@@ -248,6 +248,9 @@
                         <li>
                                 <a class="variable" href="#Architecture.GraniteMoeHybrid">GraniteMoeHybrid</a>
                         </li>
+                        <li>
+                                <a class="variable" href="#Architecture.GptOss">GptOss</a>
+                        </li>
                 </ul>
 
             </li>
@@ -384,13 +387,16 @@
                     <a class="class" href="#ResponseMessage">ResponseMessage</a>
                             <ul class="memberlist">
                         <li>
+                                <a class="variable" href="#ResponseMessage.role">role</a>
+                        </li>
+                        <li>
                                 <a class="variable" href="#ResponseMessage.content">content</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ResponseMessage.tool_calls">tool_calls</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ResponseMessage.role">role</a>
+                                <a class="variable" href="#ResponseMessage.reasoning_content">reasoning_content</a>
                         </li>
                 </ul>
 
@@ -399,13 +405,16 @@
                     <a class="class" href="#Delta">Delta</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#Delta.tool_calls">tool_calls</a>
+                                <a class="variable" href="#Delta.role">role</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#Delta.reasoning_content">reasoning_content</a>
                         </li>
                         <li>
                                 <a class="variable" href="#Delta.content">content</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Delta.role">role</a>
+                                <a class="variable" href="#Delta.tool_calls">tool_calls</a>
                         </li>
                 </ul>
 
@@ -414,16 +423,16 @@
                     <a class="class" href="#ResponseLogprob">ResponseLogprob</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#ResponseLogprob.bytes">bytes</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ResponseLogprob.logprob">logprob</a>
+                                <a class="variable" href="#ResponseLogprob.token">token</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ResponseLogprob.top_logprobs">top_logprobs</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ResponseLogprob.token">token</a>
+                                <a class="variable" href="#ResponseLogprob.bytes">bytes</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResponseLogprob.logprob">logprob</a>
                         </li>
                 </ul>
 
@@ -441,13 +450,13 @@
                     <a class="class" href="#Choice">Choice</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#Choice.index">index</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#Choice.message">message</a>
                         </li>
                         <li>
                                 <a class="variable" href="#Choice.finish_reason">finish_reason</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#Choice.index">index</a>
                         </li>
                         <li>
                                 <a class="variable" href="#Choice.logprobs">logprobs</a>
@@ -462,13 +471,13 @@
                                 <a class="variable" href="#ChunkChoice.finish_reason">finish_reason</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ChunkChoice.index">index</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#ChunkChoice.logprobs">logprobs</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ChunkChoice.delta">delta</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChunkChoice.index">index</a>
                         </li>
                 </ul>
 
@@ -477,31 +486,31 @@
                     <a class="class" href="#Usage">Usage</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#Usage.prompt_tokens">prompt_tokens</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#Usage.avg_compl_tok_per_sec">avg_compl_tok_per_sec</a>
+                                <a class="variable" href="#Usage.avg_tok_per_sec">avg_tok_per_sec</a>
                         </li>
                         <li>
                                 <a class="variable" href="#Usage.total_prompt_time_sec">total_prompt_time_sec</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Usage.avg_tok_per_sec">avg_tok_per_sec</a>
+                                <a class="variable" href="#Usage.avg_compl_tok_per_sec">avg_compl_tok_per_sec</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Usage.total_completion_time_sec">total_completion_time_sec</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#Usage.total_tokens">total_tokens</a>
+                                <a class="variable" href="#Usage.completion_tokens">completion_tokens</a>
                         </li>
                         <li>
                                 <a class="variable" href="#Usage.total_time_sec">total_time_sec</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Usage.avg_prompt_tok_per_sec">avg_prompt_tok_per_sec</a>
+                                <a class="variable" href="#Usage.total_tokens">total_tokens</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Usage.completion_tokens">completion_tokens</a>
+                                <a class="variable" href="#Usage.total_completion_time_sec">total_completion_time_sec</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#Usage.prompt_tokens">prompt_tokens</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#Usage.avg_prompt_tok_per_sec">avg_prompt_tok_per_sec</a>
                         </li>
                 </ul>
 
@@ -510,25 +519,25 @@
                     <a class="class" href="#ChatCompletionResponse">ChatCompletionResponse</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#ChatCompletionResponse.created">created</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ChatCompletionResponse.model">model</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#ChatCompletionResponse.choices">choices</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ChatCompletionResponse.system_fingerprint">system_fingerprint</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ChatCompletionResponse.id">id</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ChatCompletionResponse.usage">usage</a>
+                                <a class="variable" href="#ChatCompletionResponse.system_fingerprint">system_fingerprint</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ChatCompletionResponse.object">object</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChatCompletionResponse.usage">usage</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChatCompletionResponse.model">model</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChatCompletionResponse.created">created</a>
                         </li>
                 </ul>
 
@@ -537,16 +546,7 @@
                     <a class="class" href="#ChatCompletionChunkResponse">ChatCompletionChunkResponse</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#ChatCompletionChunkResponse.created">created</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ChatCompletionChunkResponse.object">object</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#ChatCompletionChunkResponse.usage">usage</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ChatCompletionChunkResponse.id">id</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ChatCompletionChunkResponse.choices">choices</a>
@@ -555,7 +555,16 @@
                                 <a class="variable" href="#ChatCompletionChunkResponse.model">model</a>
                         </li>
                         <li>
+                                <a class="variable" href="#ChatCompletionChunkResponse.created">created</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChatCompletionChunkResponse.id">id</a>
+                        </li>
+                        <li>
                                 <a class="variable" href="#ChatCompletionChunkResponse.system_fingerprint">system_fingerprint</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChatCompletionChunkResponse.object">object</a>
                         </li>
                 </ul>
 
@@ -563,6 +572,9 @@
             <li>
                     <a class="class" href="#CompletionChoice">CompletionChoice</a>
                             <ul class="memberlist">
+                        <li>
+                                <a class="variable" href="#CompletionChoice.finish_reason">finish_reason</a>
+                        </li>
                         <li>
                                 <a class="variable" href="#CompletionChoice.logprobs">logprobs</a>
                         </li>
@@ -572,9 +584,6 @@
                         <li>
                                 <a class="variable" href="#CompletionChoice.index">index</a>
                         </li>
-                        <li>
-                                <a class="variable" href="#CompletionChoice.finish_reason">finish_reason</a>
-                        </li>
                 </ul>
 
             </li>
@@ -582,25 +591,25 @@
                     <a class="class" href="#CompletionResponse">CompletionResponse</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#CompletionResponse.object">object</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#CompletionResponse.usage">usage</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#CompletionResponse.id">id</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#CompletionResponse.created">created</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#CompletionResponse.choices">choices</a>
                         </li>
                         <li>
                                 <a class="variable" href="#CompletionResponse.model">model</a>
                         </li>
                         <li>
                                 <a class="variable" href="#CompletionResponse.system_fingerprint">system_fingerprint</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#CompletionResponse.choices">choices</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#CompletionResponse.id">id</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#CompletionResponse.object">object</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#CompletionResponse.usage">usage</a>
                         </li>
                 </ul>
 
@@ -669,10 +678,10 @@
                     <a class="class" href="#McpServerConfigPy">McpServerConfigPy</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#McpServerConfigPy.name">name</a>
+                                <a class="variable" href="#McpServerConfigPy.enabled">enabled</a>
                         </li>
                         <li>
-                                <a class="variable" href="#McpServerConfigPy.source">source</a>
+                                <a class="variable" href="#McpServerConfigPy.resources">resources</a>
                         </li>
                         <li>
                                 <a class="variable" href="#McpServerConfigPy.tool_prefix">tool_prefix</a>
@@ -684,10 +693,10 @@
                                 <a class="variable" href="#McpServerConfigPy.id">id</a>
                         </li>
                         <li>
-                                <a class="variable" href="#McpServerConfigPy.enabled">enabled</a>
+                                <a class="variable" href="#McpServerConfigPy.source">source</a>
                         </li>
                         <li>
-                                <a class="variable" href="#McpServerConfigPy.resources">resources</a>
+                                <a class="variable" href="#McpServerConfigPy.name">name</a>
                         </li>
                 </ul>
 
@@ -696,16 +705,16 @@
                     <a class="class" href="#McpClientConfigPy">McpClientConfigPy</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#McpClientConfigPy.auto_register_tools">auto_register_tools</a>
+                                <a class="variable" href="#McpClientConfigPy.tool_timeout_secs">tool_timeout_secs</a>
                         </li>
                         <li>
-                                <a class="variable" href="#McpClientConfigPy.servers">servers</a>
+                                <a class="variable" href="#McpClientConfigPy.auto_register_tools">auto_register_tools</a>
                         </li>
                         <li>
                                 <a class="variable" href="#McpClientConfigPy.max_concurrent_calls">max_concurrent_calls</a>
                         </li>
                         <li>
-                                <a class="variable" href="#McpClientConfigPy.tool_timeout_secs">tool_timeout_secs</a>
+                                <a class="variable" href="#McpClientConfigPy.servers">servers</a>
                         </li>
                 </ul>
 
@@ -1682,6 +1691,18 @@ This returns the embeddings as [batch size, embedding dim]</p>
     
 
                             </div>
+                            <div id="Architecture.GptOss" class="classattr">
+                                <div class="attr variable">
+            <span class="name">GptOss</span>        =
+<span class="default_value"><a href="#Architecture.GptOss">Architecture.GptOss</a></span>
+
+        
+    </div>
+    <a class="headerlink" href="#Architecture.GptOss"></a>
+    
+    
+
+                            </div>
                 </section>
                 <section id="EmbeddingArchitecture">
                     <div class="attr class">
@@ -2122,6 +2143,17 @@ This returns the embeddings as [batch size, embedding dim]</p>
 </div>
 
 
+                            <div id="ResponseMessage.role" class="classattr">
+                                <div class="attr variable">
+            <span class="name">role</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResponseMessage.role"></a>
+    
+    
+
+                            </div>
                             <div id="ResponseMessage.content" class="classattr">
                                 <div class="attr variable">
             <span class="name">content</span>
@@ -2144,15 +2176,18 @@ This returns the embeddings as [batch size, embedding dim]</p>
     
 
                             </div>
-                            <div id="ResponseMessage.role" class="classattr">
+                            <div id="ResponseMessage.reasoning_content" class="classattr">
                                 <div class="attr variable">
-            <span class="name">role</span>
+            <span class="name">reasoning_content</span>
 
         
     </div>
-    <a class="headerlink" href="#ResponseMessage.role"></a>
+    <a class="headerlink" href="#ResponseMessage.reasoning_content"></a>
     
-    
+            <div class="docstring"><p>Reasoning/analysis content from Harmony format (separate from final content).
+This contains chain-of-thought reasoning that is not intended for end users.</p>
+</div>
+
 
                             </div>
                 </section>
@@ -2170,15 +2205,29 @@ This returns the embeddings as [batch size, embedding dim]</p>
 </div>
 
 
-                            <div id="Delta.tool_calls" class="classattr">
+                            <div id="Delta.role" class="classattr">
                                 <div class="attr variable">
-            <span class="name">tool_calls</span>
+            <span class="name">role</span>
 
         
     </div>
-    <a class="headerlink" href="#Delta.tool_calls"></a>
+    <a class="headerlink" href="#Delta.role"></a>
     
     
+
+                            </div>
+                            <div id="Delta.reasoning_content" class="classattr">
+                                <div class="attr variable">
+            <span class="name">reasoning_content</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Delta.reasoning_content"></a>
+    
+            <div class="docstring"><p>Reasoning/analysis content delta from Harmony format.
+This contains incremental chain-of-thought reasoning.</p>
+</div>
+
 
                             </div>
                             <div id="Delta.content" class="classattr">
@@ -2192,13 +2241,13 @@ This returns the embeddings as [batch size, embedding dim]</p>
     
 
                             </div>
-                            <div id="Delta.role" class="classattr">
+                            <div id="Delta.tool_calls" class="classattr">
                                 <div class="attr variable">
-            <span class="name">role</span>
+            <span class="name">tool_calls</span>
 
         
     </div>
-    <a class="headerlink" href="#Delta.role"></a>
+    <a class="headerlink" href="#Delta.tool_calls"></a>
     
     
 
@@ -2218,6 +2267,28 @@ This returns the embeddings as [batch size, embedding dim]</p>
 </div>
 
 
+                            <div id="ResponseLogprob.token" class="classattr">
+                                <div class="attr variable">
+            <span class="name">token</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResponseLogprob.token"></a>
+    
+    
+
+                            </div>
+                            <div id="ResponseLogprob.top_logprobs" class="classattr">
+                                <div class="attr variable">
+            <span class="name">top_logprobs</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResponseLogprob.top_logprobs"></a>
+    
+    
+
+                            </div>
                             <div id="ResponseLogprob.bytes" class="classattr">
                                 <div class="attr variable">
             <span class="name">bytes</span>
@@ -2236,28 +2307,6 @@ This returns the embeddings as [batch size, embedding dim]</p>
         
     </div>
     <a class="headerlink" href="#ResponseLogprob.logprob"></a>
-    
-    
-
-                            </div>
-                            <div id="ResponseLogprob.top_logprobs" class="classattr">
-                                <div class="attr variable">
-            <span class="name">top_logprobs</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ResponseLogprob.top_logprobs"></a>
-    
-    
-
-                            </div>
-                            <div id="ResponseLogprob.token" class="classattr">
-                                <div class="attr variable">
-            <span class="name">token</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ResponseLogprob.token"></a>
     
     
 
@@ -2303,17 +2352,6 @@ This returns the embeddings as [batch size, embedding dim]</p>
 </div>
 
 
-                            <div id="Choice.index" class="classattr">
-                                <div class="attr variable">
-            <span class="name">index</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Choice.index"></a>
-    
-    
-
-                            </div>
                             <div id="Choice.message" class="classattr">
                                 <div class="attr variable">
             <span class="name">message</span>
@@ -2332,6 +2370,17 @@ This returns the embeddings as [batch size, embedding dim]</p>
         
     </div>
     <a class="headerlink" href="#Choice.finish_reason"></a>
+    
+    
+
+                            </div>
+                            <div id="Choice.index" class="classattr">
+                                <div class="attr variable">
+            <span class="name">index</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Choice.index"></a>
     
     
 
@@ -2373,17 +2422,6 @@ This returns the embeddings as [batch size, embedding dim]</p>
     
 
                             </div>
-                            <div id="ChunkChoice.index" class="classattr">
-                                <div class="attr variable">
-            <span class="name">index</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChunkChoice.index"></a>
-    
-    
-
-                            </div>
                             <div id="ChunkChoice.logprobs" class="classattr">
                                 <div class="attr variable">
             <span class="name">logprobs</span>
@@ -2406,6 +2444,17 @@ This returns the embeddings as [batch size, embedding dim]</p>
     
 
                             </div>
+                            <div id="ChunkChoice.index" class="classattr">
+                                <div class="attr variable">
+            <span class="name">index</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChunkChoice.index"></a>
+    
+    
+
+                            </div>
                 </section>
                 <section id="Usage">
                     <div class="attr class">
@@ -2421,24 +2470,13 @@ This returns the embeddings as [batch size, embedding dim]</p>
 </div>
 
 
-                            <div id="Usage.prompt_tokens" class="classattr">
+                            <div id="Usage.avg_tok_per_sec" class="classattr">
                                 <div class="attr variable">
-            <span class="name">prompt_tokens</span>
+            <span class="name">avg_tok_per_sec</span>
 
         
     </div>
-    <a class="headerlink" href="#Usage.prompt_tokens"></a>
-    
-    
-
-                            </div>
-                            <div id="Usage.avg_compl_tok_per_sec" class="classattr">
-                                <div class="attr variable">
-            <span class="name">avg_compl_tok_per_sec</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Usage.avg_compl_tok_per_sec"></a>
+    <a class="headerlink" href="#Usage.avg_tok_per_sec"></a>
     
     
 
@@ -2454,35 +2492,24 @@ This returns the embeddings as [batch size, embedding dim]</p>
     
 
                             </div>
-                            <div id="Usage.avg_tok_per_sec" class="classattr">
+                            <div id="Usage.avg_compl_tok_per_sec" class="classattr">
                                 <div class="attr variable">
-            <span class="name">avg_tok_per_sec</span>
+            <span class="name">avg_compl_tok_per_sec</span>
 
         
     </div>
-    <a class="headerlink" href="#Usage.avg_tok_per_sec"></a>
+    <a class="headerlink" href="#Usage.avg_compl_tok_per_sec"></a>
     
     
 
                             </div>
-                            <div id="Usage.total_completion_time_sec" class="classattr">
+                            <div id="Usage.completion_tokens" class="classattr">
                                 <div class="attr variable">
-            <span class="name">total_completion_time_sec</span>
+            <span class="name">completion_tokens</span>
 
         
     </div>
-    <a class="headerlink" href="#Usage.total_completion_time_sec"></a>
-    
-    
-
-                            </div>
-                            <div id="Usage.total_tokens" class="classattr">
-                                <div class="attr variable">
-            <span class="name">total_tokens</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Usage.total_tokens"></a>
+    <a class="headerlink" href="#Usage.completion_tokens"></a>
     
     
 
@@ -2498,6 +2525,39 @@ This returns the embeddings as [batch size, embedding dim]</p>
     
 
                             </div>
+                            <div id="Usage.total_tokens" class="classattr">
+                                <div class="attr variable">
+            <span class="name">total_tokens</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Usage.total_tokens"></a>
+    
+    
+
+                            </div>
+                            <div id="Usage.total_completion_time_sec" class="classattr">
+                                <div class="attr variable">
+            <span class="name">total_completion_time_sec</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Usage.total_completion_time_sec"></a>
+    
+    
+
+                            </div>
+                            <div id="Usage.prompt_tokens" class="classattr">
+                                <div class="attr variable">
+            <span class="name">prompt_tokens</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Usage.prompt_tokens"></a>
+    
+    
+
+                            </div>
                             <div id="Usage.avg_prompt_tok_per_sec" class="classattr">
                                 <div class="attr variable">
             <span class="name">avg_prompt_tok_per_sec</span>
@@ -2505,17 +2565,6 @@ This returns the embeddings as [batch size, embedding dim]</p>
         
     </div>
     <a class="headerlink" href="#Usage.avg_prompt_tok_per_sec"></a>
-    
-    
-
-                            </div>
-                            <div id="Usage.completion_tokens" class="classattr">
-                                <div class="attr variable">
-            <span class="name">completion_tokens</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Usage.completion_tokens"></a>
     
     
 
@@ -2535,28 +2584,6 @@ This returns the embeddings as [batch size, embedding dim]</p>
 </div>
 
 
-                            <div id="ChatCompletionResponse.created" class="classattr">
-                                <div class="attr variable">
-            <span class="name">created</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionResponse.created"></a>
-    
-    
-
-                            </div>
-                            <div id="ChatCompletionResponse.model" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionResponse.model"></a>
-    
-    
-
-                            </div>
                             <div id="ChatCompletionResponse.choices" class="classattr">
                                 <div class="attr variable">
             <span class="name">choices</span>
@@ -2564,17 +2591,6 @@ This returns the embeddings as [batch size, embedding dim]</p>
         
     </div>
     <a class="headerlink" href="#ChatCompletionResponse.choices"></a>
-    
-    
-
-                            </div>
-                            <div id="ChatCompletionResponse.system_fingerprint" class="classattr">
-                                <div class="attr variable">
-            <span class="name">system_fingerprint</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionResponse.system_fingerprint"></a>
     
     
 
@@ -2590,13 +2606,13 @@ This returns the embeddings as [batch size, embedding dim]</p>
     
 
                             </div>
-                            <div id="ChatCompletionResponse.usage" class="classattr">
+                            <div id="ChatCompletionResponse.system_fingerprint" class="classattr">
                                 <div class="attr variable">
-            <span class="name">usage</span>
+            <span class="name">system_fingerprint</span>
 
         
     </div>
-    <a class="headerlink" href="#ChatCompletionResponse.usage"></a>
+    <a class="headerlink" href="#ChatCompletionResponse.system_fingerprint"></a>
     
     
 
@@ -2608,6 +2624,39 @@ This returns the embeddings as [batch size, embedding dim]</p>
         
     </div>
     <a class="headerlink" href="#ChatCompletionResponse.object"></a>
+    
+    
+
+                            </div>
+                            <div id="ChatCompletionResponse.usage" class="classattr">
+                                <div class="attr variable">
+            <span class="name">usage</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionResponse.usage"></a>
+    
+    
+
+                            </div>
+                            <div id="ChatCompletionResponse.model" class="classattr">
+                                <div class="attr variable">
+            <span class="name">model</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionResponse.model"></a>
+    
+    
+
+                            </div>
+                            <div id="ChatCompletionResponse.created" class="classattr">
+                                <div class="attr variable">
+            <span class="name">created</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionResponse.created"></a>
     
     
 
@@ -2627,28 +2676,6 @@ This returns the embeddings as [batch size, embedding dim]</p>
 </div>
 
 
-                            <div id="ChatCompletionChunkResponse.created" class="classattr">
-                                <div class="attr variable">
-            <span class="name">created</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionChunkResponse.created"></a>
-    
-    
-
-                            </div>
-                            <div id="ChatCompletionChunkResponse.object" class="classattr">
-                                <div class="attr variable">
-            <span class="name">object</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionChunkResponse.object"></a>
-    
-    
-
-                            </div>
                             <div id="ChatCompletionChunkResponse.usage" class="classattr">
                                 <div class="attr variable">
             <span class="name">usage</span>
@@ -2656,17 +2683,6 @@ This returns the embeddings as [batch size, embedding dim]</p>
         
     </div>
     <a class="headerlink" href="#ChatCompletionChunkResponse.usage"></a>
-    
-    
-
-                            </div>
-                            <div id="ChatCompletionChunkResponse.id" class="classattr">
-                                <div class="attr variable">
-            <span class="name">id</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionChunkResponse.id"></a>
     
     
 
@@ -2693,6 +2709,28 @@ This returns the embeddings as [batch size, embedding dim]</p>
     
 
                             </div>
+                            <div id="ChatCompletionChunkResponse.created" class="classattr">
+                                <div class="attr variable">
+            <span class="name">created</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionChunkResponse.created"></a>
+    
+    
+
+                            </div>
+                            <div id="ChatCompletionChunkResponse.id" class="classattr">
+                                <div class="attr variable">
+            <span class="name">id</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionChunkResponse.id"></a>
+    
+    
+
+                            </div>
                             <div id="ChatCompletionChunkResponse.system_fingerprint" class="classattr">
                                 <div class="attr variable">
             <span class="name">system_fingerprint</span>
@@ -2700,6 +2738,17 @@ This returns the embeddings as [batch size, embedding dim]</p>
         
     </div>
     <a class="headerlink" href="#ChatCompletionChunkResponse.system_fingerprint"></a>
+    
+    
+
+                            </div>
+                            <div id="ChatCompletionChunkResponse.object" class="classattr">
+                                <div class="attr variable">
+            <span class="name">object</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionChunkResponse.object"></a>
     
     
 
@@ -2719,6 +2768,17 @@ This returns the embeddings as [batch size, embedding dim]</p>
 </div>
 
 
+                            <div id="CompletionChoice.finish_reason" class="classattr">
+                                <div class="attr variable">
+            <span class="name">finish_reason</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CompletionChoice.finish_reason"></a>
+    
+    
+
+                            </div>
                             <div id="CompletionChoice.logprobs" class="classattr">
                                 <div class="attr variable">
             <span class="name">logprobs</span>
@@ -2752,17 +2812,6 @@ This returns the embeddings as [batch size, embedding dim]</p>
     
 
                             </div>
-                            <div id="CompletionChoice.finish_reason" class="classattr">
-                                <div class="attr variable">
-            <span class="name">finish_reason</span>
-
-        
-    </div>
-    <a class="headerlink" href="#CompletionChoice.finish_reason"></a>
-    
-    
-
-                            </div>
                 </section>
                 <section id="CompletionResponse">
                     <div class="attr class">
@@ -2778,39 +2827,6 @@ This returns the embeddings as [batch size, embedding dim]</p>
 </div>
 
 
-                            <div id="CompletionResponse.object" class="classattr">
-                                <div class="attr variable">
-            <span class="name">object</span>
-
-        
-    </div>
-    <a class="headerlink" href="#CompletionResponse.object"></a>
-    
-    
-
-                            </div>
-                            <div id="CompletionResponse.usage" class="classattr">
-                                <div class="attr variable">
-            <span class="name">usage</span>
-
-        
-    </div>
-    <a class="headerlink" href="#CompletionResponse.usage"></a>
-    
-    
-
-                            </div>
-                            <div id="CompletionResponse.id" class="classattr">
-                                <div class="attr variable">
-            <span class="name">id</span>
-
-        
-    </div>
-    <a class="headerlink" href="#CompletionResponse.id"></a>
-    
-    
-
-                            </div>
                             <div id="CompletionResponse.created" class="classattr">
                                 <div class="attr variable">
             <span class="name">created</span>
@@ -2818,17 +2834,6 @@ This returns the embeddings as [batch size, embedding dim]</p>
         
     </div>
     <a class="headerlink" href="#CompletionResponse.created"></a>
-    
-    
-
-                            </div>
-                            <div id="CompletionResponse.choices" class="classattr">
-                                <div class="attr variable">
-            <span class="name">choices</span>
-
-        
-    </div>
-    <a class="headerlink" href="#CompletionResponse.choices"></a>
     
     
 
@@ -2851,6 +2856,50 @@ This returns the embeddings as [batch size, embedding dim]</p>
         
     </div>
     <a class="headerlink" href="#CompletionResponse.system_fingerprint"></a>
+    
+    
+
+                            </div>
+                            <div id="CompletionResponse.choices" class="classattr">
+                                <div class="attr variable">
+            <span class="name">choices</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CompletionResponse.choices"></a>
+    
+    
+
+                            </div>
+                            <div id="CompletionResponse.id" class="classattr">
+                                <div class="attr variable">
+            <span class="name">id</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CompletionResponse.id"></a>
+    
+    
+
+                            </div>
+                            <div id="CompletionResponse.object" class="classattr">
+                                <div class="attr variable">
+            <span class="name">object</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CompletionResponse.object"></a>
+    
+    
+
+                            </div>
+                            <div id="CompletionResponse.usage" class="classattr">
+                                <div class="attr variable">
+            <span class="name">usage</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CompletionResponse.usage"></a>
     
     
 
@@ -3075,24 +3124,24 @@ This returns the embeddings as [batch size, embedding dim]</p>
 </div>
 
 
-                            <div id="McpServerConfigPy.name" class="classattr">
+                            <div id="McpServerConfigPy.enabled" class="classattr">
                                 <div class="attr variable">
-            <span class="name">name</span>
+            <span class="name">enabled</span>
 
         
     </div>
-    <a class="headerlink" href="#McpServerConfigPy.name"></a>
+    <a class="headerlink" href="#McpServerConfigPy.enabled"></a>
     
     
 
                             </div>
-                            <div id="McpServerConfigPy.source" class="classattr">
+                            <div id="McpServerConfigPy.resources" class="classattr">
                                 <div class="attr variable">
-            <span class="name">source</span>
+            <span class="name">resources</span>
 
         
     </div>
-    <a class="headerlink" href="#McpServerConfigPy.source"></a>
+    <a class="headerlink" href="#McpServerConfigPy.resources"></a>
     
     
 
@@ -3130,24 +3179,24 @@ This returns the embeddings as [batch size, embedding dim]</p>
     
 
                             </div>
-                            <div id="McpServerConfigPy.enabled" class="classattr">
+                            <div id="McpServerConfigPy.source" class="classattr">
                                 <div class="attr variable">
-            <span class="name">enabled</span>
+            <span class="name">source</span>
 
         
     </div>
-    <a class="headerlink" href="#McpServerConfigPy.enabled"></a>
+    <a class="headerlink" href="#McpServerConfigPy.source"></a>
     
     
 
                             </div>
-                            <div id="McpServerConfigPy.resources" class="classattr">
+                            <div id="McpServerConfigPy.name" class="classattr">
                                 <div class="attr variable">
-            <span class="name">resources</span>
+            <span class="name">name</span>
 
         
     </div>
-    <a class="headerlink" href="#McpServerConfigPy.resources"></a>
+    <a class="headerlink" href="#McpServerConfigPy.name"></a>
     
     
 
@@ -3167,6 +3216,17 @@ This returns the embeddings as [batch size, embedding dim]</p>
 </div>
 
 
+                            <div id="McpClientConfigPy.tool_timeout_secs" class="classattr">
+                                <div class="attr variable">
+            <span class="name">tool_timeout_secs</span>
+
+        
+    </div>
+    <a class="headerlink" href="#McpClientConfigPy.tool_timeout_secs"></a>
+    
+    
+
+                            </div>
                             <div id="McpClientConfigPy.auto_register_tools" class="classattr">
                                 <div class="attr variable">
             <span class="name">auto_register_tools</span>
@@ -3174,17 +3234,6 @@ This returns the embeddings as [batch size, embedding dim]</p>
         
     </div>
     <a class="headerlink" href="#McpClientConfigPy.auto_register_tools"></a>
-    
-    
-
-                            </div>
-                            <div id="McpClientConfigPy.servers" class="classattr">
-                                <div class="attr variable">
-            <span class="name">servers</span>
-
-        
-    </div>
-    <a class="headerlink" href="#McpClientConfigPy.servers"></a>
     
     
 
@@ -3200,13 +3249,13 @@ This returns the embeddings as [batch size, embedding dim]</p>
     
 
                             </div>
-                            <div id="McpClientConfigPy.tool_timeout_secs" class="classattr">
+                            <div id="McpClientConfigPy.servers" class="classattr">
                                 <div class="attr variable">
-            <span class="name">tool_timeout_secs</span>
+            <span class="name">servers</span>
 
         
     </div>
-    <a class="headerlink" href="#McpClientConfigPy.tool_timeout_secs"></a>
+    <a class="headerlink" href="#McpClientConfigPy.servers"></a>
     
     
 

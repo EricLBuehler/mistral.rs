@@ -182,4 +182,63 @@
 <a href=#182 id=182 data-nosnippet>182</a>        dtype: i32, <span class="comment">// 0=float16, 1=bf16 (for input/output)
 <a href=#183 id=183 data-nosnippet>183</a>        </span>stream: i64,
 <a href=#184 id=184 data-nosnippet>184</a>    );
-<a href=#185 id=185 data-nosnippet>185</a>}</code></pre></div></section></main></body></html>
+<a href=#185 id=185 data-nosnippet>185</a>
+<a href=#186 id=186 data-nosnippet>186</a>    <span class="comment">// Optimized parallel topk for small k (MoE routing)
+<a href=#187 id=187 data-nosnippet>187</a>    // Single kernel call writes to both values and indices buffers
+<a href=#188 id=188 data-nosnippet>188</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>topk_f32(
+<a href=#189 id=189 data-nosnippet>189</a>        input: <span class="kw-2">*const </span>c_void,
+<a href=#190 id=190 data-nosnippet>190</a>        values_out: <span class="kw-2">*mut </span>c_void,  <span class="comment">// [nrows, k]
+<a href=#191 id=191 data-nosnippet>191</a>        </span>indices_out: <span class="kw-2">*mut </span>c_void, <span class="comment">// [nrows, k] as u32
+<a href=#192 id=192 data-nosnippet>192</a>        </span>nrows: i32,
+<a href=#193 id=193 data-nosnippet>193</a>        ncols: i32,
+<a href=#194 id=194 data-nosnippet>194</a>        k: i32,
+<a href=#195 id=195 data-nosnippet>195</a>        stream: i64,
+<a href=#196 id=196 data-nosnippet>196</a>    );
+<a href=#197 id=197 data-nosnippet>197</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>topk_bf16(
+<a href=#198 id=198 data-nosnippet>198</a>        input: <span class="kw-2">*const </span>c_void,
+<a href=#199 id=199 data-nosnippet>199</a>        values_out: <span class="kw-2">*mut </span>c_void,  <span class="comment">// [nrows, k]
+<a href=#200 id=200 data-nosnippet>200</a>        </span>indices_out: <span class="kw-2">*mut </span>c_void, <span class="comment">// [nrows, k] as u32
+<a href=#201 id=201 data-nosnippet>201</a>        </span>nrows: i32,
+<a href=#202 id=202 data-nosnippet>202</a>        ncols: i32,
+<a href=#203 id=203 data-nosnippet>203</a>        k: i32,
+<a href=#204 id=204 data-nosnippet>204</a>        stream: i64,
+<a href=#205 id=205 data-nosnippet>205</a>    );
+<a href=#206 id=206 data-nosnippet>206</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>topk_f16(
+<a href=#207 id=207 data-nosnippet>207</a>        input: <span class="kw-2">*const </span>c_void,
+<a href=#208 id=208 data-nosnippet>208</a>        values_out: <span class="kw-2">*mut </span>c_void,  <span class="comment">// [nrows, k]
+<a href=#209 id=209 data-nosnippet>209</a>        </span>indices_out: <span class="kw-2">*mut </span>c_void, <span class="comment">// [nrows, k] as u32
+<a href=#210 id=210 data-nosnippet>210</a>        </span>nrows: i32,
+<a href=#211 id=211 data-nosnippet>211</a>        ncols: i32,
+<a href=#212 id=212 data-nosnippet>212</a>        k: i32,
+<a href=#213 id=213 data-nosnippet>213</a>        stream: i64,
+<a href=#214 id=214 data-nosnippet>214</a>    );
+<a href=#215 id=215 data-nosnippet>215</a>
+<a href=#216 id=216 data-nosnippet>216</a>    <span class="comment">// Fused topk + softmax - returns softmax weights directly (not raw logits)
+<a href=#217 id=217 data-nosnippet>217</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>topk_softmax_f32(
+<a href=#218 id=218 data-nosnippet>218</a>        input: <span class="kw-2">*const </span>c_void,
+<a href=#219 id=219 data-nosnippet>219</a>        weights_out: <span class="kw-2">*mut </span>c_void, <span class="comment">// [nrows, k] - softmax weights
+<a href=#220 id=220 data-nosnippet>220</a>        </span>indices_out: <span class="kw-2">*mut </span>c_void, <span class="comment">// [nrows, k] as u32
+<a href=#221 id=221 data-nosnippet>221</a>        </span>nrows: i32,
+<a href=#222 id=222 data-nosnippet>222</a>        ncols: i32,
+<a href=#223 id=223 data-nosnippet>223</a>        k: i32,
+<a href=#224 id=224 data-nosnippet>224</a>        stream: i64,
+<a href=#225 id=225 data-nosnippet>225</a>    );
+<a href=#226 id=226 data-nosnippet>226</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>topk_softmax_bf16(
+<a href=#227 id=227 data-nosnippet>227</a>        input: <span class="kw-2">*const </span>c_void,
+<a href=#228 id=228 data-nosnippet>228</a>        weights_out: <span class="kw-2">*mut </span>c_void,
+<a href=#229 id=229 data-nosnippet>229</a>        indices_out: <span class="kw-2">*mut </span>c_void,
+<a href=#230 id=230 data-nosnippet>230</a>        nrows: i32,
+<a href=#231 id=231 data-nosnippet>231</a>        ncols: i32,
+<a href=#232 id=232 data-nosnippet>232</a>        k: i32,
+<a href=#233 id=233 data-nosnippet>233</a>        stream: i64,
+<a href=#234 id=234 data-nosnippet>234</a>    );
+<a href=#235 id=235 data-nosnippet>235</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>topk_softmax_f16(
+<a href=#236 id=236 data-nosnippet>236</a>        input: <span class="kw-2">*const </span>c_void,
+<a href=#237 id=237 data-nosnippet>237</a>        weights_out: <span class="kw-2">*mut </span>c_void,
+<a href=#238 id=238 data-nosnippet>238</a>        indices_out: <span class="kw-2">*mut </span>c_void,
+<a href=#239 id=239 data-nosnippet>239</a>        nrows: i32,
+<a href=#240 id=240 data-nosnippet>240</a>        ncols: i32,
+<a href=#241 id=241 data-nosnippet>241</a>        k: i32,
+<a href=#242 id=242 data-nosnippet>242</a>        stream: i64,
+<a href=#243 id=243 data-nosnippet>243</a>    );
+<a href=#244 id=244 data-nosnippet>244</a>}</code></pre></div></section></main></body></html>

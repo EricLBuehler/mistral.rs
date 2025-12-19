@@ -42,14 +42,14 @@
 <a href=#42 id=42 data-nosnippet>42</a>    DiffusionModel, DiffusionModelLoader, EmbeddingGemmaLoader, EmbeddingLoaderType,
 <a href=#43 id=43 data-nosnippet>43</a>    EmbeddingModel, EmbeddingModelLoader, EmbeddingModelPaths, EmbeddingModule,
 <a href=#44 id=44 data-nosnippet>44</a>    EmbeddingModulePaths, EmbeddingModuleType, FluxLoader, GLM4Loader, Gemma2Loader, Gemma3Loader,
-<a href=#45 id=45 data-nosnippet>45</a>    Gemma3nLoader, GemmaLoader, GraniteMoeHybridLoader, Idefics2Loader, Idefics3Loader,
-<a href=#46 id=46 data-nosnippet>46</a>    LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader,
-<a href=#47 id=47 data-nosnippet>47</a>    Mistral3Loader, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType,
-<a href=#48 id=48 data-nosnippet>48</a>    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
-<a href=#49 id=49 data-nosnippet>49</a>    Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader,
-<a href=#50 id=50 data-nosnippet>50</a>    Qwen2_5VLLoader, Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader, Qwen3VLLoader,
-<a href=#51 id=51 data-nosnippet>51</a>    Qwen3VLMoELoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
-<a href=#52 id=52 data-nosnippet>52</a>    VisionLoaderType, VisionModel, VisionModelLoader,
+<a href=#45 id=45 data-nosnippet>45</a>    Gemma3nLoader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader, Idefics2Loader,
+<a href=#46 id=46 data-nosnippet>46</a>    Idefics3Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths,
+<a href=#47 id=47 data-nosnippet>47</a>    MiniCpmOLoader, Mistral3Loader, MistralLoader, MixtralLoader, ModelKind, ModelPaths,
+<a href=#48 id=48 data-nosnippet>48</a>    NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
+<a href=#49 id=49 data-nosnippet>49</a>    Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind,
+<a href=#50 id=50 data-nosnippet>50</a>    Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader,
+<a href=#51 id=51 data-nosnippet>51</a>    Qwen3VLLoader, Qwen3VLMoELoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader,
+<a href=#52 id=52 data-nosnippet>52</a>    VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
 <a href=#53 id=53 data-nosnippet>53</a>};
 <a href=#54 id=54 data-nosnippet>54</a><span class="kw">use </span>mistralrs_quant::IsqType;
 <a href=#55 id=55 data-nosnippet>55</a><span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -911,203 +911,204 @@
 <a href=#911 id=911 data-nosnippet>911</a>                },
 <a href=#912 id=912 data-nosnippet>912</a>                <span class="bool-val">true</span>,
 <a href=#913 id=913 data-nosnippet>913</a>                <span class="prelude-val">None</span>,
-<a href=#914 id=914 data-nosnippet>914</a>                <span class="kw-2">&amp;</span>ChatTemplateValue(Either::Left(template.to_string())),
-<a href=#915 id=915 data-nosnippet>915</a>                <span class="prelude-val">Some</span>(bos.to_string()),
-<a href=#916 id=916 data-nosnippet>916</a>                <span class="prelude-val">Some</span>(eos.to_string()),
-<a href=#917 id=917 data-nosnippet>917</a>                <span class="prelude-val">Some</span>(unk.to_string()),
-<a href=#918 id=918 data-nosnippet>918</a>                Vec::new(),
-<a href=#919 id=919 data-nosnippet>919</a>            ) {
-<a href=#920 id=920 data-nosnippet>920</a>                <span class="prelude-val">Ok</span>(v) =&gt; v,
-<a href=#921 id=921 data-nosnippet>921</a>                <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#922 id=922 data-nosnippet>922</a>                    failed.push(<span class="macro">format!</span>(<span class="string">"Failed with {e}."</span>));
-<a href=#923 id=923 data-nosnippet>923</a>                    <span class="kw">continue</span>;
-<a href=#924 id=924 data-nosnippet>924</a>                }
-<a href=#925 id=925 data-nosnippet>925</a>            };
-<a href=#926 id=926 data-nosnippet>926</a>            <span class="kw">if </span>output != <span class="kw-2">*</span>expected {
-<a href=#927 id=927 data-nosnippet>927</a>                failed.push(<span class="macro">format!</span>(
-<a href=#928 id=928 data-nosnippet>928</a>                    <span class="string">"Expected: `{}` \n\nGot:      `{}`"</span>,
-<a href=#929 id=929 data-nosnippet>929</a>                    expected.replace(<span class="string">'\n'</span>, <span class="string">"\\n"</span>),
-<a href=#930 id=930 data-nosnippet>930</a>                    output.replace(<span class="string">'\n'</span>, <span class="string">"\\n"</span>)
-<a href=#931 id=931 data-nosnippet>931</a>                ));
-<a href=#932 id=932 data-nosnippet>932</a>            }
-<a href=#933 id=933 data-nosnippet>933</a>        }
-<a href=#934 id=934 data-nosnippet>934</a>        <span class="kw">if </span>!failed.is_empty() {
-<a href=#935 id=935 data-nosnippet>935</a>            <span class="kw">for </span>(i, line) <span class="kw">in </span>failed.iter().enumerate() {
-<a href=#936 id=936 data-nosnippet>936</a>                <span class="macro">println!</span>(<span class="string">"------------ Template {i} ------------"</span>);
-<a href=#937 id=937 data-nosnippet>937</a>                <span class="macro">println!</span>(<span class="string">"{line}"</span>);
-<a href=#938 id=938 data-nosnippet>938</a>            }
-<a href=#939 id=939 data-nosnippet>939</a>            <span class="macro">println!</span>(<span class="string">"------------------------"</span>);
-<a href=#940 id=940 data-nosnippet>940</a>            <span class="macro">panic!</span>(<span class="string">"{}/{n_templates} chat templates failed."</span>, failed.len());
-<a href=#941 id=941 data-nosnippet>941</a>        }
-<a href=#942 id=942 data-nosnippet>942</a>    }
-<a href=#943 id=943 data-nosnippet>943</a>
-<a href=#944 id=944 data-nosnippet>944</a>    <span class="attr">#[test]
-<a href=#945 id=945 data-nosnippet>945</a>    </span><span class="doccomment">/// Generating these cases:
-<a href=#946 id=946 data-nosnippet>946</a>    /// ```py
-<a href=#947 id=947 data-nosnippet>947</a>    /// &gt;&gt;&gt; t=transformers.AutoTokenizer.from_pretrained(...)
-<a href=#948 id=948 data-nosnippet>948</a>    /// # If non-system prompt model
-<a href=#949 id=949 data-nosnippet>949</a>    /// &gt;&gt;&gt; t.apply_chat_template([{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi there"},{"role":"user","content":"Who are you"},{"role":"assistant","content":"   I am an assistant   "},{"role":"user","content":"Another question"}], add_generation_prompt=True, tokenize=False)
-<a href=#950 id=950 data-nosnippet>950</a>    /// # If system prompt model
-<a href=#951 id=951 data-nosnippet>951</a>    /// &gt;&gt;&gt; t.apply_chat_template([{"role":"system","content":"You are a helpful assistant"},{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi there"},{"role":"user","content":"Who are you"},{"role":"assistant","content":"   I am an assistant   "},{"role":"user","content":"Another question"}], add_generation_prompt=True, tokenize=False)
-<a href=#952 id=952 data-nosnippet>952</a>    /// ```
-<a href=#953 id=953 data-nosnippet>953</a>    </span><span class="kw">fn </span>test_chat_templates() {
-<a href=#954 id=954 data-nosnippet>954</a>        <span class="kw">let </span>templates = [
-<a href=#955 id=955 data-nosnippet>955</a>            <span class="comment">// ChatML: https://huggingface.co/teknium/OpenHermes-2.5-Mistral-7B
-<a href=#956 id=956 data-nosnippet>956</a>            </span>(<span class="bool-val">true</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{% for message in messages %}{{'&lt;|im_start|&gt;' + message['role'] + '\n' + message['content'] + '&lt;|im_end|&gt;' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '&lt;|im_start|&gt;assistant\n' }}{% endif %}"</span>),
-<a href=#957 id=957 data-nosnippet>957</a>            <span class="comment">// mistralai/Mistral-7B-Instruct-v0.1
-<a href=#958 id=958 data-nosnippet>958</a>            </span>(<span class="bool-val">false</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token + ' ' }}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}"</span>),
-<a href=#959 id=959 data-nosnippet>959</a>            <span class="comment">// meta-llama/Llama-2-13b-chat-hf
-<a href=#960 id=960 data-nosnippet>960</a>            </span>(<span class="bool-val">true</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}{% set system_message = messages[0]['content'] %}{% else %}{% set loop_messages = messages %}{% set system_message = false %}{% endif %}{% for message in loop_messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if loop.index0 == 0 and system_message != false %}{% set content = '&lt;&lt;SYS&gt;&gt;\\n' + system_message + '\\n&lt;&lt;/SYS&gt;&gt;\\n\\n' + message['content'] %}{% else %}{% set content = message['content'] %}{% endif %}{% if message['role'] == 'user' %}{{ bos_token + '[INST] ' + content.strip() + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ ' '  + content.strip() + ' ' + eos_token }}{% endif %}{% endfor %}"</span>),
-<a href=#961 id=961 data-nosnippet>961</a>            <span class="comment">// mistralai/Mixtral-8x7B-Instruct-v0.1
-<a href=#962 id=962 data-nosnippet>962</a>            </span>(<span class="bool-val">false</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token}}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}"</span>),
-<a href=#963 id=963 data-nosnippet>963</a>            <span class="comment">// google/gemma-7b-it
-<a href=#964 id=964 data-nosnippet>964</a>            </span>(<span class="bool-val">false</span>, <span class="string">"&lt;bos&gt;"</span>, <span class="string">"&lt;eos&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{{ bos_token }}{% if messages[0]['role'] == 'system' %}{{ raise_exception('System role not supported') }}{% endif %}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if (message['role'] == 'assistant') %}{% set role = 'model' %}{% else %}{% set role = message['role'] %}{% endif %}{{ '&lt;start_of_turn&gt;' + role + '\n' + message['content'] | trim + '&lt;end_of_turn&gt;\n' }}{% endfor %}{% if add_generation_prompt %}{{'&lt;start_of_turn&gt;model\n'}}{% endif %}"</span>),
-<a href=#965 id=965 data-nosnippet>965</a>            <span class="comment">// HuggingFaceM4/idefics2-8b-chatty
-<a href=#966 id=966 data-nosnippet>966</a>            </span>(<span class="bool-val">true</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{% for message in messages %}{{message['role'].capitalize()}}{% if message['content'][0]['type'] == 'image' %}{{':'}}{% else %}{{': '}}{% endif %}{% for line in message['content'] %}{% if line['type'] == 'text' %}{{line['text']}}{% elif line['type'] == 'image' %}{{ '&lt;image&gt;' }}{% endif %}{% endfor %}&lt;end_of_utterance&gt;\n{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"</span>),
-<a href=#967 id=967 data-nosnippet>967</a>        ];
-<a href=#968 id=968 data-nosnippet>968</a>        <span class="kw">let </span>expected_outputs = [
-<a href=#969 id=969 data-nosnippet>969</a>            <span class="comment">// ChatML: https://huggingface.co/teknium/OpenHermes-2.5-Mistral-7B
-<a href=#970 id=970 data-nosnippet>970</a>            </span><span class="string">"&lt;|im_start|&gt;system\nYou are a helpful assistant&lt;|im_end|&gt;\n&lt;|im_start|&gt;user\nHello&lt;|im_end|&gt;\n&lt;|im_start|&gt;assistant\nHi there&lt;|im_end|&gt;\n&lt;|im_start|&gt;user\nWho are you&lt;|im_end|&gt;\n&lt;|im_start|&gt;assistant\n   I am an assistant   &lt;|im_end|&gt;\n&lt;|im_start|&gt;user\nAnother question&lt;|im_end|&gt;\n&lt;|im_start|&gt;assistant\n"</span>,
-<a href=#971 id=971 data-nosnippet>971</a>            <span class="comment">// mistralai/Mistral-7B-Instruct-v0.1
-<a href=#972 id=972 data-nosnippet>972</a>            </span><span class="string">"&lt;s&gt;[INST] Hello [/INST]Hi there&lt;/s&gt; [INST] Who are you [/INST]   I am an assistant   &lt;/s&gt; [INST] Another question [/INST]"</span>,
-<a href=#973 id=973 data-nosnippet>973</a>            <span class="comment">// meta-llama/Llama-2-13b-chat-hf
-<a href=#974 id=974 data-nosnippet>974</a>            </span><span class="string">"&lt;s&gt;[INST] &lt;&lt;SYS&gt;&gt;\nYou are a helpful assistant\n&lt;&lt;/SYS&gt;&gt;\n\nHello [/INST] Hi there &lt;/s&gt;&lt;s&gt;[INST] Who are you [/INST] I am an assistant &lt;/s&gt;&lt;s&gt;[INST] Another question [/INST]"</span>,
-<a href=#975 id=975 data-nosnippet>975</a>            <span class="comment">// mistralai/Mixtral-8x7B-Instruct-v0.1
-<a href=#976 id=976 data-nosnippet>976</a>            </span><span class="string">"&lt;s&gt;[INST] Hello [/INST]Hi there&lt;/s&gt;[INST] Who are you [/INST]   I am an assistant   &lt;/s&gt;[INST] Another question [/INST]"</span>,
-<a href=#977 id=977 data-nosnippet>977</a>            <span class="comment">// google/gemma-7b-it
-<a href=#978 id=978 data-nosnippet>978</a>            </span><span class="string">"&lt;bos&gt;&lt;start_of_turn&gt;user\nHello&lt;end_of_turn&gt;\n&lt;start_of_turn&gt;model\nHi there&lt;end_of_turn&gt;\n&lt;start_of_turn&gt;user\nWho are you&lt;end_of_turn&gt;\n&lt;start_of_turn&gt;model\nI am an assistant&lt;end_of_turn&gt;\n&lt;start_of_turn&gt;user\nAnother question&lt;end_of_turn&gt;\n&lt;start_of_turn&gt;model\n"</span>,
-<a href=#979 id=979 data-nosnippet>979</a>        ];
-<a href=#980 id=980 data-nosnippet>980</a>        <span class="kw">let </span>messages = [
-<a href=#981 id=981 data-nosnippet>981</a>            [<span class="string">"system"</span>, <span class="string">"You are a helpful assistant"</span>],
-<a href=#982 id=982 data-nosnippet>982</a>            [<span class="string">"user"</span>, <span class="string">"Hello"</span>],
-<a href=#983 id=983 data-nosnippet>983</a>            [<span class="string">"assistant"</span>, <span class="string">"Hi there"</span>],
-<a href=#984 id=984 data-nosnippet>984</a>            [<span class="string">"user"</span>, <span class="string">"Who are you"</span>],
-<a href=#985 id=985 data-nosnippet>985</a>            [<span class="string">"assistant"</span>, <span class="string">"   I am an assistant   "</span>],
-<a href=#986 id=986 data-nosnippet>986</a>            [<span class="string">"user"</span>, <span class="string">"Another question"</span>],
-<a href=#987 id=987 data-nosnippet>987</a>        ];
-<a href=#988 id=988 data-nosnippet>988</a>        <span class="kw">let </span><span class="kw-2">mut </span>inputs = Vec::new();
-<a href=#989 id=989 data-nosnippet>989</a>        <span class="kw">for </span>[role, content] <span class="kw">in </span>messages {
-<a href=#990 id=990 data-nosnippet>990</a>            <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
-<a href=#991 id=991 data-nosnippet>991</a>                IndexMap::new();
-<a href=#992 id=992 data-nosnippet>992</a>            message.insert(<span class="string">"role"</span>.to_string(), Either::Left(role.to_string()));
-<a href=#993 id=993 data-nosnippet>993</a>            message.insert(<span class="string">"content"</span>.to_string(), Either::Left(content.to_string()));
-<a href=#994 id=994 data-nosnippet>994</a>            inputs.push(message);
-<a href=#995 id=995 data-nosnippet>995</a>        }
-<a href=#996 id=996 data-nosnippet>996</a>        test_with_inputs(<span class="kw-2">&amp;</span>templates, <span class="kw-2">&amp;</span>expected_outputs, inputs);
-<a href=#997 id=997 data-nosnippet>997</a>    }
-<a href=#998 id=998 data-nosnippet>998</a>
-<a href=#999 id=999 data-nosnippet>999</a>    <span class="attr">#[test]
-<a href=#1000 id=1000 data-nosnippet>1000</a>    </span><span class="doccomment">/// Generating these cases:
-<a href=#1001 id=1001 data-nosnippet>1001</a>    /// ```py
-<a href=#1002 id=1002 data-nosnippet>1002</a>    /// &gt;&gt;&gt; processor=transformers.AutoProcessor.from_pretrained(...)
-<a href=#1003 id=1003 data-nosnippet>1003</a>    /// &gt;&gt;&gt; processor.apply_chat_template([
-<a href=#1004 id=1004 data-nosnippet>1004</a>    ///         {"role":"system","content":[{"type":"text", "text": "You are a helpful assistant"}]},
-<a href=#1005 id=1005 data-nosnippet>1005</a>    ///         {"role":"user","content":[{"type":"image"}, {"type":"text", "text": "Hello, please describe the above."}]},
-<a href=#1006 id=1006 data-nosnippet>1006</a>    ///         {"role":"assistant","content":[{"type":"text", "text": "Hi there"}]},
-<a href=#1007 id=1007 data-nosnippet>1007</a>    ///         {"role":"user","content":[{"type":"text", "text": "Who are you"}]},
-<a href=#1008 id=1008 data-nosnippet>1008</a>    ///         {"role":"assistant","content":[{"type":"text", "text": "   I am an assistant   "}]},
-<a href=#1009 id=1009 data-nosnippet>1009</a>    ///         {"role":"user","content":[{"type":"text", "text": "Another question"}]}
-<a href=#1010 id=1010 data-nosnippet>1010</a>    ///     ], add_generation_prompt=True, tokenize=False)
-<a href=#1011 id=1011 data-nosnippet>1011</a>    /// ```
-<a href=#1012 id=1012 data-nosnippet>1012</a>    </span><span class="kw">fn </span>test_image_chat_templates() {
-<a href=#1013 id=1013 data-nosnippet>1013</a>        <span class="kw">let </span>templates = [
-<a href=#1014 id=1014 data-nosnippet>1014</a>            <span class="comment">// HuggingFaceM4/idefics2-8b-chatty
-<a href=#1015 id=1015 data-nosnippet>1015</a>            </span>(<span class="bool-val">true</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{% for message in messages %}{{message['role'].capitalize()}}{% if message['content'][0]['type'] == 'image' %}{{':'}}{% else %}{{': '}}{% endif %}{% for line in message['content'] %}{% if line['type'] == 'text' %}{{line['text']}}{% elif line['type'] == 'image' %}{{ '&lt;image&gt;' }}{% endif %}{% endfor %}&lt;end_of_utterance&gt;\n{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"</span>),
-<a href=#1016 id=1016 data-nosnippet>1016</a>        ];
-<a href=#1017 id=1017 data-nosnippet>1017</a>        <span class="kw">let </span>expected_outputs = [
-<a href=#1018 id=1018 data-nosnippet>1018</a>            <span class="comment">// HuggingFaceM4/idefics2-8b-chatty
-<a href=#1019 id=1019 data-nosnippet>1019</a>            </span><span class="string">"System: You are a helpful assistant&lt;end_of_utterance&gt;\nUser:&lt;image&gt;Hello, please describe the above.&lt;end_of_utterance&gt;\nAssistant: Hi there&lt;end_of_utterance&gt;\nUser:&lt;image&gt;This is me, who are you&lt;end_of_utterance&gt;\nAssistant:    I am an assistant   &lt;end_of_utterance&gt;\nUser:&lt;image&gt;Another question, what is this?&lt;end_of_utterance&gt;\nAssistant:"</span>,
-<a href=#1020 id=1020 data-nosnippet>1020</a>        ];
-<a href=#1021 id=1021 data-nosnippet>1021</a>
-<a href=#1022 id=1022 data-nosnippet>1022</a>        <span class="kw">let </span><span class="kw-2">mut </span>inputs = Vec::new();
-<a href=#1023 id=1023 data-nosnippet>1023</a>
-<a href=#1024 id=1024 data-nosnippet>1024</a>        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
-<a href=#1025 id=1025 data-nosnippet>1025</a>            IndexMap::new();
-<a href=#1026 id=1026 data-nosnippet>1026</a>        message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"system"</span>.to_string()));
-<a href=#1027 id=1027 data-nosnippet>1027</a>        message.insert(
-<a href=#1028 id=1028 data-nosnippet>1028</a>            <span class="string">"content"</span>.to_string(),
-<a href=#1029 id=1029 data-nosnippet>1029</a>            Either::Right(<span class="macro">vec!</span>[<span class="macro">hashmap!</span> {
-<a href=#1030 id=1030 data-nosnippet>1030</a>                <span class="string">"type"</span>.to_string() =&gt; <span class="string">"text"</span>.to_string(),
-<a href=#1031 id=1031 data-nosnippet>1031</a>                <span class="string">"text"</span>.to_string() =&gt; <span class="string">"You are a helpful assistant"</span>.to_string()
-<a href=#1032 id=1032 data-nosnippet>1032</a>            }]),
-<a href=#1033 id=1033 data-nosnippet>1033</a>        );
-<a href=#1034 id=1034 data-nosnippet>1034</a>        inputs.push(message);
-<a href=#1035 id=1035 data-nosnippet>1035</a>
-<a href=#1036 id=1036 data-nosnippet>1036</a>        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
-<a href=#1037 id=1037 data-nosnippet>1037</a>            IndexMap::new();
-<a href=#1038 id=1038 data-nosnippet>1038</a>        message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
-<a href=#1039 id=1039 data-nosnippet>1039</a>        message.insert(
-<a href=#1040 id=1040 data-nosnippet>1040</a>            <span class="string">"content"</span>.to_string(),
-<a href=#1041 id=1041 data-nosnippet>1041</a>            Either::Right(<span class="macro">vec!</span>[
-<a href=#1042 id=1042 data-nosnippet>1042</a>                <span class="macro">hashmap!</span> {
-<a href=#1043 id=1043 data-nosnippet>1043</a>                    <span class="string">"type"</span>.to_string() =&gt; <span class="string">"image"</span>.to_string()
-<a href=#1044 id=1044 data-nosnippet>1044</a>                },
-<a href=#1045 id=1045 data-nosnippet>1045</a>                <span class="macro">hashmap!</span> {
-<a href=#1046 id=1046 data-nosnippet>1046</a>                    <span class="string">"type"</span>.to_string() =&gt; <span class="string">"text"</span>.to_string(),
-<a href=#1047 id=1047 data-nosnippet>1047</a>                    <span class="string">"text"</span>.to_string() =&gt; <span class="string">"Hello, please describe the above."</span>.to_string()
-<a href=#1048 id=1048 data-nosnippet>1048</a>                },
-<a href=#1049 id=1049 data-nosnippet>1049</a>            ]),
-<a href=#1050 id=1050 data-nosnippet>1050</a>        );
-<a href=#1051 id=1051 data-nosnippet>1051</a>        inputs.push(message);
-<a href=#1052 id=1052 data-nosnippet>1052</a>
-<a href=#1053 id=1053 data-nosnippet>1053</a>        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
-<a href=#1054 id=1054 data-nosnippet>1054</a>            IndexMap::new();
-<a href=#1055 id=1055 data-nosnippet>1055</a>        message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"assistant"</span>.to_string()));
-<a href=#1056 id=1056 data-nosnippet>1056</a>        message.insert(
-<a href=#1057 id=1057 data-nosnippet>1057</a>            <span class="string">"content"</span>.to_string(),
-<a href=#1058 id=1058 data-nosnippet>1058</a>            Either::Right(<span class="macro">vec!</span>[<span class="macro">hashmap!</span> {
-<a href=#1059 id=1059 data-nosnippet>1059</a>                <span class="string">"type"</span>.to_string() =&gt; <span class="string">"text"</span>.to_string(),
-<a href=#1060 id=1060 data-nosnippet>1060</a>                <span class="string">"text"</span>.to_string() =&gt; <span class="string">"Hi there"</span>.to_string()
-<a href=#1061 id=1061 data-nosnippet>1061</a>            }]),
-<a href=#1062 id=1062 data-nosnippet>1062</a>        );
-<a href=#1063 id=1063 data-nosnippet>1063</a>        inputs.push(message);
-<a href=#1064 id=1064 data-nosnippet>1064</a>
-<a href=#1065 id=1065 data-nosnippet>1065</a>        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
-<a href=#1066 id=1066 data-nosnippet>1066</a>            IndexMap::new();
-<a href=#1067 id=1067 data-nosnippet>1067</a>        message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
-<a href=#1068 id=1068 data-nosnippet>1068</a>        message.insert(
-<a href=#1069 id=1069 data-nosnippet>1069</a>            <span class="string">"content"</span>.to_string(),
-<a href=#1070 id=1070 data-nosnippet>1070</a>            Either::Right(<span class="macro">vec!</span>[
-<a href=#1071 id=1071 data-nosnippet>1071</a>                <span class="macro">hashmap!</span> {
-<a href=#1072 id=1072 data-nosnippet>1072</a>                    <span class="string">"type"</span>.to_string() =&gt; <span class="string">"image"</span>.to_string()
-<a href=#1073 id=1073 data-nosnippet>1073</a>                },
-<a href=#1074 id=1074 data-nosnippet>1074</a>                <span class="macro">hashmap!</span> {
-<a href=#1075 id=1075 data-nosnippet>1075</a>                    <span class="string">"type"</span>.to_string() =&gt; <span class="string">"text"</span>.to_string(),
-<a href=#1076 id=1076 data-nosnippet>1076</a>                    <span class="string">"text"</span>.to_string() =&gt; <span class="string">"This is me, who are you"</span>.to_string()
-<a href=#1077 id=1077 data-nosnippet>1077</a>                },
-<a href=#1078 id=1078 data-nosnippet>1078</a>            ]),
-<a href=#1079 id=1079 data-nosnippet>1079</a>        );
-<a href=#1080 id=1080 data-nosnippet>1080</a>        inputs.push(message);
-<a href=#1081 id=1081 data-nosnippet>1081</a>
-<a href=#1082 id=1082 data-nosnippet>1082</a>        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
-<a href=#1083 id=1083 data-nosnippet>1083</a>            IndexMap::new();
-<a href=#1084 id=1084 data-nosnippet>1084</a>        message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"assistant"</span>.to_string()));
-<a href=#1085 id=1085 data-nosnippet>1085</a>        message.insert(
-<a href=#1086 id=1086 data-nosnippet>1086</a>            <span class="string">"content"</span>.to_string(),
-<a href=#1087 id=1087 data-nosnippet>1087</a>            Either::Right(<span class="macro">vec!</span>[<span class="macro">hashmap!</span> {
-<a href=#1088 id=1088 data-nosnippet>1088</a>                <span class="string">"type"</span>.to_string() =&gt; <span class="string">"text"</span>.to_string(),
-<a href=#1089 id=1089 data-nosnippet>1089</a>                <span class="string">"text"</span>.to_string() =&gt; <span class="string">"   I am an assistant   "</span>.to_string()
-<a href=#1090 id=1090 data-nosnippet>1090</a>            }]),
-<a href=#1091 id=1091 data-nosnippet>1091</a>        );
-<a href=#1092 id=1092 data-nosnippet>1092</a>        inputs.push(message);
-<a href=#1093 id=1093 data-nosnippet>1093</a>
-<a href=#1094 id=1094 data-nosnippet>1094</a>        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
-<a href=#1095 id=1095 data-nosnippet>1095</a>            IndexMap::new();
-<a href=#1096 id=1096 data-nosnippet>1096</a>        message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
-<a href=#1097 id=1097 data-nosnippet>1097</a>        message.insert(
-<a href=#1098 id=1098 data-nosnippet>1098</a>            <span class="string">"content"</span>.to_string(),
-<a href=#1099 id=1099 data-nosnippet>1099</a>            Either::Right(<span class="macro">vec!</span>[
-<a href=#1100 id=1100 data-nosnippet>1100</a>                <span class="macro">hashmap!</span> {
-<a href=#1101 id=1101 data-nosnippet>1101</a>                    <span class="string">"type"</span>.to_string() =&gt; <span class="string">"image"</span>.to_string()
-<a href=#1102 id=1102 data-nosnippet>1102</a>                },
-<a href=#1103 id=1103 data-nosnippet>1103</a>                <span class="macro">hashmap!</span> {
-<a href=#1104 id=1104 data-nosnippet>1104</a>                    <span class="string">"type"</span>.to_string() =&gt; <span class="string">"text"</span>.to_string(),
-<a href=#1105 id=1105 data-nosnippet>1105</a>                    <span class="string">"text"</span>.to_string() =&gt; <span class="string">"Another question, what is this?"</span>.to_string()
-<a href=#1106 id=1106 data-nosnippet>1106</a>                },
-<a href=#1107 id=1107 data-nosnippet>1107</a>            ]),
-<a href=#1108 id=1108 data-nosnippet>1108</a>        );
-<a href=#1109 id=1109 data-nosnippet>1109</a>        inputs.push(message);
-<a href=#1110 id=1110 data-nosnippet>1110</a>
-<a href=#1111 id=1111 data-nosnippet>1111</a>        test_with_inputs(<span class="kw-2">&amp;</span>templates, <span class="kw-2">&amp;</span>expected_outputs, inputs);
-<a href=#1112 id=1112 data-nosnippet>1112</a>    }
-<a href=#1113 id=1113 data-nosnippet>1113</a>}</code></pre></div></section></main></body></html>
+<a href=#914 id=914 data-nosnippet>914</a>                <span class="prelude-val">None</span>, <span class="comment">// reasoning_effort
+<a href=#915 id=915 data-nosnippet>915</a>                </span><span class="kw-2">&amp;</span>ChatTemplateValue(Either::Left(template.to_string())),
+<a href=#916 id=916 data-nosnippet>916</a>                <span class="prelude-val">Some</span>(bos.to_string()),
+<a href=#917 id=917 data-nosnippet>917</a>                <span class="prelude-val">Some</span>(eos.to_string()),
+<a href=#918 id=918 data-nosnippet>918</a>                <span class="prelude-val">Some</span>(unk.to_string()),
+<a href=#919 id=919 data-nosnippet>919</a>                Vec::new(),
+<a href=#920 id=920 data-nosnippet>920</a>            ) {
+<a href=#921 id=921 data-nosnippet>921</a>                <span class="prelude-val">Ok</span>(v) =&gt; v,
+<a href=#922 id=922 data-nosnippet>922</a>                <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#923 id=923 data-nosnippet>923</a>                    failed.push(<span class="macro">format!</span>(<span class="string">"Failed with {e}."</span>));
+<a href=#924 id=924 data-nosnippet>924</a>                    <span class="kw">continue</span>;
+<a href=#925 id=925 data-nosnippet>925</a>                }
+<a href=#926 id=926 data-nosnippet>926</a>            };
+<a href=#927 id=927 data-nosnippet>927</a>            <span class="kw">if </span>output != <span class="kw-2">*</span>expected {
+<a href=#928 id=928 data-nosnippet>928</a>                failed.push(<span class="macro">format!</span>(
+<a href=#929 id=929 data-nosnippet>929</a>                    <span class="string">"Expected: `{}` \n\nGot:      `{}`"</span>,
+<a href=#930 id=930 data-nosnippet>930</a>                    expected.replace(<span class="string">'\n'</span>, <span class="string">"\\n"</span>),
+<a href=#931 id=931 data-nosnippet>931</a>                    output.replace(<span class="string">'\n'</span>, <span class="string">"\\n"</span>)
+<a href=#932 id=932 data-nosnippet>932</a>                ));
+<a href=#933 id=933 data-nosnippet>933</a>            }
+<a href=#934 id=934 data-nosnippet>934</a>        }
+<a href=#935 id=935 data-nosnippet>935</a>        <span class="kw">if </span>!failed.is_empty() {
+<a href=#936 id=936 data-nosnippet>936</a>            <span class="kw">for </span>(i, line) <span class="kw">in </span>failed.iter().enumerate() {
+<a href=#937 id=937 data-nosnippet>937</a>                <span class="macro">println!</span>(<span class="string">"------------ Template {i} ------------"</span>);
+<a href=#938 id=938 data-nosnippet>938</a>                <span class="macro">println!</span>(<span class="string">"{line}"</span>);
+<a href=#939 id=939 data-nosnippet>939</a>            }
+<a href=#940 id=940 data-nosnippet>940</a>            <span class="macro">println!</span>(<span class="string">"------------------------"</span>);
+<a href=#941 id=941 data-nosnippet>941</a>            <span class="macro">panic!</span>(<span class="string">"{}/{n_templates} chat templates failed."</span>, failed.len());
+<a href=#942 id=942 data-nosnippet>942</a>        }
+<a href=#943 id=943 data-nosnippet>943</a>    }
+<a href=#944 id=944 data-nosnippet>944</a>
+<a href=#945 id=945 data-nosnippet>945</a>    <span class="attr">#[test]
+<a href=#946 id=946 data-nosnippet>946</a>    </span><span class="doccomment">/// Generating these cases:
+<a href=#947 id=947 data-nosnippet>947</a>    /// ```py
+<a href=#948 id=948 data-nosnippet>948</a>    /// &gt;&gt;&gt; t=transformers.AutoTokenizer.from_pretrained(...)
+<a href=#949 id=949 data-nosnippet>949</a>    /// # If non-system prompt model
+<a href=#950 id=950 data-nosnippet>950</a>    /// &gt;&gt;&gt; t.apply_chat_template([{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi there"},{"role":"user","content":"Who are you"},{"role":"assistant","content":"   I am an assistant   "},{"role":"user","content":"Another question"}], add_generation_prompt=True, tokenize=False)
+<a href=#951 id=951 data-nosnippet>951</a>    /// # If system prompt model
+<a href=#952 id=952 data-nosnippet>952</a>    /// &gt;&gt;&gt; t.apply_chat_template([{"role":"system","content":"You are a helpful assistant"},{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi there"},{"role":"user","content":"Who are you"},{"role":"assistant","content":"   I am an assistant   "},{"role":"user","content":"Another question"}], add_generation_prompt=True, tokenize=False)
+<a href=#953 id=953 data-nosnippet>953</a>    /// ```
+<a href=#954 id=954 data-nosnippet>954</a>    </span><span class="kw">fn </span>test_chat_templates() {
+<a href=#955 id=955 data-nosnippet>955</a>        <span class="kw">let </span>templates = [
+<a href=#956 id=956 data-nosnippet>956</a>            <span class="comment">// ChatML: https://huggingface.co/teknium/OpenHermes-2.5-Mistral-7B
+<a href=#957 id=957 data-nosnippet>957</a>            </span>(<span class="bool-val">true</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{% for message in messages %}{{'&lt;|im_start|&gt;' + message['role'] + '\n' + message['content'] + '&lt;|im_end|&gt;' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '&lt;|im_start|&gt;assistant\n' }}{% endif %}"</span>),
+<a href=#958 id=958 data-nosnippet>958</a>            <span class="comment">// mistralai/Mistral-7B-Instruct-v0.1
+<a href=#959 id=959 data-nosnippet>959</a>            </span>(<span class="bool-val">false</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token + ' ' }}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}"</span>),
+<a href=#960 id=960 data-nosnippet>960</a>            <span class="comment">// meta-llama/Llama-2-13b-chat-hf
+<a href=#961 id=961 data-nosnippet>961</a>            </span>(<span class="bool-val">true</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}{% set system_message = messages[0]['content'] %}{% else %}{% set loop_messages = messages %}{% set system_message = false %}{% endif %}{% for message in loop_messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if loop.index0 == 0 and system_message != false %}{% set content = '&lt;&lt;SYS&gt;&gt;\\n' + system_message + '\\n&lt;&lt;/SYS&gt;&gt;\\n\\n' + message['content'] %}{% else %}{% set content = message['content'] %}{% endif %}{% if message['role'] == 'user' %}{{ bos_token + '[INST] ' + content.strip() + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ ' '  + content.strip() + ' ' + eos_token }}{% endif %}{% endfor %}"</span>),
+<a href=#962 id=962 data-nosnippet>962</a>            <span class="comment">// mistralai/Mixtral-8x7B-Instruct-v0.1
+<a href=#963 id=963 data-nosnippet>963</a>            </span>(<span class="bool-val">false</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token}}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}"</span>),
+<a href=#964 id=964 data-nosnippet>964</a>            <span class="comment">// google/gemma-7b-it
+<a href=#965 id=965 data-nosnippet>965</a>            </span>(<span class="bool-val">false</span>, <span class="string">"&lt;bos&gt;"</span>, <span class="string">"&lt;eos&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{{ bos_token }}{% if messages[0]['role'] == 'system' %}{{ raise_exception('System role not supported') }}{% endif %}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if (message['role'] == 'assistant') %}{% set role = 'model' %}{% else %}{% set role = message['role'] %}{% endif %}{{ '&lt;start_of_turn&gt;' + role + '\n' + message['content'] | trim + '&lt;end_of_turn&gt;\n' }}{% endfor %}{% if add_generation_prompt %}{{'&lt;start_of_turn&gt;model\n'}}{% endif %}"</span>),
+<a href=#966 id=966 data-nosnippet>966</a>            <span class="comment">// HuggingFaceM4/idefics2-8b-chatty
+<a href=#967 id=967 data-nosnippet>967</a>            </span>(<span class="bool-val">true</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{% for message in messages %}{{message['role'].capitalize()}}{% if message['content'][0]['type'] == 'image' %}{{':'}}{% else %}{{': '}}{% endif %}{% for line in message['content'] %}{% if line['type'] == 'text' %}{{line['text']}}{% elif line['type'] == 'image' %}{{ '&lt;image&gt;' }}{% endif %}{% endfor %}&lt;end_of_utterance&gt;\n{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"</span>),
+<a href=#968 id=968 data-nosnippet>968</a>        ];
+<a href=#969 id=969 data-nosnippet>969</a>        <span class="kw">let </span>expected_outputs = [
+<a href=#970 id=970 data-nosnippet>970</a>            <span class="comment">// ChatML: https://huggingface.co/teknium/OpenHermes-2.5-Mistral-7B
+<a href=#971 id=971 data-nosnippet>971</a>            </span><span class="string">"&lt;|im_start|&gt;system\nYou are a helpful assistant&lt;|im_end|&gt;\n&lt;|im_start|&gt;user\nHello&lt;|im_end|&gt;\n&lt;|im_start|&gt;assistant\nHi there&lt;|im_end|&gt;\n&lt;|im_start|&gt;user\nWho are you&lt;|im_end|&gt;\n&lt;|im_start|&gt;assistant\n   I am an assistant   &lt;|im_end|&gt;\n&lt;|im_start|&gt;user\nAnother question&lt;|im_end|&gt;\n&lt;|im_start|&gt;assistant\n"</span>,
+<a href=#972 id=972 data-nosnippet>972</a>            <span class="comment">// mistralai/Mistral-7B-Instruct-v0.1
+<a href=#973 id=973 data-nosnippet>973</a>            </span><span class="string">"&lt;s&gt;[INST] Hello [/INST]Hi there&lt;/s&gt; [INST] Who are you [/INST]   I am an assistant   &lt;/s&gt; [INST] Another question [/INST]"</span>,
+<a href=#974 id=974 data-nosnippet>974</a>            <span class="comment">// meta-llama/Llama-2-13b-chat-hf
+<a href=#975 id=975 data-nosnippet>975</a>            </span><span class="string">"&lt;s&gt;[INST] &lt;&lt;SYS&gt;&gt;\nYou are a helpful assistant\n&lt;&lt;/SYS&gt;&gt;\n\nHello [/INST] Hi there &lt;/s&gt;&lt;s&gt;[INST] Who are you [/INST] I am an assistant &lt;/s&gt;&lt;s&gt;[INST] Another question [/INST]"</span>,
+<a href=#976 id=976 data-nosnippet>976</a>            <span class="comment">// mistralai/Mixtral-8x7B-Instruct-v0.1
+<a href=#977 id=977 data-nosnippet>977</a>            </span><span class="string">"&lt;s&gt;[INST] Hello [/INST]Hi there&lt;/s&gt;[INST] Who are you [/INST]   I am an assistant   &lt;/s&gt;[INST] Another question [/INST]"</span>,
+<a href=#978 id=978 data-nosnippet>978</a>            <span class="comment">// google/gemma-7b-it
+<a href=#979 id=979 data-nosnippet>979</a>            </span><span class="string">"&lt;bos&gt;&lt;start_of_turn&gt;user\nHello&lt;end_of_turn&gt;\n&lt;start_of_turn&gt;model\nHi there&lt;end_of_turn&gt;\n&lt;start_of_turn&gt;user\nWho are you&lt;end_of_turn&gt;\n&lt;start_of_turn&gt;model\nI am an assistant&lt;end_of_turn&gt;\n&lt;start_of_turn&gt;user\nAnother question&lt;end_of_turn&gt;\n&lt;start_of_turn&gt;model\n"</span>,
+<a href=#980 id=980 data-nosnippet>980</a>        ];
+<a href=#981 id=981 data-nosnippet>981</a>        <span class="kw">let </span>messages = [
+<a href=#982 id=982 data-nosnippet>982</a>            [<span class="string">"system"</span>, <span class="string">"You are a helpful assistant"</span>],
+<a href=#983 id=983 data-nosnippet>983</a>            [<span class="string">"user"</span>, <span class="string">"Hello"</span>],
+<a href=#984 id=984 data-nosnippet>984</a>            [<span class="string">"assistant"</span>, <span class="string">"Hi there"</span>],
+<a href=#985 id=985 data-nosnippet>985</a>            [<span class="string">"user"</span>, <span class="string">"Who are you"</span>],
+<a href=#986 id=986 data-nosnippet>986</a>            [<span class="string">"assistant"</span>, <span class="string">"   I am an assistant   "</span>],
+<a href=#987 id=987 data-nosnippet>987</a>            [<span class="string">"user"</span>, <span class="string">"Another question"</span>],
+<a href=#988 id=988 data-nosnippet>988</a>        ];
+<a href=#989 id=989 data-nosnippet>989</a>        <span class="kw">let </span><span class="kw-2">mut </span>inputs = Vec::new();
+<a href=#990 id=990 data-nosnippet>990</a>        <span class="kw">for </span>[role, content] <span class="kw">in </span>messages {
+<a href=#991 id=991 data-nosnippet>991</a>            <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
+<a href=#992 id=992 data-nosnippet>992</a>                IndexMap::new();
+<a href=#993 id=993 data-nosnippet>993</a>            message.insert(<span class="string">"role"</span>.to_string(), Either::Left(role.to_string()));
+<a href=#994 id=994 data-nosnippet>994</a>            message.insert(<span class="string">"content"</span>.to_string(), Either::Left(content.to_string()));
+<a href=#995 id=995 data-nosnippet>995</a>            inputs.push(message);
+<a href=#996 id=996 data-nosnippet>996</a>        }
+<a href=#997 id=997 data-nosnippet>997</a>        test_with_inputs(<span class="kw-2">&amp;</span>templates, <span class="kw-2">&amp;</span>expected_outputs, inputs);
+<a href=#998 id=998 data-nosnippet>998</a>    }
+<a href=#999 id=999 data-nosnippet>999</a>
+<a href=#1000 id=1000 data-nosnippet>1000</a>    <span class="attr">#[test]
+<a href=#1001 id=1001 data-nosnippet>1001</a>    </span><span class="doccomment">/// Generating these cases:
+<a href=#1002 id=1002 data-nosnippet>1002</a>    /// ```py
+<a href=#1003 id=1003 data-nosnippet>1003</a>    /// &gt;&gt;&gt; processor=transformers.AutoProcessor.from_pretrained(...)
+<a href=#1004 id=1004 data-nosnippet>1004</a>    /// &gt;&gt;&gt; processor.apply_chat_template([
+<a href=#1005 id=1005 data-nosnippet>1005</a>    ///         {"role":"system","content":[{"type":"text", "text": "You are a helpful assistant"}]},
+<a href=#1006 id=1006 data-nosnippet>1006</a>    ///         {"role":"user","content":[{"type":"image"}, {"type":"text", "text": "Hello, please describe the above."}]},
+<a href=#1007 id=1007 data-nosnippet>1007</a>    ///         {"role":"assistant","content":[{"type":"text", "text": "Hi there"}]},
+<a href=#1008 id=1008 data-nosnippet>1008</a>    ///         {"role":"user","content":[{"type":"text", "text": "Who are you"}]},
+<a href=#1009 id=1009 data-nosnippet>1009</a>    ///         {"role":"assistant","content":[{"type":"text", "text": "   I am an assistant   "}]},
+<a href=#1010 id=1010 data-nosnippet>1010</a>    ///         {"role":"user","content":[{"type":"text", "text": "Another question"}]}
+<a href=#1011 id=1011 data-nosnippet>1011</a>    ///     ], add_generation_prompt=True, tokenize=False)
+<a href=#1012 id=1012 data-nosnippet>1012</a>    /// ```
+<a href=#1013 id=1013 data-nosnippet>1013</a>    </span><span class="kw">fn </span>test_image_chat_templates() {
+<a href=#1014 id=1014 data-nosnippet>1014</a>        <span class="kw">let </span>templates = [
+<a href=#1015 id=1015 data-nosnippet>1015</a>            <span class="comment">// HuggingFaceM4/idefics2-8b-chatty
+<a href=#1016 id=1016 data-nosnippet>1016</a>            </span>(<span class="bool-val">true</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{% for message in messages %}{{message['role'].capitalize()}}{% if message['content'][0]['type'] == 'image' %}{{':'}}{% else %}{{': '}}{% endif %}{% for line in message['content'] %}{% if line['type'] == 'text' %}{{line['text']}}{% elif line['type'] == 'image' %}{{ '&lt;image&gt;' }}{% endif %}{% endfor %}&lt;end_of_utterance&gt;\n{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"</span>),
+<a href=#1017 id=1017 data-nosnippet>1017</a>        ];
+<a href=#1018 id=1018 data-nosnippet>1018</a>        <span class="kw">let </span>expected_outputs = [
+<a href=#1019 id=1019 data-nosnippet>1019</a>            <span class="comment">// HuggingFaceM4/idefics2-8b-chatty
+<a href=#1020 id=1020 data-nosnippet>1020</a>            </span><span class="string">"System: You are a helpful assistant&lt;end_of_utterance&gt;\nUser:&lt;image&gt;Hello, please describe the above.&lt;end_of_utterance&gt;\nAssistant: Hi there&lt;end_of_utterance&gt;\nUser:&lt;image&gt;This is me, who are you&lt;end_of_utterance&gt;\nAssistant:    I am an assistant   &lt;end_of_utterance&gt;\nUser:&lt;image&gt;Another question, what is this?&lt;end_of_utterance&gt;\nAssistant:"</span>,
+<a href=#1021 id=1021 data-nosnippet>1021</a>        ];
+<a href=#1022 id=1022 data-nosnippet>1022</a>
+<a href=#1023 id=1023 data-nosnippet>1023</a>        <span class="kw">let </span><span class="kw-2">mut </span>inputs = Vec::new();
+<a href=#1024 id=1024 data-nosnippet>1024</a>
+<a href=#1025 id=1025 data-nosnippet>1025</a>        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
+<a href=#1026 id=1026 data-nosnippet>1026</a>            IndexMap::new();
+<a href=#1027 id=1027 data-nosnippet>1027</a>        message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"system"</span>.to_string()));
+<a href=#1028 id=1028 data-nosnippet>1028</a>        message.insert(
+<a href=#1029 id=1029 data-nosnippet>1029</a>            <span class="string">"content"</span>.to_string(),
+<a href=#1030 id=1030 data-nosnippet>1030</a>            Either::Right(<span class="macro">vec!</span>[<span class="macro">hashmap!</span> {
+<a href=#1031 id=1031 data-nosnippet>1031</a>                <span class="string">"type"</span>.to_string() =&gt; <span class="string">"text"</span>.to_string(),
+<a href=#1032 id=1032 data-nosnippet>1032</a>                <span class="string">"text"</span>.to_string() =&gt; <span class="string">"You are a helpful assistant"</span>.to_string()
+<a href=#1033 id=1033 data-nosnippet>1033</a>            }]),
+<a href=#1034 id=1034 data-nosnippet>1034</a>        );
+<a href=#1035 id=1035 data-nosnippet>1035</a>        inputs.push(message);
+<a href=#1036 id=1036 data-nosnippet>1036</a>
+<a href=#1037 id=1037 data-nosnippet>1037</a>        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
+<a href=#1038 id=1038 data-nosnippet>1038</a>            IndexMap::new();
+<a href=#1039 id=1039 data-nosnippet>1039</a>        message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
+<a href=#1040 id=1040 data-nosnippet>1040</a>        message.insert(
+<a href=#1041 id=1041 data-nosnippet>1041</a>            <span class="string">"content"</span>.to_string(),
+<a href=#1042 id=1042 data-nosnippet>1042</a>            Either::Right(<span class="macro">vec!</span>[
+<a href=#1043 id=1043 data-nosnippet>1043</a>                <span class="macro">hashmap!</span> {
+<a href=#1044 id=1044 data-nosnippet>1044</a>                    <span class="string">"type"</span>.to_string() =&gt; <span class="string">"image"</span>.to_string()
+<a href=#1045 id=1045 data-nosnippet>1045</a>                },
+<a href=#1046 id=1046 data-nosnippet>1046</a>                <span class="macro">hashmap!</span> {
+<a href=#1047 id=1047 data-nosnippet>1047</a>                    <span class="string">"type"</span>.to_string() =&gt; <span class="string">"text"</span>.to_string(),
+<a href=#1048 id=1048 data-nosnippet>1048</a>                    <span class="string">"text"</span>.to_string() =&gt; <span class="string">"Hello, please describe the above."</span>.to_string()
+<a href=#1049 id=1049 data-nosnippet>1049</a>                },
+<a href=#1050 id=1050 data-nosnippet>1050</a>            ]),
+<a href=#1051 id=1051 data-nosnippet>1051</a>        );
+<a href=#1052 id=1052 data-nosnippet>1052</a>        inputs.push(message);
+<a href=#1053 id=1053 data-nosnippet>1053</a>
+<a href=#1054 id=1054 data-nosnippet>1054</a>        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
+<a href=#1055 id=1055 data-nosnippet>1055</a>            IndexMap::new();
+<a href=#1056 id=1056 data-nosnippet>1056</a>        message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"assistant"</span>.to_string()));
+<a href=#1057 id=1057 data-nosnippet>1057</a>        message.insert(
+<a href=#1058 id=1058 data-nosnippet>1058</a>            <span class="string">"content"</span>.to_string(),
+<a href=#1059 id=1059 data-nosnippet>1059</a>            Either::Right(<span class="macro">vec!</span>[<span class="macro">hashmap!</span> {
+<a href=#1060 id=1060 data-nosnippet>1060</a>                <span class="string">"type"</span>.to_string() =&gt; <span class="string">"text"</span>.to_string(),
+<a href=#1061 id=1061 data-nosnippet>1061</a>                <span class="string">"text"</span>.to_string() =&gt; <span class="string">"Hi there"</span>.to_string()
+<a href=#1062 id=1062 data-nosnippet>1062</a>            }]),
+<a href=#1063 id=1063 data-nosnippet>1063</a>        );
+<a href=#1064 id=1064 data-nosnippet>1064</a>        inputs.push(message);
+<a href=#1065 id=1065 data-nosnippet>1065</a>
+<a href=#1066 id=1066 data-nosnippet>1066</a>        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
+<a href=#1067 id=1067 data-nosnippet>1067</a>            IndexMap::new();
+<a href=#1068 id=1068 data-nosnippet>1068</a>        message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
+<a href=#1069 id=1069 data-nosnippet>1069</a>        message.insert(
+<a href=#1070 id=1070 data-nosnippet>1070</a>            <span class="string">"content"</span>.to_string(),
+<a href=#1071 id=1071 data-nosnippet>1071</a>            Either::Right(<span class="macro">vec!</span>[
+<a href=#1072 id=1072 data-nosnippet>1072</a>                <span class="macro">hashmap!</span> {
+<a href=#1073 id=1073 data-nosnippet>1073</a>                    <span class="string">"type"</span>.to_string() =&gt; <span class="string">"image"</span>.to_string()
+<a href=#1074 id=1074 data-nosnippet>1074</a>                },
+<a href=#1075 id=1075 data-nosnippet>1075</a>                <span class="macro">hashmap!</span> {
+<a href=#1076 id=1076 data-nosnippet>1076</a>                    <span class="string">"type"</span>.to_string() =&gt; <span class="string">"text"</span>.to_string(),
+<a href=#1077 id=1077 data-nosnippet>1077</a>                    <span class="string">"text"</span>.to_string() =&gt; <span class="string">"This is me, who are you"</span>.to_string()
+<a href=#1078 id=1078 data-nosnippet>1078</a>                },
+<a href=#1079 id=1079 data-nosnippet>1079</a>            ]),
+<a href=#1080 id=1080 data-nosnippet>1080</a>        );
+<a href=#1081 id=1081 data-nosnippet>1081</a>        inputs.push(message);
+<a href=#1082 id=1082 data-nosnippet>1082</a>
+<a href=#1083 id=1083 data-nosnippet>1083</a>        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
+<a href=#1084 id=1084 data-nosnippet>1084</a>            IndexMap::new();
+<a href=#1085 id=1085 data-nosnippet>1085</a>        message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"assistant"</span>.to_string()));
+<a href=#1086 id=1086 data-nosnippet>1086</a>        message.insert(
+<a href=#1087 id=1087 data-nosnippet>1087</a>            <span class="string">"content"</span>.to_string(),
+<a href=#1088 id=1088 data-nosnippet>1088</a>            Either::Right(<span class="macro">vec!</span>[<span class="macro">hashmap!</span> {
+<a href=#1089 id=1089 data-nosnippet>1089</a>                <span class="string">"type"</span>.to_string() =&gt; <span class="string">"text"</span>.to_string(),
+<a href=#1090 id=1090 data-nosnippet>1090</a>                <span class="string">"text"</span>.to_string() =&gt; <span class="string">"   I am an assistant   "</span>.to_string()
+<a href=#1091 id=1091 data-nosnippet>1091</a>            }]),
+<a href=#1092 id=1092 data-nosnippet>1092</a>        );
+<a href=#1093 id=1093 data-nosnippet>1093</a>        inputs.push(message);
+<a href=#1094 id=1094 data-nosnippet>1094</a>
+<a href=#1095 id=1095 data-nosnippet>1095</a>        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
+<a href=#1096 id=1096 data-nosnippet>1096</a>            IndexMap::new();
+<a href=#1097 id=1097 data-nosnippet>1097</a>        message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
+<a href=#1098 id=1098 data-nosnippet>1098</a>        message.insert(
+<a href=#1099 id=1099 data-nosnippet>1099</a>            <span class="string">"content"</span>.to_string(),
+<a href=#1100 id=1100 data-nosnippet>1100</a>            Either::Right(<span class="macro">vec!</span>[
+<a href=#1101 id=1101 data-nosnippet>1101</a>                <span class="macro">hashmap!</span> {
+<a href=#1102 id=1102 data-nosnippet>1102</a>                    <span class="string">"type"</span>.to_string() =&gt; <span class="string">"image"</span>.to_string()
+<a href=#1103 id=1103 data-nosnippet>1103</a>                },
+<a href=#1104 id=1104 data-nosnippet>1104</a>                <span class="macro">hashmap!</span> {
+<a href=#1105 id=1105 data-nosnippet>1105</a>                    <span class="string">"type"</span>.to_string() =&gt; <span class="string">"text"</span>.to_string(),
+<a href=#1106 id=1106 data-nosnippet>1106</a>                    <span class="string">"text"</span>.to_string() =&gt; <span class="string">"Another question, what is this?"</span>.to_string()
+<a href=#1107 id=1107 data-nosnippet>1107</a>                },
+<a href=#1108 id=1108 data-nosnippet>1108</a>            ]),
+<a href=#1109 id=1109 data-nosnippet>1109</a>        );
+<a href=#1110 id=1110 data-nosnippet>1110</a>        inputs.push(message);
+<a href=#1111 id=1111 data-nosnippet>1111</a>
+<a href=#1112 id=1112 data-nosnippet>1112</a>        test_with_inputs(<span class="kw-2">&amp;</span>templates, <span class="kw-2">&amp;</span>expected_outputs, inputs);
+<a href=#1113 id=1113 data-nosnippet>1113</a>    }
+<a href=#1114 id=1114 data-nosnippet>1114</a>}</code></pre></div></section></main></body></html>
