@@ -61,23 +61,20 @@ impl QuantMethod for MXFP4Layer {
     }
 
     fn dequantize_w(&self) -> Result<candle_core::Tensor> {
-        // For now, fall back to Metal AFQ implementation or CPU
         #[cfg(feature = "metal")]
-        {
+        if self.blocks.device().is_metal() {
             use crate::afq::ops;
             use crate::{AfqBits, AfqGroupSize};
-            ops::afq_dequantize_op(
+            return ops::afq_dequantize_op(
                 &self.blocks,
                 &self.scales,
                 &self.scales.clone(),
                 AfqGroupSize::Low,
                 AfqBits::Mxfp4,
-            )
+            );
         }
-        #[cfg(not(feature = "metal"))]
-        {
-            candle_core::bail!("MXFP4 dequantize_w not implemented for this backend")
-        }
+        // CPU fallback
+        self.dequantize_weights()
     }
 
     #[allow(unused_variables)]
@@ -131,7 +128,8 @@ impl QuantMethod for MXFP4Layer {
             }
         }
 
-        candle_core::bail!("MXFP4 forward requires CUDA or Metal backend")
+        // CPU fallback: dequantize weights and compute using standard matmul
+        self.forward_dequantize(x)
     }
 
     #[allow(unused_variables)]
@@ -160,7 +158,8 @@ impl QuantMethod for MXFP4Layer {
             }
         }
 
-        candle_core::bail!("MXFP4 gather_forward requires CUDA or Metal backend")
+        // CPU fallback: dequantize weights and compute using standard matmul
+        self.gather_forward_dequantize(x, indices)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -345,7 +344,6 @@ impl MXFP4Layer {
     }
 
     /// FP4 E2M1 lookup table for dequantization
-    #[allow(dead_code)]
     const FP4_LUT: [f32; 16] = [
         0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
     ];
@@ -354,7 +352,6 @@ impl MXFP4Layer {
     /// blocks: [num_experts, N, K/2] packed bytes
     /// scales: [num_experts, N, K/32] E8M0 scales
     /// Returns: [num_experts, N, K] f32 weights
-    #[allow(dead_code)]
     fn dequantize_weights(&self) -> Result<Tensor> {
         let blocks_dims = self.blocks.dims();
         let scales_dims = self.scales.dims();
@@ -415,11 +412,47 @@ impl MXFP4Layer {
             .to_dtype(DType::BF16)
     }
 
+    /// Fallback forward using dequantized weights
+    /// x: [M, K] or batched [B, M, K]
+    /// Returns: [M, N] or [B, M, N]
+    fn forward_dequantize(&self, x: &Tensor) -> Result<Tensor> {
+        let orig_dims = x.dims().to_vec();
+
+        // Flatten to 2D if batched
+        let x_2d = if orig_dims.len() > 2 {
+            let features = orig_dims[orig_dims.len() - 1];
+            let batch_size: usize = orig_dims[..orig_dims.len() - 1].iter().product();
+            x.reshape((batch_size, features))?
+        } else {
+            x.clone()
+        };
+
+        // Dequantize weights: [N, K]
+        let weights = self.dequantize_weights()?;
+
+        // Compute: x @ weight.T = [M, K] @ [K, N] = [M, N]
+        let weight_t = weights.t()?;
+        let mut result = x_2d.matmul(&weight_t)?;
+
+        // Add bias if present
+        if let Some(bias) = &self.bias {
+            result = result.broadcast_add(bias)?;
+        }
+
+        // Reshape back if needed
+        if orig_dims.len() > 2 {
+            let mut new_dims = orig_dims[..orig_dims.len() - 1].to_vec();
+            new_dims.push(result.dim(1)?);
+            result = result.reshape(new_dims)?;
+        }
+
+        Ok(result)
+    }
+
     /// Fallback gather_forward using dequantized weights
     /// x: [num_tokens, K] or [num_tokens, topk, K]
     /// indices: [num_tokens, topk]
     /// Returns: [num_tokens, topk, N]
-    #[allow(dead_code)]
     fn gather_forward_dequantize(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
         let x_dims = x.dims();
         let indices_dims = indices.dims();
