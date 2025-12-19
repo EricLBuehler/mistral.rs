@@ -4013,24 +4013,35 @@ impl DeviceMappedModelLoader for Mistral3Loader {
         let cfg: Mistral3Config = serde_json::from_str(config)?;
         let tcfg = &cfg.text_config;
 
-        let AutoDeviceMapParams::Vision {
-            max_seq_len,
-            max_batch_size,
-            max_image_shape: (mut height, mut width),
-            max_num_images,
-        } = params
-        else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        let (max_seq_len, max_batch_size, max_image_shape, max_num_images) = match params {
+            AutoDeviceMapParams::Text {
+                max_seq_len,
+                max_batch_size,
+            } if mistral3_vision_disabled() => {
+                return Ok(
+                    max_batch_size
+                        * tcfg.num_attention_heads
+                        * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+                );
+            }
+            AutoDeviceMapParams::Vision {
+                max_seq_len,
+                max_batch_size,
+                max_image_shape,
+                max_num_images,
+            } => (*max_seq_len, *max_batch_size, *max_image_shape, *max_num_images),
+            _ => anyhow::bail!("Expected vision AutoDeviceMapParams for this model!"),
         };
 
         if mistral3_vision_disabled() {
             return Ok(
                 max_batch_size
                     * tcfg.num_attention_heads
-                    * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+                    * max_seq_len.min(ATTENTION_CHUNK_SIZE).pow(2),
             );
         }
 
+        let (mut height, mut width) = max_image_shape;
         let vcfg = &cfg.vision_config;
         let img_seq_len = {
             // Reshaping algorithm
@@ -4056,7 +4067,7 @@ impl DeviceMappedModelLoader for Mistral3Loader {
         };
 
         // This model injects the vision information directly into the input embeddings
-        let max_seq_len = img_seq_len * max_num_images + *max_seq_len.min(&ATTENTION_CHUNK_SIZE);
+        let max_seq_len = img_seq_len * max_num_images + max_seq_len.min(ATTENTION_CHUNK_SIZE);
         Ok(max_batch_size * tcfg.num_attention_heads * max_seq_len * max_seq_len)
     }
 
@@ -4071,14 +4082,16 @@ impl DeviceMappedModelLoader for Mistral3Loader {
         let cfg: Mistral3Config = serde_json::from_str(config)?;
         let cfg = &cfg.vision_config;
 
-        let AutoDeviceMapParams::Vision {
-            max_seq_len: _,
-            max_batch_size,
-            max_image_shape: (mut height, mut width),
-            max_num_images,
-        } = params
-        else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        let (mut height, mut width, max_batch_size, max_num_images) = match params {
+            AutoDeviceMapParams::Vision {
+                max_seq_len: _,
+                max_batch_size,
+                max_image_shape: (height, width),
+                max_num_images,
+            } => (*height, *width, *max_batch_size, *max_num_images),
+            AutoDeviceMapParams::Text { .. } => {
+                return Ok(0);
+            }
         };
 
         let img_seq_len = {

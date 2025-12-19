@@ -265,7 +265,9 @@ impl Loader for VisionLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         let config = std::fs::read_to_string(paths.get_config_filename())?;
-        crate::vision_models::mistral3::set_vision_disabled(self.config.disable_vision);
+        let disable_vision = self.config.disable_vision
+            || crate::vision_models::mistral3::env_vision_disabled();
+        crate::vision_models::mistral3::set_vision_disabled(disable_vision);
 
         if !self.inner.supports_paged_attention(&config) {
             paged_attn_config = None;
@@ -323,8 +325,10 @@ impl Loader for VisionLoader {
                 nm_device: available_devices[0].clone(),
             };
         } else if let DeviceMapSetting::Auto(mut params) = mapper.clone() {
-            // We can promote to vision params if we get text params
-            params = params.maybe_promote_to_vision();
+            if !disable_vision {
+                // We can promote to vision params if we get text params
+                params = params.maybe_promote_to_vision();
+            }
 
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;

@@ -92,6 +92,10 @@ struct Args {
     #[arg(long, default_value_t = defaults::PREFIX_CACHE_N)]
     prefix_cache_n: usize,
 
+    /// Disable loading the vision component for multimodal models (text-only).
+    #[arg(long, default_value_t = false)]
+    no_vision: bool,
+
     /// NOTE: This can be omitted to use automatic device mapping!
     /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
     /// If one GPU is used, then this value should be an integer. Otherwise, it follows the following pattern:
@@ -343,6 +347,9 @@ fn load_multi_model_config(config_path: &str) -> Result<Vec<ModelConfig>> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    if args.no_vision {
+        std::env::set_var("MISTRALRS_NO_VISION", "1");
+    }
 
     initialize_logging();
 

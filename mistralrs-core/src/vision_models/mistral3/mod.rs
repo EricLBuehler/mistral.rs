@@ -39,6 +39,16 @@ pub fn is_vision_disabled() -> bool {
     MISTRAL3_VISION_DISABLED.load(Ordering::Relaxed)
 }
 
+pub fn env_vision_disabled() -> bool {
+    match std::env::var("MISTRALRS_NO_VISION") {
+        Ok(val) => matches!(
+            val.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "y" | "on"
+        ),
+        Err(_) => false,
+    }
+}
+
 struct Mistral3PatchMerger {
     merging_layer: Linear,
     spatial_merge_size: usize,
