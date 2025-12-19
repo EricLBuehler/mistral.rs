@@ -715,6 +715,7 @@ impl Engine {
                                             content: Some(res),
                                             role: "assistant".to_string(),
                                             tool_calls: None,
+                                            reasoning_content: None,
                                         },
                                         logprobs: None,
                                     };

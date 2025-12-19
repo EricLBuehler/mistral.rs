@@ -204,10 +204,11 @@ fn parse_codex_tool_calls_from_text(text: &str) -> Option<Vec<ToolCall>> {
 
         let parameters = serde_json::to_string(&arguments).ok()?;
         calls.push(ToolCall {
+            id: None,
             tp: mistralrs_core::ToolType::Function,
             function: FunctionCalled {
                 name: name.to_string(),
-                parameters,
+                arguments: parameters,
             },
         });
 
