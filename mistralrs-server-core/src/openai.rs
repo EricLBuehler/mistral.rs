@@ -12,6 +12,7 @@ use utoipa::{
     openapi::{schema::SchemaType, ArrayBuilder, ObjectBuilder, OneOfBuilder, RefOr, Schema, Type},
     PartialSchema, ToSchema,
 };
+use uuid::Uuid;
 
 /// Inner content structure for messages that can be either a string or key-value pairs
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -103,6 +104,10 @@ impl MessageContent {
         MessageContent(Either::Left(text))
     }
 
+    pub fn from_parts(parts: Vec<HashMap<String, MessageInnerContent>>) -> Self {
+        MessageContent(Either::Right(parts))
+    }
+
     /// Extract text from MessageContent
     pub fn to_text(&self) -> Option<String> {
         match &self.0 {
@@ -170,7 +175,7 @@ pub struct FunctionCalled {
     /// The name of the function to call
     pub name: String,
     /// The function arguments
-    #[serde(alias = "arguments")]
+    #[serde(rename = "arguments", alias = "parameters")]
     pub parameters: String,
 }
 
@@ -217,6 +222,9 @@ pub struct Message {
     /// The role of the message sender ("user", "assistant", "system", "tool", etc.)
     pub role: String,
     pub name: Option<String>,
+    /// When role is `tool`, this associates the message with a tool call.
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
     /// Optional list of tool calls
     pub tool_calls: Option<Vec<ToolCall>>,
 }
@@ -257,6 +265,28 @@ fn default_1280usize() -> usize {
 /// Default value helper
 fn default_model() -> String {
     "default".to_string()
+}
+
+fn deserialize_truncation<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum TruncationRepr {
+        String(String),
+        Obj {
+            #[serde(rename = "type")]
+            tp: Option<String>,
+        },
+    }
+
+    let repr = Option::<TruncationRepr>::deserialize(d)?;
+    Ok(match repr {
+        None => None,
+        Some(TruncationRepr::String(s)) => Some(s),
+        Some(TruncationRepr::Obj { tp }) => tp,
+    })
 }
 
 /// Default value helper
@@ -476,7 +506,7 @@ pub enum ResponseFormat {
 pub struct ChatCompletionRequest {
     #[schema(
         schema_with = messages_schema,
-        example = json!(vec![Message{content:Some(MessageContent{0: either::Left(("Why did the crab cross the road?".to_string()))}), role:"user".to_string(), name: None, tool_calls: None}])
+        example = json!(vec![Message{content:Some(MessageContent{0: either::Left(("Why did the crab cross the road?".to_string()))}), role:"user".to_string(), name: None, tool_call_id: None, tool_calls: None}])
     )]
     #[serde(with = "either::serde_untagged")]
     pub messages: Either<Vec<Message>, String>,
@@ -907,40 +937,560 @@ pub struct SpeechGenerationRequest {
 }
 
 /// Helper type for messages field in ResponsesCreateRequest
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum ResponsesMessages {
-    Messages(Vec<Message>),
-    String(String),
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "type")]
+pub enum ResponsesInputContentPart {
+    #[serde(rename = "input_text")]
+    InputText { text: String },
+    // Codex (and some OpenAI tooling) may include prior assistant messages as `output_text` parts
+    // inside `message.content`. For prompt-building, treat this equivalently to `input_text`.
+    #[serde(rename = "output_text")]
+    OutputText { text: String },
+    #[serde(rename = "input_image")]
+    InputImage {
+        #[serde(default)]
+        image_url: Option<ResponsesImageUrl>,
+        #[serde(default)]
+        file_id: Option<String>,
+    },
 }
 
-impl ResponsesMessages {
-    pub fn into_either(self) -> Either<Vec<Message>, String> {
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(untagged)]
+pub enum ResponsesImageUrl {
+    Url(String),
+    Object {
+        url: String,
+        #[serde(flatten)]
+        extra: HashMap<String, Value>,
+    },
+}
+
+impl ResponsesImageUrl {
+    pub fn url(&self) -> &str {
         match self {
-            ResponsesMessages::Messages(msgs) => Either::Left(msgs),
-            ResponsesMessages::String(s) => Either::Right(s),
+            ResponsesImageUrl::Url(u) => u,
+            ResponsesImageUrl::Object { url, .. } => url,
         }
     }
 }
 
-impl PartialSchema for ResponsesMessages {
-    fn schema() -> RefOr<Schema> {
-        RefOr::T(messages_schema())
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(untagged)]
+pub enum ResponsesInputMessageContent {
+    Text(String),
+    Parts(Vec<ResponsesInputContentPart>),
+}
+
+impl ResponsesInputMessageContent {
+    pub fn into_parts(self) -> Vec<ResponsesInputContentPart> {
+        match self {
+            ResponsesInputMessageContent::Text(t) => {
+                vec![ResponsesInputContentPart::InputText { text: t }]
+            }
+            ResponsesInputMessageContent::Parts(p) => p,
+        }
     }
 }
 
-impl ToSchema for ResponsesMessages {
-    fn schemas(
-        schemas: &mut Vec<(
-            String,
-            utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
-        )>,
-    ) {
-        schemas.push((
-            ResponsesMessages::name().into(),
-            ResponsesMessages::schema(),
-        ));
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponsesReasoningSummaryItem {
+    SummaryText {
+        text: String,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponsesReasoningContentItem {
+    ReasoningText {
+        text: String,
+    },
+    Text {
+        text: String,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponsesWebSearchAction {
+    Search {
+        #[serde(default)]
+        query: Option<String>,
+    },
+    OpenPage {
+        #[serde(default)]
+        url: Option<String>,
+    },
+    FindInPage {
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        pattern: Option<String>,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(tag = "type")]
+pub enum ResponsesInputItem {
+    /// A message-style input item, e.g. a user/system message with typed content parts.
+    #[serde(rename = "message")]
+    Message {
+        /// Unique identifier for this input item.
+        #[serde(default = "default_msg_id")]
+        id: String,
+        #[schema(example = "user")]
+        role: String,
+        content: ResponsesInputMessageContent,
+    },
+    /// Tool output provided by the client for a prior function call.
+    #[serde(rename = "function_call_output")]
+    FunctionCallOutput {
+        /// Unique identifier for this input item.
+        #[serde(default = "default_fco_id")]
+        id: String,
+        #[schema(example = "call_abc123")]
+        call_id: String,
+        /// Tool output. Some clients send a plain string; others send an array of content items
+        /// (e.g. `input_text` + `input_image`).
+        output: ResponsesInputMessageContent,
+    },
+    /// A function/tool call emitted by the assistant (may be echoed back by some clients in `input` history).
+    #[serde(rename = "function_call")]
+    FunctionCall {
+        #[serde(default = "default_msg_id")]
+        id: String,
+        #[schema(example = "call_abc123")]
+        call_id: String,
+        name: String,
+        /// JSON string arguments (OpenAI-style).
+        arguments: String,
+    },
+    /// Codex-specific tool call item (treated like a function call for prompt-building).
+    #[serde(rename = "custom_tool_call")]
+    CustomToolCall {
+        #[serde(default = "default_msg_id")]
+        id: String,
+        #[serde(default)]
+        status: Option<String>,
+        #[schema(example = "call_abc123")]
+        call_id: String,
+        name: String,
+        input: String,
+    },
+    /// Codex-specific tool call output item (treated like a function_call_output for prompt-building).
+    #[serde(rename = "custom_tool_call_output")]
+    CustomToolCallOutput {
+        #[serde(default = "default_fco_id")]
+        id: String,
+        #[schema(example = "call_abc123")]
+        call_id: String,
+        output: ResponsesInputMessageContent,
+    },
+    /// Codex local shell call item. We preserve it for history but treat it as a tool call for prompt-building.
+    #[serde(rename = "local_shell_call")]
+    LocalShellCall {
+        #[serde(default = "default_msg_id")]
+        id: String,
+        #[serde(default)]
+        call_id: Option<String>,
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        action: Option<Value>,
+    },
+    /// Reasoning item emitted by some Responses-compatible clients.
+    #[serde(rename = "reasoning")]
+    Reasoning {
+        #[serde(default = "default_msg_id")]
+        id: String,
+        #[serde(default)]
+        summary: Vec<ResponsesReasoningSummaryItem>,
+        #[serde(default)]
+        content: Option<Vec<ResponsesReasoningContentItem>>,
+        #[serde(default)]
+        encrypted_content: Option<String>,
+    },
+    /// Web search call item emitted by the Responses API.
+    #[serde(rename = "web_search_call")]
+    WebSearchCall {
+        #[serde(default = "default_msg_id")]
+        id: String,
+        #[serde(default)]
+        status: Option<String>,
+        action: ResponsesWebSearchAction,
+    },
+    /// Generated by the Codex harness but considered as model response.
+    #[serde(rename = "ghost_snapshot")]
+    GhostSnapshot {
+        #[serde(default = "default_msg_id")]
+        id: String,
+        ghost_commit: Value,
+    },
+    /// Conversation compaction item (alias: `compaction_summary`).
+    #[serde(rename = "compaction")]
+    Compaction {
+        #[serde(default = "default_msg_id")]
+        id: String,
+        encrypted_content: String,
+    },
+    /// Unknown / ignored Responses input item.
+    #[serde(rename = "other")]
+    Other {
+        #[serde(default = "default_msg_id")]
+        id: String,
+        #[serde(default)]
+        kind: String,
+        #[serde(skip_serializing)]
+        raw: Value,
+    },
+}
+
+impl<'de> Deserialize<'de> for ResponsesInputItem {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct TypedMessage {
+            #[serde(default = "default_msg_id")]
+            id: String,
+            role: String,
+            content: ResponsesInputMessageContent,
+        }
+
+        #[derive(Deserialize)]
+        struct TypedFunctionCallOutput {
+            #[serde(default = "default_fco_id")]
+            id: String,
+            call_id: String,
+            output: ResponsesInputMessageContent,
+        }
+
+        #[derive(Deserialize)]
+        struct TypedFunctionCall {
+            #[serde(default = "default_msg_id")]
+            id: String,
+            call_id: String,
+            name: String,
+            arguments: String,
+        }
+
+        #[derive(Deserialize)]
+        struct TypedCustomToolCall {
+            #[serde(default = "default_msg_id")]
+            id: String,
+            #[serde(default)]
+            status: Option<String>,
+            call_id: String,
+            name: String,
+            input: String,
+        }
+
+        #[derive(Deserialize)]
+        struct TypedCustomToolCallOutput {
+            #[serde(default = "default_fco_id")]
+            id: String,
+            call_id: String,
+            output: ResponsesInputMessageContent,
+        }
+
+        #[derive(Deserialize)]
+        struct TypedLocalShellCall {
+            #[serde(default = "default_msg_id")]
+            id: String,
+            #[serde(default)]
+            call_id: Option<String>,
+            #[serde(default)]
+            status: Option<String>,
+            #[serde(default)]
+            action: Option<Value>,
+        }
+
+        #[derive(Deserialize)]
+        struct TypedReasoning {
+            #[serde(default = "default_msg_id")]
+            id: String,
+            #[serde(default)]
+            summary: Vec<ResponsesReasoningSummaryItem>,
+            #[serde(default)]
+            content: Option<Vec<ResponsesReasoningContentItem>>,
+            #[serde(default)]
+            encrypted_content: Option<String>,
+        }
+
+        #[derive(Deserialize)]
+        struct TypedWebSearchCall {
+            #[serde(default = "default_msg_id")]
+            id: String,
+            #[serde(default)]
+            status: Option<String>,
+            action: ResponsesWebSearchAction,
+        }
+
+        #[derive(Deserialize)]
+        struct TypedGhostSnapshot {
+            #[serde(default = "default_msg_id")]
+            id: String,
+            ghost_commit: Value,
+        }
+
+        #[derive(Deserialize)]
+        struct TypedCompaction {
+            #[serde(default = "default_msg_id")]
+            id: String,
+            encrypted_content: String,
+        }
+
+        let mut v = serde_json::Value::deserialize(deserializer)?;
+        let kind = v
+            .get("type")
+            .and_then(|t| t.as_str())
+            .map(|s| s.to_string());
+
+        let kind = match kind {
+            Some(k) => k,
+            None => {
+                // OpenAI's Responses API accepts shorthand message items without the `type` discriminator,
+                // e.g. `{ "role": "user", "content": "hello" }`.
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert(
+                        "type".to_string(),
+                        serde_json::Value::String("message".to_string()),
+                    );
+                }
+                "message".to_string()
+            }
+        };
+
+        match kind.as_str() {
+            "message" => {
+                let msg: TypedMessage =
+                    serde_json::from_value(v).map_err(serde::de::Error::custom)?;
+                Ok(ResponsesInputItem::Message {
+                    id: msg.id,
+                    role: msg.role,
+                    content: msg.content,
+                })
+            }
+            "function_call_output" => {
+                let fco: TypedFunctionCallOutput =
+                    serde_json::from_value(v).map_err(serde::de::Error::custom)?;
+                Ok(ResponsesInputItem::FunctionCallOutput {
+                    id: fco.id,
+                    call_id: fco.call_id,
+                    output: fco.output,
+                })
+            }
+            "function_call" => {
+                let fc: TypedFunctionCall =
+                    serde_json::from_value(v).map_err(serde::de::Error::custom)?;
+                Ok(ResponsesInputItem::FunctionCall {
+                    id: fc.id,
+                    call_id: fc.call_id,
+                    name: fc.name,
+                    arguments: fc.arguments,
+                })
+            }
+            "custom_tool_call" => {
+                let tc: TypedCustomToolCall =
+                    serde_json::from_value(v).map_err(serde::de::Error::custom)?;
+                Ok(ResponsesInputItem::CustomToolCall {
+                    id: tc.id,
+                    status: tc.status,
+                    call_id: tc.call_id,
+                    name: tc.name,
+                    input: tc.input,
+                })
+            }
+            "custom_tool_call_output" => {
+                let tco: TypedCustomToolCallOutput =
+                    serde_json::from_value(v).map_err(serde::de::Error::custom)?;
+                Ok(ResponsesInputItem::CustomToolCallOutput {
+                    id: tco.id,
+                    call_id: tco.call_id,
+                    output: tco.output,
+                })
+            }
+            "local_shell_call" => {
+                let sc: TypedLocalShellCall =
+                    serde_json::from_value(v).map_err(serde::de::Error::custom)?;
+                Ok(ResponsesInputItem::LocalShellCall {
+                    id: sc.id,
+                    call_id: sc.call_id,
+                    status: sc.status,
+                    action: sc.action,
+                })
+            }
+            "reasoning" => {
+                let r: TypedReasoning =
+                    serde_json::from_value(v).map_err(serde::de::Error::custom)?;
+                Ok(ResponsesInputItem::Reasoning {
+                    id: r.id,
+                    summary: r.summary,
+                    content: r.content,
+                    encrypted_content: r.encrypted_content,
+                })
+            }
+            "web_search_call" => {
+                let ws: TypedWebSearchCall =
+                    serde_json::from_value(v).map_err(serde::de::Error::custom)?;
+                Ok(ResponsesInputItem::WebSearchCall {
+                    id: ws.id,
+                    status: ws.status,
+                    action: ws.action,
+                })
+            }
+            "ghost_snapshot" => {
+                let gs: TypedGhostSnapshot =
+                    serde_json::from_value(v).map_err(serde::de::Error::custom)?;
+                Ok(ResponsesInputItem::GhostSnapshot {
+                    id: gs.id,
+                    ghost_commit: gs.ghost_commit,
+                })
+            }
+            "compaction" | "compaction_summary" => {
+                let c: TypedCompaction =
+                    serde_json::from_value(v).map_err(serde::de::Error::custom)?;
+                Ok(ResponsesInputItem::Compaction {
+                    id: c.id,
+                    encrypted_content: c.encrypted_content,
+                })
+            }
+            other => {
+                let id = v
+                    .get("id")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(default_msg_id);
+                Ok(ResponsesInputItem::Other {
+                    id,
+                    kind: other.to_string(),
+                    raw: v,
+                })
+            }
+        }
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(untagged)]
+pub enum ResponsesInput {
+    Text(String),
+    Items(Vec<ResponsesInputItem>),
+}
+
+impl ResponsesInput {
+    pub fn into_items(self) -> Vec<ResponsesInputItem> {
+        match self {
+            ResponsesInput::Text(s) => vec![ResponsesInputItem::Message {
+                id: default_msg_id(),
+                role: "user".to_string(),
+                content: ResponsesInputMessageContent::Text(s),
+            }],
+            ResponsesInput::Items(items) => items,
+        }
+    }
+}
+
+fn default_msg_id() -> String {
+    format!("msg_{}", Uuid::new_v4())
+}
+
+fn default_fco_id() -> String {
+    format!("fco_{}", Uuid::new_v4())
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponsesTextFormatParam {
+    Text,
+    JsonSchema {
+        /// Friendly name for the schema, used for telemetry/debugging.
+        name: String,
+        /// JSON schema for the desired output.
+        schema: Value,
+        /// When true, the server is expected to strictly validate responses.
+        #[serde(default)]
+        strict: bool,
+    },
+}
+
+impl<'de> Deserialize<'de> for ResponsesTextFormatParam {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct NestedJsonSchema {
+            name: String,
+            schema: Value,
+            #[serde(default)]
+            strict: bool,
+        }
+
+        let v = serde_json::Value::deserialize(deserializer)?;
+        let Some(obj) = v.as_object() else {
+            return Err(serde::de::Error::custom("text.format must be an object"));
+        };
+
+        let format_type = obj.get("type").and_then(|t| t.as_str()).unwrap_or("text");
+
+        match format_type {
+            "text" => Ok(ResponsesTextFormatParam::Text),
+            "json_schema" => {
+                // OpenAI-style nested shape:
+                // { "type": "json_schema", "json_schema": { "name": ..., "schema": ..., "strict": ... } }
+                if let Some(nested) = obj.get("json_schema") {
+                    let ns: NestedJsonSchema =
+                        serde_json::from_value(nested.clone()).map_err(serde::de::Error::custom)?;
+                    return Ok(ResponsesTextFormatParam::JsonSchema {
+                        name: ns.name,
+                        schema: ns.schema,
+                        strict: ns.strict,
+                    });
+                }
+
+                // Codex-style flat shape:
+                // { "type": "json_schema", "name": ..., "schema": ..., "strict": ... }
+                let name = obj
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| serde::de::Error::custom("text.format.name is required"))?
+                    .to_string();
+                let schema = obj
+                    .get("schema")
+                    .cloned()
+                    .ok_or_else(|| serde::de::Error::custom("text.format.schema is required"))?;
+                let strict = obj.get("strict").and_then(|v| v.as_bool()).unwrap_or(false);
+
+                Ok(ResponsesTextFormatParam::JsonSchema {
+                    name,
+                    schema,
+                    strict,
+                })
+            }
+            other => Err(serde::de::Error::custom(format!(
+                "Unsupported text.format type: {other}"
+            ))),
+        }
+    }
+}
+
+/// Controls the `text` field for the Responses API, combining verbosity and optional JSON schema formatting.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct ResponsesTextControls {
+    #[serde(default)]
+    pub verbosity: Option<String>,
+    #[serde(default)]
+    pub format: Option<ResponsesTextFormatParam>,
 }
 
 /// Response creation request
@@ -949,7 +1499,7 @@ pub struct ResponsesCreateRequest {
     #[schema(example = "mistral")]
     #[serde(default = "default_model")]
     pub model: String,
-    pub input: ResponsesMessages,
+    pub input: ResponsesInput,
     #[schema(example = json!(Option::None::<String>))]
     pub instructions: Option<String>,
     #[schema(example = json!(Option::None::<Vec<String>>))]
@@ -987,6 +1537,8 @@ pub struct ResponsesCreateRequest {
     pub tools: Option<Vec<Tool>>,
     #[schema(example = json!(Option::None::<ToolChoice>))]
     pub tool_choice: Option<ToolChoice>,
+    #[schema(example = json!(Option::None::<ResponsesTextControls>))]
+    pub text: Option<ResponsesTextControls>,
     #[schema(example = json!(Option::None::<ResponseFormat>))]
     pub response_format: Option<ResponseFormat>,
     #[schema(example = json!(Option::None::<WebSearchOptions>))]
@@ -1008,7 +1560,8 @@ pub struct ResponsesCreateRequest {
     #[schema(example = json!(Option::None::<usize>))]
     pub reasoning_top_logprobs: Option<usize>,
     #[schema(example = json!(Option::None::<Vec<String>>))]
-    pub truncation: Option<HashMap<String, Value>>,
+    #[serde(default, deserialize_with = "deserialize_truncation")]
+    pub truncation: Option<String>,
 
     // mistral.rs additional
     #[schema(example = json!(Option::None::<usize>))]
@@ -1036,12 +1589,399 @@ pub struct ResponsesCreateRequest {
     pub compact_history_with_summary: Option<bool>,
 }
 
+#[cfg(test)]
+mod responses_input_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn responses_message_shorthand_with_image_url_string_deserializes() {
+        let v = json!({
+            "model": "gpt-4.1",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "what is in this image?"},
+                        {"type": "input_image", "image_url": "https://example.com/image.jpg"}
+                    ]
+                }
+            ]
+        });
+
+        let req: ResponsesCreateRequest = serde_json::from_value(v).expect("deserialize");
+        let items = req.input.into_items();
+        assert_eq!(items.len(), 1);
+
+        match &items[0] {
+            ResponsesInputItem::Message { role, content, .. } => {
+                assert_eq!(role, "user");
+                let parts = content.clone().into_parts();
+                assert_eq!(parts.len(), 2);
+                assert!(matches!(
+                    parts[0],
+                    ResponsesInputContentPart::InputText { .. }
+                ));
+                match &parts[1] {
+                    ResponsesInputContentPart::InputImage { image_url, .. } => {
+                        let url = image_url.as_ref().expect("image_url");
+                        assert_eq!(url.url(), "https://example.com/image.jpg");
+                    }
+                    other => panic!("expected input_image, got {other:?}"),
+                }
+            }
+            other => panic!("expected message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_message_accepts_output_text_parts() {
+        let v = json!({
+            "model": "gpt-4.1",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "hello"}
+                    ]
+                }
+            ]
+        });
+
+        let req: ResponsesCreateRequest = serde_json::from_value(v).expect("deserialize");
+        let items = req.input.into_items();
+        match &items[0] {
+            ResponsesInputItem::Message { role, content, .. } => {
+                assert_eq!(role, "assistant");
+                let parts = content.clone().into_parts();
+                assert!(matches!(
+                    parts[0],
+                    ResponsesInputContentPart::OutputText { ref text } if text == "hello"
+                ));
+            }
+            other => panic!("expected message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_function_call_output_accepts_array_output() {
+        let v = json!({
+            "model": "gpt-4.1",
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call1",
+                    "output": [
+                        {"type": "input_text", "text": "note"},
+                        {"type": "input_image", "image_url": "data:image/png;base64,XYZ"}
+                    ]
+                }
+            ]
+        });
+
+        let req: ResponsesCreateRequest = serde_json::from_value(v).expect("deserialize");
+        let items = req.input.into_items();
+        match &items[0] {
+            ResponsesInputItem::FunctionCallOutput {
+                call_id, output, ..
+            } => {
+                assert_eq!(call_id, "call1");
+                let parts = output.clone().into_parts();
+                assert_eq!(parts.len(), 2);
+                assert!(matches!(
+                    parts[0],
+                    ResponsesInputContentPart::InputText { .. }
+                ));
+                assert!(matches!(
+                    parts[1],
+                    ResponsesInputContentPart::InputImage { .. }
+                ));
+            }
+            other => panic!("expected function_call_output, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_function_call_deserializes() {
+        let v = json!({
+            "model": "gpt-4.1",
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "call1",
+                    "name": "shell",
+                    "arguments": "{\"cmd\":\"ls\"}"
+                }
+            ]
+        });
+
+        let req: ResponsesCreateRequest = serde_json::from_value(v).expect("deserialize");
+        let items = req.input.into_items();
+        match &items[0] {
+            ResponsesInputItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+                ..
+            } => {
+                assert_eq!(call_id, "call1");
+                assert_eq!(name, "shell");
+                assert_eq!(arguments, "{\"cmd\":\"ls\"}");
+            }
+            other => panic!("expected function_call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_local_shell_call_deserializes() {
+        let v = json!({
+            "model": "gpt-4.1",
+            "input": [
+                {
+                    "type": "local_shell_call",
+                    "call_id": "call1",
+                    "status": "completed",
+                    "action": {
+                        "type": "exec",
+                        "command": ["ls"],
+                        "timeout_ms": 1000
+                    }
+                }
+            ]
+        });
+
+        let req: ResponsesCreateRequest = serde_json::from_value(v).expect("deserialize");
+        let items = req.input.into_items();
+        match &items[0] {
+            ResponsesInputItem::LocalShellCall {
+                call_id,
+                status,
+                action,
+                ..
+            } => {
+                assert_eq!(call_id.as_deref(), Some("call1"));
+                assert_eq!(status.as_deref(), Some("completed"));
+                assert!(action.is_some());
+            }
+            other => panic!("expected local_shell_call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_reasoning_item_deserializes() {
+        let v = json!({
+            "model": "gpt-4.1",
+            "input": [
+                {
+                    "type": "reasoning",
+                    "id": "rsn_1",
+                    "summary": [{"type": "summary_text", "text": "short summary"}],
+                    "content": [
+                        {"type": "reasoning_text", "text": "hidden"},
+                        {"type": "text", "text": "visible"}
+                    ],
+                    "encrypted_content": null
+                }
+            ]
+        });
+
+        let req: ResponsesCreateRequest = serde_json::from_value(v).expect("deserialize");
+        let items = req.input.into_items();
+        match &items[0] {
+            ResponsesInputItem::Reasoning {
+                id,
+                summary,
+                content,
+                encrypted_content,
+                ..
+            } => {
+                assert_eq!(id, "rsn_1");
+                assert_eq!(summary.len(), 1);
+                assert!(content.as_ref().is_some_and(|c| c.len() == 2));
+                assert!(encrypted_content.is_none());
+            }
+            other => panic!("expected reasoning, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_web_search_call_deserializes() {
+        let v = json!({
+            "model": "gpt-4.1",
+            "input": [
+                {
+                    "type": "web_search_call",
+                    "id": "ws_1",
+                    "status": "completed",
+                    "action": {"type": "search", "query": "weather: SF"}
+                }
+            ]
+        });
+
+        let req: ResponsesCreateRequest = serde_json::from_value(v).expect("deserialize");
+        let items = req.input.into_items();
+        match &items[0] {
+            ResponsesInputItem::WebSearchCall { id, status, action } => {
+                assert_eq!(id, "ws_1");
+                assert_eq!(status.as_deref(), Some("completed"));
+                assert!(matches!(action, ResponsesWebSearchAction::Search { .. }));
+            }
+            other => panic!("expected web_search_call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_compaction_summary_alias_deserializes() {
+        let v = json!({
+            "model": "gpt-4.1",
+            "input": [
+                {
+                    "type": "compaction_summary",
+                    "encrypted_content": "abc"
+                }
+            ]
+        });
+
+        let req: ResponsesCreateRequest = serde_json::from_value(v).expect("deserialize");
+        let items = req.input.into_items();
+        match &items[0] {
+            ResponsesInputItem::Compaction {
+                encrypted_content, ..
+            } => {
+                assert_eq!(encrypted_content, "abc");
+            }
+            other => panic!("expected compaction, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_ghost_snapshot_deserializes() {
+        let v = json!({
+            "model": "gpt-4.1",
+            "input": [
+                {
+                    "type": "ghost_snapshot",
+                    "ghost_commit": {"sha": "deadbeef"}
+                }
+            ]
+        });
+
+        let req: ResponsesCreateRequest = serde_json::from_value(v).expect("deserialize");
+        let items = req.input.into_items();
+        match &items[0] {
+            ResponsesInputItem::GhostSnapshot { ghost_commit, .. } => {
+                assert_eq!(
+                    ghost_commit.get("sha").and_then(|v| v.as_str()),
+                    Some("deadbeef")
+                );
+            }
+            other => panic!("expected ghost_snapshot, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_unknown_item_is_accepted_as_other() {
+        let v = json!({
+            "model": "gpt-4.1",
+            "input": [
+                {
+                    "type": "mystery_item",
+                    "foo": "bar"
+                }
+            ]
+        });
+
+        let req: ResponsesCreateRequest = serde_json::from_value(v).expect("deserialize");
+        let items = req.input.into_items();
+        match &items[0] {
+            ResponsesInputItem::Other { kind, raw, .. } => {
+                assert_eq!(kind, "mystery_item");
+                assert_eq!(raw.get("foo").and_then(|v| v.as_str()), Some("bar"));
+            }
+            other => panic!("expected other, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_text_format_json_schema_deserializes() {
+        let v = json!({
+            "model": "gpt-4.1",
+            "input": "hi",
+            "text": {
+                "verbosity": "medium",
+                "format": {
+                    "type": "json_schema",
+                    "name": "codex_output_schema",
+                    "strict": true,
+                    "schema": {"type": "object", "properties": {"x": {"type": "string"}}}
+                }
+            }
+        });
+
+        let req: ResponsesCreateRequest = serde_json::from_value(v).expect("deserialize");
+        let text = req.text.expect("text");
+        let fmt = text.format.expect("format");
+        match fmt {
+            ResponsesTextFormatParam::JsonSchema {
+                name,
+                schema,
+                strict,
+            } => {
+                assert_eq!(name, "codex_output_schema");
+                assert!(strict);
+                assert_eq!(schema.get("type").and_then(|v| v.as_str()), Some("object"));
+            }
+            other => panic!("expected json_schema, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_text_format_json_schema_nested_deserializes() {
+        let v = json!({
+            "model": "gpt-4.1",
+            "input": "hi",
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "nested",
+                        "strict": true,
+                        "schema": {"type": "object"}
+                    }
+                }
+            }
+        });
+
+        let req: ResponsesCreateRequest = serde_json::from_value(v).expect("deserialize");
+        let fmt = req.text.unwrap().format.unwrap();
+        match fmt {
+            ResponsesTextFormatParam::JsonSchema { name, strict, .. } => {
+                assert_eq!(name, "nested");
+                assert!(strict);
+            }
+            other => panic!("expected json_schema, got {other:?}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesTextFormat {
+    #[serde(rename = "type")]
+    pub format_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResponsesTextConfig {
+    pub format: ResponsesTextFormat,
+}
+
 /// Response object
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ResponsesObject {
     pub id: String,
     pub object: &'static str,
-    pub created_at: f64,
+    pub created_at: i64,
     pub model: String,
     pub status: String,
     pub output: Vec<ResponsesOutput>,
@@ -1051,6 +1991,17 @@ pub struct ResponsesObject {
     pub metadata: Option<Value>,
     pub instructions: Option<String>,
     pub incomplete_details: Option<ResponsesIncompleteDetails>,
+    pub previous_response_id: Option<String>,
+    pub store: Option<bool>,
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub truncation: Option<String>,
+    pub tool_choice: Option<Value>,
+    pub tools: Option<Vec<Tool>>,
+    pub parallel_tool_calls: Option<bool>,
+    pub text: Option<ResponsesTextConfig>,
+    pub max_output_tokens: Option<usize>,
+    pub max_tool_calls: Option<usize>,
 }
 
 /// Response usage information
@@ -1086,6 +2037,10 @@ pub struct ResponsesError {
     #[serde(rename = "type")]
     pub error_type: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub param: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 /// Incomplete details for incomplete responses
@@ -1100,9 +2055,18 @@ pub struct ResponsesOutput {
     pub id: String,
     #[serde(rename = "type")]
     pub output_type: String,
+    #[serde(default)]
     pub role: String,
     pub status: Option<String>,
     pub content: Vec<ResponsesContent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<String>,
 }
 
 /// Response content item

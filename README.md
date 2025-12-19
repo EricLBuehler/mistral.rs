@@ -369,6 +369,12 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
         ),
     )
     ```
+
+    **Real-world example (Devstral Small 2 24B):**
+    ```bash
+    # Fits more layers on GPU by quantizing a middle block and forcing tail layers onto cuda[0]
+    ./mistralrs-server run -m mistralai/Devstral-Small-2-24B-Instruct-2512 --topology topologies/devstral_small2_24b_default.yml
+    ```
   </details>
 
 ## Description

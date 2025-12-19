@@ -394,17 +394,15 @@ impl BlockEngine {
 
             // Free non-cached blocks (or all if not caching)
             for (idx, block) in block_table.iter().enumerate() {
-                // Skip blocks that were from cache and are now in cache
-                // (they have refcount > 1 due to cache holding a reference)
-                if idx < num_cached && self.prefix_cacher.is_enabled() {
-                    // This was a cached block - just decrement our reference
-                    self.gpu_allocator.free_block(block.clone());
-                } else if self.prefix_cacher.is_enabled() && logical_blocks.is_some() {
-                    // This block is being added to cache, so cache holds the ref
-                    // We don't free it to the allocator
-                } else {
-                    self.gpu_allocator.free_block(block.clone());
-                }
+                // Always drop the sequence's reference. If the block is also held by the prefix
+                // cache (either because it was a cache hit or because it was inserted above),
+                // the physical refcount will remain > 0 and `free_block` will not return it to
+                // the allocator.
+                //
+                // The previous logic skipped freeing blocks when `logical_blocks` was provided,
+                // which leaked sequence references and could lead to OOM / allocator exhaustion.
+                let _ = idx; // kept to avoid changing loop shape; useful for debugging.
+                self.gpu_allocator.free_block(block.clone());
             }
         }
     }
@@ -513,5 +511,101 @@ impl BlockEngine {
     /// Get number of blocks in prefix cache.
     pub fn prefix_cache_size(&self) -> usize {
         self.prefix_cacher.num_cached_blocks()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::paged_attention::block_engine_sequence::BlockEngineSequence;
+
+    #[derive(Clone)]
+    struct TestSeq {
+        id: usize,
+        block_size: usize,
+        logical: Vec<LogicalTokenBlock>,
+        waitlisted: usize,
+        _prefix_cache_len: usize,
+        prefill: Option<Vec<Arc<PhysicalTokenBlock>>>,
+    }
+
+    impl TestSeq {
+        fn new_full_blocks(id: usize, block_size: usize, num_blocks: usize) -> Self {
+            let mut logical = Vec::with_capacity(num_blocks);
+            for _ in 0..num_blocks {
+                let mut b = LogicalTokenBlock::new(block_size);
+                for t in 0..block_size {
+                    b.append_token_id(t);
+                }
+                logical.push(b);
+            }
+            Self {
+                id,
+                block_size,
+                logical,
+                waitlisted: 0,
+                _prefix_cache_len: 0,
+                prefill: None,
+            }
+        }
+    }
+
+    impl BlockEngineSequence for TestSeq {
+        fn blocks_to_add_new_tok(&self) -> usize {
+            0
+        }
+
+        fn take_physical_blocks_prefill(&mut self) -> Option<Vec<Arc<PhysicalTokenBlock>>> {
+            self.prefill.take()
+        }
+
+        fn get_id(&self) -> usize {
+            self.id
+        }
+
+        fn logical_token_blocks(&self) -> &[LogicalTokenBlock] {
+            &self.logical
+        }
+
+        fn increment_waitlist_count(&mut self) -> usize {
+            let prev = self.waitlisted;
+            self.waitlisted += 1;
+            prev
+        }
+
+        fn set_prefix_cache_len(&mut self, len: usize) {
+            self._prefix_cache_len = len;
+        }
+
+        fn block_size(&self) -> usize {
+            self.block_size
+        }
+    }
+
+    #[test]
+    fn prefix_cache_hit_does_not_double_free_or_leak_allocator_blocks() {
+        let block_size = 4;
+        let mut engine = BlockEngine::new(block_size, 2, true);
+
+        // First sequence allocates one block and then caches it on free.
+        let mut s1 = TestSeq::new_full_blocks(1, block_size, 1);
+        engine.allocate(&mut s1);
+        assert_eq!(*engine.gpu_allocator.get_num_free_blocks(), 1);
+        engine.free_sequence_with_caching(s1.get_id(), Some(s1.logical_token_blocks()));
+
+        // One block should be held by the cache, one still free.
+        assert_eq!(engine.prefix_cache_size(), 1);
+        assert_eq!(*engine.gpu_allocator.get_num_free_blocks(), 1);
+
+        // Second sequence should reuse cached block (prefix hit) and then free without double-free.
+        let mut s2 = TestSeq::new_full_blocks(2, block_size, 1);
+        engine.allocate(&mut s2);
+        assert_eq!(engine.last_allocate_had_cache_hit(s2.get_id()), 1);
+        // If refcounts are wrong, this free can panic ("double free!") or leak.
+        engine.free_sequence_with_caching(s2.get_id(), Some(s2.logical_token_blocks()));
+
+        // Cache still owns the block; allocator should still have exactly one free block.
+        assert_eq!(engine.prefix_cache_size(), 1);
+        assert_eq!(*engine.gpu_allocator.get_num_free_blocks(), 1);
     }
 }

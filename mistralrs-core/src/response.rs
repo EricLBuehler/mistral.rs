@@ -8,6 +8,7 @@ use candle_core::Tensor;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::{pyclass, pymethods};
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::{sampler::TopLogprob, tools::ToolCallResponse};
 
@@ -236,6 +237,13 @@ pub enum Response {
     ModelError(String, ChatCompletionResponse),
     Done(ChatCompletionResponse),
     Chunk(ChatCompletionChunkResponse),
+    /// Signals that a built-in web search/extraction action is being performed.
+    /// Used to surface `web_search_call` items in the Responses API SSE stream.
+    WebSearchCall {
+        id: String,
+        status: String,
+        action: Value,
+    },
     // Completion
     CompletionModelError(String, CompletionResponse),
     CompletionDone(CompletionResponse),
@@ -265,6 +273,11 @@ pub enum ResponseOk {
     // Chat
     Done(ChatCompletionResponse),
     Chunk(ChatCompletionChunkResponse),
+    WebSearchCall {
+        id: String,
+        status: String,
+        action: Value,
+    },
     // Completion
     CompletionDone(CompletionResponse),
     CompletionChunk(CompletionChunkResponse),
@@ -340,6 +353,9 @@ impl Response {
         match self {
             Self::Done(x) => Ok(ResponseOk::Done(x)),
             Self::Chunk(x) => Ok(ResponseOk::Chunk(x)),
+            Self::WebSearchCall { id, status, action } => {
+                Ok(ResponseOk::WebSearchCall { id, status, action })
+            }
             Self::CompletionDone(x) => Ok(ResponseOk::CompletionDone(x)),
             Self::CompletionChunk(x) => Ok(ResponseOk::CompletionChunk(x)),
             Self::InternalError(e) => Err(Box::new(ResponseErr::InternalError(e))),

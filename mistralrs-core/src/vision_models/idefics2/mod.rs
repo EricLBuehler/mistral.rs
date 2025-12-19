@@ -187,6 +187,8 @@ impl From<TextConfig> for mistral::Config {
             max_position_embeddings: val.max_position_embeddings,
             rms_norm_eps: val.rms_norm_eps,
             rope_theta: val.rope_theta,
+            rope_scaling: None,
+            rope_attention_factor: None,
             sliding_window: val.sliding_window,
             head_dim: None,
             quantization_config: None,

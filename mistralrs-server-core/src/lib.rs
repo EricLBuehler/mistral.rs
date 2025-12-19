@@ -34,7 +34,7 @@
 //!     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
 //!     openai::ChatCompletionRequest,
 //!     openapi_doc::get_openapi_doc,
-//!     types::SharedMistralRsState,
+//!     types::{SamplingDefaults, SharedMistralRsState},
 //! };
 //!
 //! #[derive(OpenApi)]
@@ -163,7 +163,9 @@
 //!     let (tx, mut rx) = create_response_channel(None);
 //!
 //!     let (request, is_streaming) =
-//!         match parse_request(oai_request, mistralrs_state.clone(), tx).await {
+//!         match parse_request(oai_request, mistralrs_state.clone(), tx, SamplingDefaults::default())
+//!             .await
+//!         {
 //!             Ok(x) => x,
 //!             Err(e) => return handle_error(mistralrs_state, e.into()),
 //!         };
@@ -227,6 +229,7 @@ pub mod embeddings;
 pub mod handler_core;
 mod handlers;
 pub mod image_generation;
+pub mod mistral3_chat;
 pub mod mistralrs_for_server_builder;
 pub mod mistralrs_server_router_builder;
 pub mod openai;

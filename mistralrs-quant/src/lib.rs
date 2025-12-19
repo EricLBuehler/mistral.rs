@@ -174,7 +174,10 @@ pub enum QuantizedConfig {
         is_awq: bool,
     },
     Fp8 {
-        weight_block_size: Vec<usize>,
+        /// When present, weights use blockwise scaling with a `[block_m, block_n]` tile.
+        ///
+        /// Some HF fp8 configs set this to `null`, which corresponds to per-tensor scaling.
+        weight_block_size: Option<Vec<usize>>,
     },
     Bitsandbytes {
         bnb_4bit_quant_type: Option<String>,
@@ -221,10 +224,9 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
                 })
             }
             Some(m) if m == "fp8" => {
-                let weight_block_size = raw
-                    .weight_block_size
-                    .ok_or_else(|| serde::de::Error::missing_field("weight_block_size"))?;
-                Ok(QuantizedConfig::Fp8 { weight_block_size })
+                Ok(QuantizedConfig::Fp8 {
+                    weight_block_size: raw.weight_block_size,
+                })
             }
             Some(m) if m == "bitsandbytes" => Ok(QuantizedConfig::Bitsandbytes {
                 bnb_4bit_quant_type: raw.bnb_4bit_quant_type,
@@ -297,7 +299,15 @@ impl QuantizedConfig {
                 40 => 4, // mxfp4: 2 FP4 values per byte = factor of 4
                 other => panic!("Unexpected bits in `pack_factor` {other}"),
             },
-            Self::Fp8 { .. } => IsqType::Q8_0.pack_factor(dtype),
+            // If weight_block_size is not set (HF configs may set it to null), we currently
+            // dequantize fp8 weights into the model dtype at load time, so treat this as
+            // effectively unquantized for sizing/device-mapping purposes.
+            Self::Fp8 {
+                weight_block_size: None,
+            } => 1,
+            Self::Fp8 {
+                weight_block_size: Some(_),
+            } => IsqType::Q8_0.pack_factor(dtype),
             Self::Bitsandbytes {
                 bnb_4bit_quant_type: Some(_),
             }
@@ -840,8 +850,19 @@ pub fn linear_no_bias(
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantizedConfig::Fp8 { .. } => {
-                blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, Default::default(), vb)?
+            QuantizedConfig::Fp8 { weight_block_size } => {
+                if weight_block_size.is_some() {
+                    blockwise_fp8_linear_b(
+                        in_dim,
+                        out_dim,
+                        quant_conf,
+                        false,
+                        Default::default(),
+                        vb,
+                    )?
+                } else {
+                    scalar_fp8_linear_b(in_dim, out_dim, false, vb)?
+                }
             }
             QuantizedConfig::Bitsandbytes { .. } => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
@@ -887,8 +908,19 @@ pub fn linear(
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantizedConfig::Fp8 { .. } => {
-                blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, true, Default::default(), vb)?
+            QuantizedConfig::Fp8 { weight_block_size } => {
+                if weight_block_size.is_some() {
+                    blockwise_fp8_linear_b(
+                        in_dim,
+                        out_dim,
+                        quant_conf,
+                        true,
+                        Default::default(),
+                        vb,
+                    )?
+                } else {
+                    scalar_fp8_linear_b(in_dim, out_dim, true, vb)?
+                }
             }
             QuantizedConfig::Bitsandbytes { .. } => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, true, vb)?) as Arc<_>
@@ -917,6 +949,45 @@ pub fn linear(
         }
     };
     apply_immediate_isq(layer, base_vb)
+}
+
+fn scalar_fp8_linear_b(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    vb: ShardedVarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    // Handle the case where we actually have an unquantized layer (no scale tensor).
+    if vb.contains_tensor("weight") && !vb.contains_tensor("weight_scale_inv") {
+        return crate::linear_b(in_dim, out_dim, bias, &None, vb);
+    }
+
+    // Handle the case where the layer is dummy (no tensors).
+    if !(vb.contains_tensor("weight") && vb.contains_tensor("weight_scale_inv")) {
+        let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
+        return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
+    }
+
+    let weight_f8 = vb.get_with_hints_dtype(
+        (out_dim, in_dim),
+        "weight",
+        Default::default(),
+        DType::F8E4M3,
+    )?;
+    let scale = vb.get_with_hints_dtype((), "weight_scale_inv", Default::default(), DType::F32)?;
+    let scale = scale.reshape((1, 1))?;
+    let weight =
+        crate::fp8_blockwise_dequantize(&weight_f8, &scale, vec![out_dim, in_dim], vb.dtype())?;
+    let bias = if bias {
+        Some(vb.get_with_hints((out_dim,), "bias", Default::default())?)
+    } else {
+        None
+    };
+
+    let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(Linear::new(
+        weight, bias,
+    )))?;
+    Ok(Arc::new(layer) as Arc<dyn QuantMethod>)
 }
 
 pub fn linear_b(

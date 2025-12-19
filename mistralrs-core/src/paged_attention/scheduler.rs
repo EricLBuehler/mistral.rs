@@ -156,7 +156,9 @@ impl PagedAttentionScheduler {
         while !self.waiting.is_empty() {
             let seq = self.waiting.front().unwrap().clone();
 
-            if self.config.max_num_seqs == self.running.len() + 1 {
+            // Only allow up to `max_num_seqs` active (running) sequences.
+            // If we're already at capacity, don't schedule more prompts.
+            if self.running.len() >= self.config.max_num_seqs {
                 break;
             }
 

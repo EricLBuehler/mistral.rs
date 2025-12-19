@@ -165,6 +165,8 @@ pub struct Engine {
     no_kv_cache: bool,
     prefix_cacher: Arc<Mutex<PrefixCacheManagerV2>>,
     is_debug: bool,
+    profile_requests: bool,
+    profile_last_empty_log: std::sync::Mutex<Instant>,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
     logger: IntervalLogger,
@@ -219,6 +221,9 @@ impl Engine {
         get_mut_arcmutex!(scheduler).set_prefix_caching_enabled(!no_prefix_cache);
 
         let block_engine = get_mut_arcmutex!(scheduler).block_engine();
+        let profile_requests = std::env::var("MISTRALRS_PROFILE_REQUESTS")
+            .ok()
+            .is_some_and(|x| x.contains('1'));
 
         Ok(Self {
             tx,
@@ -237,6 +242,10 @@ impl Engine {
                 block_engine,
             ))),
             is_debug: DEBUG.load(Ordering::Relaxed),
+            profile_requests,
+            profile_last_empty_log: std::sync::Mutex::new(
+                Instant::now() - Duration::from_secs(3600),
+            ),
             disable_eos_stop,
             throughput_logging_enabled,
             logger: IntervalLogger::new(Duration::from_secs(5)),
@@ -358,7 +367,54 @@ impl Engine {
 
             let run_start = Instant::now();
             let mut scheduler = get_mut_arcmutex!(self.scheduler);
+            let (waiting, running) = if self.profile_requests {
+                (scheduler.waiting_len(), scheduler.running_len())
+            } else {
+                (0, 0)
+            };
             let scheduled = scheduler.schedule(&self.logger);
+            if self.profile_requests {
+                match &scheduled {
+                    SchedulerOutput::DefaultScheduler { output } => {
+                        if output.prompt.is_empty() && output.completion.is_empty() {
+                            let mut should_log = false;
+                            if let Ok(mut last) = self.profile_last_empty_log.lock() {
+                                if last.elapsed() >= Duration::from_secs(5) {
+                                    *last = Instant::now();
+                                    should_log = true;
+                                }
+                            }
+                            if should_log {
+                                tracing::info!(
+                                    target: "mistralrs_core::profile",
+                                    "scheduler produced empty output (waiting={}, running={})",
+                                    waiting,
+                                    running
+                                );
+                            }
+                        }
+                    }
+                    SchedulerOutput::PagedAttention { output } => {
+                        if output.scheduled.is_empty() {
+                            let mut should_log = false;
+                            if let Ok(mut last) = self.profile_last_empty_log.lock() {
+                                if last.elapsed() >= Duration::from_secs(5) {
+                                    *last = Instant::now();
+                                    should_log = true;
+                                }
+                            }
+                            if should_log {
+                                tracing::info!(
+                                    target: "mistralrs_core::profile",
+                                    "scheduler produced empty PA output (waiting={}, running={})",
+                                    waiting,
+                                    running
+                                );
+                            }
+                        }
+                    }
+                }
+            }
 
             match scheduled {
                 SchedulerOutput::DefaultScheduler {
@@ -367,6 +423,7 @@ impl Engine {
                     if !scheduled.completion.is_empty() {
                         let current_completion_ids: Vec<usize> =
                             scheduled.completion.iter().map(|seq| *seq.id()).collect();
+                        let step_started = Instant::now();
                         let res = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
                             let pre_op = if !self.no_kv_cache
@@ -406,6 +463,21 @@ impl Engine {
                                 )
                                 .await
                         };
+                        let step_elapsed = step_started.elapsed();
+                        if self.profile_requests {
+                            let seq_ids = scheduled
+                                .completion
+                                .iter()
+                                .map(|s| s.id().to_string())
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            tracing::info!(
+                                target: "mistralrs_core::profile",
+                                "default completion step seqs=[{}] took {:.3}s",
+                                seq_ids,
+                                step_elapsed.as_secs_f64()
+                            );
+                        }
 
                         handle_pipeline_forward_error!(
                             "completion step",
@@ -416,7 +488,8 @@ impl Engine {
                             self.prefix_cacher
                         );
 
-                        self.logger.add_tokens_processed(scheduled.completion.len());
+                        self.logger
+                            .add_completion_tokens_processed(scheduled.completion.len());
 
                         last_completion_ids = current_completion_ids;
                     }
@@ -482,7 +555,8 @@ impl Engine {
                             .iter()
                             .map(|seq| seq.get_toks().len())
                             .sum();
-                        self.logger.add_tokens_processed(total_processed_tokens);
+                        self.logger
+                            .add_prompt_tokens_processed(total_processed_tokens);
 
                         for seq in scheduled.prompt.iter_mut() {
                             match seq.sequence_stepping_type() {
@@ -544,9 +618,21 @@ impl Engine {
                             .map(|seq| seq.lock().unwrap())
                             .collect::<Vec<_>>();
 
+                        let seq_ids = if self.profile_requests {
+                            guards
+                                .iter()
+                                .map(|s| s.id().to_string())
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        } else {
+                            String::new()
+                        };
+                        let seq_id_list = guards.iter().map(|s| *s.id()).collect::<Vec<_>>();
+
                         let mut guards_mut =
                             guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
 
+                        let step_started = Instant::now();
                         let res = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
@@ -581,15 +667,136 @@ impl Engine {
                                 )
                                 .await
                         };
+                        let step_elapsed = step_started.elapsed();
+                        if self.profile_requests {
+                            tracing::debug!(
+                                target: "mistralrs_core::profile",
+                                "PA step prompt={} seqs=[{}] took {:.3}s",
+                                is_prompt,
+                                seq_ids,
+                                step_elapsed.as_secs_f64()
+                            );
+                        }
 
-                        handle_pipeline_forward_error!(
-                            "step",
-                            res,
-                            &mut guards_mut,
-                            self.pipeline,
-                            'lp,
-                            self.prefix_cacher
-                        );
+                        if let Err(e) = res {
+                            // PagedAttention needs additional cleanup:
+                            // - mark sequences finished and respond
+                            // - remove from scheduler + free blocks exactly once
+                            let (tokenizer, pipeline_name) = {
+                                let pipeline = get_mut_arcmutex!(self.pipeline);
+                                let pipeline_name = pipeline.name();
+                                let tokenizer = pipeline.tokenizer();
+                                (tokenizer, pipeline_name)
+                            };
+                            use crate::response::Response;
+                            use crate::response::SYSTEM_FINGERPRINT;
+                            use crate::sequence::SequenceState;
+                            use tracing::error;
+
+                            error!("step - Model failed with error: {:?}", &e);
+
+                            for seq in guards_mut.iter_mut() {
+                                let start = seq.prompt_tokens().min(seq.get_toks().len());
+                                let res = match &tokenizer {
+                                    Some(tok) => {
+                                        match tok.decode(&seq.get_toks()[start..], false) {
+                                            Ok(t) => t,
+                                            Err(_) => "".to_string(),
+                                        }
+                                    }
+                                    None => "".to_string(),
+                                };
+
+                                if seq.get_mut_group().is_chat {
+                                    let choice = Choice {
+                                        finish_reason: "error".to_string(),
+                                        index: seq.get_response_index(),
+                                        message: ResponseMessage {
+                                            content: Some(res),
+                                            role: "assistant".to_string(),
+                                            tool_calls: None,
+                                        },
+                                        logprobs: None,
+                                    };
+                                    seq.add_choice_to_group(choice);
+                                } else {
+                                    let choice = CompletionChoice {
+                                        finish_reason: "error".to_string(),
+                                        index: seq.get_response_index(),
+                                        text: res,
+                                        logprobs: None,
+                                    };
+                                    seq.add_completion_choice_to_group(choice);
+                                }
+                            }
+
+                            for seq in guards_mut.iter_mut() {
+                                let group = seq.get_mut_group();
+
+                                if group.is_chat {
+                                    let partial_completion_response = ChatCompletionResponse {
+                                        id: seq.id().to_string(),
+                                        choices: group.get_choices().to_vec(),
+                                        created: seq.creation_time(),
+                                        model: pipeline_name.clone(),
+                                        system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                                        object: "chat.completion".to_string(),
+                                        usage: group.get_usage(),
+                                    };
+
+                                    let _ = seq
+                                        .responder()
+                                        .send(Response::ModelError(
+                                            e.to_string(),
+                                            partial_completion_response,
+                                        ))
+                                        .await;
+                                } else {
+                                    let partial_completion_response = CompletionResponse {
+                                        id: seq.id().to_string(),
+                                        choices: group.get_completion_choices().to_vec(),
+                                        created: seq.creation_time(),
+                                        model: pipeline_name.clone(),
+                                        system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                                        object: "text_completion".to_string(),
+                                        usage: group.get_usage(),
+                                    };
+
+                                    let _ = seq
+                                        .responder()
+                                        .send(Response::CompletionModelError(
+                                            e.to_string(),
+                                            partial_completion_response,
+                                        ))
+                                        .await;
+                                }
+                            }
+
+                            for seq in guards_mut.iter_mut() {
+                                // Mark as finished so we don't keep trying to step.
+                                // (We'll also remove them from the scheduler below.)
+                                seq.set_state(SequenceState::FinishedAborted);
+                            }
+
+                            {
+                                let p = get_mut_arcmutex!(self.pipeline);
+                                // Reset non-granular state because:
+                                // - the sequence is gone
+                                // - we should reset the state then, including draft.
+                                p.set_none_cache(&mut guards_mut, true, true, false);
+                            }
+                            let _ = get_mut_arcmutex!(self.prefix_cacher).evict_all_caches();
+
+                            // Drop sequence locks before mutating scheduler queues.
+                            drop(guards_mut);
+                            drop(guards);
+
+                            for seq_id in seq_id_list {
+                                scheduler.abort_seq(seq_id);
+                            }
+
+                            continue 'lp;
+                        }
 
                         let total_processed_tokens: usize = guards
                             .iter()
@@ -601,7 +808,13 @@ impl Engine {
                                 }
                             })
                             .sum();
-                        self.logger.add_tokens_processed(total_processed_tokens);
+                        if is_prompt {
+                            self.logger
+                                .add_prompt_tokens_processed(total_processed_tokens);
+                        } else {
+                            self.logger
+                                .add_completion_tokens_processed(total_processed_tokens);
+                        }
 
                         if self.is_debug {
                             let ms_from_last_run = run_start.elapsed().as_secs_f64();

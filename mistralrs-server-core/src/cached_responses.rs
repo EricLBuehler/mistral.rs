@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::RwLock;
 
-use crate::openai::{Message, ResponsesChunk, ResponsesObject};
+use crate::openai::{Message, ResponsesChunk, ResponsesInputItem, ResponsesObject};
 
 /// Trait for caching responses
 pub trait ResponseCache: Send + Sync {
@@ -31,8 +31,19 @@ pub trait ResponseCache: Send + Sync {
     /// Retrieve conversation history for a response
     fn get_conversation_history(&self, id: &str) -> Result<Option<Vec<Message>>>;
 
+    /// Store input items for a response
+    fn store_input_items(&self, id: String, items: Vec<ResponsesInputItem>) -> Result<()>;
+
+    /// Retrieve input items for a response
+    fn get_input_items(&self, id: &str) -> Result<Option<Vec<ResponsesInputItem>>>;
+
     /// Store an active request ID mapping (API ID -> Engine ID)
-    fn add_active_request(&self, api_id: String, engine_id: usize, model_id: Option<String>) -> Result<()>;
+    fn add_active_request(
+        &self,
+        api_id: String,
+        engine_id: usize,
+        model_id: Option<String>,
+    ) -> Result<()>;
     /// Remove an active request ID mapping
     fn remove_active_request(&self, api_id: &str) -> Result<()>;
     /// Get the engine ID for an active request
@@ -47,6 +58,7 @@ struct CacheEntry {
     response: Option<ResponsesObject>,
     chunks: Option<Vec<ResponsesChunk>>,
     history: Option<Vec<Message>>,
+    input_items: Option<Vec<ResponsesInputItem>>,
 }
 
 struct CacheInner {
@@ -129,6 +141,18 @@ impl ResponseCache for InMemoryResponseCache {
         Ok(inner.store.get(id).and_then(|e| e.history.clone()))
     }
 
+    fn store_input_items(&self, id: String, items: Vec<ResponsesInputItem>) -> Result<()> {
+        let mut inner = self.inner.write().unwrap();
+        let entry = inner.store.get_or_insert_mut(id, CacheEntry::default);
+        entry.input_items = Some(items);
+        Ok(())
+    }
+
+    fn get_input_items(&self, id: &str) -> Result<Option<Vec<ResponsesInputItem>>> {
+        let mut inner = self.inner.write().unwrap();
+        Ok(inner.store.get(id).and_then(|e| e.input_items.clone()))
+    }
+
     fn add_active_request(
         &self,
         api_id: String,
@@ -173,7 +197,7 @@ mod tests {
         let response1 = ResponsesObject {
             id: "1".to_string(),
             object: "response",
-            created_at: 1.0,
+            created_at: 1,
             model: "m".to_string(),
             status: "c".to_string(),
             output: vec![],
@@ -183,6 +207,17 @@ mod tests {
             metadata: None,
             instructions: None,
             incomplete_details: None,
+            previous_response_id: None,
+            store: None,
+            temperature: None,
+            top_p: None,
+            truncation: None,
+            tool_choice: None,
+            tools: None,
+            parallel_tool_calls: None,
+            text: None,
+            max_output_tokens: None,
+            max_tool_calls: None,
         };
         let mut response2 = response1.clone();
         response2.id = "2".to_string();

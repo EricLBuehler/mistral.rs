@@ -15,6 +15,7 @@ use mistralrs_server_core::{
         MistralRsForServerBuilder, ModelConfig,
     },
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
+    types::SamplingDefaults,
 };
 
 mod interactive_mode;
@@ -47,6 +48,22 @@ struct Args {
     /// Maximum running sequences at any time. If the `tgt_non_granular_index` flag is set for X-LoRA models, this will be set to 1.
     #[arg(long, default_value_t = defaults::MAX_SEQS)]
     max_seqs: usize,
+
+    /// Default temperature to use when requests omit it (good default for coding assistants).
+    #[arg(long, default_value_t = 0.2)]
+    temperature: f64,
+
+    /// Default top_p to use when requests omit it (good default for coding assistants).
+    #[arg(long = "top-p", alias = "top_p", default_value_t = 0.9)]
+    top_p: f64,
+
+    /// Default min_p to use when requests omit it.
+    #[arg(long = "min-p", alias = "min_p", default_value_t = 0.01)]
+    min_p: f64,
+
+    /// Default top_k to use when requests omit it.
+    #[arg(long = "top-k", alias = "top_k")]
+    top_k: Option<usize>,
 
     /// Use no KV cache.
     #[arg(long, default_value_t = defaults::NO_KV_CACHE)]
@@ -450,8 +467,16 @@ async fn main() -> Result<()> {
         // Create listener early to validate address before model loading
         let listener = tokio::net::TcpListener::bind(format!("{ip}:{port}")).await?;
 
+        let sampling_defaults = SamplingDefaults {
+            temperature: Some(args.temperature),
+            top_p: Some(args.top_p),
+            min_p: Some(args.min_p),
+            top_k: args.top_k,
+        };
+
         let app = MistralRsServerRouterBuilder::new()
             .with_mistralrs(mistralrs)
+            .with_sampling_defaults(sampling_defaults)
             .build()
             .await?;
 

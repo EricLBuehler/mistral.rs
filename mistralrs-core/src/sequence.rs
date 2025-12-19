@@ -454,6 +454,8 @@ pub struct Sequence {
 
     // Tool calls
     pub tools: Option<Arc<ToolCallingMatcher>>,
+    pub(crate) mistral_tool_stream_parser:
+        Option<crate::tools::mistral_token_parser::MistralV11ToolStreamParser>,
 }
 
 impl BlockEngineSequence for Sequence {
@@ -615,6 +617,7 @@ impl Sequence {
             ),
             custom_metadata,
             tools,
+            mistral_tool_stream_parser: None,
             sequence_stepping_type,
             return_raw_logits,
             token_offset: 0,
@@ -757,6 +760,14 @@ impl Sequence {
 
     pub fn token_offset(&self) -> usize {
         self.token_offset
+    }
+
+    pub(crate) fn set_token_offset(&mut self, offset: usize) {
+        self.token_offset = offset;
+    }
+
+    pub(crate) fn prefill_toks_clone(&self) -> Option<Vec<u32>> {
+        self.prefill_prompt_toks.clone()
     }
 
     /// Get the number of prefix tokens that are cached (KV already computed).
@@ -1175,6 +1186,7 @@ pub struct SequenceGroup {
     pub completion_streaming_chunks: Vec<CompletionChunkChoice>,
     pub is_streaming: bool,
     pub is_chat: bool,
+    bare_tool_calls_seen: usize,
 }
 
 impl SequenceGroup {
@@ -1202,7 +1214,17 @@ impl SequenceGroup {
             is_streaming,
             is_chat,
             best_of,
+            bare_tool_calls_seen: 0,
         }
+    }
+
+    pub(crate) fn record_bare_tool_calls_marker(&mut self) -> usize {
+        self.bare_tool_calls_seen += 1;
+        self.bare_tool_calls_seen
+    }
+
+    pub(crate) fn reset_bare_tool_calls_marker(&mut self) {
+        self.bare_tool_calls_seen = 0;
     }
 
     pub fn get_choices(&self) -> &[Choice] {

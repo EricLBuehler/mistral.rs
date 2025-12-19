@@ -49,6 +49,21 @@ async fn do_search(
         tool_call_params.query
     );
 
+    if second_request.is_streaming {
+        let action = serde_json::json!({
+            "type": "search",
+            "query": tool_call_params.query.clone(),
+        });
+        let _ = second_request
+            .response
+            .send(Response::WebSearchCall {
+                id: format!("ws_{}", tool_calls.id),
+                status: "in_progress".to_string(),
+                action,
+            })
+            .await;
+    }
+
     let start = Instant::now();
     // Add tool response
     {
@@ -194,6 +209,21 @@ async fn do_search(
             used_results.len()
         );
 
+        if second_request.is_streaming {
+            let action = serde_json::json!({
+                "type": "search",
+                "query": tool_call_params.query.clone(),
+            });
+            let _ = second_request
+                .response
+                .send(Response::WebSearchCall {
+                    id: format!("ws_{}", tool_calls.id),
+                    status: "completed".to_string(),
+                    action,
+                })
+                .await;
+        }
+
         let mut message: IndexMap<String, MessageContent> = IndexMap::new();
         message.insert("role".to_string(), Either::Left("tool".to_string()));
         message.insert(
@@ -252,6 +282,21 @@ async fn do_extraction(
         tool_call_params.url
     );
 
+    if second_request.is_streaming {
+        let action = serde_json::json!({
+            "type": "open_page",
+            "url": tool_call_params.url.clone(),
+        });
+        let _ = second_request
+            .response
+            .send(Response::WebSearchCall {
+                id: format!("ws_{}", tool_calls.id),
+                status: "in_progress".to_string(),
+                action,
+            })
+            .await;
+    }
+
     let start = Instant::now();
     // Add tool response
     {
@@ -301,6 +346,21 @@ async fn do_extraction(
             "Extraction executed in {:.2}s, using {used_len} tokens.",
             (end - start).as_secs_f32(),
         );
+
+        if second_request.is_streaming {
+            let action = serde_json::json!({
+                "type": "open_page",
+                "url": tool_call_params.url.clone(),
+            });
+            let _ = second_request
+                .response
+                .send(Response::WebSearchCall {
+                    id: format!("ws_{}", tool_calls.id),
+                    status: "completed".to_string(),
+                    action,
+                })
+                .await;
+        }
 
         let mut message: IndexMap<String, MessageContent> = IndexMap::new();
         message.insert("role".to_string(), Either::Left("tool".to_string()));
@@ -460,85 +520,93 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
 
             // ----------------------- NON-STREAMING ------------------------
             if !is_streaming {
-                let resp = receiver.recv().await.unwrap();
-                // Handle the response, forwarding errors and non-Done responses to user
-                let done = match resp {
-                    Response::Done(done) => done,
-                    // Forward error responses to user and return
-                    Response::InternalError(e) => {
-                        let _ = user_sender.send(Response::InternalError(e)).await;
+                // Non-streaming requests are expected to return a single terminal response, but
+                // tolerate optional intermediate events (e.g. web_search_call).
+                let done = loop {
+                    let Some(resp) = receiver.recv().await else {
                         return;
-                    }
-                    Response::ValidationError(e) => {
-                        let _ = user_sender.send(Response::ValidationError(e)).await;
-                        return;
-                    }
-                    Response::ModelError(msg, resp) => {
-                        let _ = user_sender.send(Response::ModelError(msg, resp)).await;
-                        return;
-                    }
-                    // Forward other response types to user and return
-                    Response::Chunk(res) => {
-                        let _ = user_sender.send(Response::Chunk(res)).await;
-                        return;
-                    }
-                    Response::CompletionChunk(res) => {
-                        let _ = user_sender.send(Response::CompletionChunk(res)).await;
-                        return;
-                    }
-                    Response::CompletionModelError(msg, resp) => {
-                        let _ = user_sender
-                            .send(Response::CompletionModelError(msg, resp))
-                            .await;
-                        return;
-                    }
-                    Response::CompletionDone(res) => {
-                        let _ = user_sender.send(Response::CompletionDone(res)).await;
-                        return;
-                    }
-                    Response::ImageGeneration(res) => {
-                        let _ = user_sender.send(Response::ImageGeneration(res)).await;
-                        return;
-                    }
-                    Response::Raw {
-                        logits_chunks,
-                        tokens,
-                    } => {
-                        let _ = user_sender
-                            .send(Response::Raw {
-                                logits_chunks,
-                                tokens,
-                            })
-                            .await;
-                        return;
-                    }
-                    Response::Embeddings {
-                        embeddings,
-                        prompt_tokens,
-                        total_tokens,
-                    } => {
-                        let _ = user_sender
-                            .send(Response::Embeddings {
-                                embeddings,
-                                prompt_tokens,
-                                total_tokens,
-                            })
-                            .await;
-                        return;
-                    }
-                    Response::Speech {
-                        pcm,
-                        rate,
-                        channels,
-                    } => {
-                        let _ = user_sender
-                            .send(Response::Speech {
-                                pcm,
-                                rate,
-                                channels,
-                            })
-                            .await;
-                        return;
+                    };
+                    // Handle the response, forwarding errors and non-Done responses to user
+                    match resp {
+                        Response::Done(done) => break done,
+                        // Ignore intermediate web search signals in non-streaming mode.
+                        Response::WebSearchCall { .. } => continue,
+                        // Forward error responses to user and return
+                        Response::InternalError(e) => {
+                            let _ = user_sender.send(Response::InternalError(e)).await;
+                            return;
+                        }
+                        Response::ValidationError(e) => {
+                            let _ = user_sender.send(Response::ValidationError(e)).await;
+                            return;
+                        }
+                        Response::ModelError(msg, resp) => {
+                            let _ = user_sender.send(Response::ModelError(msg, resp)).await;
+                            return;
+                        }
+                        // Forward other response types to user and return
+                        Response::Chunk(res) => {
+                            let _ = user_sender.send(Response::Chunk(res)).await;
+                            return;
+                        }
+                        Response::CompletionChunk(res) => {
+                            let _ = user_sender.send(Response::CompletionChunk(res)).await;
+                            return;
+                        }
+                        Response::CompletionModelError(msg, resp) => {
+                            let _ = user_sender
+                                .send(Response::CompletionModelError(msg, resp))
+                                .await;
+                            return;
+                        }
+                        Response::CompletionDone(res) => {
+                            let _ = user_sender.send(Response::CompletionDone(res)).await;
+                            return;
+                        }
+                        Response::ImageGeneration(res) => {
+                            let _ = user_sender.send(Response::ImageGeneration(res)).await;
+                            return;
+                        }
+                        Response::Raw {
+                            logits_chunks,
+                            tokens,
+                        } => {
+                            let _ = user_sender
+                                .send(Response::Raw {
+                                    logits_chunks,
+                                    tokens,
+                                })
+                                .await;
+                            return;
+                        }
+                        Response::Embeddings {
+                            embeddings,
+                            prompt_tokens,
+                            total_tokens,
+                        } => {
+                            let _ = user_sender
+                                .send(Response::Embeddings {
+                                    embeddings,
+                                    prompt_tokens,
+                                    total_tokens,
+                                })
+                                .await;
+                            return;
+                        }
+                        Response::Speech {
+                            pcm,
+                            rate,
+                            channels,
+                        } => {
+                            let _ = user_sender
+                                .send(Response::Speech {
+                                    pcm,
+                                    rate,
+                                    channels,
+                                })
+                                .await;
+                            return;
+                        }
                     }
                 };
 
@@ -616,6 +684,11 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                         Response::ModelError(msg, resp) => {
                             let _ = user_sender.send(Response::ModelError(msg, resp)).await;
                             return;
+                        }
+                        Response::WebSearchCall { id, status, action } => {
+                            let _ = user_sender
+                                .send(Response::WebSearchCall { id, status, action })
+                                .await;
                         }
                         // Forward other response types to user and return
                         Response::CompletionChunk(res) => {

@@ -649,8 +649,97 @@ pub trait Pipeline:
                     .expect("PagedAttention must have cache engines.")
                     .execute_scheduler_ops(&blocks_to_copy)?;
 
-                let inputs_iter =
-                    std::iter::once(self.get_processor().inputs_processor().process_inputs(
+                // Optional prompt chunking for PagedAttention prefill.
+                // This reduces peak VRAM use for large prompt prefill (Codex clients can send 10k+ token prompts).
+                let prefill_chunk_size = std::env::var("MISTRALRS_PREFILL_CHUNK_SIZE")
+                    .ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(0);
+
+                let should_chunk_prompt = is_prompt
+                    && !return_raw_logits
+                    && prefill_chunk_size > 0
+                    && input_seqs.len() == 1
+                    && input_seqs[0].get_toks().len() > prefill_chunk_size;
+
+                let meta_sliding_window = metadata.sliding_window;
+                let meta_block_size = metadata.block_size;
+                let meta_block_engine = metadata.block_engine.clone();
+
+                let mut logits = vec![None; input_seqs.len()];
+                let len_inputs = 1;
+                let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
+                let mut embedding_logits = vec![None; input_seqs.len()];
+
+                let mut exec_duration = Duration::ZERO;
+                if should_chunk_prompt {
+                    let original_prefill = input_seqs[0].prefill_toks_clone();
+                    let original_offset = input_seqs[0].token_offset();
+                    let full_prompt = input_seqs[0].get_toks().to_vec();
+
+                    let mut rel_start = 0usize;
+                    while rel_start < full_prompt.len() {
+                        let rel_end = (rel_start + prefill_chunk_size).min(full_prompt.len());
+                        let chunk = full_prompt[rel_start..rel_end].to_vec();
+                        let is_last = rel_end == full_prompt.len();
+
+                        input_seqs[0].set_prefill_toks(chunk);
+                        input_seqs[0].set_token_offset(original_offset + rel_start);
+
+                        let inputs = self.get_processor().inputs_processor().process_inputs(
+                            self.tokenizer(),
+                            input_seqs,
+                            is_prompt,
+                            self.get_metadata().is_xlora,
+                            &self.device(),
+                            self.get_metadata().no_kv_cache,
+                            None,
+                            return_raw_logits,
+                            self.get_input_processor_config(),
+                            Some(PagedAttentionMeta {
+                                sliding_window: meta_sliding_window,
+                                block_size: meta_block_size,
+                                block_engine: meta_block_engine.clone(),
+                            }),
+                            self.device_mapper(),
+                        );
+
+                        let InputProcessorOutput {
+                            inputs,
+                            seq_indices,
+                        } = inputs.map_err(candle_core::Error::msg)?;
+
+                        let start = Instant::now();
+                        let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
+                        let end = Instant::now();
+                        exec_duration += end.duration_since(start);
+
+                        if is_last {
+                            for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
+                                if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
+                                    raw_out_logits[seq_idx][0] =
+                                        Some(logits.i(logit_idx)?.to_device(&Device::Cpu)?);
+                                } else if let ForwardInputsResult::Embeddings { embeddings } =
+                                    &raw_logits
+                                {
+                                    embedding_logits[seq_idx] =
+                                        Some(embeddings.i(logit_idx)?.to_device(&Device::Cpu)?);
+                                } else {
+                                    logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
+                                }
+                            }
+                        }
+
+                        rel_start = rel_end;
+                    }
+
+                    match original_prefill {
+                        Some(toks) => input_seqs[0].set_prefill_toks(toks),
+                        None => input_seqs[0].reset_prefill_toks(),
+                    }
+                    input_seqs[0].set_token_offset(original_offset);
+                } else {
+                    let inputs = self.get_processor().inputs_processor().process_inputs(
                         self.tokenizer(),
                         input_seqs,
                         is_prompt,
@@ -660,17 +749,14 @@ pub trait Pipeline:
                         None,
                         return_raw_logits,
                         self.get_input_processor_config(),
-                        Some(metadata),
+                        Some(PagedAttentionMeta {
+                            sliding_window: meta_sliding_window,
+                            block_size: meta_block_size,
+                            block_engine: meta_block_engine,
+                        }),
                         self.device_mapper(),
-                    ));
+                    );
 
-                let mut logits = vec![None; input_seqs.len()];
-                let len_inputs = 1;
-                let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
-                let mut embedding_logits = vec![None; input_seqs.len()];
-
-                let mut exec_duration = Duration::ZERO;
-                for (i, inputs) in inputs_iter.into_iter().enumerate() {
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
@@ -683,7 +769,7 @@ pub trait Pipeline:
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
                         if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
-                            raw_out_logits[seq_idx][i] =
+                            raw_out_logits[seq_idx][0] =
                                 Some(logits.i(logit_idx)?.to_device(&Device::Cpu)?);
                         } else if let ForwardInputsResult::Embeddings { embeddings } = &raw_logits {
                             embedding_logits[seq_idx] =

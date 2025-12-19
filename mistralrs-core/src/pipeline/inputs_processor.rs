@@ -194,7 +194,7 @@ pub mod text_models_inputs_processor {
                 seqlens_k.push((ctxt.len() + chunk_offset_toks) as u32);
             }
 
-            seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
+            seqs_tensors.push(Tensor::new(ctxt, device)?.unsqueeze(0)?);
 
             if let Some(paged_attn_metadata) = &mut paged_attn_metadata {
                 let block_engine = get_mut_arcmutex!(paged_attn_metadata.block_engine);
@@ -218,13 +218,15 @@ pub mod text_models_inputs_processor {
                 };
 
                 let mut slot_mapping = Vec::new();
+                // Per-token context lengths (not token indices). The CUDA kernel expects
+                // each entry to be the number of keys available for that query token.
                 let mut ctxt_len = Vec::new();
                 for i in chunk_offset_toks..prompt_len + chunk_offset_toks {
                     if i < start_idx {
                         // Pad [0,start_idx) with _PAD_TOKEN_ID
                         slot_mapping.push(_PAD_SLOT_ID);
                     }
-                    ctxt_len.push(i);
+                    ctxt_len.push(i + 1);
 
                     let block_number = if i / paged_attn_metadata.block_size >= table.len() {
                         panic!(
@@ -286,7 +288,7 @@ pub mod text_models_inputs_processor {
             (0, 0, HashMap::new(), HashMap::new())
         };
 
-        let input = Tensor::cat(&seqs_tensors, 0).unwrap();
+        let input = Tensor::cat(&seqs_tensors, 0).map_err(anyhow::Error::msg)?;
 
         let paged_attn_meta = if paged_attn_metadata.is_some() {
             let max_slot_mapping_len = slot_mappings.iter().map(|x| x.len()).max().unwrap();
@@ -305,18 +307,32 @@ pub mod text_models_inputs_processor {
             )?;
             let block_tables = block_tables.reshape(((), max_block_table_len))?;
 
-            let max_context_len = paged_attn_context_lens
+            // `context_lens` is provided per-token (flattened), so we pad by the maximum number
+            // of tokens in this batch, but the PA kernel also needs the *maximum context length
+            // value* across those tokens (which can be larger than the token count when chunking
+            // prompt prefill).
+            let max_context_len_tokens = paged_attn_context_lens
                 .iter()
                 .map(|x| x.len())
                 .max()
-                .unwrap();
+                .expect(
+                    "paged_attn_context_lens should not be empty when paged attention is enabled",
+                );
+            let max_context_len_value = paged_attn_context_lens
+                .iter()
+                .flatten()
+                .max()
+                .copied()
+                .expect(
+                    "paged_attn_context_lens should not be empty when paged attention is enabled",
+                );
 
             let context_lens = _make_tensor_with_pad(
                 paged_attn_context_lens
                     .iter()
                     .map(|x| x.iter().map(|x| *x as u32).collect::<Vec<_>>())
                     .collect::<Vec<_>>(),
-                max_context_len,
+                max_context_len_tokens,
                 0,
                 device,
             )?
@@ -341,7 +357,7 @@ pub mod text_models_inputs_processor {
                 slot_mappings: slot_mappings_map,
                 block_tables: Some(block_tables_map),
                 context_lens: Some(context_lens_map),
-                max_context_len: Some(max_context_len),
+                max_context_len: Some(max_context_len_value),
                 is_first_prompt_chunk: chunk_offset_toks == 0,
             })
         } else {
@@ -395,11 +411,16 @@ pub mod text_models_inputs_processor {
                 seqlens_k.push((ctxt.len() + start_pos) as u32);
             }
 
-            seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
+            seqs_tensors.push(Tensor::new(ctxt, device)?.unsqueeze(0)?);
 
             if let Some(paged_attn_metadata) = &mut paged_attn_metadata {
                 let block_engine = get_mut_arcmutex!(paged_attn_metadata.block_engine);
-                let table = block_engine.block_tables.get(seq.id()).unwrap();
+                let Some(table) = block_engine.block_tables.get(seq.id()) else {
+                    anyhow::bail!(
+                        "PagedAttention block table missing for completion seq_id={}",
+                        seq.id()
+                    );
+                };
 
                 let table = table
                     .iter()
@@ -407,13 +428,16 @@ pub mod text_models_inputs_processor {
                     .collect::<Vec<_>>();
 
                 let block_pos = start_pos - seq.token_offset();
-                let block_number = if block_pos / paged_attn_metadata.block_size >= table.len() {
-                    panic!("Block table is too small (completion)! start_pos={} block_size={} table_len={}", block_pos, paged_attn_metadata.block_size, table.len());
-                } else {
-                    table
-                        .get(block_pos / paged_attn_metadata.block_size)
-                        .unwrap()
-                };
+                let block_idx = block_pos / paged_attn_metadata.block_size;
+                let block_number = table.get(block_idx).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Block table too small (completion): block_pos={} block_size={} block_idx={} table_len={}",
+                        block_pos,
+                        paged_attn_metadata.block_size,
+                        block_idx,
+                        table.len()
+                    )
+                })?;
                 let block_offset = block_pos % paged_attn_metadata.block_size;
                 // Use checked arithmetic to prevent overflow
                 let slot = block_number
@@ -432,7 +456,12 @@ pub mod text_models_inputs_processor {
                     } else {
                         0
                     };
-                    block_tables.push(table.get(slide_idx..).unwrap().to_vec());
+                    block_tables.push(
+                        table
+                            .get(slide_idx..)
+                            .ok_or_else(|| anyhow::anyhow!("Invalid sliding window slice"))?
+                            .to_vec(),
+                    );
                 } else {
                     block_tables.push(table);
                 }
@@ -538,7 +567,7 @@ pub mod text_models_inputs_processor {
         };
 
         Ok(InputMetadata {
-            input: Tensor::cat(&seqs_tensors, 0).unwrap(),
+            input: Tensor::cat(&seqs_tensors, 0).map_err(anyhow::Error::msg)?,
             positions: seqlen_offsets,
             context_lens,
             position_ids,

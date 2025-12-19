@@ -16,11 +16,26 @@ pub type ExtractedMistralRsState = State<SharedMistralRsState>;
 /// This is the `ResponseCache` that has been extracted for an axum handler.
 pub type ExtractedResponseCache = State<Arc<dyn ResponseCache>>;
 
+/// Server-level default sampling parameters applied when requests omit them.
+///
+/// Any per-request value (non-`None`) takes precedence over these defaults.
+#[derive(Clone, Debug, Default)]
+pub struct SamplingDefaults {
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub min_p: Option<f64>,
+    pub top_k: Option<usize>,
+}
+
+/// Sampling defaults extracted for an axum handler.
+pub type ExtractedSamplingDefaults = State<SamplingDefaults>;
+
 /// The application state sharing mistral.rs and the response cache.
 #[derive(Clone)]
 pub struct ServerState {
     pub mistralrs: SharedMistralRsState,
     pub response_cache: Arc<dyn ResponseCache>,
+    pub sampling_defaults: SamplingDefaults,
 }
 
 impl FromRef<ServerState> for SharedMistralRsState {
@@ -32,6 +47,12 @@ impl FromRef<ServerState> for SharedMistralRsState {
 impl FromRef<ServerState> for Arc<dyn ResponseCache> {
     fn from_ref(state: &ServerState) -> Arc<dyn ResponseCache> {
         state.response_cache.clone()
+    }
+}
+
+impl FromRef<ServerState> for SamplingDefaults {
+    fn from_ref(state: &ServerState) -> SamplingDefaults {
+        state.sampling_defaults.clone()
     }
 }
 

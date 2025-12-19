@@ -241,8 +241,17 @@ fn main() -> Result<(), String> {
 
         // https://github.com/EricLBuehler/mistral.rs/issues/286
         if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
-            builder = builder.arg("--compiler-options");
-            builder = builder.arg(cuda_nvcc_flags_env);
+            // Check if the flag should be passed directly to NVCC or as compiler options
+            if cuda_nvcc_flags_env.contains("--allow-unsupported-compiler") {
+                // This flag should be passed directly to NVCC, not as compiler options
+                for flag in cuda_nvcc_flags_env.split_whitespace() {
+                    builder = builder.arg(flag);
+                }
+            } else {
+                // Pass as compiler options for other flags
+                builder = builder.arg("--compiler-options");
+                builder = builder.arg(cuda_nvcc_flags_env);
+            }
         }
 
         let target = std::env::var("TARGET").unwrap();

@@ -21,8 +21,8 @@ use crate::{
     image_generation::image_generation,
     openapi_doc::get_openapi_doc,
     responses::{
-        cancel_response, create_response, delete_response, get_input_items, get_response,
-        list_responses,
+        cancel_response, compact_response, create_response, delete_response, get_input_items,
+        get_response, list_responses,
     },
     speech_generation::speech_generation,
     types::{ServerState, SharedMistralRsState},
@@ -71,6 +71,8 @@ pub struct MistralRsServerRouterBuilder {
     allowed_origins: Option<Vec<String>>,
     /// Optional axum default request body limit
     max_body_limit: Option<usize>,
+    /// Default sampling parameters applied when requests omit them.
+    sampling_defaults: crate::types::SamplingDefaults,
 }
 
 impl Default for MistralRsServerRouterBuilder {
@@ -82,6 +84,7 @@ impl Default for MistralRsServerRouterBuilder {
             base_path: None,
             allowed_origins: None,
             max_body_limit: None,
+            sampling_defaults: crate::types::SamplingDefaults::default(),
         }
     }
 }
@@ -139,6 +142,15 @@ impl MistralRsServerRouterBuilder {
         self
     }
 
+    /// Sets server-level default sampling parameters for requests that omit them.
+    pub fn with_sampling_defaults(
+        mut self,
+        sampling_defaults: crate::types::SamplingDefaults,
+    ) -> Self {
+        self.sampling_defaults = sampling_defaults;
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
@@ -162,6 +174,7 @@ impl MistralRsServerRouterBuilder {
             self.base_path.as_deref(),
             self.allowed_origins,
             self.max_body_limit,
+            self.sampling_defaults,
         );
 
         mistralrs_server_router
@@ -178,6 +191,7 @@ fn init_router(
     base_path: Option<&str>,
     allowed_origins: Option<Vec<String>>,
     max_body_limit: Option<usize>,
+    sampling_defaults: crate::types::SamplingDefaults,
 ) -> Result<Router> {
     let allow_origin = if let Some(origins) = allowed_origins {
         let parsed_origins: Result<Vec<_>, _> = origins.into_iter().map(|o| o.parse()).collect();
@@ -208,6 +222,7 @@ fn init_router(
     let server_state = ServerState {
         mistralrs: state,
         response_cache,
+        sampling_defaults,
     };
 
     let mut router = Router::new()
@@ -221,11 +236,15 @@ fn init_router(
         .route("/v1/images/generations", post(image_generation))
         .route("/v1/audio/speech", post(speech_generation))
         .route("/v1/responses", post(create_response).get(list_responses))
+        .route("/v1/responses/compact", post(compact_response))
         .route(
             "/v1/responses/{response_id}",
             get(get_response).delete(delete_response),
         )
-        .route("/v1/responses/{response_id}/input_items", get(get_input_items))
+        .route(
+            "/v1/responses/{response_id}/input_items",
+            get(get_input_items),
+        )
         .route("/v1/responses/{response_id}/cancel", post(cancel_response))
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))

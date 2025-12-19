@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
-use candle_core::{Device, Module, Result, Tensor};
+use candle_core::{DType, Device, Module, Result, Tensor};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -14,7 +14,10 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{
+        embedding, Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling,
+        DeepSeekV2RotaryEmbedding, MatMul, Mlp, RmsNorm, RotaryEmbedding, ScaledRopeType, Sdpa,
+    },
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -28,7 +31,7 @@ use crate::{
 
 serde_default_fn!(bool, tie_word_embeddings, false);
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Config {
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
@@ -40,6 +43,12 @@ pub struct Config {
     pub(crate) max_position_embeddings: usize,
     pub(crate) rms_norm_eps: f64,
     pub(crate) rope_theta: f64,
+    /// Optional RoPE scaling config (e.g. YaRN used by Ministral3/Devstral2).
+    #[serde(default)]
+    pub(crate) rope_scaling: Option<DeepSeekV2RopeScaling>,
+    /// Optional explicit attention scaling factor for YaRN (when present in config).
+    #[serde(default)]
+    pub(crate) rope_attention_factor: Option<f32>,
     pub(crate) sliding_window: Option<usize>,
     pub(crate) head_dim: Option<usize>,
     pub(crate) quantization_config: Option<QuantizedConfig>,
@@ -47,10 +56,194 @@ pub struct Config {
     pub(crate) tie_word_embeddings: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct RopeParameters {
+    #[serde(default)]
+    rope_theta: Option<f64>,
+    #[serde(default)]
+    rope_type: Option<String>,
+    #[serde(rename = "type", default)]
+    tp: Option<String>,
+    #[serde(default)]
+    original_max_position_embeddings: Option<usize>,
+    #[serde(default)]
+    beta_fast: Option<f32>,
+    #[serde(default)]
+    beta_slow: Option<f32>,
+    #[serde(default)]
+    mscale: Option<f32>,
+    #[serde(default)]
+    mscale_all_dim: Option<f32>,
+    #[serde(default)]
+    factor: Option<f32>,
+    #[serde(default)]
+    attention_factor: Option<f32>,
+}
+
+impl RopeParameters {
+    fn is_yarn(&self) -> bool {
+        matches!(self.rope_type.as_deref(), Some("yarn"))
+            || matches!(self.tp.as_deref(), Some("yarn"))
+    }
+
+    fn to_rope_scaling(&self) -> Option<DeepSeekV2RopeScaling> {
+        if !self.is_yarn() {
+            return None;
+        }
+        Some(DeepSeekV2RopeScaling::Yarn {
+            original_max_position_embeddings: self.original_max_position_embeddings?,
+            beta_fast: self.beta_fast.unwrap_or(32.0),
+            beta_slow: self.beta_slow.unwrap_or(1.0),
+            mscale: self.mscale.unwrap_or(1.0),
+            mscale_all_dim: self.mscale_all_dim.unwrap_or(1.0),
+            factor: self.factor?,
+            scaling_type: ScaledRopeType::Yarn,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawConfig {
+    vocab_size: usize,
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    hidden_act: Activation,
+    max_position_embeddings: usize,
+    rms_norm_eps: f64,
+    #[serde(default)]
+    rope_theta: Option<f64>,
+    #[serde(default)]
+    rope_parameters: Option<RopeParameters>,
+    #[serde(default)]
+    rope_scaling: Option<DeepSeekV2RopeScaling>,
+    #[serde(default)]
+    rope_attention_factor: Option<f32>,
+    #[serde(default)]
+    sliding_window: Option<usize>,
+    #[serde(default)]
+    head_dim: Option<usize>,
+    #[serde(default)]
+    quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "tie_word_embeddings")]
+    tie_word_embeddings: bool,
+}
+
+impl<'de> Deserialize<'de> for Config {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawConfig::deserialize(deserializer)?;
+
+        let rope_params = raw.rope_parameters.clone();
+        let rope_theta = raw
+            .rope_theta
+            .or_else(|| rope_params.as_ref().and_then(|p| p.rope_theta))
+            .ok_or_else(|| serde::de::Error::missing_field("rope_theta"))?;
+
+        let rope_scaling = raw
+            .rope_scaling
+            .clone()
+            .or_else(|| rope_params.as_ref().and_then(|p| p.to_rope_scaling()));
+        let rope_attention_factor = raw
+            .rope_attention_factor
+            .or_else(|| rope_params.as_ref().and_then(|p| p.attention_factor));
+
+        Ok(Self {
+            vocab_size: raw.vocab_size,
+            hidden_size: raw.hidden_size,
+            intermediate_size: raw.intermediate_size,
+            num_hidden_layers: raw.num_hidden_layers,
+            num_attention_heads: raw.num_attention_heads,
+            num_key_value_heads: raw.num_key_value_heads,
+            hidden_act: raw.hidden_act,
+            max_position_embeddings: raw.max_position_embeddings,
+            rms_norm_eps: raw.rms_norm_eps,
+            rope_theta,
+            rope_scaling,
+            rope_attention_factor,
+            sliding_window: raw.sliding_window,
+            head_dim: raw.head_dim,
+            quantization_config: raw.quantization_config,
+            tie_word_embeddings: raw.tie_word_embeddings,
+        })
+    }
+}
+
 impl Config {
     pub(crate) fn head_dim(&self) -> usize {
         self.head_dim
             .unwrap_or(self.hidden_size / self.num_attention_heads)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum MistralRotaryEmbedding {
+    Unscaled(RotaryEmbedding),
+    Yarn {
+        inner: DeepSeekV2RotaryEmbedding,
+        is_gpt_neox: bool,
+    },
+}
+
+impl MistralRotaryEmbedding {
+    fn new(
+        cfg: &Config,
+        head_dim: usize,
+        device: &Device,
+        is_gptx: bool,
+        dtype: DType,
+    ) -> Result<Self> {
+        if let Some(DeepSeekV2RopeScaling::Yarn {
+            original_max_position_embeddings,
+            beta_fast,
+            beta_slow,
+            mscale,
+            mscale_all_dim,
+            factor,
+            ..
+        }) = &cfg.rope_scaling
+        {
+            tracing::debug!(
+                "Using YaRN RoPE for Mistral (head_dim={head_dim}, factor={factor}, orig_max_pos={original_max_position_embeddings}, beta_fast={beta_fast}, beta_slow={beta_slow}, mscale={mscale}, mscale_all_dim={mscale_all_dim}, is_gpt_neox={is_gptx})."
+            );
+            let rope_cfg = DeepSeekV2RopeConfig {
+                rope_scaling: cfg.rope_scaling.clone(),
+                max_position_embeddings: cfg.max_position_embeddings,
+                rope_theta: cfg.rope_theta as f32,
+                qk_rope_head_dim: head_dim,
+            };
+            return Ok(Self::Yarn {
+                inner: DeepSeekV2RotaryEmbedding::new(&rope_cfg, dtype, device)?,
+                is_gpt_neox: is_gptx,
+            });
+        }
+
+        Ok(Self::Unscaled(RotaryEmbedding::new(
+            cfg.rope_theta as f32,
+            head_dim,
+            cfg.max_position_embeddings,
+            device,
+            is_gptx,
+            dtype,
+        )?))
+    }
+
+    fn forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        seqlen_offsets: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        match self {
+            Self::Unscaled(inner) => inner.forward(q, k, seqlen_offsets),
+            Self::Yarn { inner, is_gpt_neox } => {
+                inner.forward_with_is_gpt_neox(q, k, seqlen_offsets, *is_gpt_neox)
+            }
+        }
     }
 }
 
@@ -62,14 +255,14 @@ struct Attention {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
-    rotary_emb: Arc<RotaryEmbedding>,
+    rotary_emb: Arc<MistralRotaryEmbedding>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
 }
 
 impl Attention {
     fn new(
-        rotary_emb: Arc<RotaryEmbedding>,
+        rotary_emb: Arc<MistralRotaryEmbedding>,
         cfg: &Config,
         vb: ShardedVarBuilder,
         paged_attn: Option<PagedAttention>,
@@ -118,6 +311,8 @@ impl Attention {
             comm,
             vb.pp("o_proj"),
         )?;
+
+        let softmax_scale = 1.0 / (head_dim as f32).sqrt();
         Ok(Self {
             q_proj,
             k_proj,
@@ -135,7 +330,7 @@ impl Attention {
                     comm,
                 ),
                 softcap: None,
-                softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                softmax_scale,
                 sliding_window: cfg.sliding_window,
             },
         })
@@ -259,7 +454,7 @@ struct DecoderLayer {
 impl DecoderLayer {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        rotary_emb: Arc<RotaryEmbedding>,
+        rotary_emb: Arc<MistralRotaryEmbedding>,
         cfg: &Config,
         vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
@@ -393,17 +588,19 @@ impl Model {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
-            ropes.insert(
-                device.location(),
-                Arc::new(RotaryEmbedding::new(
-                    cfg.rope_theta as f32,
-                    head_dim,
-                    cfg.max_position_embeddings,
-                    device,
-                    is_gptx,
-                    vb_m.dtype(),
-                )?),
-            );
+            let loc = device.location();
+            if !ropes.contains_key(&loc) {
+                ropes.insert(
+                    loc,
+                    Arc::new(MistralRotaryEmbedding::new(
+                        cfg,
+                        head_dim,
+                        device,
+                        is_gptx,
+                        vb_m.dtype(),
+                    )?),
+                );
+            }
         }
 
         let vb_l = vb_m.pp("layers");
@@ -796,5 +993,42 @@ impl AnyMoeBaseModelMixin for Model {
     }
     fn amoe_supported(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn mistral_config_parses_yarn_rope_parameters() {
+        let raw = serde_json::json!({
+            "vocab_size": 32,
+            "hidden_size": 256,
+            "intermediate_size": 512,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "hidden_act": "silu",
+            "max_position_embeddings": 1024,
+            "rms_norm_eps": 1e-5,
+            "head_dim": 128,
+            "rope_parameters": {
+                "rope_theta": 100000000.0,
+                "rope_type": "yarn",
+                "type": "yarn",
+                "factor": 48.0,
+                "original_max_position_embeddings": 8192,
+                "beta_fast": 32.0,
+                "beta_slow": 1.0,
+                "mscale": 1.0,
+                "mscale_all_dim": 1.0
+            },
+            "tie_word_embeddings": false
+        });
+
+        let cfg: Config = serde_json::from_value(raw).expect("config should deserialize");
+        assert!(cfg.rope_scaling.is_some());
+        assert!((cfg.rope_theta - 100000000.0).abs() < 1.0);
     }
 }

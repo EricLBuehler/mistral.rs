@@ -955,6 +955,11 @@ impl PackedExperts {
                 QuantizedConfig::Fp8 { weight_block_size } => {
                     // FP8 quantization for PackedExperts
                     // Keep weights as FP8 using BlockwiseFP8Linear to leverage native FP8 GEMM
+                    let Some(weight_block_size) = weight_block_size.as_ref() else {
+                        candle_core::bail!(
+                            "Distributed/PackedExperts FP8 requires `weight_block_size` to be set."
+                        );
+                    };
                     if weight_block_size.len() != 2 {
                         candle_core::bail!(
                             "Expected weight_block_size to have length 2, got {weight_block_size:?}"
@@ -1378,8 +1383,14 @@ impl FusedExperts {
 
             if has_fp8_scales {
                 let weight_block_size = match quantization_config {
-                    Some(QuantizedConfig::Fp8 { weight_block_size }) => weight_block_size.clone(),
-                    _ => unreachable!(),
+                    Some(QuantizedConfig::Fp8 {
+                        weight_block_size: Some(weight_block_size),
+                    }) => weight_block_size.clone(),
+                    _ => {
+                        candle_core::bail!(
+                            "Distributed/PackedExperts FP8 requires `weight_block_size` to be set."
+                        )
+                    }
                 };
 
                 if weight_block_size.len() != 2 {
@@ -1555,8 +1566,14 @@ impl FusedExperts {
             // Per-expert format with FP8 quantization
             // Keep weights as FP8 using BlockwiseFP8 to leverage native FP8 GEMM in gather_forward
             let weight_block_size = match quantization_config {
-                Some(QuantizedConfig::Fp8 { weight_block_size }) => weight_block_size.clone(),
-                _ => unreachable!(),
+                Some(QuantizedConfig::Fp8 {
+                    weight_block_size: Some(weight_block_size),
+                }) => weight_block_size.clone(),
+                _ => {
+                    candle_core::bail!(
+                        "Distributed/PackedExperts FP8 requires `weight_block_size` to be set."
+                    )
+                }
             };
 
             if weight_block_size.len() != 2 {

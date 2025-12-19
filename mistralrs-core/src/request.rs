@@ -25,7 +25,6 @@ pub enum Constraint {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 /// Image generation response format
 pub enum ImageGenerationResponseFormat {
@@ -77,7 +76,6 @@ fn default_responder<T>() -> Sender<T> {
     sender
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub enum SearchContextSize {
@@ -90,7 +88,7 @@ pub enum SearchContextSize {
     High,
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ApproximateUserLocation {
@@ -100,7 +98,7 @@ pub struct ApproximateUserLocation {
     pub timezone: String,
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
@@ -111,7 +109,7 @@ pub enum WebSearchUserLocation {
     },
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct WebSearchOptions {
@@ -229,10 +227,7 @@ pub enum Request {
     // and then Engine will be dropped.
     Terminate,
     TerminateAllSeqsNextStep,
-    Cancel {
-        id: usize,
-        model_id: Option<String>,
-    },
+    Cancel { id: usize, model_id: Option<String> },
 }
 
 impl Debug for Request {
@@ -262,7 +257,9 @@ impl Debug for Request {
             }
             Request::Terminate => write!(f, "Termination Request"),
             Request::TerminateAllSeqsNextStep => write!(f, "Terminate All Seqs Next Step"),
-            Request::Cancel { id, model_id } => write!(f, "Cancel Request {id} for model {model_id:?}"),
+            Request::Cancel { id, model_id } => {
+                write!(f, "Cancel Request {id} for model {model_id:?}")
+            }
         }
     }
 }

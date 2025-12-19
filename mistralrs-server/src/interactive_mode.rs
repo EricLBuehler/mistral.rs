@@ -382,6 +382,7 @@ async fn text_interactive_mode(
                     error!("Got a validation error: {e:?}");
                     break 'outer;
                 }
+                Response::WebSearchCall { .. } => {}
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
                 Response::CompletionModelError(_, _) => unreachable!(),
@@ -686,6 +687,7 @@ async fn vision_interactive_mode(
                     error!("Got a validation error: {e:?}");
                     break 'outer;
                 }
+                Response::WebSearchCall { .. } => {}
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
                 Response::CompletionModelError(_, _) => unreachable!(),

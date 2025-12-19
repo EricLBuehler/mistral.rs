@@ -464,26 +464,16 @@ pub trait IsqModel {
                 multi_progress.add(bar.clone());
 
                 let layers = topology.map(|x| {
+                    // Preserve the original layer indices; sparse topologies are valid.
                     x.layers
                         .iter()
-                        .filter_map(|topo| topo.as_ref().map(|x| (x.isq, x.device.clone())))
+                        .map(|topo| topo.as_ref().map(|x| (x.isq, x.device.clone())))
                         .collect::<Vec<_>>()
                 });
 
                 let mut devices_and_dtypes = Vec::new();
                 for (_, layer_num) in &tensors {
-                    let device = if let Some(ref layers) = layers {
-                        if let Some(layer) = layer_num {
-                            layers
-                                .get(*layer)
-                                .as_ref()
-                                .map(|x| x.1.clone())
-                                .unwrap_or(Some(device.clone()))
-                                .unwrap_or(device.clone())
-                        } else {
-                            device.clone()
-                        }
-                    } else if let Some(layer_num) = layer_num {
+                    let base_device = if let Some(layer_num) = layer_num {
                         mapper
                             .device_for(*layer_num, false)
                             .cloned()
@@ -491,9 +481,26 @@ pub trait IsqModel {
                     } else {
                         device.clone()
                     };
+                    let device = if let Some(ref layers) = layers {
+                        if let Some(layer) = layer_num {
+                            layers
+                                .get(*layer)
+                                .and_then(|x| x.as_ref())
+                                .and_then(|x| x.1.clone())
+                                .unwrap_or_else(|| base_device.clone())
+                        } else {
+                            base_device.clone()
+                        }
+                    } else {
+                        base_device.clone()
+                    };
                     let dtype = if let Some(ref layers) = layers {
                         if let Some(layer) = layer_num {
-                            layers.get(*layer).cloned().map(|x| x.0).unwrap_or(dtype)
+                            layers
+                                .get(*layer)
+                                .and_then(|x| x.as_ref())
+                                .map(|x| x.0)
+                                .unwrap_or(dtype)
                         } else {
                             dtype
                         }
@@ -875,33 +882,36 @@ pub trait IsqModel {
         let total_tensors = tensors.len();
 
         let layers = topology.map(|x| {
+            // Preserve the original layer indices; sparse topologies are valid.
             x.layers
                 .iter()
-                .filter_map(|topo| topo.as_ref().map(|x| (x.isq, x.device.clone())))
+                .map(|topo| topo.as_ref().map(|x| (x.isq, x.device.clone())))
                 .collect::<Vec<_>>()
         });
 
         let mut devices = Vec::new();
         let mut comms = Vec::new();
         for (_, layer_num) in &tensors {
-            let device = if let Some(ref layers) = layers {
-                if let Some(layer) = layer_num {
-                    layers
-                        .get(*layer)
-                        .as_ref()
-                        .map(|x| x.1.clone())
-                        .unwrap_or(Some(device.clone()))
-                        .unwrap_or(device.clone())
-                } else {
-                    device.clone()
-                }
-            } else if let Some(layer_num) = layer_num {
+            let base_device = if let Some(layer_num) = layer_num {
                 mapper
                     .device_for(*layer_num, false)
                     .cloned()
                     .unwrap_or(device.clone())
             } else {
                 device.clone()
+            };
+            let device = if let Some(ref layers) = layers {
+                if let Some(layer) = layer_num {
+                    layers
+                        .get(*layer)
+                        .and_then(|x| x.as_ref())
+                        .and_then(|x| x.1.clone())
+                        .unwrap_or_else(|| base_device.clone())
+                } else {
+                    base_device.clone()
+                }
+            } else {
+                base_device.clone()
             };
             devices.push(device);
             comms.push(mapper.get_comm_for(layer_num.unwrap_or(0))?)

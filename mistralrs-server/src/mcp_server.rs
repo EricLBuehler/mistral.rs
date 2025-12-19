@@ -160,9 +160,14 @@ impl McpTool for ChatTool {
 
         // Execute the request using existing helper utilities.
         let (tx, mut rx) = create_response_channel(None);
-        let (request, _is_streaming) = parse_request(chat_req, state.clone(), tx)
-            .await
-            .map_err(|e| CallToolError::new(io::Error::other(e.to_string())))?;
+        let (request, _is_streaming) = parse_request(
+            chat_req,
+            state.clone(),
+            tx,
+            mistralrs_server_core::types::SamplingDefaults::default(),
+        )
+        .await
+        .map_err(|e| CallToolError::new(io::Error::other(e.to_string())))?;
 
         mistralrs_server_core::handler_core::send_request(state, request)
             .await

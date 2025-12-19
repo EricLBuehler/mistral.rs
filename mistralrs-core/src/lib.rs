@@ -14,7 +14,7 @@ use pyo3::exceptions::PyValueError;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{
     cell::RefCell,
     error::Error,
@@ -66,7 +66,7 @@ mod scheduler;
 mod sequence;
 mod speech_models;
 mod toml_selector;
-mod tools;
+pub mod tools;
 mod topology;
 mod utils;
 mod vision_models;
@@ -601,7 +601,7 @@ impl MistralRs {
         let is_multi_threaded = tokio::runtime::Handle::try_current()
             .is_ok_and(|h| h.runtime_flavor() != tokio::runtime::RuntimeFlavor::CurrentThread);
 
-        // Do a dummy run
+        // Do a dummy run (best-effort warmup)
         if !distributed::is_daemon()
             && is_multi_threaded
             && matches!(
@@ -610,7 +610,10 @@ impl MistralRs {
             )
         {
             let clone_sender = engine_instance.sender.clone();
-            tokio::task::block_in_place(|| {
+            tokio::spawn(async move {
+                let profile = std::env::var("MISTRALRS_PROFILE_REQUESTS")
+                    .ok()
+                    .is_some_and(|x| x.contains('1'));
                 let (tx, mut rx) = channel(1);
                 let req = Request::Normal(Box::new(NormalRequest {
                     id: 0,
@@ -636,24 +639,83 @@ impl MistralRs {
                     model_id: None,
                     truncate_sequence: false,
                 }));
+
                 info!("Beginning dummy run.");
                 let start = Instant::now();
-                clone_sender.blocking_send(req).unwrap();
-
-                // Drain all responses from the channel until it's closed
-                let mut received_any = false;
-                while let Some(_resp) = rx.blocking_recv() {
-                    received_any = true;
+                if clone_sender.send(req).await.is_err() {
+                    warn!("Dummy run send failed (engine channel closed).");
+                    return;
+                }
+                if profile {
+                    tracing::info!(
+                        target: "mistralrs_core::profile",
+                        "dummy_run request enqueued in {:.3}s",
+                        start.elapsed().as_secs_f64()
+                    );
                 }
 
-                if received_any {
-                    let end = Instant::now();
+                // CUDA warmup can include kernel compilation / autotuning; don't block startup.
+                // If it takes a while, log a heads-up but keep waiting.
+                let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                {
+                    let finished = finished.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(120)).await;
+                        if !finished.load(std::sync::atomic::Ordering::Relaxed) {
+                            warn!("Dummy run still running after 120s (this can happen on first CUDA run).");
+                        }
+                    });
+                }
+
+                let mut received_terminal = false;
+                let mut saw_any = false;
+                while let Some(resp) = rx.recv().await {
+                    if profile && !saw_any {
+                        let kind = match &resp {
+                            Response::Chunk(_) => "Chunk",
+                            Response::Done(_) => "Done",
+                            Response::ModelError(_, _) => "ModelError",
+                            Response::CompletionChunk(_) => "CompletionChunk",
+                            Response::CompletionDone(_) => "CompletionDone",
+                            Response::CompletionModelError(_, _) => "CompletionModelError",
+                            Response::InternalError(_) => "InternalError",
+                            Response::ValidationError(_) => "ValidationError",
+                            Response::ImageGeneration(_) => "ImageGeneration",
+                            Response::Speech { .. } => "Speech",
+                            Response::Raw { .. } => "Raw",
+                            Response::Embeddings { .. } => "Embeddings",
+                            Response::WebSearchCall { .. } => "WebSearchCall",
+                        };
+                        tracing::info!(
+                            target: "mistralrs_core::profile",
+                            "dummy_run first response after {:.3}s (kind={})",
+                            Instant::now().duration_since(start).as_secs_f64(),
+                            kind
+                        );
+                        saw_any = true;
+                    }
+                    match resp {
+                        Response::Done(_)
+                        | Response::ModelError(_, _)
+                        | Response::CompletionDone(_)
+                        | Response::CompletionModelError(_, _)
+                        | Response::InternalError(_)
+                        | Response::ValidationError(_) => {
+                            received_terminal = true;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                finished.store(true, std::sync::atomic::Ordering::Relaxed);
+
+                if received_terminal {
                     info!(
                         "Dummy run completed in {}s.",
-                        end.duration_since(start).as_secs_f64()
+                        Instant::now().duration_since(start).as_secs_f64()
                     );
                 } else {
-                    warn!("Dummy run failed!");
+                    warn!("Dummy run receiver disconnected before terminal response.");
                 }
             });
         }

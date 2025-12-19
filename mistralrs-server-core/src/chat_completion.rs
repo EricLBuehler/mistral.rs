@@ -18,8 +18,9 @@ use mistralrs_core::{
     ChatCompletionChunkResponse, ChatCompletionResponse, Constraint, MistralRs, NormalRequest,
     Request, RequestMessage, Response, SamplingParams,
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 use tokio::sync::mpsc::{Receiver, Sender};
+use uuid::Uuid;
 
 use crate::{
     completion_core::{
@@ -30,13 +31,20 @@ use crate::{
         base_process_non_streaming_response, create_response_channel, send_request_with_model,
         BaseJsonModelError, ErrorToResponse, JsonError, ModelErrorMessage,
     },
+    mistral3_chat::canonicalize_messages_for_mistral3_template_if_needed,
     openai::{
         ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
         ResponseFormat,
     },
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
-    types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
-    util::{parse_audio_url, parse_image_url, sanitize_error_message, validate_model_name},
+    types::{
+        ExtractedMistralRsState, ExtractedSamplingDefaults, OnChunkCallback, OnDoneCallback,
+        SamplingDefaults, SharedMistralRsState,
+    },
+    util::{
+        maybe_dump_prompt_json, maybe_dump_request_json, parse_audio_url, parse_image_url,
+        sanitize_error_message, validate_model_name,
+    },
 };
 
 /// A callback function that processes streaming response chunks before they are sent to the client.
@@ -115,53 +123,59 @@ impl futures::Stream for ChatCompletionStreamer {
             DoneState::Running => (),
         }
 
-        match self.rx.poll_recv(cx) {
-            Poll::Ready(Some(resp)) => match resp {
-                Response::ModelError(msg, _) => {
-                    MistralRs::maybe_log_error(
-                        self.state.clone(),
-                        &ModelErrorMessage(msg.to_string()),
-                    );
-                    // Done now, just need to send the [DONE]
-                    self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(Event::default().data(msg))))
-                }
-                Response::ValidationError(e) => Poll::Ready(Some(Ok(
-                    Event::default().data(sanitize_error_message(e.as_ref()))
-                ))),
-                Response::InternalError(e) => {
-                    MistralRs::maybe_log_error(self.state.clone(), &*e);
-                    Poll::Ready(Some(Ok(
-                        Event::default().data(sanitize_error_message(e.as_ref()))
-                    )))
-                }
-                Response::Chunk(mut response) => {
-                    if response.choices.iter().all(|x| x.finish_reason.is_some()) {
+        loop {
+            match self.rx.poll_recv(cx) {
+                Poll::Ready(Some(resp)) => match resp {
+                    // Responses-only item; ignore on the Chat Completions wire format.
+                    Response::WebSearchCall { .. } => continue,
+                    Response::ModelError(msg, _) => {
+                        MistralRs::maybe_log_error(
+                            self.state.clone(),
+                            &ModelErrorMessage(msg.to_string()),
+                        );
+                        // Done now, just need to send the [DONE]
                         self.done_state = DoneState::SendingDone;
+                        return Poll::Ready(Some(Ok(Event::default().data(msg))));
                     }
-                    // Done now, just need to send the [DONE]
-                    MistralRs::maybe_log_response(self.state.clone(), &response);
-
-                    if let Some(on_chunk) = &self.on_chunk {
-                        response = on_chunk(response);
+                    Response::ValidationError(e) => {
+                        return Poll::Ready(Some(Ok(
+                            Event::default().data(sanitize_error_message(e.as_ref()))
+                        )));
                     }
-
-                    if self.store_chunks {
-                        self.chunks.push(response.clone());
+                    Response::InternalError(e) => {
+                        MistralRs::maybe_log_error(self.state.clone(), &*e);
+                        return Poll::Ready(Some(Ok(
+                            Event::default().data(sanitize_error_message(e.as_ref()))
+                        )));
                     }
+                    Response::Chunk(mut response) => {
+                        if response.choices.iter().all(|x| x.finish_reason.is_some()) {
+                            self.done_state = DoneState::SendingDone;
+                        }
+                        // Done now, just need to send the [DONE]
+                        MistralRs::maybe_log_response(self.state.clone(), &response);
 
-                    Poll::Ready(Some(Event::default().json_data(response)))
-                }
-                Response::Done(_) => unreachable!(),
-                Response::CompletionDone(_) => unreachable!(),
-                Response::CompletionModelError(_, _) => unreachable!(),
-                Response::CompletionChunk(_) => unreachable!(),
-                Response::ImageGeneration(_) => unreachable!(),
-                Response::Speech { .. } => unreachable!(),
-                Response::Raw { .. } => unreachable!(),
-                Response::Embeddings { .. } => unreachable!(),
-            },
-            Poll::Pending | Poll::Ready(None) => Poll::Pending,
+                        if let Some(on_chunk) = &self.on_chunk {
+                            response = on_chunk(response);
+                        }
+
+                        if self.store_chunks {
+                            self.chunks.push(response.clone());
+                        }
+
+                        return Poll::Ready(Some(Event::default().json_data(response)));
+                    }
+                    Response::Done(_) => unreachable!(),
+                    Response::CompletionDone(_) => unreachable!(),
+                    Response::CompletionModelError(_, _) => unreachable!(),
+                    Response::CompletionChunk(_) => unreachable!(),
+                    Response::ImageGeneration(_) => unreachable!(),
+                    Response::Speech { .. } => unreachable!(),
+                    Response::Raw { .. } => unreachable!(),
+                    Response::Embeddings { .. } => unreachable!(),
+                },
+                Poll::Pending | Poll::Ready(None) => return Poll::Pending,
+            }
         }
     }
 }
@@ -200,10 +214,24 @@ impl IntoResponse for ChatCompletionResponder {
 /// This function transforms an OpenAI-compatible chat completion request into the
 /// request format used by mistral.rs.
 pub async fn parse_request(
-    oairequest: ChatCompletionRequest,
+    mut oairequest: ChatCompletionRequest,
     state: SharedMistralRsState,
     tx: Sender<Response>,
+    sampling_defaults: SamplingDefaults,
 ) -> Result<(Request, bool)> {
+    if oairequest.temperature.is_none() {
+        oairequest.temperature = sampling_defaults.temperature;
+    }
+    if oairequest.top_p.is_none() {
+        oairequest.top_p = sampling_defaults.top_p;
+    }
+    if oairequest.min_p.is_none() {
+        oairequest.min_p = sampling_defaults.min_p;
+    }
+    if oairequest.top_k.is_none() {
+        oairequest.top_k = sampling_defaults.top_k;
+    }
+
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
 
@@ -212,8 +240,37 @@ pub async fn parse_request(
 
     let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
 
+    fn tool_calls_to_template_value(
+        calls: &[crate::openai::ToolCall],
+    ) -> Vec<IndexMap<String, Value>> {
+        calls
+            .iter()
+            .map(|call| {
+                let mut tool_map: IndexMap<String, Value> = IndexMap::new();
+                tool_map.insert(
+                    "type".to_string(),
+                    Value::String(match call.tp {
+                        mistralrs_core::ToolType::Function => "function".to_string(),
+                    }),
+                );
+                let mut function_map = Map::new();
+                function_map.insert(
+                    "name".to_string(),
+                    Value::String(call.function.name.clone()),
+                );
+                function_map.insert(
+                    "arguments".to_string(),
+                    Value::String(call.function.parameters.clone()),
+                );
+                tool_map.insert("function".to_string(), Value::Object(function_map));
+                tool_map
+            })
+            .collect()
+    }
+
     let messages = match oairequest.messages {
         Either::Left(req_messages) => {
+            let req_messages = canonicalize_messages_for_mistral3_template_if_needed(req_messages);
             let mut messages = Vec::new();
             let mut image_urls = Vec::new();
             let mut audio_urls = Vec::new();
@@ -221,18 +278,9 @@ pub async fn parse_request(
                 let content = match message.content.as_deref() {
                     Some(content) => content.clone(),
                     None => {
-                        // Handle tool call
-                        let calls = message
-                            .tool_calls
-                            .as_ref()
-                            .context(
-                                "No content was provided, expected tool calls to be provided.",
-                            )?
-                            .iter()
-                            .map(|call| &call.function)
-                            .collect::<Vec<_>>();
-
-                        Either::Left(serde_json::to_string(&calls)?)
+                        // Tool call messages (assistant + tool_calls) should keep `content` empty so
+                        // Devstral's chat template can render them via `tool_calls`.
+                        Either::Left(String::new())
                     }
                 };
 
@@ -243,17 +291,38 @@ pub async fn parse_request(
                             Either<String, Vec<IndexMap<String, Value>>>,
                         > = IndexMap::new();
                         message_map.insert("role".to_string(), Either::Left(message.role));
-                        message_map.insert("content".to_string(), Either::Left(content.clone()));
+
+                        let has_tool_calls =
+                            message.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty());
+
+                        // Only insert content if it is not empty or if there are no tool calls.
+                        // Some templates (e.g. Devstral) strictly check if content is defined/empty
+                        // before checking for tool calls, and will raise an error if content is present but empty.
+                        if !content.is_empty() || !has_tool_calls {
+                            message_map
+                                .insert("content".to_string(), Either::Left(content.clone()));
+                        }
+
+                        if let Some(tool_call_id) = message.tool_call_id {
+                            message_map
+                                .insert("tool_call_id".to_string(), Either::Left(tool_call_id));
+                        }
+                        if let Some(tool_calls) = message.tool_calls.as_ref() {
+                            if !tool_calls.is_empty() {
+                                message_map.insert(
+                                    "tool_calls".to_string(),
+                                    Either::Right(tool_calls_to_template_value(tool_calls)),
+                                );
+                            }
+                        }
                         messages.push(message_map);
                     }
                     Either::Right(image_messages) => {
-                        // If there is only one message, it is possible a text message
-                        // found when rig is used as client. In this case, we need to check if
-                        // the message is a text message or an image message.
-                        if image_messages.len() == 1 {
-                            if !image_messages[0].contains_key("text") {
-                                anyhow::bail!("Expected `text` key in input message.");
-                            }
+                        // If there is only one part, it may be a text-only message encoded as
+                        // structured content (observed with some clients like rig). In that case,
+                        // accept it as a plain text message. Otherwise, treat it as a multimodal
+                        // message (e.g. image-only).
+                        if image_messages.len() == 1 && image_messages[0].contains_key("text") {
                             let content = match image_messages[0]["text"].deref() {
                                 Either::Left(left) => left.to_string(),
                                 Either::Right(right) => format!("{right:?}"),
@@ -264,12 +333,24 @@ pub async fn parse_request(
                             > = IndexMap::new();
                             message_map.insert("role".to_string(), Either::Left(message.role));
                             message_map.insert("content".to_string(), Either::Left(content));
+                            if let Some(tool_call_id) = message.tool_call_id {
+                                message_map
+                                    .insert("tool_call_id".to_string(), Either::Left(tool_call_id));
+                            }
+                            if let Some(tool_calls) = message.tool_calls.as_ref() {
+                                if !tool_calls.is_empty() {
+                                    message_map.insert(
+                                        "tool_calls".to_string(),
+                                        Either::Right(tool_calls_to_template_value(tool_calls)),
+                                    );
+                                }
+                            }
                             messages.push(message_map);
                             continue;
                         }
-                        if message.role != "user" {
+                        if message.role != "user" && message.role != "tool" {
                             anyhow::bail!(
-                                "Role for an image message must be `user`, but it is {}",
+                                "Role for an image message must be `user` or `tool`, but it is {}",
                                 message.role
                             );
                         }
@@ -379,6 +460,18 @@ pub async fn parse_request(
                         }
 
                         message_map.insert("content".to_string(), Either::Right(content_map));
+                        if let Some(tool_call_id) = message.tool_call_id {
+                            message_map
+                                .insert("tool_call_id".to_string(), Either::Left(tool_call_id));
+                        }
+                        if let Some(tool_calls) = message.tool_calls.as_ref() {
+                            if !tool_calls.is_empty() {
+                                message_map.insert(
+                                    "tool_calls".to_string(),
+                                    Either::Right(tool_calls_to_template_value(tool_calls)),
+                                );
+                            }
+                        }
                         messages.push(message_map);
                         image_urls.extend(image_urls_iter);
                         audio_urls.extend(audio_urls_iter);
@@ -508,9 +601,39 @@ pub async fn parse_request(
 )]
 pub async fn chatcompletions(
     State(state): ExtractedMistralRsState,
-    Json(oairequest): Json<ChatCompletionRequest>,
+    State(sampling_defaults): ExtractedSamplingDefaults,
+    Json(mut oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
     let (tx, mut rx) = create_response_channel(None);
+
+    if oairequest.temperature.is_none() {
+        oairequest.temperature = sampling_defaults.temperature;
+    }
+    if oairequest.top_p.is_none() {
+        oairequest.top_p = sampling_defaults.top_p;
+    }
+    if oairequest.min_p.is_none() {
+        oairequest.min_p = sampling_defaults.min_p;
+    }
+    if oairequest.top_k.is_none() {
+        oairequest.top_k = sampling_defaults.top_k;
+    }
+
+    let debug_id = format!("chatcmpl_{}", Uuid::new_v4());
+    maybe_dump_request_json("chat_completions", &debug_id, &oairequest).await;
+    tracing::info!(
+        "chat_completions {} params: temperature={:?} top_p={:?} top_k={:?} min_p={:?} max_tokens={:?} n_choices={:?} presence_penalty={:?} frequency_penalty={:?} repetition_penalty={:?}",
+        debug_id,
+        oairequest.temperature,
+        oairequest.top_p,
+        oairequest.top_k,
+        oairequest.min_p,
+        oairequest.max_tokens,
+        oairequest.n_choices,
+        oairequest.presence_penalty,
+        oairequest.frequency_penalty,
+        oairequest.repetition_penalty
+    );
 
     // Extract model_id for routing before parsing
     let model_id = if oairequest.model == "default" {
@@ -519,10 +642,13 @@ pub async fn chatcompletions(
         Some(oairequest.model.clone())
     };
 
-    let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx).await {
-        Ok(x) => x,
-        Err(e) => return handle_error(state, e.into()),
-    };
+    let (request, is_streaming) =
+        match parse_request(oairequest, state.clone(), tx, sampling_defaults).await {
+            Ok(x) => x,
+            Err(e) => return handle_error(state, e.into()),
+        };
+
+    maybe_dump_prompt_json("chat_completions_parsed", &debug_id, &request).await;
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
         return handle_error(state, e.into());
@@ -590,5 +716,6 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> ChatC
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
+        Response::WebSearchCall { .. } => unreachable!(),
     }
 }

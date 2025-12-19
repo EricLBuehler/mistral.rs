@@ -11,9 +11,10 @@ use either::Either;
 use std::{
     ops::Deref,
     sync::{atomic::Ordering, Arc},
+    time::{Duration, Instant},
     time::{SystemTime, UNIX_EPOCH},
 };
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     get_mut_arcmutex, handle_seq_error,
@@ -29,6 +30,24 @@ impl Engine {
     pub async fn handle_request(self: Arc<Self>, request: Request) {
         match request {
             Request::Normal(request) => {
+                if self.profile_requests {
+                    let kind = match &request.messages {
+                        RequestMessage::Completion { .. } => "completion",
+                        RequestMessage::CompletionTokens(_) => "completion_tokens",
+                        RequestMessage::Chat { .. } => "chat",
+                        RequestMessage::VisionChat { .. } => "vision_chat",
+                        RequestMessage::ImageGeneration { .. } => "image_generation",
+                        RequestMessage::SpeechGeneration { .. } => "speech_generation",
+                        RequestMessage::Embedding { .. } => "embedding",
+                        RequestMessage::EmbeddingTokens { .. } => "embedding_tokens",
+                    };
+                    info!(
+                        target: "mistralrs_core::profile",
+                        "handle_request start id={} kind={}",
+                        request.id,
+                        kind
+                    );
+                }
                 let is_chat = matches!(
                     &request.messages,
                     RequestMessage::Chat { .. } | RequestMessage::VisionChat { .. }
@@ -61,6 +80,9 @@ impl Engine {
     }
 
     pub(super) async fn add_request(&self, request: NormalRequest) {
+        let profile = self.profile_requests;
+        let profile_start = Instant::now();
+        let request_id = request.id;
         let is_chat = matches!(
             request.messages,
             RequestMessage::Chat { .. } | RequestMessage::VisionChat { .. }
@@ -176,6 +198,7 @@ impl Engine {
         };
         let mut added_seq = false;
 
+        let prompt_build_started = Instant::now();
         let (mut prompt_tokens, prompt_text) = match request.messages {
             RequestMessage::Chat {
                 messages,
@@ -241,6 +264,16 @@ impl Engine {
                 (it, handle_seq_error!(prompt, request.response))
             }
         };
+        if profile {
+            let took = prompt_build_started.elapsed();
+            info!(
+                target: "mistralrs_core::profile",
+                "request {} prompt_build took {:.3}s ({} toks)",
+                request_id,
+                took.as_secs_f64(),
+                prompt_tokens.len()
+            );
+        }
         if prompt_tokens.is_empty() {
             request
                 .response
@@ -451,11 +484,16 @@ impl Engine {
                 .eos_tok
                 .clone();
 
-            let seq_preallocated_cache = if matches!(
-                get_mut_arcmutex!(self.pipeline).category(),
-                ModelCategory::Text | ModelCategory::Vision { .. }
-            ) && get_mut_arcmutex!(self.pipeline)
-                .do_preallocated_cache()
+            // If PagedAttention is enabled (`cache_config` present), we should not allocate the
+            // per-sequence preallocated KV cache (NormalCache). PagedAttention manages KV storage
+            // via its own block engine; allocating both can push VRAM over the edge for large
+            // prompts (e.g. Codex tool/system prompts) and lead to CUDA OOM / illegal access.
+            let seq_preallocated_cache = if block_size.is_none()
+                && matches!(
+                    get_mut_arcmutex!(self.pipeline).category(),
+                    ModelCategory::Text | ModelCategory::Vision { .. }
+                )
+                && get_mut_arcmutex!(self.pipeline).do_preallocated_cache()
             {
                 let metadata = get_mut_arcmutex!(self.pipeline).get_metadata();
                 let model_metadata = metadata
@@ -599,11 +637,26 @@ impl Engine {
             }
 
             let prefill_cache = handle_seq_error!(
-                get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache(
-                    seq.get_toks(),
-                    seq.image_hashes(),
-                    seq.audio_hashes(),
-                ),
+                {
+                    let prefix_started = Instant::now();
+                    let res = get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache(
+                        seq.get_toks(),
+                        seq.image_hashes(),
+                        seq.audio_hashes(),
+                    );
+                    if profile {
+                        let took = prefix_started.elapsed();
+                        if took >= Duration::from_millis(50) {
+                            info!(
+                                target: "mistralrs_core::profile",
+                                "request {} prefix_cache_lookup took {:.3}s",
+                                request_id,
+                                took.as_secs_f64()
+                            );
+                        }
+                    }
+                    res
+                },
                 request.response
             );
 
@@ -644,6 +697,18 @@ impl Engine {
         }
         if added_seq {
             self.pending_notify.notify_one();
+        }
+        if profile {
+            let took = profile_start.elapsed();
+            if took >= Duration::from_millis(50) {
+                info!(
+                    target: "mistralrs_core::profile",
+                    "request {} add_request finished in {:.3}s (choices={})",
+                    request_id,
+                    took.as_secs_f64(),
+                    request.sampling_params.n_choices
+                );
+            }
         }
     }
 
