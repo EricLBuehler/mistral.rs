@@ -81,7 +81,6 @@ impl QuantMethod for MXFP4Layer {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         if matches!(x.device(), Device::Cuda(_)) && ffi::HAVE_MXFP4_GEMM_KERNELS {
-            // Handle batched inputs by flattening to 2D
             let orig_dims = x.dims().to_vec();
             let x_2d = if orig_dims.len() > 2 {
                 let features = orig_dims[orig_dims.len() - 1];
@@ -93,7 +92,6 @@ impl QuantMethod for MXFP4Layer {
 
             let result = ops::mxfp4_matmul(&x_2d, &self.blocks, &self.scales, self.bias.as_ref())?;
 
-            // Reshape back if needed
             if orig_dims.len() > 2 {
                 let mut new_dims = orig_dims[..orig_dims.len() - 1].to_vec();
                 new_dims.push(result.dim(1)?);
@@ -105,7 +103,6 @@ impl QuantMethod for MXFP4Layer {
         #[cfg(feature = "metal")]
         {
             if x.device().is_metal() {
-                // Handle batched inputs by flattening to 2D.
                 let orig_dims = x.dims().to_vec();
                 let x_2d = if orig_dims.len() > 2 {
                     let features = orig_dims[orig_dims.len() - 1];
@@ -118,7 +115,6 @@ impl QuantMethod for MXFP4Layer {
                 let result =
                     metal_ops::mxfp4_matmul(&x_2d, &self.blocks, &self.scales, self.bias.as_ref())?;
 
-                // Reshape back if needed.
                 if orig_dims.len() > 2 {
                     let mut new_dims = orig_dims[..orig_dims.len() - 1].to_vec();
                     new_dims.push(result.dim(1)?);
@@ -128,7 +124,6 @@ impl QuantMethod for MXFP4Layer {
             }
         }
 
-        // CPU fallback: dequantize weights and compute using standard matmul
         self.forward_dequantize(x)
     }
 
@@ -158,7 +153,6 @@ impl QuantMethod for MXFP4Layer {
             }
         }
 
-        // CPU fallback: dequantize weights and compute using standard matmul
         self.gather_forward_dequantize(x, indices)
     }
 
@@ -171,7 +165,6 @@ impl QuantMethod for MXFP4Layer {
     }
 
     fn dtype_and_device(&self) -> (DType, candle_core::Device) {
-        // Return the dtype we want for activations (bf16 typically)
         (DType::BF16, self.scales.device().clone())
     }
 
@@ -216,8 +209,6 @@ impl MXFP4Layer {
             candle_core::bail!("Unexpected quantization config.")
         };
 
-        // blocks: [out_dim, in_dim/2] packed bytes (2 FP4 values per byte)
-        // scales: [out_dim, in_dim/32] E8M0 scales
         let blocks = vb.get_with_hints_dtype(
             (out_dim, in_dim / 2),
             "blocks",
@@ -260,8 +251,6 @@ impl MXFP4Layer {
             candle_core::bail!("Unexpected quantization config.")
         };
 
-        // blocks: [num_experts, out_dim, in_dim/2] packed bytes
-        // scales: [num_experts, out_dim, in_dim/32] E8M0 scales
         let blocks = vb.get_with_hints_dtype(
             (num_local_experts, out_dim, in_dim / 2),
             "blocks",
@@ -310,7 +299,6 @@ impl MXFP4Layer {
 
         let num_blocks = in_dim / MXFP4_BLOCK_SIZE;
 
-        // Load 4D blocks tensor: [num_experts, out_dim, num_blocks, 16]
         let blocks_4d = vb.get_with_hints_dtype(
             (num_local_experts, out_dim, num_blocks, 16),
             &format!("{name}_blocks"),
@@ -318,10 +306,8 @@ impl MXFP4Layer {
             DType::U8,
         )?;
 
-        // Reshape to 3D: [num_experts, out_dim, num_blocks * 16] = [num_experts, out_dim, in_dim/2]
         let blocks = blocks_4d.reshape((num_local_experts, out_dim, num_blocks * 16))?;
 
-        // Load scales: [num_experts, out_dim, num_blocks]
         let scales = vb.get_with_hints_dtype(
             (num_local_experts, out_dim, num_blocks),
             &format!("{name}_scales"),
@@ -329,7 +315,6 @@ impl MXFP4Layer {
             DType::U8,
         )?;
 
-        // Load bias if present
         let bias = if bias {
             Some(vb.get((num_local_experts, out_dim), &format!("{name}_bias"))?)
         } else {
@@ -412,13 +397,9 @@ impl MXFP4Layer {
             .to_dtype(DType::BF16)
     }
 
-    /// Fallback forward using dequantized weights
-    /// x: [M, K] or batched [B, M, K]
-    /// Returns: [M, N] or [B, M, N]
     fn forward_dequantize(&self, x: &Tensor) -> Result<Tensor> {
         let orig_dims = x.dims().to_vec();
 
-        // Flatten to 2D if batched
         let x_2d = if orig_dims.len() > 2 {
             let features = orig_dims[orig_dims.len() - 1];
             let batch_size: usize = orig_dims[..orig_dims.len() - 1].iter().product();
@@ -427,19 +408,14 @@ impl MXFP4Layer {
             x.clone()
         };
 
-        // Dequantize weights: [N, K]
         let weights = self.dequantize_weights()?;
-
-        // Compute: x @ weight.T = [M, K] @ [K, N] = [M, N]
         let weight_t = weights.t()?;
         let mut result = x_2d.matmul(&weight_t)?;
 
-        // Add bias if present
         if let Some(bias) = &self.bias {
             result = result.broadcast_add(bias)?;
         }
 
-        // Reshape back if needed
         if orig_dims.len() > 2 {
             let mut new_dims = orig_dims[..orig_dims.len() - 1].to_vec();
             new_dims.push(result.dim(1)?);
@@ -449,10 +425,6 @@ impl MXFP4Layer {
         Ok(result)
     }
 
-    /// Fallback gather_forward using dequantized weights
-    /// x: [num_tokens, K] or [num_tokens, topk, K]
-    /// indices: [num_tokens, topk]
-    /// Returns: [num_tokens, topk, N]
     fn gather_forward_dequantize(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
         let x_dims = x.dims();
         let indices_dims = indices.dims();
@@ -463,41 +435,32 @@ impl MXFP4Layer {
             (x_dims[0], x_dims[1], x_dims[2], true)
         };
 
-        // Dequantize weights: [num_experts, N, K]
         let weights = self.dequantize_weights()?;
         let weight_dims = weights.dims();
         let n = weight_dims[1];
 
-        // Convert indices to vec for iteration
         let indices_cpu = indices.to_device(&Device::Cpu)?.to_dtype(DType::U32)?;
         let indices_data: Vec<u32> = indices_cpu.flatten_all()?.to_vec1()?;
 
-        // Compute output for each (token, expert_slot)
         let mut outputs = Vec::with_capacity(num_tokens * topk);
 
         for token_idx in 0..num_tokens {
             for slot_idx in 0..topk {
                 let expert_idx = indices_data[token_idx * topk + slot_idx] as usize;
 
-                // Get input for this token/slot
                 let input = if x_has_topk {
-                    x.i((token_idx, slot_idx))? // [K]
+                    x.i((token_idx, slot_idx))?
                 } else {
-                    x.i(token_idx)? // [K]
+                    x.i(token_idx)?
                 };
 
-                // Get weight for this expert: [N, K]
                 let weight = weights.i(expert_idx)?;
+                let input_2d = input.unsqueeze(0)?;
+                let weight_t = weight.t()?;
+                let mut output = input_2d.matmul(&weight_t)?.squeeze(0)?;
 
-                // Compute: input @ weight.T = [K] @ [K, N] = [N]
-                // weight is [N, K], so weight.T is [K, N]
-                let input_2d = input.unsqueeze(0)?; // [1, K]
-                let weight_t = weight.t()?; // [K, N]
-                let mut output = input_2d.matmul(&weight_t)?.squeeze(0)?; // [N]
-
-                // Add bias if present
                 if let Some(bias) = &self.bias {
-                    let expert_bias = bias.i(expert_idx)?; // [N]
+                    let expert_bias = bias.i(expert_idx)?;
                     output = output.broadcast_add(&expert_bias)?;
                 }
 
@@ -505,7 +468,6 @@ impl MXFP4Layer {
             }
         }
 
-        // Stack outputs: [num_tokens * topk, N] -> [num_tokens, topk, N]
         let stacked = Tensor::stack(&outputs, 0)?;
         stacked.reshape((num_tokens, topk, n))
     }

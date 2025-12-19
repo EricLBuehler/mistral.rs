@@ -108,33 +108,26 @@ impl GptOssRotaryEmbeddingVariant {
     }
 }
 
-/// Custom SwiGLU activation with clamping as used in GPT-OSS
-/// Formula: (up + 1) * gate * sigmoid(gate * alpha)
-/// With clamping: gate clamped to max=limit (no min), up clamped to [-limit, limit]
+/// Custom SwiGLU activation: (up + 1) * gate * sigmoid(gate * alpha)
+/// With clamping: gate max=limit, up [-limit, limit]
 #[allow(dead_code)]
 fn gptoss_swiglu(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -> Result<Tensor> {
-    // Use fused CUDA kernel when available for better performance
     #[cfg(feature = "cuda")]
     if gate.device().is_cuda() {
         return mistralrs_quant::gptoss_swiglu_fused(gate, up, alpha, limit);
     }
 
-    // CPU fallback
     let dtype = gate.dtype();
     let limit_d = limit as f64;
 
-    // Clamp gate to max=limit only (no min bound), up to [-limit, limit]
-    // HF: gate.clamp(min=None, max=self.limit)
     let gate_clamped =
         gate.minimum(&Tensor::full(limit_d as f32, gate.shape(), gate.device())?.to_dtype(dtype)?)?;
     let up_clamped = up.clamp(-limit_d, limit_d)?;
 
-    // glu = gate * sigmoid(gate * alpha)
     let gate_scaled = (&gate_clamped * alpha as f64)?;
     let sigmoid_val = candle_nn::ops::sigmoid(&gate_scaled)?;
     let glu = (&gate_clamped * &sigmoid_val)?;
 
-    // output = (up + 1) * glu
     let up_plus_one = (&up_clamped + 1.0)?;
     up_plus_one.mul(&glu)
 }
@@ -173,11 +166,10 @@ impl Attention {
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim();
 
-        // Attention projections are NOT quantized in MXFP4 models (in modules_to_not_convert)
         let q_proj = ColumnParallelLayer::new(
             hidden_sz,
             num_heads * head_dim,
-            &None, // Not quantized
+            &None,
             cfg.attention_bias,
             comm,
             mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
@@ -190,7 +182,7 @@ impl Attention {
         let k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
-            &None, // Not quantized
+            &None,
             cfg.attention_bias,
             comm,
             kv_shard,
@@ -199,7 +191,7 @@ impl Attention {
         let v_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
-            &None, // Not quantized
+            &None,
             cfg.attention_bias,
             comm,
             kv_shard,
@@ -208,13 +200,12 @@ impl Attention {
         let o_proj = RowParallelLayer::new(
             num_heads * head_dim,
             hidden_sz,
-            &None, // Not quantized
+            &None,
             cfg.attention_bias,
             comm,
             mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
         )?;
 
-        // Load sinks: [num_heads]
         let sinks = mapper
             .set_device(layer_idx, vb.clone(), false)
             .get((num_heads,), "sinks")?;
@@ -330,7 +321,6 @@ impl Attention {
             None => {
                 let (k, v) = kv_cache.append(&k, &v)?;
 
-                // Custom attention with sinks for non-paged attention
                 self.attention_with_sinks(
                     &q,
                     &k,
@@ -358,8 +348,7 @@ impl Attention {
         Ok(res)
     }
 
-    /// Attention computation with sinks
-    /// Sinks are added as extra logits, go through softmax, then are dropped
+    /// Attention with sinks: sinks are added as extra logits, softmaxed, then dropped
     #[allow(clippy::too_many_arguments)]
     fn attention_with_sinks(
         &self,
@@ -371,11 +360,9 @@ impl Attention {
         _flash_params: &FlashParams,
         _layer_idx: usize,
     ) -> Result<Tensor> {
-        // Manual attention with sinks
         let (b_sz, num_heads, q_len, _head_dim) = q.dims4()?;
         let (_, _, k_len, _) = k.dims4()?;
 
-        // Repeat KV for grouped query attention - only clone if needed
         let k_expanded;
         let v_expanded;
         let (k_ref, v_ref): (&Tensor, &Tensor) = if self.sdpa_params.n_kv_groups > 1 {
@@ -383,23 +370,17 @@ impl Attention {
             v_expanded = crate::layers::repeat_kv(v.clone(), self.sdpa_params.n_kv_groups)?;
             (&k_expanded, &v_expanded)
         } else {
-            // No GQA expansion needed - use original references without cloning
             (k, v)
         };
 
-        // Compute attention scores: [b, heads, q_len, k_len]
         let attn_weights = (q.matmul(&k_ref.transpose(D::Minus2, D::Minus1)?)?
             * self.sdpa_params.softmax_scale as f64)?;
 
-        // Use fused softmax with sinks kernel on CUDA when no mask (common during decode)
-        // Fall back to original implementation when mask is present to avoid preparation overhead
         #[cfg(feature = "cuda")]
         let scores = if attention_mask.is_none() {
-            // Fast path: no mask, use fused kernel
             let sinks = self.sinks.to_dtype(attn_weights.dtype())?;
             mistralrs_quant::softmax_with_sinks(&attn_weights, &sinks, None)?
         } else {
-            // Slow path: mask present, use original implementation
             let mask = attention_mask.unwrap();
             let mask_last_dim = mask.dim(D::Minus1)?;
             let causal_mask = if mask_last_dim > k_len {
@@ -410,7 +391,6 @@ impl Attention {
             };
             let attn_weights = attn_weights.broadcast_add(&causal_mask)?;
 
-            // Add sinks
             let sinks_expanded = self
                 .sinks
                 .reshape((1, num_heads, 1, 1))?
@@ -418,52 +398,41 @@ impl Attention {
                 .to_dtype(attn_weights.dtype())?;
             let combined_logits = Tensor::cat(&[&attn_weights, &sinks_expanded], D::Minus1)?;
 
-            // Softmax with numerical stability
             let max_logits = combined_logits.max_keepdim(D::Minus1)?;
             let combined_logits = combined_logits.broadcast_sub(&max_logits)?;
             let probs = candle_nn::ops::softmax_last_dim(&combined_logits)?;
 
-            // Drop sink probability
             probs.narrow(D::Minus1, 0, k_len)?.contiguous()?
         };
 
-        // Fallback for non-CUDA (shouldn't happen in practice for GPT-OSS)
         #[cfg(not(feature = "cuda"))]
         let scores = {
-            // Apply attention mask
             let attn_weights = if let Some(mask) = attention_mask {
                 attn_weights.broadcast_add(&mask)?
             } else {
                 attn_weights
             };
 
-            // Add sinks: reshape [num_heads] -> [1, num_heads, 1, 1] and concat along last dim
             let sinks_expanded = self
                 .sinks
                 .reshape((1, num_heads, 1, 1))?
                 .broadcast_as((b_sz, num_heads, q_len, 1))?
                 .to_dtype(attn_weights.dtype())?;
 
-            // Concatenate sinks to attention logits
             let combined_logits = Tensor::cat(&[&attn_weights, &sinks_expanded], D::Minus1)?;
 
-            // Subtract max for numerical stability
             let max_logits = combined_logits.max_keepdim(D::Minus1)?;
             let combined_logits = combined_logits.broadcast_sub(&max_logits)?;
 
-            // Softmax
             let probs = candle_nn::ops::softmax_last_dim(&combined_logits)?;
 
-            // Drop the sink probability
             probs.narrow(D::Minus1, 0, k_len)?.contiguous()?
         };
 
-        // Compute output
         scores.matmul(v_ref)
     }
 }
 
-/// GPT-OSS MoE layer with combined gate_up_proj and special activation
 struct GptOssMoE {
     gate: Linear,
     gate_up_proj: Arc<dyn QuantMethod>,
@@ -478,23 +447,19 @@ struct GptOssMoE {
 
 impl GptOssMoE {
     fn new(cfg: &Config, vb: ShardedVarBuilder, layer_device: Device) -> Result<Self> {
-        // Router is not quantized
         let gate = layers::linear(
             cfg.hidden_size,
             cfg.num_local_experts,
             vb.pp("router").set_device(layer_device.clone()),
         )?;
 
-        // Load MXFP4 quantized experts
         let experts_vb = vb.pp("experts").set_device(layer_device);
 
-        // gate_up_proj: [num_experts, intermediate_size * 2, hidden_size/2] packed
-        // down_proj: [num_experts, hidden_size, intermediate_size/2] packed
         let gate_up_proj = MXFP4Layer::packed_gptoss_linear(
             cfg.num_local_experts,
             cfg.hidden_size,
             cfg.intermediate_size * 2,
-            true, // has bias
+            true,
             "gate_up_proj",
             experts_vb.clone(),
         )?;
@@ -503,7 +468,7 @@ impl GptOssMoE {
             cfg.num_local_experts,
             cfg.intermediate_size,
             cfg.hidden_size,
-            true, // has bias
+            true,
             "down_proj",
             experts_vb,
         )?;
@@ -524,7 +489,6 @@ impl GptOssMoE {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
-        // Compute routing logits
         let router_logits = self.gate.forward(&xs_flat)?;
 
         #[cfg(feature = "cuda")]
@@ -542,10 +506,8 @@ impl GptOssMoE {
         };
 
         let gate_up = self.gate_up_proj.gather_forward(&xs_flat, &topk_ids)?;
-
         let (num_tokens, topk_dim, _) = gate_up.dims3()?;
 
-        // Use fused interleaved swiglu kernel on CUDA
         #[cfg(feature = "cuda")]
         let activated = {
             let gate_up_for_kernel =
@@ -572,10 +534,8 @@ impl GptOssMoE {
             gptoss_swiglu(&gate, &up, self.alpha, self.limit)?
         };
 
-        // down_proj: [num_tokens, topk, hidden_size]
         let expert_out = self.down_proj.gather_forward(&activated, &topk_ids)?;
 
-        // Weight and sum expert outputs
         let topk_weights = topk_weights
             .to_dtype(expert_out.dtype())?
             .unsqueeze(D::Minus1)?;
@@ -700,12 +660,11 @@ impl Model {
         let vb_m = vb.pp("model");
         let mapper = normal_loading_metadata.mapper;
 
-        // embed_tokens is NOT quantized (in modules_to_not_convert)
         let embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
-            &None, // Not quantized
+            &None,
         )?;
 
         let mut ropes: HashMap<_, GptOssRotaryEmbeddingVariant> = HashMap::new();
@@ -714,7 +673,6 @@ impl Model {
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
 
-            // Use YARN RoPE if configured, otherwise standard RoPE
             let rope = if let Some(rope_scaling) = &cfg.rope_scaling {
                 if rope_scaling.rope_type == "yarn" {
                     GptOssRotaryEmbeddingVariant::Yarn(Arc::new(GptOssRotaryEmbedding::new(
@@ -730,7 +688,6 @@ impl Model {
                         vb_m.dtype(),
                     )?))
                 } else {
-                    // Fallback to standard RoPE for unknown types
                     GptOssRotaryEmbeddingVariant::Standard(Arc::new(RotaryEmbedding::new(
                         cfg.rope_theta as f32,
                         cfg.head_dim(),
@@ -801,12 +758,11 @@ impl Model {
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
 
-        // lm_head is NOT quantized (in modules_to_not_convert)
         let lm_head = if !cfg.tie_word_embeddings {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
-                &None, // Not quantized
+                &None,
                 false,
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
@@ -832,25 +788,14 @@ impl Model {
             v_head_dim: head_dim,
         };
 
-        // Create hybrid cache: RotatingCache for sliding_attention layers, NormalCache for full_attention
-        // This allows sliding window layers to automatically truncate old tokens in the KV cache,
-        // eliminating the need for sliding window masks during decode
         let cache_types: Vec<NormalCacheType> = (0..cfg.num_hidden_layers)
-            .map(|layer_idx| {
-                match cfg.layer_types.get(layer_idx) {
-                    Some(LayerType::SlidingAttention) => {
-                        // Use rotating cache for sliding window layers
-                        NormalCacheType::SlidingWindow {
-                            window: cfg.sliding_window.unwrap_or(cfg.max_position_embeddings),
-                        }
-                    }
-                    _ => {
-                        // Use normal cache for full attention layers
-                        NormalCacheType::Normal {
-                            max_seq_len: cfg.max_position_embeddings,
-                        }
-                    }
-                }
+            .map(|layer_idx| match cfg.layer_types.get(layer_idx) {
+                Some(LayerType::SlidingAttention) => NormalCacheType::SlidingWindow {
+                    window: cfg.sliding_window.unwrap_or(cfg.max_position_embeddings),
+                },
+                _ => NormalCacheType::Normal {
+                    max_seq_len: cfg.max_position_embeddings,
+                },
             })
             .collect();
 
@@ -880,26 +825,15 @@ impl Model {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let cache = &mut self.cache.normal().0;
 
-        // GPT-OSS uses custom attention with sinks, which requires the full causal mask
-        // Don't use CausalMasker which shortcuts to (1,1) when flash-attn is enabled
         let (_b_sz, tgt_len) = input_ids.dims2()?;
         let sliding_window = self.cfg.sliding_window;
 
-        // During decode (tgt_len == 1), no masks are needed:
-        // - Full attention layers: single query can attend to all cached positions
-        // - Sliding attention layers: RotatingCache automatically truncates to window size
-        //
-        // During prefill (tgt_len > 1), we need masks:
-        // - Causal mask for full attention layers
-        // - Sliding window mask for sliding attention layers
         let (causal_mask, sliding_mask) = if tgt_len == 1 {
             (None, None)
         } else {
-            // Get past_kv_len from first full attention layer (they all have same seq len during prefill)
             let past_kv_len = cache[0].current_seq_len();
             let kv_len = tgt_len + past_kv_len;
 
-            // Create causal mask using tensor operations for better performance
             let q_pos = Tensor::arange(
                 past_kv_len as u32,
                 (past_kv_len + tgt_len) as u32,
@@ -911,7 +845,6 @@ impl Model {
                 .to_dtype(DType::I64)?
                 .reshape((1, kv_len))?;
 
-            // Causal mask: attend where k <= q
             let causal_mask_bool = k_pos.broadcast_gt(&q_pos)?;
             let zeros = Tensor::zeros((tgt_len, kv_len), xs.dtype(), input_ids.device())?;
             let neg_inf = Tensor::full(f32::NEG_INFINITY, (tgt_len, kv_len), input_ids.device())?
@@ -923,16 +856,12 @@ impl Model {
                     .unsqueeze(0)?,
             );
 
-            // Sliding window mask (only if sliding_window is configured)
             let sliding_mask = if let Some(window) = sliding_window {
-                // min_k = max(0, q_pos - window)
                 let window_tensor = Tensor::full(window as i64, q_pos.shape(), input_ids.device())?;
                 let min_k = q_pos.sub(&window_tensor)?.maximum(0i64)?;
 
-                // Attend where k >= min_k AND k <= q_pos
                 let too_far_left = k_pos.broadcast_lt(&min_k)?;
                 let too_far_right = k_pos.broadcast_gt(&q_pos)?;
-                // Combine: mask out if either condition is true
                 let sliding_mask_bool = too_far_left
                     .to_dtype(DType::U8)?
                     .add(&too_far_right.to_dtype(DType::U8)?)?
@@ -951,7 +880,6 @@ impl Model {
             (causal_mask, sliding_mask)
         };
 
-        // PagedAttention prompt chunking filter
         let should_use_mask = metadata
             .as_ref()
             .map(|(_, meta)| meta.is_first_prompt_chunk)
@@ -962,7 +890,6 @@ impl Model {
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
 
-            // Select appropriate mask based on layer type (sliding vs full attention)
             let layer_mask = if layer.self_attn.is_sliding {
                 sliding_mask.as_ref().or(causal_mask.as_ref())
             } else {
@@ -1006,7 +933,6 @@ impl IsqModel for Model {
             layers.push((&mut layer.self_attn.k_proj, Some(i)));
             layers.push((&mut layer.self_attn.v_proj, Some(i)));
             layers.push((&mut layer.self_attn.o_proj, Some(i)));
-            // MoE layers are already MXFP4 quantized, don't ISQ them
         }
         layers.push((&mut self.lm_head, None));
         (layers, &*self.mapper)
