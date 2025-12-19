@@ -47,6 +47,7 @@ fn main() -> Result<(), String> {
         const BLOCKWISE_FP8_FFI_PATH: &str = "src/blockwise_fp8/ffi.rs";
         const SCALAR_FP8_FFI_PATH: &str = "src/scalar_fp8/ffi.rs";
         const VECTOR_FP8_FFI_PATH: &str = "src/vector_fp8/ffi.rs";
+        const MXFP4_FFI_PATH: &str = "src/mxfp4/ffi.rs";
         const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
         println!("cargo:rerun-if-changed=build.rs");
@@ -190,6 +191,15 @@ fn main() -> Result<(), String> {
             );
         }
         std::fs::write(VECTOR_FP8_FFI_PATH, vector_fp8_ffi_ct).unwrap();
+
+        // Handle MXFP4 kernel (doesn't require cc >= 800, uses LUT-based dequantization)
+        // MXFP4 is always enabled when CUDA is available since it uses software dequant
+        let mxfp4_ffi_ct = read_to_string(MXFP4_FFI_PATH).unwrap();
+        let mxfp4_ffi_ct = mxfp4_ffi_ct.replace(
+            "pub(crate) const HAVE_MXFP4_GEMM_KERNELS: bool = false;",
+            "pub(crate) const HAVE_MXFP4_GEMM_KERNELS: bool = true;",
+        );
+        std::fs::write(MXFP4_FFI_PATH, mxfp4_ffi_ct).unwrap();
         // ========
 
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
@@ -202,6 +212,7 @@ fn main() -> Result<(), String> {
             "kernels/rotary/rotary.cu",
             "kernels/afq/afq.cu",
             "kernels/afq/afq_gemm.cu",
+            "kernels/mxfp4/mxfp4_gemm.cu", // MXFP4 works on all compute caps
         ];
         if cc_over_800 {
             lib_files.push("kernels/marlin/marlin_matmul_f16.cu");
@@ -293,12 +304,13 @@ fn main() -> Result<(), String> {
         use std::process::Command;
         use std::{env, str};
 
-        const METAL_SOURCES: [&str; 9] = [
+        const METAL_SOURCES: [&str; 10] = [
             "bitwise",
             "blockwise_fp8",
             "bnb_dequantize",
             "hqq_dequantize",
             "hqq_bitpack",
+            "mxfp4",
             "quantized",
             "scan",
             "sort",

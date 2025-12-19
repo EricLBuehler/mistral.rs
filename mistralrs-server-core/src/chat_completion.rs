@@ -16,7 +16,7 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use mistralrs_core::{
     ChatCompletionChunkResponse, ChatCompletionResponse, Constraint, MistralRs, NormalRequest,
-    Request, RequestMessage, Response, SamplingParams,
+    ReasoningEffort, Request, RequestMessage, Response, SamplingParams,
 };
 use serde_json::{Map, Value};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -206,6 +206,18 @@ impl IntoResponse for ChatCompletionResponder {
     }
 }
 
+/// Parse reasoning_effort string to ReasoningEffort enum
+fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
+    effort
+        .as_ref()
+        .and_then(|e| match e.to_lowercase().as_str() {
+            "low" => Some(ReasoningEffort::Low),
+            "medium" => Some(ReasoningEffort::Medium),
+            "high" => Some(ReasoningEffort::High),
+            _ => None,
+        })
+}
+
 /// Parses and validates a chat completion request.
 ///
 /// This function transforms an OpenAI-compatible chat completion request into the
@@ -235,6 +247,9 @@ pub async fn parse_request(
     // Validate that the requested model matches the loaded model
     validate_model_name(&oairequest.model, state.clone())?;
 
+    // Parse reasoning effort for Harmony-format models
+    let reasoning_effort = parse_reasoning_effort(&oairequest.reasoning_effort);
+
     let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
 
     fn tool_calls_to_template_value(
@@ -257,7 +272,7 @@ pub async fn parse_request(
                 );
                 function_map.insert(
                     "arguments".to_string(),
-                    Value::String(call.function.parameters.clone()),
+                    Value::String(call.function.arguments.clone()),
                 );
                 tool_map.insert("function".to_string(), Value::Object(function_map));
                 tool_map
@@ -287,7 +302,7 @@ pub async fn parse_request(
                             String,
                             Either<String, Vec<IndexMap<String, Value>>>,
                         > = IndexMap::new();
-                        message_map.insert("role".to_string(), Either::Left(message.role));
+                        message_map.insert("role".to_string(), Either::Left(message.role.clone()));
 
                         let has_tool_calls =
                             message.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty());
@@ -312,6 +327,11 @@ pub async fn parse_request(
                                 );
                             }
                         }
+
+                        if let Some(ref name) = message.name {
+                            message_map.insert("name".to_string(), Either::Left(name.clone()));
+                        }
+
                         messages.push(message_map);
                     }
                     Either::Right(image_messages) => {
@@ -499,11 +519,13 @@ pub async fn parse_request(
                     images,
                     audios,
                     enable_thinking: oairequest.enable_thinking,
+                    reasoning_effort,
                 }
             } else {
                 RequestMessage::Chat {
                     messages,
                     enable_thinking: oairequest.enable_thinking,
+                    reasoning_effort,
                 }
             }
         }
@@ -517,6 +539,7 @@ pub async fn parse_request(
             RequestMessage::Chat {
                 messages,
                 enable_thinking: oairequest.enable_thinking,
+                reasoning_effort,
             }
         }
     };

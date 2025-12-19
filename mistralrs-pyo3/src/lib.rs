@@ -28,10 +28,10 @@ use mistralrs_core::{
     EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
     GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar,
     Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
-    NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, Request as _Request,
-    RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig, SearchEmbeddingModel,
-    SpeculativeConfig, SpeculativeLoader, SpeechLoader, StopTokens, TokenSource,
-    TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
+    NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, ReasoningEffort,
+    Request as _Request, RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig,
+    SearchEmbeddingModel, SpeculativeConfig, SpeculativeLoader, SpeechLoader, StopTokens,
+    TokenSource, TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use mistralrs_core::{
     CalledFunction, SearchCallback, SearchFunctionParameters, SearchResult, ToolCallback,
@@ -49,6 +49,18 @@ mod stream;
 mod util;
 mod which;
 use which::{Architecture, DiffusionArchitecture, SpeechLoaderType, VisionArchitecture, Which};
+
+/// Parse reasoning effort string to ReasoningEffort enum
+fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
+    effort
+        .as_ref()
+        .and_then(|e| match e.to_lowercase().as_str() {
+            "low" => Some(ReasoningEffort::Low),
+            "medium" => Some(ReasoningEffort::Medium),
+            "high" => Some(ReasoningEffort::High),
+            _ => None,
+        })
+}
 
 static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
 
@@ -1150,11 +1162,13 @@ impl Runner {
                             images,
                             audios,
                             enable_thinking: request.enable_thinking,
+                            reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
                         }
                     } else {
                         RequestMessage::Chat {
                             messages: messages_vec,
                             enable_thinking: request.enable_thinking,
+                            reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
                         }
                     }
                 }
@@ -1170,6 +1184,7 @@ impl Runner {
                     RequestMessage::Chat {
                         messages,
                         enable_thinking: request.enable_thinking,
+                        reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
                     }
                 }
             };
@@ -1634,6 +1649,7 @@ impl Runner {
             add_special_tokens,
             response: tx,
             enable_thinking,
+            reasoning_effort: None,
         });
 
         self.runner
@@ -1911,11 +1927,13 @@ impl Runner {
                             images,
                             audios,
                             enable_thinking: request.enable_thinking,
+                            reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
                         }
                     } else {
                         RequestMessage::Chat {
                             messages: messages_vec,
                             enable_thinking: request.enable_thinking,
+                            reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
                         }
                     }
                 }
@@ -1931,6 +1949,7 @@ impl Runner {
                     RequestMessage::Chat {
                         messages,
                         enable_thinking: request.enable_thinking,
+                        reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
                     }
                 }
             };

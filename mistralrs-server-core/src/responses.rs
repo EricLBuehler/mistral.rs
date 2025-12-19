@@ -1632,6 +1632,7 @@ async fn parse_responses_request(
                     dry_allowed_length: None,
                     dry_sequence_breakers: None,
                     enable_thinking: None,
+                    reasoning_effort: None,
                     truncate_sequence: None,
                 };
 
@@ -1902,10 +1903,11 @@ async fn parse_responses_request(
                     name: None,
                     tool_call_id: None,
                     tool_calls: Some(vec![ToolCall {
+                        id: None,
                         tp: mistralrs_core::ToolType::Function,
                         function: crate::openai::FunctionCalled {
                             name: name.clone(),
-                            parameters: arguments.clone(),
+                            arguments: arguments.clone(),
                         },
                     }]),
                 });
@@ -1923,10 +1925,11 @@ async fn parse_responses_request(
                     name: None,
                     tool_call_id: None,
                     tool_calls: Some(vec![ToolCall {
+                        id: None,
                         tp: mistralrs_core::ToolType::Function,
                         function: crate::openai::FunctionCalled {
                             name: "local_shell".to_string(),
-                            parameters: args,
+                            arguments: args,
                         },
                     }]),
                 });
@@ -2013,6 +2016,7 @@ async fn parse_responses_request(
         dry_allowed_length: oairequest.dry_allowed_length,
         dry_sequence_breakers: oairequest.dry_sequence_breakers,
         enable_thinking: oairequest.enable_thinking,
+        reasoning_effort: None,
         truncate_sequence: oairequest.truncate_sequence,
     };
 
@@ -2600,6 +2604,7 @@ pub async fn compact_response(
         dry_allowed_length: None,
         dry_sequence_breakers: None,
         enable_thinking: None,
+        reasoning_effort: None,
         truncate_sequence: None,
     };
 
@@ -2844,7 +2849,7 @@ mod tests {
         let parsed = parse_tool_calls_if_complete(complete).expect("should parse");
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].name, "shell");
-        assert_eq!(parsed[0].parameters["workdir"], "/tmp");
+        assert_eq!(parsed[0].arguments["workdir"], "/tmp");
     }
 
     #[test]

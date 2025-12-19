@@ -34,6 +34,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - Granite 4.0
 - SmolLM 3
 - DeepSeek V3
+- GPT-OSS
 - DeepSeek V2
 - Qwen 3 MoE
 - Phi 3.5 MoE
@@ -689,6 +690,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `qwen3moe`
 - `smollm3`
 - `granitemoehybrid`
+- `gpt_oss`
 
 </details>
 
@@ -791,6 +793,7 @@ Please submit more benchmarks via raising an issue!
 |Gemma 3n| | |✅|
 |Qwen 3 VL | |✅|
 |Granite 4.0| | |✅|
+|GPT-OSS| | |✅|
 </details>
 
 <details>
@@ -840,6 +843,7 @@ Please submit more benchmarks via raising an issue!
 |Gemma 3n| | | |
 |Qwen 3 VL | | |
 |Granite 4.0| | | |
+|GPT-OSS| | | |
 </details>
 
 <details>
@@ -877,6 +881,7 @@ Please submit more benchmarks via raising an issue!
 |Gemma 3n| |
 |Qwen 3 VL | |
 |Granite 4.0| |
+|GPT-OSS| |
 </details>
 
 ### Using derivative and adapter models

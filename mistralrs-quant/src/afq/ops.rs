@@ -105,7 +105,7 @@ pub(crate) fn afq_quantize_op(
             Shape::from(s_shape),
         ));
 
-        Ok((output, scales, biases))
+        return Ok((output, scales, biases));
     }
     #[cfg(feature = "cuda")]
     if w.device().is_cuda() {
@@ -200,7 +200,7 @@ pub(crate) fn afq_dequantize_op(
             Shape::from(w_shape),
         ));
 
-        Ok(output)
+        return Ok(output);
     }
     #[cfg(feature = "cuda")]
     if w_q.device().is_cuda() {
@@ -426,7 +426,7 @@ pub(crate) fn afq_mm_op(
             Shape::from(out_shape),
         ));
 
-        Ok(output)
+        return Ok(output);
     }
     #[cfg(feature = "cuda")]
     if x.device().is_cuda() {

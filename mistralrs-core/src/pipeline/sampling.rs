@@ -7,8 +7,12 @@ use crate::{
     prefix_cacher::PrefixCacheManagerV2,
     sampler::Logprobs,
     sequence::{Sequence, SequenceRecognizer, SequenceState, StopReason},
-    tools::{mistral_token_parser::MistralV11ToolStreamParser, parse_text_tools},
+    tools::{
+        mistral_token_parser::MistralV11ToolStreamParser, parse_text_tools, ToolCallResponse,
+        ToolCallType,
+    },
 };
+use mistralrs_mcp::CalledFunction;
 
 use super::Pipeline;
 
@@ -147,23 +151,53 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     }
 
                     if seq.get_mut_group().is_chat {
-                        let (text_new, tool_calls) = if let Some(tool_calls) = token_tool_calls {
-                            (None, tool_calls)
+                        // Parse streamed delta + tool calls (token-based for Mistral v11, text-based fallback, Harmony aware)
+                        let mut reasoning_delta = None;
+                        let (content_delta, tool_calls) = if seq.is_harmony_mode() {
+                            let content = seq.get_harmony_final_delta();
+                            reasoning_delta = seq.get_harmony_reasoning_delta();
+
+                            let tool_calls = if is_done.is_some() && seq.has_harmony_tool_calls() {
+                                is_done = Some(StopReason::ToolCalls);
+                                let harmony_tool_calls = seq.get_harmony_tool_calls();
+                                harmony_tool_calls
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(i, tc)| ToolCallResponse {
+                                        index: i,
+                                        id: tc.id,
+                                        tp: ToolCallType::Function,
+                                        function: CalledFunction {
+                                            name: tc.name,
+                                            arguments: tc.arguments,
+                                        },
+                                    })
+                                    .collect()
+                            } else {
+                                vec![]
+                            };
+
+                            (content, tool_calls)
                         } else {
-                            parse_text_tools(this, delta.as_str(), seq.tools.clone())
-                                .map_err(candle_core::Error::msg)?
+                            if let Some(tool_calls) = token_tool_calls {
+                                (None, tool_calls)
+                            } else {
+                                let (text_new, tool_calls) =
+                                    parse_text_tools(this, delta.as_str(), seq.tools.clone())
+                                        .map_err(candle_core::Error::msg)?;
+                                if !tool_calls.is_empty() {
+                                    is_done = Some(StopReason::ToolCalls);
+                                }
+                                (text_new.map(ToString::to_string), tool_calls)
+                            }
                         };
-                        if !tool_calls.is_empty() {
-                            is_done = Some(StopReason::ToolCalls);
-                        }
 
                         seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
                             delta: crate::Delta {
-                                content: fixup_sentencepiece!(
-                                    Option text_new.map(ToString::to_string)
-                                ),
+                                content: fixup_sentencepiece!(Option content_delta),
                                 role: "assistant".to_string(),
                                 tool_calls: Some(tool_calls).filter(|v| !v.is_empty()),
+                                reasoning_content: reasoning_delta,
                             },
                             index: seq.get_response_index(),
                             finish_reason: is_done.map(|x| x.to_string()),
@@ -272,6 +306,9 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 None
             };
 
+            // Signal EOS to Harmony parser if in Harmony mode
+            seq.harmony_process_eos();
+
             let text = match reason {
                 crate::sequence::StopReason::Length(_)
                 | crate::sequence::StopReason::ModelLength(_)
@@ -297,9 +334,36 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             };
 
             if seq.get_mut_group().is_chat {
-                let (text_new, tool_calls) =
-                    parse_text_tools(this, text.as_str(), seq.tools.clone())
-                        .map_err(candle_core::Error::msg)?;
+                // In Harmony mode, use Harmony's parsed content and tool calls
+                let (text_new, tool_calls, reasoning_content) = if seq.is_harmony_mode() {
+                    let final_content = seq.get_harmony_final_content();
+                    let reasoning = seq.get_harmony_reasoning_content();
+
+                    // Get Harmony tool calls
+                    let harmony_tool_calls = seq.get_harmony_tool_calls();
+                    let tool_calls: Vec<ToolCallResponse> = harmony_tool_calls
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, tc)| ToolCallResponse {
+                            index: i,
+                            id: tc.id,
+                            tp: ToolCallType::Function,
+                            function: CalledFunction {
+                                name: tc.name,
+                                arguments: tc.arguments,
+                            },
+                        })
+                        .collect();
+
+                    (final_content, tool_calls, reasoning)
+                } else {
+                    // Not in Harmony mode - parse text for tool calls
+                    let (text_new, tool_calls) =
+                        parse_text_tools(this, text.as_str(), seq.tools.clone())
+                            .map_err(candle_core::Error::msg)?;
+                    (text_new.map(ToString::to_string), tool_calls, None)
+                };
+
                 if !tool_calls.is_empty() {
                     reason = StopReason::ToolCalls;
                 }
@@ -308,9 +372,10 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     finish_reason: fixup_sentencepiece!(reason),
                     index: seq.get_response_index(),
                     message: crate::ResponseMessage {
-                        content: text_new.map(ToString::to_string),
+                        content: text_new,
                         role: "assistant".to_string(),
                         tool_calls: Some(tool_calls).filter(|v| !v.is_empty()),
+                        reasoning_content,
                     },
                     logprobs: logprobs.map(|l| crate::Logprobs { content: Some(l) }),
                 };
