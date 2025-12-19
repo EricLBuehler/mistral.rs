@@ -3,14 +3,12 @@ mod request;
 mod response;
 
 use candle_core::Result;
-use chrono::Utc;
 use regex::Regex;
 pub use request::*;
 pub use response::*;
 use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
-use std::env;
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
@@ -51,14 +49,6 @@ fn process_model_specific_message(message: &str) -> Result<String> {
     static DEEPSEEK_REGEX: OnceLock<Regex> = OnceLock::new();
     static QWEN_REGEX: OnceLock<Regex> = OnceLock::new();
     static CODEX_SHELL_UNESCAPED_QUOTES_REGEX: OnceLock<Regex> = OnceLock::new();
-
-    if message.contains("[TOOL_CALLS]") && env::var("MISTRALRS_DEBUG_TOOL_CALL_PARSING").is_ok() {
-        if std::fs::create_dir_all("request_dumps").is_ok() {
-            let ts = chrono::Utc::now().timestamp_millis();
-            let path = format!("request_dumps/tool_call_seen_{ts}.txt");
-            let _ = std::fs::write(&path, message);
-        }
-    }
 
     // These are reasoning models so we need a regex.
     let deepseek_regex = DEEPSEEK_REGEX.get_or_init(|| Regex::new(
@@ -276,16 +266,6 @@ fn process_model_specific_message(message: &str) -> Result<String> {
 
                     // Malformed JSON: break the sentinel so `prefix_could_be_tool` returns false
                     // and streaming can continue instead of hanging forever.
-                    if env::var("MISTRALRS_DEBUG_TOOL_CALL_PARSING").is_ok() {
-                        let preview = message.chars().take(400).collect::<String>();
-                        tracing::warn!("tool_call_parse_failed model_output_preview={preview:?}");
-                        // Persist the full raw snippet for post-mortem debugging.
-                        if std::fs::create_dir_all("request_dumps").is_ok() {
-                            let ts = Utc::now().timestamp_millis();
-                            let path = format!("request_dumps/tool_call_failed_{ts}.txt");
-                            let _ = std::fs::write(&path, message);
-                        }
-                    }
                     return Ok(message.replacen("[TOOL_CALLS]", "TOOL_CALLS", 1));
                 }
             };

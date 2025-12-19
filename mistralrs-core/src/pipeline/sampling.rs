@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use candle_core::{DType, Result, Tensor};
-use chrono::Utc;
 use rand_isaac::Isaac64Rng;
 
 use crate::{
@@ -132,17 +131,6 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 let delta_result = seq.get_delta();
                 if let Some(mut delta) = crate::handle_seq_error_ok!(delta_result, seq.responder())
                 {
-                    // Persist raw streaming text when debugging tool calls to catch malformed outputs.
-                    if delta.contains("[TOOL_CALLS]")
-                        && std::env::var("MISTRALRS_DEBUG_TOOL_CALL_PARSING").is_ok()
-                    {
-                        if std::fs::create_dir_all("request_dumps").is_ok() {
-                            let ts = Utc::now().timestamp_millis();
-                            let path = format!("request_dumps/stream_delta_{ts}.txt");
-                            let _ = std::fs::write(&path, delta.as_bytes());
-                        }
-                    }
-
                     // Heuristic: if the model streams repeated bare markers without JSON,
                     // treat it as non-tool text to avoid infinite loops.
                     if seq.get_mut_group().is_chat && seq.tools.is_some() {

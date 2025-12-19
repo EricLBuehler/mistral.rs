@@ -1,15 +1,8 @@
-use std::{
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use either::Either;
 use indexmap::IndexMap;
-use serde_json::{json, Value};
 
 use crate::{
     vision_models::{preprocessor_config::PreProcessorConfig, processor_config::ProcessorConfig},
@@ -138,17 +131,6 @@ pub(crate) fn apply_chat_template(
         }
     };
 
-    // Best-effort debug dump of the rendered prompt + inputs to the template renderer.
-    // This is intentionally in `mistralrs-core` so it captures the exact final prompt that is
-    // being tokenized/executed (including chat template behavior).
-    static DUMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
-    let dump_enabled = std::env::var("MISTRALRS_DEBUG_DUMP_PROMPT")
-        .ok()
-        .as_deref()
-        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
-    let dump_messages = dump_enabled.then(|| messages.clone());
-    let dump_tools = dump_enabled.then(|| tools.clone());
-
     let chat_template = pipeline
         .get_chat_template()
         .with_context(|| "`apply_chat_template` expects the pipeline to have a chat template.")?;
@@ -168,45 +150,6 @@ pub(crate) fn apply_chat_template(
         unk_tok,
         tools,
     );
-
-    if dump_enabled {
-        let dir = std::env::var("MISTRALRS_DEBUG_DUMP_PROMPT_DIR")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| "request_dumps".to_string());
-
-        let ts_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let n = DUMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::path::Path::new(&dir).join(format!("{ts_ms}_prompt_{n}.json"));
-
-        let _ = std::fs::create_dir_all(&dir);
-        let dump: Value = match &render_result {
-            Ok(prompt) => json!({
-                "ts_ms": ts_ms,
-                "counter": n,
-                "add_generation_prompt": add_generation_prompt,
-                "enable_thinking": enable_thinking,
-                "messages": dump_messages,
-                "tools": dump_tools,
-                "prompt": prompt,
-            }),
-            Err(e) => json!({
-                "ts_ms": ts_ms,
-                "counter": n,
-                "add_generation_prompt": add_generation_prompt,
-                "enable_thinking": enable_thinking,
-                "messages": dump_messages,
-                "tools": dump_tools,
-                "error": e.to_string(),
-            }),
-        };
-        if let Ok(pretty) = serde_json::to_string_pretty(&dump) {
-            let _ = std::fs::write(&path, pretty);
-        }
-    }
 
     render_result
 }
