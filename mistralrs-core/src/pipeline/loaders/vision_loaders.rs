@@ -1108,7 +1108,11 @@ impl DeviceMappedModelLoader for Idefics2Loader {
     }
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
-        Some(vec![NonMappedSubModel::Vision])
+        if mistral3_vision_disabled() {
+            None
+        } else {
+            Some(vec![NonMappedSubModel::Vision])
+        }
     }
 }
 
