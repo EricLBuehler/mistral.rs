@@ -511,6 +511,7 @@ fn parse_which(
                         .map(|x| PathBuf::from_str(x).unwrap())
                         .collect::<Vec<_>>()
                 }),
+                disable_vision: false,
                 max_edge,
                 calibration_file,
                 imatrix,
