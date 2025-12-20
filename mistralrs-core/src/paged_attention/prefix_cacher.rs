@@ -159,6 +159,12 @@ impl PrefixCacher {
                         self.lru_queue.retain(|h| h != hash);
                     }
 
+                    // The physical block is now being used by an active sequence. We must reflect
+                    // that in the physical refcount, otherwise freeing the sequence's reference
+                    // would drop the block back into the allocator even though the cache still
+                    // holds it (leading to double-free / use-after-free).
+                    entry.physical_block.deref_mut().increment_refcount();
+
                     matched_blocks.push((idx, entry.physical_block.clone()));
                     num_matched = idx + 1;
                     self.hits += 1;

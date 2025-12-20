@@ -130,6 +130,7 @@ pub fn nccl_daemon_replicator(request_sender: Sender<Request>) {
                             continue;
                         }
                         Request::TerminateAllSeqsNextStep => Request::TerminateAllSeqsNextStep,
+                        Request::Cancel { id, model_id } => Request::Cancel { id, model_id },
                     };
 
                     if request_sender.send(req).await.is_err() {
@@ -194,6 +195,7 @@ pub fn ring_daemon_replicator(request_sender: Sender<Request>) {
                             continue;
                         }
                         Request::TerminateAllSeqsNextStep => Request::TerminateAllSeqsNextStep,
+                        Request::Cancel { id, model_id } => Request::Cancel { id, model_id },
                     };
 
                     request_sender.send(req).await.unwrap();

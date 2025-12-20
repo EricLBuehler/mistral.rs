@@ -34,6 +34,7 @@ safetensors.workspace = true
 regex.workspace = true
 hf-hub.workspace = true
 tokio.workspace = true
+libc.workspace = true
 
 [features]
 cuda = [

@@ -33,24 +33,73 @@ fn default_num_attention_heads() -> usize {
     16
 }
 
-#[derive(serde::Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct Mistral3VisionConfig {
-    #[serde(default = "default_hidden_size")]
     pub hidden_size: usize,
-    #[serde(default = "default_num_channels")]
     pub num_channels: usize,
     pub image_size: usize,
     pub patch_size: usize,
     pub rope_theta: f64,
-    #[serde(default = "default_intermediate_size")]
     pub intermediate_size: usize,
-    #[serde(default = "default_num_hidden_layers")]
     pub num_hidden_layers: usize,
     pub head_dim: Option<usize>,
-    #[serde(default = "default_num_attention_heads")]
     pub num_attention_heads: usize,
-    #[serde(default = "default_act")]
     pub hidden_act: candle_nn::Activation,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RopeParameters {
+    rope_theta: Option<f64>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RawMistral3VisionConfig {
+    #[serde(default = "default_hidden_size")]
+    hidden_size: usize,
+    #[serde(default = "default_num_channels")]
+    num_channels: usize,
+    image_size: usize,
+    patch_size: usize,
+    #[serde(default)]
+    rope_theta: Option<f64>,
+    #[serde(default)]
+    rope_parameters: Option<RopeParameters>,
+    #[serde(default = "default_intermediate_size")]
+    intermediate_size: usize,
+    #[serde(default = "default_num_hidden_layers")]
+    num_hidden_layers: usize,
+    #[serde(default)]
+    head_dim: Option<usize>,
+    #[serde(default = "default_num_attention_heads")]
+    num_attention_heads: usize,
+    #[serde(default = "default_act")]
+    hidden_act: candle_nn::Activation,
+}
+
+impl<'de> serde::Deserialize<'de> for Mistral3VisionConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawMistral3VisionConfig::deserialize(deserializer)?;
+        let rope_theta = raw
+            .rope_theta
+            .or_else(|| raw.rope_parameters.and_then(|p| p.rope_theta))
+            .ok_or_else(|| serde::de::Error::missing_field("rope_theta"))?;
+
+        Ok(Self {
+            hidden_size: raw.hidden_size,
+            num_channels: raw.num_channels,
+            image_size: raw.image_size,
+            patch_size: raw.patch_size,
+            rope_theta,
+            intermediate_size: raw.intermediate_size,
+            num_hidden_layers: raw.num_hidden_layers,
+            head_dim: raw.head_dim,
+            num_attention_heads: raw.num_attention_heads,
+            hidden_act: raw.hidden_act,
+        })
+    }
 }
 
 impl Mistral3VisionConfig {

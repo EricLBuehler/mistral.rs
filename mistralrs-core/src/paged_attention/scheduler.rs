@@ -156,7 +156,9 @@ impl PagedAttentionScheduler {
         while !self.waiting.is_empty() {
             let seq = self.waiting.front().unwrap().clone();
 
-            if self.config.max_num_seqs == self.running.len() + 1 {
+            // Only allow up to `max_num_seqs` active (running) sequences.
+            // If we're already at capacity, don't schedule more prompts.
+            if self.running.len() >= self.config.max_num_seqs {
                 break;
             }
 
@@ -472,5 +474,28 @@ impl Scheduler for PagedAttentionScheduler {
     }
     fn set_prefix_caching_enabled(&mut self, enabled: bool) {
         self.set_prefix_caching_enabled_sync(enabled);
+    }
+
+    fn abort_seq(&mut self, id: usize) {
+        if let Some(idx) = self
+            .waiting
+            .iter()
+            .position(|other| get_mut_arcmutex!(other).get_id() == id)
+        {
+            let seq = self.waiting.remove(idx).unwrap();
+            get_mut_arcmutex!(seq).set_state(SequenceState::Done(StopReason::Canceled));
+            self._free(id);
+            return;
+        };
+
+        if let Some(idx) = self
+            .running
+            .iter()
+            .position(|other| get_mut_arcmutex!(other).get_id() == id)
+        {
+            let seq = self.running.remove(idx).unwrap();
+            get_mut_arcmutex!(seq).set_state(SequenceState::Done(StopReason::Canceled));
+            self._free(id);
+        };
     }
 }

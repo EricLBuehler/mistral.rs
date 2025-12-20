@@ -421,6 +421,26 @@ pub fn blockwise_fp8_linear_b(
         return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
     }
 
+    // Some HF fp8 configs set `weight_block_size` to null (per-tensor scaling). In that case we
+    // fall back to dequantizing weights into the model dtype at load time.
+    let Some(weight_block_size) = weight_block_size.as_ref() else {
+        let weight_f8 =
+            vb.get_with_hints_dtype((out_dim, in_dim), "weight", hints, DType::F8E4M3)?;
+        let scale = vb.get_with_hints_dtype((), "weight_scale_inv", hints, DType::F32)?;
+        let scale = scale.reshape((1, 1))?;
+        let weight =
+            ops::fp8_blockwise_dequantize(&weight_f8, &scale, vec![out_dim, in_dim], vb.dtype())?;
+        let bias = if bias {
+            Some(vb.get((out_dim,), "bias")?)
+        } else {
+            None
+        };
+        let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+            Linear::new(weight, bias),
+        ))?;
+        return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
+    };
+
     if weight_block_size.len() != 2 {
         candle_core::bail!("Expected weight_block_size to have length 2, got {weight_block_size:?}")
     }

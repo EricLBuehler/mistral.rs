@@ -312,6 +312,7 @@ impl VisionModelBuilder {
             topology: self.topology,
             write_uqff: self.write_uqff,
             from_uqff: self.from_uqff,
+            disable_vision: false,
             max_edge: self.max_edge,
             calibration_file: self.calibration_file,
             imatrix: self.imatrix,

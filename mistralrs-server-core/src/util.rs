@@ -5,10 +5,7 @@ use mistralrs_core::AudioInput;
 use mistralrs_core::MistralRs;
 use std::error::Error;
 use std::sync::Arc;
-use tokio::{
-    fs::{self, File},
-    io::AsyncReadExt,
-};
+use tokio::{fs, fs::File, io::AsyncReadExt};
 
 /// Parses and loads an image from a URL, file path, or data URL.
 ///

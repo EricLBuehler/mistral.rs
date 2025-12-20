@@ -29,6 +29,7 @@ mistralrs-core = { workspace = true, features = [
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+jsonschema.workspace = true
 tokio.workspace = true
 tower-http = { workspace = true, features = ["cors"] }
 tracing.workspace = true
@@ -39,6 +40,7 @@ uuid.workspace = true
 
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
+lru = "0.16.2"
 
 [features]
 cuda = ["mistralrs-core/cuda"]

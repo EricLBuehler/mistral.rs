@@ -1,11 +1,12 @@
 //! ## Response caching functionality for the Responses API.
 
 use anyhow::Result;
+use lru::LruCache;
 use std::collections::HashMap;
-use std::sync::LazyLock;
-use std::sync::{Arc, RwLock};
+use std::num::NonZeroUsize;
+use std::sync::RwLock;
 
-use crate::openai::{Message, ResponsesChunk, ResponsesObject};
+use crate::openai::{Message, ResponsesChunk, ResponsesInputItem, ResponsesObject};
 
 /// Trait for caching responses
 pub trait ResponseCache: Send + Sync {
@@ -29,92 +30,160 @@ pub trait ResponseCache: Send + Sync {
 
     /// Retrieve conversation history for a response
     fn get_conversation_history(&self, id: &str) -> Result<Option<Vec<Message>>>;
+
+    /// Store input items for a response
+    fn store_input_items(&self, id: String, items: Vec<ResponsesInputItem>) -> Result<()>;
+
+    /// Retrieve input items for a response
+    fn get_input_items(&self, id: &str) -> Result<Option<Vec<ResponsesInputItem>>>;
+
+    /// Store an active request ID mapping (API ID -> Engine ID)
+    fn add_active_request(
+        &self,
+        api_id: String,
+        engine_id: usize,
+        model_id: Option<String>,
+    ) -> Result<()>;
+    /// Remove an active request ID mapping
+    fn remove_active_request(&self, api_id: &str) -> Result<()>;
+    /// Get the engine ID for an active request
+    fn get_active_request_id(&self, api_id: &str) -> Result<Option<(usize, Option<String>)>>;
+
+    /// Retrieve all response objects
+    fn get_all_responses(&self) -> Result<Vec<ResponsesObject>>;
 }
 
-/// In-memory implementation of ResponseCache
+#[derive(Default, Clone)]
+struct CacheEntry {
+    response: Option<ResponsesObject>,
+    chunks: Option<Vec<ResponsesChunk>>,
+    history: Option<Vec<Message>>,
+    input_items: Option<Vec<ResponsesInputItem>>,
+}
+
+struct CacheInner {
+    store: LruCache<String, CacheEntry>,
+    active_requests: HashMap<String, (usize, Option<String>)>,
+}
+
+impl CacheInner {
+    fn new(capacity: usize) -> Self {
+        Self {
+            store: LruCache::new(NonZeroUsize::new(capacity).unwrap()),
+            active_requests: HashMap::new(),
+        }
+    }
+}
+
+/// In-memory implementation of ResponseCache with LRU eviction
 pub struct InMemoryResponseCache {
-    responses: Arc<RwLock<HashMap<String, ResponsesObject>>>,
-    chunks: Arc<RwLock<HashMap<String, Vec<ResponsesChunk>>>>,
-    conversation_histories: Arc<RwLock<HashMap<String, Vec<Message>>>>,
+    inner: RwLock<CacheInner>,
 }
 
 impl InMemoryResponseCache {
-    /// Create a new in-memory cache
-    pub fn new() -> Self {
+    /// Create a new in-memory cache with specified capacity
+    pub fn new(capacity: usize) -> Self {
         Self {
-            responses: Arc::new(RwLock::new(HashMap::new())),
-            chunks: Arc::new(RwLock::new(HashMap::new())),
-            conversation_histories: Arc::new(RwLock::new(HashMap::new())),
+            inner: RwLock::new(CacheInner::new(capacity)),
         }
     }
 }
 
 impl Default for InMemoryResponseCache {
     fn default() -> Self {
-        Self::new()
+        Self::new(1000) // Default capacity
     }
 }
 
 impl ResponseCache for InMemoryResponseCache {
     fn store_response(&self, id: String, response: ResponsesObject) -> Result<()> {
-        let mut responses = self.responses.write().unwrap();
-        responses.insert(id, response);
+        let mut inner = self.inner.write().unwrap();
+        // Get or insert entry
+        let entry = inner.store.get_or_insert_mut(id, CacheEntry::default);
+        entry.response = Some(response);
         Ok(())
     }
 
     fn get_response(&self, id: &str) -> Result<Option<ResponsesObject>> {
-        let responses = self.responses.read().unwrap();
-        Ok(responses.get(id).cloned())
+        let mut inner = self.inner.write().unwrap();
+        // Use get() to update LRU position
+        Ok(inner.store.get(id).and_then(|e| e.response.clone()))
     }
 
     fn delete_response(&self, id: &str) -> Result<bool> {
-        // IMPORTANT: Lock ordering must be maintained to prevent deadlocks.
-        // Order: responses -> chunks -> conversation_histories
-        // All methods that acquire multiple locks must follow this order.
-        //
-        // We acquire all locks before any modifications to ensure atomicity.
-        // The locks are released in reverse order when dropped at end of scope.
-        let mut responses = self.responses.write().unwrap();
-        let mut chunks = self.chunks.write().unwrap();
-        let mut histories = self.conversation_histories.write().unwrap();
-
-        let response_removed = responses.remove(id).is_some();
-        let chunks_removed = chunks.remove(id).is_some();
-        let history_removed = histories.remove(id).is_some();
-
-        Ok(response_removed || chunks_removed || history_removed)
+        let mut inner = self.inner.write().unwrap();
+        let removed_store = inner.store.pop(id).is_some();
+        let removed_active = inner.active_requests.remove(id).is_some();
+        Ok(removed_store || removed_active)
     }
 
     fn store_chunks(&self, id: String, chunks: Vec<ResponsesChunk>) -> Result<()> {
-        let mut chunk_storage = self.chunks.write().unwrap();
-        chunk_storage.insert(id, chunks);
+        let mut inner = self.inner.write().unwrap();
+        let entry = inner.store.get_or_insert_mut(id, CacheEntry::default);
+        entry.chunks = Some(chunks);
         Ok(())
     }
 
     fn get_chunks(&self, id: &str) -> Result<Option<Vec<ResponsesChunk>>> {
-        let chunks = self.chunks.read().unwrap();
-        Ok(chunks.get(id).cloned())
+        let mut inner = self.inner.write().unwrap();
+        Ok(inner.store.get(id).and_then(|e| e.chunks.clone()))
     }
 
     fn store_conversation_history(&self, id: String, messages: Vec<Message>) -> Result<()> {
-        let mut histories = self.conversation_histories.write().unwrap();
-        histories.insert(id, messages);
+        let mut inner = self.inner.write().unwrap();
+        let entry = inner.store.get_or_insert_mut(id, CacheEntry::default);
+        entry.history = Some(messages);
         Ok(())
     }
 
     fn get_conversation_history(&self, id: &str) -> Result<Option<Vec<Message>>> {
-        let histories = self.conversation_histories.read().unwrap();
-        Ok(histories.get(id).cloned())
+        let mut inner = self.inner.write().unwrap();
+        Ok(inner.store.get(id).and_then(|e| e.history.clone()))
     }
-}
 
-/// Global response cache instance
-pub static RESPONSE_CACHE: LazyLock<Arc<dyn ResponseCache>> =
-    LazyLock::new(|| Arc::new(InMemoryResponseCache::new()));
+    fn store_input_items(&self, id: String, items: Vec<ResponsesInputItem>) -> Result<()> {
+        let mut inner = self.inner.write().unwrap();
+        let entry = inner.store.get_or_insert_mut(id, CacheEntry::default);
+        entry.input_items = Some(items);
+        Ok(())
+    }
 
-/// Helper function to get the global cache instance
-pub fn get_response_cache() -> Arc<dyn ResponseCache> {
-    RESPONSE_CACHE.clone()
+    fn get_input_items(&self, id: &str) -> Result<Option<Vec<ResponsesInputItem>>> {
+        let mut inner = self.inner.write().unwrap();
+        Ok(inner.store.get(id).and_then(|e| e.input_items.clone()))
+    }
+
+    fn add_active_request(
+        &self,
+        api_id: String,
+        engine_id: usize,
+        model_id: Option<String>,
+    ) -> Result<()> {
+        let mut inner = self.inner.write().unwrap();
+        inner.active_requests.insert(api_id, (engine_id, model_id));
+        Ok(())
+    }
+
+    fn remove_active_request(&self, api_id: &str) -> Result<()> {
+        let mut inner = self.inner.write().unwrap();
+        inner.active_requests.remove(api_id);
+        Ok(())
+    }
+
+    fn get_active_request_id(&self, api_id: &str) -> Result<Option<(usize, Option<String>)>> {
+        let inner = self.inner.read().unwrap();
+        Ok(inner.active_requests.get(api_id).cloned())
+    }
+
+    fn get_all_responses(&self) -> Result<Vec<ResponsesObject>> {
+        let inner = self.inner.read().unwrap();
+        // This does NOT update LRU position as we are just iterating
+        Ok(inner
+            .store
+            .iter()
+            .filter_map(|(_, entry)| entry.response.clone())
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -122,16 +191,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_in_memory_cache() {
-        let cache = InMemoryResponseCache::new();
+    fn test_in_memory_cache_lru() {
+        let cache = InMemoryResponseCache::new(2); // Small capacity for testing
 
-        // Create a test response
-        let response = ResponsesObject {
-            id: "test-id".to_string(),
+        let response1 = ResponsesObject {
+            id: "1".to_string(),
             object: "response",
-            created_at: 1234567890.0,
-            model: "test-model".to_string(),
-            status: "completed".to_string(),
+            created_at: 1,
+            model: "m".to_string(),
+            status: "c".to_string(),
             output: vec![],
             output_text: None,
             usage: None,
@@ -139,20 +207,34 @@ mod tests {
             metadata: None,
             instructions: None,
             incomplete_details: None,
+            previous_response_id: None,
+            store: None,
+            temperature: None,
+            top_p: None,
+            truncation: None,
+            tool_choice: None,
+            tools: None,
+            parallel_tool_calls: None,
+            text: None,
+            max_output_tokens: None,
+            max_tool_calls: None,
         };
+        let mut response2 = response1.clone();
+        response2.id = "2".to_string();
+        let mut response3 = response1.clone();
+        response3.id = "3".to_string();
 
-        // Store and retrieve
-        cache
-            .store_response("test-id".to_string(), response.clone())
-            .unwrap();
-        let retrieved = cache.get_response("test-id").unwrap();
-        assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().id, "test-id");
+        cache.store_response("1".to_string(), response1).unwrap();
+        cache.store_response("2".to_string(), response2).unwrap();
 
-        // Delete
-        let deleted = cache.delete_response("test-id").unwrap();
-        assert!(deleted);
-        let retrieved = cache.get_response("test-id").unwrap();
-        assert!(retrieved.is_none());
+        // Access 1 to make it most recently used
+        assert!(cache.get_response("1").unwrap().is_some());
+
+        // Add 3, which should evict 2 (LRU)
+        cache.store_response("3".to_string(), response3).unwrap();
+
+        assert!(cache.get_response("1").unwrap().is_some());
+        assert!(cache.get_response("3").unwrap().is_some());
+        assert!(cache.get_response("2").unwrap().is_none());
     }
 }

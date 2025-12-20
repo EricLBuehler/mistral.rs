@@ -511,6 +511,7 @@ fn parse_which(
                         .map(|x| PathBuf::from_str(x).unwrap())
                         .collect::<Vec<_>>()
                 }),
+                disable_vision: false,
                 max_edge,
                 calibration_file,
                 imatrix,
@@ -1249,7 +1250,12 @@ impl Runner {
             if request.stream {
                 Ok(Either::Right(ChatCompletionStreamer::from_rx(rx)))
             } else {
-                let response = rx.blocking_recv().unwrap();
+                let response = loop {
+                    match rx.blocking_recv().unwrap() {
+                        Response::WebSearchCall { .. } => continue,
+                        other => break other,
+                    }
+                };
 
                 match response {
                     Response::ValidationError(e) | Response::InternalError(e) => {
@@ -1265,6 +1271,7 @@ impl Runner {
                     Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
                     Response::Embeddings { .. } => unreachable!(),
+                    Response::WebSearchCall { .. } => unreachable!(),
                 }
             }
         })
@@ -1399,6 +1406,11 @@ impl Runner {
                             "Received raw logits response from embeddings request.",
                         ))
                     }
+                    Response::WebSearchCall { .. } => {
+                        return Err(PyApiErr::from(
+                            "Received web search response from embeddings request.",
+                        ))
+                    }
                 }
             }
 
@@ -1510,6 +1522,7 @@ impl Runner {
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
                 Response::Embeddings { .. } => unreachable!(),
+                Response::WebSearchCall { .. } => unreachable!(),
             }
         })
     }
@@ -2014,7 +2027,12 @@ impl Runner {
             if request.stream {
                 Ok(Either::Right(ChatCompletionStreamer::from_rx(rx)))
             } else {
-                let response = rx.blocking_recv().unwrap();
+                let response = loop {
+                    match rx.blocking_recv().unwrap() {
+                        Response::WebSearchCall { .. } => continue,
+                        other => break other,
+                    }
+                };
 
                 match response {
                     Response::ValidationError(e) | Response::InternalError(e) => {
@@ -2030,6 +2048,7 @@ impl Runner {
                     Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
                     Response::Embeddings { .. } => unreachable!(),
+                    Response::WebSearchCall { .. } => unreachable!(),
                 }
             }
         })
@@ -2138,6 +2157,7 @@ impl Runner {
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
                 Response::Embeddings { .. } => unreachable!(),
+                Response::WebSearchCall { .. } => unreachable!(),
             }
         })
     }

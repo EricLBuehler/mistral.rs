@@ -8,6 +8,51 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+const MISTRALRS_MMAP_WILLNEED: &str = "MISTRALRS_MMAP_WILLNEED";
+
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+
+#[cfg(unix)]
+fn maybe_hint_file_cache(file: &std::fs::File) {
+    let enabled = std::env::var(MISTRALRS_MMAP_WILLNEED)
+        .ok()
+        .is_some_and(|x| x.contains('1'));
+    if !enabled {
+        return;
+    }
+
+    // Best-effort: these are only hints; ignore errors.
+    unsafe {
+        let _ = libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_SEQUENTIAL);
+        let _ = libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_WILLNEED);
+    }
+}
+
+#[cfg(unix)]
+fn maybe_hint_mmap(mmap: &memmap2::Mmap) {
+    let enabled = std::env::var(MISTRALRS_MMAP_WILLNEED)
+        .ok()
+        .is_some_and(|x| x.contains('1'));
+    if !enabled {
+        return;
+    }
+
+    // Best-effort: hint the kernel that we'll read these pages soon and mostly sequentially.
+    unsafe {
+        let _ = libc::madvise(
+            mmap.as_ptr().cast_mut().cast(),
+            mmap.len(),
+            libc::MADV_SEQUENTIAL,
+        );
+        let _ = libc::madvise(
+            mmap.as_ptr().cast_mut().cast(),
+            mmap.len(),
+            libc::MADV_WILLNEED,
+        );
+    }
+}
+
 fn convert_slice<T: WithDType>(data: &[u8], shape: &[usize], device: &Device) -> Result<Tensor> {
     let size_in_bytes = T::DTYPE.size_in_bytes();
     let elem_count = data.len() / size_in_bytes;
@@ -232,9 +277,13 @@ impl MmapedSafetensors {
     pub unsafe fn new<P: AsRef<Path>>(p: P) -> Result<Self> {
         let p = p.as_ref();
         let file = std::fs::File::open(p).map_err(|e| Error::from(e).with_path(p))?;
+        #[cfg(unix)]
+        maybe_hint_file_cache(&file);
         let file = memmap2::MmapOptions::new()
             .map(&file)
             .map_err(|e| Error::from(e).with_path(p))?;
+        #[cfg(unix)]
+        maybe_hint_mmap(&file);
         let safetensors = yoke::Yoke::<SafeTensors_<'static>, memmap2::Mmap>::try_attach_to_cart(
             file,
             |data: &[u8]| {
@@ -262,9 +311,13 @@ impl MmapedSafetensors {
         for (index, p) in paths.iter().enumerate() {
             let p = p.as_ref();
             let file = std::fs::File::open(p).map_err(|e| Error::from(e).with_path(p))?;
+            #[cfg(unix)]
+            maybe_hint_file_cache(&file);
             let file = memmap2::MmapOptions::new()
                 .map(&file)
                 .map_err(|e| Error::from(e).with_path(p))?;
+            #[cfg(unix)]
+            maybe_hint_mmap(&file);
             let data = yoke::Yoke::<SafeTensors_<'static>, memmap2::Mmap>::try_attach_to_cart(
                 file,
                 |data: &[u8]| {

@@ -15,6 +15,7 @@ use mistralrs_server_core::{
         MistralRsForServerBuilder, ModelConfig,
     },
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
+    types::SamplingDefaults,
 };
 
 mod interactive_mode;
@@ -48,6 +49,22 @@ struct Args {
     #[arg(long, default_value_t = defaults::MAX_SEQS)]
     max_seqs: usize,
 
+    /// Default temperature to use when requests omit it (good default for coding assistants).
+    #[arg(long, default_value_t = 0.2)]
+    temperature: f64,
+
+    /// Default top_p to use when requests omit it (good default for coding assistants).
+    #[arg(long = "top-p", alias = "top_p", default_value_t = 0.9)]
+    top_p: f64,
+
+    /// Default min_p to use when requests omit it.
+    #[arg(long = "min-p", alias = "min_p", default_value_t = 0.01)]
+    min_p: f64,
+
+    /// Default top_k to use when requests omit it.
+    #[arg(long = "top-k", alias = "top_k")]
+    top_k: Option<usize>,
+
     /// Use no KV cache.
     #[arg(long, default_value_t = defaults::NO_KV_CACHE)]
     no_kv_cache: bool,
@@ -74,6 +91,10 @@ struct Args {
     /// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
     #[arg(long, default_value_t = defaults::PREFIX_CACHE_N)]
     prefix_cache_n: usize,
+
+    /// Disable loading the vision component for multimodal models (text-only).
+    #[arg(long, default_value_t = false)]
+    no_vision: bool,
 
     /// NOTE: This can be omitted to use automatic device mapping!
     /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
@@ -326,6 +347,9 @@ fn load_multi_model_config(config_path: &str) -> Result<Vec<ModelConfig>> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    if args.no_vision {
+        std::env::set_var("MISTRALRS_NO_VISION", "1");
+    }
 
     initialize_logging();
 
@@ -450,8 +474,16 @@ async fn main() -> Result<()> {
         // Create listener early to validate address before model loading
         let listener = tokio::net::TcpListener::bind(format!("{ip}:{port}")).await?;
 
+        let sampling_defaults = SamplingDefaults {
+            temperature: Some(args.temperature),
+            top_p: Some(args.top_p),
+            min_p: Some(args.min_p),
+            top_k: args.top_k,
+        };
+
         let app = MistralRsServerRouterBuilder::new()
             .with_mistralrs(mistralrs)
+            .with_sampling_defaults(sampling_defaults)
             .build()
             .await?;
 

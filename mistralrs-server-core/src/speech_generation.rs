@@ -175,6 +175,7 @@ pub fn match_responses(
         Response::Chunk(_) => unreachable!(),
         Response::Done(_) => unreachable!(),
         Response::ModelError(_, _) => unreachable!(),
+        Response::WebSearchCall { .. } => unreachable!(),
         Response::Speech {
             pcm,
             rate,

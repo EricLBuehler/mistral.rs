@@ -7,7 +7,6 @@ use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
 use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
-use tracing::info;
 
 #[derive(Debug, Default, Deserialize, Clone)]
 pub struct DeviceLayerMapMetadata {
@@ -87,34 +86,16 @@ impl DeviceMapSetting {
                 device_layers,
                 host_layers,
             }) => {
-                if let Some(topology) = topology {
-                    if topology.layers.iter().all(|x| x.is_none()) {
-                        return Ok(Box::new(DummyDeviceMapper {
-                            nm_device: device.clone(),
-                        }));
-                    } else {
-                        let layers = topology
-                            .layers
-                            .iter()
-                            .map(|layer| {
-                                layer
-                                    .as_ref()
-                                    .map(|x| x.device.clone().unwrap_or(device.clone()))
-                                    .unwrap_or(device.clone())
-                            })
-                            .collect::<Vec<_>>();
-
-                        info!("Loading model according to the following repeating layer mappings based on topology:");
-                        for (i, dev) in layers.iter().enumerate() {
-                            info!("Layer {i}: {}", dev.device_pretty_repr());
-                        }
-
-                        return Ok(Box::new(LayerDeviceMapper {
-                            mappings: layers,
-                            nm_device: device.clone(),
-                        }));
-                    }
-                }
+                // If the topology specifies per-layer devices, treat them as overrides on top of
+                // any existing mapping (manual or automatic). This allows "sparse" topology
+                // files that only override a few layers without forcing all unspecified layers
+                // onto the default device.
+                let has_layer_device_overrides = topology.is_some_and(|topo| {
+                    topo.layers
+                        .iter()
+                        .flatten()
+                        .any(|layer| layer.device.is_some())
+                });
 
                 // How many device layers
                 // Clamp to max of model layers
@@ -125,14 +106,22 @@ impl DeviceMapSetting {
                         .sum::<usize>()
                         .clamp(0, model_layers)
                 } else {
-                    return Ok(Box::new(DummyDeviceMapper {
-                        nm_device: device.clone(),
-                    }));
+                    // No explicit mapping means "all on the default device" unless host_layers
+                    // requests CPU layers at the end.
+                    model_layers
                 };
                 // How many host (cpu) layers, defaulting to automatically filling the rest.
                 // If n_device_layers > model_layers, n_host_layers = 0
-                let n_host_layers =
+                let mut n_host_layers =
                     host_layers.unwrap_or(model_layers.saturating_sub(n_device_layers));
+                let mut n_device_layers = n_device_layers;
+                if device_layers.is_none() {
+                    // When no explicit GPU layer count was provided, honor host_layers (if any)
+                    // by moving that many layers to CPU at the end.
+                    n_host_layers = host_layers.unwrap_or(0).clamp(0, model_layers);
+                    n_device_layers = model_layers.saturating_sub(n_host_layers);
+                }
+
                 if n_device_layers + n_host_layers != model_layers {
                     candle_core::bail!("Expected the total number of GPU ({n_device_layers}) and host layers ({n_host_layers}) to sum to the number of model hidden layers ({model_layers})");
                 }
@@ -140,42 +129,41 @@ impl DeviceMapSetting {
 
                 // Handle multi-GPU mapping here
                 let mut combined = Vec::with_capacity(model_layers);
-                if device_layers
-                    .as_ref()
-                    .is_some_and(|layers| layers.len() == 1)
-                {
-                    combined.extend(vec![device.clone(); n_device_layers]);
-                } else {
-                    let original_seed = if !device.is_cpu() {
-                        Some(device.get_current_seed()?)
+                if let Some(layers_meta) = device_layers.as_ref() {
+                    if layers_meta.len() == 1 {
+                        combined.extend(vec![device.clone(); n_device_layers]);
                     } else {
-                        None
-                    };
-                    for DeviceLayerMapMetadata { ordinal, layers } in
-                        device_layers.as_ref().unwrap()
-                    {
-                        let dev = match device.location() {
-                            DeviceLocation::Cpu => Device::Cpu,
-                            DeviceLocation::Cuda { gpu_id: device_ord } => {
-                                if device_ord == *ordinal {
-                                    device.clone()
-                                } else {
-                                    Device::new_cuda(*ordinal)?
-                                }
-                            }
-                            DeviceLocation::Metal { gpu_id: device_ord } => {
-                                if device_ord == *ordinal {
-                                    device.clone()
-                                } else {
-                                    Device::new_metal(*ordinal)?
-                                }
-                            }
+                        let original_seed = if !device.is_cpu() {
+                            Some(device.get_current_seed()?)
+                        } else {
+                            None
                         };
-                        if !device.is_cpu() {
-                            dev.set_seed(original_seed.unwrap())?;
+                        for DeviceLayerMapMetadata { ordinal, layers } in layers_meta {
+                            let dev = match device.location() {
+                                DeviceLocation::Cpu => Device::Cpu,
+                                DeviceLocation::Cuda { gpu_id: device_ord } => {
+                                    if device_ord == *ordinal {
+                                        device.clone()
+                                    } else {
+                                        Device::new_cuda(*ordinal)?
+                                    }
+                                }
+                                DeviceLocation::Metal { gpu_id: device_ord } => {
+                                    if device_ord == *ordinal {
+                                        device.clone()
+                                    } else {
+                                        Device::new_metal(*ordinal)?
+                                    }
+                                }
+                            };
+                            if !device.is_cpu() {
+                                dev.set_seed(original_seed.unwrap())?;
+                            }
+                            combined.extend(vec![dev; *layers]);
                         }
-                        combined.extend(vec![dev; *layers]);
                     }
+                } else {
+                    combined.extend(vec![device.clone(); n_device_layers]);
                 }
 
                 // Always put the CPU layers at the end so that we reduce dtoh and htod copies
@@ -184,11 +172,29 @@ impl DeviceMapSetting {
                 // Sanity
                 assert_eq!(combined.len(), model_layers);
 
+                // Apply per-layer topology device overrides on top of the computed mapping.
+                if has_layer_device_overrides {
+                    let topology = topology.expect("checked by has_layer_device_overrides");
+                    for (i, layer) in topology.layers.iter().enumerate().take(model_layers) {
+                        let Some(device_override) = layer.as_ref().and_then(|x| x.device.clone())
+                        else {
+                            continue;
+                        };
+                        combined[i] = device_override;
+                    }
+                }
+
                 // Print it out
                 {
-                    once_log_info(
-                        "Loading model according to the following repeating layer mappings:",
-                    );
+                    if has_layer_device_overrides {
+                        once_log_info(
+                            "Loading model according to the following repeating layer mappings (with topology device overrides):",
+                        );
+                    } else {
+                        once_log_info(
+                            "Loading model according to the following repeating layer mappings:",
+                        );
+                    }
                     let mut start_index = 0;
                     let mut current_dev = &combined[0];
 

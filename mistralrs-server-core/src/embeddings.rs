@@ -328,6 +328,7 @@ async fn process_embedding_response(
             | Response::CompletionDone(_)
             | Response::CompletionChunk(_)
             | Response::CompletionModelError(_, _)
+            | Response::WebSearchCall { .. }
             | Response::ImageGeneration(_)
             | Response::Speech { .. }
             | Response::Raw { .. } => Err(anyhow!(

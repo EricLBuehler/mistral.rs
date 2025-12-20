@@ -74,6 +74,10 @@ pub enum ModelSelected {
         #[arg(long)]
         topology: Option<String>,
 
+        /// Disable loading the vision component for multimodal models (text-only).
+        #[arg(long)]
+        no_vision: bool,
+
         /// ISQ organization: `default` or `moqe`.
         #[arg(short, long)]
         organization: Option<IsqOrganization>,

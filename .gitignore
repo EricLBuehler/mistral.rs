@@ -6,3 +6,13 @@
 .idea
 mistral.rs/
 mistralrs-web-chat/cache
+
+# Local dev artifacts
+.env
+request_dumps/
+reports/
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+.hf

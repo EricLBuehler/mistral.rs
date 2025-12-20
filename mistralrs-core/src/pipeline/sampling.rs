@@ -7,7 +7,10 @@ use crate::{
     prefix_cacher::PrefixCacheManagerV2,
     sampler::Logprobs,
     sequence::{Sequence, SequenceRecognizer, SequenceState, StopReason},
-    tools::{parse_text_tools, ToolCallResponse, ToolCallType},
+    tools::{
+        mistral_token_parser::MistralV11ToolStreamParser, parse_text_tools, ToolCallResponse,
+        ToolCallType,
+    },
 };
 use mistralrs_mcp::CalledFunction;
 
@@ -34,34 +37,74 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     use_prefix_cacher: bool,
 ) -> Result<()> {
     let mut is_done = seq.is_done(logprobs.token, eos_tok, this.get_metadata().max_seq_len);
-    seq.add_token(
-        logprobs.clone(),
-        this.get_metadata()
-            .tok_env()
-            .ok_or(candle_core::Error::Msg(
-                "`finish_or_add_toks_to_seq` requires the pipeline to have a token trie"
-                    .to_string(),
-            ))?
-            .tok_trie()
-            .decode(&[logprobs.token]),
-        &is_done,
-    );
+    let tok_bytes = this
+        .get_metadata()
+        .tok_env()
+        .ok_or(candle_core::Error::Msg(
+            "`finish_or_add_toks_to_seq` requires the pipeline to have a token trie".to_string(),
+        ))?
+        .tok_trie()
+        .decode(&[logprobs.token]);
+    let tok_text = String::from_utf8_lossy(&tok_bytes).to_string();
+
+    seq.add_token(logprobs.clone(), tok_bytes, &is_done);
+
+    // Token-ID-based streaming tool parser for Mistral v11+ ([TOOL_CALLS]/[ARGS]/[CALL_ID]).
+    // This avoids fragile partial-JSON parsing while streaming.
+    let mut token_tool_calls: Option<Vec<crate::tools::ToolCallResponse>> = None;
+    let mut token_tool_in_progress = false;
+    if seq.tools.is_some() {
+        if seq.mistral_tool_stream_parser.is_none() {
+            if let Some(tok) = this.tokenizer() {
+                if let Some(ids) =
+                    crate::tools::mistral_token_parser::MistralV11ToolTokenIds::from_tokenizer(
+                        tok.as_ref(),
+                    )
+                {
+                    seq.mistral_tool_stream_parser = Some(MistralV11ToolStreamParser::new(ids));
+                }
+            }
+        }
+        if let Some(parser) = seq.mistral_tool_stream_parser.as_mut() {
+            token_tool_calls = parser.feed_token(logprobs.token, &tok_text, is_done.is_some());
+            token_tool_in_progress = parser.in_progress();
+            if token_tool_calls.is_some() {
+                is_done = Some(StopReason::ToolCalls);
+            }
+        }
+    }
+
+    // Guard against pathological outputs where the model streams repeated bare `[TOOL_CALLS]`
+    // markers without ever emitting a valid tool name / args. If we see this enough times,
+    // force termination so the server doesn't hang forever waiting for tool JSON.
+    if seq.get_mut_group().is_chat && seq.tools.is_some() {
+        if tok_text.trim() == "[TOOL_CALLS]" && token_tool_calls.is_none() {
+            let n = seq.get_mut_group().record_bare_tool_calls_marker();
+            if n >= 3 {
+                is_done = Some(StopReason::Eos);
+            }
+        } else {
+            seq.get_mut_group().reset_bare_tool_calls_marker();
+        }
+    }
 
     // If we can have a tool and we got a tool, stop the sequence early.
     // Doesn't conflict with the logic below because it does the same thing anyway.
-    if let Some(ref t) = seq.tools {
-        if let Ok(Some(ref d)) = seq.peek_delta() {
-            let (_tool_use_still_possible, tool_use_is_done) =
-                t.prefix_could_be_tool(this, d.as_str())?;
+    if is_done != Some(StopReason::ToolCalls) {
+        if let Some(ref t) = seq.tools {
+            if let Ok(Some(ref d)) = seq.peek_delta() {
+                let (_tool_use_still_possible, tool_use_is_done) =
+                    t.prefix_could_be_tool(this, d.as_str())?;
 
-            if tool_use_is_done
-                && matches!(
-                    parse_text_tools(this, d, seq.tools.clone()),
-                    Ok((None, _tools))
-                )
-            {
-                seq.set_state(SequenceState::Done(StopReason::Eos));
-                is_done = Some(StopReason::Eos);
+                if tool_use_is_done
+                    && matches!(
+                        parse_text_tools(this, d, seq.tools.clone()),
+                        Ok((None, _tools))
+                    )
+                {
+                    seq.set_state(SequenceState::Done(StopReason::Eos));
+                    is_done = Some(StopReason::Eos);
+                }
             }
         }
     };
@@ -76,6 +119,10 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     t.prefix_could_be_tool(this, d.as_str())?;
             }
         };
+        if token_tool_in_progress {
+            tool_use_still_possible = true;
+            tool_use_is_done = false;
+        }
 
         // let send = seq.get_toks().len() % 2 == 0 || is_done.is_some();
         let send = true;
@@ -86,29 +133,31 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         if !tool_use_still_possible || tool_use_is_done || is_done.is_some() {
             if send {
                 let delta_result = seq.get_delta();
-                if let Some(delta) = crate::handle_seq_error_ok!(delta_result, seq.responder()) {
-                    if seq.get_mut_group().is_chat {
-                        // Check if we're in Harmony mode and use parsed content
-                        let (content_delta, reasoning_delta) = if seq.is_harmony_mode() {
-                            // In Harmony mode, use the parsed final content and reasoning
-                            let final_delta = seq.get_harmony_final_delta();
-                            let reasoning = seq.get_harmony_reasoning_delta();
-                            (final_delta, reasoning)
+                if let Some(mut delta) = crate::handle_seq_error_ok!(delta_result, seq.responder())
+                {
+                    // Heuristic: if the model streams repeated bare markers without JSON,
+                    // treat it as non-tool text to avoid infinite loops.
+                    if seq.get_mut_group().is_chat && seq.tools.is_some() {
+                        if delta.trim() == "[TOOL_CALLS]" {
+                            let n = seq.get_mut_group().record_bare_tool_calls_marker();
+                            if n >= 3 {
+                                // Strip the marker and mark as done so we flush buffered output.
+                                delta.clear();
+                                is_done = Some(StopReason::Eos);
+                            }
                         } else {
-                            // Not in Harmony mode, use raw delta
-                            let (text_new, _) =
-                                parse_text_tools(this, delta.as_str(), seq.tools.clone())
-                                    .map_err(candle_core::Error::msg)?;
-                            (text_new.map(ToString::to_string), None)
-                        };
+                            seq.get_mut_group().reset_bare_tool_calls_marker();
+                        }
+                    }
 
-                        // Detect tool calls
-                        let tool_calls = if seq.is_harmony_mode() {
-                            // In Harmony mode, only finalize tool calls when the sequence is done
-                            // (EOS token or stop string), not when we first detect a tool call.
-                            // This ensures tool call arguments are fully generated.
-                            if is_done.is_some() && seq.has_harmony_tool_calls() {
-                                // Sequence is done and has tool calls - finalize and send them
+                    if seq.get_mut_group().is_chat {
+                        // Parse streamed delta + tool calls (token-based for Mistral v11, text-based fallback, Harmony aware)
+                        let mut reasoning_delta = None;
+                        let (content_delta, tool_calls) = if seq.is_harmony_mode() {
+                            let content = seq.get_harmony_final_delta();
+                            reasoning_delta = seq.get_harmony_reasoning_delta();
+
+                            let tool_calls = if is_done.is_some() && seq.has_harmony_tool_calls() {
                                 is_done = Some(StopReason::ToolCalls);
                                 let harmony_tool_calls = seq.get_harmony_tool_calls();
                                 harmony_tool_calls
@@ -126,16 +175,19 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                                     .collect()
                             } else {
                                 vec![]
-                            }
+                            };
+
+                            (content, tool_calls)
+                        } else if let Some(tool_calls) = token_tool_calls {
+                            (None, tool_calls)
                         } else {
-                            // Not in Harmony mode - parse text for tool calls
-                            let (_, tool_calls) =
+                            let (text_new, tool_calls) =
                                 parse_text_tools(this, delta.as_str(), seq.tools.clone())
                                     .map_err(candle_core::Error::msg)?;
                             if !tool_calls.is_empty() {
                                 is_done = Some(StopReason::ToolCalls);
                             }
-                            tool_calls
+                            (text_new.map(ToString::to_string), tool_calls)
                         };
 
                         seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {

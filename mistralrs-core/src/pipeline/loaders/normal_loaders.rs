@@ -26,8 +26,6 @@ use mistralrs_quant::log::once_log_info;
 
 use indicatif::MultiProgress;
 use mistralrs_quant::ShardedVarBuilder;
-#[cfg(feature = "pyo3_macros")]
-use pyo3::pyclass;
 
 use regex::Regex;
 use serde::Deserialize;
@@ -139,7 +137,6 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
     }
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 /// The architecture to load the normal model as.
 pub enum NormalLoaderType {

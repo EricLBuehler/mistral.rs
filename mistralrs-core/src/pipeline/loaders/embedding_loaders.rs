@@ -27,8 +27,6 @@ use candle_core::{DType, Device, Tensor};
 use mistralrs_quant::log::once_log_info;
 
 use mistralrs_quant::ShardedVarBuilder;
-#[cfg(feature = "pyo3_macros")]
-use pyo3::pyclass;
 
 use regex::Regex;
 use serde::{de::Visitor, Deserialize, Deserializer, Serialize};
@@ -85,7 +83,6 @@ pub trait EmbeddingModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModel
     }
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 /// The architecture to load the embedding model as.
 pub enum EmbeddingLoaderType {

@@ -40,11 +40,57 @@ pub struct Function {
 
 /// Tool definition
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Tool {
     #[serde(rename = "type")]
     pub tp: ToolType,
     pub function: Function,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ToolDeserializeRepr {
+    /// OpenAI Chat Completions-style tool definition:
+    /// `{ "type": "function", "function": { "name": "...", ... } }`
+    Nested {
+        #[serde(rename = "type")]
+        tp: ToolType,
+        function: Function,
+    },
+    /// OpenAI Responses API-style tool definition:
+    /// `{ "type": "function", "name": "...", "description": "...", "parameters": { ... } }`
+    Flat {
+        #[serde(rename = "type")]
+        tp: ToolType,
+        name: String,
+        description: Option<String>,
+        #[serde(alias = "arguments")]
+        parameters: Option<HashMap<String, Value>>,
+    },
+}
+
+impl<'de> Deserialize<'de> for Tool {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match ToolDeserializeRepr::deserialize(deserializer)? {
+            ToolDeserializeRepr::Nested { tp, function } => Ok(Self { tp, function }),
+            ToolDeserializeRepr::Flat {
+                tp,
+                name,
+                description,
+                parameters,
+            } => Ok(Self {
+                tp,
+                function: Function {
+                    name,
+                    description,
+                    parameters,
+                },
+            }),
+        }
+    }
 }
 
 /// Called function with name and arguments

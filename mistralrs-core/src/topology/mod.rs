@@ -238,11 +238,12 @@ impl Topology {
     }
 
     pub fn requires_post_quantization(&self) -> bool {
-        self.layers.iter().any(|layer| {
-            layer
-                .as_ref()
-                .is_some_and(|layer| layer.isq.is_some() || layer.device.is_some())
-        })
+        // Only numeric layer `isq` requires the post-load quantization pass. Device mapping via
+        // topology happens during the normal loading/device-mapping flow, and regex selectors are
+        // applied through the immediate-ISQ override system.
+        self.layers
+            .iter()
+            .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()))
     }
 }
 

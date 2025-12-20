@@ -9,8 +9,6 @@ use candle_core::{Device, Tensor};
 
 use hf_hub::api::sync::ApiRepo;
 use mistralrs_quant::ShardedVarBuilder;
-#[cfg(feature = "pyo3_macros")]
-use pyo3::pyclass;
 
 use regex::Regex;
 use serde::Deserialize;
@@ -59,7 +57,6 @@ pub trait DiffusionModelLoader: Send + Sync {
     ) -> Result<Box<dyn DiffusionModel + Send + Sync>>;
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 /// The architecture to load the vision model as.
 pub enum DiffusionLoaderType {

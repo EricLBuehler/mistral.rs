@@ -34,7 +34,10 @@ use crate::{
     },
     openai::{CompletionRequest, Grammar},
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
-    types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
+    types::{
+        ExtractedMistralRsState, ExtractedSamplingDefaults, OnChunkCallback, OnDoneCallback,
+        SamplingDefaults, SharedMistralRsState,
+    },
     util::{sanitize_error_message, validate_model_name},
 };
 
@@ -108,53 +111,59 @@ impl futures::Stream for CompletionStreamer {
             DoneState::Running => (),
         }
 
-        match self.rx.poll_recv(cx) {
-            Poll::Ready(Some(resp)) => match resp {
-                Response::CompletionModelError(msg, _) => {
-                    MistralRs::maybe_log_error(
-                        self.state.clone(),
-                        &ModelErrorMessage(msg.to_string()),
-                    );
-                    // Done now, just need to send the [DONE]
-                    self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(Event::default().data(msg))))
-                }
-                Response::ValidationError(e) => Poll::Ready(Some(Ok(
-                    Event::default().data(sanitize_error_message(e.as_ref()))
-                ))),
-                Response::InternalError(e) => {
-                    MistralRs::maybe_log_error(self.state.clone(), &*e);
-                    Poll::Ready(Some(Ok(
-                        Event::default().data(sanitize_error_message(e.as_ref()))
-                    )))
-                }
-                Response::CompletionChunk(mut response) => {
-                    if response.choices.iter().all(|x| x.finish_reason.is_some()) {
+        loop {
+            match self.rx.poll_recv(cx) {
+                Poll::Ready(Some(resp)) => match resp {
+                    // Responses-only item; ignore on the Completions wire format.
+                    Response::WebSearchCall { .. } => continue,
+                    Response::CompletionModelError(msg, _) => {
+                        MistralRs::maybe_log_error(
+                            self.state.clone(),
+                            &ModelErrorMessage(msg.to_string()),
+                        );
+                        // Done now, just need to send the [DONE]
                         self.done_state = DoneState::SendingDone;
+                        return Poll::Ready(Some(Ok(Event::default().data(msg))));
                     }
-                    // Done now, just need to send the [DONE]
-                    MistralRs::maybe_log_response(self.state.clone(), &response);
-
-                    if let Some(on_chunk) = &self.on_chunk {
-                        response = on_chunk(response);
+                    Response::ValidationError(e) => {
+                        return Poll::Ready(Some(Ok(
+                            Event::default().data(sanitize_error_message(e.as_ref()))
+                        )));
                     }
-
-                    if self.store_chunks {
-                        self.chunks.push(response.clone());
+                    Response::InternalError(e) => {
+                        MistralRs::maybe_log_error(self.state.clone(), &*e);
+                        return Poll::Ready(Some(Ok(
+                            Event::default().data(sanitize_error_message(e.as_ref()))
+                        )));
                     }
+                    Response::CompletionChunk(mut response) => {
+                        if response.choices.iter().all(|x| x.finish_reason.is_some()) {
+                            self.done_state = DoneState::SendingDone;
+                        }
+                        // Done now, just need to send the [DONE]
+                        MistralRs::maybe_log_response(self.state.clone(), &response);
 
-                    Poll::Ready(Some(Event::default().json_data(response)))
-                }
-                Response::Done(_) => unreachable!(),
-                Response::CompletionDone(_) => unreachable!(),
-                Response::Chunk(_) => unreachable!(),
-                Response::ImageGeneration(_) => unreachable!(),
-                Response::ModelError(_, _) => unreachable!(),
-                Response::Speech { .. } => unreachable!(),
-                Response::Raw { .. } => unreachable!(),
-                Response::Embeddings { .. } => unreachable!(),
-            },
-            Poll::Pending | Poll::Ready(None) => Poll::Pending,
+                        if let Some(on_chunk) = &self.on_chunk {
+                            response = on_chunk(response);
+                        }
+
+                        if self.store_chunks {
+                            self.chunks.push(response.clone());
+                        }
+
+                        return Poll::Ready(Some(Event::default().json_data(response)));
+                    }
+                    Response::Done(_) => unreachable!(),
+                    Response::CompletionDone(_) => unreachable!(),
+                    Response::Chunk(_) => unreachable!(),
+                    Response::ImageGeneration(_) => unreachable!(),
+                    Response::ModelError(_, _) => unreachable!(),
+                    Response::Speech { .. } => unreachable!(),
+                    Response::Raw { .. } => unreachable!(),
+                    Response::Embeddings { .. } => unreachable!(),
+                },
+                Poll::Pending | Poll::Ready(None) => return Poll::Pending,
+            }
         }
     }
 }
@@ -192,10 +201,24 @@ impl IntoResponse for CompletionResponder {
 /// This function transforms an OpenAI-compatible completion request into the
 /// request format used by mistral.rs.
 pub fn parse_request(
-    oairequest: CompletionRequest,
+    mut oairequest: CompletionRequest,
     state: Arc<MistralRs>,
     tx: Sender<Response>,
+    sampling_defaults: SamplingDefaults,
 ) -> Result<(Request, bool)> {
+    if oairequest.temperature.is_none() {
+        oairequest.temperature = sampling_defaults.temperature;
+    }
+    if oairequest.top_p.is_none() {
+        oairequest.top_p = sampling_defaults.top_p;
+    }
+    if oairequest.min_p.is_none() {
+        oairequest.min_p = sampling_defaults.min_p;
+    }
+    if oairequest.top_k.is_none() {
+        oairequest.top_k = sampling_defaults.top_k;
+    }
+
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
 
@@ -277,14 +300,29 @@ pub fn parse_request(
 )]
 pub async fn completions(
     State(state): ExtractedMistralRsState,
-    Json(oairequest): Json<CompletionRequest>,
+    State(sampling_defaults): ExtractedSamplingDefaults,
+    Json(mut oairequest): Json<CompletionRequest>,
 ) -> CompletionResponder {
     let (tx, mut rx) = create_response_channel(None);
 
-    let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx) {
-        Ok(x) => x,
-        Err(e) => return handle_error(state, e.into()),
-    };
+    if oairequest.temperature.is_none() {
+        oairequest.temperature = sampling_defaults.temperature;
+    }
+    if oairequest.top_p.is_none() {
+        oairequest.top_p = sampling_defaults.top_p;
+    }
+    if oairequest.min_p.is_none() {
+        oairequest.min_p = sampling_defaults.min_p;
+    }
+    if oairequest.top_k.is_none() {
+        oairequest.top_k = sampling_defaults.top_k;
+    }
+
+    let (request, is_streaming) =
+        match parse_request(oairequest, state.clone(), tx, sampling_defaults) {
+            Ok(x) => x,
+            Err(e) => return handle_error(state, e.into()),
+        };
 
     if let Err(e) = send_request(&state, request).await {
         return handle_error(state, e.into());
@@ -352,5 +390,6 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> Compl
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
+        Response::WebSearchCall { .. } => unreachable!(),
     }
 }

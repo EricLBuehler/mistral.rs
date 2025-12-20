@@ -10,7 +10,8 @@ use tracing::info;
 pub struct IntervalLogger {
     enable_logging: Arc<AtomicBool>,
     prefix_cache_hits: Arc<AtomicUsize>,
-    tokens_processed: Arc<AtomicUsize>,
+    prompt_tokens_processed: Arc<AtomicUsize>,
+    completion_tokens_processed: Arc<AtomicUsize>,
     total_new_seqs: Arc<AtomicUsize>,
     num_running: Arc<AtomicUsize>,
     num_waiting: Arc<AtomicUsize>,
@@ -20,14 +21,16 @@ impl IntervalLogger {
     /// Starts an interval logger. Call `begin_logging` to begin the logging process.
     pub fn new(interval: Duration) -> Self {
         let prefix_cache_hits = Arc::new(AtomicUsize::new(0));
-        let tokens_processed = Arc::new(AtomicUsize::new(0));
+        let prompt_tokens_processed = Arc::new(AtomicUsize::new(0));
+        let completion_tokens_processed = Arc::new(AtomicUsize::new(0));
         let total_new_seqs = Arc::new(AtomicUsize::new(0));
         let enable_logging = Arc::new(AtomicBool::new(false));
         let num_running = Arc::new(AtomicUsize::new(0));
         let num_waiting = Arc::new(AtomicUsize::new(0));
 
         let t_prefix_cache_hits = prefix_cache_hits.clone();
-        let t_tokens_processed = tokens_processed.clone();
+        let t_prompt_tokens_processed = prompt_tokens_processed.clone();
+        let t_completion_tokens_processed = completion_tokens_processed.clone();
         let t_total_new_seqs = total_new_seqs.clone();
         let t_enable_logging = enable_logging.clone();
         let t_num_running = num_running.clone();
@@ -42,14 +45,24 @@ impl IntervalLogger {
 
                 let total_new_seqs = t_total_new_seqs.load(Ordering::Relaxed);
                 let prefix_cache_hits = t_prefix_cache_hits.load(Ordering::Relaxed);
-                let tokens_processed = t_tokens_processed.swap(0, Ordering::Relaxed);
+                let prompt_tokens_processed = t_prompt_tokens_processed.swap(0, Ordering::Relaxed);
+                let completion_tokens_processed =
+                    t_completion_tokens_processed.swap(0, Ordering::Relaxed);
+                let tokens_processed =
+                    prompt_tokens_processed.saturating_add(completion_tokens_processed);
                 let num_running = t_num_running.load(Ordering::Relaxed);
                 let num_waiting = t_num_waiting.load(Ordering::Relaxed);
 
                 if total_new_seqs != 0 && tokens_processed != 0 {
+                    let interval_s = interval.as_secs_f64();
+                    let prompt_tps = prompt_tokens_processed as f64 / interval_s;
+                    let completion_tps = completion_tokens_processed as f64 / interval_s;
+                    let total_tps = tokens_processed as f64 / interval_s;
                     info!(
-                        "Throughput (T/s) {:.2}, Prefix cache hitrate {:.2}%, {num_running} running, {num_waiting} waiting",
-                        tokens_processed as f64 / interval.as_secs_f64(),
+                        "Throughput prefill/dec/total (T/s) {:.2}/{:.2}/{:.2}, Prefix cache hitrate {:.2}%, {num_running} running, {num_waiting} waiting",
+                        prompt_tps,
+                        completion_tps,
+                        total_tps,
                         100. * prefix_cache_hits as f64 / total_new_seqs as f64,
                     );
                 }
@@ -58,7 +71,8 @@ impl IntervalLogger {
 
         Self {
             prefix_cache_hits,
-            tokens_processed,
+            prompt_tokens_processed,
+            completion_tokens_processed,
             total_new_seqs,
             enable_logging,
             num_running,
@@ -70,8 +84,13 @@ impl IntervalLogger {
         self.enable_logging.store(true, Ordering::Relaxed);
     }
 
-    pub fn add_tokens_processed(&self, num_tokens: usize) {
-        self.tokens_processed
+    pub fn add_prompt_tokens_processed(&self, num_tokens: usize) {
+        self.prompt_tokens_processed
+            .fetch_add(num_tokens, Ordering::Relaxed);
+    }
+
+    pub fn add_completion_tokens_processed(&self, num_tokens: usize) {
+        self.completion_tokens_processed
             .fetch_add(num_tokens, Ordering::Relaxed);
     }
 
