@@ -764,7 +764,95 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                 };
 
                 if tc_opt.is_none() {
-                    break; // No more tool calls -> done.
+                    // No more tool calls -> wait for the terminal response and forward it.
+                    while let Some(resp) = receiver.recv().await {
+                        match resp {
+                            Response::Done(res) => {
+                                let _ = user_sender.send(Response::Done(res)).await;
+                                return;
+                            }
+                            Response::InternalError(e) => {
+                                let _ = user_sender.send(Response::InternalError(e)).await;
+                                return;
+                            }
+                            Response::ValidationError(e) => {
+                                let _ = user_sender.send(Response::ValidationError(e)).await;
+                                return;
+                            }
+                            Response::ModelError(msg, resp) => {
+                                let _ = user_sender.send(Response::ModelError(msg, resp)).await;
+                                return;
+                            }
+                            Response::WebSearchCall { id, status, action } => {
+                                let _ = user_sender
+                                    .send(Response::WebSearchCall { id, status, action })
+                                    .await;
+                            }
+                            Response::CompletionChunk(res) => {
+                                let _ = user_sender.send(Response::CompletionChunk(res)).await;
+                                return;
+                            }
+                            Response::CompletionModelError(msg, resp) => {
+                                let _ = user_sender
+                                    .send(Response::CompletionModelError(msg, resp))
+                                    .await;
+                                return;
+                            }
+                            Response::CompletionDone(res) => {
+                                let _ = user_sender.send(Response::CompletionDone(res)).await;
+                                return;
+                            }
+                            Response::ImageGeneration(res) => {
+                                let _ = user_sender.send(Response::ImageGeneration(res)).await;
+                                return;
+                            }
+                            Response::Raw {
+                                logits_chunks,
+                                tokens,
+                            } => {
+                                let _ = user_sender
+                                    .send(Response::Raw {
+                                        logits_chunks,
+                                        tokens,
+                                    })
+                                    .await;
+                                return;
+                            }
+                            Response::Embeddings {
+                                embeddings,
+                                prompt_tokens,
+                                total_tokens,
+                            } => {
+                                let _ = user_sender
+                                    .send(Response::Embeddings {
+                                        embeddings,
+                                        prompt_tokens,
+                                        total_tokens,
+                                    })
+                                    .await;
+                                return;
+                            }
+                            Response::Speech {
+                                pcm,
+                                rate,
+                                channels,
+                            } => {
+                                let _ = user_sender
+                                    .send(Response::Speech {
+                                        pcm,
+                                        rate,
+                                        channels,
+                                    })
+                                    .await;
+                                return;
+                            }
+                            Response::Chunk(_) => {
+                                // Ignore extra chunks after a terminal finish_reason.
+                                continue;
+                            }
+                        }
+                    }
+                    break;
                 }
 
                 let tc = tc_opt.unwrap();

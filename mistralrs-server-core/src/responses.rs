@@ -265,6 +265,8 @@ pub struct ResponsesStreamer {
     web_search_calls: HashMap<String, usize>,
     usage: Option<ResponsesUsage>,
     strict_json_schema: Option<StrictJsonSchema>,
+    saw_finish_reason: bool,
+    saw_length_finish: bool,
 }
 
 impl Drop for ResponsesStreamer {
@@ -1092,6 +1094,17 @@ impl futures::Stream for ResponsesStreamer {
                     }
                 }
                 Response::Chunk(chat_chunk) => {
+                    // Track whether the stream has emitted a finish_reason yet.
+                    if chat_chunk.choices.iter().any(|c| c.finish_reason.is_some()) {
+                        self.saw_finish_reason = true;
+                        if chat_chunk
+                            .choices
+                            .iter()
+                            .any(|c| c.finish_reason.as_deref() == Some("length"))
+                        {
+                            self.saw_length_finish = true;
+                        }
+                    }
                     // Streaming responses may include usage on the final chunk; preserve it so
                     // `response.completed` can report accurate token counts (Codex uses this for
                     // its context-left indicator).
@@ -1363,6 +1376,20 @@ impl futures::Stream for ResponsesStreamer {
             },
             Poll::Pending => Poll::Pending,
             Poll::Ready(None) => {
+                if self.saw_finish_reason {
+                    let result = if self.saw_length_finish {
+                        self.incomplete_response("max_tokens")
+                    } else {
+                        self.complete_response()
+                    };
+                    if let Err(e) = result {
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                    if let Some(ev) = self.queued.pop_front() {
+                        return Poll::Ready(Some(Ok(ev)));
+                    }
+                    return Poll::Ready(None);
+                }
                 // The engine response channel may close without emitting a terminal `Response::Done`
                 // or finish_reason-bearing chunk. For the Responses API, clients (notably Codex)
                 // require a terminal `response.completed` SSE event to treat the turn as successful.
@@ -2243,6 +2270,8 @@ pub async fn create_response(
             web_search_calls: HashMap::new(),
             usage: None,
             strict_json_schema: strict_json_schema.clone(),
+            saw_finish_reason: false,
+            saw_length_finish: false,
         };
         ResponsesResponder::Sse(create_streamer(streamer))
     } else {
