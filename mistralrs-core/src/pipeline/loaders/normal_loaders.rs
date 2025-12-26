@@ -179,6 +179,8 @@ pub enum NormalLoaderType {
     GraniteMoeHybrid,
     #[serde(rename = "gpt_oss")]
     GptOss,
+    #[serde(rename = "minimax_m2")]
+    MinimaxM2,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -203,6 +205,7 @@ impl NormalLoaderType {
             "SmolLM3ForCausalLM" => Ok(Self::SmolLm3),
             "GraniteMoeHybridForCausalLM" => Ok(Self::GraniteMoeHybrid),
             "GptOssForCausalLM" => Ok(Self::GptOss),
+            "MiniMaxM2ForCausalLM" => Ok(Self::MinimaxM2),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
@@ -232,6 +235,7 @@ impl FromStr for NormalLoaderType {
             "smollm3" => Ok(Self::SmolLm3),
             "granitemoehybrid" => Ok(Self::GraniteMoeHybrid),
             "gpt_oss" => Ok(Self::GptOss),
+            "minimax_m2" => Ok(Self::MinimaxM2),
             a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `glm4`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`.")),
         }
     }
@@ -258,6 +262,7 @@ impl Display for NormalLoaderType {
             Self::SmolLm3 => write!(f, "smollm3"),
             Self::GraniteMoeHybrid => write!(f, "granitemoehybrid"),
             Self::GptOss => write!(f, "gpt_oss"),
+            Self::MinimaxM2 => write!(f, "minimax_m2"),
         }
     }
 }
@@ -312,6 +317,7 @@ impl AutoNormalLoader {
             NormalLoaderType::SmolLm3 => Ok(Box::new(SmolLm3Loader)),
             NormalLoaderType::GraniteMoeHybrid => Ok(Box::new(GraniteMoeHybridLoader)),
             NormalLoaderType::GptOss => Ok(Box::new(GptOssLoader)),
+            NormalLoaderType::MinimaxM2 => Ok(Box::new(MinimaxM2Loader)),
         }
     }
 }
@@ -4210,5 +4216,77 @@ impl DeviceMappedModelLoader for GptOssLoader {
         };
 
         Ok(Box::new(cfg))
+    }
+}
+
+/// [`NormalLoader`] for a Minimax M2 model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+pub struct MinimaxM2Loader;
+
+impl NormalModelLoader for MinimaxM2Loader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::minimax2::Config = serde_json::from_str(config)?;
+
+        Ok(Box::new(models::minimax2::Model::new(
+            &cfg,
+            vb,
+            self.is_gptx(config)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _vb: ShardedVarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        todo!()
+    }
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::qwen3_moe::Config = serde_json::from_str(config)?;
+
+        Ok(Box::new(cfg))
+    }
+}
+
+impl IsqModelLoader for MinimaxM2Loader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            // MLP MoE
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
     }
 }
