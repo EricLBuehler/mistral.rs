@@ -144,10 +144,10 @@ struct Allocator<T> {
 }
 
 impl<T> Allocator<T> {
-    fn allocate(&mut self) -> Arc<PhysicalTokenBlock> {
-        let block = self.free_blocks.pop().unwrap();
+    fn allocate(&mut self) -> Option<Arc<PhysicalTokenBlock>> {
+        let block = self.free_blocks.pop()?;
         block.deref_mut().refcount = 1;
-        block
+        Some(block)
     }
 
     fn free_block(&mut self, block: Arc<PhysicalTokenBlock>) {
@@ -272,7 +272,9 @@ impl BlockEngine {
         }
     }
 
-    pub fn allocate(&mut self, seq: &mut impl BlockEngineSequence) {
+    /// Allocate physical blocks for a sequence.
+    /// Returns true if allocation succeeded, false if it failed due to insufficient blocks.
+    pub fn allocate(&mut self, seq: &mut impl BlockEngineSequence) -> bool {
         let num_blocks_needed = seq.logical_token_blocks().len();
         let seq_id = seq.get_id();
         let block_size = seq.block_size();
@@ -282,12 +284,21 @@ impl BlockEngine {
             let mut block_table = physical_blocks_prefill.clone();
             let n_extra_blocks = num_blocks_needed - block_table.len();
             for _ in 0..n_extra_blocks {
-                block_table.push(self.allocate_block_with_eviction());
+                match self.allocate_block_with_eviction() {
+                    Some(block) => block_table.push(block),
+                    None => {
+                        // Allocation failed - free any blocks we allocated and return failure
+                        for block in block_table.iter().skip(physical_blocks_prefill.len()) {
+                            self.gpu_allocator.free_block(block.clone());
+                        }
+                        return false;
+                    }
+                }
             }
             self.block_tables.insert(seq_id, block_table);
             self.cached_blocks_per_seq.insert(seq_id, 0);
             seq.set_prefix_cache_len(0);
-            return;
+            return true;
         }
 
         // Re-borrow logical_blocks after the mutable borrow above is done
@@ -301,12 +312,25 @@ impl BlockEngine {
         };
 
         let mut block_table = Vec::with_capacity(num_blocks_needed);
+        let mut allocated_count = 0; // Track how many we allocated (not from cache)
 
         // Use cached blocks for the prefix
         for (idx, physical_block) in cached_blocks {
             // Extend block_table to the right size
             while block_table.len() < idx {
-                block_table.push(self.allocate_block_with_eviction());
+                match self.allocate_block_with_eviction() {
+                    Some(block) => {
+                        block_table.push(block);
+                        allocated_count += 1;
+                    }
+                    None => {
+                        // Allocation failed - free any blocks we allocated
+                        for block in block_table.iter().rev().take(allocated_count) {
+                            self.gpu_allocator.free_block(block.clone());
+                        }
+                        return false;
+                    }
+                }
             }
             // The cached block already has its refcount incremented by match_prefix
             block_table.push(physical_block);
@@ -314,7 +338,19 @@ impl BlockEngine {
 
         // Allocate new blocks for the rest
         for _ in block_table.len()..num_blocks_needed {
-            block_table.push(self.allocate_block_with_eviction());
+            match self.allocate_block_with_eviction() {
+                Some(block) => {
+                    block_table.push(block);
+                    allocated_count += 1;
+                }
+                None => {
+                    // Allocation failed - free any blocks we allocated
+                    for block in block_table.iter().rev().take(allocated_count) {
+                        self.gpu_allocator.free_block(block.clone());
+                    }
+                    return false;
+                }
+            }
         }
 
         self.cached_blocks_per_seq.insert(seq_id, num_cached);
@@ -324,6 +360,7 @@ impl BlockEngine {
         // num_cached is the number of full blocks that were cache hits
         let cached_tokens = num_cached * block_size;
         seq.set_prefix_cache_len(cached_tokens);
+        true
     }
 
     /// Check if the last allocate() call resulted in a prefix cache hit.
@@ -336,7 +373,8 @@ impl BlockEngine {
     }
 
     /// Allocate a block, evicting from prefix cache if necessary.
-    fn allocate_block_with_eviction(&mut self) -> Arc<PhysicalTokenBlock> {
+    /// Returns None if no block could be allocated (e.g., all blocks are in use).
+    fn allocate_block_with_eviction(&mut self) -> Option<Arc<PhysicalTokenBlock>> {
         // Try to allocate from free pool first
         if *self.gpu_allocator.get_num_free_blocks() > 0 {
             return self.gpu_allocator.allocate();
@@ -352,7 +390,7 @@ impl BlockEngine {
             }
         }
 
-        // Now allocate
+        // Try to allocate - may return None if eviction didn't free any blocks
         self.gpu_allocator.allocate()
     }
 
@@ -443,26 +481,29 @@ impl BlockEngine {
         }
     }
 
-    // Returns the COW mapping (src, dst).
-    // COW is performed if there are multiple references to the last physical block.
+    /// Append a token slot to a sequence, potentially allocating a new block.
+    /// Returns:
+    /// - `Ok(None)` - success, no COW needed
+    /// - `Ok(Some((src, dst)))` - success with COW (copy-on-write)
+    /// - `Err(())` - allocation failed due to insufficient blocks
     pub fn append_token_slot_to_seq(
         &mut self,
         sequence: &impl BlockEngineSequence,
-    ) -> Option<(usize, usize)> {
+    ) -> Result<Option<(usize, usize)>, ()> {
         let seq_id = sequence.get_id();
         let blocks_to_add = sequence.blocks_to_add_new_tok();
 
         // Check if table exists
         if !self.block_tables.contains_key(&seq_id) {
-            return None;
+            return Ok(None);
         }
 
         match blocks_to_add {
             1 => {
                 // Allocate first, then push to table
-                let new_block = self.allocate_block_with_eviction();
+                let new_block = self.allocate_block_with_eviction().ok_or(())?;
                 self.block_tables.get_mut(&seq_id).unwrap().push(new_block);
-                None
+                Ok(None)
             }
             0 => {
                 // Get the last block's info first
@@ -474,14 +515,14 @@ impl BlockEngine {
                 assert!(is_gpu);
 
                 if refcount == 1 {
-                    None
+                    Ok(None)
                 } else {
                     // We would be writing into shared, so COW.
                     let old_block = last_block.clone();
                     let old_number = old_block.deref_mut().block_id;
 
                     // Now allocate and mutate
-                    let new_block = self.allocate_block_with_eviction();
+                    let new_block = self.allocate_block_with_eviction().ok_or(())?;
                     let new_number = new_block.deref_mut().block_id;
 
                     // Free old block
@@ -491,7 +532,7 @@ impl BlockEngine {
                     let table = self.block_tables.get_mut(&seq_id).unwrap();
                     *table.last_mut().unwrap() = new_block;
 
-                    Some((old_number, new_number))
+                    Ok(Some((old_number, new_number)))
                 }
             }
             _ => {
