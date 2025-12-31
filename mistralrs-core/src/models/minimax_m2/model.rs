@@ -1,67 +1,27 @@
-use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::Linear;
-use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder,
-};
-use serde::{Deserialize, Serialize};
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
+/// Mistral LLM, https://github.com/mistralai/mistral-src
+use candle_core::{Device, Module, Result, Tensor};
+use mistralrs_quant::{QuantMethod, ReplicatedLayer, ShardedVarBuilder};
+
 use std::{collections::HashMap, sync::Arc};
 
-use crate::moe::{MoEExperts, MoEExpertsConfig};
 use crate::{
-    amoe::AnyMoeBaseModelMixin,
-    attention::SdpaParams,
+    amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
-    layers::{self, embedding, Activation, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{embedding, CausalMasker, MatMul, RmsNorm, RotaryEmbedding},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalCacheType, NormalLoadingMetadata,
-        NormalModel,
+        EitherCache, IsqModel, NormalCache, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 serde_default_fn!(bool, tie_word_embeddings, false);
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Config {
-    pub(crate) attn_type_list: Vec<usize>,
-    pub(crate) head_dim: Option<usize>,
-    pub(crate) hidden_act: Activation,
-    pub(crate) hidden_size: usize,
-    pub(crate) intermediate_size: usize,
-    pub(crate) max_position_embeddings: usize,
-    pub(crate) mtp_transformer_layers: usize,
-    pub(crate) num_attention_heads: usize,
-    pub(crate) num_experts_per_tok: usize,
-    pub(crate) num_hidden_layers: usize,
-    pub(crate) num_key_value_heads: usize,
-    pub(crate) num_local_experts: usize,
-    pub(crate) num_mtp_modules: usize,
-    pub(crate) qk_norm_type: String,
-    pub(crate) quantization_config: Option<QuantizedConfig>,
-    pub(crate) rms_norm_eps: f64,
-    pub(crate) rope_theta: f64,
-    pub(crate) rotary_dim: usize,
-    pub(crate) scoring_func: String,
-    pub(crate) shared_intermediate_size: usize,
-    #[serde(default = "tie_word_embeddings")]
-    pub(crate) tie_word_embeddings: bool,
-    pub(crate) use_qk_norm: bool,
-    pub(crate) use_routing_bias: bool,
-    pub(crate) vocab_size: usize,
-}
-
-impl Config {
-    pub(crate) fn head_dim(&self) -> usize {
-        self.head_dim
-            .unwrap_or(self.hidden_size / self.num_attention_heads)
-    }
-}
 
 pub struct Model {
     embed_tokens: candle_nn::Embedding,
