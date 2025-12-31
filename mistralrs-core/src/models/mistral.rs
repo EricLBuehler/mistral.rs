@@ -54,7 +54,7 @@ impl Config {
     }
 }
 
-struct Attention {
+pub(crate) struct Attention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
     v_proj: Arc<dyn QuantMethod>,
@@ -68,7 +68,7 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(
+    pub(crate) fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
         vb: ShardedVarBuilder,
@@ -142,7 +142,7 @@ impl Attention {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn forward(
+    pub(crate) fn forward(
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,

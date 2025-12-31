@@ -4232,15 +4232,16 @@ impl NormalModelLoader for MinimaxM2Loader {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        let cfg: crate::models::minimax2::Config = serde_json::from_str(config)?;
+        let cfg: crate::models::minimax_m2::Config = serde_json::from_str(config)?;
 
-        Ok(Box::new(models::minimax2::Model::new(
-            &cfg,
-            vb,
-            self.is_gptx(config)?,
-            normal_loading_metadata,
-            attention_mechanism,
-        )?))
+        unimplemented!()
+        // Ok(Box::new(models::minimax_m2::Model::new(
+        //     &cfg,
+        //     vb,
+        //     self.is_gptx(config)?,
+        //     normal_loading_metadata,
+        //     attention_mechanism,
+        // )?))
     }
     fn load_xlora(
         &self,
@@ -4262,31 +4263,110 @@ impl NormalModelLoader for MinimaxM2Loader {
 
         Ok(Box::new(cfg))
     }
+
+    fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn get_device_for_tensor(
+        &self,
+        config: &str,
+        _mapper: &dyn DeviceMapper,
+        loading_isq: bool,
+    ) -> Result<Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>> {
+        // if loading_isq {
+        //     Ok(Arc::new(|_| DeviceForLoadTensor::Base))
+        // } else {
+        //     let re = Regex::new(r"\.layers\.(\d+)\.").unwrap();
+        //     let num_layers = self.model_config(config)?.num_layers();
+        //     let closure = move |name: String| {
+        //         if let Some(captures) = re.captures(&name) {
+        //             captures
+        //                 .get(1)
+        //                 .and_then(|m| m.as_str().parse::<usize>().ok())
+        //                 .map(|l| l.min(num_layers))
+        //                 .map(DeviceForLoadTensor::Idx)
+        //                 .unwrap_or(DeviceForLoadTensor::Base)
+        //         } else {
+        //             DeviceForLoadTensor::Base
+        //         }
+        //     };
+
+        //     Ok(Arc::new(closure))
+        // }
+        unimplemented!()
+    }
 }
 
+//fixme chl
 impl IsqModelLoader for MinimaxM2Loader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
-        Ok(vec![
-            Regex::new(r"lm_head\.(weight|bias)$")?,
-            // Attention
-            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
-            // MLP
-            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
-            // MLP MoE
-            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$")?,
-        ])
+        unimplemented!()
+        // Ok(vec![
+        //     Regex::new(r"lm_head\.(weight|bias)$")?,
+        //     // Attention
+        //     Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+        //     Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+        //     Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+        //     Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+        //     // MLP
+        //     Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+        //     Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+        //     Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        //     // MLP MoE
+        //     Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$")?,
+        //     Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$")?,
+        //     Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$")?,
+        // ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes(config)
     }
     fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes_moqe(config)
+    }
+}
+
+impl DeviceMappedModelLoader for MinimaxM2Loader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        unimplemented!()
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        unimplemented!()
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        unimplemented!()
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        unimplemented!()
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        unimplemented!()
+    }
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        unimplemented!()
     }
 }
