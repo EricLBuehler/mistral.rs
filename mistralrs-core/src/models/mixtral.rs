@@ -50,7 +50,7 @@ pub struct Config {
     pub(crate) tie_word_embeddings: bool,
 }
 
-struct Attention {
+pub(crate) struct Attention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
     v_proj: Arc<dyn QuantMethod>,
@@ -64,7 +64,7 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(
+    pub(crate) fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
         vb: ShardedVarBuilder,
@@ -138,7 +138,7 @@ impl Attention {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn forward(
+    pub(crate) fn forward(
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
@@ -309,14 +309,18 @@ impl Module for BlockSparseTop2MLP {
 }
 
 #[derive(Clone)]
-struct SparseMoeBlock {
+pub(crate) struct SparseMoeBlock {
     gate: Arc<dyn QuantMethod>,
     experts: Vec<BlockSparseTop2MLP>,
     num_experts_per_tok: usize,
 }
 
 impl SparseMoeBlock {
-    fn new(cfg: &Config, vb: ShardedVarBuilder, comm: &Arc<mistralrs_quant::Comm>) -> Result<Self> {
+    pub(crate) fn new(
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
         let gate = mistralrs_quant::linear_no_bias(
             cfg.hidden_size,
             cfg.num_local_experts,
