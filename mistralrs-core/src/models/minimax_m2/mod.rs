@@ -1,6 +1,6 @@
 mod attention;
 mod config;
-// mod decoderlayer;
+mod decoderlayer;
 // mod model;
 // mod moe;
 

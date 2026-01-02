@@ -1,21 +1,19 @@
 use std::sync::Arc;
 
 use super::config::Config;
-use crate::models::mistral::Attention;
+use crate::{layers::Activation, models::mixtral::Attention as MixtralAttention};
 use candle_core::{Result, Tensor};
-use mistralrs_quant::{
-    ColumnParallelLayer, MatMul, QuantMethod, RowParallelLayer, ShardedVarBuilder,
-};
+use candle_nn::Module;
+use mistralrs_quant::{ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder};
 
 use crate::{
-    attention::SdpaParams,
     kv_cache::KvCache,
-    layers::{RotaryEmbedding, Sdpa},
+    layers::RotaryEmbedding,
     paged_attention::PagedAttention,
     pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
 };
 
-struct LinearAttention {
+pub(crate) struct LinearAttention {
     qkv_proj: Arc<dyn QuantMethod>,
     o_proj: Arc<dyn QuantMethod>,
     o_gate: Arc<dyn QuantMethod>,
@@ -23,11 +21,12 @@ struct LinearAttention {
     num_kv_heads: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
+    activation: Activation,
 
-    slopte_rate: Arc<dyn QuantMethod>,
-    q_decay: Arc<dyn QuantMethod>,
-    k_decay: Arc<dyn QuantMethod>,
-    diagonal_decay: Arc<dyn QuantMethod>,
+    slopte_rate: Arc<Tensor>,
+    q_decay: Arc<Tensor>,
+    k_decay: Arc<Tensor>,
+    diagonal_decay: Arc<Tensor>,
 }
 
 impl LinearAttention {
@@ -96,36 +95,13 @@ impl LinearAttention {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim();
-        let q_proj = ColumnParallelLayer::new(
+        let qkv_proj = ColumnParallelLayer::new(
             hidden_sz,
-            num_heads * head_dim,
+            num_heads * head_dim * 3,
             &cfg.quantization_config,
             false,
             comm,
-            vb.pp("q_proj"),
-        )?;
-        let kv_shard = mistralrs_quant::compute_kv_shard(
-            cfg.num_key_value_heads,
-            cfg.hidden_size / cfg.num_attention_heads,
-            comm,
-        );
-        let k_proj = ColumnParallelLayer::new_with_shard(
-            hidden_sz,
-            num_kv_heads * head_dim,
-            &cfg.quantization_config,
-            false,
-            comm,
-            kv_shard,
-            vb.pp("k_proj"),
-        )?;
-        let v_proj = ColumnParallelLayer::new_with_shard(
-            hidden_sz,
-            num_kv_heads * head_dim,
-            &cfg.quantization_config,
-            false,
-            comm,
-            kv_shard,
-            vb.pp("v_proj"),
+            vb.pp("qkv_proj"),
         )?;
         let o_proj = RowParallelLayer::new(
             num_heads * head_dim,
@@ -135,29 +111,34 @@ impl LinearAttention {
             comm,
             vb.pp("o_proj"),
         )?;
-        candle_core::bail!("ohno");
-        // Ok(Self {
-        //     q_proj,
-        //     k_proj,
-        //     v_proj,
-        //     o_proj,
-        //     num_heads: num_heads / comm.world_size(),
-        //     num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
-        //     head_dim,
-        //     rotary_emb,
-        //     paged_attn,
-        //     sdpa_params: SdpaParams {
-        //         n_kv_groups: mistralrs_quant::compute_n_kv_groups(
-        //             cfg.num_key_value_heads,
-        //             cfg.num_attention_heads,
-        //             comm,
-        //         ),
-        //         softcap: None,
-        //         softmax_scale: 1.0 / (head_dim as f32).sqrt(),
-        //         sliding_window: cfg.sliding_window,
-        //     },
-        // })
+        let o_gate = RowParallelLayer::new(
+            hidden_sz,
+            num_heads * head_dim,
+            &cfg.quantization_config,
+            false,
+            comm,
+            vb.pp("o_gate"),
+        )?;
+        let slope_rate = Self::slope_rate(num_heads, layer, hidden_sz, vb.pp("slope_rate"))?;
+        let (q_decay, k_decay, diagonal_decay) =
+            Self::decay_factors(&slope_rate, cfg.block_size, vb.pp("decay_factors"))?;
+
+        Ok(Self {
+            qkv_proj,
+            o_proj,
+            o_gate,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            rotary_emb,
+            slopte_rate: Arc::new(slope_rate),
+            q_decay: Arc::new(q_decay),
+            k_decay: Arc::new(k_decay),
+            diagonal_decay: Arc::new(diagonal_decay),
+            activation: cfg.hidden_act.clone(),
+        })
     }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn forward(
         &self,
@@ -168,14 +149,66 @@ impl LinearAttention {
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
+        let (batch_sz, seq_len, _) = xs.dims3()?;
+
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if let Some(t) = self.qkv_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
+        let qkv_states = self.qkv_proj.forward(&xs)?;
+        let qkv_states = self.activation.forward(&&qkv_states)?;
+        let qkv_states =
+            qkv_states.reshape((batch_sz, seq_len, self.num_heads, 3 * self.head_dim))?;
+
+        // Split into Q, K, V
+        let qkv_split = qkv_states.chunk(self.head_dim, 3)?;
+        let mut query_states = qkv_split[0].transpose(1, 2)?; // [batch, num_heads, seq_len, head_dim]
+        let mut key_states = qkv_split[1].transpose(1, 2)?;
+        let mut value_states = qkv_split[2].transpose(1, 2)?;
+
+        unimplemented!()
     }
 }
+
 pub(crate) enum FullOrLinearAttention {
-    Full(Attention),
+    Full(MixtralAttention),
     Linear(LinearAttention),
 }
-
 impl FullOrLinearAttention {
+    pub fn is_linear_layer(layer_idx: usize) -> bool {
+        layer_idx % 2 == 1
+    }
+    pub fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        layer_idx: usize,
+        paged_attn: Option<PagedAttention>,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        let mixtral_config = cfg.clone().into();
+        let is_linear = Self::is_linear_layer(layer_idx);
+        let self_attn = if is_linear {
+            FullOrLinearAttention::Linear(LinearAttention::new(
+                rotary_emb,
+                cfg,
+                vb.pp(format!("linear_layer_{}", layer_idx)),
+                layer_idx,
+                comm,
+            )?)
+        } else {
+            FullOrLinearAttention::Full(MixtralAttention::new(
+                rotary_emb,
+                &mixtral_config,
+                vb.pp(format!("full_layer_{}", layer_idx)),
+                paged_attn,
+                comm,
+            )?)
+        };
+        Ok(self_attn)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn forward(
         &self,

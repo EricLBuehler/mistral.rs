@@ -4,12 +4,13 @@ use serde::{Deserialize, Serialize};
 use crate::{layers::Activation, serde_default_fn};
 
 serde_default_fn!(bool, tie_word_embeddings, false);
+serde_default_fn!(usize, block_size, 256);
+serde_default_fn!(Activation, hidden_act, Activation::Silu);
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     pub(crate) attn_type_list: Vec<usize>,
     pub(crate) head_dim: Option<usize>,
-    pub(crate) hidden_act: Activation,
     pub(crate) hidden_size: usize,
     pub(crate) intermediate_size: usize,
     pub(crate) max_position_embeddings: usize,
@@ -32,6 +33,10 @@ pub struct Config {
     pub(crate) use_qk_norm: bool,
     pub(crate) use_routing_bias: bool,
     pub(crate) vocab_size: usize,
+    #[serde(default = "block_size")]
+    pub(crate) block_size: usize,
+    #[serde(default = "hidden_act")]
+    pub(crate) hidden_act: Activation,
 }
 
 impl Config {
@@ -41,31 +46,24 @@ impl Config {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::{
-        fs::File,
-        io::{Read, Write},
-        path::PathBuf,
-    };
-
-    use super::*;
-
-    fn get_file(file: &str) -> (File, PathBuf) {
-        let temp_dir = std::env::temp_dir().join("minimax-m2");
-        std::fs::create_dir_all(&temp_dir);
-        let target = format!(
-            "https://huggingface.co/MiniMaxAI/MiniMax-M2/resolve/main/{}",
-            file
-        );
-        let response = reqwest::blocking::get(target).expect("Could not download minimax config");
-        let file_path = temp_dir.join(file);
-
-        let content = response.bytes().expect("Could not read response ");
-        let mut file = File::create(&file_path).expect("Could not create target file");
-        file.write_all(&content)
-            .expect("Could not write file contents");
-        file.flush().expect("Could not flush file contents");
-        (file, file_path)
+impl Into<crate::models::mixtral::Config> for Config {
+    fn into(self) -> crate::models::mixtral::Config {
+        crate::models::mixtral::Config {
+            vocab_size: self.vocab_size,
+            hidden_size: self.hidden_size,
+            intermediate_size: self.intermediate_size,
+            num_hidden_layers: self.num_hidden_layers,
+            num_attention_heads: self.num_attention_heads,
+            num_key_value_heads: self.num_key_value_heads,
+            hidden_act: self.hidden_act,
+            max_position_embeddings: self.max_position_embeddings,
+            rms_norm_eps: self.rms_norm_eps,
+            rope_theta: self.rope_theta,
+            sliding_window: None,
+            num_experts_per_tok: self.num_experts_per_tok,
+            num_local_experts: self.num_local_experts,
+            quantization_config: self.quantization_config,
+            tie_word_embeddings: self.tie_word_embeddings,
+        }
     }
 }
