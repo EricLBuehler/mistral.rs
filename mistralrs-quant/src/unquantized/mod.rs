@@ -55,6 +55,12 @@ impl QuantMethod for UnquantLinear {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(a.device().clone());
 
+        // Try custom GEMV for single-token decode (batch_size=1)
+        #[cfg(feature = "cuda")]
+        if crate::gemv::should_use_gemv(a, &self.w) {
+            return crate::gemv::gemv(a, &self.w, self.b.as_ref());
+        }
+
         let w = match *a.dims() {
             [b1, b2, _, _] => self.w.broadcast_left((b1, b2))?,
             [bsize, _, _] => self.w.broadcast_left(bsize)?,

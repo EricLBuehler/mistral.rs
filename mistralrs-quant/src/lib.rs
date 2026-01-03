@@ -21,6 +21,7 @@ pub mod cublaslt;
 pub mod distributed;
 mod dummy;
 mod fp8;
+pub mod gemv;
 mod gguf;
 mod gptq;
 mod hqq;
@@ -54,6 +55,9 @@ pub use distributed::{
 };
 pub use dummy::DummyLayer;
 pub use fp8::FP8Linear;
+#[cfg(feature = "cuda")]
+pub use gemv::gemv;
+pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
