@@ -2055,8 +2055,7 @@ pub fn softmax_with_sinks(
 }
 
 /// Activation enum for fused GLU kernel.
-/// Must match the GluActivation enum in CUDA code (ops.cu).
-#[cfg(feature = "cuda")]
+/// Must match the GluActivation enum in CUDA (ops.cu) and Metal (fused_glu.metal) kernels.
 #[derive(Clone, Copy, Debug)]
 #[repr(i32)]
 pub enum GluActivationType {
@@ -2065,37 +2064,119 @@ pub enum GluActivationType {
     Relu = 2,
 }
 
-/// Fused GLU activation: output = activation(a) * b
-///
-/// This fuses the activation function application and element-wise multiplication
-/// into a single GPU kernel pass, reducing memory bandwidth and eliminating
-/// intermediate tensor allocation.
-///
-/// Args:
-///   a: Input tensor to apply activation to
-///   b: Tensor to multiply with activated values
-///   activation: The activation function to apply (SiLU, GELU, or ReLU)
-///
-/// Returns: Tensor with same shape as inputs
+// CPU activation functions for fused GLU
+fn cpu_silu(x: f32) -> f32 {
+    x / (1.0 + (-x).exp())
+}
+
+fn cpu_gelu(x: f32) -> f32 {
+    const SQRT_2_OVER_PI: f32 = 0.7978845608;
+    const COEFF: f32 = 0.044715;
+    let x3 = x * x * x;
+    let inner = SQRT_2_OVER_PI * (x + COEFF * x3);
+    0.5 * x * (1.0 + inner.tanh())
+}
+
+fn cpu_relu(x: f32) -> f32 {
+    x.max(0.0)
+}
+
+fn apply_cpu_activation(x: f32, activation: GluActivationType) -> f32 {
+    match activation {
+        GluActivationType::Silu => cpu_silu(x),
+        GluActivationType::Gelu => cpu_gelu(x),
+        GluActivationType::Relu => cpu_relu(x),
+    }
+}
+
+/// CPU implementation of fused GLU using rayon parallelism
+fn fused_glu_cpu_impl(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Result<Tensor> {
+    use candle_core::cpu_backend::CpuStorage;
+    use half::{bf16, f16};
+    use rayon::prelude::*;
+
+    let shape = a.shape().clone();
+    let dtype = a.dtype();
+
+    let (a_storage, a_layout) = a.storage_and_layout();
+    let (b_storage, b_layout) = b.storage_and_layout();
+
+    let a_cpu = match &*a_storage {
+        candle_core::Storage::Cpu(s) => s,
+        _ => candle_core::bail!("fused_glu_cpu: expected CPU storage"),
+    };
+    let b_cpu = match &*b_storage {
+        candle_core::Storage::Cpu(s) => s,
+        _ => candle_core::bail!("fused_glu_cpu: expected CPU storage"),
+    };
+
+    let result_storage = match dtype {
+        DType::F32 => {
+            let a_slice = a_cpu.as_slice::<f32>()?;
+            let b_slice = b_cpu.as_slice::<f32>()?;
+            let a_offset = a_layout.start_offset();
+            let b_offset = b_layout.start_offset();
+            let len = a.elem_count();
+
+            let result: Vec<f32> = (0..len)
+                .into_par_iter()
+                .map(|i| {
+                    let a_val = a_slice[a_offset + i];
+                    let b_val = b_slice[b_offset + i];
+                    apply_cpu_activation(a_val, activation) * b_val
+                })
+                .collect();
+            CpuStorage::F32(result)
+        }
+        DType::F16 => {
+            let a_slice = a_cpu.as_slice::<f16>()?;
+            let b_slice = b_cpu.as_slice::<f16>()?;
+            let a_offset = a_layout.start_offset();
+            let b_offset = b_layout.start_offset();
+            let len = a.elem_count();
+
+            let result: Vec<f16> = (0..len)
+                .into_par_iter()
+                .map(|i| {
+                    let a_val = a_slice[a_offset + i].to_f32();
+                    let b_val = b_slice[b_offset + i].to_f32();
+                    f16::from_f32(apply_cpu_activation(a_val, activation) * b_val)
+                })
+                .collect();
+            CpuStorage::F16(result)
+        }
+        DType::BF16 => {
+            let a_slice = a_cpu.as_slice::<bf16>()?;
+            let b_slice = b_cpu.as_slice::<bf16>()?;
+            let a_offset = a_layout.start_offset();
+            let b_offset = b_layout.start_offset();
+            let len = a.elem_count();
+
+            let result: Vec<bf16> = (0..len)
+                .into_par_iter()
+                .map(|i| {
+                    let a_val = a_slice[a_offset + i].to_f32();
+                    let b_val = b_slice[b_offset + i].to_f32();
+                    bf16::from_f32(apply_cpu_activation(a_val, activation) * b_val)
+                })
+                .collect();
+            CpuStorage::BF16(result)
+        }
+        _ => candle_core::bail!("fused_glu_cpu: unsupported dtype {:?}", dtype),
+    };
+
+    Ok(Tensor::from((candle_core::Storage::Cpu(result_storage), shape)))
+}
+
+/// CUDA implementation of fused GLU
 #[cfg(feature = "cuda")]
-pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Result<Tensor> {
+fn fused_glu_cuda(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Result<Tensor> {
     use half::{bf16, f16};
     use std::ffi::c_void;
 
-    let a = a.contiguous()?;
-    let b = b.contiguous()?;
-
-    if a.shape() != b.shape() {
-        candle_core::bail!(
-            "fused_glu: a and b must have same shape, got {:?} vs {:?}",
-            a.shape(),
-            b.shape()
-        );
-    }
-
     let device = match a.device() {
         candle_core::Device::Cuda(dev) => dev,
-        _ => candle_core::bail!("fused_glu requires CUDA device"),
+        _ => candle_core::bail!("fused_glu_cuda requires CUDA device"),
     };
 
     let n_elements = a.elem_count();
@@ -2197,7 +2278,91 @@ pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resul
                 a.shape().clone(),
             )))
         }
-        _ => candle_core::bail!("fused_glu: unsupported dtype {:?}", dtype),
+        _ => candle_core::bail!("fused_glu_cuda: unsupported dtype {:?}", dtype),
+    }
+}
+
+/// Metal implementation of fused GLU
+#[cfg(feature = "metal")]
+fn fused_glu_metal(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Result<Tensor> {
+    let n_elements = a.elem_count();
+    let dtype = a.dtype();
+    let shape = a.shape().clone();
+
+    let (a_storage, a_layout) = a.storage_and_layout();
+    let (b_storage, b_layout) = b.storage_and_layout();
+
+    let a_metal = match &*a_storage {
+        candle_core::Storage::Metal(s) => s,
+        _ => candle_core::bail!("fused_glu_metal: expected Metal storage"),
+    };
+    let b_metal = match &*b_storage {
+        candle_core::Storage::Metal(s) => s,
+        _ => candle_core::bail!("fused_glu_metal: expected Metal storage"),
+    };
+
+    let device = a_metal.device();
+    let command_buffer = device.command_buffer()?;
+    command_buffer.set_label("fused-glu");
+
+    let output = device.new_buffer(n_elements, dtype, "fused-glu-output")?;
+
+    crate::metal_kernels::call_fused_glu(
+        device.device(),
+        &command_buffer,
+        device.kernels(),
+        dtype,
+        a_metal.buffer(),
+        b_metal.buffer(),
+        a_layout.start_offset() * dtype.size_in_bytes(),
+        b_layout.start_offset() * dtype.size_in_bytes(),
+        n_elements,
+        activation as i32,
+        &output,
+    )
+    .map_err(candle_core::Error::wrap)?;
+
+    let newstorage = candle_core::MetalStorage::new(output, device.clone(), n_elements, dtype);
+    Ok(Tensor::from((candle_core::Storage::Metal(newstorage), shape)))
+}
+
+/// Fused GLU activation: output = activation(a) * b
+///
+/// This fuses the activation function application and element-wise multiplication
+/// into a single pass, reducing memory bandwidth and eliminating
+/// intermediate tensor allocation.
+///
+/// Supported on CUDA (optimized kernel), Metal (optimized kernel), and CPU (rayon parallelism).
+///
+/// Args:
+///   a: Input tensor to apply activation to
+///   b: Tensor to multiply with activated values
+///   activation: The activation function to apply (SiLU, GELU, or ReLU)
+///
+/// Returns: Tensor with same shape as inputs
+pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Result<Tensor> {
+    let a = a.contiguous()?;
+    let b = b.contiguous()?;
+
+    if a.shape() != b.shape() {
+        candle_core::bail!(
+            "fused_glu: a and b must have same shape, got {:?} vs {:?}",
+            a.shape(),
+            b.shape()
+        );
+    }
+
+    match a.device() {
+        #[cfg(feature = "cuda")]
+        candle_core::Device::Cuda(_) => fused_glu_cuda(&a, &b, activation),
+
+        #[cfg(feature = "metal")]
+        candle_core::Device::Metal(_) => fused_glu_metal(&a, &b, activation),
+
+        candle_core::Device::Cpu => fused_glu_cpu_impl(&a, &b, activation),
+
+        #[allow(unreachable_patterns)]
+        _ => candle_core::bail!("fused_glu: unsupported device"),
     }
 }
 

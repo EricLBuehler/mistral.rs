@@ -75,7 +75,6 @@ pub use utils::gptoss_swiglu_interleaved;
 pub use utils::isq::apply_immediate_isq;
 #[cfg(feature = "cuda")]
 pub use utils::softmax_with_sinks;
-#[cfg(feature = "cuda")]
 pub use utils::{fused_glu, GluActivationType};
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
 pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};

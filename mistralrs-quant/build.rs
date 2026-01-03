@@ -296,10 +296,11 @@ fn main() -> Result<(), String> {
         use std::process::Command;
         use std::{env, str};
 
-        const METAL_SOURCES: [&str; 10] = [
+        const METAL_SOURCES: [&str; 11] = [
             "bitwise",
             "blockwise_fp8",
             "bnb_dequantize",
+            "fused_glu",
             "hqq_dequantize",
             "hqq_bitpack",
             "mxfp4",
