@@ -735,7 +735,36 @@ pub fn apply_triangular(xs: &Tensor, diagonal: isize, upper: bool) -> Result<Ten
 ///
 /// This is equivalent to:
 /// `act(a) * b`
+///
+/// On CUDA with supported dtypes (F16, BF16, F32), this uses a fused kernel
+/// for better performance by eliminating intermediate memory allocation.
 pub fn mul_and_act(a: &Tensor, b: &Tensor, act: Activation) -> Result<Tensor> {
+    #[cfg(feature = "cuda")]
+    {
+        // Check if we can use the fused CUDA kernel
+        if a.device().is_cuda()
+            && matches!(a.dtype(), DType::F16 | DType::BF16 | DType::F32)
+            && a.dtype() == b.dtype()
+        {
+            // Map Activation to GluActivationType
+            let glu_act = match act {
+                Activation::Silu | Activation::Swish => {
+                    Some(mistralrs_quant::GluActivationType::Silu)
+                }
+                Activation::Gelu | Activation::NewGelu | Activation::GeluPytorchTanh => {
+                    Some(mistralrs_quant::GluActivationType::Gelu)
+                }
+                Activation::Relu => Some(mistralrs_quant::GluActivationType::Relu),
+                _ => None, // Unsupported activation, fall back to default
+            };
+
+            if let Some(activation_type) = glu_act {
+                return mistralrs_quant::fused_glu(a, b, activation_type);
+            }
+        }
+    }
+
+    // Fallback for CPU, unsupported dtypes, or unsupported activations
     a.apply(&act)? * b
 }
 
