@@ -34,5 +34,8 @@ jobs:
           nvidia-smi || true
           nvcc --version || true
 
+      - name: Clippy (cuda)
+        run: cargo clippy --features cuda
+
       - name: Test (cuda)
         run: cargo test --features cuda
