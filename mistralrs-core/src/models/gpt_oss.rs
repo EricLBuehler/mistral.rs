@@ -377,11 +377,7 @@ impl Attention {
             * self.sdpa_params.softmax_scale as f64)?;
 
         #[cfg(feature = "cuda")]
-        let scores = if attention_mask.is_none() {
-            let sinks = self.sinks.to_dtype(attn_weights.dtype())?;
-            mistralrs_quant::softmax_with_sinks(&attn_weights, &sinks, None)?
-        } else {
-            let mask = attention_mask.unwrap();
+        let scores = if let Some(mask) = attention_mask {
             let mask_last_dim = mask.dim(D::Minus1)?;
             let causal_mask = if mask_last_dim > k_len {
                 mask.narrow(D::Minus1, 0, k_len)?
@@ -403,6 +399,9 @@ impl Attention {
             let probs = candle_nn::ops::softmax_last_dim(&combined_logits)?;
 
             probs.narrow(D::Minus1, 0, k_len)?.contiguous()?
+        } else {
+            let sinks = self.sinks.to_dtype(attn_weights.dtype())?;
+            mistralrs_quant::softmax_with_sinks(&attn_weights, &sinks, None)?
         };
 
         #[cfg(not(feature = "cuda"))]

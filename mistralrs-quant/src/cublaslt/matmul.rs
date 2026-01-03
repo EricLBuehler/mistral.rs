@@ -395,7 +395,6 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
         scale_d: &S,
         c: &C,
         out: &mut OB,
-        // amax_d: &mut A,
         bias: Option<&B>,
         act: Option<&Activation>,
     ) -> Result<(), CublasError> {
@@ -437,13 +436,16 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
             d_layout.set_batch(batch_size, stride_c)?;
         }
 
-        // Set scale factors
+        // Set scale factors for FP8 inputs (dequantization scales)
+        // Note: D_SCALE is NOT set because output is BF16, not FP8.
+        // Setting D_SCALE with BF16 output causes CUBLAS_STATUS_INVALID_VALUE
+        // on some architectures (e.g., Blackwell SM 12.x).
         let (scale_a, _scale_a_guard) = scale_a.device_ptr(self.stream());
         let (scale_b, _scale_b_guard) = scale_b.device_ptr(self.stream());
-        let (scale_d, _scale_d_guard) = scale_d.device_ptr(self.stream());
+        let (_scale_d, _scale_d_guard) = scale_d.device_ptr(self.stream());
         matmul_desc.set_scale_ptr(&scale_a, Matrix::A)?;
         matmul_desc.set_scale_ptr(&scale_b, Matrix::B)?;
-        matmul_desc.set_scale_ptr(&scale_d, Matrix::D)?;
+        // D_SCALE is only valid when D matrix is FP8 (for requantization)
 
         // Pass amaxd ptr
         // unsafe {
