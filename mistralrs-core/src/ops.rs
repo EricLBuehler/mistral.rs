@@ -13,6 +13,7 @@ use candle_core::Shape;
 // ============================================================================
 
 #[cfg(feature = "cuda")]
+#[allow(clippy::cast_possible_truncation)]
 fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
     use candle_core::backend::BackendStorage;
     use candle_core::cuda_backend::cudarc::driver::DevicePtr;
@@ -182,6 +183,7 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
 /// Returns softmax weights (not raw logits) and indices in a single kernel call
 /// This eliminates intermediate tensor allocations and the separate softmax kernel
 #[cfg(feature = "cuda")]
+#[allow(clippy::cast_possible_truncation)]
 pub fn cuda_topk_softmax(input: &Tensor, k: usize) -> Result<TopKOutput> {
     use candle_core::backend::BackendStorage;
     use candle_core::cuda_backend::cudarc::driver::DevicePtr;

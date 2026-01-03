@@ -180,6 +180,7 @@ pub fn gemv(x: &Tensor, w: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
 }
 
 #[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
 fn gemv_bf16(
     dev: &CudaDevice,
     x: &Tensor,
@@ -212,7 +213,7 @@ fn gemv_bf16(
 
     // Get bias storage
     let bias_storage = bias.map(|b| b.storage_and_layout());
-    let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, ref b_l)) = bias_storage {
+    let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, b_l)) = bias_storage {
         let Storage::Cuda(b_s) = &**b_arc else {
             candle_core::bail!("Expected CUDA storage for bias");
         };
@@ -247,6 +248,7 @@ fn gemv_bf16(
 }
 
 #[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
 fn gemv_f16(
     dev: &CudaDevice,
     x: &Tensor,
@@ -275,7 +277,7 @@ fn gemv_f16(
     let (y_ptr, y_guard) = y_buf.device_ptr(y_buf.stream());
 
     let bias_storage = bias.map(|b| b.storage_and_layout());
-    let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, ref b_l)) = bias_storage {
+    let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, b_l)) = bias_storage {
         let Storage::Cuda(b_s) = &**b_arc else {
             candle_core::bail!("Expected CUDA storage for bias");
         };
@@ -310,6 +312,7 @@ fn gemv_f16(
 }
 
 #[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
 fn gemv_f32(
     dev: &CudaDevice,
     x: &Tensor,
@@ -338,7 +341,7 @@ fn gemv_f32(
     let (y_ptr, y_guard) = y_buf.device_ptr(y_buf.stream());
 
     let bias_storage = bias.map(|b| b.storage_and_layout());
-    let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, ref b_l)) = bias_storage {
+    let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, b_l)) = bias_storage {
         let Storage::Cuda(b_s) = &**b_arc else {
             candle_core::bail!("Expected CUDA storage for bias");
         };
