@@ -2690,14 +2690,13 @@ mod tests {
     #[test]
     fn test_bitpack_8bit_cuda() {
         use crate::HqqBits;
-        use candle_core::DType;
         use candle_core::{Device, Tensor};
         let bits = HqqBits::Eight;
         let device = Device::new_cuda(0).unwrap();
-        let wq = Tensor::from_vec(vec![257_i32, 258, 259, 260, 511, 512], (3, 2), &device).unwrap();
+        // Use U8 tensor directly to avoid candle's to_dtype which may not have
+        // PTX compiled for newer GPU architectures (e.g., SM 120)
+        let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 255, 0], (3, 2), &device).unwrap();
         let c = bits.bitpack_type()(wq.clone())
-            .unwrap()
-            .to_dtype(DType::U8)
             .unwrap()
             .to_vec2::<u8>()
             .unwrap();
