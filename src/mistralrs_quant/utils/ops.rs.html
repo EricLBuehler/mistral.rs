@@ -2690,143 +2690,142 @@
 <a href=#2690 id=2690 data-nosnippet>2690</a>    #[test]
 <a href=#2691 id=2691 data-nosnippet>2691</a>    </span><span class="kw">fn </span>test_bitpack_8bit_cuda() {
 <a href=#2692 id=2692 data-nosnippet>2692</a>        <span class="kw">use </span><span class="kw">crate</span>::HqqBits;
-<a href=#2693 id=2693 data-nosnippet>2693</a>        <span class="kw">use </span>candle_core::DType;
-<a href=#2694 id=2694 data-nosnippet>2694</a>        <span class="kw">use </span>candle_core::{Device, Tensor};
-<a href=#2695 id=2695 data-nosnippet>2695</a>        <span class="kw">let </span>bits = HqqBits::Eight;
-<a href=#2696 id=2696 data-nosnippet>2696</a>        <span class="kw">let </span>device = Device::new_cuda(<span class="number">0</span>).unwrap();
-<a href=#2697 id=2697 data-nosnippet>2697</a>        <span class="kw">let </span>wq = Tensor::from_vec(<span class="macro">vec!</span>[<span class="number">257_i32</span>, <span class="number">258</span>, <span class="number">259</span>, <span class="number">260</span>, <span class="number">511</span>, <span class="number">512</span>], (<span class="number">3</span>, <span class="number">2</span>), <span class="kw-2">&amp;</span>device).unwrap();
-<a href=#2698 id=2698 data-nosnippet>2698</a>        <span class="kw">let </span>c = bits.bitpack_type()(wq.clone())
-<a href=#2699 id=2699 data-nosnippet>2699</a>            .unwrap()
-<a href=#2700 id=2700 data-nosnippet>2700</a>            .to_dtype(DType::U8)
-<a href=#2701 id=2701 data-nosnippet>2701</a>            .unwrap()
-<a href=#2702 id=2702 data-nosnippet>2702</a>            .to_vec2::&lt;u8&gt;()
-<a href=#2703 id=2703 data-nosnippet>2703</a>            .unwrap();
-<a href=#2704 id=2704 data-nosnippet>2704</a>        <span class="macro">assert_eq!</span>(c, [[<span class="number">1</span>, <span class="number">2</span>], [<span class="number">3</span>, <span class="number">4</span>], [<span class="number">255</span>, <span class="number">0</span>]]);
-<a href=#2705 id=2705 data-nosnippet>2705</a>    }
-<a href=#2706 id=2706 data-nosnippet>2706</a>
-<a href=#2707 id=2707 data-nosnippet>2707</a>    <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
-<a href=#2708 id=2708 data-nosnippet>2708</a>    #[test]
-<a href=#2709 id=2709 data-nosnippet>2709</a>    </span><span class="kw">fn </span>test_bitpack_8bit_metal() {
-<a href=#2710 id=2710 data-nosnippet>2710</a>        <span class="kw">use </span><span class="kw">crate</span>::HqqBits;
-<a href=#2711 id=2711 data-nosnippet>2711</a>        <span class="kw">use </span>candle_core::{Device, Tensor};
-<a href=#2712 id=2712 data-nosnippet>2712</a>        <span class="kw">let </span>bits = HqqBits::Eight;
-<a href=#2713 id=2713 data-nosnippet>2713</a>        <span class="kw">let </span>device = Device::new_metal(<span class="number">0</span>).unwrap();
-<a href=#2714 id=2714 data-nosnippet>2714</a>        <span class="kw">let </span>wq = Tensor::from_vec(<span class="macro">vec!</span>[<span class="number">257_i32</span>, <span class="number">258</span>, <span class="number">259</span>, <span class="number">260</span>, <span class="number">511</span>, <span class="number">512</span>], (<span class="number">3</span>, <span class="number">2</span>), <span class="kw-2">&amp;</span>device).unwrap();
-<a href=#2715 id=2715 data-nosnippet>2715</a>        <span class="kw">let </span>c = bits.bitpack_type()(wq.clone())
-<a href=#2716 id=2716 data-nosnippet>2716</a>            .unwrap()
-<a href=#2717 id=2717 data-nosnippet>2717</a>            .to_vec2::&lt;u8&gt;()
-<a href=#2718 id=2718 data-nosnippet>2718</a>            .unwrap();
-<a href=#2719 id=2719 data-nosnippet>2719</a>        <span class="macro">assert_eq!</span>(c, [[<span class="number">1</span>, <span class="number">2</span>], [<span class="number">3</span>, <span class="number">4</span>], [<span class="number">255</span>, <span class="number">0</span>]]);
-<a href=#2720 id=2720 data-nosnippet>2720</a>    }
-<a href=#2721 id=2721 data-nosnippet>2721</a>
-<a href=#2722 id=2722 data-nosnippet>2722</a>    <span class="attr">#[test]
-<a href=#2723 id=2723 data-nosnippet>2723</a>    </span><span class="kw">fn </span>test_bitpack_4bit() {
-<a href=#2724 id=2724 data-nosnippet>2724</a>        <span class="kw">use </span><span class="kw">crate</span>::HqqBits;
-<a href=#2725 id=2725 data-nosnippet>2725</a>        <span class="kw">use </span>candle_core::{Device, Tensor};
-<a href=#2726 id=2726 data-nosnippet>2726</a>        <span class="kw">let </span>bits = HqqBits::Four;
-<a href=#2727 id=2727 data-nosnippet>2727</a>        <span class="kw">let </span>device = Device::Cpu;
-<a href=#2728 id=2728 data-nosnippet>2728</a>        <span class="kw">let </span>wq = Tensor::from_vec(<span class="macro">vec!</span>[<span class="number">1_u8</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>], (<span class="number">3</span>, <span class="number">2</span>), <span class="kw-2">&amp;</span>device).unwrap();
-<a href=#2729 id=2729 data-nosnippet>2729</a>        <span class="kw">let </span>c = bits.bitpack_type()(wq.clone())
-<a href=#2730 id=2730 data-nosnippet>2730</a>            .unwrap()
-<a href=#2731 id=2731 data-nosnippet>2731</a>            .to_vec2::&lt;u8&gt;()
-<a href=#2732 id=2732 data-nosnippet>2732</a>            .unwrap();
-<a href=#2733 id=2733 data-nosnippet>2733</a>        <span class="macro">assert_eq!</span>(c, [[<span class="number">19</span>, <span class="number">36</span>]]);
-<a href=#2734 id=2734 data-nosnippet>2734</a>    }
-<a href=#2735 id=2735 data-nosnippet>2735</a>
-<a href=#2736 id=2736 data-nosnippet>2736</a>    <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
-<a href=#2737 id=2737 data-nosnippet>2737</a>    #[test]
-<a href=#2738 id=2738 data-nosnippet>2738</a>    </span><span class="kw">fn </span>test_bitpack_4bit_cuda() {
-<a href=#2739 id=2739 data-nosnippet>2739</a>        <span class="kw">use </span><span class="kw">crate</span>::HqqBits;
-<a href=#2740 id=2740 data-nosnippet>2740</a>        <span class="kw">use </span>candle_core::{Device, Tensor};
-<a href=#2741 id=2741 data-nosnippet>2741</a>        <span class="kw">let </span>bits = HqqBits::Four;
-<a href=#2742 id=2742 data-nosnippet>2742</a>        <span class="kw">let </span>device = Device::new_cuda(<span class="number">0</span>).unwrap();
-<a href=#2743 id=2743 data-nosnippet>2743</a>        <span class="kw">let </span>wq = Tensor::from_vec(<span class="macro">vec!</span>[<span class="number">1_u8</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>], (<span class="number">3</span>, <span class="number">2</span>), <span class="kw-2">&amp;</span>device).unwrap();
-<a href=#2744 id=2744 data-nosnippet>2744</a>        <span class="kw">let </span>c = bits.bitpack_type()(wq.clone())
-<a href=#2745 id=2745 data-nosnippet>2745</a>            .unwrap()
-<a href=#2746 id=2746 data-nosnippet>2746</a>            .to_vec2::&lt;u8&gt;()
-<a href=#2747 id=2747 data-nosnippet>2747</a>            .unwrap();
-<a href=#2748 id=2748 data-nosnippet>2748</a>        <span class="macro">assert_eq!</span>(c, [[<span class="number">19</span>, <span class="number">36</span>]]);
-<a href=#2749 id=2749 data-nosnippet>2749</a>    }
-<a href=#2750 id=2750 data-nosnippet>2750</a>
-<a href=#2751 id=2751 data-nosnippet>2751</a>    <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
-<a href=#2752 id=2752 data-nosnippet>2752</a>    #[test]
-<a href=#2753 id=2753 data-nosnippet>2753</a>    </span><span class="kw">fn </span>test_bitpack_4bit_metal() {
-<a href=#2754 id=2754 data-nosnippet>2754</a>        <span class="kw">use </span><span class="kw">crate</span>::HqqBits;
-<a href=#2755 id=2755 data-nosnippet>2755</a>        <span class="kw">use </span>candle_core::{Device, Tensor};
-<a href=#2756 id=2756 data-nosnippet>2756</a>        <span class="kw">let </span>bits = HqqBits::Four;
-<a href=#2757 id=2757 data-nosnippet>2757</a>        <span class="kw">let </span>device = Device::new_metal(<span class="number">0</span>).unwrap();
-<a href=#2758 id=2758 data-nosnippet>2758</a>        <span class="kw">let </span>wq = Tensor::from_vec(<span class="macro">vec!</span>[<span class="number">1_u8</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>], (<span class="number">3</span>, <span class="number">2</span>), <span class="kw-2">&amp;</span>device).unwrap();
-<a href=#2759 id=2759 data-nosnippet>2759</a>        <span class="kw">let </span>c = bits.bitpack_type()(wq.clone())
-<a href=#2760 id=2760 data-nosnippet>2760</a>            .unwrap()
-<a href=#2761 id=2761 data-nosnippet>2761</a>            .to_vec2::&lt;u8&gt;()
-<a href=#2762 id=2762 data-nosnippet>2762</a>            .unwrap();
-<a href=#2763 id=2763 data-nosnippet>2763</a>        <span class="macro">assert_eq!</span>(c, [[<span class="number">19</span>, <span class="number">36</span>]]);
-<a href=#2764 id=2764 data-nosnippet>2764</a>    }
-<a href=#2765 id=2765 data-nosnippet>2765</a>    <span class="comment">// ─────────────────────────────── Sort / ArgSort ────────────────────────────────
-<a href=#2766 id=2766 data-nosnippet>2766</a>    </span><span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
-<a href=#2767 id=2767 data-nosnippet>2767</a>    #[test]
-<a href=#2768 id=2768 data-nosnippet>2768</a>    </span><span class="kw">fn </span>test_sort_and_argsort_vector_metal() {
-<a href=#2769 id=2769 data-nosnippet>2769</a>        <span class="kw">use </span><span class="kw">crate</span>::utils::ops::SortOp;
-<a href=#2770 id=2770 data-nosnippet>2770</a>        <span class="kw">use </span>candle_core::Tensor;
-<a href=#2771 id=2771 data-nosnippet>2771</a>
-<a href=#2772 id=2772 data-nosnippet>2772</a>        <span class="kw">let </span>device = candle_core::Device::new_metal(<span class="number">0</span>).unwrap();
-<a href=#2773 id=2773 data-nosnippet>2773</a>        <span class="kw">let </span>a = Tensor::from_vec(<span class="macro">vec!</span>[<span class="number">3i32</span>, <span class="number">1</span>, <span class="number">4</span>, <span class="number">2</span>], <span class="kw-2">&amp;</span>[<span class="number">4</span>], <span class="kw-2">&amp;</span>device).unwrap();
-<a href=#2774 id=2774 data-nosnippet>2774</a>
-<a href=#2775 id=2775 data-nosnippet>2775</a>        <span class="comment">// sort (ascending)
-<a href=#2776 id=2776 data-nosnippet>2776</a>        </span><span class="kw">let </span>sorted = a.fast_sort_asc(<span class="number">0</span>).unwrap().to_vec1::&lt;i32&gt;().unwrap();
-<a href=#2777 id=2777 data-nosnippet>2777</a>        <span class="macro">assert_eq!</span>(sorted, [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>]);
-<a href=#2778 id=2778 data-nosnippet>2778</a>
-<a href=#2779 id=2779 data-nosnippet>2779</a>        <span class="comment">// argsort (ascending indices)
-<a href=#2780 id=2780 data-nosnippet>2780</a>        </span><span class="kw">let </span>idx = a.fast_argsort_asc(<span class="number">0</span>).unwrap().to_vec1::&lt;u32&gt;().unwrap();
-<a href=#2781 id=2781 data-nosnippet>2781</a>        <span class="macro">assert_eq!</span>(idx, [<span class="number">1</span>, <span class="number">3</span>, <span class="number">0</span>, <span class="number">2</span>]);
-<a href=#2782 id=2782 data-nosnippet>2782</a>    }
-<a href=#2783 id=2783 data-nosnippet>2783</a>
-<a href=#2784 id=2784 data-nosnippet>2784</a>    <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
-<a href=#2785 id=2785 data-nosnippet>2785</a>    #[test]
-<a href=#2786 id=2786 data-nosnippet>2786</a>    </span><span class="kw">fn </span>test_sort_and_argsort_matrix_axis1_metal() {
-<a href=#2787 id=2787 data-nosnippet>2787</a>        <span class="kw">use </span><span class="kw">crate</span>::utils::ops::SortOp;
-<a href=#2788 id=2788 data-nosnippet>2788</a>        <span class="kw">use </span>candle_core::Tensor;
-<a href=#2789 id=2789 data-nosnippet>2789</a>
-<a href=#2790 id=2790 data-nosnippet>2790</a>        <span class="kw">let </span>device = candle_core::Device::new_metal(<span class="number">0</span>).unwrap();
-<a href=#2791 id=2791 data-nosnippet>2791</a>        <span class="comment">// 2 × 3 matrix:
-<a href=#2792 id=2792 data-nosnippet>2792</a>        // [[3, 1, 2],
-<a href=#2793 id=2793 data-nosnippet>2793</a>        //  [0, 4, 5]]
-<a href=#2794 id=2794 data-nosnippet>2794</a>        </span><span class="kw">let </span>a = Tensor::from_vec(<span class="macro">vec!</span>[<span class="number">3i32</span>, <span class="number">1</span>, <span class="number">2</span>, <span class="number">0</span>, <span class="number">4</span>, <span class="number">5</span>], <span class="kw-2">&amp;</span>[<span class="number">2</span>, <span class="number">3</span>], <span class="kw-2">&amp;</span>device).unwrap();
-<a href=#2795 id=2795 data-nosnippet>2795</a>
-<a href=#2796 id=2796 data-nosnippet>2796</a>        <span class="comment">// Sort along axis=1 (second dimension)
-<a href=#2797 id=2797 data-nosnippet>2797</a>        </span><span class="kw">let </span>sorted = a.fast_sort_asc(<span class="number">1</span>).unwrap().to_vec2::&lt;i32&gt;().unwrap();
-<a href=#2798 id=2798 data-nosnippet>2798</a>        <span class="macro">assert_eq!</span>(sorted, [[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>], [<span class="number">0</span>, <span class="number">4</span>, <span class="number">5</span>]]);
-<a href=#2799 id=2799 data-nosnippet>2799</a>
-<a href=#2800 id=2800 data-nosnippet>2800</a>        <span class="comment">// ArgSort indices along axis=1
-<a href=#2801 id=2801 data-nosnippet>2801</a>        </span><span class="kw">let </span>idx = a.fast_argsort_asc(<span class="number">1</span>).unwrap().to_vec2::&lt;u32&gt;().unwrap();
-<a href=#2802 id=2802 data-nosnippet>2802</a>        <span class="macro">assert_eq!</span>(idx, [[<span class="number">1</span>, <span class="number">2</span>, <span class="number">0</span>], [<span class="number">0</span>, <span class="number">1</span>, <span class="number">2</span>]]);
-<a href=#2803 id=2803 data-nosnippet>2803</a>    }
-<a href=#2804 id=2804 data-nosnippet>2804</a>
-<a href=#2805 id=2805 data-nosnippet>2805</a>    <span class="comment">// ─────────────────────────────── 2 048-element vector ────────────────────────────────
-<a href=#2806 id=2806 data-nosnippet>2806</a>    </span><span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
-<a href=#2807 id=2807 data-nosnippet>2807</a>    #[test]
-<a href=#2808 id=2808 data-nosnippet>2808</a>    </span><span class="kw">fn </span>test_sort_and_argsort_vector_2048_metal() {
-<a href=#2809 id=2809 data-nosnippet>2809</a>        <span class="kw">use </span><span class="kw">crate</span>::utils::ops::SortOp;
-<a href=#2810 id=2810 data-nosnippet>2810</a>        <span class="kw">use </span>candle_core::Tensor;
-<a href=#2811 id=2811 data-nosnippet>2811</a>
-<a href=#2812 id=2812 data-nosnippet>2812</a>        <span class="kw">const </span>N: usize = <span class="number">4096</span>;
-<a href=#2813 id=2813 data-nosnippet>2813</a>
-<a href=#2814 id=2814 data-nosnippet>2814</a>        <span class="kw">let </span>device = candle_core::Device::new_metal(<span class="number">0</span>).expect(<span class="string">"Metal device"</span>);
-<a href=#2815 id=2815 data-nosnippet>2815</a>
-<a href=#2816 id=2816 data-nosnippet>2816</a>        <span class="comment">// Create a descending vector [4095, 4094, …, 0]
-<a href=#2817 id=2817 data-nosnippet>2817</a>        </span><span class="kw">let </span>vals: Vec&lt;i32&gt; = (<span class="number">0</span>..N <span class="kw">as </span>i32).rev().collect();
-<a href=#2818 id=2818 data-nosnippet>2818</a>        <span class="kw">let </span>a = Tensor::from_vec(vals.clone(), <span class="kw-2">&amp;</span>[N], <span class="kw-2">&amp;</span>device).unwrap();
-<a href=#2819 id=2819 data-nosnippet>2819</a>
-<a href=#2820 id=2820 data-nosnippet>2820</a>        <span class="comment">// ---- sort (ascending) ---------------------------------------------------------
-<a href=#2821 id=2821 data-nosnippet>2821</a>        </span><span class="kw">let </span>sorted = a.fast_sort_asc(<span class="number">0</span>).unwrap().to_vec1::&lt;i32&gt;().unwrap();
-<a href=#2822 id=2822 data-nosnippet>2822</a>        <span class="kw">let </span>expected: Vec&lt;i32&gt; = (<span class="number">0</span>..N <span class="kw">as </span>i32).collect();
-<a href=#2823 id=2823 data-nosnippet>2823</a>        <span class="macro">assert_eq!</span>(sorted, expected);
-<a href=#2824 id=2824 data-nosnippet>2824</a>
-<a href=#2825 id=2825 data-nosnippet>2825</a>        <span class="comment">// ---- argsort (indices that would sort) ---------------------------------------
-<a href=#2826 id=2826 data-nosnippet>2826</a>        </span><span class="kw">let </span>idx = a.fast_argsort_asc(<span class="number">0</span>).unwrap().to_vec1::&lt;u32&gt;().unwrap();
-<a href=#2827 id=2827 data-nosnippet>2827</a>        <span class="comment">// Because the input is reversed, the correct indices are likewise reversed
-<a href=#2828 id=2828 data-nosnippet>2828</a>        </span><span class="kw">for </span>(i, <span class="kw-2">&amp;</span>v) <span class="kw">in </span>idx.iter().enumerate() {
-<a href=#2829 id=2829 data-nosnippet>2829</a>            <span class="macro">assert_eq!</span>(v <span class="kw">as </span>usize, N - <span class="number">1 </span>- i);
-<a href=#2830 id=2830 data-nosnippet>2830</a>        }
-<a href=#2831 id=2831 data-nosnippet>2831</a>    }
-<a href=#2832 id=2832 data-nosnippet>2832</a>}</code></pre></div></section></main></body></html>
+<a href=#2693 id=2693 data-nosnippet>2693</a>        <span class="kw">use </span>candle_core::{Device, Tensor};
+<a href=#2694 id=2694 data-nosnippet>2694</a>        <span class="kw">let </span>bits = HqqBits::Eight;
+<a href=#2695 id=2695 data-nosnippet>2695</a>        <span class="kw">let </span>device = Device::new_cuda(<span class="number">0</span>).unwrap();
+<a href=#2696 id=2696 data-nosnippet>2696</a>        <span class="comment">// Use U8 tensor directly to avoid candle's to_dtype which may not have
+<a href=#2697 id=2697 data-nosnippet>2697</a>        // PTX compiled for newer GPU architectures (e.g., SM 120)
+<a href=#2698 id=2698 data-nosnippet>2698</a>        </span><span class="kw">let </span>wq = Tensor::from_vec(<span class="macro">vec!</span>[<span class="number">1_u8</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">255</span>, <span class="number">0</span>], (<span class="number">3</span>, <span class="number">2</span>), <span class="kw-2">&amp;</span>device).unwrap();
+<a href=#2699 id=2699 data-nosnippet>2699</a>        <span class="kw">let </span>c = bits.bitpack_type()(wq.clone())
+<a href=#2700 id=2700 data-nosnippet>2700</a>            .unwrap()
+<a href=#2701 id=2701 data-nosnippet>2701</a>            .to_vec2::&lt;u8&gt;()
+<a href=#2702 id=2702 data-nosnippet>2702</a>            .unwrap();
+<a href=#2703 id=2703 data-nosnippet>2703</a>        <span class="macro">assert_eq!</span>(c, [[<span class="number">1</span>, <span class="number">2</span>], [<span class="number">3</span>, <span class="number">4</span>], [<span class="number">255</span>, <span class="number">0</span>]]);
+<a href=#2704 id=2704 data-nosnippet>2704</a>    }
+<a href=#2705 id=2705 data-nosnippet>2705</a>
+<a href=#2706 id=2706 data-nosnippet>2706</a>    <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
+<a href=#2707 id=2707 data-nosnippet>2707</a>    #[test]
+<a href=#2708 id=2708 data-nosnippet>2708</a>    </span><span class="kw">fn </span>test_bitpack_8bit_metal() {
+<a href=#2709 id=2709 data-nosnippet>2709</a>        <span class="kw">use </span><span class="kw">crate</span>::HqqBits;
+<a href=#2710 id=2710 data-nosnippet>2710</a>        <span class="kw">use </span>candle_core::{Device, Tensor};
+<a href=#2711 id=2711 data-nosnippet>2711</a>        <span class="kw">let </span>bits = HqqBits::Eight;
+<a href=#2712 id=2712 data-nosnippet>2712</a>        <span class="kw">let </span>device = Device::new_metal(<span class="number">0</span>).unwrap();
+<a href=#2713 id=2713 data-nosnippet>2713</a>        <span class="kw">let </span>wq = Tensor::from_vec(<span class="macro">vec!</span>[<span class="number">257_i32</span>, <span class="number">258</span>, <span class="number">259</span>, <span class="number">260</span>, <span class="number">511</span>, <span class="number">512</span>], (<span class="number">3</span>, <span class="number">2</span>), <span class="kw-2">&amp;</span>device).unwrap();
+<a href=#2714 id=2714 data-nosnippet>2714</a>        <span class="kw">let </span>c = bits.bitpack_type()(wq.clone())
+<a href=#2715 id=2715 data-nosnippet>2715</a>            .unwrap()
+<a href=#2716 id=2716 data-nosnippet>2716</a>            .to_vec2::&lt;u8&gt;()
+<a href=#2717 id=2717 data-nosnippet>2717</a>            .unwrap();
+<a href=#2718 id=2718 data-nosnippet>2718</a>        <span class="macro">assert_eq!</span>(c, [[<span class="number">1</span>, <span class="number">2</span>], [<span class="number">3</span>, <span class="number">4</span>], [<span class="number">255</span>, <span class="number">0</span>]]);
+<a href=#2719 id=2719 data-nosnippet>2719</a>    }
+<a href=#2720 id=2720 data-nosnippet>2720</a>
+<a href=#2721 id=2721 data-nosnippet>2721</a>    <span class="attr">#[test]
+<a href=#2722 id=2722 data-nosnippet>2722</a>    </span><span class="kw">fn </span>test_bitpack_4bit() {
+<a href=#2723 id=2723 data-nosnippet>2723</a>        <span class="kw">use </span><span class="kw">crate</span>::HqqBits;
+<a href=#2724 id=2724 data-nosnippet>2724</a>        <span class="kw">use </span>candle_core::{Device, Tensor};
+<a href=#2725 id=2725 data-nosnippet>2725</a>        <span class="kw">let </span>bits = HqqBits::Four;
+<a href=#2726 id=2726 data-nosnippet>2726</a>        <span class="kw">let </span>device = Device::Cpu;
+<a href=#2727 id=2727 data-nosnippet>2727</a>        <span class="kw">let </span>wq = Tensor::from_vec(<span class="macro">vec!</span>[<span class="number">1_u8</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>], (<span class="number">3</span>, <span class="number">2</span>), <span class="kw-2">&amp;</span>device).unwrap();
+<a href=#2728 id=2728 data-nosnippet>2728</a>        <span class="kw">let </span>c = bits.bitpack_type()(wq.clone())
+<a href=#2729 id=2729 data-nosnippet>2729</a>            .unwrap()
+<a href=#2730 id=2730 data-nosnippet>2730</a>            .to_vec2::&lt;u8&gt;()
+<a href=#2731 id=2731 data-nosnippet>2731</a>            .unwrap();
+<a href=#2732 id=2732 data-nosnippet>2732</a>        <span class="macro">assert_eq!</span>(c, [[<span class="number">19</span>, <span class="number">36</span>]]);
+<a href=#2733 id=2733 data-nosnippet>2733</a>    }
+<a href=#2734 id=2734 data-nosnippet>2734</a>
+<a href=#2735 id=2735 data-nosnippet>2735</a>    <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
+<a href=#2736 id=2736 data-nosnippet>2736</a>    #[test]
+<a href=#2737 id=2737 data-nosnippet>2737</a>    </span><span class="kw">fn </span>test_bitpack_4bit_cuda() {
+<a href=#2738 id=2738 data-nosnippet>2738</a>        <span class="kw">use </span><span class="kw">crate</span>::HqqBits;
+<a href=#2739 id=2739 data-nosnippet>2739</a>        <span class="kw">use </span>candle_core::{Device, Tensor};
+<a href=#2740 id=2740 data-nosnippet>2740</a>        <span class="kw">let </span>bits = HqqBits::Four;
+<a href=#2741 id=2741 data-nosnippet>2741</a>        <span class="kw">let </span>device = Device::new_cuda(<span class="number">0</span>).unwrap();
+<a href=#2742 id=2742 data-nosnippet>2742</a>        <span class="kw">let </span>wq = Tensor::from_vec(<span class="macro">vec!</span>[<span class="number">1_u8</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>], (<span class="number">3</span>, <span class="number">2</span>), <span class="kw-2">&amp;</span>device).unwrap();
+<a href=#2743 id=2743 data-nosnippet>2743</a>        <span class="kw">let </span>c = bits.bitpack_type()(wq.clone())
+<a href=#2744 id=2744 data-nosnippet>2744</a>            .unwrap()
+<a href=#2745 id=2745 data-nosnippet>2745</a>            .to_vec2::&lt;u8&gt;()
+<a href=#2746 id=2746 data-nosnippet>2746</a>            .unwrap();
+<a href=#2747 id=2747 data-nosnippet>2747</a>        <span class="macro">assert_eq!</span>(c, [[<span class="number">19</span>, <span class="number">36</span>]]);
+<a href=#2748 id=2748 data-nosnippet>2748</a>    }
+<a href=#2749 id=2749 data-nosnippet>2749</a>
+<a href=#2750 id=2750 data-nosnippet>2750</a>    <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
+<a href=#2751 id=2751 data-nosnippet>2751</a>    #[test]
+<a href=#2752 id=2752 data-nosnippet>2752</a>    </span><span class="kw">fn </span>test_bitpack_4bit_metal() {
+<a href=#2753 id=2753 data-nosnippet>2753</a>        <span class="kw">use </span><span class="kw">crate</span>::HqqBits;
+<a href=#2754 id=2754 data-nosnippet>2754</a>        <span class="kw">use </span>candle_core::{Device, Tensor};
+<a href=#2755 id=2755 data-nosnippet>2755</a>        <span class="kw">let </span>bits = HqqBits::Four;
+<a href=#2756 id=2756 data-nosnippet>2756</a>        <span class="kw">let </span>device = Device::new_metal(<span class="number">0</span>).unwrap();
+<a href=#2757 id=2757 data-nosnippet>2757</a>        <span class="kw">let </span>wq = Tensor::from_vec(<span class="macro">vec!</span>[<span class="number">1_u8</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>], (<span class="number">3</span>, <span class="number">2</span>), <span class="kw-2">&amp;</span>device).unwrap();
+<a href=#2758 id=2758 data-nosnippet>2758</a>        <span class="kw">let </span>c = bits.bitpack_type()(wq.clone())
+<a href=#2759 id=2759 data-nosnippet>2759</a>            .unwrap()
+<a href=#2760 id=2760 data-nosnippet>2760</a>            .to_vec2::&lt;u8&gt;()
+<a href=#2761 id=2761 data-nosnippet>2761</a>            .unwrap();
+<a href=#2762 id=2762 data-nosnippet>2762</a>        <span class="macro">assert_eq!</span>(c, [[<span class="number">19</span>, <span class="number">36</span>]]);
+<a href=#2763 id=2763 data-nosnippet>2763</a>    }
+<a href=#2764 id=2764 data-nosnippet>2764</a>    <span class="comment">// ─────────────────────────────── Sort / ArgSort ────────────────────────────────
+<a href=#2765 id=2765 data-nosnippet>2765</a>    </span><span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
+<a href=#2766 id=2766 data-nosnippet>2766</a>    #[test]
+<a href=#2767 id=2767 data-nosnippet>2767</a>    </span><span class="kw">fn </span>test_sort_and_argsort_vector_metal() {
+<a href=#2768 id=2768 data-nosnippet>2768</a>        <span class="kw">use </span><span class="kw">crate</span>::utils::ops::SortOp;
+<a href=#2769 id=2769 data-nosnippet>2769</a>        <span class="kw">use </span>candle_core::Tensor;
+<a href=#2770 id=2770 data-nosnippet>2770</a>
+<a href=#2771 id=2771 data-nosnippet>2771</a>        <span class="kw">let </span>device = candle_core::Device::new_metal(<span class="number">0</span>).unwrap();
+<a href=#2772 id=2772 data-nosnippet>2772</a>        <span class="kw">let </span>a = Tensor::from_vec(<span class="macro">vec!</span>[<span class="number">3i32</span>, <span class="number">1</span>, <span class="number">4</span>, <span class="number">2</span>], <span class="kw-2">&amp;</span>[<span class="number">4</span>], <span class="kw-2">&amp;</span>device).unwrap();
+<a href=#2773 id=2773 data-nosnippet>2773</a>
+<a href=#2774 id=2774 data-nosnippet>2774</a>        <span class="comment">// sort (ascending)
+<a href=#2775 id=2775 data-nosnippet>2775</a>        </span><span class="kw">let </span>sorted = a.fast_sort_asc(<span class="number">0</span>).unwrap().to_vec1::&lt;i32&gt;().unwrap();
+<a href=#2776 id=2776 data-nosnippet>2776</a>        <span class="macro">assert_eq!</span>(sorted, [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>]);
+<a href=#2777 id=2777 data-nosnippet>2777</a>
+<a href=#2778 id=2778 data-nosnippet>2778</a>        <span class="comment">// argsort (ascending indices)
+<a href=#2779 id=2779 data-nosnippet>2779</a>        </span><span class="kw">let </span>idx = a.fast_argsort_asc(<span class="number">0</span>).unwrap().to_vec1::&lt;u32&gt;().unwrap();
+<a href=#2780 id=2780 data-nosnippet>2780</a>        <span class="macro">assert_eq!</span>(idx, [<span class="number">1</span>, <span class="number">3</span>, <span class="number">0</span>, <span class="number">2</span>]);
+<a href=#2781 id=2781 data-nosnippet>2781</a>    }
+<a href=#2782 id=2782 data-nosnippet>2782</a>
+<a href=#2783 id=2783 data-nosnippet>2783</a>    <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
+<a href=#2784 id=2784 data-nosnippet>2784</a>    #[test]
+<a href=#2785 id=2785 data-nosnippet>2785</a>    </span><span class="kw">fn </span>test_sort_and_argsort_matrix_axis1_metal() {
+<a href=#2786 id=2786 data-nosnippet>2786</a>        <span class="kw">use </span><span class="kw">crate</span>::utils::ops::SortOp;
+<a href=#2787 id=2787 data-nosnippet>2787</a>        <span class="kw">use </span>candle_core::Tensor;
+<a href=#2788 id=2788 data-nosnippet>2788</a>
+<a href=#2789 id=2789 data-nosnippet>2789</a>        <span class="kw">let </span>device = candle_core::Device::new_metal(<span class="number">0</span>).unwrap();
+<a href=#2790 id=2790 data-nosnippet>2790</a>        <span class="comment">// 2 × 3 matrix:
+<a href=#2791 id=2791 data-nosnippet>2791</a>        // [[3, 1, 2],
+<a href=#2792 id=2792 data-nosnippet>2792</a>        //  [0, 4, 5]]
+<a href=#2793 id=2793 data-nosnippet>2793</a>        </span><span class="kw">let </span>a = Tensor::from_vec(<span class="macro">vec!</span>[<span class="number">3i32</span>, <span class="number">1</span>, <span class="number">2</span>, <span class="number">0</span>, <span class="number">4</span>, <span class="number">5</span>], <span class="kw-2">&amp;</span>[<span class="number">2</span>, <span class="number">3</span>], <span class="kw-2">&amp;</span>device).unwrap();
+<a href=#2794 id=2794 data-nosnippet>2794</a>
+<a href=#2795 id=2795 data-nosnippet>2795</a>        <span class="comment">// Sort along axis=1 (second dimension)
+<a href=#2796 id=2796 data-nosnippet>2796</a>        </span><span class="kw">let </span>sorted = a.fast_sort_asc(<span class="number">1</span>).unwrap().to_vec2::&lt;i32&gt;().unwrap();
+<a href=#2797 id=2797 data-nosnippet>2797</a>        <span class="macro">assert_eq!</span>(sorted, [[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>], [<span class="number">0</span>, <span class="number">4</span>, <span class="number">5</span>]]);
+<a href=#2798 id=2798 data-nosnippet>2798</a>
+<a href=#2799 id=2799 data-nosnippet>2799</a>        <span class="comment">// ArgSort indices along axis=1
+<a href=#2800 id=2800 data-nosnippet>2800</a>        </span><span class="kw">let </span>idx = a.fast_argsort_asc(<span class="number">1</span>).unwrap().to_vec2::&lt;u32&gt;().unwrap();
+<a href=#2801 id=2801 data-nosnippet>2801</a>        <span class="macro">assert_eq!</span>(idx, [[<span class="number">1</span>, <span class="number">2</span>, <span class="number">0</span>], [<span class="number">0</span>, <span class="number">1</span>, <span class="number">2</span>]]);
+<a href=#2802 id=2802 data-nosnippet>2802</a>    }
+<a href=#2803 id=2803 data-nosnippet>2803</a>
+<a href=#2804 id=2804 data-nosnippet>2804</a>    <span class="comment">// ─────────────────────────────── 2 048-element vector ────────────────────────────────
+<a href=#2805 id=2805 data-nosnippet>2805</a>    </span><span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
+<a href=#2806 id=2806 data-nosnippet>2806</a>    #[test]
+<a href=#2807 id=2807 data-nosnippet>2807</a>    </span><span class="kw">fn </span>test_sort_and_argsort_vector_2048_metal() {
+<a href=#2808 id=2808 data-nosnippet>2808</a>        <span class="kw">use </span><span class="kw">crate</span>::utils::ops::SortOp;
+<a href=#2809 id=2809 data-nosnippet>2809</a>        <span class="kw">use </span>candle_core::Tensor;
+<a href=#2810 id=2810 data-nosnippet>2810</a>
+<a href=#2811 id=2811 data-nosnippet>2811</a>        <span class="kw">const </span>N: usize = <span class="number">4096</span>;
+<a href=#2812 id=2812 data-nosnippet>2812</a>
+<a href=#2813 id=2813 data-nosnippet>2813</a>        <span class="kw">let </span>device = candle_core::Device::new_metal(<span class="number">0</span>).expect(<span class="string">"Metal device"</span>);
+<a href=#2814 id=2814 data-nosnippet>2814</a>
+<a href=#2815 id=2815 data-nosnippet>2815</a>        <span class="comment">// Create a descending vector [4095, 4094, …, 0]
+<a href=#2816 id=2816 data-nosnippet>2816</a>        </span><span class="kw">let </span>vals: Vec&lt;i32&gt; = (<span class="number">0</span>..N <span class="kw">as </span>i32).rev().collect();
+<a href=#2817 id=2817 data-nosnippet>2817</a>        <span class="kw">let </span>a = Tensor::from_vec(vals.clone(), <span class="kw-2">&amp;</span>[N], <span class="kw-2">&amp;</span>device).unwrap();
+<a href=#2818 id=2818 data-nosnippet>2818</a>
+<a href=#2819 id=2819 data-nosnippet>2819</a>        <span class="comment">// ---- sort (ascending) ---------------------------------------------------------
+<a href=#2820 id=2820 data-nosnippet>2820</a>        </span><span class="kw">let </span>sorted = a.fast_sort_asc(<span class="number">0</span>).unwrap().to_vec1::&lt;i32&gt;().unwrap();
+<a href=#2821 id=2821 data-nosnippet>2821</a>        <span class="kw">let </span>expected: Vec&lt;i32&gt; = (<span class="number">0</span>..N <span class="kw">as </span>i32).collect();
+<a href=#2822 id=2822 data-nosnippet>2822</a>        <span class="macro">assert_eq!</span>(sorted, expected);
+<a href=#2823 id=2823 data-nosnippet>2823</a>
+<a href=#2824 id=2824 data-nosnippet>2824</a>        <span class="comment">// ---- argsort (indices that would sort) ---------------------------------------
+<a href=#2825 id=2825 data-nosnippet>2825</a>        </span><span class="kw">let </span>idx = a.fast_argsort_asc(<span class="number">0</span>).unwrap().to_vec1::&lt;u32&gt;().unwrap();
+<a href=#2826 id=2826 data-nosnippet>2826</a>        <span class="comment">// Because the input is reversed, the correct indices are likewise reversed
+<a href=#2827 id=2827 data-nosnippet>2827</a>        </span><span class="kw">for </span>(i, <span class="kw-2">&amp;</span>v) <span class="kw">in </span>idx.iter().enumerate() {
+<a href=#2828 id=2828 data-nosnippet>2828</a>            <span class="macro">assert_eq!</span>(v <span class="kw">as </span>usize, N - <span class="number">1 </span>- i);
+<a href=#2829 id=2829 data-nosnippet>2829</a>        }
+<a href=#2830 id=2830 data-nosnippet>2830</a>    }
+<a href=#2831 id=2831 data-nosnippet>2831</a>}</code></pre></div></section></main></body></html>
