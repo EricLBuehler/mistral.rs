@@ -349,11 +349,9 @@ impl Mlp {
         if let Some(t) = self.gate_proj.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        let mut current_hidden_states = MatMul
-            .qmethod_matmul(&xs, &*self.gate_proj)?
-            .apply(&self.act_fn)?;
-        let rhs = MatMul.qmethod_matmul(&xs, &*self.up_proj)?;
-        current_hidden_states = current_hidden_states.broadcast_mul(&rhs)?;
+        let gate_out = MatMul.qmethod_matmul(&xs, &*self.gate_proj)?;
+        let up_out = MatMul.qmethod_matmul(&xs, &*self.up_proj)?;
+        let current_hidden_states = crate::ops::mul_and_act(&gate_out, &up_out, self.act_fn)?;
         let mut res = MatMul.qmethod_matmul(&current_hidden_states, &*self.down_proj)?;
         if self.gate_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;

@@ -747,9 +747,7 @@ pub fn mul_and_act(a: &Tensor, b: &Tensor, act: Activation) -> Result<Tensor> {
     if matches!(a.dtype(), DType::F16 | DType::BF16 | DType::F32) && a.dtype() == b.dtype() {
         // Map Activation to GluActivationType
         let glu_act = match act {
-            Activation::Silu | Activation::Swish => {
-                Some(mistralrs_quant::GluActivationType::Silu)
-            }
+            Activation::Silu | Activation::Swish => Some(mistralrs_quant::GluActivationType::Silu),
             Activation::Gelu | Activation::NewGelu | Activation::GeluPytorchTanh => {
                 Some(mistralrs_quant::GluActivationType::Gelu)
             }

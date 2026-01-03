@@ -2165,7 +2165,10 @@ fn fused_glu_cpu_impl(a: &Tensor, b: &Tensor, activation: GluActivationType) -> 
         _ => candle_core::bail!("fused_glu_cpu: unsupported dtype {:?}", dtype),
     };
 
-    Ok(Tensor::from((candle_core::Storage::Cpu(result_storage), shape)))
+    Ok(Tensor::from((
+        candle_core::Storage::Cpu(result_storage),
+        shape,
+    )))
 }
 
 /// CUDA implementation of fused GLU
@@ -2323,7 +2326,10 @@ fn fused_glu_metal(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Res
     .map_err(candle_core::Error::wrap)?;
 
     let newstorage = candle_core::MetalStorage::new(output, device.clone(), n_elements, dtype);
-    Ok(Tensor::from((candle_core::Storage::Metal(newstorage), shape)))
+    Ok(Tensor::from((
+        candle_core::Storage::Metal(newstorage),
+        shape,
+    )))
 }
 
 /// Fused GLU activation: output = activation(a) * b

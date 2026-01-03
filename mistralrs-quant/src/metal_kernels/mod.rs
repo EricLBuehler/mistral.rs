@@ -2636,7 +2636,13 @@ pub fn call_fused_glu(
 
     set_params!(
         encoder,
-        ((a, a_offset), (b, b_offset), output, n_elements as u32, activation)
+        (
+            (a, a_offset),
+            (b, b_offset),
+            output,
+            n_elements as u32,
+            activation
+        )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, n_elements);
