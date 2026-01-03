@@ -21,6 +21,7 @@ pub mod cublaslt;
 pub mod distributed;
 mod dummy;
 mod fp8;
+pub mod gemv;
 mod gguf;
 mod gptq;
 mod hqq;
@@ -73,6 +74,9 @@ pub use utils::isq::apply_immediate_isq;
 pub use utils::softmax_with_sinks;
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
 pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
+pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
+#[cfg(feature = "cuda")]
+pub use gemv::gemv;
 
 use candle_nn::{Conv1d, Conv2d, Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
