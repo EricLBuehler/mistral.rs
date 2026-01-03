@@ -2070,6 +2070,7 @@ fn cpu_silu(x: f32) -> f32 {
 }
 
 fn cpu_gelu(x: f32) -> f32 {
+    #[allow(clippy::excessive_precision)]
     const SQRT_2_OVER_PI: f32 = 0.7978845608;
     const COEFF: f32 = 0.044715;
     let x3 = x * x * x;
