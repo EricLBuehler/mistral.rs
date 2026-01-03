@@ -110,7 +110,7 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
 
 /// Fallback for non-CUDA builds
 #[cfg(not(feature = "cuda"))]
-pub fn should_use_gemv(_x: &Tensor, _w: &Tensor) -> bool {
+pub fn should_use_gemv(_x: &candle_core::Tensor, _w: &candle_core::Tensor) -> bool {
     false
 }
 
