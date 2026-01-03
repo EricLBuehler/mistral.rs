@@ -1,24 +1,21 @@
 //! Custom GEMV (General Matrix-Vector multiplication) for decode-phase inference.
 //!
 //! This module provides an optimized GEMV kernel that replaces cuBLAS for
-//! single-token generation (batch_size=1) scenarios where cuBLAS GEMM
-//! overhead is significant.
+//! small batch sizes (1-8) where cuBLAS GEMM overhead is significant.
 //!
 //! Key optimizations:
 //! - Vectorized loads (half2, nv_bfloat162, float2)
-//! - Loop unrolling with multiple accumulators (4x ILP)
 //! - __ldg() for read-only cache path (L2 cache handles x reuse)
-//! - Warp-level reduction using shuffle intrinsics
+//! - Warp-level reduction using XOR shuffle
 //! - Static shared memory for block-level reduction
-//! - Runtime block size selection
+//! - Supports batch sizes 1-8 efficiently
 
 #[cfg(feature = "cuda")]
 mod ffi;
 
 #[cfg(feature = "cuda")]
 use candle_core::{
-    cuda::cudarc::driver::DevicePtr, CudaDevice, CudaStorage, DType, Result, Shape, Storage,
-    Tensor,
+    cuda::cudarc::driver::DevicePtr, CudaDevice, CudaStorage, DType, Result, Shape, Storage, Tensor,
 };
 
 #[cfg(feature = "cuda")]
@@ -29,6 +26,9 @@ use half::{bf16, f16};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
+
+/// Maximum batch size supported by the GEMV kernel
+pub const MAX_GEMV_BATCH_SIZE: usize = 8;
 
 /// Controller for enabling/disabling custom GEMV kernel.
 pub struct GemvController {
@@ -57,7 +57,7 @@ pub static GEMV_CONTROLLER: LazyLock<GemvController> = LazyLock::new(|| GemvCont
 /// Returns true if:
 /// - GEMV is enabled via controller
 /// - Tensors are on CUDA device
-/// - Input represents single-token (batch_size=1)
+/// - Batch size is 1-8
 /// - Data type is supported (BF16, F16, F32)
 /// - K dimension is even (required for vectorized loads)
 #[cfg(feature = "cuda")]
@@ -72,14 +72,13 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
         return false;
     }
 
-    // Only for batch_size=1 scenarios (single token decode)
-    // x should be [1, K] or [K] for GEMV to be beneficial
+    // Check batch size (1-8 supported)
     let x_dims = x.dims();
-    let n_tokens: usize = x_dims[..x_dims.len().saturating_sub(1)]
+    let batch_size: usize = x_dims[..x_dims.len().saturating_sub(1)]
         .iter()
         .product::<usize>()
         .max(1);
-    if n_tokens > 1 {
+    if batch_size > MAX_GEMV_BATCH_SIZE {
         return false;
     }
 
@@ -115,15 +114,15 @@ pub fn should_use_gemv(_x: &Tensor, _w: &Tensor) -> bool {
     false
 }
 
-/// Execute custom GEMV: y = x @ W^T + bias
+/// Execute custom GEMV: Y = X @ W^T + bias
 ///
 /// # Arguments
-/// * `x` - Input vector tensor [1, K] or [K]
+/// * `x` - Input tensor [B, K] where B is batch size (1-8)
 /// * `w` - Weight matrix tensor [M, K]
 /// * `bias` - Optional bias tensor [M]
 ///
 /// # Returns
-/// * Output tensor [M] or [1, M] (matching input batch dims)
+/// * Output tensor [B, M]
 #[cfg(feature = "cuda")]
 pub fn gemv(x: &Tensor, w: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
     let dev = get_cuda_device(x)?;
@@ -131,16 +130,25 @@ pub fn gemv(x: &Tensor, w: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
     // Get dimensions
     let (m, k) = w.dims2()?;
 
-    // Flatten x to 1D for the kernel
-    let x_flat = x.flatten_all()?;
-    let x_k = x_flat.elem_count();
+    // Calculate batch size from input shape
+    let x_dims = x.dims();
+    let batch_size: usize = x_dims[..x_dims.len().saturating_sub(1)]
+        .iter()
+        .product::<usize>()
+        .max(1);
 
-    if x_k != k {
+    if batch_size > MAX_GEMV_BATCH_SIZE {
         candle_core::bail!(
-            "GEMV dimension mismatch: x has {} elements but W has K={}",
-            x_k,
-            k
+            "GEMV batch size {} exceeds maximum {}",
+            batch_size,
+            MAX_GEMV_BATCH_SIZE
         );
+    }
+
+    // Check K dimension
+    let x_k = x.dim(x.rank() - 1)?;
+    if x_k != k {
+        candle_core::bail!("GEMV dimension mismatch: x has K={} but W has K={}", x_k, k);
     }
 
     // Validate bias if present
@@ -155,7 +163,7 @@ pub fn gemv(x: &Tensor, w: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
         }
     }
 
-    // Allocate output buffer
+    // Output shape matches input batch dims with last dim = M
     let output_shape = {
         let mut shape = x.dims().to_vec();
         *shape.last_mut().unwrap() = m;
@@ -164,9 +172,9 @@ pub fn gemv(x: &Tensor, w: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
 
     // Dispatch based on dtype
     match x.dtype() {
-        DType::BF16 => gemv_bf16(dev, &x_flat, w, bias, m, k, &output_shape),
-        DType::F16 => gemv_f16(dev, &x_flat, w, bias, m, k, &output_shape),
-        DType::F32 => gemv_f32(dev, &x_flat, w, bias, m, k, &output_shape),
+        DType::BF16 => gemv_bf16(dev, x, w, bias, batch_size, m, k, &output_shape),
+        DType::F16 => gemv_f16(dev, x, w, bias, batch_size, m, k, &output_shape),
+        DType::F32 => gemv_f32(dev, x, w, bias, batch_size, m, k, &output_shape),
         dt => candle_core::bail!("GEMV unsupported dtype: {:?}", dt),
     }
 }
@@ -177,21 +185,24 @@ fn gemv_bf16(
     x: &Tensor,
     w: &Tensor,
     bias: Option<&Tensor>,
+    batch_size: usize,
     m: usize,
     k: usize,
     output_shape: &[usize],
 ) -> Result<Tensor> {
-    // Allocate output
-    let y_buf = unsafe { dev.alloc::<bf16>(m)? };
+    // Allocate output: [B, M]
+    let y_buf = unsafe { dev.alloc::<bf16>(batch_size * m)? };
 
-    // Get input pointers
+    // Get weight pointer
     let (w_s, w_l) = w.storage_and_layout();
     let Storage::Cuda(w_s) = &*w_s else {
         candle_core::bail!("Expected CUDA storage for weights");
     };
     let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<bf16>()?, w_l.start_offset());
 
-    let (x_s, x_l) = x.storage_and_layout();
+    // Get input pointer (contiguous)
+    let x_contig = x.contiguous()?;
+    let (x_s, x_l) = x_contig.storage_and_layout();
     let Storage::Cuda(x_s) = &*x_s else {
         candle_core::bail!("Expected CUDA storage for input");
     };
@@ -199,7 +210,7 @@ fn gemv_bf16(
 
     let (y_ptr, y_guard) = y_buf.device_ptr(y_buf.stream());
 
-    // Get bias storage - keep Arc alive
+    // Get bias storage
     let bias_storage = bias.map(|b| b.storage_and_layout());
     let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, ref b_l)) = bias_storage {
         let Storage::Cuda(b_s) = &**b_arc else {
@@ -213,7 +224,6 @@ fn gemv_bf16(
 
     let stream = dev.cuda_stream();
 
-    // Launch kernel
     unsafe {
         ffi::launch_gemv_bf16(
             w_ptr as *const bf16,
@@ -222,6 +232,7 @@ fn gemv_bf16(
             y_ptr as *mut bf16,
             m as i32,
             k as i32,
+            batch_size as i32,
             has_bias,
             stream.cu_stream() as *mut std::ffi::c_void,
         );
@@ -229,7 +240,6 @@ fn gemv_bf16(
 
     drop(y_guard);
 
-    // Wrap output in tensor
     let y_storage = CudaStorage::wrap_cuda_slice(y_buf, dev.clone());
     let y = Tensor::from((Storage::Cuda(y_storage), Shape::from(output_shape)));
 
@@ -242,21 +252,21 @@ fn gemv_f16(
     x: &Tensor,
     w: &Tensor,
     bias: Option<&Tensor>,
+    batch_size: usize,
     m: usize,
     k: usize,
     output_shape: &[usize],
 ) -> Result<Tensor> {
-    // Allocate output
-    let y_buf = unsafe { dev.alloc::<f16>(m)? };
+    let y_buf = unsafe { dev.alloc::<f16>(batch_size * m)? };
 
-    // Get input pointers
     let (w_s, w_l) = w.storage_and_layout();
     let Storage::Cuda(w_s) = &*w_s else {
         candle_core::bail!("Expected CUDA storage for weights");
     };
     let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<f16>()?, w_l.start_offset());
 
-    let (x_s, x_l) = x.storage_and_layout();
+    let x_contig = x.contiguous()?;
+    let (x_s, x_l) = x_contig.storage_and_layout();
     let Storage::Cuda(x_s) = &*x_s else {
         candle_core::bail!("Expected CUDA storage for input");
     };
@@ -264,7 +274,6 @@ fn gemv_f16(
 
     let (y_ptr, y_guard) = y_buf.device_ptr(y_buf.stream());
 
-    // Get bias storage - keep Arc alive
     let bias_storage = bias.map(|b| b.storage_and_layout());
     let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, ref b_l)) = bias_storage {
         let Storage::Cuda(b_s) = &**b_arc else {
@@ -278,7 +287,6 @@ fn gemv_f16(
 
     let stream = dev.cuda_stream();
 
-    // Launch kernel
     unsafe {
         ffi::launch_gemv_f16(
             w_ptr as *const f16,
@@ -287,6 +295,7 @@ fn gemv_f16(
             y_ptr as *mut f16,
             m as i32,
             k as i32,
+            batch_size as i32,
             has_bias,
             stream.cu_stream() as *mut std::ffi::c_void,
         );
@@ -294,7 +303,6 @@ fn gemv_f16(
 
     drop(y_guard);
 
-    // Wrap output in tensor
     let y_storage = CudaStorage::wrap_cuda_slice(y_buf, dev.clone());
     let y = Tensor::from((Storage::Cuda(y_storage), Shape::from(output_shape)));
 
@@ -307,21 +315,21 @@ fn gemv_f32(
     x: &Tensor,
     w: &Tensor,
     bias: Option<&Tensor>,
+    batch_size: usize,
     m: usize,
     k: usize,
     output_shape: &[usize],
 ) -> Result<Tensor> {
-    // Allocate output
-    let y_buf = unsafe { dev.alloc::<f32>(m)? };
+    let y_buf = unsafe { dev.alloc::<f32>(batch_size * m)? };
 
-    // Get input pointers
     let (w_s, w_l) = w.storage_and_layout();
     let Storage::Cuda(w_s) = &*w_s else {
         candle_core::bail!("Expected CUDA storage for weights");
     };
     let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<f32>()?, w_l.start_offset());
 
-    let (x_s, x_l) = x.storage_and_layout();
+    let x_contig = x.contiguous()?;
+    let (x_s, x_l) = x_contig.storage_and_layout();
     let Storage::Cuda(x_s) = &*x_s else {
         candle_core::bail!("Expected CUDA storage for input");
     };
@@ -329,7 +337,6 @@ fn gemv_f32(
 
     let (y_ptr, y_guard) = y_buf.device_ptr(y_buf.stream());
 
-    // Get bias storage - keep Arc alive
     let bias_storage = bias.map(|b| b.storage_and_layout());
     let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, ref b_l)) = bias_storage {
         let Storage::Cuda(b_s) = &**b_arc else {
@@ -343,7 +350,6 @@ fn gemv_f32(
 
     let stream = dev.cuda_stream();
 
-    // Launch kernel
     unsafe {
         ffi::launch_gemv_f32(
             w_ptr as *const f32,
@@ -352,6 +358,7 @@ fn gemv_f32(
             y_ptr as *mut f32,
             m as i32,
             k as i32,
+            batch_size as i32,
             has_bias,
             stream.cu_stream() as *mut std::ffi::c_void,
         );
@@ -359,7 +366,6 @@ fn gemv_f32(
 
     drop(y_guard);
 
-    // Wrap output in tensor
     let y_storage = CudaStorage::wrap_cuda_slice(y_buf, dev.clone());
     let y = Tensor::from((Storage::Cuda(y_storage), Shape::from(output_shape)));
 

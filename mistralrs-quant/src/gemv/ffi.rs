@@ -1,7 +1,8 @@
 //! FFI bindings for custom GEMV CUDA kernels.
 //!
 //! These bindings allow Rust code to call the optimized CUDA kernels
-//! for matrix-vector multiplication during decode-phase inference.
+//! for matrix-vector/matrix multiplication during decode-phase inference.
+//! Supports batch sizes 1-8.
 
 #![allow(dead_code)]
 #![allow(improper_ctypes)]
@@ -11,8 +12,9 @@ use std::ffi::c_void;
 
 extern "C" {
     /// Launch BF16 GEMV kernel
-    /// y = A * x + bias (optional)
-    /// A: [M, K], x: [K], bias: [M] (optional), y: [M]
+    /// Y = X @ A^T + bias (optional)
+    /// A: [M, K], X: [B, K], bias: [M] (optional), Y: [B, M]
+    /// batch_size: 1-8
     pub fn launch_gemv_bf16(
         a: *const bf16,
         x: *const bf16,
@@ -20,6 +22,7 @@ extern "C" {
         y: *mut bf16,
         m: i32,
         k: i32,
+        batch_size: i32,
         has_bias: bool,
         stream: *mut c_void,
     );
@@ -32,6 +35,7 @@ extern "C" {
         y: *mut f16,
         m: i32,
         k: i32,
+        batch_size: i32,
         has_bias: bool,
         stream: *mut c_void,
     );
@@ -44,6 +48,7 @@ extern "C" {
         y: *mut f32,
         m: i32,
         k: i32,
+        batch_size: i32,
         has_bias: bool,
         stream: *mut c_void,
     );
