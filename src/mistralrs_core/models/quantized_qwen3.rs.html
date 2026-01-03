@@ -32,8 +32,8 @@
 <a href=#32 id=32 data-nosnippet>32</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
 <a href=#33 id=33 data-nosnippet>33</a>        <span class="kw">let </span>w1 = MatMul.qmethod_matmul(xs, <span class="kw-2">&amp;*</span><span class="self">self</span>.feed_forward_w1)<span class="question-mark">?</span>;
 <a href=#34 id=34 data-nosnippet>34</a>        <span class="kw">let </span>w3 = MatMul.qmethod_matmul(xs, <span class="kw-2">&amp;*</span><span class="self">self</span>.feed_forward_w3)<span class="question-mark">?</span>;
-<a href=#35 id=35 data-nosnippet>35</a>        <span class="kw">let </span>y = <span class="kw-2">&amp;</span>(candle_nn::ops::silu(<span class="kw-2">&amp;</span>w1)<span class="question-mark">? </span>* w3)<span class="question-mark">?</span>;
-<a href=#36 id=36 data-nosnippet>36</a>        MatMul.qmethod_matmul(y, <span class="kw-2">&amp;*</span><span class="self">self</span>.feed_forward_w2)
+<a href=#35 id=35 data-nosnippet>35</a>        <span class="kw">let </span>y = <span class="kw">crate</span>::ops::mul_and_act(<span class="kw-2">&amp;</span>w1, <span class="kw-2">&amp;</span>w3, <span class="kw">crate</span>::layers::Activation::Silu)<span class="question-mark">?</span>;
+<a href=#36 id=36 data-nosnippet>36</a>        MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>y, <span class="kw-2">&amp;*</span><span class="self">self</span>.feed_forward_w2)
 <a href=#37 id=37 data-nosnippet>37</a>    }
 <a href=#38 id=38 data-nosnippet>38</a>}
 <a href=#39 id=39 data-nosnippet>39</a>
