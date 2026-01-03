@@ -114,6 +114,7 @@ impl Kernels {
         file_system.insert("bitwise.metal", include_str!("bitwise.metal"));
         file_system.insert("blockwise_fp8.metal", include_str!("blockwise_fp8.metal"));
         file_system.insert("bnb_dequantize.metal", include_str!("bnb_dequantize.metal"));
+        file_system.insert("fused_glu.metal", include_str!("fused_glu.metal"));
         file_system.insert("hqq_dequantize.metal", include_str!("hqq_dequantize.metal"));
         file_system.insert("mxfp4.metal", include_str!("mxfp4.metal"));
         file_system.insert("quantized.metal", include_str!("quantized.metal"));
@@ -243,6 +244,7 @@ impl Kernels {
             "bitwise.metal",        // Bitwise operations
             "blockwise_fp8.metal",  // FP8 blockwise operations (includes float8.metal, utils.metal)
             "bnb_dequantize.metal", // BitsAndBytes dequantization (includes utils.metal)
+            "fused_glu.metal",      // Fused GLU operations (activation(a) * b)
             "hqq_dequantize.metal", // HQQ dequantization
             "mxfp4.metal",          // MXFP4 kernels
             "quantized.metal",      // Quantization operations (includes utils.metal)
@@ -2598,5 +2600,52 @@ pub fn call_hqq_pack_1bit(
     };
 
     encoder.dispatch_thread_groups(grid_size, threadgroup_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_fused_glu(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    a: &Buffer,
+    b: &Buffer,
+    a_offset: usize,
+    b_offset: usize,
+    n_elements: usize,
+    activation: i32,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "fused_glu_float",
+        DType::F16 => "fused_glu_half",
+        DType::BF16 => "fused_glu_bfloat",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            (a, a_offset),
+            (b, b_offset),
+            output,
+            n_elements as u32,
+            activation
+        )
+    );
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, n_elements);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }

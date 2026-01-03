@@ -838,3 +838,176 @@ extern "C" void softmax_with_sinks_f32(
     );
     CUDA_CHECK(cudaGetLastError());
 }
+
+// ============================================================================
+// Fused GLU (Gated Linear Unit) kernel: output = activation(a) * b
+// Supports SiLU, GELU (approximate), and ReLU activations
+//
+// This fuses the activation function and element-wise multiplication into
+// a single kernel pass, eliminating intermediate tensor allocation.
+// ============================================================================
+
+// Activation type enum - must match Rust GluActivationType
+enum GluActivation {
+    GLU_SILU = 0,
+    GLU_GELU = 1,
+    GLU_RELU = 2
+};
+
+// SiLU activation: x * sigmoid(x)
+__device__ __forceinline__ float glu_silu(float x) {
+    return x / (1.0f + expf(-x));
+}
+
+// GELU approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+__device__ __forceinline__ float glu_gelu(float x) {
+    const float kSqrt2OverPi = 0.7978845608f;
+    const float kCoeff = 0.044715f;
+    float x3 = x * x * x;
+    float inner = kSqrt2OverPi * (x + kCoeff * x3);
+    return 0.5f * x * (1.0f + tanhf(inner));
+}
+
+// ReLU activation: max(0, x)
+__device__ __forceinline__ float glu_relu(float x) {
+    return fmaxf(x, 0.0f);
+}
+
+__device__ __forceinline__ float apply_glu_activation(float x, int act) {
+    switch (act) {
+        case GLU_SILU: return glu_silu(x);
+        case GLU_GELU: return glu_gelu(x);
+        case GLU_RELU: return glu_relu(x);
+        default: return glu_silu(x);
+    }
+}
+
+// Scalar kernel for general case
+template <typename T>
+__global__ void fused_glu_kernel(
+    const T *__restrict__ a,      // input to activation
+    const T *__restrict__ b,      // multiplier
+    T *__restrict__ output,
+    const uint32_t N,
+    const int activation
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= N) return;
+
+    float a_val = (float)a[idx];
+    float b_val = (float)b[idx];
+    float result = apply_glu_activation(a_val, activation) * b_val;
+    output[idx] = (T)result;
+}
+
+// Vectorized version for 4 elements at a time
+template <typename T, typename T4>
+__global__ void fused_glu_kernel_vec4(
+    const T4 *__restrict__ a,
+    const T4 *__restrict__ b,
+    T4 *__restrict__ output,
+    const uint32_t N4,
+    const int activation
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= N4) return;
+
+    T4 a4 = a[idx];
+    T4 b4 = b[idx];
+    T4 out4;
+
+    float a0 = (float)((T*)&a4)[0];
+    float a1 = (float)((T*)&a4)[1];
+    float a2 = (float)((T*)&a4)[2];
+    float a3 = (float)((T*)&a4)[3];
+
+    float b0 = (float)((T*)&b4)[0];
+    float b1 = (float)((T*)&b4)[1];
+    float b2 = (float)((T*)&b4)[2];
+    float b3 = (float)((T*)&b4)[3];
+
+    ((T*)&out4)[0] = (T)(apply_glu_activation(a0, activation) * b0);
+    ((T*)&out4)[1] = (T)(apply_glu_activation(a1, activation) * b1);
+    ((T*)&out4)[2] = (T)(apply_glu_activation(a2, activation) * b2);
+    ((T*)&out4)[3] = (T)(apply_glu_activation(a3, activation) * b3);
+
+    output[idx] = out4;
+}
+
+extern "C" void fused_glu_f16(
+    const __half *a,
+    const __half *b,
+    __half *output,
+    uint32_t N,
+    int activation,
+    cudaStream_t stream
+) {
+    if (N % 4 == 0) {
+        const int N4 = N / 4;
+        const int nthreads = 256;
+        const int nblocks = (N4 + nthreads - 1) / nthreads;
+        fused_glu_kernel_vec4<__half, uint64_t><<<nblocks, nthreads, 0, stream>>>(
+            (const uint64_t*)a, (const uint64_t*)b, (uint64_t*)output,
+            N4, activation
+        );
+    } else {
+        const int nthreads = 256;
+        const int nblocks = (N + nthreads - 1) / nthreads;
+        fused_glu_kernel<<<nblocks, nthreads, 0, stream>>>(
+            a, b, output, N, activation
+        );
+    }
+    CUDA_CHECK(cudaGetLastError());
+}
+
+extern "C" void fused_glu_bf16(
+    const __nv_bfloat16 *a,
+    const __nv_bfloat16 *b,
+    __nv_bfloat16 *output,
+    uint32_t N,
+    int activation,
+    cudaStream_t stream
+) {
+    if (N % 4 == 0) {
+        const int N4 = N / 4;
+        const int nthreads = 256;
+        const int nblocks = (N4 + nthreads - 1) / nthreads;
+        fused_glu_kernel_vec4<__nv_bfloat16, uint64_t><<<nblocks, nthreads, 0, stream>>>(
+            (const uint64_t*)a, (const uint64_t*)b, (uint64_t*)output,
+            N4, activation
+        );
+    } else {
+        const int nthreads = 256;
+        const int nblocks = (N + nthreads - 1) / nthreads;
+        fused_glu_kernel<<<nblocks, nthreads, 0, stream>>>(
+            a, b, output, N, activation
+        );
+    }
+    CUDA_CHECK(cudaGetLastError());
+}
+
+extern "C" void fused_glu_f32(
+    const float *a,
+    const float *b,
+    float *output,
+    uint32_t N,
+    int activation,
+    cudaStream_t stream
+) {
+    if (N % 4 == 0) {
+        const int N4 = N / 4;
+        const int nthreads = 256;
+        const int nblocks = (N4 + nthreads - 1) / nthreads;
+        fused_glu_kernel_vec4<float, float4><<<nblocks, nthreads, 0, stream>>>(
+            (const float4*)a, (const float4*)b, (float4*)output,
+            N4, activation
+        );
+    } else {
+        const int nthreads = 256;
+        const int nblocks = (N + nthreads - 1) / nthreads;
+        fused_glu_kernel<<<nblocks, nthreads, 0, stream>>>(
+            a, b, output, N, activation
+        );
+    }
+    CUDA_CHECK(cudaGetLastError());
+}

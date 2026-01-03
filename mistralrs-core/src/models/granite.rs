@@ -212,7 +212,8 @@ impl GraniteMlp {
         }
         let projected = MatMul.qmethod_matmul(&x, &*self.input_linear)?;
         let chunks = projected.chunk(2, candle_core::D::Minus1)?;
-        let gated = (candle_nn::ops::silu(&chunks[0])? * &chunks[1])?;
+        let gated =
+            crate::ops::mul_and_act(&chunks[0], &chunks[1], crate::layers::Activation::Silu)?;
         let mut res = MatMul.qmethod_matmul(&gated, &*self.output_linear)?;
         if self.input_linear.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
@@ -454,7 +455,8 @@ impl GraniteMoE {
 
         // Gated activation: silu(first_half) * second_half
         let chunks = hidden.chunk(2, candle_core::D::Minus1)?;
-        let hidden = (candle_nn::ops::silu(&chunks[0])? * &chunks[1])?;
+        let hidden =
+            crate::ops::mul_and_act(&chunks[0], &chunks[1], crate::layers::Activation::Silu)?;
 
         let expert_outputs = self.output_linear.forward(&hidden, &expert_size)?;
         let expert_outputs = expert_outputs.broadcast_mul(&batch_gates.unsqueeze(1)?)?;

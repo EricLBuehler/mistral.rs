@@ -297,9 +297,10 @@ impl Module for BlockSparseTop2MLP {
         if let Some(t) = self.w1.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        let lhs = MatMul.qmethod_matmul(&xs, &*self.w1)?.apply(&self.act_fn)?;
-        let rhs = MatMul.qmethod_matmul(&xs, &*self.w3)?;
-        let mut res = MatMul.qmethod_matmul(&(lhs * rhs)?, &*self.w2)?;
+        let w1_out = MatMul.qmethod_matmul(&xs, &*self.w1)?;
+        let w3_out = MatMul.qmethod_matmul(&xs, &*self.w3)?;
+        let activated = crate::ops::mul_and_act(&w1_out, &w3_out, self.act_fn)?;
+        let mut res = MatMul.qmethod_matmul(&activated, &*self.w2)?;
         if self.w1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
