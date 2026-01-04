@@ -1,4 +1,5 @@
 mod attention;
+mod cache;
 mod config;
 mod decoderlayer;
 // mod model;
