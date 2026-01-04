@@ -5,6 +5,7 @@ pub struct MemoryUsage;
 
 impl MemoryUsage {
     /// Amount of available memory in bytes.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn get_memory_available(&self, device: &Device) -> Result<usize> {
         match device {
             Device::Cpu => {
@@ -14,14 +15,34 @@ impl MemoryUsage {
             }
             #[cfg(feature = "cuda")]
             Device::Cuda(dev) => {
-                use candle_core::cuda::cudarc::driver::result;
+                use candle_core::cuda::cudarc::driver::{result, sys};
                 use candle_core::cuda_backend::WrapErr;
 
                 dev.cuda_stream().context().bind_to_thread().w()?;
 
-                let (free, _total) = result::mem_get_info().w()?;
+                // Check if this is an integrated GPU (unified memory, e.g., NVIDIA GB10)
+                let ordinal = dev.cuda_stream().context().ordinal();
+                let cu_device = result::device::get(ordinal as i32).w()?;
+                let is_integrated = unsafe {
+                    result::device::get_attribute(
+                        cu_device,
+                        sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_INTEGRATED,
+                    )
+                    .map(|v| v != 0)
+                    .unwrap_or(false)
+                };
 
-                Ok(free)
+                if is_integrated {
+                    // For integrated GPUs with unified memory, use system memory
+                    // Apply 3/4 fraction to leave room for OS and other processes
+                    let mut sys = System::new_all();
+                    sys.refresh_cpu();
+                    let avail = usize::try_from(sys.available_memory())?;
+                    Ok((avail * 3) / 4)
+                } else {
+                    let (free, _total) = result::mem_get_info().w()?;
+                    Ok(free)
+                }
             }
             #[cfg(not(feature = "cuda"))]
             Device::Cuda(_) => {
@@ -44,6 +65,7 @@ impl MemoryUsage {
     }
 
     /// Amount of total memory in bytes.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn get_total_memory(&self, device: &Device) -> Result<usize> {
         match device {
             Device::Cpu => {
@@ -53,14 +75,34 @@ impl MemoryUsage {
             }
             #[cfg(feature = "cuda")]
             Device::Cuda(dev) => {
-                use candle_core::cuda::cudarc::driver::result;
+                use candle_core::cuda::cudarc::driver::{result, sys};
                 use candle_core::cuda_backend::WrapErr;
 
                 dev.cuda_stream().context().bind_to_thread().w()?;
 
-                let (_free, total) = result::mem_get_info().w()?;
+                // Check if this is an integrated GPU (unified memory, e.g., NVIDIA GB10)
+                let ordinal = dev.cuda_stream().context().ordinal();
+                let cu_device = result::device::get(ordinal as i32).w()?;
+                let is_integrated = unsafe {
+                    result::device::get_attribute(
+                        cu_device,
+                        sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_INTEGRATED,
+                    )
+                    .map(|v| v != 0)
+                    .unwrap_or(false)
+                };
 
-                Ok(total)
+                if is_integrated {
+                    // For integrated GPUs with unified memory, use system total memory
+                    // Apply 3/4 fraction similar to Metal's approach
+                    let mut sys = System::new_all();
+                    sys.refresh_cpu();
+                    let total = usize::try_from(sys.total_memory())?;
+                    Ok((total * 3) / 4)
+                } else {
+                    let (_free, total) = result::mem_get_info().w()?;
+                    Ok(total)
+                }
             }
             #[cfg(not(feature = "cuda"))]
             Device::Cuda(_) => {
