@@ -5,6 +5,7 @@ pub struct MemoryUsage;
 
 impl MemoryUsage {
     /// Amount of available memory in bytes.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn get_memory_available(&self, device: &Device) -> Result<usize> {
         match device {
             Device::Cpu => {
@@ -64,6 +65,7 @@ impl MemoryUsage {
     }
 
     /// Amount of total memory in bytes.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn get_total_memory(&self, device: &Device) -> Result<usize> {
         match device {
             Device::Cpu => {
