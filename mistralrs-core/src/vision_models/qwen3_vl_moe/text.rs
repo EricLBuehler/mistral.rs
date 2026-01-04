@@ -141,7 +141,7 @@ impl MoeMlp {
         })
     }
 
-    fn forward(&self, xs: &Tensor, is_prefill: bool) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
@@ -162,10 +162,8 @@ impl MoeMlp {
             topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;
         }
 
-        // Forward through experts
-        let ys = self
-            .experts
-            .forward(xs, topk_weights, &topk_ids, is_prefill)?;
+        // Forward through experts (is_prefill determined internally based on seq_len)
+        let ys = self.experts.forward(xs, topk_weights, &topk_ids)?;
 
         ys.reshape((b_size, seq_len, hidden_dim))
     }
@@ -185,10 +183,10 @@ enum MoeOrMlp {
 }
 
 impl MoeOrMlp {
-    fn forward(&self, xs: &Tensor, is_prefill: bool) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::Mlp(m) => m.forward(xs),
-            Self::Moe(m) => m.forward(xs, is_prefill),
+            Self::Moe(m) => m.forward(xs),
         }
     }
 }
@@ -500,10 +498,7 @@ impl DecoderLayer {
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let xs = self.mlp.forward(
-            &xs.apply(&self.post_attention_layernorm)?,
-            flash_params.causal,
-        )?;
+        let xs = self.mlp.forward(&xs.apply(&self.post_attention_layernorm)?)?;
         residual + xs
     }
 }

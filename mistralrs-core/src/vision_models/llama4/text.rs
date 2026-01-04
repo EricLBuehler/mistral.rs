@@ -356,7 +356,7 @@ impl TextMoe {
         })
     }
 
-    fn forward(&self, xs: &Tensor, is_prefill: bool) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (bs, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
         let router_logits = self.router.forward_autocast(&xs_flat)?;
@@ -369,10 +369,10 @@ impl TextMoe {
         let router_scores = candle_nn::ops::sigmoid(&router_top_value.to_dtype(DType::F32)?)?
             .to_dtype(router_top_value.dtype())?;
 
-        // Forward through routed experts
+        // Forward through routed experts (is_prefill determined internally)
         let routed_out = self
             .experts
-            .forward(xs, router_scores, &router_indices, is_prefill)?
+            .forward(xs, router_scores, &router_indices)?
             .reshape((bs, seq_len, hidden_dim))?;
 
         // Forward through shared expert and add
@@ -388,10 +388,10 @@ enum MoeOrMlp {
 }
 
 impl MoeOrMlp {
-    fn forward(&self, xs: &Tensor, is_prefill: bool) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::Mlp(l) => l.forward(xs),
-            Self::Moe(l) => l.forward(xs, is_prefill),
+            Self::Moe(l) => l.forward(xs),
         }
     }
 }
@@ -502,10 +502,7 @@ impl Block {
             flash_params,
         )? + residual)?;
         let residual = &x;
-        let x = (self
-            .ff
-            .forward(&self.rms_2.forward(&x)?, flash_params.causal)?
-            + residual)?;
+        let x = (self.ff.forward(&self.rms_2.forward(&x)?)? + residual)?;
         Ok(x)
     }
 }
