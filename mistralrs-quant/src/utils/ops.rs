@@ -2306,15 +2306,15 @@ fn fused_glu_metal(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Res
     };
 
     let device = a_metal.device();
-    let command_buffer = device.command_buffer()?;
-    command_buffer.set_label("fused-glu");
+    let encoder = device.command_encoder()?;
+    encoder.set_label("fused-glu");
 
     let output = device.new_buffer(n_elements, dtype, "fused-glu-output")?;
 
     crate::metal_kernels::call_fused_glu(
         device.device(),
-        &command_buffer,
-        device.kernels(),
+        &encoder,
+        &crate::metal_kernels::Kernels::new(),
         dtype,
         a_metal.buffer(),
         b_metal.buffer(),
