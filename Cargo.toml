@@ -74,12 +74,11 @@ image = { version = "0.25.6", default-features = false, features = [
     'tiff',
     'webp',
 ] }
-reqwest = { version = "0.12.19", default-features = false, features = [
+reqwest = { version = "0.13.1", default-features = false, features = [
     "blocking",
-    "rustls-tls",
+    "rustls",
     "charset",
     "http2",
-    "macos-system-configuration",
 ] }
 base64 = "0.22.1"
 half = "2.6.0"
