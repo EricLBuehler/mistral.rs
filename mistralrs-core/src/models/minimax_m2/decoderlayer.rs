@@ -8,7 +8,7 @@ use crate::{
     kv_cache::KvCache,
     layers::{RmsNorm, RotaryEmbedding},
     models::{
-        minimax_m2::{attention::FullOrLinearAttention, Config},
+        minimax_m2::{attention::FullOrLinearAttention, cache::MinimaxCache, Config},
         mixtral::SparseMoeBlock,
     },
     paged_attention::PagedAttention,
@@ -75,6 +75,7 @@ impl DecoderLayer {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
+        lin_att_cache: &mut MinimaxCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -85,6 +86,7 @@ impl DecoderLayer {
             attention_mask,
             seqlen_offsets,
             kv_cache,
+            lin_att_cache,
             metadata,
             flash_params,
         )?;

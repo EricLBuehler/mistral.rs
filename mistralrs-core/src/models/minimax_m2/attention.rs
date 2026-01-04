@@ -1,9 +1,12 @@
 use std::sync::Arc;
 
 use super::config::Config;
-use crate::{layers::Activation, models::mixtral::Attention as MixtralAttention};
-use candle_core::{Result, Tensor};
-use candle_nn::Module;
+use crate::{
+    layers::{Activation, RmsNorm},
+    models::{minimax_m2::cache::MinimaxCache, mixtral::Attention as MixtralAttention},
+};
+use candle_core::{Result, Tensor, D};
+use candle_nn::{ops::sigmoid, Module};
 use mistralrs_quant::{ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder};
 
 use crate::{
@@ -23,10 +26,14 @@ pub(crate) struct LinearAttention {
     rotary_emb: Arc<RotaryEmbedding>,
     activation: Activation,
 
-    slopte_rate: Arc<Tensor>,
-    q_decay: Arc<Tensor>,
-    k_decay: Arc<Tensor>,
-    diagonal_decay: Arc<Tensor>,
+    slope_rate: Tensor,
+    q_decay: Tensor,
+    k_decay: Tensor,
+    diagonal_decay: Tensor,
+
+    layer: usize,
+    block_size: usize,
+    norm: RmsNorm,
 }
 
 impl LinearAttention {
@@ -123,6 +130,7 @@ impl LinearAttention {
         let (q_decay, k_decay, diagonal_decay) =
             Self::decay_factors(&slope_rate, cfg.block_size, vb.pp("decay_factors"))?;
 
+        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("norm"))?;
         Ok(Self {
             qkv_proj,
             o_proj,
@@ -131,11 +139,14 @@ impl LinearAttention {
             num_kv_heads,
             head_dim,
             rotary_emb,
-            slopte_rate: Arc::new(slope_rate),
-            q_decay: Arc::new(q_decay),
-            k_decay: Arc::new(k_decay),
-            diagonal_decay: Arc::new(diagonal_decay),
+            slope_rate,
+            q_decay: q_decay,
+            k_decay: k_decay,
+            diagonal_decay: diagonal_decay,
             activation: cfg.hidden_act.clone(),
+            layer,
+            block_size: cfg.block_size,
+            norm,
         })
     }
 
@@ -146,12 +157,13 @@ impl LinearAttention {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
+        lin_att_cache: &mut MinimaxCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (batch_sz, seq_len, _) = xs.dims3()?;
+        let num_blocks = seq_len + self.block_size - 1;
 
-        let original_dtype = xs.dtype();
         let mut xs = xs.clone();
         if let Some(t) = self.qkv_proj.quantized_act_type() {
             xs = xs.to_dtype(t)?;
@@ -163,11 +175,87 @@ impl LinearAttention {
 
         // Split into Q, K, V
         let qkv_split = qkv_states.chunk(self.head_dim, 3)?;
-        let mut query_states = qkv_split[0].transpose(1, 2)?; // [batch, num_heads, seq_len, head_dim]
-        let mut key_states = qkv_split[1].transpose(1, 2)?;
-        let mut value_states = qkv_split[2].transpose(1, 2)?;
+        let query_states = qkv_split[0].transpose(1, 2)?; // [batch, num_heads, seq_len, head_dim]
+        let key_states = qkv_split[1].transpose(1, 2)?;
+        let value_states = qkv_split[2].transpose(1, 2)?;
 
-        unimplemented!()
+        let mut attn_output = Vec::with_capacity(seq_len);
+        let cache_entry = lin_att_cache.get_linear(self.layer);
+        if let Some(weights) = cache_entry {
+            let ratio = self.slope_rate.neg()?.exp()?;
+            let mut attn_weights_inter = weights;
+            for i in 0..seq_len {
+                let current_query_states = query_states.narrow(D::Minus1, i, 1)?;
+                let current_key_states = key_states.narrow(D::Minus1, i, 1)?;
+                let current_value_states = value_states.narrow(D::Minus1, i, 1)?;
+
+                let current_attn_weights_inter = current_key_states
+                    .transpose(D::Minus1, D::Minus2)?
+                    .matmul(&current_value_states)?;
+                attn_weights_inter = ((&ratio * attn_weights_inter)? + current_attn_weights_inter)?;
+                let current_att_output = current_query_states.matmul(&attn_weights_inter)?;
+                attn_output.push(current_att_output);
+            }
+            lin_att_cache.set_linear(self.layer, attn_weights_inter);
+        } else {
+            let mut attn_weights_inter = Tensor::zeros(
+                (batch_sz, self.num_heads, self.head_dim, self.head_dim),
+                value_states.dtype(),
+                value_states.device(),
+            )?;
+            let value_states = if let Some(mask) = attention_mask {
+                mask.where_cond(&value_states, &value_states.zeros_like()?)?
+            } else {
+                value_states
+            };
+
+            for i in 0..num_blocks {
+                let start_idx = i * self.block_size;
+                let end_idx = (start_idx + self.block_size).max(seq_len);
+                let current_block_size = end_idx - start_idx;
+
+                let current_query_states = query_states.narrow(2, start_idx, end_idx)?;
+                let current_key_states = key_states.narrow(2, start_idx, end_idx)?;
+                let current_value_states = value_states.narrow(2, start_idx, end_idx)?;
+
+                let current_query_decay = self.q_decay.narrow(D::Minus1, 0, current_block_size)?;
+                let current_key_decay = self.k_decay.narrow(D::Minus1, 0, current_block_size)?;
+                let current_diagonal_decay = self
+                    .diagonal_decay
+                    .narrow(D::Minus1, 0, current_block_size)?
+                    .narrow(D::Minus2, 0, current_block_size)?;
+
+                let block_decay = (self.slope_rate.neg()? * current_block_size as f64)?.exp()?;
+
+                let att_weights_intra = current_key_states
+                    .matmul(current_key_states.transpose(D::Minus1, D::Minus2)?.as_ref())?;
+                let attn_output_intra =
+                    (att_weights_intra * current_diagonal_decay)?.matmul(&current_value_states)?;
+
+                let attn_output_inter =
+                    (current_query_states * current_query_decay)?.matmul(&attn_weights_inter)?;
+
+                let current_attn_output = (attn_output_inter + attn_output_intra)?;
+                attn_output.push(current_attn_output);
+
+                let next_attn_weights_inter = (current_key_states * current_key_decay)?
+                    .transpose(D::Minus1, D::Minus2)?
+                    .matmul(&current_value_states)?;
+
+                attn_weights_inter =
+                    ((attn_weights_inter * block_decay)? + next_attn_weights_inter)?;
+            }
+            lin_att_cache.set_linear(self.layer, attn_weights_inter);
+        }
+
+        let attn_output = Tensor::cat(&attn_output, D::Minus2)?
+            .transpose(1, 2)?
+            .reshape((batch_sz, seq_len, self.num_heads * self.head_dim))?;
+        let attn_output = self.norm.forward(&attn_output)?;
+        let attn_output = (sigmoid(&self.o_gate.forward(&xs)?)? * attn_output)?;
+        let attn_output = self.o_proj.forward(&attn_output)?;
+
+        Ok(attn_output)
     }
 }
 
@@ -216,6 +304,7 @@ impl FullOrLinearAttention {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
+        lin_att_cache: &mut MinimaxCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -233,6 +322,7 @@ impl FullOrLinearAttention {
                 attention_mask,
                 seqlen_offsets,
                 kv_cache,
+                lin_att_cache,
                 metadata,
                 flash_params,
             ),
