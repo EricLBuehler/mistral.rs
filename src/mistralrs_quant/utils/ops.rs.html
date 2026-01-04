@@ -2306,15 +2306,15 @@
 <a href=#2306 id=2306 data-nosnippet>2306</a>    };
 <a href=#2307 id=2307 data-nosnippet>2307</a>
 <a href=#2308 id=2308 data-nosnippet>2308</a>    <span class="kw">let </span>device = a_metal.device();
-<a href=#2309 id=2309 data-nosnippet>2309</a>    <span class="kw">let </span>command_buffer = device.command_buffer()<span class="question-mark">?</span>;
-<a href=#2310 id=2310 data-nosnippet>2310</a>    command_buffer.set_label(<span class="string">"fused-glu"</span>);
+<a href=#2309 id=2309 data-nosnippet>2309</a>    <span class="kw">let </span>encoder = device.command_encoder()<span class="question-mark">?</span>;
+<a href=#2310 id=2310 data-nosnippet>2310</a>    encoder.set_label(<span class="string">"fused-glu"</span>);
 <a href=#2311 id=2311 data-nosnippet>2311</a>
 <a href=#2312 id=2312 data-nosnippet>2312</a>    <span class="kw">let </span>output = device.new_buffer(n_elements, dtype, <span class="string">"fused-glu-output"</span>)<span class="question-mark">?</span>;
 <a href=#2313 id=2313 data-nosnippet>2313</a>
 <a href=#2314 id=2314 data-nosnippet>2314</a>    <span class="kw">crate</span>::metal_kernels::call_fused_glu(
 <a href=#2315 id=2315 data-nosnippet>2315</a>        device.device(),
-<a href=#2316 id=2316 data-nosnippet>2316</a>        <span class="kw-2">&amp;</span>command_buffer,
-<a href=#2317 id=2317 data-nosnippet>2317</a>        device.kernels(),
+<a href=#2316 id=2316 data-nosnippet>2316</a>        <span class="kw-2">&amp;</span>encoder,
+<a href=#2317 id=2317 data-nosnippet>2317</a>        <span class="kw-2">&amp;</span><span class="kw">crate</span>::metal_kernels::Kernels::new(),
 <a href=#2318 id=2318 data-nosnippet>2318</a>        dtype,
 <a href=#2319 id=2319 data-nosnippet>2319</a>        a_metal.buffer(),
 <a href=#2320 id=2320 data-nosnippet>2320</a>        b_metal.buffer(),
