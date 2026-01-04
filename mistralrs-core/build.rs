@@ -11,6 +11,7 @@ fn main() {
             "src/cuda/sort.cu",
             "src/cuda/moe_gemm.cu",
             "src/cuda/moe_gemm_wmma.cu",
+            "src/cuda/moe_gemv.cu",
         ];
         for lib_file in lib_files.iter() {
             println!("cargo:rerun-if-changed={lib_file}");
