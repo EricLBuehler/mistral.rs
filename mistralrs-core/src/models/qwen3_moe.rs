@@ -548,7 +548,9 @@ impl DecoderLayer {
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let xs = self.mlp.forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        let xs = self
+            .mlp
+            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
         residual + xs
     }
 }

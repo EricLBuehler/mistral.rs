@@ -338,12 +338,7 @@ impl MoEExperts {
     ///
     /// # Returns
     /// Output tensor of shape [batch, seq_len, hidden_dim]
-    pub fn forward(
-        &self,
-        xs: &Tensor,
-        topk_weights: Tensor,
-        topk_ids: &Tensor,
-    ) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor, topk_weights: Tensor, topk_ids: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         // Prefill = processing multiple tokens; Decode = single token generation
         let is_prefill = seq_len > 1;
