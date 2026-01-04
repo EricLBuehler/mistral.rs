@@ -1,4 +1,5 @@
 #include <metal_stdlib>
+#include "utils.metal"
 using namespace metal;
 
 // Activation types matching Rust GluActivationType enum
