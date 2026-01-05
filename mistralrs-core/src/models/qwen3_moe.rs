@@ -349,11 +349,9 @@ impl Mlp {
         if let Some(t) = self.gate_proj.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        let mut current_hidden_states = MatMul
-            .qmethod_matmul(&xs, &*self.gate_proj)?
-            .apply(&self.act_fn)?;
-        let rhs = MatMul.qmethod_matmul(&xs, &*self.up_proj)?;
-        current_hidden_states = current_hidden_states.broadcast_mul(&rhs)?;
+        let gate_out = MatMul.qmethod_matmul(&xs, &*self.gate_proj)?;
+        let up_out = MatMul.qmethod_matmul(&xs, &*self.up_proj)?;
+        let current_hidden_states = crate::ops::mul_and_act(&gate_out, &up_out, self.act_fn)?;
         let mut res = MatMul.qmethod_matmul(&current_hidden_states, &*self.down_proj)?;
         if self.gate_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
@@ -411,7 +409,7 @@ impl MoeMlp {
         })
     }
 
-    fn forward(&self, xs: &Tensor, is_prefill: bool) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
@@ -432,10 +430,8 @@ impl MoeMlp {
             topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;
         }
 
-        // Forward through experts
-        let ys = self
-            .experts
-            .forward(xs, topk_weights, &topk_ids, is_prefill)?;
+        // Forward through experts (is_prefill determined internally based on seq_len)
+        let ys = self.experts.forward(xs, topk_weights, &topk_ids)?;
 
         ys.reshape((b_size, seq_len, hidden_dim))
     }
@@ -455,10 +451,10 @@ enum MoeOrMlp {
 }
 
 impl MoeOrMlp {
-    fn forward(&self, xs: &Tensor, is_prefill: bool) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::Mlp(m) => m.forward(xs),
-            Self::Moe(m) => m.forward(xs, is_prefill),
+            Self::Moe(m) => m.forward(xs),
         }
     }
 }
@@ -552,10 +548,9 @@ impl DecoderLayer {
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let xs = self.mlp.forward(
-            &xs.apply(&self.post_attention_layernorm)?,
-            flash_params.causal,
-        )?;
+        let xs = self
+            .mlp
+            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
         residual + xs
     }
 }

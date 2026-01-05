@@ -32,8 +32,8 @@ impl Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let w1 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w1)?;
         let w3 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w3)?;
-        let y = &(candle_nn::ops::silu(&w1)? * w3)?;
-        MatMul.qmethod_matmul(y, &*self.feed_forward_w2)
+        let y = crate::ops::mul_and_act(&w1, &w3, crate::layers::Activation::Silu)?;
+        MatMul.qmethod_matmul(&y, &*self.feed_forward_w2)
     }
 }
 

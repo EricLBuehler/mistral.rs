@@ -295,7 +295,7 @@ impl MlpLayer for Mlp {
         let up_states = MatMul.qmethod_matmul(&xs, &*self.gate_up_proj)?;
         let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
         let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
-        let up_states = (up_states * gate.apply(&self.act_fn))?;
+        let up_states = crate::ops::mul_and_act(&gate, &up_states, self.act_fn)?;
         let mut res = MatMul.qmethod_matmul(&up_states, &*self.down_proj)?;
         if self.gate_up_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
