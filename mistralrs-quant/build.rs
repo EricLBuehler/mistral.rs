@@ -214,6 +214,7 @@ fn main() -> Result<(), String> {
             "kernels/afq/afq_gemm.cu",
             "kernels/mxfp4/mxfp4_gemm.cu", // MXFP4 works on all compute caps
             "kernels/gemv/gemv.cu",        // Custom GEMV for decode-phase inference
+            "kernels/indexed_moe/indexed_moe.cu", // Indexed MoE forward for GGUF quantized weights
         ];
         if cc_over_800 {
             lib_files.push("kernels/marlin/marlin_matmul_f16.cu");

@@ -1,3 +1,10 @@
+#[cfg(not(feature = "cuda"))]
+mod cpu;
+#[cfg(feature = "cuda")]
+mod cuda;
+#[cfg(feature = "cuda")]
+mod ffi;
+
 use std::{
     borrow::Cow,
     io::{Cursor, Read},
@@ -63,12 +70,18 @@ impl QuantMethod for GgufMatMul {
     /// If `a` is (n_tokens, 1, cols), `self` weights are (n_experts, rows, cols),
     /// then the indices are (n_tokens, n_experts_per_tok).
     fn gather_forward(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        // Use QMatMul::indexed_moe_forward for efficient indexed matmul on CUDA
+        // Use indexed_moe_forward for efficient indexed matmul
         // Expected shapes:
         // - x: (n_tokens, 1, hidden_dim) or (n_tokens, n_experts_per_tok, hidden_dim)
         // - indices: (n_tokens, n_experts_per_tok)
         // - weights (self): (n_experts, out_features, in_features)
-        let res = self.w.indexed_moe_forward(x, indices)?;
+        #[cfg(feature = "cuda")]
+        let res = cuda::qmatmul_indexed_moe_forward(&self.w, x, indices)?;
+
+        // For CPU and Metal: use dequantize-then-matmul approach
+        #[cfg(not(feature = "cuda"))]
+        let res = cpu::cpu_indexed_moe_forward(&self.w, x, indices)?;
+
         if let Some(ref b) = self.b {
             res.broadcast_add(b)
         } else {
