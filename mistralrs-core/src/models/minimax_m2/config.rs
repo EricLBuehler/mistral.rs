@@ -37,6 +37,7 @@ pub struct Config {
     pub(crate) block_size: usize,
     #[serde(default = "hidden_act")]
     pub(crate) hidden_act: Activation,
+    pub(crate) sliding_window: Option<usize>,
 }
 
 impl Config {

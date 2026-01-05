@@ -51,10 +51,10 @@ pub struct Config {
 }
 
 pub(crate) struct Attention {
-    q_proj: Arc<dyn QuantMethod>,
-    k_proj: Arc<dyn QuantMethod>,
-    v_proj: Arc<dyn QuantMethod>,
-    o_proj: Arc<dyn QuantMethod>,
+    pub(crate) q_proj: Arc<dyn QuantMethod>,
+    pub(crate) k_proj: Arc<dyn QuantMethod>,
+    pub(crate) v_proj: Arc<dyn QuantMethod>,
+    pub(crate) o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -246,11 +246,11 @@ impl Attention {
 }
 
 #[derive(Clone)]
-struct BlockSparseTop2MLP {
-    w1: Arc<dyn QuantMethod>,
-    w2: Arc<dyn QuantMethod>,
-    w3: Arc<dyn QuantMethod>,
-    act_fn: Activation,
+pub(crate) struct BlockSparseTop2MLP {
+    pub(crate) w1: Arc<dyn QuantMethod>,
+    pub(crate) w2: Arc<dyn QuantMethod>,
+    pub(crate) w3: Arc<dyn QuantMethod>,
+    pub(crate) act_fn: Activation,
 }
 
 impl BlockSparseTop2MLP {
@@ -310,9 +310,9 @@ impl Module for BlockSparseTop2MLP {
 
 #[derive(Clone)]
 pub(crate) struct SparseMoeBlock {
-    gate: Arc<dyn QuantMethod>,
-    experts: Vec<BlockSparseTop2MLP>,
-    num_experts_per_tok: usize,
+    pub(crate) gate: Arc<dyn QuantMethod>,
+    pub(crate) experts: Vec<BlockSparseTop2MLP>,
+    pub(crate) num_experts_per_tok: usize,
 }
 
 impl SparseMoeBlock {
