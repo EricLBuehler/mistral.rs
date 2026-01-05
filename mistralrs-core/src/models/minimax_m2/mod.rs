@@ -2,8 +2,8 @@ mod attention;
 mod cache;
 mod config;
 mod decoderlayer;
-// mod model;
-// mod moe;
+mod model;
 
 pub(crate) use config::Config;
-// pub(crate) use model::Model;
+pub(crate) use decoderlayer::DecoderLayer;
+pub(crate) use model::Model;

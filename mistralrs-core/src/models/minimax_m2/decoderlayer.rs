@@ -16,17 +16,17 @@ use crate::{
 };
 use candle_core::{Result, Tensor};
 
-struct DecoderLayer {
-    self_attn: FullOrLinearAttention,
-    moe: super::super::mixtral::SparseMoeBlock,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
+pub struct DecoderLayer {
+    pub(crate) self_attn: FullOrLinearAttention,
+    pub(crate) moe: super::super::mixtral::SparseMoeBlock,
+    pub(crate) input_layernorm: RmsNorm,
+    pub(crate) post_attention_layernorm: RmsNorm,
     //fixme layer cache for lin attenation
 }
 
 impl DecoderLayer {
     #[allow(clippy::too_many_arguments)]
-    fn new(
+    pub fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
         vb: ShardedVarBuilder,
@@ -69,7 +69,7 @@ impl DecoderLayer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn forward(
+    pub fn forward(
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,

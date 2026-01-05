@@ -17,9 +17,9 @@ use crate::{
 };
 
 pub(crate) struct LinearAttention {
-    qkv_proj: Arc<dyn QuantMethod>,
-    o_proj: Arc<dyn QuantMethod>,
-    o_gate: Arc<dyn QuantMethod>,
+    pub(crate) qkv_proj: Arc<dyn QuantMethod>,
+    pub(crate) o_proj: Arc<dyn QuantMethod>,
+    pub(crate) o_gate: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -219,7 +219,11 @@ impl LinearAttention {
                 let current_value_states = value_states.narrow(2, start_idx, end_idx)?;
 
                 let current_query_decay = self.q_decay.narrow(D::Minus1, 0, current_block_size)?;
-                let current_key_decay = self.k_decay.narrow(D::Minus1, 0, current_block_size)?;
+                let current_key_decay = self.k_decay.narrow(
+                    D::Minus1,
+                    self.block_size - current_block_size,
+                    current_block_size,
+                )?;
                 let current_diagonal_decay = self
                     .diagonal_decay
                     .narrow(D::Minus1, 0, current_block_size)?
@@ -227,7 +231,7 @@ impl LinearAttention {
 
                 let block_decay = (self.slope_rate.neg()? * current_block_size as f64)?.exp()?;
 
-                let att_weights_intra = current_key_states
+                let att_weights_intra = current_query_states
                     .matmul(current_key_states.transpose(D::Minus1, D::Minus2)?.as_ref())?;
                 let attn_output_intra =
                     (att_weights_intra * current_diagonal_decay)?.matmul(&current_value_states)?;
@@ -326,6 +330,35 @@ impl FullOrLinearAttention {
                 metadata,
                 flash_params,
             ),
+        }
+    }
+
+    pub(crate) fn populate_isq_tensors<'a>(
+        &'a mut self,
+        tensors: &mut Vec<(&'a mut Arc<dyn QuantMethod>, Option<usize>)>,
+        index: usize,
+    ) {
+        match self {
+            FullOrLinearAttention::Full(f) => {
+                // Use a temporary mutable reference to avoid lifetime issues
+                let q_proj = &mut f.q_proj;
+                let k_proj = &mut f.k_proj;
+                let v_proj = &mut f.v_proj;
+                let o_proj = &mut f.o_proj;
+                tensors.push((q_proj, Some(index)));
+                tensors.push((k_proj, Some(index)));
+                tensors.push((v_proj, Some(index)));
+                tensors.push((o_proj, Some(index)));
+            }
+            FullOrLinearAttention::Linear(l) => {
+                // Use a temporary mutable reference to avoid lifetime issues
+                let qkv_proj = &mut l.qkv_proj;
+                let o_gate = &mut l.o_gate;
+                let o_proj = &mut l.o_proj;
+                tensors.push((qkv_proj, Some(index)));
+                tensors.push((o_gate, Some(index)));
+                tensors.push((o_proj, Some(index)));
+            }
         }
     }
 }

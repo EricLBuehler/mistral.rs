@@ -4234,14 +4234,13 @@ impl NormalModelLoader for MinimaxM2Loader {
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         let cfg: crate::models::minimax_m2::Config = serde_json::from_str(config)?;
 
-        unimplemented!()
-        // Ok(Box::new(models::minimax_m2::Model::new(
-        //     &cfg,
-        //     vb,
-        //     self.is_gptx(config)?,
-        //     normal_loading_metadata,
-        //     attention_mechanism,
-        // )?))
+        Ok(Box::new(models::minimax_m2::Model::new(
+            &cfg,
+            vb,
+            self.is_gptx(config)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
     }
     fn load_xlora(
         &self,
@@ -4267,63 +4266,26 @@ impl NormalModelLoader for MinimaxM2Loader {
     fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
         Ok(true)
     }
-
-    fn get_device_for_tensor(
-        &self,
-        config: &str,
-        _mapper: &dyn DeviceMapper,
-        loading_isq: bool,
-    ) -> Result<Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>> {
-        // if loading_isq {
-        //     Ok(Arc::new(|_| DeviceForLoadTensor::Base))
-        // } else {
-        //     let re = Regex::new(r"\.layers\.(\d+)\.").unwrap();
-        //     let num_layers = self.model_config(config)?.num_layers();
-        //     let closure = move |name: String| {
-        //         if let Some(captures) = re.captures(&name) {
-        //             captures
-        //                 .get(1)
-        //                 .and_then(|m| m.as_str().parse::<usize>().ok())
-        //                 .map(|l| l.min(num_layers))
-        //                 .map(DeviceForLoadTensor::Idx)
-        //                 .unwrap_or(DeviceForLoadTensor::Base)
-        //         } else {
-        //             DeviceForLoadTensor::Base
-        //         }
-        //     };
-
-        //     Ok(Arc::new(closure))
-        // }
-        unimplemented!()
-    }
 }
 
-//fixme chl
 impl IsqModelLoader for MinimaxM2Loader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
-        unimplemented!()
-        // Ok(vec![
-        //     Regex::new(r"lm_head\.(weight|bias)$")?,
-        //     // Attention
-        //     Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
-        //     Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
-        //     Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-        //     Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
-        //     // MLP
-        //     Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
-        //     Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
-        //     Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
-        //     // MLP MoE
-        //     Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$")?,
-        //     Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$")?,
-        //     Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$")?,
-        // ])
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // Experts
+            Regex::new(r"layers\.(\d+)\.block_sparse_moe\.gate\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w1\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$")?,
+        ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes(config)
-    }
-    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
-        self.isq_layer_regexes_moqe(config)
     }
 }
 
@@ -4333,14 +4295,28 @@ impl DeviceMappedModelLoader for MinimaxM2Loader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        unimplemented!()
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
+
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
     }
     fn non_mapped_max_act_size_elems(
         &self,
         _config: &str,
         _params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        unimplemented!()
+        Ok(0)
     }
 
     fn non_mapped_size_in_bytes(
@@ -4350,7 +4326,20 @@ impl DeviceMappedModelLoader for MinimaxM2Loader {
         weight_pack_factor: usize,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
-        unimplemented!()
+        let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
+
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
     }
 
     fn layer_sizes_in_bytes(
@@ -4360,13 +4349,64 @@ impl DeviceMappedModelLoader for MinimaxM2Loader {
         weight_pack_factor: usize,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<Vec<usize>> {
-        unimplemented!()
+        let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
+
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
+            let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+            let q_proj = size_in * size_q / weight_pack_factor;
+            let k_proj = size_in * size_kv / weight_pack_factor;
+            let v_proj = size_in * size_kv / weight_pack_factor;
+            let o_proj = size_q * size_in / weight_pack_factor;
+
+            let moe_block = {
+                let gate = cfg.hidden_size * cfg.num_local_experts;
+                // Assume quantizing weight pack factor
+                let w1 = cfg.hidden_size * cfg.intermediate_size / weight_pack_factor;
+                let w2 = cfg.hidden_size * cfg.intermediate_size / weight_pack_factor;
+                let w3 = cfg.hidden_size * cfg.intermediate_size / weight_pack_factor;
+                gate + cfg.num_local_experts * w1
+                    + cfg.num_local_experts * w2
+                    + cfg.num_local_experts * w3
+            };
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + moe_block
+        };
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        unimplemented!()
+        let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
+
+        Ok(cfg.num_hidden_layers)
     }
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        unimplemented!()
+        let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+        };
+
+        Ok(Box::new(cfg))
     }
 }

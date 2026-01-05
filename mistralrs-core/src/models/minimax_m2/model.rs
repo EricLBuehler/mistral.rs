@@ -1,27 +1,24 @@
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-
-/// Mistral LLM, https://github.com/mistralai/mistral-src
-use candle_core::{Device, Module, Result, Tensor};
-use mistralrs_quant::{QuantMethod, ReplicatedLayer, ShardedVarBuilder};
-
 use std::{collections::HashMap, sync::Arc};
 
+use candle_nn::Module;
+use mistralrs_quant::{MatMul, QuantMethod, ReplicatedLayer, ShardedVarBuilder};
+
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, MlpLayer},
+    amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
-    layers::{embedding, CausalMasker, MatMul, RmsNorm, RotaryEmbedding},
+    kv_cache::{EitherCache, NormalCache},
+    layers::{self, CausalMasker, RmsNorm, RotaryEmbedding},
     layers_masker::PastKvLenCache,
+    models::minimax_m2::{cache::MinimaxCache, Config, DecoderLayer},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalCache, NormalLoadingMetadata, NormalModel,
+        IsqModel, NormalLoadingMetadata, NormalModel,
     },
-    serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
-
-serde_default_fn!(bool, tie_word_embeddings, false);
+use candle_core::{Device, Result, Tensor};
 
 pub struct Model {
     embed_tokens: candle_nn::Embedding,
@@ -44,43 +41,23 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        let vb_m = vb.pp("model");
-        let vb_lm_head = vb.pp("lm_head");
-        Self::new_inner(
-            cfg,
-            vb_m,
-            vb_lm_head,
-            is_gptx,
-            normal_loading_metadata,
-            attention_mechanism,
-        )
-    }
-
-    pub fn new_inner(
-        cfg: &Config,
-        vb_m: ShardedVarBuilder,
-        vb_lm_head: ShardedVarBuilder,
-        is_gptx: bool,
-        normal_loading_metadata: NormalLoadingMetadata,
-        attention_mechanism: AttentionImplementation,
-    ) -> Result<Self> {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
                 "Using {} quantization: {}.",
                 quant_cfg.name(),
-                quant_cfg.get_bits_name(&vb_m)
+                quant_cfg.get_bits_name(&vb)
             );
         }
         let mapper = normal_loading_metadata.mapper;
+        let vb_m = vb.pp("model");
 
-        let embed_tokens = embedding(
+        let embed_tokens = layers::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
             &cfg.quantization_config,
         )?;
-
-        let head_dim = cfg.head_dim();
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut ropes = HashMap::new();
         for layer_idx in 0..cfg.num_hidden_layers {
             let device = mapper
@@ -98,16 +75,13 @@ impl Model {
                 )?),
             );
         }
-
-        let load_in_parallel =
-            !(normal_loading_metadata.real_device.is_metal() && cfg.quantization_config.is_none());
         let vb_l = vb_m.pp("layers");
         let layers: Vec<DecoderLayer> = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
         )
-        .run(load_in_parallel, |layer_idx| {
+        .par_iter_if_isq(|layer_idx| {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -117,14 +91,11 @@ impl Model {
                 .clone();
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => Some(
-                    PagedAttention::new(head_dim, device, None)
-                        .expect("PagedAttention creation failed"),
-                ),
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(head_dim, device, None)?)
+                }
             };
-            let comm = mapper
-                .get_comm_for(layer_idx)
-                .expect("Failed to get comm for layer");
+            let comm = mapper.get_comm_for(layer_idx)?;
             DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
@@ -133,7 +104,6 @@ impl Model {
                 layer_idx,
                 normal_loading_metadata.loading_isq,
                 paged_attn,
-                normal_loading_metadata.real_device.clone(),
                 &comm,
             )
         })?;
@@ -148,7 +118,7 @@ impl Model {
                 cfg.vocab_size,
                 &cfg.quantization_config,
                 false,
-                mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
             ReplicatedLayer::from_linear(candle_nn::Linear::new(
@@ -159,15 +129,6 @@ impl Model {
                 None,
             ))?
         };
-        let cache_types = (0..cfg.num_hidden_layers)
-            .map(|layer_idx| {
-                sliding_window!(layer_idx, cfg)
-                    .map(|window| NormalCacheType::SlidingWindow { window })
-                    .unwrap_or(NormalCacheType::Normal {
-                        max_seq_len: cfg.max_position_embeddings,
-                    })
-            })
-            .collect::<Vec<_>>();
         Ok(Self {
             embed_tokens,
             layers,
@@ -175,18 +136,22 @@ impl Model {
             lm_head,
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
-            cache: EitherCache::Normal(NormalCache::from_types(cache_types)),
+            cache: EitherCache::Normal(NormalCache::new_sliding(
+                cfg.num_hidden_layers,
+                cfg.max_position_embeddings,
+                cfg.sliding_window,
+            )),
             max_seq_len: cfg.max_position_embeddings,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
+                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
                 num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
                     .max(1),
-                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
                 sliding_window: cfg.sliding_window,
-                k_head_dim: cfg.head_dim(),
-                v_head_dim: cfg.head_dim(),
+                k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+                v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             },
             mapper,
         })
@@ -200,27 +165,7 @@ impl Model {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        self.forward_embeds(
-            input_ids,
-            self.embed_tokens.forward(input_ids)?,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn forward_embeds(
-        &self,
-        input_ids: &Tensor,
-        input_embeds: Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
-    ) -> Result<Tensor> {
-        let mut xs = input_embeds;
+        let mut xs = self.embed_tokens.forward(input_ids)?;
         let cache = &mut self.cache.normal().0;
         let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
@@ -239,6 +184,7 @@ impl Model {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+        let mut minimax_cache = MinimaxCache::new(self.layers.len());
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
@@ -249,12 +195,12 @@ impl Model {
                     .as_ref(),
                 seqlen_offsets,
                 &mut cache[i],
+                &mut minimax_cache,
                 metadata
                     .as_ref()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
                 flash_params,
             )?;
-            // dbg!(&i);
         }
         let xs = xs.to_device(&self.device)?;
         let mut xs = xs.apply(&self.norm)?;
@@ -275,21 +221,12 @@ impl IsqModel for Model {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            match &mut layer.mlp {
-                MoeOrMlp::Mlp(mlp) => {
-                    tensors.push((&mut mlp.gate_proj, Some(i)));
-                    tensors.push((&mut mlp.up_proj, Some(i)));
-                    tensors.push((&mut mlp.down_proj, Some(i)));
-                }
-                MoeOrMlp::Moe(moe) => {
-                    for layer in moe.get_isq_layers() {
-                        tensors.push((layer, Some(i)));
-                    }
-                }
+            layer.self_attn.populate_isq_tensors(&mut tensors, i);
+            tensors.push((&mut layer.moe.gate, Some(i)));
+            for expert in &mut layer.moe.experts {
+                tensors.push((&mut expert.w1, Some(i)));
+                tensors.push((&mut expert.w2, Some(i)));
+                tensors.push((&mut expert.w3, Some(i)));
             }
         }
         (tensors, &*self.mapper)
@@ -308,17 +245,6 @@ impl IsqModel for Model {
             uvb_l
                 .pp("post_attention_layernorm")
                 .add(&layer.post_attention_layernorm);
-            uvb_l
-                .pp("self_attn")
-                .pp("q_norm")
-                .add(&layer.self_attn.q_norm);
-            uvb_l
-                .pp("self_attn")
-                .pp("k_norm")
-                .add(&layer.self_attn.k_norm);
-            if let MoeOrMlp::Moe(moe) = &layer.mlp {
-                uvb_l.pp("mlp").pp("gate").add(moe.gate());
-            }
         }
 
         uvb.to_safetensors()

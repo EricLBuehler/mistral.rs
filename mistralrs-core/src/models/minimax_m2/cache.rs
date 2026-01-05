@@ -5,6 +5,11 @@ pub struct MinimaxCache {
 }
 
 impl MinimaxCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            layer_cache: Vec::with_capacity(capacity),
+        }
+    }
     pub fn get_linear(&self, layer_idx: usize) -> Option<Tensor> {
         self.layer_cache.get(layer_idx).map(|t| t.clone())
     }
