@@ -581,7 +581,7 @@ cargo build --release --features "cuda flash-attn cudnn"
 
 Mistral.rs uses subcommands to control the model type. Please run `./mistralrs-server --help` to see the subcommands which categorize the models by kind.
 
-> **🚨 Important:** The `run` subcommand (alias for `plain`/`vision-plain`) only auto-detects and runs **text** and **vision** models. It does **not** support **diffusion** or **speech** models. 
+> **🚨 Important:** The `run` subcommand (alias for `plain`/`vision-plain`) only auto-detects and runs **text** and **vision** models. It does **not** support **diffusion** or **speech** models.
 > To run a diffusion model (e.g. FLUX series), use the `diffusion` subcommand:
 > ```bash
 > mistralrs-server -i diffusion -m <model-id> [options]
@@ -591,6 +591,38 @@ Mistral.rs uses subcommands to control the model type. Please run `./mistralrs-s
 > mistralrs-server -i speech -m <model-id> [options]
 > ```
 > If you attempt to use `run` with diffusion or speech models, model loading will fail.
+
+### Global CLI options
+
+These options apply across all subcommands:
+
+| Option | Description |
+|--------|-------------|
+| `-i, --interactive-mode` | Run in interactive terminal mode |
+| `--port <PORT>` | Run HTTP server on specified port |
+| `-c, --chat-template <FILE>` | Override chat template with JINJA file |
+| `-j, --jinja-explicit <FILE>` | Explicit JINJA template (overrides all auto-detection) |
+| `--token-source <SOURCE>` | HF token source: `cache`, `literal:<TOKEN>`, `env:<VAR>`, `path:<FILE>`, `none` |
+| `--isq <TYPE>` | Apply ISQ quantization (e.g., `Q4K`, `Q8_0`) |
+| `--num-device-layers <SPEC>` | Device layer mapping (e.g., `0:16;1:16` for multi-GPU) |
+| `--enable-search` | Enable web search integration |
+| `--search-embedding-model <MODEL>` | Built-in search embedding model (e.g., `embedding_gemma`) |
+| `--mcp-config <FILE>` | Path to MCP client configuration JSON file |
+| `--enable-thinking` | Enable thinking mode for supported models (Qwen3, SmolLM3) |
+| `-s, --seed <SEED>` | Set random seed for reproducibility |
+| `-l, --log <FILE>` | Log requests/responses to file |
+
+### PagedAttention options
+
+| Option | Description |
+|--------|-------------|
+| `--pa-gpu-mem <MB>` | GPU memory for KV cache in megabytes |
+| `--pa-gpu-mem-usage <RATIO>` | Fraction of free GPU memory (0.0-1.0) |
+| `--pa-ctxt-len <LENGTH>` | Total context length for KV cache |
+| `--pa-blk-size <SIZE>` | Block size for PagedAttention |
+| `--pa-cache-type <TYPE>` | KV cache type: `auto` or `f8e4m3` |
+| `--paged-attn` | Enable PagedAttention (for Metal) |
+| `--no-paged-attn` | Disable PagedAttention (for CUDA) |
 
 ### Interactive mode
 
@@ -944,7 +976,86 @@ If you want to add a new model, please contact us via an issue and we can coordi
     - Example: `MISTRALRS_METAL_PRECOMPILE=0 cargo build --release --features metal`
 - Disabling mmap loading
   - Set `MISTRALRS_NO_MMAP=1` to disable mmap during loading.
-  
+
+## Environment Variables
+
+### Runtime Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `MISTRALRS_DEBUG=1` | Enable debug mode: outputs tensor info files for GGUF/GGML models, increases logging verbosity |
+| `MISTRALRS_NO_MMAP=1` | Disable memory-mapped file loading, forcing all tensor data into memory |
+| `MISTRALRS_ISQ_SINGLETHREAD=1` | Force ISQ (In-Situ Quantization) to run single-threaded |
+| `MCP_CONFIG_PATH` | Fallback path for MCP client configuration (used if `--mcp-config` not provided) |
+| `KEEP_ALIVE_INTERVAL` | SSE keep-alive interval in milliseconds (default: 10000) |
+| `HF_HUB_CACHE` | Override Hugging Face Hub cache directory |
+
+### Build-Time Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `MISTRALRS_METAL_PRECOMPILE=0` | Skip Metal kernel precompilation (useful for CI) |
+| `NVCC_CCBIN` | Set CUDA compiler path |
+| `CUDA_NVCC_FLAGS=-fPIE` | Required on some Linux distributions |
+| `CUDA_COMPUTE_CAP` | Override CUDA compute capability (e.g., "80" for RTX 3090) |
+
+### Multi-Node Distributed Training
+
+For multi-node setups, configure the head node and workers:
+
+**Head Node:**
+| Variable | Description |
+|----------|-------------|
+| `MISTRALRS_MN_GLOBAL_WORLD_SIZE` | Total number of devices across all nodes |
+| `MISTRALRS_MN_HEAD_NUM_WORKERS` | Number of worker nodes |
+| `MISTRALRS_MN_HEAD_PORT` | Port for head node communication |
+
+**Worker Nodes:**
+| Variable | Description |
+|----------|-------------|
+| `MISTRALRS_MN_WORKER_SERVER_ADDR` | Address of head server to connect to |
+| `MISTRALRS_MN_WORKER_ID` | This worker's ID |
+| `MISTRALRS_MN_LOCAL_WORLD_SIZE` | Number of GPUs on this node |
+| `MISTRALRS_NO_NCCL=1` | Disable NCCL (use alternative backend) |
+
+## Server Defaults
+
+When running the HTTP server, these defaults apply:
+
+| Setting | Default Value |
+|---------|---------------|
+| Server IP | `0.0.0.0` (all interfaces) |
+| Max request body | 50 MB |
+| Max running sequences | 16 |
+| Prefix cache count | 16 |
+| SSE keep-alive | 10 seconds |
+| PagedAttention (CUDA) | Enabled |
+| PagedAttention (Metal) | Disabled |
+| PA GPU memory usage | 90% of free memory |
+| PA block size | 32 tokens |
+
+## Engine Behaviors
+
+### Warmup Run
+
+When a text or vision model is loaded in a multi-threaded runtime, mistral.rs automatically performs a warmup ("dummy") run:
+
+- Sends a short completion request ("hello" with max 1 token) to initialize CUDA kernels and caches
+- Logs "Beginning dummy run." when starting and "Dummy run completed in Xs." when finished
+- Helps ensure more consistent performance for the first real user request
+- Only runs for text and vision models (not diffusion/speech)
+
+### Automatic Engine Recovery
+
+If the inference engine thread dies unexpectedly (e.g., due to a panic), mistral.rs can automatically recover:
+
+- Detects dead engine threads when sending requests
+- Automatically reboots the engine using saved configuration
+- Logs "Engine {model_id} is dead, rebooting" followed by "Successfully rebooted engine {model_id}"
+- Preserves all original configuration including KV cache settings, prefix cache, and tool callbacks
+
+This ensures high availability without manual intervention.
+
 ## Credits
 This project would not be possible without the excellent work at [`candle`](https://github.com/huggingface/candle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.
 

@@ -25,7 +25,25 @@ Note that:
 - Any layers which are not covered will have no topology mapping. They will inherit any other ISQ (e.g. with `--isq`/`in_situ_quant`) set.
 - Unless the layer is not covered by the topology, the topology value will override any other ISQ (e.g. with `--isq`/`in_situ_quant`).
 - The topology device mapping will override any other device mapping.
-- When using UQFF, only the device mapping is relevant.
+
+### Using topology with UQFF models
+
+When loading a [UQFF](UQFF.md) model, the quantization is already applied during UQFF creation. Therefore:
+- **ISQ settings in the topology are ignored** - the pre-quantized weights are used as-is
+- **Device mapping still applies** - you can split layers across GPUs or offload to CPU
+
+This is useful for deploying pre-quantized models across multiple devices without re-quantizing.
+
+Example topology for UQFF device mapping:
+```yaml
+# Only device mapping is used; isq would be ignored
+0-16:
+  device: cuda[0]
+16-32:
+  device: cuda[1]
+```
+
+See the [UQFF documentation](UQFF.md#using-topology-for-device-mapping-with-uqff) for complete examples.
 
 ### Regex selectors
 

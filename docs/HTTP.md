@@ -16,6 +16,38 @@ To support additional features, we have extended the completion and chat complet
 - `min_p`: `float` | `null`. If non null, it is only relevant if 1 >= min_p >= 0.
 - `enable_thinking`: `bool`, default to `false`. Enable thinking for models that support it.
 - `truncate_sequence`: `bool` | `null`. When `true`, requests that exceed the model context length will be truncated instead of rejected; otherwise the server returns a validation error. Embedding requests truncate tokens at the end of the prompt, while chat/completion requests truncate tokens at the start of the prompt.
+- `repetition_penalty`: `float` | `null`. Penalty for repeating tokens. This is distinct from `frequency_penalty` and `presence_penalty` - it applies a direct multiplicative penalty to repeated token logits.
+- `web_search_options`: `object` | `null`. Enable web search integration. Contains optional fields: `search_context_size` ("low", "medium", "high"), `user_location` (object with location info), `search_description` (override search tool description), `extract_description` (override extraction tool description).
+- `reasoning_effort`: `string` | `null`. For Harmony-format models (like GPT-OSS), controls the depth of reasoning: `"low"`, `"medium"`, or `"high"`.
+- `dry_multiplier`: `float` | `null`. DRY (Don't Repeat Yourself) sampling multiplier. Controls the strength of the anti-repetition penalty.
+- `dry_base`: `float` | `null`. DRY sampling base value.
+- `dry_allowed_length`: `int` | `null`. DRY sampling allowed length before penalty applies.
+- `dry_sequence_breakers`: `array of strings` | `null`. Tokens that reset the DRY penalty sequence.
+
+## Response Extensions
+
+The response objects include additional fields beyond the standard OpenAI API:
+
+### Harmony Mode Responses
+
+For models using Harmony format (like GPT-OSS), responses may include additional reasoning content:
+
+- `reasoning_content`: `string` | `null`. Chain-of-thought reasoning from Harmony-format models. This field contains the model's internal analysis and commentary that led to the final response. It is separate from the main `content` field.
+
+When streaming, `reasoning_content` appears in the `delta` object alongside `content`.
+
+**Example response:**
+```json
+{
+  "choices": [{
+    "message": {
+      "role": "assistant",
+      "content": "The answer is 42.",
+      "reasoning_content": "Let me analyze this step by step..."
+    }
+  }]
+}
+```
 
 ## Model Parameter Validation
 
@@ -106,7 +138,14 @@ curl http://localhost:<port>/docs
 ```
 
 ## `POST`: `/v1/completions`
-Process an OpenAI compatible completions request, returning an OpenAI compatible response when finished. Please find the official OpenAI API documentation [here](https://platform.openai.com/docs/api-reference/completions). 
+Process an OpenAI compatible completions request, returning an OpenAI compatible response when finished. Please find the official OpenAI API documentation [here](https://platform.openai.com/docs/api-reference/completions).
+
+### Completions-specific parameters
+
+In addition to the common parameters listed above, the completions endpoint supports:
+
+- `best_of`: `int` | `null`. Generate `best_of` completions server-side and return the best one (the one with the highest log probability per token). When used with `n`, `best_of` must be greater than `n`.
+- `echo`: `bool`, default `false`. Echo back the prompt in addition to the completion.
 
 To send a request with the Python `openai` library:
 
@@ -199,6 +238,115 @@ curl http://localhost:8080/v1/embeddings \
 ```
 
 Responses follow the OpenAI schema: `object: "list"`, `data[*].embedding` containing either float arrays or Base64 strings depending on `encoding_format`, and a `usage` block (`prompt_tokens`, `total_tokens`). At present those counters report `0` because token accounting for embeddings is not yet implemented.
+
+## `POST`: `/v1/images/generations`
+Generate images using diffusion models (like FLUX). First, serve a diffusion model:
+
+```bash
+./mistralrs-server diffusion -m black-forest-labs/FLUX.1-schnell -a flux
+```
+
+Supported request fields:
+- `model`: Model identifier (use `"default"` to bypass validation)
+- `prompt`: Text description of the image to generate
+- `n`: Number of images to generate (default: 1)
+- `response_format`: `"url"` or `"b64_json"` (default: `"url"`)
+- `height`: Image height in pixels (default: 720)
+- `width`: Image width in pixels (default: 1280)
+
+Example with Python:
+
+```python
+import openai
+import base64
+
+client = openai.OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="EMPTY",
+)
+
+response = client.images.generate(
+    model="default",
+    prompt="A majestic snow-covered mountain at sunset",
+    n=1,
+    response_format="b64_json",
+    size="1280x720",  # width x height
+)
+
+# Save the generated image
+image_data = base64.b64decode(response.data[0].b64_json)
+with open("output.png", "wb") as f:
+    f.write(image_data)
+```
+
+Example with `curl`:
+
+```bash
+curl http://localhost:8080/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer EMPTY" \
+  -d '{
+    "model": "default",
+    "prompt": "A majestic snow-covered mountain at sunset",
+    "n": 1,
+    "response_format": "b64_json",
+    "height": 720,
+    "width": 1280
+  }'
+```
+
+## `POST`: `/v1/audio/speech`
+Generate speech from text using speech models (like Dia). First, serve a speech model:
+
+```bash
+./mistralrs-server speech -m nari-labs/Dia-1.6B -a dia
+```
+
+Supported request fields:
+- `model`: Model identifier (use `"default"` to bypass validation)
+- `input`: Text to convert to speech. For Dia models, use speaker tags like `[S1]` and `[S2]` to control multiple voices
+- `response_format`: `"wav"` or `"pcm"` (only these formats are supported)
+
+> Note: The `voice` and `instructions` fields from the OpenAI API are currently ignored.
+
+Example with Python:
+
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:8080/v1/audio/speech",
+    headers={
+        "Content-Type": "application/json",
+        "Authorization": "Bearer EMPTY",
+    },
+    json={
+        "model": "default",
+        "input": "[S1] Hello, how are you today? [S2] I'm doing great, thanks for asking!",
+        "response_format": "wav",
+    },
+)
+
+# Save the audio file
+with open("output.wav", "wb") as f:
+    f.write(response.content)
+```
+
+Example with `curl`:
+
+```bash
+curl http://localhost:8080/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer EMPTY" \
+  -d '{
+    "model": "default",
+    "input": "[S1] Dia is an open weights text to dialogue model. [S2] Try it now!",
+    "response_format": "wav"
+  }' \
+  --output output.wav
+```
+
+The response is raw audio data with the appropriate `Content-Type` header (`audio/wav` for WAV format, `audio/pcm` for PCM format).
 
 ## `POST`: `/v1/responses`
 Create a response using the OpenAI-compatible Responses API. Please find the official OpenAI API documentation [here](https://platform.openai.com/docs/api-reference/responses). 

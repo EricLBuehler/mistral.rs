@@ -100,6 +100,53 @@ Which.Plain(
 ),
 ```
 
+### Using topology for device mapping with UQFF
+
+When loading a UQFF model, the quantization is already baked in, so ISQ settings in the topology are ignored. However, **device mapping** from a topology file still applies. This is useful for splitting a pre-quantized model across multiple GPUs or offloading layers to CPU.
+
+**CLI example:**
+```bash
+./mistralrs-server -i plain -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-q4k.uqff --topology device_map.yml
+```
+
+**Topology file for device mapping only (`device_map.yml`):**
+```yaml
+0-16:
+  device: cuda[0]
+16-32:
+  device: cuda[1]
+```
+
+**Rust API example:**
+```rust
+use mistralrs::{UqffTextModelBuilder, Topology, LayerTopology, Device};
+
+let model = UqffTextModelBuilder::new(
+    "EricB/Phi-3.5-mini-instruct-UQFF",
+    vec!["phi3.5-mini-instruct-q4k.uqff".into()],
+)
+.into_inner()
+.with_topology(
+    Topology::empty()
+        .with_range(0..16, LayerTopology { isq: None, device: Some(Device::Cuda(0)) })
+        .with_range(16..32, LayerTopology { isq: None, device: Some(Device::Cuda(1)) })
+)
+.build()
+.await?;
+```
+
+**Python API example:**
+```python
+runner = Runner(
+    which=Which.Plain(
+        model_id="EricB/Phi-3.5-mini-instruct-UQFF",
+        from_uqff="phi3.5-mini-instruct-q4k.uqff",
+        topology="device_map.yml",
+    ),
+)
+```
+
+> Note: The `isq` field in topology entries is ignored when loading UQFF models since quantization is pre-applied.
 
 ## Creating a UQFF model
 
