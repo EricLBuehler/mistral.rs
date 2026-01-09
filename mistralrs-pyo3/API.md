@@ -55,6 +55,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Mistral3`
 - `Llama4`
 - `Gemma3n`
+- `Qwen3VL`
 
 ### Architecture for diffusion models
 - `Flux`
@@ -65,6 +66,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 
 ### Architecture for embedding models
 - `EmbeddingGemma`
+- `Qwen3Embedding`
 
 ### ISQ Organization
 - `Default`
