@@ -219,7 +219,19 @@ impl PagedAttentionScheduler {
             if !did_ignore {
                 get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
                 let mut seq_handle = get_mut_arcmutex!(seq);
-                self._allocate(&mut seq_handle);
+                let allocation_succeeded = self._allocate(&mut seq_handle);
+                if !allocation_succeeded {
+                    // Allocation failed unexpectedly - put sequence back to waiting
+                    warn!(
+                        "Block allocation failed for sequence {} despite can_allocate check passing. \
+                         This may indicate memory pressure. Sequence will retry.",
+                        seq_handle.get_id()
+                    );
+                    seq_handle.set_state(SequenceState::Waiting);
+                    drop(seq_handle);
+                    // Don't pop from waiting, just break and retry later
+                    break;
+                }
                 // Check for prefix cache hit and report to logger
                 let seq_id = seq_handle.get_id();
                 if get_mut_arcmutex!(self.block_engine).last_allocate_had_cache_hit(seq_id) > 0 {
@@ -284,7 +296,19 @@ impl PagedAttentionScheduler {
                     // If we need to, append physical blocks for a new token. We do not need to if there is enough space.
                     // If we just got preempted, there is no reason to allocate
                     let seq_handle = get_mut_arcmutex!(seq);
-                    self._append_token_slot_to_seq(&seq_handle, &mut blocks_to_copy);
+                    let append_succeeded =
+                        self._append_token_slot_to_seq(&seq_handle, &mut blocks_to_copy);
+                    if !append_succeeded {
+                        // Allocation failed during token slot append - preempt this sequence
+                        warn!(
+                            "Block allocation failed for sequence {} during token slot append. \
+                             Preempting sequence.",
+                            seq_handle.get_id()
+                        );
+                        drop(seq_handle);
+                        self._preempt(seq);
+                        continue;
+                    }
                 }
                 let new_seq_has_images = get_mut_arcmutex!(seq).has_images();
                 // Only add it if has_images matches either current or there are none.
@@ -369,18 +393,25 @@ impl PagedAttentionScheduler {
         panic!("Attempted to remove sequence id {seq_id} but it is not running or waiting.");
     }
 
+    /// Append a token slot to a sequence. Returns true if allocation succeeded.
     fn _append_token_slot_to_seq(
         &mut self,
         seq: &Sequence,
         blocks_to_copy: &mut HashMap<usize, Vec<usize>>,
-    ) {
-        let op = get_mut_arcmutex!(self.block_engine).append_token_slot_to_seq(seq);
-        if let Some((src_block, dst_block)) = op {
-            if let std::collections::hash_map::Entry::Vacant(e) = blocks_to_copy.entry(src_block) {
-                e.insert(vec![dst_block]);
-            } else {
-                blocks_to_copy.get_mut(&src_block).unwrap().push(dst_block);
+    ) -> bool {
+        match get_mut_arcmutex!(self.block_engine).append_token_slot_to_seq(seq) {
+            Ok(Some((src_block, dst_block))) => {
+                if let std::collections::hash_map::Entry::Vacant(e) =
+                    blocks_to_copy.entry(src_block)
+                {
+                    e.insert(vec![dst_block]);
+                } else {
+                    blocks_to_copy.get_mut(&src_block).unwrap().push(dst_block);
+                }
+                true
             }
+            Ok(None) => true,
+            Err(()) => false,
         }
     }
 
@@ -408,7 +439,8 @@ impl PagedAttentionScheduler {
         self.waiting.push_front(seq);
     }
 
-    fn _allocate(&mut self, seq: &mut Sequence) {
+    /// Allocate blocks for a sequence. Returns true if allocation succeeded.
+    fn _allocate(&mut self, seq: &mut Sequence) -> bool {
         get_mut_arcmutex!(self.block_engine).allocate(seq)
     }
 
