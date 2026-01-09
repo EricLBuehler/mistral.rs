@@ -7,7 +7,7 @@ use crate::{
     blockwise_fp8::{blockwise_fp8_linear_b, blockwise_fp8_moe},
     distributed,
     gptq::gptq_linear,
-    lora::merge_lora_weights,
+    lora::{maybe_wrap_runtime_lora, merge_lora_weights},
     should_apply_immediate_isq,
     utils::isq::{apply_immediate_isq, apply_immediate_isq_always},
     AfqLayer, BnbLinear, DistributedKind, DummyLayer, FP8Linear, GgufMatMul, HqqLayer, MXFP4Layer,
@@ -100,7 +100,13 @@ impl RowParallelLayer {
                 let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                     Linear::new(weight, None),
                 ))?;
-                Arc::new(layer) as Arc<dyn QuantMethod>
+                maybe_wrap_runtime_lora(
+                    Arc::new(layer) as Arc<dyn QuantMethod>,
+                    &vb,
+                    in_dim,
+                    out_dim,
+                    shard,
+                )?
             }
         };
 
@@ -377,7 +383,13 @@ impl ColumnParallelLayer {
                 let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                     Linear::new(weight, None),
                 ))?;
-                Arc::new(layer) as Arc<dyn QuantMethod>
+                maybe_wrap_runtime_lora(
+                    Arc::new(layer) as Arc<dyn QuantMethod>,
+                    &vb,
+                    in_dim,
+                    out_dim,
+                    shard,
+                )?
             }
         };
 
@@ -677,7 +689,13 @@ impl ReplicatedLayer {
                 let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                     Linear::new(weight, bias),
                 ))?;
-                Arc::new(layer) as Arc<dyn QuantMethod>
+                maybe_wrap_runtime_lora(
+                    Arc::new(layer) as Arc<dyn QuantMethod>,
+                    &vb,
+                    in_dim,
+                    out_dim,
+                    Default::default(),
+                )?
             }
         };
 
@@ -1320,17 +1338,38 @@ impl PackedExperts {
                     Arc::new(<UnquantLinear as QuantMethod>::new(
                         QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
                     )?);
+                gate_proj = maybe_wrap_runtime_lora(
+                    gate_proj,
+                    &vb,
+                    hidden_size,
+                    intermediate_size * 2,
+                    shard_gate,
+                )?;
                 gate_proj = apply_immediate_isq(gate_proj, vb_gate_up_proj.clone())?;
                 let mut up_proj: Arc<dyn QuantMethod> =
                     Arc::new(<UnquantLinear as QuantMethod>::new(
                         QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
                     )?);
+                up_proj = maybe_wrap_runtime_lora(
+                    up_proj,
+                    &vb,
+                    hidden_size,
+                    intermediate_size * 2,
+                    shard_up,
+                )?;
                 up_proj = apply_immediate_isq(up_proj, vb_gate_up_proj.clone())?;
                 let mut down_proj: Arc<dyn QuantMethod> =
                     Arc::new(<UnquantLinear as QuantMethod>::new(
                         QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
                     )?);
                 down_proj = apply_immediate_isq(down_proj, vb_down_proj.clone())?;
+                down_proj = maybe_wrap_runtime_lora(
+                    down_proj,
+                    &vb,
+                    intermediate_size,
+                    hidden_size,
+                    shard_down,
+                )?;
                 gs.push(gate_proj);
                 us.push(up_proj);
                 ds.push(down_proj);
