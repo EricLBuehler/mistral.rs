@@ -1,16 +1,20 @@
 mod bs1770;
 mod dia;
 pub mod utils;
+pub mod vibevoice;
 
 use std::{str::FromStr, sync::Arc};
 
 pub use dia::{DiaConfig, DiaPipeline};
 use serde::Deserialize;
+pub use vibevoice::{VibeVoiceConfig, VibeVoiceGenerationConfig, VibeVoicePipeline};
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 pub enum SpeechLoaderType {
     #[serde(rename = "dia")]
     Dia,
+    #[serde(rename = "vibevoice")]
+    VibeVoice,
 }
 
 impl FromStr for SpeechLoaderType {
@@ -18,8 +22,9 @@ impl FromStr for SpeechLoaderType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "dia" => Ok(Self::Dia),
+            "vibevoice" => Ok(Self::VibeVoice),
             a => Err(format!(
-                "Unknown architecture `{a}`. Possible architectures: `dia`."
+                "Unknown architecture `{a}`. Possible architectures: `dia`, `vibevoice`."
             )),
         }
     }
@@ -34,6 +39,11 @@ pub enum SpeechGenerationConfig {
         top_p: f32,
         top_k: Option<usize>,
     },
+    VibeVoice {
+        max_tokens: Option<usize>,
+        cfg_scale: f32,
+        temperature: f32,
+    },
 }
 
 impl SpeechGenerationConfig {
@@ -45,6 +55,11 @@ impl SpeechGenerationConfig {
                 temperature: 1.3,
                 top_p: 0.95,
                 top_k: Some(35),
+            },
+            SpeechLoaderType::VibeVoice => Self::VibeVoice {
+                max_tokens: None,
+                cfg_scale: 3.0,
+                temperature: 1.0,
             },
         }
     }
