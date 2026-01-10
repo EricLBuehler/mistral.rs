@@ -50,11 +50,11 @@ pub struct Config {
     pub(crate) tie_word_embeddings: bool,
 }
 
-struct Attention {
-    q_proj: Arc<dyn QuantMethod>,
-    k_proj: Arc<dyn QuantMethod>,
-    v_proj: Arc<dyn QuantMethod>,
-    o_proj: Arc<dyn QuantMethod>,
+pub(crate) struct Attention {
+    pub(crate) q_proj: Arc<dyn QuantMethod>,
+    pub(crate) k_proj: Arc<dyn QuantMethod>,
+    pub(crate) v_proj: Arc<dyn QuantMethod>,
+    pub(crate) o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -64,7 +64,7 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(
+    pub(crate) fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
         vb: ShardedVarBuilder,
@@ -138,7 +138,7 @@ impl Attention {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn forward(
+    pub(crate) fn forward(
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
@@ -246,11 +246,11 @@ impl Attention {
 }
 
 #[derive(Clone)]
-struct BlockSparseTop2MLP {
-    w1: Arc<dyn QuantMethod>,
-    w2: Arc<dyn QuantMethod>,
-    w3: Arc<dyn QuantMethod>,
-    act_fn: Activation,
+pub(crate) struct BlockSparseTop2MLP {
+    pub(crate) w1: Arc<dyn QuantMethod>,
+    pub(crate) w2: Arc<dyn QuantMethod>,
+    pub(crate) w3: Arc<dyn QuantMethod>,
+    pub(crate) act_fn: Activation,
 }
 
 impl BlockSparseTop2MLP {
@@ -309,14 +309,18 @@ impl Module for BlockSparseTop2MLP {
 }
 
 #[derive(Clone)]
-struct SparseMoeBlock {
-    gate: Arc<dyn QuantMethod>,
-    experts: Vec<BlockSparseTop2MLP>,
-    num_experts_per_tok: usize,
+pub(crate) struct SparseMoeBlock {
+    pub(crate) gate: Arc<dyn QuantMethod>,
+    pub(crate) experts: Vec<BlockSparseTop2MLP>,
+    pub(crate) num_experts_per_tok: usize,
 }
 
 impl SparseMoeBlock {
-    fn new(cfg: &Config, vb: ShardedVarBuilder, comm: &Arc<mistralrs_quant::Comm>) -> Result<Self> {
+    pub(crate) fn new(
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
         let gate = mistralrs_quant::linear_no_bias(
             cfg.hidden_size,
             cfg.num_local_experts,
