@@ -1,7 +1,7 @@
 use crate::{
     get_mut_arcmutex, get_mut_group,
     harmony::HarmonyContext,
-    paged_attention::PhysicalTokenBlock,
+    paged_attention::BlockRef,
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
@@ -79,7 +79,7 @@ pub enum SequenceRecognizer {
 enum SequenceCustomMetadata {
     PagedAttention {
         logical_token_blocks: Vec<LogicalTokenBlock>,
-        physical_blocks_prefill: Option<Vec<Arc<PhysicalTokenBlock>>>,
+        physical_blocks_prefill: Option<Vec<BlockRef>>,
         block_size: usize,
     },
     None,
@@ -489,7 +489,7 @@ impl BlockEngineSequence for Sequence {
         }
     }
 
-    fn take_physical_blocks_prefill(&mut self) -> Option<Vec<Arc<PhysicalTokenBlock>>> {
+    fn take_physical_blocks_prefill(&mut self) -> Option<Vec<BlockRef>> {
         match &mut self.custom_metadata {
             SequenceCustomMetadata::PagedAttention {
                 logical_token_blocks: _,
@@ -663,7 +663,7 @@ impl Sequence {
     pub fn prefill_v2_paged(
         mut self,
         logical_blocks: Vec<LogicalTokenBlock>,
-        physical_blocks: Vec<Arc<PhysicalTokenBlock>>,
+        physical_blocks: Vec<BlockRef>,
         toks: Vec<u32>,
         offset: usize,
     ) -> Self {

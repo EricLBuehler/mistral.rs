@@ -14,11 +14,10 @@
 use std::{
     collections::{HashMap, VecDeque},
     hash::{DefaultHasher, Hash, Hasher},
-    sync::Arc,
     time::Instant,
 };
 
-use super::{LogicalTokenBlock, PhysicalTokenBlock};
+use super::{BlockRef, LogicalTokenBlock};
 
 /// A hash that uniquely identifies a KV cache block by its content and position.
 /// The hash incorporates:
@@ -50,25 +49,29 @@ impl BlockHash {
 }
 
 /// Metadata for a cached block in the prefix cache.
-#[derive(Debug)]
 struct CachedBlockEntry {
-    /// The physical block containing the cached KV data.
-    physical_block: Arc<PhysicalTokenBlock>,
+    /// The block reference - holds the block alive via Arc refcount.
+    block_ref: BlockRef,
     /// Number of tokens in this block (may be less than block_size for partial blocks).
     num_tokens: usize,
     /// Last access time for LRU eviction.
     last_access: Instant,
-    /// Reference count - number of active sequences using this cached block.
+    /// Number of active sequences using this cached block.
     /// When this reaches 0, the block becomes eligible for eviction.
-    ref_count: usize,
+    active_users: usize,
 }
 
 /// The prefix cache maintains a global hash table mapping block hashes to physical blocks.
 /// This enables automatic KV cache reuse across requests with shared prefixes.
+///
+/// The cache holds BlockRef instances, which automatically manage refcounts:
+/// - When a block is cached, the cache holds a reference (keeps block alive)
+/// - When a block is evicted, dropping the BlockRef returns it to the pool
+/// - No manual refcount management needed!
 pub struct PrefixCacher {
     /// Map from block hash to cached block entry.
     cache: HashMap<BlockHash, CachedBlockEntry>,
-    /// LRU queue of block hashes with ref_count == 0, ordered by last access time.
+    /// LRU queue of block hashes with active_users == 0, ordered by last access time.
     /// Front = least recently used (evict first).
     lru_queue: VecDeque<BlockHash>,
     /// Whether prefix caching is enabled.
@@ -124,14 +127,15 @@ impl PrefixCacher {
 
     /// Try to find cached blocks for a sequence of logical token blocks.
     /// Returns:
-    /// - Vector of (block_index, physical_block) for cache hits
+    /// - Vector of (block_index, BlockRef) for cache hits (cloned refs)
     /// - The number of blocks that were cache hits (starting from index 0)
     ///
     /// Only matches contiguous blocks starting from the beginning.
+    /// The returned BlockRefs are clones - they share ownership with the cache.
     pub fn match_prefix(
         &mut self,
         logical_blocks: &[LogicalTokenBlock],
-    ) -> (Vec<(usize, Arc<PhysicalTokenBlock>)>, usize) {
+    ) -> (Vec<(usize, BlockRef)>, usize) {
         if !self.enabled || logical_blocks.is_empty() {
             return (Vec::new(), 0);
         }
@@ -150,19 +154,17 @@ impl PrefixCacher {
             if let Some(entry) = self.cache.get_mut(hash) {
                 // Cache hit! Verify token count matches.
                 if entry.num_tokens == logical_block.num_tokens() {
-                    // Update access time and ref count
+                    // Update access time and active users count
                     entry.last_access = now;
-                    entry.ref_count += 1;
+                    entry.active_users += 1;
 
-                    // Remove from LRU queue if it was there (ref_count was 0)
-                    if entry.ref_count == 1 {
+                    // Remove from LRU queue if it was there (active_users was 0)
+                    if entry.active_users == 1 {
                         self.lru_queue.retain(|h| h != hash);
                     }
 
-                    // Increment the physical block's internal refcount since we're handing it out
-                    entry.physical_block.deref_mut().increment_refcount();
-
-                    matched_blocks.push((idx, entry.physical_block.clone()));
+                    // Clone the BlockRef - this automatically increments the Arc refcount
+                    matched_blocks.push((idx, entry.block_ref.clone()));
                     num_matched = idx + 1;
                     self.hits += 1;
                 } else {
@@ -184,12 +186,12 @@ impl PrefixCacher {
     /// This is called after a sequence completes prefill to cache its blocks.
     ///
     /// `logical_blocks`: The logical token blocks
-    /// `physical_blocks`: The corresponding physical blocks (must be same length)
+    /// `block_refs`: The corresponding block references (must be same length)
     /// `start_idx`: Index to start caching from (skip already-cached blocks)
     pub fn insert_blocks(
         &mut self,
         logical_blocks: &[LogicalTokenBlock],
-        physical_blocks: &[Arc<PhysicalTokenBlock>],
+        block_refs: &[BlockRef],
         start_idx: usize,
     ) {
         if !self.enabled {
@@ -198,7 +200,7 @@ impl PrefixCacher {
 
         assert_eq!(
             logical_blocks.len(),
-            physical_blocks.len(),
+            block_refs.len(),
             "logical and physical block counts must match"
         );
 
@@ -220,28 +222,26 @@ impl PrefixCacher {
                 continue;
             }
 
-            let physical_block = physical_blocks[idx].clone();
-
-            // Increment refcount on the physical block since we're caching it
-            physical_block.deref_mut().increment_refcount();
+            // Clone the BlockRef - this keeps the block alive in the cache
+            let block_ref = block_refs[idx].clone();
 
             self.cache.insert(
                 hash,
                 CachedBlockEntry {
-                    physical_block,
+                    block_ref,
                     num_tokens: logical_block.num_tokens(),
                     last_access: now,
-                    ref_count: 0, // Not actively used by any sequence
+                    active_users: 0, // Not actively used by any sequence
                 },
             );
 
-            // Add to LRU queue since ref_count is 0
+            // Add to LRU queue since active_users is 0
             self.lru_queue.push_back(hash);
         }
     }
 
-    /// Decrement reference count for cached blocks when a sequence finishes or is preempted.
-    /// Blocks with ref_count == 0 become eligible for eviction.
+    /// Decrement active users count for cached blocks when a sequence finishes or is preempted.
+    /// Blocks with active_users == 0 become eligible for eviction.
     pub fn release_blocks(&mut self, logical_blocks: &[LogicalTokenBlock]) {
         if !self.enabled || logical_blocks.is_empty() {
             return;
@@ -255,9 +255,9 @@ impl PrefixCacher {
             }
 
             if let Some(entry) = self.cache.get_mut(hash) {
-                if entry.ref_count > 0 {
-                    entry.ref_count -= 1;
-                    if entry.ref_count == 0 {
+                if entry.active_users > 0 {
+                    entry.active_users -= 1;
+                    if entry.active_users == 0 {
                         // Add to LRU queue
                         self.lru_queue.push_back(*hash);
                     }
@@ -267,24 +267,25 @@ impl PrefixCacher {
     }
 
     /// Evict blocks from the cache to free up memory.
-    /// Returns the physical blocks that were evicted (caller should free them).
+    /// Dropping the BlockRefs will automatically return blocks to the pool.
     ///
     /// Uses LRU eviction policy:
-    /// 1. Only evict blocks with ref_count == 0
+    /// 1. Only evict blocks with active_users == 0
     /// 2. Evict least recently used blocks first
-    pub fn evict_blocks(&mut self, num_blocks_needed: usize) -> Vec<Arc<PhysicalTokenBlock>> {
+    pub fn evict_blocks(&mut self, num_blocks_needed: usize) {
         if !self.enabled {
-            return Vec::new();
+            return;
         }
 
-        let mut evicted = Vec::new();
+        let mut evicted_count = 0;
 
-        while evicted.len() < num_blocks_needed && !self.lru_queue.is_empty() {
+        while evicted_count < num_blocks_needed && !self.lru_queue.is_empty() {
             if let Some(hash) = self.lru_queue.pop_front() {
                 if let Some(entry) = self.cache.remove(&hash) {
-                    // Only evict if ref_count is still 0
-                    if entry.ref_count == 0 {
-                        evicted.push(entry.physical_block);
+                    // Only evict if active_users is still 0
+                    if entry.active_users == 0 {
+                        // Dropping entry.block_ref here automatically returns block to pool
+                        evicted_count += 1;
                     } else {
                         // Put it back, it's being used again
                         self.cache.insert(hash, entry);
@@ -292,8 +293,6 @@ impl PrefixCacher {
                 }
             }
         }
-
-        evicted
     }
 
     /// Get the number of blocks currently in the cache.
@@ -301,11 +300,11 @@ impl PrefixCacher {
         self.cache.len()
     }
 
-    /// Get the number of evictable blocks (ref_count == 0).
+    /// Get the number of evictable blocks (active_users == 0).
     pub fn num_evictable_blocks(&self) -> usize {
         self.cache
             .values()
-            .filter(|entry| entry.ref_count == 0)
+            .filter(|entry| entry.active_users == 0)
             .count()
     }
 
@@ -326,13 +325,12 @@ impl PrefixCacher {
     }
 
     /// Clear the entire cache.
+    /// Dropping all BlockRefs will return their blocks to the pool.
     #[allow(dead_code)]
-    pub fn clear(&mut self) -> Vec<Arc<PhysicalTokenBlock>> {
+    pub fn clear(&mut self) {
         self.lru_queue.clear();
-        self.cache
-            .drain()
-            .map(|(_, entry)| entry.physical_block)
-            .collect()
+        self.cache.clear();
+        // All BlockRefs are dropped here, returning blocks to pool
     }
 }
 
