@@ -208,7 +208,7 @@
 <a href=#208 id=208 data-nosnippet>208</a>                <span class="kw">let </span>table = table
 <a href=#209 id=209 data-nosnippet>209</a>                    .unwrap()
 <a href=#210 id=210 data-nosnippet>210</a>                    .iter()
-<a href=#211 id=211 data-nosnippet>211</a>                    .map(|block| block.deref_mut().block_id)
+<a href=#211 id=211 data-nosnippet>211</a>                    .map(|block| block.block_id())
 <a href=#212 id=212 data-nosnippet>212</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 <a href=#213 id=213 data-nosnippet>213</a>
 <a href=#214 id=214 data-nosnippet>214</a>                <span class="kw">let </span>start_idx = <span class="kw">if let </span><span class="prelude-val">Some</span>(sliding_window) = paged_attn_metadata.sliding_window {
@@ -403,7 +403,7 @@
 <a href=#403 id=403 data-nosnippet>403</a>
 <a href=#404 id=404 data-nosnippet>404</a>                <span class="kw">let </span>table = table
 <a href=#405 id=405 data-nosnippet>405</a>                    .iter()
-<a href=#406 id=406 data-nosnippet>406</a>                    .map(|block| block.deref_mut().block_id)
+<a href=#406 id=406 data-nosnippet>406</a>                    .map(|block| block.block_id())
 <a href=#407 id=407 data-nosnippet>407</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 <a href=#408 id=408 data-nosnippet>408</a>
 <a href=#409 id=409 data-nosnippet>409</a>                <span class="kw">let </span>block_pos = start_pos - seq.token_offset();
