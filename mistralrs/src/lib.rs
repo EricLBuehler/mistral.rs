@@ -125,6 +125,7 @@
 //! }
 //! ```
 
+mod agent;
 mod anymoe;
 mod diffusion_model;
 mod embedding_model;
@@ -141,6 +142,10 @@ mod text_model;
 mod vision_model;
 mod xlora_model;
 
+pub use agent::{
+    Agent, AgentBuilder, AgentConfig, AgentEvent, AgentResponse, AgentStep, AgentStopReason,
+    AgentStream, AsyncToolCallback, ToolCallbackType, ToolResult,
+};
 pub use anymoe::AnyMoeModelBuilder;
 pub use diffusion_model::DiffusionModelBuilder;
 pub use embedding_model::{EmbeddingModelBuilder, UqffEmbeddingModelBuilder};
@@ -167,3 +172,9 @@ pub use xlora_model::XLoraModelBuilder;
 pub use candle_core::{DType, Device, Result, Tensor};
 pub use candle_nn::loss::cross_entropy as cross_entropy_loss;
 pub use mistralrs_core::*;
+
+// Re-export the tool proc macro for ergonomic tool definition
+pub use mistralrs_macros::tool;
+
+// Re-export schemars for use in tool definitions
+pub use schemars;

@@ -392,19 +392,10 @@ impl BlockEngine {
                 }
             }
 
-            // Free non-cached blocks (or all if not caching)
-            for (idx, block) in block_table.iter().enumerate() {
-                // Skip blocks that were from cache and are now in cache
-                // (they have refcount > 1 due to cache holding a reference)
-                if idx < num_cached && self.prefix_cacher.is_enabled() {
-                    // This was a cached block - just decrement our reference
-                    self.gpu_allocator.free_block(block.clone());
-                } else if self.prefix_cacher.is_enabled() && logical_blocks.is_some() {
-                    // This block is being added to cache, so cache holds the ref
-                    // We don't free it to the allocator
-                } else {
-                    self.gpu_allocator.free_block(block.clone());
-                }
+            // Free all blocks - decrement our reference
+            // (blocks in cache will have refcount > 0 after this, so they won't be freed to pool)
+            for block in block_table.iter() {
+                self.gpu_allocator.free_block(block.clone());
             }
         }
     }
