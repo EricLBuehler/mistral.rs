@@ -16,11 +16,11 @@ use crate::{
 };
 
 type BlockBestMatch<'a> = (
-    usize,               // matched_len
+    usize,                   // matched_len
     &'a [LogicalTokenBlock], // logical blocks
-    &'a [BlockRef],      // physical blocks
-    usize,               // audios_match_until
-    usize,               // images_match_until
+    &'a [BlockRef],          // physical blocks
+    usize,                   // audios_match_until
+    usize,                   // images_match_until
 );
 
 fn hash_logical_blocks(logical_blocks: &[LogicalTokenBlock]) -> Vec<u64> {
