@@ -1,9 +1,7 @@
 use std::{
     collections::HashMap,
     hash::Hash,
-    marker::PhantomData,
-    ops::Deref,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex},
 };
 
 use super::block_engine_sequence::BlockEngineSequence;
@@ -64,129 +62,155 @@ impl Hash for LogicalTokenBlock {
     }
 }
 
-#[derive(Hash, PartialEq, Eq)]
-pub struct _PhysicalTokenBlock {
-    pub block_id: usize,
+// ============================================================================
+// Automatic Reference-Counted Block System
+// ============================================================================
+
+/// Inner state for a single physical block.
+/// When this is dropped (last Arc reference gone), the block returns to the free list.
+struct BlockInner {
+    block_id: usize,
+    pool: Arc<BlockPoolInner>,
+}
+
+impl Drop for BlockInner {
+    fn drop(&mut self) {
+        // Automatically return block to free list when last reference is dropped
+        self.pool
+            .free_list
+            .lock()
+            .expect("BlockPool free_list lock poisoned")
+            .push(self.block_id);
+    }
+}
+
+/// Shared pool state accessed by all BlockRef instances.
+struct BlockPoolInner {
+    free_list: Mutex<Vec<usize>>,
+    #[allow(dead_code)]
     block_size: usize,
-    refcount: usize,
-    is_gpu: bool,
+    #[allow(dead_code)]
+    num_blocks: usize,
 }
 
-impl _PhysicalTokenBlock {
-    pub fn refcount(&self) -> usize {
-        self.refcount
-    }
-    pub fn increment_refcount(&mut self) {
-        self.refcount += 1;
-    }
-    pub fn decrement_refcount(&mut self) {
-        assert!(self.refcount >= 1);
-        self.refcount -= 1;
-    }
-}
+/// A reference-counted handle to a physical block.
+///
+/// This works exactly like `Arc`:
+/// - Clone to share (automatic refcount increment)
+/// - Drop when done (automatic refcount decrement)
+/// - When the last reference is dropped, the block automatically returns to the free pool
+///
+/// This design makes refcount bugs impossible - there's no manual increment/decrement.
+#[derive(Clone)]
+pub struct BlockRef(Arc<BlockInner>);
 
-pub struct PhysicalTokenBlock(pub Mutex<_PhysicalTokenBlock>);
-
-impl std::fmt::Debug for PhysicalTokenBlock {
+impl std::fmt::Debug for BlockRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0.lock() {
-            Ok(inner) => f
-                .debug_struct("PhysicalTokenBlock")
-                .field("block_id", &inner.block_id)
-                .field("block_size", &inner.block_size)
-                .field("refcount", &inner.refcount)
-                .field("is_gpu", &inner.is_gpu)
-                .finish(),
-            Err(_) => write!(f, "PhysicalTokenBlock(<locked>)"),
-        }
+        f.debug_struct("BlockRef")
+            .field("block_id", &self.0.block_id)
+            .field("ref_count", &Arc::strong_count(&self.0))
+            .finish()
     }
 }
 
-impl PhysicalTokenBlock {
-    pub fn deref_mut(&self) -> MutexGuard<'_, _PhysicalTokenBlock> {
-        loop {
-            if let Ok(v) = self.0.try_lock() {
-                return v;
-            }
-        }
+impl BlockRef {
+    /// Get the underlying block ID (index into GPU memory).
+    #[inline]
+    pub fn block_id(&self) -> usize {
+        self.0.block_id
+    }
+
+    /// Check if this block is shared (more than one reference exists).
+    /// Used for copy-on-write decisions.
+    #[inline]
+    pub fn is_shared(&self) -> bool {
+        Arc::strong_count(&self.0) > 1
+    }
+
+    /// Get the current reference count (for debugging).
+    #[inline]
+    pub fn ref_count(&self) -> usize {
+        Arc::strong_count(&self.0)
     }
 }
 
-impl PartialEq for PhysicalTokenBlock {
+impl PartialEq for BlockRef {
     fn eq(&self, other: &Self) -> bool {
-        *self.deref_mut() == *other.deref_mut()
+        self.0.block_id == other.0.block_id
     }
 }
 
-impl Hash for PhysicalTokenBlock {
+impl Eq for BlockRef {}
+
+impl Hash for BlockRef {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.deref_mut().hash(state)
+        self.0.block_id.hash(state);
     }
 }
 
-impl Eq for PhysicalTokenBlock {}
-
-type BlockTable = Vec<Arc<PhysicalTokenBlock>>;
-struct GPUAllocator;
-
-struct GPUAllocatorWrapper(usize);
-impl Deref for GPUAllocatorWrapper {
-    type Target = usize;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+/// The block pool that manages physical block allocation.
+///
+/// Blocks are automatically returned to the pool when all references are dropped.
+pub struct BlockPool {
+    inner: Arc<BlockPoolInner>,
 }
 
-struct Allocator<T> {
-    free_blocks: BlockTable,
-    _ghost: PhantomData<T>,
-}
-
-impl<T> Allocator<T> {
-    fn allocate(&mut self) -> Arc<PhysicalTokenBlock> {
-        let block = self.free_blocks.pop().unwrap();
-        block.deref_mut().refcount = 1;
-        block
-    }
-
-    fn free_block(&mut self, block: Arc<PhysicalTokenBlock>) {
-        if block.deref_mut().refcount == 0 {
-            panic!(
-                "PhysicalTokenBlock with id {} experienced a double free!",
-                block.deref_mut().block_id
-            );
-        }
-        block.deref_mut().refcount -= 1;
-        if block.deref_mut().refcount == 0 {
-            self.free_blocks.push(block);
-        }
-    }
-}
-
-impl Allocator<GPUAllocator> {
-    fn new(block_size: usize, num_blocks: usize) -> Self {
-        let mut free_blocks = Vec::new();
-        for id in 0..num_blocks {
-            free_blocks.push(Arc::new(PhysicalTokenBlock(Mutex::new(
-                _PhysicalTokenBlock {
-                    block_id: id,
-                    block_size,
-                    refcount: 0,
-                    is_gpu: true,
-                },
-            ))))
-        }
-        Allocator {
-            free_blocks,
-            _ghost: PhantomData,
+impl BlockPool {
+    /// Create a new block pool with the given number of blocks.
+    pub fn new(block_size: usize, num_blocks: usize) -> Self {
+        let free_list: Vec<usize> = (0..num_blocks).collect();
+        Self {
+            inner: Arc::new(BlockPoolInner {
+                free_list: Mutex::new(free_list),
+                block_size,
+                num_blocks,
+            }),
         }
     }
 
-    fn get_num_free_blocks(&self) -> GPUAllocatorWrapper {
-        GPUAllocatorWrapper(self.free_blocks.len())
+    /// Allocate a block from the pool. Returns None if no blocks are available.
+    pub fn allocate(&self) -> Option<BlockRef> {
+        let block_id = self
+            .inner
+            .free_list
+            .lock()
+            .expect("BlockPool free_list lock poisoned")
+            .pop()?;
+
+        Some(BlockRef(Arc::new(BlockInner {
+            block_id,
+            pool: Arc::clone(&self.inner),
+        })))
+    }
+
+    /// Get the number of free blocks.
+    #[inline]
+    pub fn num_free(&self) -> usize {
+        self.inner
+            .free_list
+            .lock()
+            .expect("BlockPool free_list lock poisoned")
+            .len()
+    }
+
+    /// Get the block size.
+    #[inline]
+    #[allow(dead_code)]
+    pub fn block_size(&self) -> usize {
+        self.inner.block_size
+    }
+
+    /// Get the total number of blocks in the pool.
+    #[inline]
+    #[allow(dead_code)]
+    pub fn num_blocks(&self) -> usize {
+        self.inner.num_blocks
     }
 }
+
+/// Block table type: maps sequence ID to list of block references.
+pub type BlockTable = Vec<BlockRef>;
+pub type BlockTables = HashMap<usize, BlockTable>;
 
 #[derive(Debug)]
 pub enum AllocStatus {
@@ -204,15 +228,15 @@ type SeqID = usize;
 pub struct BlockEngine {
     num_gpu_blocks: usize,
     block_size: usize,
-    gpu_allocator: Allocator<GPUAllocator>,
+    /// The block pool for allocation. Blocks are automatically returned when refs are dropped.
+    pool: BlockPool,
+    /// Maps sequence ID to its block table.
     pub block_tables: HashMap<SeqID, BlockTable>,
     /// Prefix cache for reusing KV cache blocks across requests with shared prefixes.
     prefix_cacher: PrefixCacher,
-    /// Track number of cached blocks used per sequence (for freeing).
+    /// Track number of cached blocks used per sequence (for releasing cache entries).
     cached_blocks_per_seq: HashMap<SeqID, usize>,
 }
-
-pub type BlockTables = HashMap<usize, BlockTable>;
 
 impl BlockEngine {
     #[must_use]
@@ -220,7 +244,7 @@ impl BlockEngine {
         Self {
             num_gpu_blocks,
             block_size,
-            gpu_allocator: Allocator::<GPUAllocator>::new(block_size, num_gpu_blocks),
+            pool: BlockPool::new(block_size, num_gpu_blocks),
             block_tables: HashMap::new(),
             prefix_cacher: PrefixCacher::new(prefix_caching_enabled),
             cached_blocks_per_seq: HashMap::new(),
@@ -255,11 +279,11 @@ impl BlockEngine {
 
         // We only need to allocate blocks that aren't in the cache
         let num_new_blocks_needed = num_required_blocks.saturating_sub(num_cached);
-        let num_free_gpu_blocks = self.gpu_allocator.get_num_free_blocks();
+        let num_free_gpu_blocks = self.pool.num_free();
 
         // Also count evictable blocks from prefix cache as potentially available
         let num_evictable = self.prefix_cacher.num_evictable_blocks();
-        let total_available = *num_free_gpu_blocks + num_evictable;
+        let total_available = num_free_gpu_blocks + num_evictable;
 
         if self.num_gpu_blocks < num_required_blocks {
             AllocStatus::Impossible
@@ -279,7 +303,7 @@ impl BlockEngine {
 
         // If there are prefill physical blocks, use those here.
         if let Some(physical_blocks_prefill) = seq.take_physical_blocks_prefill() {
-            let mut block_table = physical_blocks_prefill.clone();
+            let mut block_table = physical_blocks_prefill;
             let n_extra_blocks = num_blocks_needed - block_table.len();
             for _ in 0..n_extra_blocks {
                 block_table.push(self.allocate_block_with_eviction());
@@ -302,14 +326,13 @@ impl BlockEngine {
 
         let mut block_table = Vec::with_capacity(num_blocks_needed);
 
-        // Use cached blocks for the prefix
-        for (idx, physical_block) in cached_blocks {
+        // Use cached blocks for the prefix (they're already cloned by match_prefix)
+        for (idx, block_ref) in cached_blocks {
             // Extend block_table to the right size
             while block_table.len() < idx {
                 block_table.push(self.allocate_block_with_eviction());
             }
-            // The cached block already has its refcount incremented by match_prefix
-            block_table.push(physical_block);
+            block_table.push(block_ref);
         }
 
         // Allocate new blocks for the rest
@@ -321,7 +344,6 @@ impl BlockEngine {
         self.block_tables.insert(seq_id, block_table);
 
         // Calculate number of cached tokens (full blocks only)
-        // num_cached is the number of full blocks that were cache hits
         let cached_tokens = num_cached * block_size;
         seq.set_prefix_cache_len(cached_tokens);
     }
@@ -336,31 +358,26 @@ impl BlockEngine {
     }
 
     /// Allocate a block, evicting from prefix cache if necessary.
-    fn allocate_block_with_eviction(&mut self) -> Arc<PhysicalTokenBlock> {
+    fn allocate_block_with_eviction(&mut self) -> BlockRef {
         // Try to allocate from free pool first
-        if *self.gpu_allocator.get_num_free_blocks() > 0 {
-            return self.gpu_allocator.allocate();
+        if let Some(block_ref) = self.pool.allocate() {
+            return block_ref;
         }
 
         // Need to evict from prefix cache
-        let evicted = self.prefix_cacher.evict_blocks(1);
-        for block in evicted {
-            // Decrement refcount and return to free pool
-            block.deref_mut().decrement_refcount();
-            if block.deref_mut().refcount == 0 {
-                self.gpu_allocator.free_blocks.push(block);
-            }
-        }
+        // Evicting drops the cache's reference, which may return blocks to the pool
+        self.prefix_cacher.evict_blocks(1);
 
         // Now allocate
-        self.gpu_allocator.allocate()
+        self.pool
+            .allocate()
+            .expect("Should have free blocks after eviction")
     }
 
     pub fn can_append_token_to_seq(&self, seq: &impl BlockEngineSequence) -> bool {
-        let free_blocks = self.gpu_allocator.get_num_free_blocks();
+        let free_blocks = self.pool.num_free();
         let evictable = self.prefix_cacher.num_evictable_blocks();
-        // Physical blocks = logical blocks
-        seq.blocks_to_add_new_tok() <= *free_blocks + evictable
+        seq.blocks_to_add_new_tok() <= free_blocks + evictable
     }
 
     /// Free a sequence's blocks and optionally cache them for prefix reuse.
@@ -371,7 +388,6 @@ impl BlockEngine {
         id: usize,
         logical_blocks: Option<&[LogicalTokenBlock]>,
     ) {
-        // Handle double free if run out of tokens
         if let Some(block_table) = self.block_tables.remove(&id) {
             let num_cached = self.cached_blocks_per_seq.remove(&id).unwrap_or(0);
 
@@ -379,12 +395,13 @@ impl BlockEngine {
             if let Some(logical_blocks) = logical_blocks {
                 if self.prefix_cacher.is_enabled() && block_table.len() == logical_blocks.len() {
                     // Insert new blocks into cache (starting after cached blocks)
+                    // The cache will clone the BlockRefs, keeping them alive
                     self.prefix_cacher
                         .insert_blocks(logical_blocks, &block_table, num_cached);
                 }
             }
 
-            // Release cached blocks' reference counts
+            // Release cached blocks' active user counts in the prefix cacher
             if num_cached > 0 {
                 if let Some(logical_blocks) = logical_blocks {
                     let cached_logical = &logical_blocks[..num_cached.min(logical_blocks.len())];
@@ -392,50 +409,42 @@ impl BlockEngine {
                 }
             }
 
-            // Free all blocks - decrement our reference
-            // (blocks in cache will have refcount > 0 after this, so they won't be freed to pool)
-            for block in block_table.iter() {
-                self.gpu_allocator.free_block(block.clone());
-            }
+            // The block_table is dropped here, which automatically decrements refcounts.
+            // Blocks that are only held by the cache will stay alive.
+            // Blocks that are not cached will return to the free pool.
         }
     }
 
     pub fn free_sequence(&mut self, id: usize) {
         // Free without caching (for aborted sequences or when we don't have logical blocks)
-        if let Some(block_table) = self.block_tables.remove(&id) {
+        if let Some(_block_table) = self.block_tables.remove(&id) {
             self.cached_blocks_per_seq.remove(&id);
-            // Free all blocks
-            for block in block_table.iter() {
-                self.gpu_allocator.free_block(block.clone());
-            }
+            // block_table is dropped here, automatically returning blocks to pool
         }
     }
 
     /// Free a sequence's blocks during preemption.
-    /// This properly releases prefix cache refs so cached blocks can be evicted.
+    /// This properly releases prefix cache active user counts.
     pub fn free_sequence_for_preemption(
         &mut self,
         id: usize,
         logical_blocks: &[LogicalTokenBlock],
     ) {
-        if let Some(block_table) = self.block_tables.remove(&id) {
+        if let Some(_block_table) = self.block_tables.remove(&id) {
             let num_cached = self.cached_blocks_per_seq.remove(&id).unwrap_or(0);
 
-            // Release cached blocks' reference counts in the prefix cache
+            // Release cached blocks' active user counts in the prefix cache
             if num_cached > 0 && self.prefix_cacher.is_enabled() {
                 let cached_logical = &logical_blocks[..num_cached.min(logical_blocks.len())];
                 self.prefix_cacher.release_blocks(cached_logical);
             }
 
-            // Free all blocks
-            for block in block_table.iter() {
-                self.gpu_allocator.free_block(block.clone());
-            }
+            // block_table is dropped here, automatically returning blocks to pool
         }
     }
 
-    // Returns the COW mapping (src, dst).
-    // COW is performed if there are multiple references to the last physical block.
+    /// Returns the COW mapping (src, dst).
+    /// COW is performed if there are multiple references to the last physical block.
     pub fn append_token_slot_to_seq(
         &mut self,
         sequence: &impl BlockEngineSequence,
@@ -456,29 +465,21 @@ impl BlockEngine {
                 None
             }
             0 => {
-                // Get the last block's info first
+                // Get the last block
                 let table = self.block_tables.get(&seq_id).unwrap();
                 let last_block = table.last().unwrap();
-                let is_gpu = last_block.deref_mut().is_gpu;
-                let refcount = last_block.deref_mut().refcount;
 
-                assert!(is_gpu);
-
-                if refcount == 1 {
+                if !last_block.is_shared() {
                     None
                 } else {
                     // We would be writing into shared, so COW.
-                    let old_block = last_block.clone();
-                    let old_number = old_block.deref_mut().block_id;
+                    let old_number = last_block.block_id();
 
-                    // Now allocate and mutate
+                    // Allocate new block
                     let new_block = self.allocate_block_with_eviction();
-                    let new_number = new_block.deref_mut().block_id;
+                    let new_number = new_block.block_id();
 
-                    // Free old block
-                    self.gpu_allocator.free_block(old_block);
-
-                    // Replace in table
+                    // Replace in table (old block ref is dropped, decrementing its refcount)
                     let table = self.block_tables.get_mut(&seq_id).unwrap();
                     *table.last_mut().unwrap() = new_block;
 

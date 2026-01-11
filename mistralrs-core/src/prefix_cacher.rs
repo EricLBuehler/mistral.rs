@@ -10,17 +10,17 @@ use tracing::info;
 
 use crate::{
     get_mut_arcmutex,
-    paged_attention::{BlockEngine, LogicalTokenBlock, PhysicalTokenBlock},
+    paged_attention::{BlockEngine, BlockRef, LogicalTokenBlock},
     pipeline::KvCache,
     sequence::{self, Sequence},
 };
 
 type BlockBestMatch<'a> = (
-    usize,                         // matched_len
-    &'a [LogicalTokenBlock],       // logical blocks
-    &'a [Arc<PhysicalTokenBlock>], // physical blocks
-    usize,                         // audios_match_until
-    usize,                         // images_match_until
+    usize,               // matched_len
+    &'a [LogicalTokenBlock], // logical blocks
+    &'a [BlockRef],      // physical blocks
+    usize,               // audios_match_until
+    usize,               // images_match_until
 );
 
 fn hash_logical_blocks(logical_blocks: &[LogicalTokenBlock]) -> Vec<u64> {
@@ -64,7 +64,7 @@ struct CacheElement {
 #[derive(Clone)]
 struct BlockCacheElement {
     logical_blocks: Vec<LogicalTokenBlock>,
-    physical_blocks: Vec<Arc<PhysicalTokenBlock>>,
+    physical_blocks: Vec<BlockRef>,
     image_hashes: Option<Vec<u64>>,
     audio_hashes: Option<Vec<u64>>,
 }
@@ -88,7 +88,7 @@ pub enum MatchingCache {
     },
     Paged {
         logical_blocks: Vec<LogicalTokenBlock>,
-        physical_blocks: Vec<Arc<PhysicalTokenBlock>>,
+        physical_blocks: Vec<BlockRef>,
         toks: Vec<u32>,
         offset: usize,
         images_to_keep: usize,
@@ -215,16 +215,13 @@ impl PrefixCacheManagerV2 {
         }
 
         // Now evict block‑caches if we still exceed the on‑device limit.
+        // With BlockRef, clearing the vector automatically returns blocks to the pool.
         for cache in self.block_caches.values_mut() {
             if n_on_device - n_evicted <= self.n_on_device {
                 break;
             }
             if !cache.physical_blocks.is_empty() {
-                // Drop our strong references and decrement ref‑counts so the
-                // BlockEngine can reclaim the KV blocks.
-                for block in &cache.physical_blocks {
-                    block.deref_mut().decrement_refcount();
-                }
+                // Just clear - BlockRef's Drop impl returns blocks to pool
                 cache.physical_blocks.clear();
                 n_evicted += 1;
             }
@@ -239,15 +236,10 @@ impl PrefixCacheManagerV2 {
 
     /// Evict all the caches.
     pub fn evict_all_caches(&mut self) -> Result<usize> {
-        let len = self.caches.len();
+        let len = self.caches.len() + self.block_caches.len();
 
         self.caches.clear();
-
-        for cache in self.block_caches.values_mut() {
-            for block in &cache.physical_blocks {
-                block.deref_mut().decrement_refcount();
-            }
-        }
+        // With BlockRef, clearing automatically returns blocks to pool
         self.block_caches.clear();
         Ok(len)
     }
@@ -264,9 +256,9 @@ impl PrefixCacheManagerV2 {
             return Ok(None);
         }
 
-        if let Some(block_engine) = &self.block_engine {
-            let block_engine = get_mut_arcmutex!(block_engine);
-            let block_size = block_engine.block_size();
+        if let Some(be) = &self.block_engine {
+            let engine = get_mut_arcmutex!(be);
+            let block_size = engine.block_size();
             let mut test_logical_blocks = Vec::new();
             for tok in toks {
                 sequence::util_append_token_to_blocks(
@@ -348,10 +340,8 @@ impl PrefixCacheManagerV2 {
 
             // Take the first n_blocks of both logical and physical blocks
             let mut logical_prefix = logical_blocks[..n_blocks].to_vec();
+            // Cloning BlockRefs automatically increments refcounts
             let physical_prefix = physical_blocks[..n_blocks].to_vec();
-            for block in &physical_prefix {
-                block.deref_mut().increment_refcount();
-            }
 
             // If the last reused block is full, reserve an extra empty block for new tokens
             let new_toks = toks[match_len..].to_vec();

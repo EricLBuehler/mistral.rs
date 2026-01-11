@@ -208,7 +208,7 @@ pub mod text_models_inputs_processor {
                 let table = table
                     .unwrap()
                     .iter()
-                    .map(|block| block.deref_mut().block_id)
+                    .map(|block| block.block_id())
                     .collect::<Vec<_>>();
 
                 let start_idx = if let Some(sliding_window) = paged_attn_metadata.sliding_window {
@@ -403,7 +403,7 @@ pub mod text_models_inputs_processor {
 
                 let table = table
                     .iter()
-                    .map(|block| block.deref_mut().block_id)
+                    .map(|block| block.block_id())
                     .collect::<Vec<_>>();
 
                 let block_pos = start_pos - seq.token_offset();
