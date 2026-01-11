@@ -260,77 +260,128 @@ fn generate_tool_impl(args: ToolArgs, input_fn: ItemFn) -> syn::Result<TokenStre
         .map(|name| quote! { args.#name })
         .collect();
 
-    let fn_call = if is_async {
+    // Build the output based on whether function is async or sync
+    let output = if is_async {
+        // Async function: generate AsyncToolCallback
         quote! {
-            let handle = tokio::runtime::Handle::try_current()
-                .map_err(|e| anyhow::anyhow!("No tokio runtime available: {}", e))?;
-            handle.block_on(async {
-                #fn_name(#(#call_args),*)
-            })
-        }
-    } else {
-        quote! {
-            #fn_name(#(#call_args),*)
-        }
-    };
+            // Original function preserved (with custom attributes stripped)
+            #stripped_fn
 
-    // Build the output
-    let output = quote! {
-        // Original function preserved (with custom attributes stripped)
-        #stripped_fn
+            // Default value functions (if any)
+            #(#default_fns)*
 
-        // Default value functions (if any)
-        #(#default_fns)*
+            // Arguments struct for deserialization
+            #[derive(serde::Deserialize)]
+            #[allow(non_camel_case_types)]
+            struct #args_struct_name {
+                #(#args_struct_fields),*
+            }
 
-        // Arguments struct for deserialization
-        #[derive(serde::Deserialize)]
-        #[allow(non_camel_case_types)]
-        struct #args_struct_name {
-            #(#args_struct_fields),*
-        }
+            /// Returns the Tool definition for this function
+            #fn_vis fn #tool_fn_name() -> mistralrs::Tool {
+                let mut properties = std::collections::HashMap::<String, serde_json::Value>::new();
 
-        /// Returns the Tool definition for this function
-        #fn_vis fn #tool_fn_name() -> mistralrs::Tool {
-            let mut properties = std::collections::HashMap::<String, serde_json::Value>::new();
+                #(#property_schemas)*
 
-            #(#property_schemas)*
+                let required: Vec<String> = vec![#(#required_array),*];
 
-            let required: Vec<String> = vec![#(#required_array),*];
+                let parameters: std::collections::HashMap<String, serde_json::Value> = serde_json::from_value(
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": properties,
+                        "required": required,
+                    })
+                ).expect("Failed to create tool parameters");
 
-            let parameters: std::collections::HashMap<String, serde_json::Value> = serde_json::from_value(
-                serde_json::json!({
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
+                mistralrs::Tool {
+                    tp: mistralrs::ToolType::Function,
+                    function: mistralrs::Function {
+                        description: Some(#description.to_string()),
+                        name: #tool_name.to_string(),
+                        parameters: Some(parameters),
+                    },
+                }
+            }
+
+            /// Returns an async callback that wraps this function for tool execution
+            #fn_vis fn #callback_fn_name() -> std::sync::Arc<mistralrs::AsyncToolCallback> {
+                std::sync::Arc::new(|called: mistralrs::CalledFunction| {
+                    Box::pin(async move {
+                        let args: #args_struct_name = serde_json::from_str(&called.arguments)
+                            .map_err(|e| anyhow::anyhow!("Failed to parse tool arguments: {}", e))?;
+
+                        let result = #fn_name(#(#call_args),*).await?;
+
+                        serde_json::to_string(&result)
+                            .map_err(|e| anyhow::anyhow!("Failed to serialize tool result: {}", e))
+                    })
                 })
-            ).expect("Failed to create tool parameters");
+            }
 
-            mistralrs::Tool {
-                tp: mistralrs::ToolType::Function,
-                function: mistralrs::Function {
-                    description: Some(#description.to_string()),
-                    name: #tool_name.to_string(),
-                    parameters: Some(parameters),
-                },
+            /// Returns both the Tool definition and callback as a tuple
+            #fn_vis fn #combined_fn_name() -> (mistralrs::Tool, mistralrs::ToolCallbackType) {
+                (#tool_fn_name(), mistralrs::ToolCallbackType::Async(#callback_fn_name()))
             }
         }
+    } else {
+        // Sync function: generate ToolCallback
+        quote! {
+            // Original function preserved (with custom attributes stripped)
+            #stripped_fn
 
-        /// Returns a callback that wraps this function for tool execution
-        #fn_vis fn #callback_fn_name() -> std::sync::Arc<mistralrs::ToolCallback> {
-            std::sync::Arc::new(|called: &mistralrs::CalledFunction| {
-                let args: #args_struct_name = serde_json::from_str(&called.arguments)
-                    .map_err(|e| anyhow::anyhow!("Failed to parse tool arguments: {}", e))?;
+            // Default value functions (if any)
+            #(#default_fns)*
 
-                let result = #fn_call?;
+            // Arguments struct for deserialization
+            #[derive(serde::Deserialize)]
+            #[allow(non_camel_case_types)]
+            struct #args_struct_name {
+                #(#args_struct_fields),*
+            }
 
-                serde_json::to_string(&result)
-                    .map_err(|e| anyhow::anyhow!("Failed to serialize tool result: {}", e))
-            })
-        }
+            /// Returns the Tool definition for this function
+            #fn_vis fn #tool_fn_name() -> mistralrs::Tool {
+                let mut properties = std::collections::HashMap::<String, serde_json::Value>::new();
 
-        /// Returns both the Tool definition and callback as a tuple
-        #fn_vis fn #combined_fn_name() -> (mistralrs::Tool, std::sync::Arc<mistralrs::ToolCallback>) {
-            (#tool_fn_name(), #callback_fn_name())
+                #(#property_schemas)*
+
+                let required: Vec<String> = vec![#(#required_array),*];
+
+                let parameters: std::collections::HashMap<String, serde_json::Value> = serde_json::from_value(
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": properties,
+                        "required": required,
+                    })
+                ).expect("Failed to create tool parameters");
+
+                mistralrs::Tool {
+                    tp: mistralrs::ToolType::Function,
+                    function: mistralrs::Function {
+                        description: Some(#description.to_string()),
+                        name: #tool_name.to_string(),
+                        parameters: Some(parameters),
+                    },
+                }
+            }
+
+            /// Returns a sync callback that wraps this function for tool execution
+            #fn_vis fn #callback_fn_name() -> std::sync::Arc<mistralrs::ToolCallback> {
+                std::sync::Arc::new(|called: &mistralrs::CalledFunction| {
+                    let args: #args_struct_name = serde_json::from_str(&called.arguments)
+                        .map_err(|e| anyhow::anyhow!("Failed to parse tool arguments: {}", e))?;
+
+                    let result = #fn_name(#(#call_args),*)?;
+
+                    serde_json::to_string(&result)
+                        .map_err(|e| anyhow::anyhow!("Failed to serialize tool result: {}", e))
+                })
+            }
+
+            /// Returns both the Tool definition and callback as a tuple
+            #fn_vis fn #combined_fn_name() -> (mistralrs::Tool, mistralrs::ToolCallbackType) {
+                (#tool_fn_name(), mistralrs::ToolCallbackType::Sync(#callback_fn_name()))
+            }
         }
     };
 

@@ -143,7 +143,8 @@ mod vision_model;
 mod xlora_model;
 
 pub use agent::{
-    Agent, AgentBuilder, AgentConfig, AgentResponse, AgentStep, AgentStopReason, ToolResult,
+    Agent, AgentBuilder, AgentConfig, AgentEvent, AgentResponse, AgentStep, AgentStopReason,
+    AgentStream, AsyncToolCallback, ToolCallbackType, ToolResult,
 };
 pub use anymoe::AnyMoeModelBuilder;
 pub use diffusion_model::DiffusionModelBuilder;

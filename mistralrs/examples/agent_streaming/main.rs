@@ -1,21 +1,24 @@
-//! Example demonstrating the agentic loop with tool calling
+//! Example demonstrating the agentic loop with streaming output
 //!
 //! This example shows how to:
 //! 1. Define sync and async tools using the `#[tool]` macro
 //! 2. Create an agent with registered tools
-//! 3. Run the agentic loop (non-streaming)
-//! 4. Execute tools in parallel
+//! 3. Run the agentic loop with streaming output
+//! 4. Process streaming events in real-time
+//! 5. Execute tools in parallel
 //!
-//! For streaming output, see the `agent_streaming` example.
+//! For non-streaming output, see the `agent` example.
 //!
-//! Run with: `cargo run --release --example agent -p mistralrs`
+//! Run with: `cargo run --release --example agent_streaming -p mistralrs`
 
 use anyhow::Result;
 use mistralrs::{
-    tool, AgentBuilder, AgentStopReason, IsqType, PagedAttentionMetaBuilder, TextModelBuilder,
+    tool, AgentBuilder, AgentEvent, AgentStopReason, IsqType, PagedAttentionMetaBuilder,
+    TextModelBuilder,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 
 /// Weather information returned by the get_weather tool
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -115,54 +118,81 @@ async fn main() -> Result<()> {
         .register_tool(web_search_tool_with_callback())
         .build();
 
-    println!("=== Agent Example (Non-Streaming) ===\n");
+    println!("=== Agent with Streaming Output ===\n");
+    println!(
+        "User: What's the weather like in Boston, and can you find me some good restaurants there?\n"
+    );
+    print!("Assistant: ");
 
-    let user_message =
-        "What's the weather like in Boston, and can you find me some good restaurants there?";
-    println!("User: {}\n", user_message);
+    // Run the agent with streaming output
+    let mut stream = agent
+        .run_stream(
+            "What's the weather like in Boston, and can you find me some good restaurants there?",
+        )
+        .await?;
 
-    // Run the agent (waits for complete response)
-    let response = agent.run(user_message).await?;
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
 
-    // Print the final response
-    if let Some(text) = &response.final_response {
-        println!("Assistant: {}\n", text);
-    }
-
-    // Print execution summary
-    println!("=== Execution Summary ===");
-    println!("Completed in {} iteration(s)", response.iterations);
-    println!("Stop reason: {:?}", response.stop_reason);
-    println!("Steps taken: {}", response.steps.len());
-
-    // Print details of each step
-    for (i, step) in response.steps.iter().enumerate() {
-        println!("\n--- Step {} ---", i + 1);
-        if !step.tool_calls.is_empty() {
-            println!("Tool calls:");
-            for call in &step.tool_calls {
-                println!("  - {}: {}", call.function.name, call.function.arguments);
+    // Process streaming events
+    while let Some(event) = stream.next().await {
+        match event {
+            AgentEvent::TextDelta(text) => {
+                // Print text as it streams - this gives real-time output
+                write!(handle, "{}", text)?;
+                handle.flush()?;
             }
-            println!("Tool results:");
-            for result in &step.tool_results {
+            AgentEvent::ToolCallsStart(calls) => {
+                // Model is about to call tools
+                writeln!(handle, "\n\n[Calling {} tool(s)...]", calls.len())?;
+                for call in &calls {
+                    writeln!(
+                        handle,
+                        "  - {}: {}",
+                        call.function.name, call.function.arguments
+                    )?;
+                }
+            }
+            AgentEvent::ToolResult(result) => {
+                // A single tool finished execution
                 let status = if result.result.is_ok() { "OK" } else { "ERROR" };
-                println!("  - {}: {}", result.tool_name, status);
+                writeln!(
+                    handle,
+                    "  [Tool {} completed: {}]",
+                    result.tool_name, status
+                )?;
             }
-        }
-    }
+            AgentEvent::ToolCallsComplete => {
+                // All tools finished, model will continue generating
+                writeln!(handle, "[All tools completed, continuing...]\n")?;
+                write!(handle, "Assistant: ")?;
+                handle.flush()?;
+            }
+            AgentEvent::Complete(response) => {
+                // Agent finished executing
+                writeln!(handle, "\n\n=== Agent Execution Summary ===")?;
+                writeln!(handle, "Completed in {} iteration(s)", response.iterations)?;
+                writeln!(handle, "Stop reason: {:?}", response.stop_reason)?;
+                writeln!(handle, "Steps taken: {}", response.steps.len())?;
 
-    match response.stop_reason {
-        AgentStopReason::TextResponse => {
-            println!("\nFinal response delivered successfully.");
-        }
-        AgentStopReason::MaxIterations => {
-            println!("\nAgent reached maximum iterations without producing a final response.");
-        }
-        AgentStopReason::NoAction => {
-            println!("\nAgent produced no response.");
-        }
-        AgentStopReason::Error(e) => {
-            println!("\nAgent encountered an error: {}", e);
+                match response.stop_reason {
+                    AgentStopReason::TextResponse => {
+                        writeln!(handle, "Final response delivered successfully.")?;
+                    }
+                    AgentStopReason::MaxIterations => {
+                        writeln!(
+                            handle,
+                            "Agent reached maximum iterations without producing a final response."
+                        )?;
+                    }
+                    AgentStopReason::NoAction => {
+                        writeln!(handle, "Agent produced no response.")?;
+                    }
+                    AgentStopReason::Error(e) => {
+                        writeln!(handle, "Agent encountered an error: {}", e)?;
+                    }
+                }
+            }
         }
     }
 

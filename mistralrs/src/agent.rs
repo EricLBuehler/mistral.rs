@@ -4,45 +4,75 @@
 //! The agent takes a model, registers tools, and automatically handles the
 //! tool calling loop until the model produces a final response.
 //!
+//! # Features
+//!
+//! - **Async tools**: Native support for async tool functions
+//! - **Parallel execution**: Execute multiple tool calls concurrently
+//! - **Streaming**: Stream assistant responses and tool execution events
+//!
 //! # Example
 //!
 //! ```ignore
-//! use mistralrs::{Agent, AgentBuilder, TextModelBuilder, IsqType, tool};
-//! use schemars::JsonSchema;
-//! use serde::{Deserialize, Serialize};
+//! use mistralrs::{tool, AgentBuilder, AgentEvent};
 //!
-//! #[derive(Serialize, Deserialize, JsonSchema)]
-//! struct WeatherInfo { temperature: f32 }
+//! // Async tool - runs natively async
+//! #[tool(description = "Fetch a URL")]
+//! async fn fetch_url(url: String) -> Result<String> {
+//!     reqwest::get(&url).await?.text().await.map_err(Into::into)
+//! }
 //!
-//! #[tool(description = "Get weather for a city")]
-//! fn get_weather(city: String) -> anyhow::Result<WeatherInfo> {
+//! // Sync tool
+//! #[tool(description = "Get weather")]
+//! fn get_weather(city: String) -> Result<WeatherInfo> {
 //!     Ok(WeatherInfo { temperature: 22.5 })
 //! }
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     let model = TextModelBuilder::new("model-id")
-//!         .build()
-//!         .await?;
+//!     let model = TextModelBuilder::new("model-id").build().await?;
 //!
 //!     let agent = AgentBuilder::new(model)
-//!         .with_system_prompt("You are a helpful assistant.")
+//!         .with_system_prompt("You are helpful.")
+//!         .register_tool(fetch_url_tool_with_callback())
 //!         .register_tool(get_weather_tool_with_callback())
 //!         .build();
 //!
-//!     let response = agent.run("What's the weather in Boston?").await?;
-//!     println!("{:?}", response.final_response);
+//!     // Streaming execution
+//!     let mut stream = agent.run_stream("What's the weather?").await?;
+//!     while let Some(event) = stream.next().await {
+//!         match event {
+//!             AgentEvent::TextDelta(text) => print!("{}", text),
+//!             AgentEvent::Complete(response) => println!("\nDone!"),
+//!             _ => {}
+//!         }
+//!     }
 //!     Ok(())
 //! }
 //! ```
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::{
-    ChatCompletionResponse, Model, RequestBuilder, TextMessageRole, Tool, ToolCallResponse,
-    ToolCallback, ToolChoice,
+    CalledFunction, ChatCompletionChunkResponse, ChatCompletionResponse, ChunkChoice, Delta, Model,
+    RequestBuilder, Response, TextMessageRole, Tool, ToolCallResponse, ToolCallback, ToolChoice,
 };
+
+/// Async tool callback type for native async tool support
+pub type AsyncToolCallback = dyn Fn(CalledFunction) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send>>
+    + Send
+    + Sync;
+
+/// Unified tool callback that can be sync or async
+#[derive(Clone)]
+pub enum ToolCallbackType {
+    /// Synchronous callback (runs in spawn_blocking for parallel execution)
+    Sync(Arc<ToolCallback>),
+    /// Asynchronous callback (runs natively async)
+    Async(Arc<AsyncToolCallback>),
+}
 
 /// Configuration for the agentic loop
 #[derive(Clone, Debug)]
@@ -53,6 +83,8 @@ pub struct AgentConfig {
     pub tool_choice: ToolChoice,
     /// Optional system prompt for the agent
     pub system_prompt: Option<String>,
+    /// Whether to execute multiple tool calls in parallel (default: true)
+    pub parallel_tool_execution: bool,
 }
 
 impl Default for AgentConfig {
@@ -61,6 +93,7 @@ impl Default for AgentConfig {
             max_iterations: 10,
             tool_choice: ToolChoice::Auto,
             system_prompt: None,
+            parallel_tool_execution: true,
         }
     }
 }
@@ -88,7 +121,7 @@ pub struct ToolResult {
 }
 
 /// Final response from the agent
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AgentResponse {
     /// All steps taken during execution
     pub steps: Vec<AgentStep>,
@@ -113,11 +146,326 @@ pub enum AgentStopReason {
     Error(String),
 }
 
+/// Events yielded during agent streaming
+#[derive(Debug, Clone)]
+pub enum AgentEvent {
+    /// Text content delta from the model
+    TextDelta(String),
+    /// Model is calling tools (with the tool calls)
+    ToolCallsStart(Vec<ToolCallResponse>),
+    /// A single tool completed execution
+    ToolResult(ToolResult),
+    /// All tools completed, continuing to next iteration
+    ToolCallsComplete,
+    /// Agent finished with final response
+    Complete(AgentResponse),
+}
+
+/// Internal state for the agent stream
+enum AgentStreamState {
+    /// Currently streaming model response
+    Streaming {
+        messages: RequestBuilder,
+        iteration: usize,
+        accumulated_content: String,
+        accumulated_tool_calls: Vec<ToolCallResponse>,
+        steps: Vec<AgentStep>,
+    },
+    /// Executing tool calls
+    ExecutingTools {
+        messages: RequestBuilder,
+        iteration: usize,
+        response: ChatCompletionResponse,
+        tool_calls: Vec<ToolCallResponse>,
+        tool_results: Vec<ToolResult>,
+        pending_indices: Vec<usize>,
+        steps: Vec<AgentStep>,
+    },
+    /// Agent has completed
+    Done,
+}
+
+/// Stream of agent events during execution
+pub struct AgentStream<'a> {
+    agent: &'a Agent,
+    state: AgentStreamState,
+    model_stream: Option<crate::model::Stream<'a>>,
+}
+
+impl<'a> AgentStream<'a> {
+    /// Get the next event from the agent stream
+    pub async fn next(&mut self) -> Option<AgentEvent> {
+        loop {
+            match &mut self.state {
+                AgentStreamState::Done => return None,
+
+                AgentStreamState::Streaming {
+                    messages,
+                    iteration,
+                    accumulated_content,
+                    accumulated_tool_calls,
+                    steps,
+                } => {
+                    // Get next chunk from model stream
+                    if let Some(ref mut stream) = self.model_stream {
+                        if let Some(response) = stream.next().await {
+                            match response {
+                                Response::Chunk(ChatCompletionChunkResponse {
+                                    choices, ..
+                                }) => {
+                                    if let Some(ChunkChoice {
+                                        delta:
+                                            Delta {
+                                                content,
+                                                tool_calls,
+                                                ..
+                                            },
+                                        finish_reason,
+                                        ..
+                                    }) = choices.first()
+                                    {
+                                        // Accumulate content
+                                        if let Some(text) = content {
+                                            accumulated_content.push_str(text);
+                                            return Some(AgentEvent::TextDelta(text.clone()));
+                                        }
+
+                                        // Accumulate tool calls
+                                        if let Some(calls) = tool_calls {
+                                            accumulated_tool_calls.extend(calls.clone());
+                                        }
+
+                                        // Check if done
+                                        if finish_reason.is_some() {
+                                            self.model_stream = None;
+
+                                            if accumulated_tool_calls.is_empty() {
+                                                // No tool calls - we're done
+                                                let final_response =
+                                                    if accumulated_content.is_empty() {
+                                                        None
+                                                    } else {
+                                                        Some(accumulated_content.clone())
+                                                    };
+
+                                                let stop_reason = if final_response.is_some() {
+                                                    AgentStopReason::TextResponse
+                                                } else {
+                                                    AgentStopReason::NoAction
+                                                };
+
+                                                let response = AgentResponse {
+                                                    steps: steps.clone(),
+                                                    final_response,
+                                                    iterations: *iteration + 1,
+                                                    stop_reason,
+                                                };
+
+                                                self.state = AgentStreamState::Done;
+                                                return Some(AgentEvent::Complete(response));
+                                            } else {
+                                                // Transition to executing tools
+                                                let tool_calls = accumulated_tool_calls.clone();
+                                                let event =
+                                                    AgentEvent::ToolCallsStart(tool_calls.clone());
+
+                                                // Create a placeholder response for the step
+                                                let placeholder_response = ChatCompletionResponse {
+                                                    id: String::new(),
+                                                    choices: vec![],
+                                                    created: 0,
+                                                    model: String::new(),
+                                                    system_fingerprint: String::new(),
+                                                    object: String::new(),
+                                                    usage: crate::Usage {
+                                                        completion_tokens: 0,
+                                                        prompt_tokens: 0,
+                                                        total_tokens: 0,
+                                                        avg_tok_per_sec: 0.0,
+                                                        avg_prompt_tok_per_sec: 0.0,
+                                                        avg_compl_tok_per_sec: 0.0,
+                                                        total_time_sec: 0.0,
+                                                        total_prompt_time_sec: 0.0,
+                                                        total_completion_time_sec: 0.0,
+                                                    },
+                                                };
+
+                                                self.state = AgentStreamState::ExecutingTools {
+                                                    messages: messages.clone(),
+                                                    iteration: *iteration,
+                                                    response: placeholder_response,
+                                                    tool_calls: tool_calls.clone(),
+                                                    tool_results: Vec::new(),
+                                                    pending_indices: (0..tool_calls.len())
+                                                        .collect(),
+                                                    steps: steps.clone(),
+                                                };
+
+                                                return Some(event);
+                                            }
+                                        }
+                                    }
+                                }
+                                Response::Done(response) => {
+                                    self.model_stream = None;
+                                    let tool_calls = response
+                                        .choices
+                                        .first()
+                                        .and_then(|c| c.message.tool_calls.clone())
+                                        .unwrap_or_default();
+
+                                    if tool_calls.is_empty() {
+                                        let final_response = response
+                                            .choices
+                                            .first()
+                                            .and_then(|c| c.message.content.clone());
+                                        let stop_reason = if final_response.is_some() {
+                                            AgentStopReason::TextResponse
+                                        } else {
+                                            AgentStopReason::NoAction
+                                        };
+
+                                        let agent_response = AgentResponse {
+                                            steps: steps.clone(),
+                                            final_response,
+                                            iterations: *iteration + 1,
+                                            stop_reason,
+                                        };
+
+                                        self.state = AgentStreamState::Done;
+                                        return Some(AgentEvent::Complete(agent_response));
+                                    } else {
+                                        let event = AgentEvent::ToolCallsStart(tool_calls.clone());
+
+                                        self.state = AgentStreamState::ExecutingTools {
+                                            messages: messages.clone(),
+                                            iteration: *iteration,
+                                            response: response.clone(),
+                                            tool_calls: tool_calls.clone(),
+                                            tool_results: Vec::new(),
+                                            pending_indices: (0..tool_calls.len()).collect(),
+                                            steps: steps.clone(),
+                                        };
+
+                                        return Some(event);
+                                    }
+                                }
+                                _ => continue,
+                            }
+                        }
+                    }
+
+                    // Stream ended unexpectedly
+                    self.state = AgentStreamState::Done;
+                    return None;
+                }
+
+                AgentStreamState::ExecutingTools {
+                    messages,
+                    iteration,
+                    response,
+                    tool_calls,
+                    tool_results,
+                    pending_indices,
+                    steps,
+                } => {
+                    if pending_indices.is_empty() {
+                        // All tools executed - prepare for next iteration
+                        let mut new_messages = messages.clone();
+
+                        // Add assistant message with tool calls
+                        new_messages = new_messages.add_message_with_tool_call(
+                            TextMessageRole::Assistant,
+                            response
+                                .choices
+                                .first()
+                                .and_then(|c| c.message.content.clone())
+                                .unwrap_or_default(),
+                            tool_calls.clone(),
+                        );
+
+                        // Add tool results
+                        for result in tool_results.iter() {
+                            let result_str = match &result.result {
+                                Ok(s) => s.clone(),
+                                Err(e) => format!("Error: {}", e),
+                            };
+                            new_messages =
+                                new_messages.add_tool_message(&result_str, &result.tool_call_id);
+                        }
+
+                        // Record step
+                        let step = AgentStep {
+                            response: response.clone(),
+                            tool_calls: tool_calls.clone(),
+                            tool_results: tool_results.clone(),
+                        };
+                        let mut new_steps = steps.clone();
+                        new_steps.push(step);
+
+                        let new_iteration = *iteration + 1;
+
+                        // Check max iterations
+                        if new_iteration >= self.agent.config.max_iterations {
+                            let agent_response = AgentResponse {
+                                steps: new_steps,
+                                final_response: None,
+                                iterations: new_iteration,
+                                stop_reason: AgentStopReason::MaxIterations,
+                            };
+                            self.state = AgentStreamState::Done;
+                            return Some(AgentEvent::Complete(agent_response));
+                        }
+
+                        // Start new model request
+                        let request = new_messages
+                            .clone()
+                            .set_tools(self.agent.tools.clone())
+                            .set_tool_choice(self.agent.config.tool_choice.clone());
+
+                        match self.agent.model.stream_chat_request(request).await {
+                            Ok(stream) => {
+                                self.model_stream = Some(stream);
+                                self.state = AgentStreamState::Streaming {
+                                    messages: new_messages,
+                                    iteration: new_iteration,
+                                    accumulated_content: String::new(),
+                                    accumulated_tool_calls: Vec::new(),
+                                    steps: new_steps,
+                                };
+                                return Some(AgentEvent::ToolCallsComplete);
+                            }
+                            Err(e) => {
+                                let agent_response = AgentResponse {
+                                    steps: new_steps,
+                                    final_response: None,
+                                    iterations: new_iteration,
+                                    stop_reason: AgentStopReason::Error(e.to_string()),
+                                };
+                                self.state = AgentStreamState::Done;
+                                return Some(AgentEvent::Complete(agent_response));
+                            }
+                        }
+                    }
+
+                    // Execute next pending tool
+                    let idx = pending_indices.remove(0);
+                    let tool_call = &tool_calls[idx];
+                    let result = self.agent.execute_tool_async(tool_call).await;
+                    let event = AgentEvent::ToolResult(result.clone());
+                    tool_results.push(result);
+                    return Some(event);
+                }
+            }
+        }
+    }
+}
+
 /// An agent that runs an agentic loop with tool calling
 pub struct Agent {
     model: Model,
     tools: Vec<Tool>,
-    callbacks: HashMap<String, Arc<ToolCallback>>,
+    callbacks: HashMap<String, ToolCallbackType>,
     config: AgentConfig,
 }
 
@@ -133,7 +481,7 @@ impl Agent {
     }
 
     /// Add a tool with its callback
-    pub fn with_tool(mut self, tool: Tool, callback: Arc<ToolCallback>) -> Self {
+    pub fn with_tool(mut self, tool: Tool, callback: ToolCallbackType) -> Self {
         let name = tool.function.name.clone();
         self.tools.push(tool);
         self.callbacks.insert(name, callback);
@@ -199,8 +547,16 @@ impl Agent {
                 });
             }
 
-            // Execute tool calls
-            let mut tool_results = Vec::new();
+            // Execute tool calls (parallel or sequential based on config)
+            let tool_results = if self.config.parallel_tool_execution {
+                self.execute_tools_parallel(&tool_calls).await
+            } else {
+                let mut results = Vec::new();
+                for tool_call in &tool_calls {
+                    results.push(self.execute_tool_async(tool_call).await);
+                }
+                results
+            };
 
             // Add assistant message with tool calls
             messages = messages.add_message_with_tool_call(
@@ -209,17 +565,13 @@ impl Agent {
                 tool_calls.clone(),
             );
 
-            for tool_call in &tool_calls {
-                let result = self.execute_tool(tool_call);
-
-                // Add tool result to messages
+            // Add tool results to messages
+            for result in &tool_results {
                 let result_str = match &result.result {
                     Ok(s) => s.clone(),
                     Err(e) => format!("Error: {}", e),
                 };
-                messages = messages.add_tool_message(&result_str, &tool_call.id);
-
-                tool_results.push(result);
+                messages = messages.add_tool_message(&result_str, &result.tool_call_id);
             }
 
             steps.push(AgentStep {
@@ -238,12 +590,72 @@ impl Agent {
         })
     }
 
-    /// Execute a single tool call
-    fn execute_tool(&self, tool_call: &ToolCallResponse) -> ToolResult {
+    /// Run the agent with streaming output
+    ///
+    /// Returns a stream of `AgentEvent` that can be used to observe
+    /// the agent's progress in real-time.
+    pub async fn run_stream(&self, user_message: impl ToString) -> anyhow::Result<AgentStream<'_>> {
+        let mut messages = RequestBuilder::new();
+
+        // Add system prompt if configured
+        if let Some(ref system) = self.config.system_prompt {
+            messages = messages.add_message(TextMessageRole::System, system);
+        }
+
+        // Add initial user message
+        messages = messages.add_message(TextMessageRole::User, user_message.to_string());
+
+        // Configure tools for this request
+        let request = messages
+            .clone()
+            .set_tools(self.tools.clone())
+            .set_tool_choice(self.config.tool_choice.clone());
+
+        // Start streaming
+        let stream = self.model.stream_chat_request(request).await?;
+
+        Ok(AgentStream {
+            agent: self,
+            state: AgentStreamState::Streaming {
+                messages,
+                iteration: 0,
+                accumulated_content: String::new(),
+                accumulated_tool_calls: Vec::new(),
+                steps: Vec::new(),
+            },
+            model_stream: Some(stream),
+        })
+    }
+
+    /// Execute multiple tool calls in parallel
+    async fn execute_tools_parallel(&self, tool_calls: &[ToolCallResponse]) -> Vec<ToolResult> {
+        let futures: Vec<_> = tool_calls
+            .iter()
+            .map(|tc| self.execute_tool_async(tc))
+            .collect();
+
+        futures::future::join_all(futures).await
+    }
+
+    /// Execute a single tool call (async-compatible)
+    async fn execute_tool_async(&self, tool_call: &ToolCallResponse) -> ToolResult {
         let tool_name = &tool_call.function.name;
 
         let result = match self.callbacks.get(tool_name) {
-            Some(callback) => callback(&tool_call.function).map_err(|e| e.to_string()),
+            Some(ToolCallbackType::Sync(callback)) => {
+                // Run sync callback in spawn_blocking to not block async runtime
+                let callback = Arc::clone(callback);
+                let function = tool_call.function.clone();
+                tokio::task::spawn_blocking(move || callback(&function))
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Task join error: {}", e))
+                    .and_then(|r| r)
+                    .map_err(|e| e.to_string())
+            }
+            Some(ToolCallbackType::Async(callback)) => {
+                let function = tool_call.function.clone();
+                callback(function).await.map_err(|e| e.to_string())
+            }
             None => Err(format!("Unknown tool: {}", tool_name)),
         };
 
@@ -274,7 +686,7 @@ impl Agent {
 pub struct AgentBuilder {
     model: Model,
     tools: Vec<Tool>,
-    callbacks: HashMap<String, Arc<ToolCallback>>,
+    callbacks: HashMap<String, ToolCallbackType>,
     config: AgentConfig,
 }
 
@@ -307,20 +719,39 @@ impl AgentBuilder {
         self
     }
 
-    /// Add a tool with its callback
-    pub fn with_tool(mut self, tool: Tool, callback: Arc<ToolCallback>) -> Self {
+    /// Enable or disable parallel tool execution (default: true)
+    pub fn with_parallel_tool_execution(mut self, enabled: bool) -> Self {
+        self.config.parallel_tool_execution = enabled;
+        self
+    }
+
+    /// Add a sync tool with its callback
+    pub fn with_sync_tool(mut self, tool: Tool, callback: Arc<ToolCallback>) -> Self {
+        let name = tool.function.name.clone();
+        self.tools.push(tool);
+        self.callbacks
+            .insert(name, ToolCallbackType::Sync(callback));
+        self
+    }
+
+    /// Add an async tool with its callback
+    pub fn with_async_tool(mut self, tool: Tool, callback: Arc<AsyncToolCallback>) -> Self {
+        let name = tool.function.name.clone();
+        self.tools.push(tool);
+        self.callbacks
+            .insert(name, ToolCallbackType::Async(callback));
+        self
+    }
+
+    /// Register a tool using a tuple of (Tool, ToolCallbackType)
+    ///
+    /// This is designed to work with the `_tool_with_callback()` functions
+    /// generated by the `#[tool]` macro.
+    pub fn register_tool(mut self, (tool, callback): (Tool, ToolCallbackType)) -> Self {
         let name = tool.function.name.clone();
         self.tools.push(tool);
         self.callbacks.insert(name, callback);
         self
-    }
-
-    /// Register a tool using a tuple of (Tool, Arc<ToolCallback>)
-    ///
-    /// This is designed to work with the `_tool_with_callback()` functions
-    /// generated by the `#[tool]` macro.
-    pub fn register_tool(self, (tool, callback): (Tool, Arc<ToolCallback>)) -> Self {
-        self.with_tool(tool, callback)
     }
 
     /// Build the agent
@@ -343,6 +774,7 @@ mod tests {
         let config = AgentConfig::default();
         assert_eq!(config.max_iterations, 10);
         assert!(config.system_prompt.is_none());
+        assert!(config.parallel_tool_execution);
     }
 
     #[test]
@@ -356,5 +788,13 @@ mod tests {
             AgentStopReason::TextResponse,
             AgentStopReason::MaxIterations
         );
+    }
+
+    #[test]
+    fn test_tool_callback_type_clone() {
+        // Ensure ToolCallbackType can be cloned
+        let sync_cb: Arc<ToolCallback> = Arc::new(|_| Ok("test".to_string()));
+        let cb_type = ToolCallbackType::Sync(sync_cb);
+        let _ = cb_type.clone();
     }
 }
