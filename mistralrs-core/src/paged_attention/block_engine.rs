@@ -507,3 +507,85 @@ impl BlockEngine {
         self.prefix_cacher.num_cached_blocks()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_block_auto_return_to_pool() {
+        let pool = BlockPool::new(16, 4);
+        assert_eq!(pool.num_free(), 4);
+
+        let block = pool.allocate().unwrap();
+        assert_eq!(pool.num_free(), 3);
+
+        drop(block);
+        assert_eq!(pool.num_free(), 4); // Block returned automatically
+    }
+
+    #[test]
+    fn test_block_shared_detection() {
+        let pool = BlockPool::new(16, 4);
+        let block = pool.allocate().unwrap();
+
+        assert!(!block.is_shared()); // Only one reference
+
+        let clone = block.clone();
+        assert!(block.is_shared()); // Now shared
+        assert!(clone.is_shared());
+
+        drop(clone);
+        assert!(!block.is_shared()); // Back to single reference
+    }
+
+    #[test]
+    fn test_block_only_freed_when_last_ref_dropped() {
+        let pool = BlockPool::new(16, 4);
+        let block = pool.allocate().unwrap();
+        let clone1 = block.clone();
+        let clone2 = block.clone();
+
+        assert_eq!(pool.num_free(), 3);
+        assert_eq!(block.ref_count(), 3);
+
+        drop(block);
+        assert_eq!(pool.num_free(), 3); // Still held by clones
+
+        drop(clone1);
+        assert_eq!(pool.num_free(), 3); // Still held by clone2
+
+        drop(clone2);
+        assert_eq!(pool.num_free(), 4); // Now freed
+    }
+
+    #[test]
+    fn test_pool_exhaustion_and_recovery() {
+        let pool = BlockPool::new(16, 2);
+
+        let b1 = pool.allocate().unwrap();
+        let b2 = pool.allocate().unwrap();
+        assert!(pool.allocate().is_none()); // Pool exhausted
+
+        drop(b1);
+        let b3 = pool.allocate(); // Can allocate again
+        assert!(b3.is_some());
+        assert_eq!(pool.num_free(), 0); // All allocated
+
+        drop(b2);
+        drop(b3);
+        assert_eq!(pool.num_free(), 2); // All returned
+    }
+
+    #[test]
+    fn test_block_ids_are_reused() {
+        let pool = BlockPool::new(16, 2);
+
+        let b1 = pool.allocate().unwrap();
+        let id1 = b1.block_id();
+        drop(b1);
+
+        let b2 = pool.allocate().unwrap();
+        assert_eq!(b2.block_id(), id1); // Same ID reused (LIFO)
+    }
+}
