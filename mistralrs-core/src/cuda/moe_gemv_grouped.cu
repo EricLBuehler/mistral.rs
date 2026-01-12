@@ -24,7 +24,7 @@
 
 #define CEILDIV(x, y) (((x) + (y)-1) / (y))
 
-namespace moe_gemv_grouped {
+namespace moe_gemv_grouped_internal {
 
 // Warp reduction sum using shuffle instructions
 template <int WARP_SIZE = 32>
@@ -36,7 +36,7 @@ __device__ __forceinline__ float warp_reduce_sum(float x) {
   return x;
 }
 
-} // namespace moe_gemv_grouped
+} // namespace moe_gemv_grouped_internal
 
 /**
  * @brief Grouped MOE GEMV kernel for standard weight layout [E, N, K].
@@ -154,7 +154,7 @@ __global__ void moe_gemv_grouped_kernel(
     // Warp-level reduction for each token
 #pragma unroll
     for (int t = 0; t < MAX_TOKENS; ++t) {
-      acc[t] = moe_gemv_grouped::warp_reduce_sum(acc[t]);
+      acc[t] = moe_gemv_grouped_internal::warp_reduce_sum(acc[t]);
     }
 
     // Inter-warp reduction using shared memory
@@ -279,7 +279,7 @@ __global__ void moe_gemv_grouped_transposed_kernel(
 
 #pragma unroll
     for (int t = 0; t < MAX_TOKENS; ++t) {
-      acc[t] = moe_gemv_grouped::warp_reduce_sum(acc[t]);
+      acc[t] = moe_gemv_grouped_internal::warp_reduce_sum(acc[t]);
     }
 
     if (lane_id == 0 && valid_n) {
