@@ -87,18 +87,18 @@ pub fn moe_gemm(
         let stream = dev.cuda_stream().cu_stream() as i64;
         use core::ffi::c_void;
 
-        // Threshold for using GEMV kernel (optimized for small batch sizes)
-        const GEMV_THRESHOLD: i32 = 8;
-
         let num_experts_i32 = i32::try_from(num_experts).expect("num_experts too large for i32");
         let topk_i32 = i32::try_from(topk).expect("topk too large for i32");
         let size_m_i32 = i32::try_from(size_m).expect("size_m too large for i32");
         let size_n_i32 = i32::try_from(size_n).expect("size_n too large for i32");
         let size_k_i32 = i32::try_from(size_k).expect("size_k too large for i32");
 
+        // Threshold for using GEMV kernel (optimized for small batch sizes)
+        const GEMV_THRESHOLD: i32 = 8;
+
         // Select kernel based on prefill/decode and batch size
         // - Prefill (larger batches): use WMMA-based kernel for tensor core acceleration
-        // - Decode with small M (<=8): use grouped GEMV kernel (groups tokens by expert for weight reuse)
+        // - Decode with small M: use GEMV kernel (grid=N, each block handles all M tokens)
         // - Decode with larger M: use standard moe_gemm kernel
         let moe_func = if is_prefill {
             crate::cuda::ffi::moe_gemm_wmma
@@ -262,18 +262,18 @@ pub fn moe_gemm_transposed(
         let stream = dev.cuda_stream().cu_stream() as i64;
         use core::ffi::c_void;
 
-        // Threshold for using GEMV kernel (optimized for small batch sizes)
-        const GEMV_THRESHOLD: i32 = 8;
-
         let num_experts_i32 = i32::try_from(num_experts).expect("num_experts too large for i32");
         let topk_i32 = i32::try_from(topk).expect("topk too large for i32");
         let size_m_i32 = i32::try_from(size_m).expect("size_m too large for i32");
         let size_n_i32 = i32::try_from(size_n).expect("size_n too large for i32");
         let size_k_i32 = i32::try_from(size_k).expect("size_k too large for i32");
 
+        // Threshold for using GEMV kernel (optimized for small batch sizes)
+        const GEMV_THRESHOLD: i32 = 8;
+
         // Select kernel based on prefill/decode and batch size
         // - Prefill (larger batches): use WMMA-based kernel for tensor core acceleration
-        // - Decode with small M (<=8): use grouped GEMV kernel (groups tokens by expert for weight reuse)
+        // - Decode with small M: use GEMV kernel (grid=N, each block handles all M tokens)
         // - Decode with larger M: use standard moe_gemm_transposed kernel
         let moe_func = if is_prefill {
             crate::cuda::ffi::moe_gemm_wmma_transposed
