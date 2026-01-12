@@ -217,6 +217,41 @@ extern "C" {
         stream: i64,
     );
 
+    // MoE GEMV grouped by expert for decode phase (optimized for weight reuse)
+    // Groups tokens by expert, then batches within each expert group
+    pub fn moe_gemv_grouped(
+        input: *const c_void,   // input [size_m / topk, size_k]
+        weights: *const c_void, // weights [num_experts, size_n, size_k]
+        sorted_token_ids: *const i32,
+        expert_ids: *const i32,
+        topk_weights: *const f32, // device ptr or nullptr
+        output: *mut c_void,      // output [size_m, size_n]
+        num_experts: i32,
+        topk: i32,
+        size_m: i32,
+        size_n: i32,
+        size_k: i32,
+        dtype: i32, // 0=float16, 1=bf16 (for input)
+        stream: i64,
+    );
+
+    // MoE GEMV grouped by expert with transposed weights [num_experts, size_k, size_n]
+    pub fn moe_gemv_grouped_transposed(
+        input: *const c_void,   // input [size_m / topk, size_k]
+        weights: *const c_void, // weights [num_experts, size_k, size_n] - transposed layout
+        sorted_token_ids: *const i32,
+        expert_ids: *const i32,
+        topk_weights: *const f32, // device ptr or nullptr
+        output: *mut c_void,      // output [size_m, size_n]
+        num_experts: i32,
+        topk: i32,
+        size_m: i32,
+        size_n: i32,
+        size_k: i32,
+        dtype: i32, // 0=float16, 1=bf16 (for input)
+        stream: i64,
+    );
+
     // Optimized parallel topk for small k (MoE routing)
     // Single kernel call writes to both values and indices buffers
     pub(crate) fn topk_f32(

@@ -98,12 +98,12 @@ pub fn moe_gemm(
 
         // Select kernel based on prefill/decode and batch size
         // - Prefill (larger batches): use WMMA-based kernel for tensor core acceleration
-        // - Decode with small M (<=8): use GEMV kernel optimized for warp reductions
+        // - Decode with small M (<=8): use grouped GEMV kernel (groups tokens by expert for weight reuse)
         // - Decode with larger M: use standard moe_gemm kernel
         let moe_func = if is_prefill {
             crate::cuda::ffi::moe_gemm_wmma
         } else if size_m_i32 <= GEMV_THRESHOLD {
-            crate::cuda::ffi::moe_gemv
+            crate::cuda::ffi::moe_gemv_grouped
         } else {
             crate::cuda::ffi::moe_gemm
         };
@@ -273,12 +273,12 @@ pub fn moe_gemm_transposed(
 
         // Select kernel based on prefill/decode and batch size
         // - Prefill (larger batches): use WMMA-based kernel for tensor core acceleration
-        // - Decode with small M (<=8): use GEMV kernel optimized for warp reductions
+        // - Decode with small M (<=8): use grouped GEMV kernel (groups tokens by expert for weight reuse)
         // - Decode with larger M: use standard moe_gemm_transposed kernel
         let moe_func = if is_prefill {
             crate::cuda::ffi::moe_gemm_wmma_transposed
         } else if size_m_i32 <= GEMV_THRESHOLD {
-            crate::cuda::ffi::moe_gemv_transposed
+            crate::cuda::ffi::moe_gemv_grouped_transposed
         } else {
             crate::cuda::ffi::moe_gemm_transposed
         };
