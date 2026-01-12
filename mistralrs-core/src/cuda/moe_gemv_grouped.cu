@@ -1,13 +1,8 @@
 /**
  * @brief MOE GEMV kernel optimized for decode phase (small M).
  *
- * Grid: (N) - one block per output column
- * Each block processes ALL M tokens for its output column.
- *
- * This is simpler than the expert-grouped approach and has better
- * block utilization since every block does useful work.
- *
- * For tokens sharing the same expert, weight data will be in L1/L2 cache.
+ * Grid: (N / N_PER_BLOCK) - reduced block count
+ * Each block processes N_PER_BLOCK output columns for ALL M tokens.
  */
 
 #include "moe_utils.h"
@@ -18,20 +13,15 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
+#define CEILDIV(x, y) (((x) + (y)-1) / (y))
+
 /**
  * @brief MOE GEMV kernel for standard weight layout [E, N, K].
  *
- * Each block handles one output column (n_idx) and processes all M tokens.
- * Threads cooperate on K-dimension reduction.
- *
- * @param input             [num_tokens, K] - Input activations
- * @param weights           [num_experts, N, K] - Expert weight matrices
- * @param sorted_token_ids  [M] - Token indices (sorted by expert)
- * @param expert_ids        [M] - Expert assignment per token
- * @param topk_weights      [M] (optional) - Per-token gating weights
- * @param output            [M, N] - Output activations
+ * Each block handles N_PER_BLOCK output columns and processes all M tokens.
+ * Uses warp-level reduction for efficiency.
  */
-template <typename T, int BLOCK_SIZE = 256>
+template <typename T, int BLOCK_SIZE = 128, int N_PER_BLOCK = 4>
 __global__ void moe_gemv_grouped_kernel(
     const T *__restrict__ input,                  // [num_tokens, K]
     const T *__restrict__ weights,                // [num_experts, N, K]
@@ -42,13 +32,15 @@ __global__ void moe_gemv_grouped_kernel(
     const int num_experts, const int topk, const int size_m, const int size_n,
     const int size_k) {
 
-  const int n_idx = blockIdx.x; // Output column this block handles
+  const int n_base = blockIdx.x * N_PER_BLOCK;
+  const int tid = threadIdx.x;
+  const int warp_id = tid / 32;
+  const int lane_id = tid % 32;
+
+  // Each warp handles one output column within N_PER_BLOCK
+  const int n_idx = n_base + warp_id;
   if (n_idx >= size_n)
     return;
-
-  const int tid = threadIdx.x;
-
-  __shared__ float s_partial[BLOCK_SIZE];
 
   // Process each token
   for (int m = 0; m < size_m; m++) {
@@ -63,29 +55,23 @@ __global__ void moe_gemv_grouped_kernel(
     const T *weight_row = weights + (size_t)expert_id * size_n * size_k +
                           (size_t)n_idx * size_k;
 
-    // Each thread computes partial dot product over K
+    // Each lane computes partial dot product
     float acc = 0.0f;
-    for (int k = tid; k < size_k; k += BLOCK_SIZE) {
+    for (int k = lane_id; k < size_k; k += 32) {
       float w = vllm::to_float(__ldg(&weight_row[k]));
       float x = vllm::to_float(__ldg(&input_row[k]));
       acc = __fmaf_rn(w, x, acc);
     }
 
-    // Store to shared memory
-    s_partial[tid] = acc;
-    __syncthreads();
-
-    // Tree reduction
-    for (int stride = BLOCK_SIZE / 2; stride > 0; stride >>= 1) {
-      if (tid < stride) {
-        s_partial[tid] += s_partial[tid + stride];
-      }
-      __syncthreads();
+    // Warp reduction
+#pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      acc += __shfl_xor_sync(0xffffffff, acc, offset);
     }
 
-    // Thread 0 writes result
-    if (tid == 0) {
-      float result = s_partial[0];
+    // Lane 0 writes result
+    if (lane_id == 0) {
+      float result = acc;
       if (topk_weights) {
         result *= topk_weights[token_id];
       }
@@ -93,14 +79,13 @@ __global__ void moe_gemv_grouped_kernel(
       vllm::from_float(out_val, result);
       output[(size_t)token_id * size_n + n_idx] = out_val;
     }
-    __syncthreads();
   }
 }
 
 /**
  * @brief MOE GEMV kernel for transposed weight layout [E, K, N].
  */
-template <typename T, int BLOCK_SIZE = 256>
+template <typename T, int BLOCK_SIZE = 128, int N_PER_BLOCK = 4>
 __global__ void moe_gemv_grouped_transposed_kernel(
     const T *__restrict__ input,                  // [num_tokens, K]
     const T *__restrict__ weights,                // [num_experts, K, N]
@@ -111,13 +96,14 @@ __global__ void moe_gemv_grouped_transposed_kernel(
     const int num_experts, const int topk, const int size_m, const int size_n,
     const int size_k) {
 
-  const int n_idx = blockIdx.x;
+  const int n_base = blockIdx.x * N_PER_BLOCK;
+  const int tid = threadIdx.x;
+  const int warp_id = tid / 32;
+  const int lane_id = tid % 32;
+
+  const int n_idx = n_base + warp_id;
   if (n_idx >= size_n)
     return;
-
-  const int tid = threadIdx.x;
-
-  __shared__ float s_partial[BLOCK_SIZE];
 
   for (int m = 0; m < size_m; m++) {
     const int token_id = sorted_token_ids[m];
@@ -131,24 +117,19 @@ __global__ void moe_gemv_grouped_transposed_kernel(
         weights + (size_t)expert_id * size_k * size_n + n_idx;
 
     float acc = 0.0f;
-    for (int k = tid; k < size_k; k += BLOCK_SIZE) {
+    for (int k = lane_id; k < size_k; k += 32) {
       float w = vllm::to_float(__ldg(&expert_weights[k * size_n]));
       float x = vllm::to_float(__ldg(&input_row[k]));
       acc = __fmaf_rn(w, x, acc);
     }
 
-    s_partial[tid] = acc;
-    __syncthreads();
-
-    for (int stride = BLOCK_SIZE / 2; stride > 0; stride >>= 1) {
-      if (tid < stride) {
-        s_partial[tid] += s_partial[tid + stride];
-      }
-      __syncthreads();
+#pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      acc += __shfl_xor_sync(0xffffffff, acc, offset);
     }
 
-    if (tid == 0) {
-      float result = s_partial[0];
+    if (lane_id == 0) {
+      float result = acc;
       if (topk_weights) {
         result *= topk_weights[token_id];
       }
@@ -156,7 +137,6 @@ __global__ void moe_gemv_grouped_transposed_kernel(
       vllm::from_float(out_val, result);
       output[(size_t)token_id * size_n + n_idx] = out_val;
     }
-    __syncthreads();
   }
 }
 
@@ -171,26 +151,29 @@ extern "C" void moe_gemv_grouped(const void *input, const void *weights,
                                  int num_experts, int topk, int size_m,
                                  int size_n, int size_k, int dtype,
                                  cudaStream_t stream) {
-  constexpr int BLOCK_SIZE = 256;
+  // 4 warps per block, each handles one N column
+  constexpr int N_PER_BLOCK = 4;
+  constexpr int BLOCK_SIZE = N_PER_BLOCK * 32; // 128 threads
 
-  // Grid: one block per output column
-  dim3 grid(size_n);
+  dim3 grid(CEILDIV(size_n, N_PER_BLOCK));
   dim3 block(BLOCK_SIZE);
 
   if (dtype == 0) { // FP16
-    moe_gemv_grouped_kernel<half, BLOCK_SIZE><<<grid, block, 0, stream>>>(
-        reinterpret_cast<const half *>(input),
-        reinterpret_cast<const half *>(weights), sorted_token_ids, expert_ids,
-        topk_weights, reinterpret_cast<half *>(output), num_experts, topk,
-        size_m, size_n, size_k);
+    moe_gemv_grouped_kernel<half, BLOCK_SIZE, N_PER_BLOCK>
+        <<<grid, block, 0, stream>>>(
+            reinterpret_cast<const half *>(input),
+            reinterpret_cast<const half *>(weights), sorted_token_ids,
+            expert_ids, topk_weights, reinterpret_cast<half *>(output),
+            num_experts, topk, size_m, size_n, size_k);
   }
 #ifndef NO_BF16_KERNEL
   else if (dtype == 1) { // BF16
-    moe_gemv_grouped_kernel<nv_bfloat16, BLOCK_SIZE><<<grid, block, 0, stream>>>(
-        reinterpret_cast<const nv_bfloat16 *>(input),
-        reinterpret_cast<const nv_bfloat16 *>(weights), sorted_token_ids,
-        expert_ids, topk_weights, reinterpret_cast<nv_bfloat16 *>(output),
-        num_experts, topk, size_m, size_n, size_k);
+    moe_gemv_grouped_kernel<nv_bfloat16, BLOCK_SIZE, N_PER_BLOCK>
+        <<<grid, block, 0, stream>>>(
+            reinterpret_cast<const nv_bfloat16 *>(input),
+            reinterpret_cast<const nv_bfloat16 *>(weights), sorted_token_ids,
+            expert_ids, topk_weights, reinterpret_cast<nv_bfloat16 *>(output),
+            num_experts, topk, size_m, size_n, size_k);
   }
 #endif
 }
@@ -200,13 +183,14 @@ extern "C" void moe_gemv_grouped_transposed(
     const int32_t *expert_ids, const float *topk_weights, void *output,
     int num_experts, int topk, int size_m, int size_n, int size_k, int dtype,
     cudaStream_t stream) {
-  constexpr int BLOCK_SIZE = 256;
+  constexpr int N_PER_BLOCK = 4;
+  constexpr int BLOCK_SIZE = N_PER_BLOCK * 32;
 
-  dim3 grid(size_n);
+  dim3 grid(CEILDIV(size_n, N_PER_BLOCK));
   dim3 block(BLOCK_SIZE);
 
   if (dtype == 0) { // FP16
-    moe_gemv_grouped_transposed_kernel<half, BLOCK_SIZE>
+    moe_gemv_grouped_transposed_kernel<half, BLOCK_SIZE, N_PER_BLOCK>
         <<<grid, block, 0, stream>>>(
             reinterpret_cast<const half *>(input),
             reinterpret_cast<const half *>(weights), sorted_token_ids,
@@ -215,7 +199,7 @@ extern "C" void moe_gemv_grouped_transposed(
   }
 #ifndef NO_BF16_KERNEL
   else if (dtype == 1) { // BF16
-    moe_gemv_grouped_transposed_kernel<nv_bfloat16, BLOCK_SIZE>
+    moe_gemv_grouped_transposed_kernel<nv_bfloat16, BLOCK_SIZE, N_PER_BLOCK>
         <<<grid, block, 0, stream>>>(
             reinterpret_cast<const nv_bfloat16 *>(input),
             reinterpret_cast<const nv_bfloat16 *>(weights), sorted_token_ids,
