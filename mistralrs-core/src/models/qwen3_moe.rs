@@ -415,16 +415,28 @@ impl MoeMlp {
 
         // Compute routing weights
         let router_logits = self.gate.forward(&xs_flat)?;
-        let routing_weights =
-            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
 
-        // Get top-k experts
-        let topk_ids = routing_weights
-            .arg_sort_last_dim(false)?
-            .narrow(D::Minus1, 0, self.num_experts_per_tok)?
-            .contiguous()?;
+        // Get top-k experts with fused topk+softmax kernel on CUDA
+        #[cfg(feature = "cuda")]
+        let (mut topk_weights, topk_ids) = {
+            // Use fused topk+softmax kernel - much faster than full argsort
+            let result =
+                crate::ops::cuda_topk_softmax(&router_logits, self.num_experts_per_tok)?;
+            // Convert weights to F32 as expected by the MOE GEMM kernels
+            (result.values.to_dtype(DType::F32)?, result.indices)
+        };
 
-        let mut topk_weights = routing_weights.gather(&topk_ids, D::Minus1)?;
+        #[cfg(not(feature = "cuda"))]
+        let (mut topk_weights, topk_ids) = {
+            let routing_weights =
+                candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
+            let topk_ids = routing_weights
+                .arg_sort_last_dim(false)?
+                .narrow(D::Minus1, 0, self.num_experts_per_tok)?
+                .contiguous()?;
+            let topk_weights = routing_weights.gather(&topk_ids, D::Minus1)?;
+            (topk_weights, topk_ids)
+        };
 
         if self.norm_topk_prob {
             topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;

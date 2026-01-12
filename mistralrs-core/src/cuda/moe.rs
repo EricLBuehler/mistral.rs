@@ -93,17 +93,11 @@ pub fn moe_gemm(
         let size_n_i32 = i32::try_from(size_n).expect("size_n too large for i32");
         let size_k_i32 = i32::try_from(size_k).expect("size_k too large for i32");
 
-        // Threshold for using GEMV kernel (optimized for small batch sizes)
-        const GEMV_THRESHOLD: i32 = 8;
-
-        // Select kernel based on prefill/decode and batch size
+        // Select kernel based on prefill/decode
         // - Prefill (larger batches): use WMMA-based kernel for tensor core acceleration
-        // - Decode with small M: use GEMV kernel (grid=N, each block handles all M tokens)
-        // - Decode with larger M: use standard moe_gemm kernel
+        // - Decode: use standard moe_gemm kernel
         let moe_func = if is_prefill {
             crate::cuda::ffi::moe_gemm_wmma
-        } else if size_m_i32 <= GEMV_THRESHOLD {
-            crate::cuda::ffi::moe_gemv_grouped
         } else {
             crate::cuda::ffi::moe_gemm
         };
@@ -268,17 +262,11 @@ pub fn moe_gemm_transposed(
         let size_n_i32 = i32::try_from(size_n).expect("size_n too large for i32");
         let size_k_i32 = i32::try_from(size_k).expect("size_k too large for i32");
 
-        // Threshold for using GEMV kernel (optimized for small batch sizes)
-        const GEMV_THRESHOLD: i32 = 8;
-
-        // Select kernel based on prefill/decode and batch size
+        // Select kernel based on prefill/decode
         // - Prefill (larger batches): use WMMA-based kernel for tensor core acceleration
-        // - Decode with small M: use GEMV kernel (grid=N, each block handles all M tokens)
-        // - Decode with larger M: use standard moe_gemm_transposed kernel
+        // - Decode: use standard moe_gemm_transposed kernel
         let moe_func = if is_prefill {
             crate::cuda::ffi::moe_gemm_wmma_transposed
-        } else if size_m_i32 <= GEMV_THRESHOLD {
-            crate::cuda::ffi::moe_gemv_grouped_transposed
         } else {
             crate::cuda::ffi::moe_gemm_transposed
         };
