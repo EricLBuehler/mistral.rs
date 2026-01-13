@@ -48,6 +48,7 @@ pub struct Config {
     pub(crate) quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub(crate) tie_word_embeddings: bool,
+    pub(crate) head_dim: Option<usize>,
 }
 
 pub(crate) struct Attention {
@@ -74,7 +75,7 @@ impl Attention {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
-        let head_dim = hidden_sz / num_heads;
+        let head_dim = cfg.head_dim.unwrap_or(hidden_sz / num_heads);
         let q_proj = ColumnParallelLayer::new(
             hidden_sz,
             num_heads * head_dim,
@@ -401,7 +402,7 @@ impl Module for SparseMoeBlock {
             let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden_dim))?;
             // current_hidden_states = expert_layer(current_state, routing_weights[top_x_list, idx_list, None])
             let current_hidden_states = expert_layer.forward(&current_state)?;
-            let current_hidden_states = current_hidden_states.broadcast_mul(&selected_rws)?;
+            let current_hidden_states = current_hidden_states.broadcast_mul(&selected_rws.to_dtype(current_hidden_states.dtype())?)?;
             ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
         }
 
@@ -415,6 +416,7 @@ struct DecoderLayer {
     block_sparse_moe: SparseMoeBlock,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
+    idx:usize,
 }
 
 impl DecoderLayer {
@@ -456,6 +458,7 @@ impl DecoderLayer {
             block_sparse_moe,
             input_layernorm,
             post_attention_layernorm,
+            idx:layer_idx,
         })
     }
 
@@ -469,6 +472,7 @@ impl DecoderLayer {
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
+        println!("DecoderLayer forward {}", self.idx);
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
         let xs = self.self_attn.forward(
@@ -526,7 +530,8 @@ impl Model {
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
             &cfg.quantization_config,
         )?;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let head_dim=cfg.head_dim.unwrap_or(cfg.hidden_size / cfg.num_attention_heads);
+    
         let mut ropes = HashMap::new();
         for layer_idx in 0..cfg.num_hidden_layers {
             let device = mapper
@@ -619,8 +624,8 @@ impl Model {
                 num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
                     .max(1),
                 sliding_window: cfg.sliding_window,
-                k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-                v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+                k_head_dim: cfg.head_dim.unwrap_or(cfg.hidden_size / cfg.num_attention_heads),
+                v_head_dim: cfg.head_dim.unwrap_or(cfg.hidden_size / cfg.num_attention_heads),
             },
             mapper,
         })
