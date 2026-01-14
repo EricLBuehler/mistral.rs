@@ -27,6 +27,33 @@ use crate::{
 };
 
 serde_default_fn!(bool, tie_word_embeddings, false);
+serde_default_fn!(f64, default_rope_theta, 10000.0);
+
+/// RoPE type for Mistral models
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MistralRopeType {
+    #[default]
+    #[serde(rename = "default")]
+    Default,
+    #[serde(rename = "yarn")]
+    Yarn,
+}
+
+/// RoPE parameters for Mistral models, supporting YARN scaling
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MistralRopeParameters {
+    pub rope_theta: f64,
+    #[serde(default)]
+    pub rope_type: MistralRopeType,
+    // YARN parameters (optional)
+    pub factor: Option<f32>,
+    pub beta_fast: Option<f32>,
+    pub beta_slow: Option<f32>,
+    pub mscale: Option<f32>,
+    pub mscale_all_dim: Option<f32>,
+    pub original_max_position_embeddings: Option<usize>,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -39,7 +66,11 @@ pub struct Config {
     pub(crate) hidden_act: Activation,
     pub(crate) max_position_embeddings: usize,
     pub(crate) rms_norm_eps: f64,
+    // Support both flat rope_theta and nested rope_parameters
+    #[serde(default = "default_rope_theta")]
     pub(crate) rope_theta: f64,
+    #[serde(default)]
+    pub(crate) rope_parameters: Option<MistralRopeParameters>,
     pub(crate) sliding_window: Option<usize>,
     pub(crate) head_dim: Option<usize>,
     pub(crate) quantization_config: Option<QuantizedConfig>,
@@ -51,6 +82,25 @@ impl Config {
     pub(crate) fn head_dim(&self) -> usize {
         self.head_dim
             .unwrap_or(self.hidden_size / self.num_attention_heads)
+    }
+
+    /// Get rope_theta from either flat field or rope_parameters
+    pub(crate) fn get_rope_theta(&self) -> f64 {
+        self.rope_parameters
+            .as_ref()
+            .map(|p| p.rope_theta)
+            .unwrap_or(self.rope_theta)
+    }
+
+    /// Check if YARN scaling is enabled
+    pub(crate) fn is_yarn_rope(&self) -> bool {
+        matches!(
+            &self.rope_parameters,
+            Some(MistralRopeParameters {
+                rope_type: MistralRopeType::Yarn,
+                ..
+            })
+        )
     }
 }
 
@@ -396,7 +446,7 @@ impl Model {
             ropes.insert(
                 device.location(),
                 Arc::new(RotaryEmbedding::new(
-                    cfg.rope_theta as f32,
+                    cfg.get_rope_theta() as f32,
                     head_dim,
                     cfg.max_position_embeddings,
                     device,

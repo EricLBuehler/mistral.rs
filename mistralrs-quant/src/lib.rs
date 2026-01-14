@@ -6,6 +6,7 @@ use std::{
 };
 
 use blockwise_fp8::blockwise_fp8_linear_b;
+use pertensor_fp8::pertensor_fp8_linear_b;
 use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
@@ -28,6 +29,7 @@ mod hqq;
 mod imatrix;
 mod lora;
 mod mxfp4;
+mod pertensor_fp8;
 pub mod rotary;
 pub mod safetensors;
 mod scalar_fp8;
@@ -67,6 +69,7 @@ pub use lora::{
     LoraAdapter, LoraConfig, StaticLoraConfig, MULTI_LORA_DELIMITER,
 };
 pub use mxfp4::MXFP4Layer;
+pub use pertensor_fp8::PerTensorFP8Linear;
 pub use unquantized::UnquantLinear;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_fused;
@@ -185,7 +188,7 @@ pub enum QuantizedConfig {
         is_awq: bool,
     },
     Fp8 {
-        weight_block_size: Vec<usize>,
+        weight_block_size: Option<Vec<usize>>,
     },
     Bitsandbytes {
         bnb_4bit_quant_type: Option<String>,
@@ -232,10 +235,10 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
                 })
             }
             Some(m) if m == "fp8" => {
-                let weight_block_size = raw
-                    .weight_block_size
-                    .ok_or_else(|| serde::de::Error::missing_field("weight_block_size"))?;
-                Ok(QuantizedConfig::Fp8 { weight_block_size })
+                // weight_block_size is optional - None means per-tensor quantization
+                Ok(QuantizedConfig::Fp8 {
+                    weight_block_size: raw.weight_block_size,
+                })
             }
             Some(m) if m == "bitsandbytes" => Ok(QuantizedConfig::Bitsandbytes {
                 bnb_4bit_quant_type: raw.bnb_4bit_quant_type,
@@ -366,6 +369,13 @@ pub enum QuantMethodConfig {
         bias: Option<Tensor>,
         dequant_dtype: DType,
         weight_block_size: Vec<usize>,
+    },
+    PerTensorFP8 {
+        weight: Tensor,
+        weight_scale_inv: Tensor,
+        activation_scale: Option<Tensor>,
+        bias: Option<Tensor>,
+        dequant_dtype: DType,
     },
     Afq {
         weight: Tensor,
@@ -851,8 +861,12 @@ pub fn linear_no_bias(
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantizedConfig::Fp8 { .. } => {
-                blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, Default::default(), vb)?
+            QuantizedConfig::Fp8 { weight_block_size } => {
+                if weight_block_size.is_some() {
+                    blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, Default::default(), vb)?
+                } else {
+                    pertensor_fp8_linear_b(in_dim, out_dim, quant_conf, false, Default::default(), vb)?
+                }
             }
             QuantizedConfig::Bitsandbytes { .. } => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
@@ -898,8 +912,12 @@ pub fn linear(
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantizedConfig::Fp8 { .. } => {
-                blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, true, Default::default(), vb)?
+            QuantizedConfig::Fp8 { weight_block_size } => {
+                if weight_block_size.is_some() {
+                    blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, true, Default::default(), vb)?
+                } else {
+                    pertensor_fp8_linear_b(in_dim, out_dim, quant_conf, true, Default::default(), vb)?
+                }
             }
             QuantizedConfig::Bitsandbytes { .. } => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, true, vb)?) as Arc<_>
