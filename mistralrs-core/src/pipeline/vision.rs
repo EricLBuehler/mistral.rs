@@ -259,7 +259,7 @@ impl Loader for VisionLoader {
         device: &Device,
         silent: bool,
         mut mapper: DeviceMapSetting,
-        mut in_situ_quant: Option<IsqType>,
+        in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
@@ -326,11 +326,6 @@ impl Loader for VisionLoader {
 
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
-
-            // Disable ISQ if we are loading a prequantized model.
-            if QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)? != 1 {
-                in_situ_quant = None;
-            }
 
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
@@ -525,6 +520,7 @@ impl Loader for VisionLoader {
                 topology_overrides.clone(),
             );
         }
+        dbg!(&use_immediate);
 
         // Logic for ISQ here: if no calibration (i.e imatrix), then allow immediate ISQ. Otherwise, back to normal.
         let mut loading_isq = if use_immediate {
@@ -550,6 +546,8 @@ impl Loader for VisionLoader {
         } else {
             Device::Cpu
         };
+        dbg!(&loading_isq);
+        dbg!(&in_situ_quant);
 
         let attention_mechanism = if paged_attn_config.is_some() {
             AttentionImplementation::PagedAttention

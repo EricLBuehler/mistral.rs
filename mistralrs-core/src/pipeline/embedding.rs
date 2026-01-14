@@ -215,7 +215,7 @@ impl Loader for EmbeddingLoader {
         device: &Device,
         silent: bool,
         mut mapper: DeviceMapSetting,
-        mut in_situ_quant: Option<IsqType>,
+        in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
@@ -259,11 +259,6 @@ impl Loader for EmbeddingLoader {
         } else if let DeviceMapSetting::Auto(params) = mapper.clone() {
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
-
-            // Disable ISQ if we are loading a prequantized model.
-            if QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)? != 1 {
-                in_situ_quant = None;
-            }
 
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
