@@ -307,6 +307,7 @@ impl XLoraClassifier {
         device: &Device,
         dtype: DType,
     ) -> Result<Tensor> {
+        #[allow(clippy::cast_possible_truncation)]
         Tensor::full(
             self.scaling_pass_value as f32,
             (bs, seq_len, self.model_layers, self.n_classes),

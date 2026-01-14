@@ -143,6 +143,7 @@ impl QLoraLinear {
                     .collect::<Result<Vec<_>>>()?,
                 0,
             )?;
+            #[allow(clippy::cast_possible_truncation)]
             let scale_adapters_t = Tensor::from_vec(
                 scale_adapters.iter().map(|&x| x as f32).collect::<Vec<_>>(),
                 (scale_adapters.len(), 1, 1),
