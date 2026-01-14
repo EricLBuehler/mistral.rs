@@ -9,7 +9,7 @@ use mistralrs_quant::{
     ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::{Arc, atomic::AtomicU32}};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -472,7 +472,6 @@ impl DecoderLayer {
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        println!("DecoderLayer forward {}", self.idx);
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
         let xs = self.self_attn.forward(
@@ -504,6 +503,7 @@ pub struct Model {
     max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
+    count: AtomicU32,
 }
 
 impl Model {
@@ -628,6 +628,7 @@ impl Model {
                 v_head_dim: cfg.head_dim.unwrap_or(cfg.hidden_size / cfg.num_attention_heads),
             },
             mapper,
+            count: AtomicU32::new(0),
         })
     }
 
@@ -639,6 +640,8 @@ impl Model {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
+        let now = self.count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        println!("Forward call count: {}. context_lens: {:?}, seq_len_offsets: {:?}", now, context_lens, seqlen_offsets);
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let cache = &mut self.cache.normal().0;
         let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(

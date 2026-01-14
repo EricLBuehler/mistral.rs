@@ -4,20 +4,23 @@ use mistralrs::{AutoDeviceMapParams, DeviceMapSetting, IsqType, Response, TextMe
 #[tokio::main]
 async fn main() -> Result<()> {
     let auto_map_params = AutoDeviceMapParams::Text {
-        max_seq_len: 24,
+        max_seq_len: 128,
         max_batch_size: 2,
     };
-    let model = TextModelBuilder::new("cerebras/MiniMax-M2-REAP-139B-A10B")
+    let model = TextModelBuilder::new("mistralai/Mixtral-8x7B-Instruct-v0.1")
         // .with_isq(IsqType::Q4K)
-        .with_throughput_logging()
         .with_logging()
+ .with_chat_template("chat_templates/mistral.json")
+        .with_throughput_logging()
         .with_device_mapping(DeviceMapSetting::Auto(auto_map_params))
         .build()
         .await?;
-    println!("Model loaded. Seq len = {:?}", model.max_sequence_length()?);
+
     let mut messages = TextMessages::new().enable_thinking(false);
     messages = messages.add_message(TextMessageRole::User, "Hello!");
-    
+
+
+
     let mut rx = model.stream_chat_request(messages.clone()).await?;
     while let Some(r) = rx.next().await {
         match r {
@@ -48,6 +51,7 @@ async fn main() -> Result<()> {
             }
         }
     }
+
     let response = model.send_chat_request(messages.clone()).await?;
 
     println!("{}", response.choices[0].message.content.as_ref().unwrap());

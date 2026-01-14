@@ -67,7 +67,6 @@ cuda-12060 = []
 cuda-12080 = []
 cuda-12090 = []
 cuda-13000 = []
-cuda-13010 = []
 
 [build-dependencies]
 bindgen_cuda = { workspace = true, optional = true }
