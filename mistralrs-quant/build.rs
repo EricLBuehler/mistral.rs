@@ -20,6 +20,7 @@ fn cuda_version_from_build_system() -> (usize, usize) {
     let version_number = release_section.split(' ').nth(1).unwrap();
 
     match version_number {
+        "13.1" => (13, 1),
         "13.0" => (13, 0),
         "12.9" => (12, 9),
         "12.8" => (12, 8),
