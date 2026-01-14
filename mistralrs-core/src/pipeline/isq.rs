@@ -615,51 +615,73 @@ pub trait IsqModel {
                         .progress_chars("#>-"),
                 );
 
-                #[cfg(not(feature = "metal"))]
-                let n_threads = 2;
-                #[cfg(feature = "metal")]
-                let n_threads = 1;
+                // Metal and CUDA require serialization on the current thread because GPU contexts are thread-local.
+                // Using a rayon thread pool (even with n_threads=1) creates a new thread without the GPU context.
+                #[cfg(any(feature = "metal", feature = "cuda"))]
+                let quantized_values: candle_core::Result<Vec<_>> = {
+                    tensors
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (layer, _))| layer.isq_serde_supported())
+                        .map(|(i, (layer, _))| {
+                            if !silent {
+                                bar.inc(1);
+                            }
+                            Ok((
+                                i.to_string(),
+                                match layer.serialize()? {
+                                    Cow::Borrowed(_) => unreachable!(),
+                                    Cow::Owned(owned) => owned,
+                                },
+                            ))
+                        })
+                        .collect()
+                };
 
-                let pool = rayon::ThreadPoolBuilder::new()
-                    .num_threads(n_threads)
-                    .build()
-                    .map_err(candle_core::Error::msg)?;
+                #[cfg(not(any(feature = "metal", feature = "cuda")))]
+                let quantized_values: candle_core::Result<Vec<_>> = {
+                    let pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(2)
+                        .build()
+                        .map_err(candle_core::Error::msg)?;
 
-                let quantized_values = pool.install(|| {
-                    use rayon::iter::IntoParallelRefIterator;
-                    if silent {
-                        tensors
-                            .par_iter()
-                            .enumerate()
-                            .filter(|(_, (layer, _))| layer.isq_serde_supported())
-                            .map(|(i, (layer, _))| {
-                                Ok((
-                                    i.to_string(),
-                                    match layer.serialize()? {
-                                        Cow::Borrowed(_) => unreachable!(),
-                                        Cow::Owned(owned) => owned,
-                                    },
-                                ))
-                            })
-                            .collect::<candle_core::Result<Vec<_>>>()
-                    } else {
-                        tensors
-                            .par_iter()
-                            .enumerate()
-                            .progress_with(bar)
-                            .filter(|(_, (layer, _))| layer.isq_serde_supported())
-                            .map(|(i, (layer, _))| {
-                                Ok((
-                                    i.to_string(),
-                                    match layer.serialize()? {
-                                        Cow::Borrowed(_) => unreachable!(),
-                                        Cow::Owned(owned) => owned,
-                                    },
-                                ))
-                            })
-                            .collect::<candle_core::Result<Vec<_>>>()
-                    }
-                });
+                    pool.install(|| {
+                        use rayon::iter::IntoParallelRefIterator;
+                        if silent {
+                            tensors
+                                .par_iter()
+                                .enumerate()
+                                .filter(|(_, (layer, _))| layer.isq_serde_supported())
+                                .map(|(i, (layer, _))| {
+                                    Ok((
+                                        i.to_string(),
+                                        match layer.serialize()? {
+                                            Cow::Borrowed(_) => unreachable!(),
+                                            Cow::Owned(owned) => owned,
+                                        },
+                                    ))
+                                })
+                                .collect::<candle_core::Result<Vec<_>>>()
+                        } else {
+                            tensors
+                                .par_iter()
+                                .enumerate()
+                                .progress_with(bar)
+                                .filter(|(_, (layer, _))| layer.isq_serde_supported())
+                                .map(|(i, (layer, _))| {
+                                    Ok((
+                                        i.to_string(),
+                                        match layer.serialize()? {
+                                            Cow::Borrowed(_) => unreachable!(),
+                                            Cow::Owned(owned) => owned,
+                                        },
+                                    ))
+                                })
+                                .collect::<candle_core::Result<Vec<_>>>()
+                        }
+                    })
+                };
+
                 let quantized_values = quantized_values?;
 
                 let parent = serialized
