@@ -639,7 +639,7 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 [[package]]
 name = "candle-core"
 version = "0.9.2-alpha.2"
-source = "git+https://github.com/huggingface/candle.git?rev=fd8448d#fd8448d2c7fe2098c60bb88f48d5878845bb08c0"
+source = "git+https://github.com/huggingface/candle.git?rev=f2d30fb#f2d30fbd15eb5fe8ba77a7cfc3c996d00b3d03bb"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -670,7 +670,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.9.2-alpha.2"
-source = "git+https://github.com/huggingface/candle.git?rev=fd8448d#fd8448d2c7fe2098c60bb88f48d5878845bb08c0"
+source = "git+https://github.com/huggingface/candle.git?rev=f2d30fb#f2d30fbd15eb5fe8ba77a7cfc3c996d00b3d03bb"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -682,7 +682,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-build"
 version = "0.9.2-alpha.2"
-source = "git+https://github.com/huggingface/candle.git?rev=fd8448d#fd8448d2c7fe2098c60bb88f48d5878845bb08c0"
+source = "git+https://github.com/huggingface/candle.git?rev=f2d30fb#f2d30fbd15eb5fe8ba77a7cfc3c996d00b3d03bb"
 dependencies = [
  "anyhow",
 ]
@@ -690,7 +690,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.9.2-alpha.2"
-source = "git+https://github.com/huggingface/candle.git?rev=fd8448d#fd8448d2c7fe2098c60bb88f48d5878845bb08c0"
+source = "git+https://github.com/huggingface/candle.git?rev=f2d30fb#f2d30fbd15eb5fe8ba77a7cfc3c996d00b3d03bb"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -703,7 +703,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.9.2-alpha.2"
-source = "git+https://github.com/huggingface/candle.git?rev=fd8448d#fd8448d2c7fe2098c60bb88f48d5878845bb08c0"
+source = "git+https://github.com/huggingface/candle.git?rev=f2d30fb#f2d30fbd15eb5fe8ba77a7cfc3c996d00b3d03bb"
 dependencies = [
  "bindgen_cuda 0.1.7",
 ]
@@ -711,7 +711,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.9.2-alpha.2"
-source = "git+https://github.com/huggingface/candle.git?rev=fd8448d#fd8448d2c7fe2098c60bb88f48d5878845bb08c0"
+source = "git+https://github.com/huggingface/candle.git?rev=f2d30fb#f2d30fbd15eb5fe8ba77a7cfc3c996d00b3d03bb"
 dependencies = [
  "half",
  "objc2",
@@ -725,7 +725,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.9.2-alpha.2"
-source = "git+https://github.com/huggingface/candle.git?rev=fd8448d#fd8448d2c7fe2098c60bb88f48d5878845bb08c0"
+source = "git+https://github.com/huggingface/candle.git?rev=f2d30fb#f2d30fbd15eb5fe8ba77a7cfc3c996d00b3d03bb"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -744,7 +744,7 @@ dependencies = [
 [[package]]
 name = "candle-ug"
 version = "0.9.2-alpha.2"
-source = "git+https://github.com/huggingface/candle.git?rev=fd8448d#fd8448d2c7fe2098c60bb88f48d5878845bb08c0"
+source = "git+https://github.com/huggingface/candle.git?rev=f2d30fb#f2d30fbd15eb5fe8ba77a7cfc3c996d00b3d03bb"
 dependencies = [
  "ug",
  "ug-cuda",
