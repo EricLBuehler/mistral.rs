@@ -308,7 +308,7 @@ impl XLoraClassifier {
         dtype: DType,
     ) -> Result<Tensor> {
         Tensor::full(
-            self.scaling_pass_value,
+            self.scaling_pass_value as f32,
             (bs, seq_len, self.model_layers, self.n_classes),
             device,
         )?

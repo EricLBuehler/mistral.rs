@@ -95,7 +95,7 @@ impl LoraLinear {
                 0,
             )?;
             let scale_adapters_t = Tensor::from_vec(
-                scale_adapters.clone(),
+                scale_adapters.iter().map(|&x| x as f32).collect::<Vec<_>>(),
                 (scale_adapters.len(), 1, 1),
                 a_adapters_stack.device(),
             )?
