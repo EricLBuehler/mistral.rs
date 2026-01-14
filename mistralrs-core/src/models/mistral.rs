@@ -91,17 +91,6 @@ impl Config {
             .map(|p| p.rope_theta)
             .unwrap_or(self.rope_theta)
     }
-
-    /// Check if YARN scaling is enabled
-    pub(crate) fn is_yarn_rope(&self) -> bool {
-        matches!(
-            &self.rope_parameters,
-            Some(MistralRopeParameters {
-                rope_type: MistralRopeType::Yarn,
-                ..
-            })
-        )
-    }
 }
 
 struct Attention {

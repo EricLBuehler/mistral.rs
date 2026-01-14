@@ -41,8 +41,6 @@ fn default_rope_theta() -> f64 {
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct Mistral3VisionRopeParameters {
     pub rope_theta: f64,
-    #[serde(default)]
-    pub rope_type: Option<String>,
 }
 
 #[derive(serde::Deserialize, Debug, Clone)]
