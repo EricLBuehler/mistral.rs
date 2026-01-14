@@ -307,15 +307,16 @@
 <a href=#307 id=307 data-nosnippet>307</a>        device: <span class="kw-2">&amp;</span>Device,
 <a href=#308 id=308 data-nosnippet>308</a>        dtype: DType,
 <a href=#309 id=309 data-nosnippet>309</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#310 id=310 data-nosnippet>310</a>        Tensor::full(
-<a href=#311 id=311 data-nosnippet>311</a>            <span class="self">self</span>.scaling_pass_value,
-<a href=#312 id=312 data-nosnippet>312</a>            (bs, seq_len, <span class="self">self</span>.model_layers, <span class="self">self</span>.n_classes),
-<a href=#313 id=313 data-nosnippet>313</a>            device,
-<a href=#314 id=314 data-nosnippet>314</a>        )<span class="question-mark">?
-<a href=#315 id=315 data-nosnippet>315</a>        </span>.to_dtype(dtype)
-<a href=#316 id=316 data-nosnippet>316</a>    }
-<a href=#317 id=317 data-nosnippet>317</a>
-<a href=#318 id=318 data-nosnippet>318</a>    <span class="kw">pub fn </span>get_global_scaling_weight(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; f64 {
-<a href=#319 id=319 data-nosnippet>319</a>        <span class="self">self</span>.config.global_scaling_weight
-<a href=#320 id=320 data-nosnippet>320</a>    }
-<a href=#321 id=321 data-nosnippet>321</a>}</code></pre></div></section></main></body></html>
+<a href=#310 id=310 data-nosnippet>310</a>        <span class="attr">#[allow(clippy::cast_possible_truncation)]
+<a href=#311 id=311 data-nosnippet>311</a>        </span>Tensor::full(
+<a href=#312 id=312 data-nosnippet>312</a>            <span class="self">self</span>.scaling_pass_value <span class="kw">as </span>f32,
+<a href=#313 id=313 data-nosnippet>313</a>            (bs, seq_len, <span class="self">self</span>.model_layers, <span class="self">self</span>.n_classes),
+<a href=#314 id=314 data-nosnippet>314</a>            device,
+<a href=#315 id=315 data-nosnippet>315</a>        )<span class="question-mark">?
+<a href=#316 id=316 data-nosnippet>316</a>        </span>.to_dtype(dtype)
+<a href=#317 id=317 data-nosnippet>317</a>    }
+<a href=#318 id=318 data-nosnippet>318</a>
+<a href=#319 id=319 data-nosnippet>319</a>    <span class="kw">pub fn </span>get_global_scaling_weight(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; f64 {
+<a href=#320 id=320 data-nosnippet>320</a>        <span class="self">self</span>.config.global_scaling_weight
+<a href=#321 id=321 data-nosnippet>321</a>    }
+<a href=#322 id=322 data-nosnippet>322</a>}</code></pre></div></section></main></body></html>
