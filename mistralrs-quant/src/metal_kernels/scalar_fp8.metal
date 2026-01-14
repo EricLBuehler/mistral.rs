@@ -1,3 +1,4 @@
+#include "bf16.metal"
 #include "float8.metal"
 #include <metal_stdlib>
 
