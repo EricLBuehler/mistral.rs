@@ -6,9 +6,9 @@ use candle_nn::Linear;
 use crate::{
     blockwise_fp8::{blockwise_fp8_linear_b, blockwise_fp8_moe},
     distributed,
-    pertensor_fp8::pertensor_fp8_linear_b,
     gptq::gptq_linear,
     lora::merge_lora_weights,
+    pertensor_fp8::pertensor_fp8_linear_b,
     should_apply_immediate_isq,
     utils::isq::{apply_immediate_isq, apply_immediate_isq_always},
     AfqLayer, BnbLinear, DistributedKind, DummyLayer, FP8Linear, GgufMatMul, HqqLayer, MXFP4Layer,
@@ -78,9 +78,23 @@ impl RowParallelLayer {
                 QuantizedConfig::Fp8 { weight_block_size } => {
                     // NOTE: no bias for fp8 as it might be parallelized
                     if weight_block_size.is_some() {
-                        blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, shard, vb.clone())?
+                        blockwise_fp8_linear_b(
+                            in_dim,
+                            out_dim,
+                            quant_conf,
+                            false,
+                            shard,
+                            vb.clone(),
+                        )?
                     } else {
-                        pertensor_fp8_linear_b(in_dim, out_dim, quant_conf, false, shard, vb.clone())?
+                        pertensor_fp8_linear_b(
+                            in_dim,
+                            out_dim,
+                            quant_conf,
+                            false,
+                            shard,
+                            vb.clone(),
+                        )?
                     }
                 }
                 QuantizedConfig::Bitsandbytes { .. } => {
@@ -359,9 +373,23 @@ impl ColumnParallelLayer {
                 QuantizedConfig::Fp8 { weight_block_size } => {
                     // NOTE: no bias for fp8 as it might be parallelized
                     if weight_block_size.is_some() {
-                        blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, shard, vb.clone())?
+                        blockwise_fp8_linear_b(
+                            in_dim,
+                            out_dim,
+                            quant_conf,
+                            false,
+                            shard,
+                            vb.clone(),
+                        )?
                     } else {
-                        pertensor_fp8_linear_b(in_dim, out_dim, quant_conf, false, shard, vb.clone())?
+                        pertensor_fp8_linear_b(
+                            in_dim,
+                            out_dim,
+                            quant_conf,
+                            false,
+                            shard,
+                            vb.clone(),
+                        )?
                     }
                 }
                 QuantizedConfig::Bitsandbytes { .. } => {
@@ -1452,7 +1480,9 @@ impl FusedExperts {
                 };
 
                 let Some(weight_block_size) = weight_block_size else {
-                    candle_core::bail!("Blockwise FP8 for stacked experts requires weight_block_size to be set.")
+                    candle_core::bail!(
+                        "Blockwise FP8 for stacked experts requires weight_block_size to be set."
+                    )
                 };
                 if weight_block_size.len() != 2 {
                     candle_core::bail!(
@@ -1670,7 +1700,9 @@ impl FusedExperts {
             };
 
             let Some(weight_block_size) = weight_block_size else {
-                candle_core::bail!("Blockwise FP8 for per-expert format requires weight_block_size to be set.")
+                candle_core::bail!(
+                    "Blockwise FP8 for per-expert format requires weight_block_size to be set."
+                )
             };
             if weight_block_size.len() != 2 {
                 candle_core::bail!(

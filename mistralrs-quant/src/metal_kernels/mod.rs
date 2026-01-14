@@ -67,6 +67,7 @@ impl Kernels {
 
     /// Load the library from precompiled metallib, falling back to runtime compilation if needed.
     /// If this has been previously loaded it will just fetch it from cache.
+    #[allow(clippy::const_is_empty)] // KERNELS can be empty when MISTRALRS_METAL_PRECOMPILE=0
     pub fn load_library(&self, device: &Device) -> Result<Library, MetalKernelError> {
         use objc2_foundation::{NSString, NSURL};
 
@@ -2727,6 +2728,7 @@ pub fn call_dtype_to_fp8(
 
 /// Per-tensor FP8 dequantization: output = fp8_weight * scale_inv
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 pub fn call_fp8_pertensor_dequant(
     device: &Device,
     ep: impl EncoderProvider,

@@ -245,10 +245,16 @@ pub fn pertensor_fp8_linear_b(
     }
 
     // Load FP8 weight tensor
-    let weight = vb.get_with_hints_dtype((out_dim, in_dim), "weight", Default::default(), DType::F8E4M3)?;
+    let weight = vb.get_with_hints_dtype(
+        (out_dim, in_dim),
+        "weight",
+        Default::default(),
+        DType::F8E4M3,
+    )?;
 
     // Load per-tensor weight scale (scalar)
-    let weight_scale_inv = vb.get_with_hints_dtype((), "weight_scale_inv", Default::default(), DType::F32)?;
+    let weight_scale_inv =
+        vb.get_with_hints_dtype((), "weight_scale_inv", Default::default(), DType::F32)?;
 
     // Load activation scale if present (optional - some models may not have it)
     let activation_scale = if vb.contains_tensor("activation_scale") {
@@ -266,10 +272,7 @@ pub fn pertensor_fp8_linear_b(
     // Determine the output dtype for dequantization.
     // We can't use vb.dtype() as that returns F8E4M3 (the storage type).
     // Use the bias dtype if available, otherwise default to BF16.
-    let dequant_dtype = bias
-        .as_ref()
-        .map(|b| b.dtype())
-        .unwrap_or(DType::BF16);
+    let dequant_dtype = bias.as_ref().map(|b| b.dtype()).unwrap_or(DType::BF16);
 
     // Use new() which handles dequantization (Candle FP8 is storage-only)
     Ok(Arc::new(PerTensorFP8Linear::new(

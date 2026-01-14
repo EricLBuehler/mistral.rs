@@ -6,11 +6,11 @@ use std::{
 };
 
 use blockwise_fp8::blockwise_fp8_linear_b;
-use pertensor_fp8::pertensor_fp8_linear_b;
 use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
 };
+use pertensor_fp8::pertensor_fp8_linear_b;
 
 #[cfg(feature = "metal")]
 mod metal_kernels;
@@ -863,9 +863,23 @@ pub fn linear_no_bias(
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
             QuantizedConfig::Fp8 { weight_block_size } => {
                 if weight_block_size.is_some() {
-                    blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, Default::default(), vb)?
+                    blockwise_fp8_linear_b(
+                        in_dim,
+                        out_dim,
+                        quant_conf,
+                        false,
+                        Default::default(),
+                        vb,
+                    )?
                 } else {
-                    pertensor_fp8_linear_b(in_dim, out_dim, quant_conf, false, Default::default(), vb)?
+                    pertensor_fp8_linear_b(
+                        in_dim,
+                        out_dim,
+                        quant_conf,
+                        false,
+                        Default::default(),
+                        vb,
+                    )?
                 }
             }
             QuantizedConfig::Bitsandbytes { .. } => {
@@ -914,9 +928,23 @@ pub fn linear(
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
             QuantizedConfig::Fp8 { weight_block_size } => {
                 if weight_block_size.is_some() {
-                    blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, true, Default::default(), vb)?
+                    blockwise_fp8_linear_b(
+                        in_dim,
+                        out_dim,
+                        quant_conf,
+                        true,
+                        Default::default(),
+                        vb,
+                    )?
                 } else {
-                    pertensor_fp8_linear_b(in_dim, out_dim, quant_conf, true, Default::default(), vb)?
+                    pertensor_fp8_linear_b(
+                        in_dim,
+                        out_dim,
+                        quant_conf,
+                        true,
+                        Default::default(),
+                        vb,
+                    )?
                 }
             }
             QuantizedConfig::Bitsandbytes { .. } => {
