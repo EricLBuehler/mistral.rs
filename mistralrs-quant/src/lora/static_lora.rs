@@ -1,12 +1,30 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Result};
+use candle_core::Result;
 use candle_nn::Linear;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 
-use crate::{DummyLayer, QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear};
+use crate::{
+    lora::{get_adapter_delta, load_adapter, LoraConfigLike},
+    DummyLayer, QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear,
+};
 
-use super::StaticLoraConfig;
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct StaticLoraConfig {
+    pub layer: String,
+    pub lora_alpha: f64,
+    pub r: usize,
+}
+
+impl LoraConfigLike for StaticLoraConfig {
+    fn rank(&self) -> usize {
+        self.r
+    }
+    fn alpha(&self) -> f64 {
+        self.lora_alpha
+    }
+}
 
 /// Static LoRA in the style of Phi-4 multimodal. Only when the layer regex for the specific LoRA matches.
 ///
@@ -35,22 +53,17 @@ pub fn linear_no_bias_static_lora(
                     continue;
                 }
 
-                let a = vb.get((lora_cfg.r, in_dim), &format!("lora_A.{name}.weight"))?;
-                let b = vb.get((out_dim, lora_cfg.r), &format!("lora_B.{name}.weight"))?;
-                let scale = if lora_cfg.r > 0 {
-                    lora_cfg.lora_alpha / lora_cfg.r as f64
-                } else {
-                    1.0
-                };
+                let adapter = load_adapter(
+                    in_dim,
+                    out_dim,
+                    Some(name),
+                    vb.clone(),
+                    Default::default(),
+                    &lora_cfg,
+                )?;
+                let delta_weight = get_adapter_delta(&adapter)?;
 
-                let ab = if a.device().is_cpu() {
-                    b.to_dtype(DType::F32)?.matmul(&a.to_dtype(DType::F32)?)?
-                } else {
-                    b.matmul(&a)?
-                };
-
-                let delta_weight = (ab * scale)?;
-                weight = (weight + delta_weight.to_dtype(a.dtype())?)?;
+                weight = (weight + delta_weight)?;
             }
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
