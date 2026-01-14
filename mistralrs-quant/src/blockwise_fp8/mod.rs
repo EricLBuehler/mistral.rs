@@ -42,6 +42,7 @@ impl QuantMethod for BlockwiseFP8Linear {
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Bnb { .. }
             | QuantMethodConfig::FP8 { .. }
+            | QuantMethodConfig::PerTensorFP8 { .. }
             | QuantMethodConfig::Afq { .. }
             | QuantMethodConfig::MXFP4 { .. } => unreachable!(),
             QuantMethodConfig::BlockwiseFP8 {
@@ -410,7 +411,7 @@ pub fn blockwise_fp8_linear_b(
         candle_core::bail!("Unexpected quantization config.")
     };
 
-    // Handle the case where we actually have an unqiantzed
+    // Handle the case where we actually have an unquantized layer
     if vb.contains_tensor("weight") && !vb.contains_tensor("weight_scale_inv") {
         return crate::linear_b(in_dim, out_dim, bias, &None, vb);
     }
@@ -421,6 +422,10 @@ pub fn blockwise_fp8_linear_b(
         return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
     }
 
+    // Blockwise FP8 requires weight_block_size to be set
+    let Some(weight_block_size) = weight_block_size else {
+        candle_core::bail!("Blockwise FP8 requires weight_block_size to be set. Use per-tensor FP8 for models without block sizes.")
+    };
     if weight_block_size.len() != 2 {
         candle_core::bail!("Expected weight_block_size to have length 2, got {weight_block_size:?}")
     }

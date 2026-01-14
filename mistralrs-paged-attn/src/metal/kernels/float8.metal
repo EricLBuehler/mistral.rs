@@ -21,12 +21,12 @@ inline float fp8_e4m3_to_float(uchar v) {
     return s ? -val : val;
   }
 
-  if (exp == 0xF) { // Inf / NaN  (E4M3FN keeps only NaN)
-    if (man != 0)
-      return NAN;
-    return s ? -INFINITY : INFINITY;
+  // E4M3 has NO infinity - only NaN when exp=15 and mantissa=7
+  if (exp == 0xF && man == 0x7) {
+    return NAN;
   }
 
+  // Normalized (including exp=0xF with mantissa 0-6, which are valid numbers)
   const float m = 1.f + float(man) / 8.f;
   float val = ldexp(m, int(exp) - 7);
   return s ? -val : val;
@@ -115,7 +115,34 @@ inline uchar fp32_to_fp8(float f) {
 } // namespace detail
 
 inline uchar float_to_fp8_e4m3(float f) {
-  return detail::fp32_to_fp8<4, 3, 7>(f);
+  // E4M3 has no infinity - must handle specially
+  // Max value is 448 (exp=15, mantissa=6), mantissa=7 is NaN
+
+  if (isnan(f)) {
+    return 0x7F; // positive NaN (exp=15, mantissa=7)
+  }
+
+  const uint bits = as_bits(f);
+  const uint s = bits >> 31;
+
+  // Clamp infinity and overflow to max value (448)
+  if (isinf(f) || fabs(f) > 448.0f) {
+    // E4M3 max: exp=15, mantissa=6 (value = 1.75 * 2^8 = 448)
+    return uchar((s << 7) | (0xF << 3) | 0x6);
+  }
+
+  // Use the template for normal values, but check result
+  uchar result = detail::fp32_to_fp8<4, 3, 7>(f);
+
+  // Ensure we don't accidentally create NaN or invalid encoding
+  uint exp_bits = (result >> 3) & 0xF;
+  uint man_bits = result & 0x7;
+  if (exp_bits == 0xF && man_bits == 0x7) {
+    // Would be NaN, clamp to max value instead
+    return uchar((s << 7) | (0xF << 3) | 0x6);
+  }
+
+  return result;
 }
 inline uchar float_to_fp8_e5m2(float f) {
   return detail::fp32_to_fp8<5, 2, 15>(f);

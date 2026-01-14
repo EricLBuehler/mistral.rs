@@ -4,59 +4,71 @@ use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
 use candle_nn::Linear;
 
 mod ops;
-pub use ops::{fp8_vector_dequantize, fp8_vector_quantize};
-
-#[cfg(feature = "cuda")]
-pub(crate) mod ffi;
 
 use crate::{
     generate_isq, generate_isq_imatrix,
     hqq::{ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     AfqBits, AfqGroupSize, AfqLayer, DummyLayer, FP8Linear, GgufMatMul, HqqAxis, HqqBits,
     HqqConfig, HqqLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
-    QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
+    QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
-pub(crate) const VECTOR_SIZE: usize = 128;
-
+/// Per-tensor FP8 Linear layer with static activation scaling.
+///
+/// This is used for models that have per-tensor FP8 quantization (weight_block_size = null)
+/// with static activation scales. Each linear layer has:
+/// - `<layer>.weight` (FP8 E4M3)
+/// - `<layer>.weight_scale_inv` (F32 scalar) - dequantization scale for weights
+/// - `<layer>.activation_scale` (F32 scalar) - quantization scale for activations
 #[derive(Debug)]
-pub struct VectorFP8Linear {
+pub struct PerTensorFP8Linear {
     weight: Tensor,
+    #[allow(dead_code)]
     weight_scale_inv: Tensor,
+    #[allow(dead_code)]
+    activation_scale: Option<Tensor>,
     bias: Option<Tensor>,
+    #[allow(dead_code)]
     dequant_dtype: DType,
 }
 
-impl QuantMethod for VectorFP8Linear {
+impl QuantMethod for PerTensorFP8Linear {
     fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
     where
         Self: Sized,
     {
         match method {
-            QuantMethodConfig::Gguf { .. }
-            | QuantMethodConfig::GptqAwq { .. }
-            | QuantMethodConfig::Hqq { .. }
-            | QuantMethodConfig::Dummy
-            | QuantMethodConfig::Unquantized(_)
-            | QuantMethodConfig::Bnb { .. }
-            | QuantMethodConfig::FP8 { .. }
-            | QuantMethodConfig::BlockwiseFP8 { .. }
-            | QuantMethodConfig::PerTensorFP8 { .. }
-            | QuantMethodConfig::Afq { .. }
-            | QuantMethodConfig::MXFP4 { .. } => unreachable!(),
+            QuantMethodConfig::PerTensorFP8 {
+                weight,
+                weight_scale_inv,
+                activation_scale,
+                bias,
+                dequant_dtype,
+            } => {
+                // Dequantize immediately since Candle FP8 is storage-only (no ops)
+                let dequant_weight =
+                    ops::fp8_pertensor_dequantize(&weight, &weight_scale_inv, dequant_dtype)?;
+                Ok(Self {
+                    weight: dequant_weight,
+                    weight_scale_inv,
+                    activation_scale,
+                    bias,
+                    dequant_dtype,
+                })
+            }
+            _ => unreachable!(),
         }
     }
 
-    fn dequantize_w(&self) -> Result<candle_core::Tensor> {
-        ops::fp8_vector_dequantize(&self.weight, &self.weight_scale_inv, self.dequant_dtype)
+    fn dequantize_w(&self) -> Result<Tensor> {
+        // Weight is already dequantized on load
+        Ok(self.weight.clone())
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        // Dequantize matmul always.
-        let weight = self.dequantize_w()?;
-        // Dispatch to unquant. This uses some cublaslt for bias & on cuda always, so it is better
+        // Weight is already dequantized, use standard matmul
         let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
-            weight,
+            self.weight.clone(),
             self.bias.clone(),
         )))?;
         unquant.forward(x)
@@ -67,10 +79,10 @@ impl QuantMethod for VectorFP8Linear {
     }
 
     fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("VectorFP8Linear does not support add_delta_w")
+        candle_core::bail!("PerTensorFP8Linear does not support add_delta_w")
     }
 
-    fn dtype_and_device(&self) -> (DType, candle_core::Device) {
+    fn dtype_and_device(&self) -> (DType, Device) {
         (DType::F8E4M3, self.weight.device().clone())
     }
 
@@ -82,8 +94,7 @@ impl QuantMethod for VectorFP8Linear {
         imatrix_weight: Option<Vec<f32>>,
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        let weight =
-            ops::fp8_vector_dequantize(&self.weight, &self.weight_scale_inv, self.dequant_dtype)?;
+        let weight = self.dequantize_w()?;
         match dtype {
             Some(IsqType::HQQ4 | IsqType::HQQ8) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
@@ -185,7 +196,6 @@ impl QuantMethod for VectorFP8Linear {
             }
             None => {
                 let _acquired_quantize_guard = guard.acquire(&device);
-                // Ignore imatrix altogether
 
                 let w = weight.to_device(&device)?;
                 let b = if let Some(b) = &self.bias {
@@ -201,70 +211,77 @@ impl QuantMethod for VectorFP8Linear {
     }
 }
 
-impl QuantizedSerde for VectorFP8Linear {
+impl QuantizedSerde for PerTensorFP8Linear {
     fn isq_serde_supported(&self) -> bool {
-        false
+        false // Can add serialization support later if needed
     }
     fn name(&self) -> &'static str {
-        "vector-fp8-linear"
+        "pertensor-fp8-linear"
     }
 }
 
-#[allow(dead_code)]
-pub fn vector_fp8_linear_b(
+/// Load a per-tensor FP8 linear layer from the VarBuilder.
+///
+/// This handles models with per-tensor FP8 quantization where:
+/// - `weight_block_size` is null (per-tensor, not blockwise)
+/// - Each layer has: weight (FP8), weight_scale_inv (F32), activation_scale (F32)
+pub fn pertensor_fp8_linear_b(
     in_dim: usize,
     out_dim: usize,
+    _config: &QuantizedConfig,
     bias: bool,
-    hints: Shard,
+    _hints: Shard,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
-    // Check that dimensions are divisible by VECTOR_SIZE
-    if in_dim % VECTOR_SIZE != 0 {
-        candle_core::bail!(
-            "Input dimension {} must be divisible by {} for vector FP8 quantization",
-            in_dim,
-            VECTOR_SIZE
-        );
-    }
-    if out_dim % VECTOR_SIZE != 0 {
-        candle_core::bail!(
-            "Output dimension {} must be divisible by {} for vector FP8 quantization",
-            out_dim,
-            VECTOR_SIZE
-        );
-    }
-
-    // Handle the case where we actually have an unquantized
+    // Handle the case where we actually have unquantized weights
     if vb.contains_tensor("weight") && !vb.contains_tensor("weight_scale_inv") {
         return crate::linear_b(in_dim, out_dim, bias, &None, vb);
     }
 
     // Handle the case where the layer is dummy (no tensors)
-    if !(vb.contains_tensor("weight") && vb.contains_tensor("weight_scale_inv")) {
+    if !vb.contains_tensor("weight") {
         let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
         return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
     }
 
-    let weight = vb.get_with_hints_dtype((out_dim, in_dim), "weight", hints, DType::F8E4M3)?;
+    // Load FP8 weight tensor
+    let weight = vb.get_with_hints_dtype(
+        (out_dim, in_dim),
+        "weight",
+        Default::default(),
+        DType::F8E4M3,
+    )?;
 
-    // For vector quantization, we have one scale per vector of 128 elements
-    // Since weight is (out_dim, in_dim), we'll treat it as out_dim * in_dim / 128 vectors
-    let total_elements = out_dim * in_dim;
-    let num_vectors = total_elements.div_ceil(VECTOR_SIZE);
-
+    // Load per-tensor weight scale (scalar)
     let weight_scale_inv =
-        vb.get_with_hints_dtype(num_vectors, "weight_scale_inv", hints, DType::F32)?;
+        vb.get_with_hints_dtype((), "weight_scale_inv", Default::default(), DType::F32)?;
 
-    let bias = if bias {
+    // Load activation scale if present (optional - some models may not have it)
+    let activation_scale = if vb.contains_tensor("activation_scale") {
+        Some(vb.get_with_hints_dtype((), "activation_scale", Default::default(), DType::F32)?)
+    } else {
+        None
+    };
+
+    let bias = if bias && vb.contains_tensor("bias") {
         Some(vb.get((out_dim,), "bias")?)
     } else {
         None
     };
 
-    Ok(Arc::new(VectorFP8Linear {
-        weight,
-        weight_scale_inv,
-        bias,
-        dequant_dtype: vb.dtype(),
-    }))
+    // Determine the output dtype for dequantization.
+    // We can't use vb.dtype() as that returns F8E4M3 (the storage type).
+    // Use the bias dtype if available, otherwise default to BF16.
+    let dequant_dtype = bias.as_ref().map(|b| b.dtype()).unwrap_or(DType::BF16);
+
+    // Use new() which handles dequantization (Candle FP8 is storage-only)
+    Ok(Arc::new(PerTensorFP8Linear::new(
+        QuantMethodConfig::PerTensorFP8 {
+            weight,
+            weight_scale_inv,
+            activation_scale,
+            bias,
+            dequant_dtype,
+        },
+    )?))
 }

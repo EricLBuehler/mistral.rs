@@ -105,6 +105,7 @@ impl QuantMethod for AfqLayer {
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
             | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::PerTensorFP8 { .. }
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::MXFP4 { .. } => unreachable!(),
             QuantMethodConfig::Afq {

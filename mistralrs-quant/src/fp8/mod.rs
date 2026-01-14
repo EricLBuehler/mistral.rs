@@ -43,6 +43,7 @@ impl QuantMethod for FP8Linear {
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Bnb { .. }
             | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::PerTensorFP8 { .. }
             | QuantMethodConfig::Afq { .. }
             | QuantMethodConfig::MXFP4 { .. } => unreachable!(),
             QuantMethodConfig::FP8 { lin, dtype } => {

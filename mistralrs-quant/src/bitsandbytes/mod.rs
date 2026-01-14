@@ -212,6 +212,7 @@ impl QuantMethod for BnbLinear {
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::PerTensorFP8 { .. }
             | QuantMethodConfig::Afq { .. }
             | QuantMethodConfig::MXFP4 { .. } => unreachable!(),
             QuantMethodConfig::Bnb {

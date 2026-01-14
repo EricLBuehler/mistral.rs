@@ -46,6 +46,7 @@ impl QuantMethod for MXFP4Layer {
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
             | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::PerTensorFP8 { .. }
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Afq { .. } => unreachable!(),
             QuantMethodConfig::MXFP4 {
