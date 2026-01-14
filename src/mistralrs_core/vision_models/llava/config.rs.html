@@ -92,23 +92,24 @@
 <a href=#92 id=92 data-nosnippet>92</a>            </span>max_position_embeddings: <span class="self">self</span>.text_config.max_position_embeddings,
 <a href=#93 id=93 data-nosnippet>93</a>            rms_norm_eps: <span class="self">self</span>.text_config.rms_norm_eps,
 <a href=#94 id=94 data-nosnippet>94</a>            rope_theta: <span class="self">self</span>.text_config.rope_theta <span class="kw">as </span>f64,
-<a href=#95 id=95 data-nosnippet>95</a>            sliding_window: <span class="self">self</span>.text_config.sliding_window,
-<a href=#96 id=96 data-nosnippet>96</a>            head_dim: <span class="prelude-val">None</span>,
-<a href=#97 id=97 data-nosnippet>97</a>            quantization_config: <span class="prelude-val">None</span>,
-<a href=#98 id=98 data-nosnippet>98</a>            tie_word_embeddings: <span class="bool-val">false</span>,
-<a href=#99 id=99 data-nosnippet>99</a>        }
-<a href=#100 id=100 data-nosnippet>100</a>    }
-<a href=#101 id=101 data-nosnippet>101</a>
-<a href=#102 id=102 data-nosnippet>102</a>    <span class="kw">pub fn </span>to_clip_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ClipConfig {
-<a href=#103 id=103 data-nosnippet>103</a>        ClipConfig {
-<a href=#104 id=104 data-nosnippet>104</a>            hidden_size: <span class="self">self</span>.vision_config.hidden_size,
-<a href=#105 id=105 data-nosnippet>105</a>            intermediate_size: <span class="self">self</span>.vision_config.intermediate_size,
-<a href=#106 id=106 data-nosnippet>106</a>            num_hidden_layers: <span class="self">self</span>.vision_config.num_hidden_layers,
-<a href=#107 id=107 data-nosnippet>107</a>            num_attention_heads: <span class="self">self</span>.vision_config.num_attention_heads,
-<a href=#108 id=108 data-nosnippet>108</a>            num_channels: <span class="number">3</span>,
-<a href=#109 id=109 data-nosnippet>109</a>            image_size: <span class="self">self</span>.vision_config.image_size,
-<a href=#110 id=110 data-nosnippet>110</a>            patch_size: <span class="self">self</span>.vision_config.patch_size,
-<a href=#111 id=111 data-nosnippet>111</a>            hidden_act: ClipActivation::QuickGelu,
-<a href=#112 id=112 data-nosnippet>112</a>        }
-<a href=#113 id=113 data-nosnippet>113</a>    }
-<a href=#114 id=114 data-nosnippet>114</a>}</code></pre></div></section></main></body></html>
+<a href=#95 id=95 data-nosnippet>95</a>            rope_parameters: <span class="prelude-val">None</span>,
+<a href=#96 id=96 data-nosnippet>96</a>            sliding_window: <span class="self">self</span>.text_config.sliding_window,
+<a href=#97 id=97 data-nosnippet>97</a>            head_dim: <span class="prelude-val">None</span>,
+<a href=#98 id=98 data-nosnippet>98</a>            quantization_config: <span class="prelude-val">None</span>,
+<a href=#99 id=99 data-nosnippet>99</a>            tie_word_embeddings: <span class="bool-val">false</span>,
+<a href=#100 id=100 data-nosnippet>100</a>        }
+<a href=#101 id=101 data-nosnippet>101</a>    }
+<a href=#102 id=102 data-nosnippet>102</a>
+<a href=#103 id=103 data-nosnippet>103</a>    <span class="kw">pub fn </span>to_clip_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ClipConfig {
+<a href=#104 id=104 data-nosnippet>104</a>        ClipConfig {
+<a href=#105 id=105 data-nosnippet>105</a>            hidden_size: <span class="self">self</span>.vision_config.hidden_size,
+<a href=#106 id=106 data-nosnippet>106</a>            intermediate_size: <span class="self">self</span>.vision_config.intermediate_size,
+<a href=#107 id=107 data-nosnippet>107</a>            num_hidden_layers: <span class="self">self</span>.vision_config.num_hidden_layers,
+<a href=#108 id=108 data-nosnippet>108</a>            num_attention_heads: <span class="self">self</span>.vision_config.num_attention_heads,
+<a href=#109 id=109 data-nosnippet>109</a>            num_channels: <span class="number">3</span>,
+<a href=#110 id=110 data-nosnippet>110</a>            image_size: <span class="self">self</span>.vision_config.image_size,
+<a href=#111 id=111 data-nosnippet>111</a>            patch_size: <span class="self">self</span>.vision_config.patch_size,
+<a href=#112 id=112 data-nosnippet>112</a>            hidden_act: ClipActivation::QuickGelu,
+<a href=#113 id=113 data-nosnippet>113</a>        }
+<a href=#114 id=114 data-nosnippet>114</a>    }
+<a href=#115 id=115 data-nosnippet>115</a>}</code></pre></div></section></main></body></html>
