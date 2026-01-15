@@ -122,7 +122,9 @@ impl QuantMethod for UnquantLinear {
                     }
                 }
             }
-        } else if let (Device::Cuda(_), Some(cublaslt)) = (a.device(), CUBLASLT_CONTROLLER.get_for_device(a.device())) {
+        } else if let (Device::Cuda(_), Some(cublaslt)) =
+            (a.device(), CUBLASLT_CONTROLLER.get_for_device(a.device()))
+        {
             // cuBLAS batch_matmul requires 3D tensors, fall back to regular matmul for 2D
             if a.rank() >= 3 && w.rank() >= 3 {
                 cublaslt
