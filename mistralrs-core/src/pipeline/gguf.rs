@@ -282,6 +282,9 @@ impl Loader for GGUFLoader {
             self.quantized_filenames.clone(),
             silent
         );
+
+        info!("About to load!");
+
         self.load_model_from_path(
             &paths?,
             dtype,
@@ -318,15 +321,17 @@ impl Loader for GGUFLoader {
             readers.push(std::fs::File::open(filename)?);
         }
         let mut readers = readers.iter_mut().collect::<Vec<_>>();
-
         let model = Content::from_readers(&mut readers)?;
+
         if !silent {
             model.print_metadata()?;
         }
+
         let arch = model.arch();
 
         // If auto, convert to Map
         let num_layers = model.get_metadata()[&format!("{arch}.block_count")].to_u32()? as usize;
+
         if let DeviceMapSetting::Auto(params) = mapper.clone() {
             let devices = device_map::get_all_similar_devices(device)?;
             // Initial dtype
@@ -444,7 +449,9 @@ impl Loader for GGUFLoader {
         // Config into model:
         let model = match self.kind {
             ModelKind::GgufQuantized { .. } => match arch {
-                GGUFArchitecture::Llama => Model::Llama(QLlama::try_from(model_config)?),
+                GGUFArchitecture::Llama | GGUFArchitecture::Mistral3 => {
+                    Model::Llama(QLlama::try_from(model_config)?)
+                }
                 GGUFArchitecture::Phi2 => Model::Phi2(QPhi::try_from(model_config)?),
                 GGUFArchitecture::Phi3 => Model::Phi3(QPhi3::try_from(model_config)?),
                 GGUFArchitecture::Starcoder2 => {
@@ -456,7 +463,9 @@ impl Loader for GGUFLoader {
                 a => bail!("Unsupported architecture `{a:?}` for GGUF"),
             },
             ModelKind::GgufAdapter { adapter, .. } => match arch {
-                GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
+                GGUFArchitecture::Llama | GGUFArchitecture::Mistral3 => {
+                    Model::XLoraLlama(XLoraQLlama::try_from(model_config)?)
+                }
                 GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::try_from(model_config)?),
                 a => bail!(
                     "Unsupported architecture `{a:?}` for GGUF {kind}",
