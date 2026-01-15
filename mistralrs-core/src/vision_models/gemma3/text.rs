@@ -561,7 +561,8 @@ impl TextModel {
             self.cfg.num_attn_heads,
         )?;
         // Move mask to CPU to avoid CUDA context issues when copying between GPUs
-        // during device-mapped forward passes.
+        // during device-mapped forward passes. Each GPU has its own CUDA context,
+        // and candle/cudarc doesn't properly switch contexts for cross-GPU transfers.
         let attention_mask = attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
         // PagedAttention prompt chunking
         let attention_mask = attention_mask.filter(|_| {
@@ -577,7 +578,7 @@ impl TextModel {
             xs.dtype(),
             self.cfg.num_attn_heads,
         )?;
-        // Move mask to CPU to avoid CUDA context issues when copying between GPUs
+        // Move mask to CPU (see comment above)
         let sliding_attention_mask =
             sliding_attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
         // PagedAttention prompt chunking
