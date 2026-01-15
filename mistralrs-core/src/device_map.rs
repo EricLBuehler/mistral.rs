@@ -63,6 +63,7 @@ impl DeviceMapSetting {
         model_layers: usize,
         device: &Device,
         topology: Option<&Topology>,
+        all_devices: &[Device],
     ) -> Result<Box<dyn DeviceMapper + Send + Sync>> {
         match self {
             Self::Nccl { nm_device, comm } => {
@@ -160,7 +161,16 @@ impl DeviceMapSetting {
                                 if device_ord == *ordinal {
                                     device.clone()
                                 } else {
-                                    Device::new_cuda(*ordinal)?
+                                    let cuda_device = all_devices.iter()
+                                    .filter(|d|d.is_cuda())
+                                    .find(|d|d.as_cuda_device().expect("Should be a cuda device").cuda_stream().context().ordinal() == *ordinal).cloned();
+
+                                
+                                    if let Some(device) = cuda_device {
+                                        device
+                                    } else {
+                                        candle_core::bail!("Could not find cuda device with ordinal {}", ordinal)
+                                    }                                 
                                 }
                             }
                             DeviceLocation::Metal { gpu_id: device_ord } => {
