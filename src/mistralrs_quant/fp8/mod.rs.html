@@ -70,7 +70,7 @@
 <a href=#70 id=70 data-nosnippet>70</a>        <span class="comment">// Batch matrix multiplication
 <a href=#71 id=71 data-nosnippet>71</a>        </span>maybe_init_cublas_lt_wrapper(x.device().clone());
 <a href=#72 id=72 data-nosnippet>72</a>
-<a href=#73 id=73 data-nosnippet>73</a>        <span class="kw">match </span>CUBLASLT_CONTROLLER.get() {
+<a href=#73 id=73 data-nosnippet>73</a>        <span class="kw">match </span>CUBLASLT_CONTROLLER.get_for_device(x.device()) {
 <a href=#74 id=74 data-nosnippet>74</a>            <span class="prelude-val">Some</span>(handle) =&gt; {
 <a href=#75 id=75 data-nosnippet>75</a>                <span class="kw">let </span>n_dims = x.dims().len();
 <a href=#76 id=76 data-nosnippet>76</a>                <span class="kw">if </span>n_dims &lt; <span class="number">3 </span>{

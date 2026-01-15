@@ -112,7 +112,7 @@
 <a href=#112 id=112 data-nosnippet>112</a>        <span class="comment">// Batch matrix multiplication
 <a href=#113 id=113 data-nosnippet>113</a>        </span>maybe_init_cublas_lt_wrapper(x.device().clone());
 <a href=#114 id=114 data-nosnippet>114</a>
-<a href=#115 id=115 data-nosnippet>115</a>        <span class="kw">let </span>handle = CUBLASLT_CONTROLLER.get().unwrap();
+<a href=#115 id=115 data-nosnippet>115</a>        <span class="kw">let </span>handle = CUBLASLT_CONTROLLER.get_for_device(x.device()).unwrap();
 <a href=#116 id=116 data-nosnippet>116</a>
 <a href=#117 id=117 data-nosnippet>117</a>        <span class="kw">let </span>QuantizationResult {
 <a href=#118 id=118 data-nosnippet>118</a>            qw,
