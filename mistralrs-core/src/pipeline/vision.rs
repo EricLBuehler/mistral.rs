@@ -520,7 +520,6 @@ impl Loader for VisionLoader {
                 topology_overrides.clone(),
             );
         }
-        dbg!(&use_immediate);
 
         // Logic for ISQ here: if no calibration (i.e imatrix), then allow immediate ISQ. Otherwise, back to normal.
         let mut loading_isq = if use_immediate {
@@ -546,8 +545,6 @@ impl Loader for VisionLoader {
         } else {
             Device::Cpu
         };
-        dbg!(&loading_isq);
-        dbg!(&in_situ_quant);
 
         let attention_mechanism = if paged_attn_config.is_some() {
             AttentionImplementation::PagedAttention
