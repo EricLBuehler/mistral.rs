@@ -112,7 +112,7 @@ mod tests {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(x.device().clone());
 
-        let handle = CUBLASLT_CONTROLLER.get().unwrap();
+        let handle = CUBLASLT_CONTROLLER.get_for_device(x.device()).unwrap();
 
         let QuantizationResult {
             qw,

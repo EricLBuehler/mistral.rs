@@ -221,7 +221,7 @@ impl Sdpa {
         #[allow(unused)]
         if let (Device::Cuda(_), Some(cublaslt)) = (
             q.device(),
-            mistralrs_quant::cublaslt::CUBLASLT_CONTROLLER.get(),
+            mistralrs_quant::cublaslt::CUBLASLT_CONTROLLER.get_for_device(q.device()),
         ) {
             #[cfg(feature = "cuda")]
             {

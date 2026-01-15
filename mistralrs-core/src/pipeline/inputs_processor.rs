@@ -264,11 +264,16 @@ pub mod text_models_inputs_processor {
                 .iter()
                 .max()
                 .expect("seqlens_k should not be empty when flash_attn is enabled");
-            let seqlens_q = Tensor::new(seqlens_q, device)?
+            // Create tensors on CPU first to avoid CUDA context issues when copying
+            // between different GPU devices. Each GPU has its own CUDA context, and
+            // candle/cudarc doesn't properly switch contexts when doing GPU-to-GPU
+            // transfers (which go through CPU). By creating on CPU first, we avoid
+            // the cross-context memory access that causes CUDA_ERROR_INVALID_VALUE.
+            let seqlens_q = Tensor::new(seqlens_q, &Device::Cpu)?
                 .to_dtype(DType::F32)?
                 .cumsum(0)?
                 .to_dtype(DType::U32)?;
-            let seqlens_k = Tensor::new(seqlens_k, device)?
+            let seqlens_k = Tensor::new(seqlens_k, &Device::Cpu)?
                 .to_dtype(DType::F32)?
                 .cumsum(0)?
                 .to_dtype(DType::U32)?;
@@ -289,9 +294,14 @@ pub mod text_models_inputs_processor {
         let input = Tensor::cat(&seqs_tensors, 0).unwrap();
 
         let paged_attn_meta = if paged_attn_metadata.is_some() {
+            // Create paged attention tensors on CPU first (see comment above about CUDA contexts)
             let max_slot_mapping_len = slot_mappings.iter().map(|x| x.len()).max().unwrap();
-            let slot_mappings =
-                _make_tensor_with_pad(slot_mappings, max_slot_mapping_len, _PAD_SLOT_ID, device)?;
+            let slot_mappings = _make_tensor_with_pad(
+                slot_mappings,
+                max_slot_mapping_len,
+                _PAD_SLOT_ID,
+                &Device::Cpu,
+            )?;
 
             let max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
             let block_tables = _make_tensor_with_pad(
@@ -301,7 +311,7 @@ pub mod text_models_inputs_processor {
                     .collect::<Vec<_>>(),
                 max_block_table_len,
                 0,
-                device,
+                &Device::Cpu,
             )?;
             let block_tables = block_tables.reshape(((), max_block_table_len))?;
 
@@ -318,7 +328,7 @@ pub mod text_models_inputs_processor {
                     .collect::<Vec<_>>(),
                 max_context_len,
                 0,
-                device,
+                &Device::Cpu,
             )?
             .reshape(((),))?;
 
@@ -458,11 +468,12 @@ pub mod text_models_inputs_processor {
                 .iter()
                 .max()
                 .expect("seqlens_k should not be empty when flash_attn is enabled");
-            let seqlens_q = Tensor::new(seqlens_q, device)?
+            // Create tensors on CPU first to avoid CUDA context issues (see make_prompt_chunk)
+            let seqlens_q = Tensor::new(seqlens_q, &Device::Cpu)?
                 .to_dtype(DType::F32)?
                 .cumsum(0)?
                 .to_dtype(DType::U32)?;
-            let seqlens_k = Tensor::new(seqlens_k, device)?
+            let seqlens_k = Tensor::new(seqlens_k, &Device::Cpu)?
                 .to_dtype(DType::F32)?
                 .cumsum(0)?
                 .to_dtype(DType::U32)?;
@@ -481,7 +492,9 @@ pub mod text_models_inputs_processor {
         };
 
         let paged_attn_meta = if paged_attn_metadata.is_some() {
-            let slot_mappings = _make_tensor_with_pad(slot_mappings, 1, _PAD_SLOT_ID, device)?;
+            // Create paged attention tensors on CPU first (see make_prompt_chunk for explanation)
+            let slot_mappings =
+                _make_tensor_with_pad(slot_mappings, 1, _PAD_SLOT_ID, &Device::Cpu)?;
 
             let max_block_table_len = block_tables
                 .iter()
@@ -496,7 +509,7 @@ pub mod text_models_inputs_processor {
                     .collect::<Vec<_>>(),
                 max_block_table_len,
                 0,
-                device,
+                &Device::Cpu,
             )?;
             let block_tables = block_tables.reshape(((), max_block_table_len))?;
 
@@ -508,7 +521,7 @@ pub mod text_models_inputs_processor {
                     .map(|x| *x as u32)
                     .collect::<Vec<_>>(),
                 (paged_attn_context_lens.len(),),
-                device,
+                &Device::Cpu,
             )?;
 
             // For device mapping, make a copy of each tensor for each device
