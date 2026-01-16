@@ -53,6 +53,7 @@ pub mod distributed;
 mod gguf;
 pub mod harmony;
 pub mod layers;
+pub mod think_tags;
 mod layers_masker;
 mod layers_utils;
 pub mod matformer;

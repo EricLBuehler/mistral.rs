@@ -578,6 +578,9 @@ impl Engine {
                         if let Err(e) = seq.enable_harmony_mode() {
                             warn!("Failed to enable Harmony mode: {e}");
                         }
+                    } else if chat_template.uses_think_tags() {
+                        // Enable think tag mode if the chat template uses <think> tags
+                        seq.enable_think_tag_mode();
                     }
                 }
             }
