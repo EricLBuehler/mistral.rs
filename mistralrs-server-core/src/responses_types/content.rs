@@ -18,10 +18,10 @@ pub struct ImageUrl {
     pub detail: Option<ImageDetail>,
 }
 
-/// Input content types for the OpenResponses API
+/// OpenResponses format input content types (with input_text, input_image, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
-pub enum InputContent {
+pub enum OpenResponsesInputContent {
     /// Text input content
     #[serde(rename = "input_text")]
     InputText {
@@ -59,6 +59,133 @@ pub enum InputContent {
         file_data: Option<String>,
         /// Filename
         #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+    },
+}
+
+/// Audio input structure for OpenAI format
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AudioInput {
+    /// Base64 encoded audio data
+    pub data: String,
+    /// Audio format (e.g., "wav", "mp3")
+    pub format: String,
+}
+
+/// OpenAI Chat format input content types (with text, image_url, etc.)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum OpenAIInputContent {
+    /// Text content (OpenAI format)
+    #[serde(rename = "text")]
+    Text {
+        /// The text content
+        text: String,
+    },
+    /// Image URL content (OpenAI format)
+    #[serde(rename = "image_url")]
+    ImageUrl {
+        /// The image URL object
+        image_url: ImageUrl,
+    },
+    /// Audio content (OpenAI format)
+    #[serde(rename = "input_audio")]
+    InputAudio {
+        /// The audio input object
+        input_audio: AudioInput,
+    },
+}
+
+/// Input content types for the OpenResponses API.
+///
+/// Supports both OpenResponses format (input_text, input_image) and
+/// OpenAI Chat format (text, image_url) for compatibility.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum InputContent {
+    /// OpenResponses format content
+    OpenResponses(OpenResponsesInputContent),
+    /// OpenAI Chat format content
+    OpenAI(OpenAIInputContent),
+}
+
+impl InputContent {
+    /// Normalize to the internal format for processing
+    pub fn into_normalized(self) -> NormalizedInputContent {
+        match self {
+            InputContent::OpenResponses(c) => match c {
+                OpenResponsesInputContent::InputText { text } => {
+                    NormalizedInputContent::Text { text }
+                }
+                OpenResponsesInputContent::InputImage {
+                    image_url,
+                    image_data,
+                    detail,
+                } => NormalizedInputContent::Image {
+                    image_url,
+                    image_data,
+                    detail,
+                },
+                OpenResponsesInputContent::InputAudio { data, format } => {
+                    NormalizedInputContent::Audio { data, format }
+                }
+                OpenResponsesInputContent::InputFile {
+                    file_id,
+                    file_data,
+                    filename,
+                } => NormalizedInputContent::File {
+                    file_id,
+                    file_data,
+                    filename,
+                },
+            },
+            InputContent::OpenAI(c) => match c {
+                OpenAIInputContent::Text { text } => NormalizedInputContent::Text { text },
+                OpenAIInputContent::ImageUrl { image_url } => NormalizedInputContent::Image {
+                    image_url: Some(image_url.url),
+                    image_data: None,
+                    detail: image_url.detail,
+                },
+                OpenAIInputContent::InputAudio { input_audio } => NormalizedInputContent::Audio {
+                    data: input_audio.data,
+                    format: input_audio.format,
+                },
+            },
+        }
+    }
+}
+
+/// Normalized input content for internal processing
+#[derive(Debug, Clone)]
+pub enum NormalizedInputContent {
+    /// Text content
+    Text {
+        /// The text content
+        text: String,
+    },
+    /// Image content
+    Image {
+        /// The image URL
+        image_url: Option<String>,
+        /// Base64 encoded image data
+        image_data: Option<String>,
+        /// Optional detail level
+        detail: Option<ImageDetail>,
+    },
+    /// Audio content
+    Audio {
+        /// Audio data (base64 encoded)
+        data: String,
+        /// Audio format (e.g., "wav", "mp3")
+        format: String,
+    },
+    /// File content
+    File {
+        /// File ID (for previously uploaded files)
+        file_id: Option<String>,
+        /// Base64 encoded file data
+        file_data: Option<String>,
+        /// Filename
         filename: Option<String>,
     },
 }

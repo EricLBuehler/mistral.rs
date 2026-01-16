@@ -114,13 +114,15 @@ impl OpenResponsesInput {
 ///
 /// This function handles multimodal content including text, images, audio, and files.
 fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
-    use crate::responses_types::content::InputContent;
+    use crate::responses_types::content::NormalizedInputContent;
+    use crate::responses_types::items::TaggedInputItem;
 
     let mut messages = Vec::new();
 
     for item in items {
-        match item {
-            InputItem::Message(msg_param) => {
+        // Normalize to TaggedInputItem for uniform processing
+        match item.into_tagged() {
+            TaggedInputItem::Message(msg_param) => {
                 let content = match msg_param.content {
                     MessageContentParam::Text(text) => Some(MessageContent::from_text(text)),
                     MessageContentParam::Parts(parts) => {
@@ -129,11 +131,12 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                         let mut has_non_text_content = false;
 
                         for part in parts {
-                            match part {
-                                InputContent::InputText { text } => {
+                            // Normalize the content part to handle both OpenAI and OpenResponses formats
+                            match part.into_normalized() {
+                                NormalizedInputContent::Text { text } => {
                                     content_parts.push(MessageContent::text_part(text));
                                 }
-                                InputContent::InputImage {
+                                NormalizedInputContent::Image {
                                     image_url,
                                     image_data,
                                     detail,
@@ -170,7 +173,7 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                                     };
                                     content_parts.push(image_part);
                                 }
-                                InputContent::InputAudio { data, format } => {
+                                NormalizedInputContent::Audio { data, format } => {
                                     has_non_text_content = true;
                                     // Convert audio to data URL format
                                     let mime_type = match format.as_str() {
@@ -206,7 +209,7 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                                         audio_url
                                     )));
                                 }
-                                InputContent::InputFile {
+                                NormalizedInputContent::File {
                                     file_id,
                                     file_data,
                                     filename,
@@ -262,11 +265,11 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                     tool_call_id: None,
                 });
             }
-            InputItem::ItemReference { id: _ } => {
+            TaggedInputItem::ItemReference { id: _ } => {
                 // Item references should be resolved before this point
                 // Skip for now - they'll be handled in parse_responses_request
             }
-            InputItem::FunctionCall {
+            TaggedInputItem::FunctionCall {
                 call_id,
                 name,
                 arguments,
@@ -284,7 +287,7 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                     tool_call_id: None,
                 });
             }
-            InputItem::FunctionCallOutput { call_id, output } => {
+            TaggedInputItem::FunctionCallOutput { call_id, output } => {
                 // Convert to tool message
                 messages.push(Message {
                     content: Some(MessageContent::from_text(output)),

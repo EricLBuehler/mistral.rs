@@ -57,6 +57,7 @@ resp1 = client.responses.create(
 )
 
 print(resp1.output_text)
+print(resp1.reasoning)
 
 # follow‑up: no need to resend the first question
 resp2 = client.responses.create(
@@ -64,3 +65,4 @@ resp2 = client.responses.create(
 )
 
 print(resp2.output_text)
+print(resp2.reasoning)

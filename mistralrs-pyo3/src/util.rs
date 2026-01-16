@@ -92,8 +92,13 @@ pub(crate) fn parse_image_url(url_unparsed: &str) -> PyApiResult<DynamicImage> {
         url::Url::from_file_path(std::path::absolute(url_unparsed)?)
             .map_err(|_| format!("Could not parse file path: {url_unparsed}"))?
     } else {
-        url::Url::parse(url_unparsed)
-            .map_err(|_| format!("Could not parse as base64 data: {url_unparsed}"))?
+        url::Url::parse(url_unparsed).map_err(|_| {
+            format!(
+                "Invalid source '{}': not a valid URL (http/https/data) and file not found. \
+                 Use a full URL, a data URL, or a file path that exists.",
+                url_unparsed
+            )
+        })?
     };
 
     let bytes = if url.scheme() == "http" || url.scheme() == "https" {
@@ -141,8 +146,13 @@ pub(crate) fn parse_audio_url(url_unparsed: &str) -> PyApiResult<AudioInput> {
         url::Url::from_file_path(std::path::absolute(url_unparsed)?)
             .map_err(|_| format!("Could not parse file path: {url_unparsed}"))?
     } else {
-        url::Url::parse(url_unparsed)
-            .map_err(|_| format!("Could not parse as base64 data: {url_unparsed}"))?
+        url::Url::parse(url_unparsed).map_err(|_| {
+            format!(
+                "Invalid source '{}': not a valid URL (http/https/data) and file not found. \
+                 Use a full URL, a data URL, or a file path that exists.",
+                url_unparsed
+            )
+        })?
     };
 
     let bytes = if url.scheme() == "http" || url.scheme() == "https" {

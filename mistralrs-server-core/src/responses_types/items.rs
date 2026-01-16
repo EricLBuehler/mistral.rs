@@ -55,13 +55,15 @@ impl ToSchema for MessageContentParam {
 impl MessageContentParam {
     /// Convert to a text string, extracting text from parts if needed
     pub fn to_text(&self) -> String {
+        use super::content::NormalizedInputContent;
+
         match self {
             MessageContentParam::Text(s) => s.clone(),
             MessageContentParam::Parts(parts) => {
                 let mut texts = Vec::new();
                 for part in parts {
-                    if let InputContent::InputText { text } = part {
-                        texts.push(text.clone());
+                    if let NormalizedInputContent::Text { text } = part.clone().into_normalized() {
+                        texts.push(text);
                     }
                 }
                 texts.join(" ")
@@ -87,11 +89,11 @@ pub struct MessageItemParam {
     pub name: Option<String>,
 }
 
-/// Input item types for the OpenResponses API
+/// Tagged input item types (with explicit "type" field)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
-pub enum InputItem {
-    /// A message item
+pub enum TaggedInputItem {
+    /// A message item with explicit type
     #[serde(rename = "message")]
     Message(MessageItemParam),
     /// Reference to a previous item
@@ -118,6 +120,30 @@ pub enum InputItem {
         /// Output from the function
         output: String,
     },
+}
+
+/// Input item types for the OpenResponses API.
+///
+/// This enum supports both:
+/// - Explicitly typed items with `"type": "message"`, `"type": "item_reference"`, etc.
+/// - Bare messages with just `role` and `content` (no type field) for compatibility with OpenAI's format
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum InputItem {
+    /// Explicitly typed input item (has "type" field)
+    Tagged(TaggedInputItem),
+    /// A bare message (just role + content, no type field) - OpenAI compatibility
+    Message(MessageItemParam),
+}
+
+impl InputItem {
+    /// Convert to a normalized form for internal processing
+    pub fn into_tagged(self) -> TaggedInputItem {
+        match self {
+            InputItem::Tagged(t) => t,
+            InputItem::Message(m) => TaggedInputItem::Message(m),
+        }
+    }
 }
 
 impl PartialSchema for InputItem {
