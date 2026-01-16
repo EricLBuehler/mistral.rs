@@ -107,17 +107,14 @@ mod tests {
         let cache = InMemoryResponseCache::new();
 
         // Create a test response
-        let response = ResponseResource::new(
-            "test-id".to_string(),
-            "test-model".to_string(),
-            1234567890,
-        )
-        .with_status(ResponseStatus::Completed)
-        .with_output(vec![OutputItem::message(
-            "msg-1".to_string(),
-            vec![OutputContent::text("Hello".to_string())],
-            ItemStatus::Completed,
-        )]);
+        let response =
+            ResponseResource::new("test-id".to_string(), "test-model".to_string(), 1234567890)
+                .with_status(ResponseStatus::Completed)
+                .with_output(vec![OutputItem::message(
+                    "msg-1".to_string(),
+                    vec![OutputContent::text("Hello".to_string())],
+                    ItemStatus::Completed,
+                )]);
 
         // Store and retrieve
         cache
@@ -139,7 +136,9 @@ mod tests {
         let cache = InMemoryResponseCache::new();
 
         let messages = vec![Message {
-            content: Some(crate::openai::MessageContent::from_text("Hello".to_string())),
+            content: Some(crate::openai::MessageContent::from_text(
+                "Hello".to_string(),
+            )),
             role: "user".to_string(),
             name: None,
             tool_calls: None,

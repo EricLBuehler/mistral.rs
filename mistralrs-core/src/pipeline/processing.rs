@@ -32,6 +32,7 @@ pub enum MessagesAction {
 /// model.
 pub trait Processor {
     /// Get the tokens and the untokenized prompt. `add_special_tokens` should usually be true.
+    #[allow(clippy::too_many_arguments)]
     fn process(
         &self,
         pipeline: &dyn Pipeline,

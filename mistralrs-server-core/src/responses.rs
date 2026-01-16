@@ -706,9 +706,7 @@ impl futures::Stream for OpenResponsesStreamer {
             };
             self.events.push(event.clone());
             return Poll::Ready(Some(
-                Event::default()
-                    .event("response.created")
-                    .json_data(event),
+                Event::default().event("response.created").json_data(event),
             ));
         }
 
@@ -732,9 +730,7 @@ impl futures::Stream for OpenResponsesStreamer {
                     self.done_state = DoneState::SendingDone;
                     self.events.push(event.clone());
                     Poll::Ready(Some(
-                        Event::default()
-                            .event("response.failed")
-                            .json_data(event),
+                        Event::default().event("response.failed").json_data(event),
                     ))
                 }
                 Response::ValidationError(e) => {
@@ -779,8 +775,7 @@ impl futures::Stream for OpenResponsesStreamer {
                     }
 
                     // Check if all choices are finished
-                    let all_finished =
-                        chat_chunk.choices.iter().all(|c| c.finish_reason.is_some());
+                    let all_finished = chat_chunk.choices.iter().all(|c| c.finish_reason.is_some());
 
                     for choice in &chat_chunk.choices {
                         // Handle reasoning content
@@ -1004,7 +999,7 @@ fn chat_response_to_response_resource(
     request_id: String,
     metadata: Option<Value>,
 ) -> ResponseResource {
-    let created_at = chat_resp.created as u64;
+    let created_at = chat_resp.created;
     let mut resource = ResponseResource::new(request_id, chat_resp.model.clone(), created_at);
 
     let mut output_items = Vec::new();
@@ -1134,18 +1129,18 @@ async fn parse_openresponses_request(
             crate::responses_types::enums::ReasoningEffort::High => "high".to_string(),
         });
         // Enable thinking if reasoning is configured with any effort level
-        let thinking = reasoning.effort.map(|e| {
-            !matches!(e, crate::responses_types::enums::ReasoningEffort::None)
-        });
+        let thinking = reasoning
+            .effort
+            .map(|e| !matches!(e, crate::responses_types::enums::ReasoningEffort::None));
         (thinking, effort)
     } else {
         (None, None)
     };
 
     // Convert truncation enum to truncate_sequence bool
-    let truncate_sequence = oairequest.truncation.map(|t| {
-        matches!(t, crate::responses_types::enums::TruncationStrategy::Auto)
-    });
+    let truncate_sequence = oairequest
+        .truncation
+        .map(|t| matches!(t, crate::responses_types::enums::TruncationStrategy::Auto));
 
     // Convert OpenResponses `text` field to `response_format`, falling back to legacy field
     let response_format = if let Some(text_config) = oairequest.text {
@@ -1275,7 +1270,8 @@ pub async fn create_response(
 
             task_manager.mark_in_progress(&task_id);
 
-            if let Err(e) = send_request_with_model(&state_clone, request, model_id.as_deref()).await
+            if let Err(e) =
+                send_request_with_model(&state_clone, request, model_id.as_deref()).await
             {
                 task_manager.mark_failed(&task_id, ResponseError::new("send_error", e.to_string()));
                 return;
@@ -1314,10 +1310,8 @@ pub async fn create_response(
                     task_manager.mark_completed(&task_id, response);
                 }
                 Some(Response::ModelError(msg, _partial_resp)) => {
-                    task_manager.mark_failed(
-                        &task_id,
-                        ResponseError::new("model_error", msg.to_string()),
-                    );
+                    task_manager
+                        .mark_failed(&task_id, ResponseError::new("model_error", msg.to_string()));
                 }
                 Some(Response::ValidationError(e)) => {
                     task_manager.mark_failed(
@@ -1401,11 +1395,8 @@ pub async fn create_response(
                 OpenResponsesResponder::Json(response)
             }
             Some(Response::ModelError(msg, partial_resp)) => {
-                let mut response = chat_response_to_response_resource(
-                    &partial_resp,
-                    request_id.clone(),
-                    metadata,
-                );
+                let mut response =
+                    chat_response_to_response_resource(&partial_resp, request_id.clone(), metadata);
                 response.error = Some(ResponseError::new("model_error", msg.to_string()));
                 response.status = ResponseStatus::Failed;
 

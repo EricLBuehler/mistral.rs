@@ -131,7 +131,7 @@ impl MessageRole {
     }
 
     /// Parse a string into a MessageRole
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "user" => Some(MessageRole::User),
             "assistant" => Some(MessageRole::Assistant),
@@ -231,19 +231,19 @@ mod tests {
 
     #[test]
     fn test_message_role_from_str() {
-        assert_eq!(MessageRole::from_str("user"), Some(MessageRole::User));
+        assert_eq!(MessageRole::parse("user"), Some(MessageRole::User));
         assert_eq!(
-            MessageRole::from_str("assistant"),
+            MessageRole::parse("assistant"),
             Some(MessageRole::Assistant)
         );
-        assert_eq!(MessageRole::from_str("system"), Some(MessageRole::System));
+        assert_eq!(MessageRole::parse("system"), Some(MessageRole::System));
         assert_eq!(
-            MessageRole::from_str("developer"),
+            MessageRole::parse("developer"),
             Some(MessageRole::Developer)
         );
-        assert_eq!(MessageRole::from_str("tool"), Some(MessageRole::Tool));
-        assert_eq!(MessageRole::from_str("USER"), Some(MessageRole::User)); // case insensitive
-        assert_eq!(MessageRole::from_str("invalid"), None);
+        assert_eq!(MessageRole::parse("tool"), Some(MessageRole::Tool));
+        assert_eq!(MessageRole::parse("USER"), Some(MessageRole::User)); // case insensitive
+        assert_eq!(MessageRole::parse("invalid"), None);
     }
 
     #[test]

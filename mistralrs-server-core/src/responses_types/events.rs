@@ -152,20 +152,48 @@ impl StreamingEvent {
     /// Get the sequence number of this event
     pub fn sequence_number(&self) -> u64 {
         match self {
-            StreamingEvent::ResponseCreated { sequence_number, .. } => *sequence_number,
-            StreamingEvent::ResponseInProgress { sequence_number, .. } => *sequence_number,
-            StreamingEvent::OutputItemAdded { sequence_number, .. } => *sequence_number,
-            StreamingEvent::ContentPartAdded { sequence_number, .. } => *sequence_number,
-            StreamingEvent::OutputTextDelta { sequence_number, .. } => *sequence_number,
-            StreamingEvent::ContentPartDone { sequence_number, .. } => *sequence_number,
-            StreamingEvent::OutputItemDone { sequence_number, .. } => *sequence_number,
-            StreamingEvent::FunctionCallArgumentsDelta { sequence_number, .. } => *sequence_number,
-            StreamingEvent::FunctionCallArgumentsDone { sequence_number, .. } => *sequence_number,
-            StreamingEvent::ResponseCompleted { sequence_number, .. } => *sequence_number,
-            StreamingEvent::ResponseFailed { sequence_number, .. } => *sequence_number,
-            StreamingEvent::ResponseIncomplete { sequence_number, .. } => *sequence_number,
-            StreamingEvent::ResponseCancelled { sequence_number, .. } => *sequence_number,
-            StreamingEvent::Error { sequence_number, .. } => *sequence_number,
+            StreamingEvent::ResponseCreated {
+                sequence_number, ..
+            } => *sequence_number,
+            StreamingEvent::ResponseInProgress {
+                sequence_number, ..
+            } => *sequence_number,
+            StreamingEvent::OutputItemAdded {
+                sequence_number, ..
+            } => *sequence_number,
+            StreamingEvent::ContentPartAdded {
+                sequence_number, ..
+            } => *sequence_number,
+            StreamingEvent::OutputTextDelta {
+                sequence_number, ..
+            } => *sequence_number,
+            StreamingEvent::ContentPartDone {
+                sequence_number, ..
+            } => *sequence_number,
+            StreamingEvent::OutputItemDone {
+                sequence_number, ..
+            } => *sequence_number,
+            StreamingEvent::FunctionCallArgumentsDelta {
+                sequence_number, ..
+            } => *sequence_number,
+            StreamingEvent::FunctionCallArgumentsDone {
+                sequence_number, ..
+            } => *sequence_number,
+            StreamingEvent::ResponseCompleted {
+                sequence_number, ..
+            } => *sequence_number,
+            StreamingEvent::ResponseFailed {
+                sequence_number, ..
+            } => *sequence_number,
+            StreamingEvent::ResponseIncomplete {
+                sequence_number, ..
+            } => *sequence_number,
+            StreamingEvent::ResponseCancelled {
+                sequence_number, ..
+            } => *sequence_number,
+            StreamingEvent::Error {
+                sequence_number, ..
+            } => *sequence_number,
         }
     }
 

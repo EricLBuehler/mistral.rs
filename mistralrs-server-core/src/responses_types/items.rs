@@ -31,9 +31,7 @@ impl PartialSchema for MessageContentParam {
                         .build(),
                 ))
                 .item(Schema::Array(
-                    ArrayBuilder::new()
-                        .items(InputContent::schema())
-                        .build(),
+                    ArrayBuilder::new().items(InputContent::schema()).build(),
                 ))
                 .build(),
         ))
@@ -364,9 +362,7 @@ fn output_item_schema() -> Schema {
                     .property(
                         "content",
                         RefOr::T(Schema::Array(
-                            ArrayBuilder::new()
-                                .items(OutputContent::schema())
-                                .build(),
+                            ArrayBuilder::new().items(OutputContent::schema()).build(),
                         )),
                     )
                     .property(
@@ -515,9 +511,7 @@ impl PartialSchema for ResponsesInput {
                         .build(),
                 ))
                 .item(Schema::Array(
-                    ArrayBuilder::new()
-                        .items(InputItem::schema())
-                        .build(),
+                    ArrayBuilder::new().items(InputItem::schema()).build(),
                 ))
                 .build(),
         ))

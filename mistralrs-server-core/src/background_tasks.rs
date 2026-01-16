@@ -14,6 +14,7 @@ use crate::responses_types::{ResponseError, ResponseResource, ResponseStatus};
 
 /// State of a background task
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum BackgroundTaskState {
     /// Task is queued
     Queued,
@@ -61,11 +62,8 @@ impl BackgroundTask {
 
     /// Convert the current task state to a ResponseResource
     pub fn to_response_resource(&self) -> ResponseResource {
-        let mut resource = ResponseResource::new(
-            self.id.clone(),
-            self.model.clone(),
-            self.created_at,
-        );
+        let mut resource =
+            ResponseResource::new(self.id.clone(), self.model.clone(), self.created_at);
 
         match &self.state {
             BackgroundTaskState::Queued => {
@@ -179,10 +177,7 @@ impl BackgroundTaskManager {
     /// Check if cancellation was requested for a task
     pub fn is_cancel_requested(&self, id: &str) -> bool {
         let tasks = self.tasks.read().unwrap();
-        tasks
-            .get(id)
-            .map(|t| t.cancel_requested)
-            .unwrap_or(false)
+        tasks.get(id).map(|t| t.cancel_requested).unwrap_or(false)
     }
 
     /// Mark task as cancelled

@@ -110,9 +110,10 @@ impl ChatTemplate {
                 Either::Left(s) => s.as_str(),
                 Either::Right(vec) => {
                     // For multi-template format, check if any template contains think tags
-                    return vec
-                        .iter()
-                        .any(|t| t.values().any(|v| crate::think_tags::is_think_tag_template(v)));
+                    return vec.iter().any(|t| {
+                        t.values()
+                            .any(|v| crate::think_tags::is_think_tag_template(v))
+                    });
                 }
             };
             crate::think_tags::is_think_tag_template(template_str)

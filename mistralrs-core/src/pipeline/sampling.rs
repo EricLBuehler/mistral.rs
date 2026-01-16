@@ -323,7 +323,11 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     } else {
                         (None, vec![])
                     };
-                    (text_new.map(ToString::to_string).or(final_content), tool_calls, reasoning)
+                    (
+                        text_new.map(ToString::to_string).or(final_content),
+                        tool_calls,
+                        reasoning,
+                    )
                 } else {
                     // Not in Harmony or think tag mode - parse text for tool calls
                     let (text_new, tool_calls) =

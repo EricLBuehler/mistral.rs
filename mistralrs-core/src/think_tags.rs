@@ -296,10 +296,7 @@ mod tests {
         ctx.finalize();
 
         assert_eq!(ctx.reasoning_content(), Some("reasoning".to_string()));
-        assert_eq!(
-            ctx.content(),
-            Some("prefix contentsuffix".to_string())
-        );
+        assert_eq!(ctx.content(), Some("prefix contentsuffix".to_string()));
     }
 
     #[test]
@@ -308,10 +305,7 @@ mod tests {
         ctx.process_text("<think>first</think>content<think>second</think>more");
         ctx.finalize();
 
-        assert_eq!(
-            ctx.reasoning_content(),
-            Some("firstsecond".to_string())
-        );
+        assert_eq!(ctx.reasoning_content(), Some("firstsecond".to_string()));
         assert_eq!(ctx.content(), Some("contentmore".to_string()));
     }
 
