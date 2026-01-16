@@ -17,7 +17,7 @@ use crate::{
     handlers::{health, models, re_isq},
     image_generation::image_generation,
     openapi_doc::get_openapi_doc,
-    responses::{create_response, delete_response, get_response},
+    responses::{cancel_response, create_response, delete_response, get_response},
     speech_generation::speech_generation,
     types::SharedMistralRsState,
 };
@@ -209,6 +209,7 @@ fn init_router(
             "/v1/responses/{response_id}",
             get(get_response).delete(delete_response),
         )
+        .route("/v1/responses/{response_id}/cancel", post(cancel_response))
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .with_state(state);

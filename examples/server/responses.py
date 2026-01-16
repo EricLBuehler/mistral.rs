@@ -40,6 +40,7 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 resp1 = client.responses.create(model="default", input="Apples are delicious!")
 
 print(resp1.output_text)
+print(resp1.reasoning)
 
 # follow‑up: no need to resend the first question
 resp2 = client.responses.create(
@@ -47,3 +48,4 @@ resp2 = client.responses.create(
 )
 
 print(resp2.output_text)
+print(resp1.reasoning)
