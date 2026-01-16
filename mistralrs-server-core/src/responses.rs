@@ -363,6 +363,40 @@ pub struct StreamOptions {
     pub include_usage: Option<bool>,
 }
 
+/// Request context carrying parameters to echo back in the response.
+///
+/// This struct captures relevant request parameters that should be
+/// echoed back in the ResponseResource per the OpenResponses spec.
+#[derive(Debug, Clone, Default)]
+pub struct RequestContext {
+    /// Tool definitions from the request
+    pub tools: Option<Vec<mistralrs_core::Tool>>,
+    /// Tool choice configuration from the request
+    pub tool_choice: Option<mistralrs_core::ToolChoice>,
+    /// Whether parallel tool calls are enabled
+    pub parallel_tool_calls: Option<bool>,
+    /// Text configuration from the request
+    pub text: Option<TextConfig>,
+    /// Temperature from the request
+    pub temperature: Option<f64>,
+    /// Top-p from the request
+    pub top_p: Option<f64>,
+    /// Presence penalty from the request
+    pub presence_penalty: Option<f32>,
+    /// Frequency penalty from the request
+    pub frequency_penalty: Option<f32>,
+    /// Top logprobs from the request
+    pub top_logprobs: Option<usize>,
+    /// Max output tokens from the request
+    pub max_output_tokens: Option<usize>,
+    /// Max tool calls from the request (even if unsupported)
+    pub max_tool_calls: Option<usize>,
+    /// Whether to store the response
+    pub store: Option<bool>,
+    /// Whether request runs in background
+    pub background: Option<bool>,
+}
+
 /// Include options for response content.
 ///
 /// This enum specifies additional content to include in the response.
@@ -714,10 +748,13 @@ pub struct OpenResponsesStreamer {
     on_done: Option<OnDoneCallback<OpenResponsesStreamEvent>>,
     /// Collected events for storage
     events: Vec<OpenResponsesStreamEvent>,
+    /// Request context for echoing back request parameters
+    request_context: RequestContext,
 }
 
 impl OpenResponsesStreamer {
     /// Create a new OpenResponses streamer
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         rx: Receiver<Response>,
         state: SharedMistralRsState,
@@ -726,6 +763,7 @@ impl OpenResponsesStreamer {
         metadata: Option<Value>,
         store: bool,
         conversation_history: Option<Vec<Message>>,
+        request_context: RequestContext,
     ) -> Self {
         let created_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -747,6 +785,7 @@ impl OpenResponsesStreamer {
             conversation_history,
             on_done: None,
             events: Vec::new(),
+            request_context,
         }
     }
 
@@ -759,6 +798,22 @@ impl OpenResponsesStreamer {
         );
         resource.status = status;
         resource.metadata = self.metadata.clone();
+
+        // Populate request parameters from context
+        resource.tools = self.request_context.tools.clone();
+        resource.tool_choice = self.request_context.tool_choice.clone();
+        resource.parallel_tool_calls = self.request_context.parallel_tool_calls;
+        resource.text = self.request_context.text.clone();
+        resource.temperature = self.request_context.temperature;
+        resource.top_p = self.request_context.top_p;
+        resource.presence_penalty = self.request_context.presence_penalty;
+        resource.frequency_penalty = self.request_context.frequency_penalty;
+        resource.top_logprobs = self.request_context.top_logprobs;
+        resource.max_output_tokens = self.request_context.max_output_tokens;
+        resource.max_tool_calls = self.request_context.max_tool_calls;
+        resource.store = self.request_context.store;
+        resource.background = self.request_context.background;
+
         resource
     }
 
@@ -1078,6 +1133,7 @@ impl futures::Stream for OpenResponsesStreamer {
                         &chat_resp,
                         self.streaming_state.response_id.clone(),
                         self.metadata.clone(),
+                        &self.request_context,
                     );
                     let event = OpenResponsesStreamEvent::ResponseCompleted {
                         sequence_number: seq,
@@ -1152,6 +1208,7 @@ fn chat_response_to_response_resource(
     chat_resp: &ChatCompletionResponse,
     request_id: String,
     metadata: Option<Value>,
+    request_ctx: &RequestContext,
 ) -> ResponseResource {
     let created_at = chat_resp.created;
     let mut resource = ResponseResource::new(request_id, chat_resp.model.clone(), created_at);
@@ -1223,6 +1280,21 @@ fn chat_response_to_response_resource(
             .as_secs(),
     );
 
+    // Populate request parameters from context
+    resource.tools = request_ctx.tools.clone();
+    resource.tool_choice = request_ctx.tool_choice.clone();
+    resource.parallel_tool_calls = request_ctx.parallel_tool_calls;
+    resource.text = request_ctx.text.clone();
+    resource.temperature = request_ctx.temperature;
+    resource.top_p = request_ctx.top_p;
+    resource.presence_penalty = request_ctx.presence_penalty;
+    resource.frequency_penalty = request_ctx.frequency_penalty;
+    resource.top_logprobs = request_ctx.top_logprobs;
+    resource.max_output_tokens = request_ctx.max_output_tokens;
+    resource.max_tool_calls = request_ctx.max_tool_calls;
+    resource.store = request_ctx.store;
+    resource.background = request_ctx.background;
+
     resource
 }
 
@@ -1231,7 +1303,13 @@ async fn parse_openresponses_request(
     oairequest: OpenResponsesCreateRequest,
     state: SharedMistralRsState,
     tx: Sender<Response>,
-) -> Result<(Request, bool, Option<Vec<Message>>, IncludeConfig)> {
+) -> Result<(
+    Request,
+    bool,
+    Option<Vec<Message>>,
+    IncludeConfig,
+    RequestContext,
+)> {
     // Validate unsupported parameters
     // parallel_tool_calls: only `true` (default) or `None` is supported
     if let Some(false) = oairequest.parallel_tool_calls {
@@ -1248,6 +1326,24 @@ async fn parse_openresponses_request(
              mistral.rs does not currently support limiting the number of tool calls."
         );
     }
+
+    // Build request context to echo back request parameters
+    // Must capture these before consuming oairequest
+    let request_context = RequestContext {
+        tools: oairequest.tools.clone(),
+        tool_choice: oairequest.tool_choice.clone(),
+        parallel_tool_calls: oairequest.parallel_tool_calls,
+        text: oairequest.text.clone(),
+        temperature: oairequest.temperature,
+        top_p: oairequest.top_p,
+        presence_penalty: oairequest.presence_penalty,
+        frequency_penalty: oairequest.frequency_penalty,
+        top_logprobs: oairequest.top_logprobs,
+        max_output_tokens: oairequest.max_output_tokens,
+        max_tool_calls: oairequest.max_tool_calls,
+        store: oairequest.store,
+        background: oairequest.background,
+    };
 
     // Extract include config before consuming oairequest
     let include_config = IncludeConfig::new(oairequest.include.clone());
@@ -1377,7 +1473,13 @@ async fn parse_openresponses_request(
     };
 
     let (request, is_streaming) = parse_chat_request(chat_request, state, tx).await?;
-    Ok((request, is_streaming, Some(final_messages), include_config))
+    Ok((
+        request,
+        is_streaming,
+        Some(final_messages),
+        include_config,
+        request_context,
+    ))
 }
 
 /// Create response endpoint - OpenResponses API
@@ -1430,7 +1532,7 @@ pub async fn create_response(
         tokio::spawn(async move {
             let (bg_tx, mut bg_rx) = create_response_channel(None);
 
-            let (request, _, conversation_history, _include_config) =
+            let (request, _, conversation_history, _include_config, request_context) =
                 match parse_openresponses_request(oairequest, state_clone.clone(), bg_tx).await {
                     Ok(x) => x,
                     Err(e) => {
@@ -1458,6 +1560,7 @@ pub async fn create_response(
                         &chat_resp,
                         task_id.clone(),
                         metadata_clone,
+                        &request_context,
                     );
 
                     // Store if requested
@@ -1511,7 +1614,7 @@ pub async fn create_response(
         return OpenResponsesResponder::Json(response);
     }
 
-    let (request, is_streaming, conversation_history, _include_config) =
+    let (request, is_streaming, conversation_history, _include_config, request_context) =
         match parse_openresponses_request(oairequest, state.clone(), tx).await {
             Ok(x) => x,
             Err(e) => return handle_error(state, e.into()),
@@ -1530,6 +1633,7 @@ pub async fn create_response(
             metadata,
             store,
             conversation_history,
+            request_context,
         );
 
         let keep_alive_interval = get_keep_alive_interval();
@@ -1542,8 +1646,12 @@ pub async fn create_response(
         let mut rx = rx;
         match rx.recv().await {
             Some(Response::Done(chat_resp)) => {
-                let response =
-                    chat_response_to_response_resource(&chat_resp, request_id.clone(), metadata);
+                let response = chat_response_to_response_resource(
+                    &chat_resp,
+                    request_id.clone(),
+                    metadata,
+                    &request_context,
+                );
 
                 // Store if requested
                 if store {
@@ -1569,8 +1677,12 @@ pub async fn create_response(
                 OpenResponsesResponder::Json(response)
             }
             Some(Response::ModelError(msg, partial_resp)) => {
-                let mut response =
-                    chat_response_to_response_resource(&partial_resp, request_id.clone(), metadata);
+                let mut response = chat_response_to_response_resource(
+                    &partial_resp,
+                    request_id.clone(),
+                    metadata,
+                    &request_context,
+                );
                 response.error = Some(ResponseError::new("model_error", msg.to_string()));
                 response.status = ResponseStatus::Failed;
 

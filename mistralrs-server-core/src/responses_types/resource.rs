@@ -4,10 +4,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
+use mistralrs_core::{Tool, ToolChoice};
+
 use super::{
     enums::{IncompleteReason, ResponseStatus, TruncationStrategy},
     items::OutputItem,
 };
+
+use crate::responses::TextConfig;
 
 /// Usage information for a response
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Default)]
@@ -176,6 +180,47 @@ pub struct ResponseResource {
     /// Previous response ID (for multi-turn conversations)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
+
+    // ===== Request Parameters (echoed back) =====
+    /// Tool definitions from the request
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Tool>>,
+    /// Tool choice configuration from the request
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
+    /// Whether parallel tool calls are enabled
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
+    /// Text configuration from the request
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<TextConfig>,
+    /// Temperature from the request
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    /// Top-p from the request
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
+    /// Presence penalty from the request
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f32>,
+    /// Frequency penalty from the request
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f32>,
+    /// Top logprobs from the request
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_logprobs: Option<usize>,
+    /// Max output tokens from the request
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<usize>,
+    /// Max tool calls from the request (even if unsupported)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tool_calls: Option<usize>,
+    /// Whether to store the response
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store: Option<bool>,
+    /// Whether request runs in background
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<bool>,
 }
 
 impl ResponseResource {
@@ -198,6 +243,20 @@ impl ResponseResource {
             truncation: None,
             instructions: None,
             previous_response_id: None,
+            // Request parameters (echoed back)
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: None,
+            text: None,
+            temperature: None,
+            top_p: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            top_logprobs: None,
+            max_output_tokens: None,
+            max_tool_calls: None,
+            store: None,
+            background: None,
         }
     }
 
@@ -277,6 +336,86 @@ impl ResponseResource {
     /// Mark the response as cancelled
     pub fn cancel(&mut self) {
         self.status = ResponseStatus::Cancelled;
+    }
+
+    // ===== Builder methods for request parameters =====
+
+    /// Set the tools
+    pub fn with_tools(mut self, tools: Option<Vec<Tool>>) -> Self {
+        self.tools = tools;
+        self
+    }
+
+    /// Set the tool choice
+    pub fn with_tool_choice(mut self, tool_choice: Option<ToolChoice>) -> Self {
+        self.tool_choice = tool_choice;
+        self
+    }
+
+    /// Set parallel tool calls
+    pub fn with_parallel_tool_calls(mut self, parallel_tool_calls: Option<bool>) -> Self {
+        self.parallel_tool_calls = parallel_tool_calls;
+        self
+    }
+
+    /// Set text config
+    pub fn with_text(mut self, text: Option<TextConfig>) -> Self {
+        self.text = text;
+        self
+    }
+
+    /// Set temperature
+    pub fn with_temperature(mut self, temperature: Option<f64>) -> Self {
+        self.temperature = temperature;
+        self
+    }
+
+    /// Set top_p
+    pub fn with_top_p(mut self, top_p: Option<f64>) -> Self {
+        self.top_p = top_p;
+        self
+    }
+
+    /// Set presence penalty
+    pub fn with_presence_penalty(mut self, presence_penalty: Option<f32>) -> Self {
+        self.presence_penalty = presence_penalty;
+        self
+    }
+
+    /// Set frequency penalty
+    pub fn with_frequency_penalty(mut self, frequency_penalty: Option<f32>) -> Self {
+        self.frequency_penalty = frequency_penalty;
+        self
+    }
+
+    /// Set top logprobs
+    pub fn with_top_logprobs(mut self, top_logprobs: Option<usize>) -> Self {
+        self.top_logprobs = top_logprobs;
+        self
+    }
+
+    /// Set max output tokens
+    pub fn with_max_output_tokens(mut self, max_output_tokens: Option<usize>) -> Self {
+        self.max_output_tokens = max_output_tokens;
+        self
+    }
+
+    /// Set max tool calls
+    pub fn with_max_tool_calls(mut self, max_tool_calls: Option<usize>) -> Self {
+        self.max_tool_calls = max_tool_calls;
+        self
+    }
+
+    /// Set store flag
+    pub fn with_store(mut self, store: Option<bool>) -> Self {
+        self.store = store;
+        self
+    }
+
+    /// Set background flag
+    pub fn with_background(mut self, background: Option<bool>) -> Self {
+        self.background = background;
+        self
     }
 
     /// Collect output text from all output items
