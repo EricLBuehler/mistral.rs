@@ -48,4 +48,4 @@ resp2 = client.responses.create(
 )
 
 print(resp2.output_text)
-print(resp1.reasoning)
+print(resp2.reasoning)

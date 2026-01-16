@@ -167,14 +167,14 @@ impl Engine {
             RequestMessage::Chat {
                 messages,
                 enable_thinking,
-                reasoning_effort: _,
+                reasoning_effort,
             }
             | RequestMessage::VisionChat {
                 images: _,
                 audios: _,
                 messages,
                 enable_thinking,
-                reasoning_effort: _,
+                reasoning_effort,
             } => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
                 let tools = request.tools.unwrap_or_default();
@@ -184,6 +184,7 @@ impl Engine {
                     true,
                     true,
                     enable_thinking,
+                    reasoning_effort,
                     tools,
                 );
                 handle_seq_error!(template, request.response)
@@ -670,6 +671,7 @@ impl Engine {
                     request.add_generation_prompt,
                     request.add_special_tokens,
                     request.enable_thinking,
+                    request.reasoning_effort,
                     tools,
                 );
                 let toks = match template {
