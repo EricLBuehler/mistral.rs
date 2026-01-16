@@ -184,86 +184,245 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
     messages
 }
 
+/// Reasoning configuration for models that support extended thinking
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct ReasoningConfig {
+    /// Effort level for reasoning (low, medium, high)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<crate::responses_types::enums::ReasoningEffort>,
+    /// Whether to generate a summary of reasoning
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<ReasoningSummary>,
+}
+
+/// Reasoning summary configuration
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningSummary {
+    /// Generate a concise summary
+    Concise,
+    /// Generate a detailed summary
+    Detailed,
+    /// Auto-select summary level
+    Auto,
+}
+
+/// Text output configuration
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct TextConfig {
+    /// Format for text output
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<TextFormat>,
+}
+
+/// Text format configuration
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "type")]
+pub enum TextFormat {
+    /// Plain text output
+    #[serde(rename = "text")]
+    Text,
+    /// JSON output with optional schema
+    #[serde(rename = "json_schema")]
+    JsonSchema {
+        /// Name for the schema
+        name: String,
+        /// JSON Schema definition
+        #[serde(skip_serializing_if = "Option::is_none")]
+        schema: Option<Value>,
+        /// Whether to use strict schema validation
+        #[serde(skip_serializing_if = "Option::is_none")]
+        strict: Option<bool>,
+    },
+    /// JSON object output
+    #[serde(rename = "json_object")]
+    JsonObject,
+}
+
+/// Stream options configuration
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct StreamOptions {
+    /// Include usage statistics in stream
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_usage: Option<bool>,
+}
+
+/// Include options for response content
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IncludeOption {
+    /// Include file search results
+    #[serde(rename = "file_search_call.results")]
+    FileSearchCallResults,
+    /// Include message input image URLs
+    #[serde(rename = "message.input_image.image_url")]
+    MessageInputImageUrl,
+    /// Include computer call outputs
+    #[serde(rename = "computer_call_output.output.image_url")]
+    ComputerCallOutputImageUrl,
+    /// Include reasoning encrypted content
+    #[serde(rename = "reasoning.encrypted_content")]
+    ReasoningEncryptedContent,
+}
+
 /// OpenResponses API create request
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct OpenResponsesCreateRequest {
-    /// The model to use
+    // ===== Core OpenResponses Fields =====
+    /// The model to use for this request
     #[serde(default = "default_model")]
     pub model: String,
-    /// The input for the response
+
+    /// The input for the response - can be a string or array of input items
     pub input: OpenResponsesInput,
-    /// System instructions
+
+    /// Additional instructions that guide the model's behavior
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
+
     /// ID of a previous response for multi-turn conversations
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
-    /// Whether to stream the response
+
+    /// Whether to stream the response using server-sent events
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
-    /// Whether to run in background
+
+    /// Stream options for controlling streaming behavior
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
+
+    /// Whether to run the request in background (async)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<bool>,
-    /// Whether to store the response
+
+    /// Whether to store the response for later retrieval
     #[serde(skip_serializing_if = "Option::is_none")]
     pub store: Option<bool>,
-    /// User-provided metadata
+
+    /// User-provided metadata (up to 16 key-value pairs)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
-    /// Maximum output tokens
-    #[serde(alias = "max_completion_tokens", alias = "max_output_tokens")]
-    pub max_tokens: Option<usize>,
-    /// Temperature for sampling
+
+    /// Specifies additional content to include in the response
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<IncludeOption>>,
+
+    // ===== Generation Parameters =====
+    /// Maximum number of output tokens to generate
+    #[serde(
+        alias = "max_tokens",
+        alias = "max_completion_tokens",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_output_tokens: Option<usize>,
+
+    /// Temperature for sampling (0-2)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
-    /// Top-p sampling
+
+    /// Top-p (nucleus) sampling parameter (0-1)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f64>,
-    /// Stop sequences
-    #[serde(rename = "stop")]
-    pub stop_seqs: Option<crate::openai::StopTokens>,
-    /// Tool definitions
+
+    /// Presence penalty (-2.0 to 2.0)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f32>,
+
+    /// Frequency penalty (-2.0 to 2.0)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f32>,
+
+    /// Number of top log probabilities to return
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_logprobs: Option<usize>,
+
+    // ===== Tool Calling =====
+    /// Tool definitions available for the model to call
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<mistralrs_core::Tool>>,
-    /// Tool choice
+
+    /// Controls how the model uses tools
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<mistralrs_core::ToolChoice>,
-    /// Response format
+
+    /// Whether to allow parallel tool calls
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
+
+    /// Maximum number of tool calls allowed
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tool_calls: Option<usize>,
+
+    // ===== Reasoning =====
+    /// Configuration for reasoning/thinking behavior
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningConfig>,
+
+    // ===== Output Format =====
+    /// Text output configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<TextConfig>,
+
+    /// Truncation strategy when input exceeds context window
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncation: Option<crate::responses_types::enums::TruncationStrategy>,
+
+    // ===== mistral.rs Extensions (non-standard) =====
+    /// Stop sequences to end generation
+    #[serde(rename = "stop", skip_serializing_if = "Option::is_none")]
+    pub stop_seqs: Option<crate::openai::StopTokens>,
+
+    /// Response format (legacy, prefer `text` field)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<crate::openai::ResponseFormat>,
-    /// Logit bias
+
+    /// Logit bias for token manipulation
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub logit_bias: Option<HashMap<u32, f32>>,
-    /// Whether to return logprobs
+
+    /// Whether to return log probabilities
     #[serde(default)]
     pub logprobs: bool,
-    /// Top logprobs to return
-    pub top_logprobs: Option<usize>,
-    /// Number of choices
+
+    /// Number of completions to generate
     #[serde(rename = "n", default = "default_1usize")]
     pub n_choices: usize,
-    /// Presence penalty
-    pub presence_penalty: Option<f32>,
-    /// Frequency penalty
-    pub frequency_penalty: Option<f32>,
-    /// Repetition penalty
+
+    /// Repetition penalty (mistral.rs extension)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub repetition_penalty: Option<f32>,
-    /// Top-k sampling
+
+    /// Top-k sampling (mistral.rs extension)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub top_k: Option<usize>,
-    /// Grammar for constrained generation
+
+    /// Grammar for constrained generation (mistral.rs extension)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub grammar: Option<crate::openai::Grammar>,
-    /// Min-p sampling
+
+    /// Min-p sampling (mistral.rs extension)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub min_p: Option<f64>,
-    /// DRY multiplier
+
+    /// DRY multiplier (mistral.rs extension)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dry_multiplier: Option<f32>,
-    /// DRY base
+
+    /// DRY base (mistral.rs extension)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dry_base: Option<f32>,
-    /// DRY allowed length
+
+    /// DRY allowed length (mistral.rs extension)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dry_allowed_length: Option<usize>,
-    /// DRY sequence breakers
+
+    /// DRY sequence breakers (mistral.rs extension)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dry_sequence_breakers: Option<Vec<String>>,
-    /// Enable thinking mode
-    pub enable_thinking: Option<bool>,
-    /// Truncate sequence
-    #[serde(default)]
-    pub truncate_sequence: Option<bool>,
-    /// Reasoning effort
-    pub reasoning_effort: Option<String>,
-    /// Web search options
+
+    /// Web search options (mistral.rs extension)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub web_search_options: Option<mistralrs_core::WebSearchOptions>,
 }
 
@@ -387,6 +546,8 @@ pub struct OpenResponsesStreamer {
     pending_events: Vec<OpenResponsesStreamEvent>,
     /// Accumulated text for the current output
     accumulated_text: String,
+    /// Accumulated reasoning for the current output
+    accumulated_reasoning: String,
     /// Whether content part has been added
     content_part_added: bool,
     /// Whether output item has been added
@@ -425,6 +586,7 @@ impl OpenResponsesStreamer {
             metadata,
             pending_events: Vec::new(),
             accumulated_text: String::new(),
+            accumulated_reasoning: String::new(),
             content_part_added: false,
             output_item_added: false,
             store,
@@ -464,6 +626,11 @@ impl OpenResponsesStreamer {
             );
             resource.output = vec![item];
             resource.output_text = Some(self.accumulated_text.clone());
+        }
+
+        // Include reasoning if available
+        if !self.accumulated_reasoning.is_empty() {
+            resource.reasoning = Some(self.accumulated_reasoning.clone());
         }
 
         resource
@@ -616,6 +783,11 @@ impl futures::Stream for OpenResponsesStreamer {
                         chat_chunk.choices.iter().all(|c| c.finish_reason.is_some());
 
                     for choice in &chat_chunk.choices {
+                        // Handle reasoning content
+                        if let Some(reasoning) = &choice.delta.reasoning_content {
+                            self.accumulated_reasoning.push_str(reasoning);
+                        }
+
                         // Handle text content
                         if let Some(content) = &choice.delta.content {
                             // Emit output_item.added if not done
@@ -837,6 +1009,7 @@ fn chat_response_to_response_resource(
 
     let mut output_items = Vec::new();
     let mut output_text_parts = Vec::new();
+    let mut reasoning_parts = Vec::new();
 
     for choice in &chat_resp.choices {
         let mut content_items = Vec::new();
@@ -845,6 +1018,11 @@ fn chat_response_to_response_resource(
         if let Some(text) = &choice.message.content {
             output_text_parts.push(text.clone());
             content_items.push(OutputContent::text(text.clone()));
+        }
+
+        // Handle reasoning content
+        if let Some(reasoning) = &choice.message.reasoning_content {
+            reasoning_parts.push(reasoning.clone());
         }
 
         // Handle tool calls - convert to function_call output items
@@ -878,6 +1056,11 @@ fn chat_response_to_response_resource(
         None
     } else {
         Some(output_text_parts.join(""))
+    };
+    resource.reasoning = if reasoning_parts.is_empty() {
+        None
+    } else {
+        Some(reasoning_parts.join(""))
     };
     resource.usage = Some(ResponseUsage::new(
         chat_resp.usage.prompt_tokens,
@@ -942,6 +1125,56 @@ async fn parse_openresponses_request(
         }
     }
 
+    // Extract reasoning configuration
+    let (enable_thinking, reasoning_effort) = if let Some(ref reasoning) = oairequest.reasoning {
+        let effort = reasoning.effort.map(|e| match e {
+            crate::responses_types::enums::ReasoningEffort::None => "none".to_string(),
+            crate::responses_types::enums::ReasoningEffort::Low => "low".to_string(),
+            crate::responses_types::enums::ReasoningEffort::Medium => "medium".to_string(),
+            crate::responses_types::enums::ReasoningEffort::High => "high".to_string(),
+        });
+        // Enable thinking if reasoning is configured with any effort level
+        let thinking = reasoning.effort.map(|e| {
+            !matches!(e, crate::responses_types::enums::ReasoningEffort::None)
+        });
+        (thinking, effort)
+    } else {
+        (None, None)
+    };
+
+    // Convert truncation enum to truncate_sequence bool
+    let truncate_sequence = oairequest.truncation.map(|t| {
+        matches!(t, crate::responses_types::enums::TruncationStrategy::Auto)
+    });
+
+    // Convert OpenResponses `text` field to `response_format`, falling back to legacy field
+    let response_format = if let Some(text_config) = oairequest.text {
+        text_config.format.map(|fmt| match fmt {
+            TextFormat::Text => crate::openai::ResponseFormat::Text,
+            TextFormat::JsonSchema {
+                name,
+                schema,
+                strict: _,
+            } => crate::openai::ResponseFormat::JsonSchema {
+                json_schema: crate::openai::JsonSchemaResponseFormat {
+                    name,
+                    schema: schema.unwrap_or(serde_json::Value::Object(Default::default())),
+                },
+            },
+            TextFormat::JsonObject => {
+                // JsonObject is treated as a schema with empty object
+                crate::openai::ResponseFormat::JsonSchema {
+                    json_schema: crate::openai::JsonSchemaResponseFormat {
+                        name: "json_object".to_string(),
+                        schema: serde_json::json!({"type": "object"}),
+                    },
+                }
+            }
+        })
+    } else {
+        oairequest.response_format
+    };
+
     // Convert to ChatCompletionRequest
     let chat_request = ChatCompletionRequest {
         messages: Either::Left(final_messages.clone()),
@@ -949,7 +1182,7 @@ async fn parse_openresponses_request(
         logit_bias: oairequest.logit_bias,
         logprobs: oairequest.logprobs,
         top_logprobs: oairequest.top_logprobs,
-        max_tokens: oairequest.max_tokens,
+        max_tokens: oairequest.max_output_tokens,
         n_choices: oairequest.n_choices,
         presence_penalty: oairequest.presence_penalty,
         frequency_penalty: oairequest.frequency_penalty,
@@ -960,7 +1193,7 @@ async fn parse_openresponses_request(
         stream: oairequest.stream,
         tools: oairequest.tools,
         tool_choice: oairequest.tool_choice,
-        response_format: oairequest.response_format,
+        response_format,
         web_search_options: oairequest.web_search_options,
         top_k: oairequest.top_k,
         grammar: oairequest.grammar,
@@ -969,9 +1202,9 @@ async fn parse_openresponses_request(
         dry_base: oairequest.dry_base,
         dry_allowed_length: oairequest.dry_allowed_length,
         dry_sequence_breakers: oairequest.dry_sequence_breakers,
-        enable_thinking: oairequest.enable_thinking,
-        truncate_sequence: oairequest.truncate_sequence,
-        reasoning_effort: oairequest.reasoning_effort,
+        enable_thinking,
+        truncate_sequence,
+        reasoning_effort,
     };
 
     let (request, is_streaming) = parse_chat_request(chat_request, state, tx).await?;

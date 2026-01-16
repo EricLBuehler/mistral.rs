@@ -152,6 +152,9 @@ pub struct ResponseResource {
     /// Concatenated text from all text output content
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_text: Option<String>,
+    /// Reasoning/chain-of-thought content from the model
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
     /// Token usage information
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<ResponseUsage>,
@@ -187,6 +190,7 @@ impl ResponseResource {
             status: ResponseStatus::Queued,
             output: Vec::new(),
             output_text: None,
+            reasoning: None,
             usage: None,
             error: None,
             incomplete_details: None,
@@ -212,6 +216,12 @@ impl ResponseResource {
     /// Set the output text
     pub fn with_output_text(mut self, output_text: Option<String>) -> Self {
         self.output_text = output_text;
+        self
+    }
+
+    /// Set the reasoning content
+    pub fn with_reasoning(mut self, reasoning: Option<String>) -> Self {
+        self.reasoning = reasoning;
         self
     }
 
