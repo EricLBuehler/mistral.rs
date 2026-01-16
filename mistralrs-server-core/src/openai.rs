@@ -105,6 +105,58 @@ impl MessageContent {
         MessageContent(Either::Left(text))
     }
 
+    /// Create a new MessageContent from multimodal parts
+    pub fn from_parts(parts: Vec<HashMap<String, MessageInnerContent>>) -> Self {
+        MessageContent(Either::Right(parts))
+    }
+
+    /// Create a text content part for multimodal messages
+    pub fn text_part(text: String) -> HashMap<String, MessageInnerContent> {
+        let mut part = HashMap::new();
+        part.insert(
+            "type".to_string(),
+            MessageInnerContent(Either::Left("text".to_string())),
+        );
+        part.insert("text".to_string(), MessageInnerContent(Either::Left(text)));
+        part
+    }
+
+    /// Create an image URL content part for multimodal messages
+    pub fn image_url_part(url: String) -> HashMap<String, MessageInnerContent> {
+        let mut part = HashMap::new();
+        part.insert(
+            "type".to_string(),
+            MessageInnerContent(Either::Left("image_url".to_string())),
+        );
+        let mut image_url_obj = HashMap::new();
+        image_url_obj.insert("url".to_string(), url);
+        part.insert(
+            "image_url".to_string(),
+            MessageInnerContent(Either::Right(image_url_obj)),
+        );
+        part
+    }
+
+    /// Create an image URL content part with detail level
+    pub fn image_url_part_with_detail(
+        url: String,
+        detail: String,
+    ) -> HashMap<String, MessageInnerContent> {
+        let mut part = HashMap::new();
+        part.insert(
+            "type".to_string(),
+            MessageInnerContent(Either::Left("image_url".to_string())),
+        );
+        let mut image_url_obj = HashMap::new();
+        image_url_obj.insert("url".to_string(), url);
+        image_url_obj.insert("detail".to_string(), detail);
+        part.insert(
+            "image_url".to_string(),
+            MessageInnerContent(Either::Right(image_url_obj)),
+        );
+        part
+    }
+
     /// Extract text from MessageContent
     pub fn to_text(&self) -> Option<String> {
         match &self.0 {

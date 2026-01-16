@@ -19,7 +19,7 @@ Blazingly fast LLM inference.
 
 **Mistral.rs is a cross-platform, highly-multimodal inference engine that brings you:**
 - All-in-one multimodal workflow: text↔text, text+vision↔text, text+vision+audio↔text, text→speech, text→image, text→embeddings
-- APIs: Rust, Python, OpenAI HTTP server (with Chat Completions, Responses API), MCP server
+- APIs: Rust, Python, OpenAI HTTP server (with Chat Completions, [Responses API compatible with OpenResponses](docs/OPENRESPONSES.md)), MCP server
 - 🔗 **MCP Client**: Connect to external tools and services automatically (file systems, web search, databases, APIs)
 - Performance: ISQ, PagedAttention, FlashAttention, **per-layer topology optimization**
 - Support for embedding, speech generation, and image generation models
@@ -440,7 +440,7 @@ Python API for mistral.rs.
 
 OpenAI API compatible API server
 
-- [API Docs](docs/HTTP.md) - includes chat completions, completions, and **Responses API** for stateful conversations
+- [API Docs](docs/HTTP.md) - includes chat completions, completions, and [**OpenResponses API**](docs/OPENRESPONSES.md) for stateful conversations
 - [Launching the server or use the CLI](README.md#using-the-cli)
 - [Example](examples/server/chat.py)
 - [Responses API examples](examples/server/responses.py) - maintain conversation context without resending history

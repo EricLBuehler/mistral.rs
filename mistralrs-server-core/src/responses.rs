@@ -110,8 +110,12 @@ impl OpenResponsesInput {
     }
 }
 
-/// Convert InputItem types to legacy Message format
+/// Convert InputItem types to legacy Message format.
+///
+/// This function handles multimodal content including text, images, audio, and files.
 fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
+    use crate::responses_types::content::InputContent;
+
     let mut messages = Vec::new();
 
     for item in items {
@@ -120,20 +124,132 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                 let content = match msg_param.content {
                     MessageContentParam::Text(text) => Some(MessageContent::from_text(text)),
                     MessageContentParam::Parts(parts) => {
-                        // For now, extract text from parts
-                        let mut text_parts = Vec::new();
+                        // Handle multimodal content parts
+                        let mut content_parts = Vec::new();
+                        let mut has_non_text_content = false;
+
                         for part in parts {
-                            if let crate::responses_types::content::InputContent::InputText {
-                                text,
-                            } = part
-                            {
-                                text_parts.push(text);
+                            match part {
+                                InputContent::InputText { text } => {
+                                    content_parts.push(MessageContent::text_part(text));
+                                }
+                                InputContent::InputImage {
+                                    image_url,
+                                    image_data,
+                                    detail,
+                                } => {
+                                    has_non_text_content = true;
+                                    // Prefer image_url over image_data
+                                    let url = if let Some(url) = image_url {
+                                        url
+                                    } else if let Some(data) = image_data {
+                                        // Convert base64 data to data URL
+                                        format!("data:image/png;base64,{}", data)
+                                    } else {
+                                        continue; // Skip if no image source
+                                    };
+
+                                    let image_part = if let Some(detail_level) = detail {
+                                        let detail_str = match detail_level {
+                                            crate::responses_types::enums::ImageDetail::Auto => {
+                                                "auto"
+                                            }
+                                            crate::responses_types::enums::ImageDetail::Low => {
+                                                "low"
+                                            }
+                                            crate::responses_types::enums::ImageDetail::High => {
+                                                "high"
+                                            }
+                                        };
+                                        MessageContent::image_url_part_with_detail(
+                                            url,
+                                            detail_str.to_string(),
+                                        )
+                                    } else {
+                                        MessageContent::image_url_part(url)
+                                    };
+                                    content_parts.push(image_part);
+                                }
+                                InputContent::InputAudio { data, format } => {
+                                    has_non_text_content = true;
+                                    // Convert audio to data URL format
+                                    let mime_type = match format.as_str() {
+                                        "wav" => "audio/wav",
+                                        "mp3" => "audio/mpeg",
+                                        "flac" => "audio/flac",
+                                        "ogg" => "audio/ogg",
+                                        _ => "audio/wav", // Default to wav
+                                    };
+                                    let audio_url = format!("data:{};base64,{}", mime_type, data);
+                                    // Audio is represented as a special content part
+                                    // Note: Not all models support audio input
+                                    let mut audio_part = std::collections::HashMap::new();
+                                    audio_part.insert(
+                                        "type".to_string(),
+                                        crate::openai::MessageInnerContent(Either::Left(
+                                            "input_audio".to_string(),
+                                        )),
+                                    );
+                                    let mut audio_obj = std::collections::HashMap::new();
+                                    audio_obj.insert("data".to_string(), data);
+                                    audio_obj.insert("format".to_string(), format);
+                                    audio_part.insert(
+                                        "input_audio".to_string(),
+                                        crate::openai::MessageInnerContent(Either::Right(
+                                            audio_obj,
+                                        )),
+                                    );
+                                    content_parts.push(audio_part);
+                                    // Also add as text reference for models that don't support audio
+                                    content_parts.push(MessageContent::text_part(format!(
+                                        "[Audio content: {}]",
+                                        audio_url
+                                    )));
+                                }
+                                InputContent::InputFile {
+                                    file_id,
+                                    file_data,
+                                    filename,
+                                } => {
+                                    has_non_text_content = true;
+                                    // Files are typically handled as text descriptions or references
+                                    let file_ref = if let Some(id) = file_id {
+                                        format!("[File reference: {}]", id)
+                                    } else if let Some(data) = file_data {
+                                        let name =
+                                            filename.unwrap_or_else(|| "unnamed_file".to_string());
+                                        format!(
+                                            "[File: {} (base64 data: {} bytes)]",
+                                            name,
+                                            data.len()
+                                        )
+                                    } else if let Some(name) = filename {
+                                        format!("[File: {}]", name)
+                                    } else {
+                                        "[File reference]".to_string()
+                                    };
+                                    content_parts.push(MessageContent::text_part(file_ref));
+                                }
                             }
                         }
-                        if text_parts.is_empty() {
+
+                        if content_parts.is_empty() {
                             None
+                        } else if !has_non_text_content && content_parts.len() == 1 {
+                            // Optimization: if only one text part, use simple text format
+                            // Extract text from the first part
+                            let first = &content_parts[0];
+                            if let Some(text_value) = first.get("text") {
+                                if let Either::Left(text) = &**text_value {
+                                    Some(MessageContent::from_text(text.clone()))
+                                } else {
+                                    Some(MessageContent::from_parts(content_parts))
+                                }
+                            } else {
+                                Some(MessageContent::from_parts(content_parts))
+                            }
                         } else {
-                            Some(MessageContent::from_text(text_parts.join(" ")))
+                            Some(MessageContent::from_parts(content_parts))
                         }
                     }
                 };
@@ -247,22 +363,54 @@ pub struct StreamOptions {
     pub include_usage: Option<bool>,
 }
 
-/// Include options for response content
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+/// Include options for response content.
+///
+/// This enum specifies additional content to include in the response.
+/// By default, certain content may be omitted for efficiency.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum IncludeOption {
-    /// Include file search results
+    /// Include file search results (not currently supported by mistral.rs)
     #[serde(rename = "file_search_call.results")]
     FileSearchCallResults,
-    /// Include message input image URLs
+    /// Include message input image URLs in the response
     #[serde(rename = "message.input_image.image_url")]
     MessageInputImageUrl,
-    /// Include computer call outputs
+    /// Include computer call output image URLs (not currently supported by mistral.rs)
     #[serde(rename = "computer_call_output.output.image_url")]
     ComputerCallOutputImageUrl,
     /// Include reasoning encrypted content
     #[serde(rename = "reasoning.encrypted_content")]
     ReasoningEncryptedContent,
+}
+
+/// Configuration for what to include in the response
+#[derive(Debug, Clone, Default)]
+pub struct IncludeConfig {
+    /// The raw include options from the request
+    pub options: Vec<IncludeOption>,
+}
+
+impl IncludeConfig {
+    /// Create a new IncludeConfig from the request options
+    pub fn new(options: Option<Vec<IncludeOption>>) -> Self {
+        Self {
+            options: options.unwrap_or_default(),
+        }
+    }
+
+    /// Check if a specific option is included
+    pub fn has(&self, option: &IncludeOption) -> bool {
+        self.options.contains(option)
+    }
+
+    /// Check if reasoning content should be included
+    pub fn include_reasoning(&self) -> bool {
+        // Reasoning is included by default unless explicitly filtered
+        // The ReasoningEncryptedContent option is for encrypted reasoning,
+        // which we don't support - regular reasoning is always included
+        true
+    }
 }
 
 /// OpenResponses API create request
@@ -346,11 +494,17 @@ pub struct OpenResponsesCreateRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<mistralrs_core::ToolChoice>,
 
-    /// Whether to allow parallel tool calls
+    /// Whether to allow parallel tool calls.
+    ///
+    /// NOTE: Only `true` (default) or `None` is supported. Setting this to `false`
+    /// will return an error as mistral.rs does not support disabling parallel tool calls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parallel_tool_calls: Option<bool>,
 
-    /// Maximum number of tool calls allowed
+    /// Maximum number of tool calls allowed.
+    ///
+    /// NOTE: This parameter is not supported. Setting any value will return an error
+    /// as mistral.rs does not support limiting the number of tool calls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tool_calls: Option<usize>,
 
@@ -1077,7 +1231,27 @@ async fn parse_openresponses_request(
     oairequest: OpenResponsesCreateRequest,
     state: SharedMistralRsState,
     tx: Sender<Response>,
-) -> Result<(Request, bool, Option<Vec<Message>>)> {
+) -> Result<(Request, bool, Option<Vec<Message>>, IncludeConfig)> {
+    // Validate unsupported parameters
+    // parallel_tool_calls: only `true` (default) or `None` is supported
+    if let Some(false) = oairequest.parallel_tool_calls {
+        anyhow::bail!(
+            "parallel_tool_calls=false is not supported. \
+             mistral.rs does not currently support disabling parallel tool calls."
+        );
+    }
+
+    // max_tool_calls: only `None` (unlimited) is supported
+    if oairequest.max_tool_calls.is_some() {
+        anyhow::bail!(
+            "max_tool_calls is not supported. \
+             mistral.rs does not currently support limiting the number of tool calls."
+        );
+    }
+
+    // Extract include config before consuming oairequest
+    let include_config = IncludeConfig::new(oairequest.include.clone());
+
     // If previous_response_id is provided, get the full conversation history from cache
     let previous_messages = if let Some(prev_id) = &oairequest.previous_response_id {
         let cache = get_response_cache();
@@ -1203,7 +1377,7 @@ async fn parse_openresponses_request(
     };
 
     let (request, is_streaming) = parse_chat_request(chat_request, state, tx).await?;
-    Ok((request, is_streaming, Some(final_messages)))
+    Ok((request, is_streaming, Some(final_messages), include_config))
 }
 
 /// Create response endpoint - OpenResponses API
@@ -1256,7 +1430,7 @@ pub async fn create_response(
         tokio::spawn(async move {
             let (bg_tx, mut bg_rx) = create_response_channel(None);
 
-            let (request, _, conversation_history) =
+            let (request, _, conversation_history, _include_config) =
                 match parse_openresponses_request(oairequest, state_clone.clone(), bg_tx).await {
                     Ok(x) => x,
                     Err(e) => {
@@ -1337,7 +1511,7 @@ pub async fn create_response(
         return OpenResponsesResponder::Json(response);
     }
 
-    let (request, is_streaming, conversation_history) =
+    let (request, is_streaming, conversation_history, _include_config) =
         match parse_openresponses_request(oairequest, state.clone(), tx).await {
             Ok(x) => x,
             Err(e) => return handle_error(state, e.into()),
