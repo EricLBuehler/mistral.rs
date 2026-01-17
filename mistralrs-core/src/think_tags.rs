@@ -443,7 +443,7 @@ mod tests {
         let mut ctx = ThinkTagContext::new();
         // Emoji 😀 is encoded as bytes: [0xF0, 0x9F, 0x98, 0x80]
         // Simulate it being split across multiple token boundaries
-        ctx.process_bytes(&[b'H', b'i', b' ']);
+        ctx.process_bytes(b"Hi ");
         ctx.process_bytes(&[0xF0, 0x9F]); // First half of emoji
         ctx.process_bytes(&[0x98, 0x80]); // Second half of emoji
         ctx.process_bytes(b" there");
