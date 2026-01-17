@@ -2,8 +2,8 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Device, Module, Result, Tensor};
 use crate::serde_default_fn;
+use candle_core::{Device, Module, Result, Tensor};
 use candle_nn::Linear;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig, RowParallelLayer,
