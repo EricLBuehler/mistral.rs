@@ -1261,9 +1261,18 @@ impl Sequence {
 
     /// Enable think tag parsing for this sequence.
     /// Should be called when the model uses `<think>...</think>` tags.
+    ///
+    /// If the prompt ends with `<think>`, the context will start inside a think block
+    /// since the chat template hardcoded the opening tag.
     pub fn enable_think_tag_mode(&mut self) {
         if self.think_tag_context.is_none() {
-            self.think_tag_context = Some(ThinkTagContext::new());
+            // Check if the prompt ends with <think> (template hardcoded the opening tag)
+            let starts_in_think_block = self.prompt.trim_end().ends_with("<think>");
+            self.think_tag_context = Some(if starts_in_think_block {
+                ThinkTagContext::new_in_think_block()
+            } else {
+                ThinkTagContext::new()
+            });
         }
     }
 

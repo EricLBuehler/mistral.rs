@@ -54,6 +54,22 @@ impl ThinkTagContext {
         }
     }
 
+    /// Create a new ThinkTagContext that starts inside a think block.
+    ///
+    /// Use this when the chat template hardcodes `<think>` in the generation prompt,
+    /// so the model's output starts inside the think block without an opening tag.
+    pub fn new_in_think_block() -> Self {
+        Self {
+            accumulated_content: String::new(),
+            accumulated_reasoning: String::new(),
+            in_think_block: true,
+            buffer: String::new(),
+            sent_content_len: 0,
+            sent_reasoning_len: 0,
+            utf8_buffer: Vec::new(),
+        }
+    }
+
     /// Process incremental bytes from the model output.
     ///
     /// This method handles bytes that may contain incomplete UTF-8 sequences
@@ -475,5 +491,31 @@ mod tests {
         ctx.finalize();
 
         assert_eq!(ctx.content(), Some("中 text".to_string()));
+    }
+
+    #[test]
+    fn test_new_in_think_block() {
+        // Simulate when chat template hardcodes <think> in generation prompt
+        // Model output starts inside think block without opening tag
+        let mut ctx = ThinkTagContext::new_in_think_block();
+        ctx.process_text("reasoning here</think>final content");
+        ctx.finalize();
+
+        assert_eq!(ctx.reasoning_content(), Some("reasoning here".to_string()));
+        assert_eq!(ctx.content(), Some("final content".to_string()));
+    }
+
+    #[test]
+    fn test_new_in_think_block_unclosed() {
+        // Model output inside think block that never closes
+        let mut ctx = ThinkTagContext::new_in_think_block();
+        ctx.process_text("reasoning without closing tag");
+        ctx.finalize();
+
+        assert_eq!(
+            ctx.reasoning_content(),
+            Some("reasoning without closing tag".to_string())
+        );
+        assert_eq!(ctx.content(), None);
     }
 }
