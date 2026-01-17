@@ -5,7 +5,8 @@ use super::{
     Loader, MessagesAction, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
     PreProcessingMixin, Processor, TokenSource,
 };
-use crate::device_map::DeviceMapper;
+use crate::device_map::{self, DeviceMapper};
+use crate::distributed::WorkerTransferData;
 use crate::pipeline::{ChatTemplate, EmbeddingModulePaths, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
@@ -14,8 +15,7 @@ use crate::utils::progress::ProgressScopeGuard;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::{
-    api_get_file, DeviceMapSetting, MessageContent, PagedAttentionConfig, Pipeline,
-    SpeechGenerationConfig, TryIntoDType,
+    DeviceMapSetting, MessageContent, PagedAttentionConfig, Pipeline, SpeechGenerationConfig, TryIntoDType, api_get_file, distributed
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor};
@@ -26,6 +26,7 @@ use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use regex::Regex;
 use std::any::Any;
+use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
@@ -261,8 +262,19 @@ impl Loader for SpeechLoader {
         if let Device::Cuda(dev) = &device {
             unsafe { dev.disable_event_tracking() };
         }
+        let use_nccl = mistralrs_quant::distributed::use_nccl();
+        let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
+            let payload: WorkerTransferData = serde_json::from_str(&payload)?;
+            let WorkerTransferData::Init { id: _, worker_rank } = payload;
+            vec![candle_core::Device::new_cuda(worker_rank + 1)?]
+        } else if use_nccl {
+            vec![candle_core::Device::new_cuda(0)?]
+        } else {
+            device_map::get_all_similar_devices(device)?
+        };
 
-        let mapper = DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None)?;
+
+        let mapper = DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None, &available_devices)?;
         let dtype = mapper.get_min_dtype(dtype)?;
 
         // Last weight is the dac.
