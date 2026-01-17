@@ -87,7 +87,7 @@ impl Processor for Qwen3VLProcessor {
     }
 
     fn template_action(&self) -> MessagesAction {
-        MessagesAction::FlattenOnlyText
+        MessagesAction::Keep
     }
 }
 
