@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ImageDetail","IncompleteReason","ItemStatus","MessageRole","ReasoningEffort","ResponseStatus","ServiceTier","TruncationStrategy"]};

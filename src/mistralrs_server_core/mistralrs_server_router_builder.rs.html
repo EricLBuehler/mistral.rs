@@ -17,7 +17,7 @@
 <a href=#17 id=17 data-nosnippet>17</a>    handlers::{health, models, re_isq},
 <a href=#18 id=18 data-nosnippet>18</a>    image_generation::image_generation,
 <a href=#19 id=19 data-nosnippet>19</a>    openapi_doc::get_openapi_doc,
-<a href=#20 id=20 data-nosnippet>20</a>    responses::{create_response, delete_response, get_response},
+<a href=#20 id=20 data-nosnippet>20</a>    responses::{cancel_response, create_response, delete_response, get_response},
 <a href=#21 id=21 data-nosnippet>21</a>    speech_generation::speech_generation,
 <a href=#22 id=22 data-nosnippet>22</a>    types::SharedMistralRsState,
 <a href=#23 id=23 data-nosnippet>23</a>};
@@ -209,18 +209,19 @@
 <a href=#209 id=209 data-nosnippet>209</a>            <span class="string">"/v1/responses/{response_id}"</span>,
 <a href=#210 id=210 data-nosnippet>210</a>            get(get_response).delete(delete_response),
 <a href=#211 id=211 data-nosnippet>211</a>        )
-<a href=#212 id=212 data-nosnippet>212</a>        .layer(cors_layer)
-<a href=#213 id=213 data-nosnippet>213</a>        .layer(DefaultBodyLimit::max(router_max_body_limit))
-<a href=#214 id=214 data-nosnippet>214</a>        .with_state(state);
-<a href=#215 id=215 data-nosnippet>215</a>
-<a href=#216 id=216 data-nosnippet>216</a>    <span class="kw">if </span>include_swagger_routes {
-<a href=#217 id=217 data-nosnippet>217</a>        <span class="kw">let </span>doc = get_openapi_doc(<span class="prelude-val">None</span>);
-<a href=#218 id=218 data-nosnippet>218</a>
-<a href=#219 id=219 data-nosnippet>219</a>        router = router.merge(
-<a href=#220 id=220 data-nosnippet>220</a>            SwaggerUi::new(<span class="macro">format!</span>(<span class="string">"{prefix}/docs"</span>))
-<a href=#221 id=221 data-nosnippet>221</a>                .url(<span class="macro">format!</span>(<span class="string">"{prefix}/api-doc/openapi.json"</span>), doc),
-<a href=#222 id=222 data-nosnippet>222</a>        );
-<a href=#223 id=223 data-nosnippet>223</a>    }
-<a href=#224 id=224 data-nosnippet>224</a>
-<a href=#225 id=225 data-nosnippet>225</a>    <span class="prelude-val">Ok</span>(router)
-<a href=#226 id=226 data-nosnippet>226</a>}</code></pre></div></section></main></body></html>
+<a href=#212 id=212 data-nosnippet>212</a>        .route(<span class="string">"/v1/responses/{response_id}/cancel"</span>, post(cancel_response))
+<a href=#213 id=213 data-nosnippet>213</a>        .layer(cors_layer)
+<a href=#214 id=214 data-nosnippet>214</a>        .layer(DefaultBodyLimit::max(router_max_body_limit))
+<a href=#215 id=215 data-nosnippet>215</a>        .with_state(state);
+<a href=#216 id=216 data-nosnippet>216</a>
+<a href=#217 id=217 data-nosnippet>217</a>    <span class="kw">if </span>include_swagger_routes {
+<a href=#218 id=218 data-nosnippet>218</a>        <span class="kw">let </span>doc = get_openapi_doc(<span class="prelude-val">None</span>);
+<a href=#219 id=219 data-nosnippet>219</a>
+<a href=#220 id=220 data-nosnippet>220</a>        router = router.merge(
+<a href=#221 id=221 data-nosnippet>221</a>            SwaggerUi::new(<span class="macro">format!</span>(<span class="string">"{prefix}/docs"</span>))
+<a href=#222 id=222 data-nosnippet>222</a>                .url(<span class="macro">format!</span>(<span class="string">"{prefix}/api-doc/openapi.json"</span>), doc),
+<a href=#223 id=223 data-nosnippet>223</a>        );
+<a href=#224 id=224 data-nosnippet>224</a>    }
+<a href=#225 id=225 data-nosnippet>225</a>
+<a href=#226 id=226 data-nosnippet>226</a>    <span class="prelude-val">Ok</span>(router)
+<a href=#227 id=227 data-nosnippet>227</a>}</code></pre></div></section></main></body></html>

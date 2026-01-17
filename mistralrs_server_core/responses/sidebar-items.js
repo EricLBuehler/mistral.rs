@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["create_response","delete_response","get_response"],"type":["ResponsesResponder","ResponsesStreamer"]};
+window.SIDEBAR_ITEMS = {"enum":["IncludeOption","OpenResponsesInput","OpenResponsesStreamEvent","ReasoningSummary","TextFormat"],"fn":["cancel_response","create_response","delete_response","get_response"],"struct":["IncludeConfig","OpenResponsesCreateRequest","OpenResponsesStreamer","ReasoningConfig","RequestContext","StreamOptions","TextConfig"],"type":["OpenResponsesResponder"]};
