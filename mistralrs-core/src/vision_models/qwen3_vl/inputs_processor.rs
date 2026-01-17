@@ -64,8 +64,6 @@ pub struct Qwen3VLProcessor {
 }
 
 impl Qwen3VLProcessor {
-    pub const VISION_START: &str = "<|vision_start|>";
-    pub const VISION_END: &str = "<|vision_end|>";
     pub const IMAGE_PAD: &str = "<|image_pad|>";
     pub const VIDEO_PAD: &str = "<|video_pad|>";
     pub const PLACEHOLDER: &str = "<|placeholder|>";
@@ -87,7 +85,7 @@ impl Processor for Qwen3VLProcessor {
     }
 
     fn template_action(&self) -> MessagesAction {
-        MessagesAction::FlattenOnlyText
+        MessagesAction::Keep
     }
 }
 

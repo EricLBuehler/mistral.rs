@@ -95,6 +95,33 @@ impl ChatTemplate {
         }
     }
 
+    /// Check if this chat template uses `<think>...</think>` tags for reasoning.
+    ///
+    /// This is mutually exclusive with Harmony format - if the template uses
+    /// Harmony format, this returns false even if think tags are present.
+    pub fn uses_think_tags(&self) -> bool {
+        // Don't enable if Harmony format is detected (mutual exclusivity)
+        if self.is_harmony_format() {
+            return false;
+        }
+
+        if let Some(ref template_value) = self.chat_template {
+            let template_str = match &template_value.0 {
+                Either::Left(s) => s.as_str(),
+                Either::Right(vec) => {
+                    // For multi-template format, check if any template contains think tags
+                    return vec.iter().any(|t| {
+                        t.values()
+                            .any(|v| crate::think_tags::is_think_tag_template(v))
+                    });
+                }
+            };
+            crate::think_tags::is_think_tag_template(template_str)
+        } else {
+            false
+        }
+    }
+
     pub fn eos_tok(&self) -> Option<String> {
         match self.eos_token.as_ref()?.0 {
             Either::Left(ref lit) => Some(lit.clone()),

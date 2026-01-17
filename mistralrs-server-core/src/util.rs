@@ -49,8 +49,11 @@ pub async fn parse_image_url(url_unparsed: &str) -> Result<DynamicImage, anyhow:
         url::Url::from_file_path(std::path::absolute(url_unparsed)?)
             .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url_unparsed))?
     } else {
-        url::Url::parse(url_unparsed)
-            .map_err(|_| anyhow::anyhow!("Could not parse as base64 data: {}", url_unparsed))?
+        anyhow::bail!(
+            "Invalid source '{}': not a valid URL (http/https/data) and file not found on server. \
+             Use a full URL, a data URL, or an absolute file path that exists on the server.",
+            url_unparsed
+        )
     };
 
     let bytes = if url.scheme() == "http" || url.scheme() == "https" {
@@ -92,8 +95,11 @@ pub async fn parse_audio_url(url_unparsed: &str) -> Result<AudioInput, anyhow::E
         url::Url::from_file_path(std::path::absolute(url_unparsed)?)
             .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url_unparsed))?
     } else {
-        url::Url::parse(url_unparsed)
-            .map_err(|_| anyhow::anyhow!("Could not parse as base64 data: {}", url_unparsed))?
+        anyhow::bail!(
+            "Invalid source '{}': not a valid URL (http/https/data) and file not found on server. \
+             Use a full URL, a data URL, or an absolute file path that exists on the server.",
+            url_unparsed
+        )
     };
 
     let bytes = if url.scheme() == "http" || url.scheme() == "https" {

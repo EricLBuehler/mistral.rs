@@ -5,6 +5,7 @@ use either::Either;
 use indexmap::IndexMap;
 
 use crate::{
+    request::ReasoningEffort,
     vision_models::{preprocessor_config::PreProcessorConfig, processor_config::ProcessorConfig},
     MessageContent, Pipeline, Tool,
 };
@@ -31,6 +32,7 @@ pub enum MessagesAction {
 /// model.
 pub trait Processor {
     /// Get the tokens and the untokenized prompt. `add_special_tokens` should usually be true.
+    #[allow(clippy::too_many_arguments)]
     fn process(
         &self,
         pipeline: &dyn Pipeline,
@@ -38,6 +40,7 @@ pub trait Processor {
         add_generation_prompt: bool,
         add_special_tokens: bool,
         enable_thinking: Option<bool>,
+        reasoning_effort: Option<ReasoningEffort>,
         tools: Vec<Tool>,
     ) -> Result<(Vec<u32>, String)> {
         // for message in messages.iter_mut() {
@@ -55,6 +58,7 @@ pub trait Processor {
             messages,
             add_generation_prompt,
             enable_thinking,
+            reasoning_effort,
             self.template_action(),
             tools,
         )?;
@@ -104,6 +108,7 @@ pub(crate) fn apply_chat_template(
     messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
     enable_thinking: Option<bool>,
+    reasoning_effort: Option<ReasoningEffort>,
     action: MessagesAction,
     tools: Vec<Tool>,
 ) -> Result<String> {
@@ -144,7 +149,7 @@ pub(crate) fn apply_chat_template(
         messages,
         add_generation_prompt,
         enable_thinking,
-        None, // reasoning_effort - passed through from request when needed
+        reasoning_effort,
         template,
         bos_tok,
         eos_tok,

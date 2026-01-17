@@ -88,14 +88,19 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 let delta_result = seq.get_delta();
                 if let Some(delta) = crate::handle_seq_error_ok!(delta_result, seq.responder()) {
                     if seq.get_mut_group().is_chat {
-                        // Check if we're in Harmony mode and use parsed content
+                        // Check if we're in Harmony mode or think tag mode and use parsed content
                         let (content_delta, reasoning_delta) = if seq.is_harmony_mode() {
                             // In Harmony mode, use the parsed final content and reasoning
                             let final_delta = seq.get_harmony_final_delta();
                             let reasoning = seq.get_harmony_reasoning_delta();
                             (final_delta, reasoning)
+                        } else if seq.is_think_tag_mode() {
+                            // In think tag mode, use the parsed content and reasoning
+                            let content = seq.get_think_tag_content_delta();
+                            let reasoning = seq.get_think_tag_reasoning_delta();
+                            (content, reasoning)
                         } else {
-                            // Not in Harmony mode, use raw delta
+                            // Not in Harmony or think tag mode, use raw delta
                             let (text_new, _) =
                                 parse_text_tools(this, delta.as_str(), seq.tools.clone())
                                     .map_err(candle_core::Error::msg)?;
@@ -255,6 +260,9 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             // Signal EOS to Harmony parser if in Harmony mode
             seq.harmony_process_eos();
 
+            // Finalize think tag parser if in think tag mode
+            seq.think_tag_finalize();
+
             let text = match reason {
                 crate::sequence::StopReason::Length(_)
                 | crate::sequence::StopReason::ModelLength(_)
@@ -280,7 +288,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             };
 
             if seq.get_mut_group().is_chat {
-                // In Harmony mode, use Harmony's parsed content and tool calls
+                // In Harmony or think tag mode, use parsed content and tool calls
                 let (text_new, tool_calls, reasoning_content) = if seq.is_harmony_mode() {
                     let final_content = seq.get_harmony_final_content();
                     let reasoning = seq.get_harmony_reasoning_content();
@@ -302,8 +310,26 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         .collect();
 
                     (final_content, tool_calls, reasoning)
+                } else if seq.is_think_tag_mode() {
+                    // In think tag mode - finalize and get parsed content
+                    seq.think_tag_finalize();
+                    let final_content = seq.get_think_tag_content();
+                    let reasoning = seq.get_think_tag_reasoning_content();
+
+                    // Parse for tool calls in final content
+                    let (text_new, tool_calls) = if let Some(ref content) = final_content {
+                        parse_text_tools(this, content.as_str(), seq.tools.clone())
+                            .map_err(candle_core::Error::msg)?
+                    } else {
+                        (None, vec![])
+                    };
+                    (
+                        text_new.map(ToString::to_string).or(final_content),
+                        tool_calls,
+                        reasoning,
+                    )
                 } else {
-                    // Not in Harmony mode - parse text for tool calls
+                    // Not in Harmony or think tag mode - parse text for tool calls
                     let (text_new, tool_calls) =
                         parse_text_tools(this, text.as_str(), seq.tools.clone())
                             .map_err(candle_core::Error::msg)?;
