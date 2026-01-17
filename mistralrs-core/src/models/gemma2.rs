@@ -2,6 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use crate::serde_default_fn;
 use candle_core::{Device, Module, Result, Tensor};
 use candle_nn::Linear;
 use mistralrs_quant::{
@@ -24,6 +25,8 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
+serde_default_fn!(bool, word_emb_default, false);
+
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct Config {
     pub attention_bias: bool,
@@ -45,6 +48,7 @@ pub struct Config {
     pub query_pre_attn_scalar: usize,
     pub max_position_embeddings: usize,
     pub quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
     #[allow(dead_code)]
     pub tie_word_embeddings: bool,
 }
