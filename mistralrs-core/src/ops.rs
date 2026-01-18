@@ -193,11 +193,7 @@ pub fn cuda_topk_softmax(input: &Tensor, k: usize) -> Result<TopKOutput> {
     // Validate k to prevent shared memory issues in the CUDA kernel
     const MAX_K: usize = 256;
     if k == 0 || k > MAX_K {
-        candle_core::bail!(
-            "cuda_topk_softmax: k={} must be in range [1, {}]",
-            k,
-            MAX_K
-        );
+        candle_core::bail!("cuda_topk_softmax: k={} must be in range [1, {}]", k, MAX_K);
     }
 
     let input = input.contiguous()?;
