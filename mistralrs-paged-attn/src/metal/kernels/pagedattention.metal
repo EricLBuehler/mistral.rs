@@ -930,7 +930,7 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
 
       // Apply softcapping
       if (softcapping != 1.0) {
-        qk = precise::tanh(qk / softcapping) * softcapping;
+        qk = tanh(qk / softcapping) * softcapping;
       }
 
       // Add the ALiBi bias if slopes are given.
@@ -980,7 +980,7 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
                                                  simd_tid, simd_lid);
 
   // Compute softmax.
-  const float inv_sum = divide(1.f, exp_sum + 1e-6f);
+  const float inv_sum = 1.f / (exp_sum + 1e-6f);
   for (int i = thread_idx; i < num_tokens; i += NUM_THREADS) {
     logits[i] *= inv_sum;
   }
@@ -1225,7 +1225,7 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES,
   threadgroup_barrier(mem_flags::mem_threadgroup);
   global_exp_sum = block_sum<NUM_WARPS, NUM_SIMD_LANES>(
       &red_smem[NUM_WARPS], global_exp_sum, simd_tid, simd_lid);
-  const float inv_global_exp_sum = divide(1.0f, global_exp_sum + 1e-6f);
+  const float inv_global_exp_sum = 1.0f / (global_exp_sum + 1e-6f);
 
   // Aggregate tmp_out to out.
   const device T *tmp_out_ptr =
