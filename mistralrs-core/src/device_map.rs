@@ -161,16 +161,30 @@ impl DeviceMapSetting {
                                 if device_ord == *ordinal {
                                     device.clone()
                                 } else {
-                                    let cuda_device = all_devices.iter()
-                                    .filter(|d|d.is_cuda())
-                                    .find(|d|d.as_cuda_device().expect("Should be a cuda device").cuda_stream().context().ordinal() == *ordinal).cloned();
+                                    let cuda_device = all_devices
+                                        .iter()
+                                        .filter(|d| d.is_cuda())
+                                        .map(|d| {
+                                            // should implement this in candle and get the ordinal back from the device location directly
+                                            let ordinal = match d.location() {
+                                                DeviceLocation::Cpu => 0,
+                                                DeviceLocation::Cuda { gpu_id } => gpu_id,
+                                                DeviceLocation::Metal { gpu_id } => gpu_id,
+                                            };
+                                            (d.clone(), ordinal)
+                                        })
+                                        .find(|(_, other_device_ordinal)| {
+                                            other_device_ordinal == ordinal
+                                        });
 
-                                
-                                    if let Some(device) = cuda_device {
+                                    if let Some((device, _)) = cuda_device {
                                         device
                                     } else {
-                                        candle_core::bail!("Could not find cuda device with ordinal {}", ordinal)
-                                    }                                 
+                                        candle_core::bail!(
+                                            "Could not find cuda device with ordinal {}",
+                                            ordinal
+                                        )
+                                    }
                                 }
                             }
                             DeviceLocation::Metal { gpu_id: device_ord } => {
