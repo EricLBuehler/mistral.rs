@@ -337,12 +337,13 @@ __global__ void topk_softmax_kernel(
     const int tid = threadIdx.x;
     const int block_size = blockDim.x;
 
-    // Shared memory layout: [data][used][topk_vals][topk_idx]
+    // Shared memory layout: [data][used][topk_vals][topk_idx][softmax_ws]
     extern __shared__ char smem[];
     T* s_data = (T*)smem;
     bool* s_used = (bool*)(s_data + ncols);
     T* s_topk_vals = (T*)(s_used + ncols);
     int* s_topk_idx = (int*)(s_topk_vals + k);
+    float* s_softmax_ws = (float*)(s_topk_idx + k);  // Dynamic workspace for softmax
 
     // Load data into shared memory
     for (int i = tid; i < ncols; i += block_size) {
@@ -405,18 +406,17 @@ __global__ void topk_softmax_kernel(
             if (v > max_val) max_val = v;
         }
 
-        // Compute exp(x - max) and sum
+        // Compute exp(x - max) and sum using shared memory workspace
         float sum_exp = 0.0f;
-        float exp_vals[16];  // Assuming k <= 16
         for (int i = 0; i < k; i++) {
-            exp_vals[i] = expf((float)s_topk_vals[i] - max_val);
-            sum_exp += exp_vals[i];
+            s_softmax_ws[i] = expf((float)s_topk_vals[i] - max_val);
+            sum_exp += s_softmax_ws[i];
         }
 
         // Normalize and write output
         float inv_sum = 1.0f / sum_exp;
         for (int i = 0; i < k; i++) {
-            row_weights[i] = (T)(exp_vals[i] * inv_sum);
+            row_weights[i] = (T)(s_softmax_ws[i] * inv_sum);
             row_indices[i] = (uint32_t)s_topk_idx[i];
         }
     }
@@ -434,7 +434,7 @@ extern "C" void topk_softmax_f32(
 ) {
     const cudaStream_t custream = (cudaStream_t)stream;
     int block_size = (ncols <= 64) ? 64 : (ncols <= 128) ? 128 : (ncols <= 256) ? 256 : 512;
-    size_t smem_size = ncols * sizeof(float) + ncols * sizeof(bool) + k * sizeof(float) + k * sizeof(int);
+    size_t smem_size = ncols * sizeof(float) + ncols * sizeof(bool) + k * sizeof(float) + k * sizeof(int) + k * sizeof(float);
     topk_softmax_kernel<float><<<nrows, block_size, smem_size, custream>>>(
         input, weights_out, indices_out, nrows, ncols, k
     );
@@ -451,7 +451,7 @@ extern "C" void topk_softmax_bf16(
 ) {
     const cudaStream_t custream = (cudaStream_t)stream;
     int block_size = (ncols <= 64) ? 64 : (ncols <= 128) ? 128 : (ncols <= 256) ? 256 : 512;
-    size_t smem_size = ncols * sizeof(__nv_bfloat16) + ncols * sizeof(bool) + k * sizeof(__nv_bfloat16) + k * sizeof(int);
+    size_t smem_size = ncols * sizeof(__nv_bfloat16) + ncols * sizeof(bool) + k * sizeof(__nv_bfloat16) + k * sizeof(int) + k * sizeof(float);
     topk_softmax_kernel<__nv_bfloat16><<<nrows, block_size, smem_size, custream>>>(
         input, weights_out, indices_out, nrows, ncols, k
     );
@@ -468,7 +468,7 @@ extern "C" void topk_softmax_f16(
 ) {
     const cudaStream_t custream = (cudaStream_t)stream;
     int block_size = (ncols <= 64) ? 64 : (ncols <= 128) ? 128 : (ncols <= 256) ? 256 : 512;
-    size_t smem_size = ncols * sizeof(__half) + ncols * sizeof(bool) + k * sizeof(__half) + k * sizeof(int);
+    size_t smem_size = ncols * sizeof(__half) + ncols * sizeof(bool) + k * sizeof(__half) + k * sizeof(int) + k * sizeof(float);
     topk_softmax_kernel<__half><<<nrows, block_size, smem_size, custream>>>(
         input, weights_out, indices_out, nrows, ncols, k
     );
