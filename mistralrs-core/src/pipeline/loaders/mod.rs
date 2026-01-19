@@ -229,7 +229,7 @@ impl ModelPaths for EmbeddingModelPaths<PathBuf> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 /// The source of the HF token.
 pub enum TokenSource {
     Literal(String),

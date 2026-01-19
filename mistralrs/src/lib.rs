@@ -139,6 +139,7 @@ mod multi_model;
 mod speculative;
 mod speech_model;
 mod text_model;
+mod unified;
 mod vision_model;
 mod xlora_model;
 
@@ -166,6 +167,7 @@ pub use multi_model::MultiModel;
 pub use speculative::TextSpeculativeBuilder;
 pub use speech_model::SpeechModelBuilder;
 pub use text_model::{PagedAttentionMetaBuilder, TextModelBuilder, UqffTextModelBuilder};
+pub use unified::{AdapterConfig, ModelBuilder, ModelSource};
 pub use vision_model::{UqffVisionModelBuilder, VisionModelBuilder};
 pub use xlora_model::XLoraModelBuilder;
 

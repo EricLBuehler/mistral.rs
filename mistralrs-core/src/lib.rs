@@ -11,7 +11,7 @@ pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -191,6 +191,52 @@ pub struct MistralRsConfig {
     pub max_seq_len: Option<usize>,
 }
 
+/// Configuration for recreating a model loader when reloading an unloaded model.
+/// This captures the essential parameters needed to reconstruct a loader.
+#[derive(Clone)]
+pub struct ModelLoaderConfig {
+    /// The model selection configuration (Plain, GGUF, Vision, etc.)
+    pub model_selected: ModelSelected,
+    /// Source of the HF token
+    pub token_source: TokenSource,
+    /// Optional HF revision
+    pub hf_revision: Option<String>,
+    /// Model data type
+    pub dtype: ModelDType,
+    /// Device to load the model on
+    pub device: Device,
+    /// Device mapping setting
+    pub device_map_setting: DeviceMapSetting,
+    /// In-situ quantization type
+    pub isq: Option<IsqType>,
+    /// Paged attention configuration
+    pub paged_attn_config: Option<PagedAttentionConfig>,
+    /// Whether to suppress logging during loading
+    pub silent: bool,
+    /// Chat template override
+    pub chat_template: Option<String>,
+    /// Explicit Jinja template path
+    pub jinja_explicit: Option<String>,
+}
+
+/// State preserved when a model is unloaded.
+/// This contains all the information needed to reload the model on demand.
+#[derive(Clone)]
+pub struct UnloadedModelState {
+    /// Configuration to recreate the loader
+    pub loader_config: ModelLoaderConfig,
+    /// Scheduler configuration
+    pub scheduler_config: SchedulerConfig,
+    /// Engine configuration
+    pub engine_config: EngineConfig,
+    /// MCP client configuration
+    pub mcp_client_config: Option<McpClientConfig>,
+    /// Model category (Text, Vision, etc.)
+    pub category: ModelCategory,
+    /// Model metadata configuration
+    pub mistralrs_config: MistralRsConfig,
+}
+
 /// Internal structure to hold per-engine state
 struct EngineInstance {
     sender: Sender<Request>,
@@ -206,6 +252,10 @@ struct EngineInstance {
 /// appropriate engine based on model ID.
 pub struct MistralRs {
     engines: RwLock<HashMap<String, EngineInstance>>,
+    /// Models that have been unloaded but can be reloaded on demand
+    unloaded_models: RwLock<HashMap<String, UnloadedModelState>>,
+    /// Models currently being reloaded (to prevent concurrent reloads)
+    reloading_models: RwLock<HashSet<String>>,
     default_engine_id: RwLock<Option<String>>,
     log: Option<String>,
     id: String,
@@ -227,12 +277,20 @@ struct RebootState {
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
     mcp_client_config: Option<McpClientConfig>,
+    /// Optional loader config for reloading after unload
+    loader_config: Option<ModelLoaderConfig>,
 }
 
 #[derive(Debug)]
 pub enum MistralRsError {
     EnginePoisoned,
     SenderPoisoned,
+    /// The requested model was not found (neither loaded nor unloaded)
+    ModelNotFound(String),
+    /// The model is currently being reloaded
+    ModelReloading(String),
+    /// Failed to reload the model
+    ReloadFailed(String),
 }
 
 impl std::fmt::Display for MistralRsError {
@@ -562,6 +620,7 @@ impl MistralRs {
             tool_callbacks: tool_callbacks.clone(),
             tool_callbacks_with_tools: tool_callbacks_with_tools.clone(),
             mcp_client_config: mcp_client_config.clone(),
+            loader_config: None,
         };
 
         // Create the engine configuration
@@ -666,6 +725,8 @@ impl MistralRs {
 
         Arc::new(Self {
             engines: RwLock::new(engines),
+            unloaded_models: RwLock::new(HashMap::new()),
+            reloading_models: RwLock::new(HashSet::new()),
             default_engine_id: RwLock::new(Some(id.clone())),
             log,
             id,
@@ -735,6 +796,7 @@ impl MistralRs {
     }
 
     /// Get sender for a specific model. If model_id is None, uses default engine.
+    /// If the model is unloaded, it will be automatically reloaded before returning the sender.
     pub fn get_sender(&self, model_id: Option<&str>) -> Result<Sender<Request>, MistralRsError> {
         let resolved_model_id = match model_id {
             Some(id) => id.to_string(),
@@ -750,20 +812,58 @@ impl MistralRs {
             }
         };
 
-        if self.engine_dead(&resolved_model_id)? {
-            tracing::warn!("Engine {} is dead, rebooting", resolved_model_id);
-            self.reboot_engine(&resolved_model_id)?
+        // Check if model is loaded
+        let is_loaded = {
+            let engines = self
+                .engines
+                .read()
+                .map_err(|_| MistralRsError::SenderPoisoned)?;
+            engines.contains_key(&resolved_model_id)
+        };
+
+        if is_loaded {
+            // Check if engine is dead and needs reboot
+            if self.engine_dead(&resolved_model_id)? {
+                tracing::warn!("Engine {} is dead, rebooting", resolved_model_id);
+                self.reboot_engine(&resolved_model_id)?
+            }
+
+            let engines = self
+                .engines
+                .read()
+                .map_err(|_| MistralRsError::SenderPoisoned)?;
+            if let Some(engine_instance) = engines.get(&resolved_model_id) {
+                return Ok(engine_instance.sender.clone());
+            }
         }
 
-        let engines = self
-            .engines
-            .read()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
-        if let Some(engine_instance) = engines.get(&resolved_model_id) {
-            Ok(engine_instance.sender.clone())
-        } else {
-            Err(MistralRsError::EnginePoisoned)
+        // Check if model is unloaded - trigger auto-reload
+        let is_unloaded = {
+            let unloaded = self
+                .unloaded_models
+                .read()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            unloaded.contains_key(&resolved_model_id)
+        };
+
+        if is_unloaded {
+            tracing::info!(
+                "Model {} is unloaded, triggering auto-reload",
+                resolved_model_id
+            );
+            self.reload_model_blocking(&resolved_model_id)?;
+
+            // After reload, get the sender
+            let engines = self
+                .engines
+                .read()
+                .map_err(|_| MistralRsError::SenderPoisoned)?;
+            if let Some(engine_instance) = engines.get(&resolved_model_id) {
+                return Ok(engine_instance.sender.clone());
+            }
         }
+
+        Err(MistralRsError::ModelNotFound(resolved_model_id))
     }
 
     pub fn get_id(&self) -> String {
@@ -878,6 +978,7 @@ impl MistralRs {
             tool_callbacks: config.engine_config.tool_callbacks.clone(),
             tool_callbacks_with_tools: config.engine_config.tool_callbacks_with_tools.clone(),
             mcp_client_config: config.mcp_client_config.clone(),
+            loader_config: None,
         };
 
         let engine_instance =
@@ -1104,5 +1205,336 @@ impl MistralRs {
         } else {
             Err(format!("Model {resolved_model_id} not found"))
         }
+    }
+
+    /// Unload a model from memory while preserving its configuration for later reload.
+    /// The model can be reloaded automatically when a request is sent to it, or manually
+    /// using `reload_model()`.
+    ///
+    /// Note: The model must have been added with a `ModelLoaderConfig` for auto-reload to work.
+    /// Models added via `MistralRsBuilder` without explicit loader config cannot be reloaded.
+    pub fn unload_model(&self, model_id: &str) -> Result<(), String> {
+        // Check if it's the last model
+        let engines_count = {
+            let engines = self
+                .engines
+                .read()
+                .map_err(|_| "Failed to acquire read lock on engines")?;
+            engines.len()
+        };
+
+        if engines_count <= 1 {
+            return Err("Cannot unload the last model from MistralRs".to_string());
+        }
+
+        // Get the engine instance and create UnloadedModelState
+        let mut engines = self
+            .engines
+            .write()
+            .map_err(|_| "Failed to acquire write lock on engines")?;
+
+        let engine_instance = engines
+            .remove(model_id)
+            .ok_or_else(|| format!("Model {model_id} not found"))?;
+
+        // Check if we have loader config for reloading
+        let loader_config = engine_instance
+            .reboot_state
+            .loader_config
+            .clone()
+            .ok_or_else(|| {
+                format!(
+                    "Model {model_id} does not have loader config stored. \
+                     It cannot be reloaded after unloading. \
+                     Consider using add_model_with_loader_config() for models that need unload/reload support."
+                )
+            })?;
+
+        // Create the unloaded state
+        let unloaded_state = UnloadedModelState {
+            loader_config,
+            scheduler_config: engine_instance.reboot_state.method.clone(),
+            engine_config: EngineConfig {
+                no_kv_cache: engine_instance.reboot_state.no_kv_cache,
+                no_prefix_cache: engine_instance.reboot_state.no_prefix_cache,
+                prefix_cache_n: engine_instance.reboot_state.prefix_cache_n,
+                disable_eos_stop: engine_instance.reboot_state.disable_eos_stop,
+                throughput_logging_enabled: engine_instance.reboot_state.throughput_logging_enabled,
+                search_embedding_model: engine_instance.reboot_state.search_embedding_model,
+                search_callback: engine_instance.reboot_state.search_callback.clone(),
+                tool_callbacks: engine_instance.reboot_state.tool_callbacks.clone(),
+                tool_callbacks_with_tools: engine_instance
+                    .reboot_state
+                    .tool_callbacks_with_tools
+                    .clone(),
+            },
+            mcp_client_config: engine_instance.reboot_state.mcp_client_config.clone(),
+            category: engine_instance.category.clone(),
+            mistralrs_config: engine_instance.config.clone(),
+        };
+
+        // Send terminate signal to the engine
+        let _ = engine_instance.sender.try_send(Request::Terminate);
+
+        drop(engines);
+
+        // Store the unloaded state
+        let mut unloaded = self
+            .unloaded_models
+            .write()
+            .map_err(|_| "Failed to acquire write lock on unloaded_models")?;
+        unloaded.insert(model_id.to_string(), unloaded_state);
+
+        // Update default if needed
+        let mut default_lock = self
+            .default_engine_id
+            .write()
+            .map_err(|_| "Failed to acquire write lock on default_engine_id")?;
+        if let Some(ref default_id) = *default_lock {
+            if default_id == model_id {
+                // Set the first available engine as the new default
+                let engines = self
+                    .engines
+                    .read()
+                    .map_err(|_| "Failed to acquire read lock on engines")?;
+                *default_lock = engines.keys().next().cloned();
+            }
+        }
+
+        info!("Model {} unloaded successfully", model_id);
+        Ok(())
+    }
+
+    /// Manually reload a previously unloaded model.
+    /// This is also called automatically by `get_sender()` when a request targets an unloaded model.
+    pub async fn reload_model(&self, model_id: &str) -> Result<(), MistralRsError> {
+        // Check if already reloading
+        {
+            let reloading = self
+                .reloading_models
+                .read()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            if reloading.contains(model_id) {
+                return Err(MistralRsError::ModelReloading(model_id.to_string()));
+            }
+        }
+
+        // Mark as reloading
+        {
+            let mut reloading = self
+                .reloading_models
+                .write()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            reloading.insert(model_id.to_string());
+        }
+
+        // Get the unloaded state
+        let unloaded_state = {
+            let unloaded = self
+                .unloaded_models
+                .read()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            unloaded
+                .get(model_id)
+                .cloned()
+                .ok_or_else(|| MistralRsError::ModelNotFound(model_id.to_string()))?
+        };
+
+        // Attempt to reload
+        let result = self.do_reload_model(model_id, unloaded_state).await;
+
+        // Remove from reloading set
+        {
+            let mut reloading = self
+                .reloading_models
+                .write()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            reloading.remove(model_id);
+        }
+
+        result
+    }
+
+    /// Internal method to perform the actual model reload
+    async fn do_reload_model(
+        &self,
+        model_id: &str,
+        unloaded_state: UnloadedModelState,
+    ) -> Result<(), MistralRsError> {
+        use crate::model_loader::LoaderBuilder;
+
+        info!("Reloading model: {}", model_id);
+
+        let loader_config = &unloaded_state.loader_config;
+
+        // Build the loader from the stored config
+        let loader = LoaderBuilder::new(loader_config.model_selected.clone())
+            .with_chat_template(loader_config.chat_template.clone())
+            .with_jinja_explicit(loader_config.jinja_explicit.clone())
+            .build()
+            .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to build loader: {e}")))?;
+
+        // Load the model
+        let pipeline = loader
+            .load_model_from_hf(
+                None,
+                loader_config.token_source.clone(),
+                &loader_config.dtype,
+                &loader_config.device,
+                loader_config.silent,
+                loader_config.device_map_setting.clone(),
+                loader_config.isq,
+                loader_config.paged_attn_config.clone(),
+            )
+            .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to load model: {e}")))?;
+
+        // Create the reboot state
+        let reboot_state = RebootState {
+            pipeline: pipeline.clone(),
+            method: unloaded_state.scheduler_config.clone(),
+            no_kv_cache: unloaded_state.engine_config.no_kv_cache,
+            no_prefix_cache: unloaded_state.engine_config.no_prefix_cache,
+            prefix_cache_n: unloaded_state.engine_config.prefix_cache_n,
+            disable_eos_stop: unloaded_state.engine_config.disable_eos_stop,
+            throughput_logging_enabled: unloaded_state.engine_config.throughput_logging_enabled,
+            search_embedding_model: unloaded_state.engine_config.search_embedding_model,
+            search_callback: unloaded_state.engine_config.search_callback.clone(),
+            tool_callbacks: unloaded_state.engine_config.tool_callbacks.clone(),
+            tool_callbacks_with_tools: unloaded_state.engine_config.tool_callbacks_with_tools.clone(),
+            mcp_client_config: unloaded_state.mcp_client_config.clone(),
+            loader_config: Some(unloaded_state.loader_config.clone()),
+        };
+
+        // Create the engine instance
+        let engine_instance = Self::create_engine_instance(
+            pipeline,
+            unloaded_state.scheduler_config,
+            unloaded_state.engine_config,
+            reboot_state,
+        )
+        .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to create engine: {e}")))?;
+
+        // Add to engines map
+        {
+            let mut engines = self
+                .engines
+                .write()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            engines.insert(model_id.to_string(), engine_instance);
+        }
+
+        // Remove from unloaded map
+        {
+            let mut unloaded = self
+                .unloaded_models
+                .write()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            unloaded.remove(model_id);
+        }
+
+        info!("Model {} reloaded successfully", model_id);
+        Ok(())
+    }
+
+    /// Synchronous version of reload_model for use in non-async contexts
+    pub fn reload_model_blocking(&self, model_id: &str) -> Result<(), MistralRsError> {
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to create runtime: {e}")))?;
+        rt.block_on(self.reload_model(model_id))
+    }
+
+    /// List all unloaded model IDs
+    pub fn list_unloaded_models(&self) -> Result<Vec<String>, String> {
+        let unloaded = self
+            .unloaded_models
+            .read()
+            .map_err(|_| "Failed to acquire read lock on unloaded_models")?;
+        Ok(unloaded.keys().cloned().collect())
+    }
+
+    /// Check if a model is currently loaded (as opposed to unloaded)
+    pub fn is_model_loaded(&self, model_id: &str) -> Result<bool, String> {
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| "Failed to acquire read lock on engines")?;
+        Ok(engines.contains_key(model_id))
+    }
+
+    /// Get the status of a model: "loaded", "unloaded", "reloading", or None if not found
+    pub fn get_model_status(&self, model_id: &str) -> Result<Option<&'static str>, String> {
+        // Check if reloading
+        {
+            let reloading = self
+                .reloading_models
+                .read()
+                .map_err(|_| "Failed to acquire read lock on reloading_models")?;
+            if reloading.contains(model_id) {
+                return Ok(Some("reloading"));
+            }
+        }
+
+        // Check if loaded
+        {
+            let engines = self
+                .engines
+                .read()
+                .map_err(|_| "Failed to acquire read lock on engines")?;
+            if engines.contains_key(model_id) {
+                return Ok(Some("loaded"));
+            }
+        }
+
+        // Check if unloaded
+        {
+            let unloaded = self
+                .unloaded_models
+                .read()
+                .map_err(|_| "Failed to acquire read lock on unloaded_models")?;
+            if unloaded.contains_key(model_id) {
+                return Ok(Some("unloaded"));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// List all models with their status (loaded, unloaded, reloading)
+    pub fn list_models_with_status(&self) -> Result<Vec<(String, &'static str)>, String> {
+        let mut result = Vec::new();
+
+        // Get reloading models
+        let reloading = self
+            .reloading_models
+            .read()
+            .map_err(|_| "Failed to acquire read lock on reloading_models")?;
+        for model_id in reloading.iter() {
+            result.push((model_id.clone(), "reloading"));
+        }
+        drop(reloading);
+
+        // Get loaded models
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| "Failed to acquire read lock on engines")?;
+        for model_id in engines.keys() {
+            result.push((model_id.clone(), "loaded"));
+        }
+        drop(engines);
+
+        // Get unloaded models
+        let unloaded = self
+            .unloaded_models
+            .read()
+            .map_err(|_| "Failed to acquire read lock on unloaded_models")?;
+        for model_id in unloaded.keys() {
+            // Skip if already in reloading
+            if !result.iter().any(|(id, _)| id == model_id) {
+                result.push((model_id.clone(), "unloaded"));
+            }
+        }
+
+        Ok(result)
     }
 }

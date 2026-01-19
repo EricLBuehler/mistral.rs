@@ -2141,6 +2141,50 @@ impl Runner {
             }
         })
     }
+
+    /// Unload a model from memory while preserving its configuration for later reload.
+    /// The model can be reloaded automatically when a request is sent to it, or manually
+    /// using `reload_model()`.
+    fn unload_model(&self, model_id: String) -> PyApiResult<()> {
+        self.runner
+            .unload_model(&model_id)
+            .map_err(PyApiErr::from)
+    }
+
+    /// Manually reload a previously unloaded model.
+    fn reload_model(&self, model_id: String) -> PyApiResult<()> {
+        self.runner
+            .reload_model_blocking(&model_id)
+            .map_err(PyApiErr::from)
+    }
+
+    /// List all unloaded model IDs.
+    fn list_unloaded_models(&self) -> PyApiResult<Vec<String>> {
+        self.runner.list_unloaded_models().map_err(PyApiErr::from)
+    }
+
+    /// Check if a model is currently loaded (as opposed to unloaded).
+    fn is_model_loaded(&self, model_id: String) -> PyApiResult<bool> {
+        self.runner
+            .is_model_loaded(&model_id)
+            .map_err(PyApiErr::from)
+    }
+
+    /// Get the status of a model: "loaded", "unloaded", "reloading", or None if not found.
+    fn get_model_status(&self, model_id: String) -> PyApiResult<Option<String>> {
+        self.runner
+            .get_model_status(&model_id)
+            .map(|s| s.map(|s| s.to_string()))
+            .map_err(PyApiErr::from)
+    }
+
+    /// List all models with their status (loaded, unloaded, reloading).
+    fn list_models_with_status(&self) -> PyApiResult<Vec<(String, String)>> {
+        self.runner
+            .list_models_with_status()
+            .map(|v| v.into_iter().map(|(id, s)| (id, s.to_string())).collect())
+            .map_err(PyApiErr::from)
+    }
 }
 
 #[pyclass]
