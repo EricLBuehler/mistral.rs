@@ -1,7 +1,7 @@
 //! ## General mistral.rs server route handlers.
 
 use anyhow::Result;
-use axum::extract::{Json, Path, State};
+use axum::extract::{Json, State};
 use mistralrs_core::{parse_isq_value, MistralRs, Request};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -102,6 +102,13 @@ pub async fn re_isq(
     Ok(repr)
 }
 
+/// Request for model operations (unload, reload, status)
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct ModelOperationRequest {
+    #[schema(example = "my-model")]
+    pub model_id: String,
+}
+
 /// Response for model status operations
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ModelStatusResponse {
@@ -116,10 +123,8 @@ pub struct ModelStatusResponse {
 #[utoipa::path(
   post,
   tag = "Mistral.rs",
-  path = "/v1/models/{model_id}/unload",
-  params(
-    ("model_id" = String, Path, description = "The model ID to unload")
-  ),
+  path = "/v1/models/unload",
+  request_body = ModelOperationRequest,
   responses(
     (status = 200, description = "Model unloaded successfully", body = ModelStatusResponse),
     (status = 400, description = "Failed to unload model", body = ModelStatusResponse)
@@ -127,8 +132,9 @@ pub struct ModelStatusResponse {
 )]
 pub async fn unload_model(
     State(state): ExtractedMistralRsState,
-    Path(model_id): Path<String>,
+    Json(request): Json<ModelOperationRequest>,
 ) -> Json<ModelStatusResponse> {
+    let model_id = request.model_id;
     match state.unload_model(&model_id) {
         Ok(()) => Json(ModelStatusResponse {
             model_id: model_id.clone(),
@@ -146,10 +152,8 @@ pub async fn unload_model(
 #[utoipa::path(
   post,
   tag = "Mistral.rs",
-  path = "/v1/models/{model_id}/reload",
-  params(
-    ("model_id" = String, Path, description = "The model ID to reload")
-  ),
+  path = "/v1/models/reload",
+  request_body = ModelOperationRequest,
   responses(
     (status = 200, description = "Model reloaded successfully", body = ModelStatusResponse),
     (status = 400, description = "Failed to reload model", body = ModelStatusResponse)
@@ -157,8 +161,9 @@ pub async fn unload_model(
 )]
 pub async fn reload_model(
     State(state): ExtractedMistralRsState,
-    Path(model_id): Path<String>,
+    Json(request): Json<ModelOperationRequest>,
 ) -> Json<ModelStatusResponse> {
+    let model_id = request.model_id;
     match state.reload_model(&model_id).await {
         Ok(()) => Json(ModelStatusResponse {
             model_id: model_id.clone(),
@@ -174,12 +179,10 @@ pub async fn reload_model(
 }
 
 #[utoipa::path(
-  get,
+  post,
   tag = "Mistral.rs",
-  path = "/v1/models/{model_id}/status",
-  params(
-    ("model_id" = String, Path, description = "The model ID to check status")
-  ),
+  path = "/v1/models/status",
+  request_body = ModelOperationRequest,
   responses(
     (status = 200, description = "Model status", body = ModelStatusResponse),
     (status = 404, description = "Model not found", body = ModelStatusResponse)
@@ -187,8 +190,9 @@ pub async fn reload_model(
 )]
 pub async fn get_model_status(
     State(state): ExtractedMistralRsState,
-    Path(model_id): Path<String>,
+    Json(request): Json<ModelOperationRequest>,
 ) -> Json<ModelStatusResponse> {
+    let model_id = request.model_id;
     match state.get_model_status(&model_id) {
         Ok(Some(status)) => Json(ModelStatusResponse {
             model_id: model_id.clone(),
