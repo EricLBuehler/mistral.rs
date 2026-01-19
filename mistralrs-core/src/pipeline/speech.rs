@@ -9,7 +9,10 @@ use crate::device_map::DeviceMapper;
 use crate::pipeline::{ChatTemplate, EmbeddingModulePaths, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::speech_models::{DiaConfig, DiaPipeline, SpeechGenerationOutput, SpeechLoaderType};
+use crate::speech_models::{
+    DiaConfig, DiaPipeline, SpeechLoaderType, VibeVoiceConfig, VibeVoiceGenerationConfig,
+    VibeVoicePipeline,
+};
 use crate::utils::progress::ProgressScopeGuard;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
@@ -139,9 +142,16 @@ impl InputsProcessor for SpeechInputsProcessor {
     }
 }
 
+/// Enum to hold different speech model types
+#[allow(clippy::large_enum_variant)]
+pub enum SpeechModel {
+    Dia(DiaPipeline),
+    VibeVoice(VibeVoicePipeline),
+}
+
 pub struct SpeechPipeline {
     model_id: String,
-    model: DiaPipeline,
+    model: SpeechModel,
     metadata: Arc<GeneralMetadata>,
     dummy_cache: EitherCache,
     cfg: SpeechGenerationConfig,
@@ -192,31 +202,34 @@ impl Loader for SpeechLoader {
                 config
             };
 
-            // DAC model
-            {
-                let api = ApiBuilder::new()
-                    .with_progress(!silent)
-                    .with_token(get_token(&token_source)?)
-                    .build()?;
-                let revision = revision.unwrap_or("main".to_string());
+            // DAC model (only needed for Dia, not VibeVoice)
+            match self.arch {
+                SpeechLoaderType::Dia => {
+                    let api = ApiBuilder::new()
+                        .with_progress(!silent)
+                        .with_token(get_token(&token_source)?)
+                        .build()?;
+                    let revision = revision.unwrap_or("main".to_string());
 
-                // Apply default here
-                let dac_model = self
-                    .dac_model_id
-                    .clone()
-                    .unwrap_or_else(|| match self.arch {
-                        SpeechLoaderType::Dia => "EricB/dac_44khz".to_string(),
-                    });
+                    // Apply default here
+                    let dac_model = self
+                        .dac_model_id
+                        .clone()
+                        .unwrap_or_else(|| "EricB/dac_44khz".to_string());
 
-                let api = api.repo(Repo::with_revision(
-                    dac_model.clone(),
-                    RepoType::Model,
-                    revision.clone(),
-                ));
-                let model_id = std::path::Path::new(&dac_model);
+                    let api = api.repo(Repo::with_revision(
+                        dac_model.clone(),
+                        RepoType::Model,
+                        revision.clone(),
+                    ));
+                    let model_id = std::path::Path::new(&dac_model);
 
-                let weight = api_get_file!(api, "model.safetensors", &model_id);
-                weights.push(weight);
+                    let weight = api_get_file!(api, "model.safetensors", &model_id);
+                    weights.push(weight);
+                }
+                SpeechLoaderType::VibeVoice => {
+                    // VibeVoice includes its acoustic decoder in the main model
+                }
             }
 
             Ok(Box::new(SpeechModelPaths { weights, config }))
@@ -256,8 +269,6 @@ impl Loader for SpeechLoader {
 
         mistralrs_quant::set_immediate_isq(in_situ_quant, vec![Regex::new(".*")?]);
 
-        let cfg: DiaConfig = serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
-
         #[cfg(feature = "cuda")]
         if let Device::Cuda(dev) = &device {
             unsafe { dev.disable_event_tracking() };
@@ -266,41 +277,87 @@ impl Loader for SpeechLoader {
         let mapper = DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None)?;
         let dtype = mapper.get_min_dtype(dtype)?;
 
-        // Last weight is the dac.
-        let model_weights = paths.weights[..paths.weights.len() - 1].to_vec();
-        let vb = from_mmaped_safetensors(
-            model_weights,
-            Vec::new(),
-            Some(dtype),
-            device,
-            vec![None],
-            silent,
-            None,
-            |_| true,
-            Arc::new(|_| DeviceForLoadTensor::Base),
-        )?;
+        let (model, _device_ref) = match self.arch {
+            SpeechLoaderType::Dia => {
+                // Last weight is the dac.
+                let model_weights = paths.weights[..paths.weights.len() - 1].to_vec();
+                let vb = from_mmaped_safetensors(
+                    model_weights,
+                    Vec::new(),
+                    Some(dtype),
+                    device,
+                    vec![None],
+                    silent,
+                    None,
+                    |_| true,
+                    Arc::new(|_| DeviceForLoadTensor::Base),
+                )?;
 
-        let dac_vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[paths.weights.last().unwrap()], dtype, device)?
+                let dac_vb = unsafe {
+                    VarBuilder::from_mmaped_safetensors(
+                        &[paths.weights.last().unwrap()],
+                        dtype,
+                        device,
+                    )?
+                };
+
+                let cfg: DiaConfig =
+                    serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
+                let model = DiaPipeline::new(&cfg, vb, dac_vb)?;
+                let device_ref = model.device().clone();
+                (SpeechModel::Dia(model), device_ref)
+            }
+            SpeechLoaderType::VibeVoice => {
+                info!("Loading VibeVoice model...");
+
+                // VibeVoice has the acoustic decoder built into the main model
+                let vb = from_mmaped_safetensors(
+                    paths.weights.clone(),
+                    Vec::new(),
+                    Some(dtype),
+                    device,
+                    vec![None],
+                    silent,
+                    None,
+                    |_| true,
+                    Arc::new(|_| DeviceForLoadTensor::Base),
+                )?;
+
+                let cfg: VibeVoiceConfig =
+                    serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
+
+                // Load tokenizer from HuggingFace (Qwen2.5 tokenizer)
+                let api = ApiBuilder::new()
+                    .with_progress(!silent)
+                    .with_token(get_token(&TokenSource::CacheToken)?)
+                    .build()?;
+                let tokenizer_repo = api.repo(Repo::with_revision(
+                    "Qwen/Qwen2.5-0.5B".to_string(),
+                    RepoType::Model,
+                    "main".to_string(),
+                ));
+                let tokenizer_path = tokenizer_repo.get("tokenizer.json")?;
+                let tokenizer = Tokenizer::from_file(&tokenizer_path)
+                    .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
+
+                let model = VibeVoicePipeline::new(&cfg, Arc::new(tokenizer), vb)?;
+                let device_ref = model.device().clone();
+                (SpeechModel::VibeVoice(model), device_ref)
+            }
         };
-
-        // Only Dia is supported for now.
-        assert_eq!(self.arch, SpeechLoaderType::Dia);
-
-        let model = DiaPipeline::new(&cfg, vb, dac_vb)?;
 
         Ok(Arc::new(Mutex::new(SpeechPipeline {
             model_id: self.model_id.clone(),
             model,
             metadata: Arc::new(GeneralMetadata {
-                max_seq_len: 1024,
+                max_seq_len: 8192,
                 llg_factory: None,
                 is_xlora: false,
                 no_prefix_cache: false,
-                num_hidden_layers: 1, // FIXME(EricLBuehler): we know this is only for caching, so its OK.
+                num_hidden_layers: 1,
                 eos_tok: vec![],
                 kind: ModelKind::Normal,
-                no_kv_cache: true, // NOTE(EricLBuehler): no cache for these.
+                no_kv_cache: true,
                 activation_dtype: dtype,
                 sliding_window: None,
                 cache_config: None,
@@ -363,7 +420,10 @@ impl CacheManagerMixin for SpeechPipeline {
 
 impl MetadataMixin for SpeechPipeline {
     fn device(&self) -> Device {
-        self.model.device().clone()
+        match &self.model {
+            SpeechModel::Dia(m) => m.device().clone(),
+            SpeechModel::VibeVoice(m) => m.device().clone(),
+        }
     }
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
@@ -393,15 +453,35 @@ impl Pipeline for SpeechPipeline {
         let mut pcms = Vec::new();
         let mut rates = Vec::new();
         let mut channels_all = Vec::new();
+
         for prompt in prompts {
-            let SpeechGenerationOutput {
-                pcm,
-                rate,
-                channels,
-            } = self.model.generate(&prompt, &self.cfg)?;
-            pcms.push(pcm);
-            rates.push(rate);
-            channels_all.push(channels);
+            let output = match (&mut self.model, &self.cfg) {
+                (SpeechModel::Dia(model), SpeechGenerationConfig::Dia { .. }) => {
+                    model.generate(&prompt, &self.cfg)?
+                }
+                (
+                    SpeechModel::VibeVoice(model),
+                    SpeechGenerationConfig::VibeVoice {
+                        max_tokens,
+                        cfg_scale,
+                        temperature,
+                    },
+                ) => {
+                    let gen_cfg = VibeVoiceGenerationConfig {
+                        max_tokens: *max_tokens,
+                        cfg_scale: *cfg_scale,
+                        temperature: *temperature,
+                    };
+                    model.generate(&prompt, &gen_cfg)?
+                }
+                _ => {
+                    candle_core::bail!("Mismatched model and config types");
+                }
+            };
+
+            pcms.push(output.pcm);
+            rates.push(output.rate);
+            channels_all.push(output.channels);
         }
 
         Ok(ForwardInputsResult::Speech {
