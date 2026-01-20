@@ -309,8 +309,6 @@ pub enum MistralRsError {
     ModelReloading(String),
     /// Failed to reload the model
     ReloadFailed(String),
-    /// Cannot unload the last model
-    CannotUnloadLastModel,
     /// Model does not have loader config for reloading
     NoLoaderConfig(String),
     /// Model is already loaded
@@ -351,6 +349,7 @@ pub struct MistralRsBuilder {
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
     mcp_client_config: Option<McpClientConfig>,
+    loader_config: Option<ModelLoaderConfig>,
 }
 
 impl MistralRsBuilder {
@@ -377,7 +376,15 @@ impl MistralRsBuilder {
             tool_callbacks: HashMap::new(),
             tool_callbacks_with_tools: HashMap::new(),
             mcp_client_config: None,
+            loader_config: None,
         }
+    }
+
+    /// Set the loader config for enabling model unload/reload support.
+    /// Without this, models cannot be unloaded and reloaded.
+    pub fn with_loader_config(mut self, loader_config: ModelLoaderConfig) -> Self {
+        self.loader_config = Some(loader_config);
+        self
     }
     pub fn with_log(mut self, log: String) -> Self {
         self.log = Some(log);
@@ -570,6 +577,7 @@ impl MistralRs {
             tool_callbacks,
             mut tool_callbacks_with_tools,
             mcp_client_config,
+            loader_config,
         } = config;
 
         mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
@@ -646,7 +654,7 @@ impl MistralRs {
             tool_callbacks: tool_callbacks.clone(),
             tool_callbacks_with_tools: tool_callbacks_with_tools.clone(),
             mcp_client_config: mcp_client_config.clone(),
-            loader_config: None,
+            loader_config,
         };
 
         // Create the engine configuration
@@ -1249,19 +1257,6 @@ impl MistralRs {
             if unloaded.contains_key(model_id) {
                 return Err(MistralRsError::ModelAlreadyUnloaded(model_id.to_string()));
             }
-        }
-
-        // Check if it's the last model
-        let engines_count = {
-            let engines = self
-                .engines
-                .read()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
-            engines.len()
-        };
-
-        if engines_count <= 1 {
-            return Err(MistralRsError::CannotUnloadLastModel);
         }
 
         // Get the engine instance and create UnloadedModelState

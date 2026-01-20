@@ -120,8 +120,6 @@ pub enum ModelStatus {
     Unloaded,
     Reloading,
     NotFound,
-    /// Cannot unload the last remaining model
-    CannotUnloadLast,
     /// Model doesn't have loader config for reload
     NoLoaderConfig,
     /// Internal error (e.g., lock poisoned)
@@ -164,7 +162,6 @@ pub async fn unload_model(
             let (status, error) = match &e {
                 MistralRsError::ModelNotFound(_) => (ModelStatus::NotFound, None),
                 MistralRsError::ModelAlreadyUnloaded(_) => (ModelStatus::Unloaded, None),
-                MistralRsError::CannotUnloadLastModel => (ModelStatus::CannotUnloadLast, None),
                 MistralRsError::NoLoaderConfig(_) => (ModelStatus::NoLoaderConfig, None),
                 _ => (ModelStatus::InternalError, Some(e.to_string())),
             };

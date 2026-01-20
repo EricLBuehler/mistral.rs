@@ -8,8 +8,8 @@ use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
     parse_isq_value, AutoDeviceMapParams, DefaultSchedulerMethod, DeviceLayerMapMetadata,
     DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder, McpClientConfig, MemoryGpuConfig,
-    MistralRsBuilder, ModelSelected, PagedAttentionConfig, PagedCacheType, SchedulerConfig,
-    SearchCallback, SearchEmbeddingModel, TokenSource,
+    MistralRsBuilder, ModelLoaderConfig, ModelSelected, PagedAttentionConfig, PagedCacheType,
+    SchedulerConfig, SearchCallback, SearchEmbeddingModel, TokenSource,
 };
 use tracing::{info, warn};
 
@@ -619,6 +619,13 @@ impl MistralRsForServerBuilder {
             max_seq_len,
         )?;
 
+        // Clone values needed for loader config before they're moved
+        let model_for_config = model.clone();
+        let token_source_for_config = self.token_source.clone();
+        let mapper_for_config = mapper.clone();
+        let chat_template_for_config = self.chat_template.clone();
+        let jinja_explicit_for_config = self.jinja_explicit.clone();
+
         // Configure this last to prevent arg moves
         let loader: Box<dyn Loader> = LoaderBuilder::new(model)
             .with_no_kv_cache(self.no_kv_cache)
@@ -650,6 +657,21 @@ impl MistralRsForServerBuilder {
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
 
+        // Create loader config for unload/reload support
+        let loader_config = ModelLoaderConfig {
+            model_selected: model_for_config,
+            token_source: token_source_for_config,
+            hf_revision: None,
+            dtype,
+            device: device.clone(),
+            device_map_setting: mapper_for_config,
+            isq,
+            paged_attn_config: cache_config,
+            silent: false,
+            chat_template: chat_template_for_config,
+            jinja_explicit: jinja_explicit_for_config,
+        };
+
         let mut builder = MistralRsBuilder::new(
             pipeline,
             scheduler_config,
@@ -658,7 +680,8 @@ impl MistralRsForServerBuilder {
         )
         .with_opt_log(self.log)
         .with_no_kv_cache(self.no_kv_cache)
-        .with_prefix_cache_n(self.prefix_cache_n);
+        .with_prefix_cache_n(self.prefix_cache_n)
+        .with_loader_config(loader_config);
 
         // Add MCP client configuration if provided
         if let Some(mcp_config) = self.mcp_client_config {
