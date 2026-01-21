@@ -28,6 +28,7 @@
 - [Gemma 3n](GEMMA3N.md)
 - [GLM4](GLM4.md)
 - [GLM-4.7-Flash (MoE)](GLM4_MOE_LITE.md)
+- [GLM-4.7 (MoE)](GLM4_MOE.md)
 - [SmolLM3](SMOLLM3.md)
 - [GPT-OSS](GPT_OSS.md)
 - [Dia (Speech)](DIA.md)

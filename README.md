@@ -41,6 +41,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - Qwen 3
 - GLM 4
 - GLM-4.7-Flash
+- GLM-4.7 (MoE)
 - Gemma 2
 - Qwen 2
 - Starcoder 2
@@ -714,6 +715,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `gemma2`
 - `glm4`
 - `glm4moelite`
+- `glm4moe`
 - `starcoder2`
 - `deepseekv2`
 - `deepseekv3`
@@ -806,6 +808,7 @@ Please submit more benchmarks via raising an issue!
 |Gemma 2| | |✅|
 |GLM4| | |✅|
 |GLM-4.7-Flash (MoE)| | |✅|
+|GLM-4.7 (MoE)| | |✅|
 |Starcoder 2| |✅|✅|
 |LLaVa Next| | |✅|
 |LLaVa| | |✅|
@@ -859,6 +862,7 @@ Please submit more benchmarks via raising an issue!
 |Gemma 2|✅| | |
 |GLM4|✅| | |
 |GLM-4.7-Flash (MoE)| | | |
+|GLM-4.7 (MoE)| | | |
 |Starcoder 2|✅| | |
 |LLaVa Next| | | |
 |LLaVa| | | |
@@ -897,6 +901,7 @@ Please submit more benchmarks via raising an issue!
 |Idefics 2| |
 |Gemma 2|✅|
 |GLM-4.7-Flash (MoE)| |
+|GLM-4.7 (MoE)| |
 |Starcoder 2|✅|
 |LLaVa Next|✅|
 |LLaVa|✅|
