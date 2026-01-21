@@ -2146,9 +2146,7 @@ impl Runner {
     /// The model can be reloaded automatically when a request is sent to it, or manually
     /// using `reload_model()`.
     fn unload_model(&self, model_id: String) -> PyApiResult<()> {
-        self.runner
-            .unload_model(&model_id)
-            .map_err(PyApiErr::from)
+        self.runner.unload_model(&model_id).map_err(PyApiErr::from)
     }
 
     /// Manually reload a previously unloaded model.

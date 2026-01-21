@@ -1410,7 +1410,7 @@ impl MistralRs {
                 loader_config.silent,
                 loader_config.device_map_setting.clone(),
                 loader_config.isq,
-                loader_config.paged_attn_config.clone(),
+                loader_config.paged_attn_config,
             )
             .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to load model: {e}")))?;
 
@@ -1426,7 +1426,10 @@ impl MistralRs {
             search_embedding_model: unloaded_state.engine_config.search_embedding_model,
             search_callback: unloaded_state.engine_config.search_callback.clone(),
             tool_callbacks: unloaded_state.engine_config.tool_callbacks.clone(),
-            tool_callbacks_with_tools: unloaded_state.engine_config.tool_callbacks_with_tools.clone(),
+            tool_callbacks_with_tools: unloaded_state
+                .engine_config
+                .tool_callbacks_with_tools
+                .clone(),
             mcp_client_config: unloaded_state.mcp_client_config.clone(),
             loader_config: Some(unloaded_state.loader_config.clone()),
         };

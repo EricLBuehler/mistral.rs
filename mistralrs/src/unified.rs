@@ -78,9 +78,7 @@ pub enum AdapterConfig {
     #[default]
     None,
     /// LoRA adapter
-    Lora {
-        adapter_model_ids: Vec<String>,
-    },
+    Lora { adapter_model_ids: Vec<String> },
     /// XLoRA adapter
     XLora {
         xlora_model_id: String,
@@ -625,8 +623,7 @@ impl ModelBuilder {
                     AdapterConfig::Lora { adapter_model_ids } => {
                         // GGUF LoRA expects a single model ID
                         if let Some(first_id) = adapter_model_ids.first() {
-                            let order =
-                                serde_json::from_str("{}")?; // Placeholder - would need actual order
+                            let order = serde_json::from_str("{}")?; // Placeholder - would need actual order
                             builder = builder.with_lora(first_id.clone(), order);
                         }
                     }
@@ -676,7 +673,7 @@ impl ModelBuilder {
             !self.with_logging,
             device_mapping,
             self.isq,
-            self.paged_attn_cfg.clone(),
+            self.paged_attn_cfg,
         )?;
 
         // Build the scheduler config
@@ -689,9 +686,9 @@ impl ModelBuilder {
             } else {
                 SchedulerConfig::DefaultScheduler {
                     method: DefaultSchedulerMethod::Fixed(
-                        self.max_num_seqs.try_into().unwrap_or(
-                            std::num::NonZeroUsize::new(16).expect("16 > 0"),
-                        ),
+                        self.max_num_seqs
+                            .try_into()
+                            .unwrap_or(std::num::NonZeroUsize::new(16).expect("16 > 0")),
                     ),
                 }
             }
@@ -706,7 +703,8 @@ impl ModelBuilder {
         };
 
         // Build MistralRs instance
-        let mut builder = MistralRsBuilder::new(pipeline, scheduler_config, self.throughput_logging, None);
+        let mut builder =
+            MistralRsBuilder::new(pipeline, scheduler_config, self.throughput_logging, None);
 
         if self.no_kv_cache {
             builder = builder.with_no_kv_cache(true);
