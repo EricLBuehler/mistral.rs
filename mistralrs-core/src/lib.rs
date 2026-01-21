@@ -166,6 +166,9 @@ impl Default for EngineConfig {
 pub struct AddModelConfig {
     pub engine_config: EngineConfig,
     pub mcp_client_config: Option<McpClientConfig>,
+    /// Optional loader config for enabling model unload/reload support.
+    /// Without this, models cannot be unloaded and reloaded.
+    pub loader_config: Option<ModelLoaderConfig>,
 }
 
 impl AddModelConfig {
@@ -173,11 +176,19 @@ impl AddModelConfig {
         Self {
             engine_config,
             mcp_client_config: None,
+            loader_config: None,
         }
     }
 
     pub fn with_mcp_config(mut self, mcp_config: McpClientConfig) -> Self {
         self.mcp_client_config = Some(mcp_config);
+        self
+    }
+
+    /// Set the loader config for enabling model unload/reload support.
+    /// Without this, models cannot be unloaded and reloaded.
+    pub fn with_loader_config(mut self, loader_config: ModelLoaderConfig) -> Self {
+        self.loader_config = Some(loader_config);
         self
     }
 }
@@ -1012,7 +1023,7 @@ impl MistralRs {
             tool_callbacks: config.engine_config.tool_callbacks.clone(),
             tool_callbacks_with_tools: config.engine_config.tool_callbacks_with_tools.clone(),
             mcp_client_config: config.mcp_client_config.clone(),
-            loader_config: None,
+            loader_config: config.loader_config.clone(),
         };
 
         let engine_instance =

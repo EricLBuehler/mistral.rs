@@ -81,7 +81,7 @@ impl From<crate::EmbeddingModelBuilder> for AnyModelBuilder {
 
 /// Builder for creating a Model with multiple models.
 pub struct MultiModelBuilder {
-    builders: Vec<(String, AnyModelBuilder)>,
+    builders: Vec<AnyModelBuilder>,
     default_model_id: Option<String>,
 }
 
@@ -100,20 +100,13 @@ impl MultiModelBuilder {
         }
     }
 
-    /// Add a model with optional custom ID.
-    /// If `model_id` is `None`, the builder's default model ID will be used.
-    pub fn add_model<B: Into<AnyModelBuilder>>(
-        mut self,
-        builder: B,
-        model_id: Option<String>,
-    ) -> Self {
-        let builder = builder.into();
-        let id = model_id.unwrap_or_else(|| builder.model_id());
-        self.builders.push((id, builder));
+    /// Add a model. The model ID will be the pipeline's model_id (e.g., "google/gemma-3-4b-it").
+    pub fn add_model<B: Into<AnyModelBuilder>>(mut self, builder: B) -> Self {
+        self.builders.push(builder.into());
         self
     }
 
-    /// Set the default model.
+    /// Set the default model by its model ID (e.g., "google/gemma-3-4b-it").
     pub fn with_default_model(mut self, model_id: impl ToString) -> Self {
         self.default_model_id = Some(model_id.to_string());
         self
@@ -127,19 +120,17 @@ impl MultiModelBuilder {
 
         // Build the first model to create the initial MistralRs instance
         let mut builders_iter = self.builders.into_iter();
-        let (first_model_id, first_builder) = builders_iter.next().unwrap();
+        let first_builder = builders_iter.next().unwrap();
 
         let (pipeline, scheduler_config, add_model_config) = first_builder.build_pipeline().await?;
 
         // Create the MistralRsBuilder for the first model
+        // The model ID will be taken from the pipeline's name
         let mut runner_builder = mistralrs_core::MistralRsBuilder::new(
             pipeline,
             scheduler_config,
             add_model_config.engine_config.throughput_logging_enabled,
-            add_model_config
-                .engine_config
-                .search_embedding_model
-                .clone(),
+            add_model_config.engine_config.search_embedding_model,
         );
 
         if let Some(cb) = add_model_config.engine_config.search_callback.clone() {
@@ -159,8 +150,12 @@ impl MultiModelBuilder {
             );
         }
 
-        if let Some(mcp_config) = add_model_config.mcp_client_config {
+        if let Some(mcp_config) = add_model_config.mcp_client_config.clone() {
             runner_builder = runner_builder.with_mcp_client(mcp_config);
+        }
+
+        if let Some(loader_config) = add_model_config.loader_config.clone() {
+            runner_builder = runner_builder.with_loader_config(loader_config);
         }
 
         runner_builder = runner_builder
@@ -170,8 +165,9 @@ impl MultiModelBuilder {
 
         let mistralrs = runner_builder.build().await;
 
-        // Add remaining models
-        for (model_id, builder) in builders_iter {
+        // Add remaining models using their pipeline names as IDs
+        for builder in builders_iter {
+            let model_id = builder.model_id();
             let (pipeline, scheduler_config, add_model_config) = builder.build_pipeline().await?;
             mistralrs
                 .add_model(model_id, pipeline, scheduler_config, add_model_config)
@@ -184,12 +180,8 @@ impl MultiModelBuilder {
             mistralrs
                 .set_default_model_id(&default_id)
                 .map_err(|e| anyhow::anyhow!(e))?;
-        } else {
-            // Set the first model as default if not already set
-            mistralrs
-                .set_default_model_id(&first_model_id)
-                .map_err(|e| anyhow::anyhow!(e))?;
         }
+        // Otherwise, the first model is already the default (set by MistralRs::new)
 
         Ok(Model::new(mistralrs))
     }
@@ -227,7 +219,7 @@ async fn build_text_pipeline(
         builder.no_kv_cache,
         builder.jinja_explicit.clone(),
     )
-    .build(builder.loader_type)?;
+    .build(builder.loader_type.clone())?;
 
     let pipeline = loader.load_model_from_hf(
         builder.hf_revision.clone(),
@@ -243,7 +235,7 @@ async fn build_text_pipeline(
             .clone()
             .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
         builder.isq,
-        builder.paged_attn_cfg.clone(),
+        builder.paged_attn_cfg,
     )?;
 
     let scheduler_config = match builder.paged_attn_cfg {
@@ -274,7 +266,7 @@ async fn build_text_pipeline(
 
     let engine_config = EngineConfig {
         throughput_logging_enabled: builder.throughput_logging,
-        search_embedding_model: builder.search_embedding_model.clone(),
+        search_embedding_model: builder.search_embedding_model,
         search_callback: builder.search_callback.clone(),
         tool_callbacks: builder.tool_callbacks.clone(),
         tool_callbacks_with_tools: builder
@@ -296,9 +288,59 @@ async fn build_text_pipeline(
         disable_eos_stop: false,
     };
 
+    // Create loader config for unload/reload support
+    let device = builder
+        .device
+        .clone()
+        .unwrap_or(best_device(builder.force_cpu).unwrap());
+    let device_map_setting = builder
+        .device_mapping
+        .clone()
+        .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()));
+
+    // Convert from_uqff Vec<PathBuf> to semicolon-separated string if present
+    let from_uqff_str = builder.from_uqff.as_ref().map(|paths| {
+        paths
+            .iter()
+            .map(|p| p.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(";")
+    });
+
+    let loader_config = ModelLoaderConfig {
+        model_selected: ModelSelected::Plain {
+            model_id: builder.model_id.clone(),
+            tokenizer_json: builder.tokenizer_json.clone(),
+            arch: builder.loader_type,
+            dtype: builder.dtype,
+            topology: None, // Topology struct doesn't store original path
+            organization: Some(builder.organization),
+            write_uqff: builder.write_uqff.clone(),
+            from_uqff: from_uqff_str,
+            imatrix: builder.imatrix.clone(),
+            calibration_file: builder.calibration_file.clone(),
+            max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
+            hf_cache_path: builder.hf_cache_path.clone(),
+            matformer_config_path: builder.matformer_config_path.clone(),
+            matformer_slice_name: builder.matformer_slice_name.clone(),
+        },
+        token_source: builder.token_source.clone(),
+        hf_revision: builder.hf_revision.clone(),
+        dtype: builder.dtype,
+        device,
+        device_map_setting,
+        isq: builder.isq,
+        paged_attn_config: builder.paged_attn_cfg,
+        silent: !builder.with_logging,
+        chat_template: builder.chat_template.clone(),
+        jinja_explicit: builder.jinja_explicit.clone(),
+    };
+
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: builder.mcp_client_config.clone(),
+        loader_config: Some(loader_config),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -333,7 +375,7 @@ async fn build_vision_pipeline(
         Some(builder.model_id.clone()),
         builder.jinja_explicit.clone(),
     )
-    .build(builder.loader_type);
+    .build(builder.loader_type.clone());
 
     let pipeline = loader.load_model_from_hf(
         builder.hf_revision.clone(),
@@ -349,7 +391,7 @@ async fn build_vision_pipeline(
             .clone()
             .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_vision())),
         builder.isq,
-        builder.paged_attn_cfg.clone(),
+        builder.paged_attn_cfg,
     )?;
 
     let scheduler_config = match builder.paged_attn_cfg {
@@ -380,7 +422,7 @@ async fn build_vision_pipeline(
 
     let engine_config = EngineConfig {
         throughput_logging_enabled: builder.throughput_logging,
-        search_embedding_model: builder.search_embedding_model.clone(),
+        search_embedding_model: builder.search_embedding_model,
         search_callback: builder.search_callback.clone(),
         tool_callbacks: builder.tool_callbacks.clone(),
         tool_callbacks_with_tools: builder
@@ -402,9 +444,61 @@ async fn build_vision_pipeline(
         disable_eos_stop: false,
     };
 
+    // Create loader config for unload/reload support
+    let device = builder
+        .device
+        .clone()
+        .unwrap_or(best_device(builder.force_cpu).unwrap());
+    let device_map_setting = builder
+        .device_mapping
+        .clone()
+        .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_vision()));
+
+    // Convert from_uqff Vec<PathBuf> to semicolon-separated string if present
+    let from_uqff_str = builder.from_uqff.as_ref().map(|paths| {
+        paths
+            .iter()
+            .map(|p| p.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(";")
+    });
+
+    let loader_config = ModelLoaderConfig {
+        model_selected: ModelSelected::VisionPlain {
+            model_id: builder.model_id.clone(),
+            tokenizer_json: builder.tokenizer_json.clone(),
+            arch: builder.loader_type,
+            dtype: builder.dtype,
+            topology: None, // Topology struct doesn't store original path
+            write_uqff: builder.write_uqff.clone(),
+            from_uqff: from_uqff_str,
+            max_edge: builder.max_edge,
+            calibration_file: builder.calibration_file.clone(),
+            imatrix: builder.imatrix.clone(),
+            max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
+            max_num_images: AutoDeviceMapParams::DEFAULT_MAX_NUM_IMAGES,
+            max_image_length: AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH,
+            hf_cache_path: builder.hf_cache_path.clone(),
+            matformer_config_path: builder.matformer_config_path.clone(),
+            matformer_slice_name: builder.matformer_slice_name.clone(),
+        },
+        token_source: builder.token_source.clone(),
+        hf_revision: builder.hf_revision.clone(),
+        dtype: builder.dtype,
+        device,
+        device_map_setting,
+        isq: builder.isq,
+        paged_attn_config: builder.paged_attn_cfg,
+        silent: !builder.with_logging,
+        chat_template: builder.chat_template.clone(),
+        jinja_explicit: builder.jinja_explicit.clone(),
+    };
+
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: None,
+        loader_config: Some(loader_config),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -449,7 +543,7 @@ async fn build_gguf_pipeline(
             .clone()
             .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
         None,
-        builder.paged_attn_cfg.clone(),
+        builder.paged_attn_cfg,
     )?;
 
     let scheduler_config = match builder.paged_attn_cfg {
@@ -475,7 +569,7 @@ async fn build_gguf_pipeline(
 
     let engine_config = EngineConfig {
         throughput_logging_enabled: builder.throughput_logging,
-        search_embedding_model: builder.search_embedding_model.clone(),
+        search_embedding_model: builder.search_embedding_model,
         search_callback: builder.search_callback.clone(),
         tool_callbacks: builder.tool_callbacks.clone(),
         tool_callbacks_with_tools: builder
@@ -497,9 +591,11 @@ async fn build_gguf_pipeline(
         disable_eos_stop: false,
     };
 
+    // GGUF models don't support unload/reload yet - need to implement ModelSelected::GGUF conversion
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: None,
+        loader_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -535,9 +631,11 @@ async fn build_diffusion_pipeline(
 
     let engine_config = EngineConfig::default();
 
+    // Diffusion models don't support unload/reload yet
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: None,
+        loader_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -556,8 +654,8 @@ async fn build_speech_pipeline(
     let loader = SpeechLoader {
         model_id: builder.model_id.clone(),
         dac_model_id: builder.dac_model_id.clone(),
-        arch: builder.loader_type.clone(),
-        cfg: builder.cfg.clone(),
+        arch: builder.loader_type,
+        cfg: builder.cfg,
     };
 
     let pipeline = loader.load_model_from_hf(
@@ -577,9 +675,11 @@ async fn build_speech_pipeline(
 
     let engine_config = EngineConfig::default();
 
+    // Speech models don't support unload/reload yet
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: None,
+        loader_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -635,9 +735,11 @@ async fn build_embedding_pipeline(
         ..Default::default()
     };
 
+    // Embedding models don't support unload/reload yet
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: None,
+        loader_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))

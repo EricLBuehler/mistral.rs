@@ -310,25 +310,26 @@ The `mistralrs` crate provides `MultiModelBuilder` for loading multiple models a
 
 ### Loading Multiple Models
 
+Model IDs are always the HuggingFace model path (e.g., `"google/gemma-3-4b-it"`). Custom model IDs are not supported.
+
 ```rust
 use mistralrs::{IsqType, MultiModelBuilder, TextModelBuilder, VisionModelBuilder, TextMessages, TextMessageRole};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Build a multi-model instance with a vision model and a text model
+    // Model IDs are the HuggingFace model paths
     let model = MultiModelBuilder::new()
         .add_model(
             VisionModelBuilder::new("google/gemma-3-4b-it")  // Vision model
                 .with_isq(IsqType::Q4K)
                 .with_logging(),
-            Some("gemma".to_string()),
         )
         .add_model(
             TextModelBuilder::new("Qwen/Qwen3-4B")  // Text model
                 .with_isq(IsqType::Q4K),
-            Some("qwen".to_string()),
         )
-        .with_default_model("gemma")
+        .with_default_model("google/gemma-3-4b-it")
         .build()
         .await?;
 
@@ -337,10 +338,10 @@ async fn main() -> anyhow::Result<()> {
         .add_message(TextMessageRole::User, "Hello!");
     let response = model.send_chat_request(messages).await?;
 
-    // Send request to specific model
+    // Send request to specific model using its HuggingFace path
     let messages = TextMessages::new()
         .add_message(TextMessageRole::User, "Hello from Qwen!");
-    let response = model.send_chat_request_with_model(messages, Some("qwen")).await?;
+    let response = model.send_chat_request_with_model(messages, Some("Qwen/Qwen3-4B")).await?;
 
     Ok(())
 }
@@ -349,25 +350,25 @@ async fn main() -> anyhow::Result<()> {
 ### Model Management Methods
 
 ```rust
-// List all models
+// List all models (returns HuggingFace model paths)
 let models = model.list_models()?;
 
 // Get/set default model
 let default = model.get_default_model_id()?;
-model.set_default_model_id("qwen")?;
+model.set_default_model_id("Qwen/Qwen3-4B")?;
 
 // List models with status
 let status = model.list_models_with_status()?;
 // Returns Vec<(String, ModelStatus)> where ModelStatus is Loaded, Unloaded, or Reloading
 
 // Check if a model is loaded
-let is_loaded = model.is_model_loaded("gemma")?;
+let is_loaded = model.is_model_loaded("google/gemma-3-4b-it")?;
 
 // Unload a model to free memory
-model.unload_model("gemma")?;
+model.unload_model("google/gemma-3-4b-it")?;
 
 // Reload when needed
-model.reload_model("gemma").await?;
+model.reload_model("google/gemma-3-4b-it").await?;
 ```
 
 ### Available `_with_model` Methods
@@ -484,13 +485,13 @@ The `MultiModel` struct has been removed. Use `Model` directly with `MultiModelB
 let multi = MultiModel::new(...);
 multi.send_chat_request_to_model(request, "model-id").await?;
 
-// New
+// New - model IDs are HuggingFace paths (e.g., "google/gemma-3-4b-it")
 let model = MultiModelBuilder::new()
-    .add_model(builder1, Some("model1".into()))
-    .add_model(builder2, Some("model2".into()))
+    .add_model(VisionModelBuilder::new("google/gemma-3-4b-it"))
+    .add_model(TextModelBuilder::new("Qwen/Qwen3-4B"))
     .build()
     .await?;
-model.send_chat_request_with_model(request, Some("model-id")).await?;
+model.send_chat_request_with_model(request, Some("Qwen/Qwen3-4B")).await?;
 ```
 
 ### From `MultiModelRunner` (Python)
@@ -502,7 +503,7 @@ The `MultiModelRunner` class has been removed. Use `Runner` directly:
 multi_runner = MultiModelRunner(runner)
 multi_runner.send_chat_completion_request_to_model(request, "model-id")
 
-# New
-runner = Runner(which=Which.Plain(...))
-runner.send_chat_completion_request(request, model_id="model-id")
+# New - model IDs are HuggingFace paths
+runner = Runner(which=Which.Plain(model_id="google/gemma-3-4b-it", ...))
+runner.send_chat_completion_request(request, model_id="google/gemma-3-4b-it")
 ```

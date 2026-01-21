@@ -255,7 +255,7 @@ impl GgufModelBuilder {
                 .clone()
                 .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
             None,
-            self.paged_attn_cfg.clone(),
+            self.paged_attn_cfg,
         )?;
 
         let scheduler_method = match self.paged_attn_cfg {
@@ -283,7 +283,7 @@ impl GgufModelBuilder {
             pipeline,
             scheduler_method,
             self.throughput_logging,
-            self.search_embedding_model.clone(),
+            self.search_embedding_model,
         );
         if let Some(cb) = self.search_callback.clone() {
             runner = runner.with_search_callback(cb);

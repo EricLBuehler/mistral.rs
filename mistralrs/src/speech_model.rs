@@ -91,8 +91,8 @@ impl SpeechModelBuilder {
         let loader = SpeechLoader {
             model_id: self.model_id.clone(),
             dac_model_id: self.dac_model_id.clone(),
-            arch: self.loader_type.clone(),
-            cfg: self.cfg.clone(),
+            arch: self.loader_type,
+            cfg: self.cfg,
         };
 
         // Load, into a Pipeline
