@@ -179,6 +179,8 @@ pub enum NormalLoaderType {
     GraniteMoeHybrid,
     #[serde(rename = "gpt_oss")]
     GptOss,
+    #[serde(rename = "minimax_m2")]
+    MinimaxM2,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -203,6 +205,7 @@ impl NormalLoaderType {
             "SmolLM3ForCausalLM" => Ok(Self::SmolLm3),
             "GraniteMoeHybridForCausalLM" => Ok(Self::GraniteMoeHybrid),
             "GptOssForCausalLM" => Ok(Self::GptOss),
+            "MiniMaxM2ForCausalLM" => Ok(Self::MinimaxM2),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
@@ -232,6 +235,7 @@ impl FromStr for NormalLoaderType {
             "smollm3" => Ok(Self::SmolLm3),
             "granitemoehybrid" => Ok(Self::GraniteMoeHybrid),
             "gpt_oss" => Ok(Self::GptOss),
+            "minimax_m2" => Ok(Self::MinimaxM2),
             a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `glm4`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`.")),
         }
     }
@@ -258,6 +262,7 @@ impl Display for NormalLoaderType {
             Self::SmolLm3 => write!(f, "smollm3"),
             Self::GraniteMoeHybrid => write!(f, "granitemoehybrid"),
             Self::GptOss => write!(f, "gpt_oss"),
+            Self::MinimaxM2 => write!(f, "minimax_m2"),
         }
     }
 }
@@ -312,6 +317,7 @@ impl AutoNormalLoader {
             NormalLoaderType::SmolLm3 => Ok(Box::new(SmolLm3Loader)),
             NormalLoaderType::GraniteMoeHybrid => Ok(Box::new(GraniteMoeHybridLoader)),
             NormalLoaderType::GptOss => Ok(Box::new(GptOssLoader)),
+            NormalLoaderType::MinimaxM2 => Ok(Box::new(MixtralLoader)),
         }
     }
 }

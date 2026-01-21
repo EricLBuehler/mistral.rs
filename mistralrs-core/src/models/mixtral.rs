@@ -9,7 +9,7 @@ use mistralrs_quant::{
     ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::{Arc, atomic::AtomicU32}};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -48,13 +48,14 @@ pub struct Config {
     pub(crate) quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub(crate) tie_word_embeddings: bool,
+    pub(crate) head_dim: Option<usize>,
 }
 
-struct Attention {
-    q_proj: Arc<dyn QuantMethod>,
-    k_proj: Arc<dyn QuantMethod>,
-    v_proj: Arc<dyn QuantMethod>,
-    o_proj: Arc<dyn QuantMethod>,
+pub(crate) struct Attention {
+    pub(crate) q_proj: Arc<dyn QuantMethod>,
+    pub(crate) k_proj: Arc<dyn QuantMethod>,
+    pub(crate) v_proj: Arc<dyn QuantMethod>,
+    pub(crate) o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -64,7 +65,7 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(
+    pub(crate) fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
         vb: ShardedVarBuilder,
@@ -74,7 +75,7 @@ impl Attention {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
-        let head_dim = hidden_sz / num_heads;
+        let head_dim = cfg.head_dim.unwrap_or(hidden_sz / num_heads);
         let q_proj = ColumnParallelLayer::new(
             hidden_sz,
             num_heads * head_dim,
@@ -138,7 +139,7 @@ impl Attention {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn forward(
+    pub(crate) fn forward(
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
@@ -246,11 +247,11 @@ impl Attention {
 }
 
 #[derive(Clone)]
-struct BlockSparseTop2MLP {
-    w1: Arc<dyn QuantMethod>,
-    w2: Arc<dyn QuantMethod>,
-    w3: Arc<dyn QuantMethod>,
-    act_fn: Activation,
+pub(crate) struct BlockSparseTop2MLP {
+    pub(crate) w1: Arc<dyn QuantMethod>,
+    pub(crate) w2: Arc<dyn QuantMethod>,
+    pub(crate) w3: Arc<dyn QuantMethod>,
+    pub(crate) act_fn: Activation,
 }
 
 impl BlockSparseTop2MLP {
@@ -309,14 +310,18 @@ impl Module for BlockSparseTop2MLP {
 }
 
 #[derive(Clone)]
-struct SparseMoeBlock {
-    gate: Arc<dyn QuantMethod>,
-    experts: Vec<BlockSparseTop2MLP>,
-    num_experts_per_tok: usize,
+pub(crate) struct SparseMoeBlock {
+    pub(crate) gate: Arc<dyn QuantMethod>,
+    pub(crate) experts: Vec<BlockSparseTop2MLP>,
+    pub(crate) num_experts_per_tok: usize,
 }
 
 impl SparseMoeBlock {
-    fn new(cfg: &Config, vb: ShardedVarBuilder, comm: &Arc<mistralrs_quant::Comm>) -> Result<Self> {
+    pub(crate) fn new(
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
         let gate = mistralrs_quant::linear_no_bias(
             cfg.hidden_size,
             cfg.num_local_experts,
@@ -397,7 +402,7 @@ impl Module for SparseMoeBlock {
             let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden_dim))?;
             // current_hidden_states = expert_layer(current_state, routing_weights[top_x_list, idx_list, None])
             let current_hidden_states = expert_layer.forward(&current_state)?;
-            let current_hidden_states = current_hidden_states.broadcast_mul(&selected_rws)?;
+            let current_hidden_states = current_hidden_states.broadcast_mul(&selected_rws.to_dtype(current_hidden_states.dtype())?)?;
             ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
         }
 
@@ -411,6 +416,7 @@ struct DecoderLayer {
     block_sparse_moe: SparseMoeBlock,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
+    idx:usize,
 }
 
 impl DecoderLayer {
@@ -452,6 +458,7 @@ impl DecoderLayer {
             block_sparse_moe,
             input_layernorm,
             post_attention_layernorm,
+            idx:layer_idx,
         })
     }
 
@@ -496,6 +503,7 @@ pub struct Model {
     max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
+    count: AtomicU32,
 }
 
 impl Model {
@@ -522,7 +530,8 @@ impl Model {
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
             &cfg.quantization_config,
         )?;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let head_dim=cfg.head_dim.unwrap_or(cfg.hidden_size / cfg.num_attention_heads);
+    
         let mut ropes = HashMap::new();
         for layer_idx in 0..cfg.num_hidden_layers {
             let device = mapper
@@ -615,10 +624,11 @@ impl Model {
                 num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
                     .max(1),
                 sliding_window: cfg.sliding_window,
-                k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-                v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+                k_head_dim: cfg.head_dim.unwrap_or(cfg.hidden_size / cfg.num_attention_heads),
+                v_head_dim: cfg.head_dim.unwrap_or(cfg.hidden_size / cfg.num_attention_heads),
             },
             mapper,
+            count: AtomicU32::new(0),
         })
     }
 
@@ -630,6 +640,8 @@ impl Model {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
+        let now = self.count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        println!("Forward call count: {}. context_lens: {:?}, seq_len_offsets: {:?}", now, context_lens, seqlen_offsets);
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let cache = &mut self.cache.normal().0;
         let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
