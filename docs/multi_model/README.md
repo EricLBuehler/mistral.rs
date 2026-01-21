@@ -2,6 +2,13 @@
 
 The mistralrs-server supports loading and serving multiple models simultaneously, allowing you to switch between different models in the same server instance.
 
+- Each model runs in its own engine thread
+- Models can have different configurations (quantization, device layers, etc.)
+- Memory usage scales with the number of loaded models
+- All models share the same server configuration (port, logging, etc.)
+- Interactive mode uses the default model or the first model if no default is set
+- You can unload all models (including the last one) - they will auto-reload when accessed
+
 ## Usage
 
 ### Single-Model Mode (Default)
@@ -190,10 +197,313 @@ mistralrs-server [OPTIONS] --multi-model --multi-model-config <CONFIG> [--defaul
 }
 ```
 
-## Notes
+## Model Unloading and Reloading
 
-- Each model runs in its own engine thread
-- Models can have different configurations (quantization, device layers, etc.)
-- Memory usage scales with the number of loaded models
-- All models share the same server configuration (port, logging, etc.)
-- Interactive mode uses the default model or the first model if no default is set
+You can dynamically unload models to free memory and reload them on demand. This is useful for managing GPU memory when working with multiple large models.
+
+### Unload a Model
+
+Unload a model from memory while preserving its configuration for later reload:
+
+```bash
+curl -X POST http://localhost:1234/v1/models/unload \
+  -H "Content-Type: application/json" \
+  -d '{"model_id": "meta-llama/Llama-3.2-3B-Instruct"}'
+```
+
+Response:
+```json
+{
+  "model_id": "meta-llama/Llama-3.2-3B-Instruct",
+  "status": "unloaded"
+}
+```
+
+### Reload a Model
+
+Manually reload a previously unloaded model:
+
+```bash
+curl -X POST http://localhost:1234/v1/models/reload \
+  -H "Content-Type: application/json" \
+  -d '{"model_id": "meta-llama/Llama-3.2-3B-Instruct"}'
+```
+
+Response:
+```json
+{
+  "model_id": "meta-llama/Llama-3.2-3B-Instruct",
+  "status": "loaded"
+}
+```
+
+### Check Model Status
+
+Get the current status of a specific model:
+
+```bash
+curl -X POST http://localhost:1234/v1/models/status \
+  -H "Content-Type: application/json" \
+  -d '{"model_id": "meta-llama/Llama-3.2-3B-Instruct"}'
+```
+
+Response:
+```json
+{
+  "model_id": "meta-llama/Llama-3.2-3B-Instruct",
+  "status": "loaded"
+}
+```
+
+Possible status values:
+- `loaded`: Model is loaded and ready
+- `unloaded`: Model is unloaded but can be reloaded
+- `reloading`: Model is currently being reloaded
+- `not_found`: Model ID not recognized
+- `no_loader_config`: Model cannot be reloaded (missing loader configuration)
+- `internal_error`: An internal error occurred
+
+### Auto-Reload
+
+When a request is sent to an unloaded model, it will automatically reload before processing the request. This enables a "lazy loading" pattern where models are only loaded when needed.
+
+### List Models with Status
+
+The `/v1/models` endpoint now includes status information:
+
+```bash
+curl http://localhost:1234/v1/models
+```
+
+Response:
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "default",
+      "object": "model",
+      "created": 1234567890,
+      "owned_by": "local"
+    },
+    {
+      "id": "meta-llama/Llama-3.2-3B-Instruct",
+      "object": "model",
+      "created": 1234567890,
+      "owned_by": "local",
+      "status": "loaded"
+    },
+    {
+      "id": "Qwen/Qwen3-4B",
+      "object": "model",
+      "created": 1234567890,
+      "owned_by": "local",
+      "status": "unloaded"
+    }
+  ]
+}
+```
+
+## Rust API Usage
+
+The `mistralrs` crate provides `MultiModelBuilder` for loading multiple models and `Model` methods for multi-model management.
+
+### Loading Multiple Models
+
+Model IDs are always the HuggingFace model path (e.g., `"google/gemma-3-4b-it"`). Custom model IDs are not supported.
+
+```rust
+use mistralrs::{IsqType, MultiModelBuilder, TextModelBuilder, VisionModelBuilder, TextMessages, TextMessageRole};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Build a multi-model instance with a vision model and a text model
+    // Model IDs are the HuggingFace model paths
+    let model = MultiModelBuilder::new()
+        .add_model(
+            VisionModelBuilder::new("google/gemma-3-4b-it")  // Vision model
+                .with_isq(IsqType::Q4K)
+                .with_logging(),
+        )
+        .add_model(
+            TextModelBuilder::new("Qwen/Qwen3-4B")  // Text model
+                .with_isq(IsqType::Q4K),
+        )
+        .with_default_model("google/gemma-3-4b-it")
+        .build()
+        .await?;
+
+    // Send request to default model
+    let messages = TextMessages::new()
+        .add_message(TextMessageRole::User, "Hello!");
+    let response = model.send_chat_request(messages).await?;
+
+    // Send request to specific model using its HuggingFace path
+    let messages = TextMessages::new()
+        .add_message(TextMessageRole::User, "Hello from Qwen!");
+    let response = model.send_chat_request_with_model(messages, Some("Qwen/Qwen3-4B")).await?;
+
+    Ok(())
+}
+```
+
+### Model Management Methods
+
+```rust
+// List all models (returns HuggingFace model paths)
+let models = model.list_models()?;
+
+// Get/set default model
+let default = model.get_default_model_id()?;
+model.set_default_model_id("Qwen/Qwen3-4B")?;
+
+// List models with status
+let status = model.list_models_with_status()?;
+// Returns Vec<(String, ModelStatus)> where ModelStatus is Loaded, Unloaded, or Reloading
+
+// Check if a model is loaded
+let is_loaded = model.is_model_loaded("google/gemma-3-4b-it")?;
+
+// Unload a model to free memory
+model.unload_model("google/gemma-3-4b-it")?;
+
+// Reload when needed
+model.reload_model("google/gemma-3-4b-it").await?;
+```
+
+### Available `_with_model` Methods
+
+All request methods have `_with_model` variants that accept an optional model ID:
+
+- `send_chat_request_with_model(request, model_id: Option<&str>)`
+- `stream_chat_request_with_model(request, model_id: Option<&str>)`
+- `generate_image_with_model(..., model_id: Option<&str>)`
+- `generate_speech_with_model(prompt, model_id: Option<&str>)`
+- `generate_embeddings_with_model(request, model_id: Option<&str>)`
+- `tokenize_with_model(..., model_id: Option<&str>)`
+- `detokenize_with_model(..., model_id: Option<&str>)`
+- `config_with_model(model_id: Option<&str>)`
+- `max_sequence_length_with_model(model_id: Option<&str>)`
+- `re_isq_model_with_model(isq_type, model_id: Option<&str>)`
+
+When `model_id` is `None`, the default model is used.
+
+## Python API Usage
+
+The Python `Runner` class supports multi-model operations directly.
+
+### Basic Usage
+
+```python
+from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture, Architecture
+
+# Create a runner with a vision model (Gemma 3 4B)
+runner = Runner(
+    which=Which.VisionPlain(
+        model_id="google/gemma-3-4b-it",
+        arch=VisionArchitecture.Gemma3,
+    ),
+    in_situ_quant="Q4K",
+)
+
+# Or create a runner with a text model (Qwen3 4B)
+# runner = Runner(
+#     which=Which.Plain(
+#         model_id="Qwen/Qwen3-4B",
+#         arch=Architecture.Qwen3,
+#     ),
+#     in_situ_quant="Q4K",
+# )
+
+# List models
+models = runner.list_models()
+print(f"Available models: {models}")
+
+# Get/set default model
+default = runner.get_default_model_id()
+runner.set_default_model_id("google/gemma-3-4b-it")
+
+# Send request with specific model_id
+request = ChatCompletionRequest(
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+response = runner.send_chat_completion_request(request, model_id=models[0])
+```
+
+### Model Management
+
+```python
+# List models with their status
+status = runner.list_models_with_status()
+# Returns list of (model_id, status) tuples
+
+# Check if a model is loaded
+is_loaded = runner.is_model_loaded("google/gemma-3-4b-it")
+
+# Unload a model to free memory
+runner.unload_model("google/gemma-3-4b-it")
+
+# Reload when needed
+runner.reload_model("google/gemma-3-4b-it")
+```
+
+### Request Methods with model_id
+
+All request methods accept an optional `model_id` parameter:
+
+```python
+# Chat completion
+response = runner.send_chat_completion_request(request, model_id="model-id")
+
+# Completion
+response = runner.send_completion_request(request, model_id="model-id")
+
+# Embeddings
+embeddings = runner.send_embedding_request(request, model_id="model-id")
+
+# Image generation
+image = runner.generate_image(prompt, response_format, model_id="model-id")
+
+# Speech generation
+audio = runner.generate_audio(prompt, model_id="model-id")
+
+# Tokenization
+tokens = runner.tokenize_text(text, add_special_tokens=True, model_id="model-id")
+text = runner.detokenize_text(tokens, skip_special_tokens=True, model_id="model-id")
+```
+
+When `model_id` is `None` or omitted, the default model is used.
+
+## Migration Guide
+
+### From `MultiModel` (Rust)
+
+The `MultiModel` struct has been removed. Use `Model` directly with `MultiModelBuilder`:
+
+```rust
+// Old (deprecated)
+let multi = MultiModel::new(...);
+multi.send_chat_request_to_model(request, "model-id").await?;
+
+// New - model IDs are HuggingFace paths (e.g., "google/gemma-3-4b-it")
+let model = MultiModelBuilder::new()
+    .add_model(VisionModelBuilder::new("google/gemma-3-4b-it"))
+    .add_model(TextModelBuilder::new("Qwen/Qwen3-4B"))
+    .build()
+    .await?;
+model.send_chat_request_with_model(request, Some("Qwen/Qwen3-4B")).await?;
+```
+
+### From `MultiModelRunner` (Python)
+
+The `MultiModelRunner` class has been removed. Use `Runner` directly:
+
+```python
+# Old (deprecated)
+multi_runner = MultiModelRunner(runner)
+multi_runner.send_chat_completion_request_to_model(request, "model-id")
+
+# New - model IDs are HuggingFace paths
+runner = Runner(which=Which.Plain(model_id="google/gemma-3-4b-it", ...))
+runner.send_chat_completion_request(request, model_id="google/gemma-3-4b-it")
+```

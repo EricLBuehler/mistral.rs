@@ -633,6 +633,9 @@ pub struct ModelObject {
     pub object: &'static str,
     pub created: u64,
     pub owned_by: &'static str,
+    /// Model status: "loaded", "unloaded", or "reloading"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
     /// Whether tools are available through MCP or tool callbacks
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools_available: Option<bool>,

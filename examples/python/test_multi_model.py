@@ -5,6 +5,7 @@ This script tests the core multi-model operations:
 - Listing models
 - Getting/setting default model
 - Sending requests to specific models
+- Model unloading/reloading
 - Model removal (commented out for safety)
 """
 
@@ -13,7 +14,6 @@ from mistralrs import (
     Which,
     ChatCompletionRequest,
     Architecture,
-    MultiModelRunner,
 )
 import sys
 
@@ -69,26 +69,18 @@ def test_multi_model_operations():
             )
             print(f"   ✓ Response received: {response.choices[0].message.content}")
 
-        # Test MultiModelRunner wrapper
-        print("\n6. Testing MultiModelRunner wrapper...")
-        multi_runner = MultiModelRunner(runner)
+        # Test list_models_with_status
+        print("\n6. Testing list_models_with_status()...")
+        models_with_status = runner.list_models_with_status()
+        print(f"   ✓ Models with status: {models_with_status}")
+        assert isinstance(models_with_status, list), "Should return a list"
 
-        # Test wrapper methods
-        wrapper_models = multi_runner.list_models()
-        print(f"   ✓ MultiModelRunner.list_models(): {wrapper_models}")
-        assert wrapper_models == models, "MultiModelRunner should return same models"
-
-        wrapper_default = multi_runner.get_default_model_id()
-        print(f"   ✓ MultiModelRunner.get_default_model_id(): {wrapper_default}")
-
-        # Test wrapper request methods
+        # Test is_model_loaded
+        print("\n7. Testing is_model_loaded()...")
         if models:
-            response = multi_runner.send_chat_completion_request_to_model(
-                request=request, model_id=models[0]
-            )
-            print(
-                f"   ✓ Response from specific model: {response.choices[0].message.content}"
-            )
+            is_loaded = runner.is_model_loaded(models[0])
+            print(f"   ✓ Model '{models[0]}' loaded: {is_loaded}")
+            assert is_loaded, "Model should be loaded initially"
 
         print("\n✅ All tests passed!")
 
@@ -137,6 +129,59 @@ def test_model_id_in_requests():
         print(f"   ✓ Chat response (default): {response.choices[0].message.content}")
 
         print("\n✅ Model ID request tests passed!")
+        return True
+
+    except Exception as e:
+        print(f"\n❌ Test failed with error: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
+
+
+def test_unload_reload():
+    """Test model unloading and reloading."""
+    print("\n\nTesting Model Unload/Reload\n" + "=" * 50)
+
+    try:
+        runner = Runner(
+            which=Which.Plain(
+                model_id="gpt2",
+                arch=Architecture.Gpt2,
+            )
+        )
+
+        models = runner.list_models()
+        if not models:
+            print("No models available to test")
+            return False
+
+        model_id = models[0]
+
+        # Check initial status
+        print("1. Checking initial status...")
+        assert runner.is_model_loaded(model_id), "Model should be loaded initially"
+        print(f"   ✓ Model '{model_id}' is loaded")
+
+        # Unload the model
+        print("\n2. Unloading model...")
+        runner.unload_model(model_id)
+        is_loaded = runner.is_model_loaded(model_id)
+        print(f"   ✓ Model unloaded. is_model_loaded: {is_loaded}")
+
+        # Check status after unload
+        print("\n3. Checking status after unload...")
+        status = runner.list_models_with_status()
+        print(f"   ✓ Status: {status}")
+
+        # Reload the model
+        print("\n4. Reloading model...")
+        runner.reload_model(model_id)
+        is_loaded = runner.is_model_loaded(model_id)
+        print(f"   ✓ Model reloaded. is_model_loaded: {is_loaded}")
+        assert is_loaded, "Model should be loaded after reload"
+
+        print("\n✅ Unload/reload tests passed!")
         return True
 
     except Exception as e:
@@ -197,6 +242,7 @@ if __name__ == "__main__":
     # Run tests
     all_passed &= test_multi_model_operations()
     all_passed &= test_model_id_in_requests()
+    all_passed &= test_unload_reload()
     all_passed &= test_error_handling()
 
     print("\n" + "=" * 60)

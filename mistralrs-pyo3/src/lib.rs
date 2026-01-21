@@ -2141,176 +2141,47 @@ impl Runner {
             }
         })
     }
-}
 
-#[pyclass]
-/// A multi-model runner that provides a cleaner interface for managing multiple models.
-/// This wraps the existing Runner and provides model-specific methods.
-struct MultiModelRunner {
-    runner: Runner,
-}
-
-#[pymethods]
-impl MultiModelRunner {
-    #[new]
-    /// Create a new MultiModelRunner from an existing Runner.
-    /// The Runner should have been created with multiple models loaded.
-    fn new(runner: Runner) -> Self {
-        Self { runner }
+    /// Unload a model from memory while preserving its configuration for later reload.
+    /// The model can be reloaded automatically when a request is sent to it, or manually
+    /// using `reload_model()`.
+    fn unload_model(&self, model_id: String) -> PyApiResult<()> {
+        self.runner.unload_model(&model_id).map_err(PyApiErr::from)
     }
 
-    /// Send a chat completion request to a specific model.
-    #[pyo3(signature = (request, model_id))]
-    fn send_chat_completion_request_to_model(
-        &mut self,
-        request: Py<ChatCompletionRequest>,
-        model_id: String,
-    ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
+    /// Manually reload a previously unloaded model.
+    fn reload_model(&self, model_id: String) -> PyApiResult<()> {
         self.runner
-            .send_chat_completion_request(request, Some(model_id))
+            .reload_model_blocking(&model_id)
+            .map_err(PyApiErr::from)
     }
 
-    /// Send a completion request to a specific model.
-    #[pyo3(signature = (request, model_id))]
-    fn send_completion_request_to_model(
-        &mut self,
-        request: Py<CompletionRequest>,
-        model_id: String,
-    ) -> PyApiResult<CompletionResponse> {
-        self.runner.send_completion_request(request, Some(model_id))
+    /// List all unloaded model IDs.
+    fn list_unloaded_models(&self) -> PyApiResult<Vec<String>> {
+        self.runner.list_unloaded_models().map_err(PyApiErr::from)
     }
 
-    /// Send an embeddings request to a specific model.
-    #[pyo3(signature = (request, model_id))]
-    fn send_embedding_request_to_model(
-        &mut self,
-        request: Py<EmbeddingRequest>,
-        model_id: String,
-    ) -> PyApiResult<Vec<Vec<f32>>> {
-        self.runner.send_embedding_request(request, Some(model_id))
-    }
-
-    /// List all available model IDs.
-    fn list_models(&self) -> PyApiResult<Vec<String>> {
-        self.runner.list_models()
-    }
-
-    /// Return the maximum supported sequence length for a model, if available.
-    #[pyo3(signature = (model_id = None))]
-    fn max_sequence_length(&self, model_id: Option<String>) -> PyApiResult<Option<usize>> {
-        self.runner.max_sequence_length(model_id)
-    }
-
-    /// Get the default model ID.
-    fn get_default_model_id(&self) -> PyApiResult<Option<String>> {
-        self.runner.get_default_model_id()
-    }
-
-    /// Set the default model ID.
-    fn set_default_model_id(&self, model_id: String) -> PyApiResult<()> {
-        self.runner.set_default_model_id(model_id)
-    }
-
-    /// Remove a model by ID.
-    fn remove_model(&self, model_id: String) -> PyApiResult<()> {
-        self.runner.remove_model(model_id)
-    }
-
-    /// Send a chat completion request to the specified model.
-    #[pyo3(signature = (request, model_id = None))]
-    fn send_chat_completion_request(
-        &mut self,
-        request: Py<ChatCompletionRequest>,
-        model_id: Option<String>,
-    ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
-        self.runner.send_chat_completion_request(request, model_id)
-    }
-
-    /// Send a completion request to the specified model.
-    #[pyo3(signature = (request, model_id = None))]
-    fn send_completion_request(
-        &mut self,
-        request: Py<CompletionRequest>,
-        model_id: Option<String>,
-    ) -> PyApiResult<CompletionResponse> {
-        self.runner.send_completion_request(request, model_id)
-    }
-
-    /// Send an embeddings request to the specified model.
-    /// This returns the embeddings as [batch size, embedding dim]
-    #[pyo3(signature = (request, model_id = None))]
-    fn send_embedding_request(
-        &mut self,
-        request: Py<EmbeddingRequest>,
-        model_id: Option<String>,
-    ) -> PyApiResult<Vec<Vec<f32>>> {
-        self.runner.send_embedding_request(request, model_id)
-    }
-
-    /// Generate an image using the specified model.
-    #[pyo3(signature = (
-        prompt,
-        response_format,
-        height = 720,
-        width = 1280,
-        model_id = None,
-    ))]
-    fn generate_image(
-        &self,
-        prompt: String,
-        response_format: ImageGenerationResponseFormat,
-        height: usize,
-        width: usize,
-        model_id: Option<String>,
-    ) -> PyApiResult<ImageGenerationResponse> {
+    /// Check if a model is currently loaded (as opposed to unloaded).
+    fn is_model_loaded(&self, model_id: String) -> PyApiResult<bool> {
         self.runner
-            .generate_image(prompt, response_format, height, width, model_id)
+            .is_model_loaded(&model_id)
+            .map_err(PyApiErr::from)
     }
 
-    /// Generate audio using the specified model.
-    #[pyo3(signature = (prompt, model_id = None))]
-    fn generate_audio(
-        &self,
-        prompt: String,
-        model_id: Option<String>,
-    ) -> PyApiResult<SpeechGenerationResponse> {
-        self.runner.generate_audio(prompt, model_id)
-    }
-
-    /// Send a request to re-ISQ the specified model.
-    #[pyo3(signature = (dtype, model_id = None))]
-    fn send_re_isq(&self, dtype: String, model_id: Option<String>) -> PyApiResult<()> {
-        self.runner.send_re_isq(dtype, model_id)
-    }
-
-    /// Tokenize some text using the specified model.
-    #[pyo3(signature = (text, add_special_tokens, enable_thinking, model_id = None))]
-    fn tokenize_text(
-        &self,
-        text: String,
-        add_special_tokens: bool,
-        enable_thinking: Option<bool>,
-        model_id: Option<String>,
-    ) -> PyApiResult<Vec<u32>> {
+    /// Get the status of a model: "loaded", "unloaded", "reloading", or None if not found.
+    fn get_model_status(&self, model_id: String) -> PyApiResult<Option<String>> {
         self.runner
-            .tokenize_text(text, add_special_tokens, enable_thinking, model_id)
+            .get_model_status(&model_id)
+            .map(|s| s.map(|s| s.to_string()))
+            .map_err(PyApiErr::from)
     }
 
-    /// Detokenize some tokens using the specified model.
-    #[pyo3(signature = (tokens, skip_special_tokens, model_id = None))]
-    fn detokenize_text(
-        &self,
-        tokens: Vec<u32>,
-        skip_special_tokens: bool,
-        model_id: Option<String>,
-    ) -> PyApiResult<String> {
+    /// List all models with their status (loaded, unloaded, reloading).
+    fn list_models_with_status(&self) -> PyApiResult<Vec<(String, String)>> {
         self.runner
-            .detokenize_text(tokens, skip_special_tokens, model_id)
-    }
-
-    /// Get a copy of the underlying Runner instance.
-    fn inner(&self) -> Runner {
-        self.runner.clone()
+            .list_models_with_status()
+            .map(|v| v.into_iter().map(|(id, s)| (id, s.to_string())).collect())
+            .map_err(PyApiErr::from)
     }
 }
 
@@ -2486,7 +2357,6 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     initialize_logging();
 
     m.add_class::<Runner>()?;
-    m.add_class::<MultiModelRunner>()?;
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<CompletionRequest>()?;

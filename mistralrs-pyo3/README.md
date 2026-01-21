@@ -82,3 +82,7 @@ See [`examples/python/phi4mm_audio.py`](../examples/python/phi4mm_audio.py) for 
 Please find [API docs here](API.md) and the type stubs [here](mistralrs.pyi), which are another great form of documentation.
 
 We also provide [a cookbook here](../examples/python/cookbook.ipynb)!
+
+## Multi-model and Model Management
+
+For serving multiple models and dynamic model management (unloading/reloading), see the [multi-model documentation](API.md#multi-model-support).

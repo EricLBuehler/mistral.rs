@@ -47,9 +47,11 @@
 - [Topology](TOPOLOGY.md)
 - [Importance Matrix (ISQ Enhancement)](IMATRIX.md)
 
+## Multi-Model & Runtime Management
+- [Multi-model support](multi_model/README.md) - Load multiple models, switch between them, unload/reload at runtime
+
 ## Other
 - [Chat templates and tokenizers](CHAT_TOK.md)
-- [Multi-model support](multi_model/README.md) - Serve multiple models simultaneously
 - [Paged Attention](PAGED_ATTENTION.md)
 - [Flash Attention](FLASH_ATTENTION.md)
 - [Sampling](SAMPLING.md)

@@ -8,7 +8,8 @@ use std::{
     sync::Arc,
 };
 
-use crate::{best_device, Model};
+use crate::model_builder_trait::{build_model_from_pipeline, build_text_pipeline};
+use crate::Model;
 
 /// A tool callback with its associated Tool definition.
 #[derive(Clone)]
@@ -44,6 +45,7 @@ pub struct TextModelBuilder {
 
     // Model running
     pub(crate) topology: Option<Topology>,
+    pub(crate) topology_path: Option<String>,
     pub(crate) organization: IsqOrganization,
     pub(crate) loader_type: Option<NormalLoaderType>,
     pub(crate) dtype: ModelDType,
@@ -109,6 +111,7 @@ impl TextModelBuilder {
         Self {
             model_id: model_id.to_string(),
             topology: None,
+            topology_path: None,
             organization: IsqOrganization::Default,
             write_uqff: None,
             from_uqff: None,
@@ -201,6 +204,18 @@ impl TextModelBuilder {
     pub fn with_topology(mut self, topology: Topology) -> Self {
         self.topology = Some(topology);
         self
+    }
+
+    /// Set the model topology from a path. This preserves the path for unload/reload support.
+    /// If there is an overlap, the topology type is used over the ISQ type.
+    pub fn with_topology_from_path<P: AsRef<std::path::Path>>(
+        mut self,
+        path: P,
+    ) -> anyhow::Result<Self> {
+        let path_str = path.as_ref().to_string_lossy().to_string();
+        self.topology = Some(Topology::from_path(&path)?);
+        self.topology_path = Some(path_str);
+        Ok(self)
     }
 
     /// Organize ISQ to enable MoQE (Mixture of Quantized Experts, <https://arxiv.org/abs/2310.02410>)
@@ -371,102 +386,8 @@ impl TextModelBuilder {
     }
 
     pub async fn build(self) -> anyhow::Result<Model> {
-        let config = NormalSpecificConfig {
-            topology: self.topology,
-            organization: self.organization,
-            write_uqff: self.write_uqff,
-            from_uqff: self.from_uqff,
-            imatrix: self.imatrix,
-            calibration_file: self.calibration_file,
-            hf_cache_path: self.hf_cache_path,
-            matformer_config_path: self.matformer_config_path,
-            matformer_slice_name: self.matformer_slice_name,
-        };
-
-        if self.with_logging {
-            initialize_logging();
-        }
-
-        let loader = NormalLoaderBuilder::new(
-            config,
-            self.chat_template,
-            self.tokenizer_json,
-            Some(self.model_id),
-            self.no_kv_cache,
-            self.jinja_explicit,
-        )
-        .build(self.loader_type)?;
-
-        // Load, into a Pipeline
-        let pipeline = loader.load_model_from_hf(
-            self.hf_revision,
-            self.token_source,
-            &self.dtype,
-            &self.device.unwrap_or(best_device(self.force_cpu).unwrap()),
-            !self.with_logging,
-            self.device_mapping
-                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
-            self.isq,
-            self.paged_attn_cfg,
-        )?;
-
-        let scheduler_method = match self.paged_attn_cfg {
-            Some(_) => {
-                let config = pipeline
-                    .lock()
-                    .await
-                    .get_metadata()
-                    .cache_config
-                    .as_ref()
-                    .cloned();
-
-                if let Some(config) = config {
-                    SchedulerConfig::PagedAttentionMeta {
-                        max_num_seqs: self.max_num_seqs,
-                        config,
-                    }
-                } else {
-                    SchedulerConfig::DefaultScheduler {
-                        method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
-                    }
-                }
-            }
-            None => SchedulerConfig::DefaultScheduler {
-                method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
-            },
-        };
-
-        let mut runner = MistralRsBuilder::new(
-            pipeline,
-            scheduler_method,
-            self.throughput_logging,
-            self.search_embedding_model,
-        );
-        if let Some(cb) = self.search_callback.clone() {
-            runner = runner.with_search_callback(cb);
-        }
-        for (name, cb) in &self.tool_callbacks {
-            runner = runner.with_tool_callback(name.clone(), cb.clone());
-        }
-        for (name, callback_with_tool) in &self.tool_callbacks_with_tools {
-            runner = runner.with_tool_callback_and_tool(
-                name.clone(),
-                callback_with_tool.callback.clone(),
-                callback_with_tool.tool.clone(),
-            );
-        }
-        if let Some(mcp_config) = self.mcp_client_config {
-            runner = runner.with_mcp_client(mcp_config);
-        }
-        runner = runner
-            .with_no_kv_cache(self.no_kv_cache)
-            .with_no_prefix_cache(self.prefix_cache_n.is_none());
-
-        if let Some(n) = self.prefix_cache_n {
-            runner = runner.with_prefix_cache_n(n)
-        }
-
-        Ok(Model::new(runner.build().await))
+        let (pipeline, scheduler_config, add_model_config) = build_text_pipeline(self).await?;
+        Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)
     }
 }
 

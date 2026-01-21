@@ -168,7 +168,7 @@ pub fn parse_isq_value(s: &str, device: Option<&Device>) -> Result<IsqType, Stri
     Ok(tp)
 }
 
-#[derive(Clone, Debug, Copy, Default, Deserialize)]
+#[derive(Clone, Debug, Copy, Default, Deserialize, serde::Serialize)]
 pub enum IsqOrganization {
     #[default]
     #[serde(rename = "default")]
