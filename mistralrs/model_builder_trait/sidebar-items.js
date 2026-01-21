@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["AnyModelBuilder"],"fn":["build_diffusion_pipeline","build_embedding_pipeline","build_gguf_pipeline","build_model_from_pipeline","build_speech_pipeline","build_text_pipeline","build_vision_pipeline"],"struct":["MultiModelBuilder"]};

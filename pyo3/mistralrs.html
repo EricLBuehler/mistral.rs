@@ -71,62 +71,23 @@
                         <li>
                                 <a class="function" href="#Runner.send_completion_request_to_model">send_completion_request_to_model</a>
                         </li>
-                </ul>
-
-            </li>
-            <li>
-                    <a class="class" href="#MultiModelRunner">MultiModelRunner</a>
-                            <ul class="memberlist">
                         <li>
-                                <a class="function" href="#MultiModelRunner.send_chat_completion_request_to_model">send_chat_completion_request_to_model</a>
+                                <a class="function" href="#Runner.unload_model">unload_model</a>
                         </li>
                         <li>
-                                <a class="function" href="#MultiModelRunner.send_completion_request_to_model">send_completion_request_to_model</a>
+                                <a class="function" href="#Runner.reload_model">reload_model</a>
                         </li>
                         <li>
-                                <a class="function" href="#MultiModelRunner.send_embedding_request_to_model">send_embedding_request_to_model</a>
+                                <a class="function" href="#Runner.list_unloaded_models">list_unloaded_models</a>
                         </li>
                         <li>
-                                <a class="function" href="#MultiModelRunner.list_models">list_models</a>
+                                <a class="function" href="#Runner.is_model_loaded">is_model_loaded</a>
                         </li>
                         <li>
-                                <a class="function" href="#MultiModelRunner.max_sequence_length">max_sequence_length</a>
+                                <a class="function" href="#Runner.get_model_status">get_model_status</a>
                         </li>
                         <li>
-                                <a class="function" href="#MultiModelRunner.get_default_model_id">get_default_model_id</a>
-                        </li>
-                        <li>
-                                <a class="function" href="#MultiModelRunner.set_default_model_id">set_default_model_id</a>
-                        </li>
-                        <li>
-                                <a class="function" href="#MultiModelRunner.remove_model">remove_model</a>
-                        </li>
-                        <li>
-                                <a class="function" href="#MultiModelRunner.send_chat_completion_request">send_chat_completion_request</a>
-                        </li>
-                        <li>
-                                <a class="function" href="#MultiModelRunner.send_completion_request">send_completion_request</a>
-                        </li>
-                        <li>
-                                <a class="function" href="#MultiModelRunner.send_embedding_request">send_embedding_request</a>
-                        </li>
-                        <li>
-                                <a class="function" href="#MultiModelRunner.generate_image">generate_image</a>
-                        </li>
-                        <li>
-                                <a class="function" href="#MultiModelRunner.generate_audio">generate_audio</a>
-                        </li>
-                        <li>
-                                <a class="function" href="#MultiModelRunner.send_re_isq">send_re_isq</a>
-                        </li>
-                        <li>
-                                <a class="function" href="#MultiModelRunner.tokenize_text">tokenize_text</a>
-                        </li>
-                        <li>
-                                <a class="function" href="#MultiModelRunner.detokenize_text">detokenize_text</a>
-                        </li>
-                        <li>
-                                <a class="function" href="#MultiModelRunner.inner">inner</a>
+                                <a class="function" href="#Runner.list_models_with_status">list_models_with_status</a>
                         </li>
                 </ul>
 
@@ -387,16 +348,16 @@
                     <a class="class" href="#ResponseMessage">ResponseMessage</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#ResponseMessage.reasoning_content">reasoning_content</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ResponseMessage.role">role</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#ResponseMessage.content">content</a>
                         </li>
                         <li>
+                                <a class="variable" href="#ResponseMessage.reasoning_content">reasoning_content</a>
+                        </li>
+                        <li>
                                 <a class="variable" href="#ResponseMessage.tool_calls">tool_calls</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ResponseMessage.role">role</a>
                         </li>
                 </ul>
 
@@ -405,16 +366,16 @@
                     <a class="class" href="#Delta">Delta</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#Delta.reasoning_content">reasoning_content</a>
+                                <a class="variable" href="#Delta.tool_calls">tool_calls</a>
                         </li>
                         <li>
                                 <a class="variable" href="#Delta.role">role</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Delta.content">content</a>
+                                <a class="variable" href="#Delta.reasoning_content">reasoning_content</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Delta.tool_calls">tool_calls</a>
+                                <a class="variable" href="#Delta.content">content</a>
                         </li>
                 </ul>
 
@@ -423,6 +384,9 @@
                     <a class="class" href="#ResponseLogprob">ResponseLogprob</a>
                             <ul class="memberlist">
                         <li>
+                                <a class="variable" href="#ResponseLogprob.token">token</a>
+                        </li>
+                        <li>
                                 <a class="variable" href="#ResponseLogprob.logprob">logprob</a>
                         </li>
                         <li>
@@ -430,9 +394,6 @@
                         </li>
                         <li>
                                 <a class="variable" href="#ResponseLogprob.top_logprobs">top_logprobs</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ResponseLogprob.token">token</a>
                         </li>
                 </ul>
 
@@ -450,16 +411,16 @@
                     <a class="class" href="#Choice">Choice</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#Choice.finish_reason">finish_reason</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#Choice.index">index</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Choice.logprobs">logprobs</a>
+                                <a class="variable" href="#Choice.message">message</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Choice.message">message</a>
+                                <a class="variable" href="#Choice.finish_reason">finish_reason</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#Choice.logprobs">logprobs</a>
                         </li>
                 </ul>
 
@@ -468,16 +429,16 @@
                     <a class="class" href="#ChunkChoice">ChunkChoice</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#ChunkChoice.logprobs">logprobs</a>
+                                <a class="variable" href="#ChunkChoice.delta">delta</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ChunkChoice.finish_reason">finish_reason</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ChunkChoice.delta">delta</a>
+                                <a class="variable" href="#ChunkChoice.index">index</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ChunkChoice.index">index</a>
+                                <a class="variable" href="#ChunkChoice.logprobs">logprobs</a>
                         </li>
                 </ul>
 
@@ -486,31 +447,31 @@
                     <a class="class" href="#Usage">Usage</a>
                             <ul class="memberlist">
                         <li>
+                                <a class="variable" href="#Usage.avg_compl_tok_per_sec">avg_compl_tok_per_sec</a>
+                        </li>
+                        <li>
                                 <a class="variable" href="#Usage.completion_tokens">completion_tokens</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#Usage.avg_prompt_tok_per_sec">avg_prompt_tok_per_sec</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#Usage.total_completion_time_sec">total_completion_time_sec</a>
                         </li>
                         <li>
                                 <a class="variable" href="#Usage.avg_tok_per_sec">avg_tok_per_sec</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Usage.avg_compl_tok_per_sec">avg_compl_tok_per_sec</a>
+                                <a class="variable" href="#Usage.total_tokens">total_tokens</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Usage.total_prompt_time_sec">total_prompt_time_sec</a>
+                                <a class="variable" href="#Usage.avg_prompt_tok_per_sec">avg_prompt_tok_per_sec</a>
                         </li>
                         <li>
                                 <a class="variable" href="#Usage.total_time_sec">total_time_sec</a>
                         </li>
                         <li>
+                                <a class="variable" href="#Usage.total_completion_time_sec">total_completion_time_sec</a>
+                        </li>
+                        <li>
                                 <a class="variable" href="#Usage.prompt_tokens">prompt_tokens</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Usage.total_tokens">total_tokens</a>
+                                <a class="variable" href="#Usage.total_prompt_time_sec">total_prompt_time_sec</a>
                         </li>
                 </ul>
 
@@ -519,10 +480,7 @@
                     <a class="class" href="#ChatCompletionResponse">ChatCompletionResponse</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#ChatCompletionResponse.object">object</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ChatCompletionResponse.system_fingerprint">system_fingerprint</a>
+                                <a class="variable" href="#ChatCompletionResponse.usage">usage</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ChatCompletionResponse.choices">choices</a>
@@ -531,10 +489,13 @@
                                 <a class="variable" href="#ChatCompletionResponse.id">id</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ChatCompletionResponse.usage">usage</a>
+                                <a class="variable" href="#ChatCompletionResponse.created">created</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ChatCompletionResponse.created">created</a>
+                                <a class="variable" href="#ChatCompletionResponse.system_fingerprint">system_fingerprint</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChatCompletionResponse.object">object</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ChatCompletionResponse.model">model</a>
@@ -546,25 +507,25 @@
                     <a class="class" href="#ChatCompletionChunkResponse">ChatCompletionChunkResponse</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#ChatCompletionChunkResponse.id">id</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#ChatCompletionChunkResponse.choices">choices</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ChatCompletionChunkResponse.system_fingerprint">system_fingerprint</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ChatCompletionChunkResponse.object">object</a>
+                                <a class="variable" href="#ChatCompletionChunkResponse.created">created</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ChatCompletionChunkResponse.model">model</a>
                         </li>
                         <li>
+                                <a class="variable" href="#ChatCompletionChunkResponse.object">object</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChatCompletionChunkResponse.system_fingerprint">system_fingerprint</a>
+                        </li>
+                        <li>
                                 <a class="variable" href="#ChatCompletionChunkResponse.usage">usage</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ChatCompletionChunkResponse.created">created</a>
+                                <a class="variable" href="#ChatCompletionChunkResponse.id">id</a>
                         </li>
                 </ul>
 
@@ -573,16 +534,16 @@
                     <a class="class" href="#CompletionChoice">CompletionChoice</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#CompletionChoice.finish_reason">finish_reason</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#CompletionChoice.text">text</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#CompletionChoice.logprobs">logprobs</a>
                         </li>
                         <li>
                                 <a class="variable" href="#CompletionChoice.index">index</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#CompletionChoice.finish_reason">finish_reason</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#CompletionChoice.text">text</a>
                         </li>
                 </ul>
 
@@ -594,10 +555,13 @@
                                 <a class="variable" href="#CompletionResponse.id">id</a>
                         </li>
                         <li>
-                                <a class="variable" href="#CompletionResponse.created">created</a>
+                                <a class="variable" href="#CompletionResponse.choices">choices</a>
                         </li>
                         <li>
                                 <a class="variable" href="#CompletionResponse.system_fingerprint">system_fingerprint</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#CompletionResponse.model">model</a>
                         </li>
                         <li>
                                 <a class="variable" href="#CompletionResponse.object">object</a>
@@ -606,10 +570,7 @@
                                 <a class="variable" href="#CompletionResponse.usage">usage</a>
                         </li>
                         <li>
-                                <a class="variable" href="#CompletionResponse.model">model</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#CompletionResponse.choices">choices</a>
+                                <a class="variable" href="#CompletionResponse.created">created</a>
                         </li>
                 </ul>
 
@@ -621,10 +582,10 @@
                                 <a class="variable" href="#TopLogprob.token">token</a>
                         </li>
                         <li>
-                                <a class="variable" href="#TopLogprob.logprob">logprob</a>
+                                <a class="variable" href="#TopLogprob.bytes">bytes</a>
                         </li>
                         <li>
-                                <a class="variable" href="#TopLogprob.bytes">bytes</a>
+                                <a class="variable" href="#TopLogprob.logprob">logprob</a>
                         </li>
                 </ul>
 
@@ -678,6 +639,15 @@
                     <a class="class" href="#McpServerConfigPy">McpServerConfigPy</a>
                             <ul class="memberlist">
                         <li>
+                                <a class="variable" href="#McpServerConfigPy.bearer_token">bearer_token</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#McpServerConfigPy.tool_prefix">tool_prefix</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#McpServerConfigPy.name">name</a>
+                        </li>
+                        <li>
                                 <a class="variable" href="#McpServerConfigPy.source">source</a>
                         </li>
                         <li>
@@ -689,15 +659,6 @@
                         <li>
                                 <a class="variable" href="#McpServerConfigPy.resources">resources</a>
                         </li>
-                        <li>
-                                <a class="variable" href="#McpServerConfigPy.bearer_token">bearer_token</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#McpServerConfigPy.name">name</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#McpServerConfigPy.tool_prefix">tool_prefix</a>
-                        </li>
                 </ul>
 
             </li>
@@ -708,13 +669,13 @@
                                 <a class="variable" href="#McpClientConfigPy.auto_register_tools">auto_register_tools</a>
                         </li>
                         <li>
-                                <a class="variable" href="#McpClientConfigPy.servers">servers</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#McpClientConfigPy.max_concurrent_calls">max_concurrent_calls</a>
                         </li>
                         <li>
                                 <a class="variable" href="#McpClientConfigPy.tool_timeout_secs">tool_timeout_secs</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#McpClientConfigPy.servers">servers</a>
                         </li>
                 </ul>
 
@@ -990,274 +951,94 @@ then nothing will happen.</p>
 
 
                             </div>
-                </section>
-                <section id="MultiModelRunner">
-                    <div class="attr class">
-            
-    <span class="def">class</span>
-    <span class="name">MultiModelRunner</span>:
-
-        
-    </div>
-    <a class="headerlink" href="#MultiModelRunner"></a>
-    
-            <div class="docstring"><p>A multi-model runner that provides a cleaner interface for managing multiple models.
-This wraps the existing Runner and provides model-specific methods.</p>
-</div>
-
-
-                            <div id="MultiModelRunner.send_chat_completion_request_to_model" class="classattr">
+                            <div id="Runner.unload_model" class="classattr">
                                 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">send_chat_completion_request_to_model</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">request</span>, </span><span class="param"><span class="n">model_id</span></span><span class="return-annotation">):</span></span>
+        <span class="name">unload_model</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">model_id</span></span><span class="return-annotation">):</span></span>
 
         
     </div>
-    <a class="headerlink" href="#MultiModelRunner.send_chat_completion_request_to_model"></a>
+    <a class="headerlink" href="#Runner.unload_model"></a>
     
-            <div class="docstring"><p>Send a chat completion request to a specific model.</p>
+            <div class="docstring"><p>Unload a model from memory while preserving its configuration for later reload.
+The model can be reloaded automatically when a request is sent to it, or manually
+using <code><a href="#Runner.reload_model">reload_model()</a></code>.</p>
 </div>
 
 
                             </div>
-                            <div id="MultiModelRunner.send_completion_request_to_model" class="classattr">
+                            <div id="Runner.reload_model" class="classattr">
                                 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">send_completion_request_to_model</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">request</span>, </span><span class="param"><span class="n">model_id</span></span><span class="return-annotation">):</span></span>
+        <span class="name">reload_model</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">model_id</span></span><span class="return-annotation">):</span></span>
 
         
     </div>
-    <a class="headerlink" href="#MultiModelRunner.send_completion_request_to_model"></a>
+    <a class="headerlink" href="#Runner.reload_model"></a>
     
-            <div class="docstring"><p>Send a completion request to a specific model.</p>
+            <div class="docstring"><p>Manually reload a previously unloaded model.</p>
 </div>
 
 
                             </div>
-                            <div id="MultiModelRunner.send_embedding_request_to_model" class="classattr">
+                            <div id="Runner.list_unloaded_models" class="classattr">
                                 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">send_embedding_request_to_model</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">request</span>, </span><span class="param"><span class="n">model_id</span></span><span class="return-annotation">):</span></span>
+        <span class="name">list_unloaded_models</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span></span><span class="return-annotation">):</span></span>
 
         
     </div>
-    <a class="headerlink" href="#MultiModelRunner.send_embedding_request_to_model"></a>
+    <a class="headerlink" href="#Runner.list_unloaded_models"></a>
     
-            <div class="docstring"><p>Send an embeddings request to a specific model.</p>
+            <div class="docstring"><p>List all unloaded model IDs.</p>
 </div>
 
 
                             </div>
-                            <div id="MultiModelRunner.list_models" class="classattr">
+                            <div id="Runner.is_model_loaded" class="classattr">
                                 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">list_models</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span></span><span class="return-annotation">):</span></span>
+        <span class="name">is_model_loaded</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">model_id</span></span><span class="return-annotation">):</span></span>
 
         
     </div>
-    <a class="headerlink" href="#MultiModelRunner.list_models"></a>
+    <a class="headerlink" href="#Runner.is_model_loaded"></a>
     
-            <div class="docstring"><p>List all available model IDs.</p>
+            <div class="docstring"><p>Check if a model is currently loaded (as opposed to unloaded).</p>
 </div>
 
 
                             </div>
-                            <div id="MultiModelRunner.max_sequence_length" class="classattr">
+                            <div id="Runner.get_model_status" class="classattr">
                                 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">max_sequence_length</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">model_id</span><span class="o">=</span><span class="kc">None</span></span><span class="return-annotation">):</span></span>
+        <span class="name">get_model_status</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">model_id</span></span><span class="return-annotation">):</span></span>
 
         
     </div>
-    <a class="headerlink" href="#MultiModelRunner.max_sequence_length"></a>
+    <a class="headerlink" href="#Runner.get_model_status"></a>
     
-            <div class="docstring"><p>Return the maximum supported sequence length for a model, if available.</p>
+            <div class="docstring"><p>Get the status of a model: "loaded", "unloaded", "reloading", or None if not found.</p>
 </div>
 
 
                             </div>
-                            <div id="MultiModelRunner.get_default_model_id" class="classattr">
+                            <div id="Runner.list_models_with_status" class="classattr">
                                 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">get_default_model_id</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span></span><span class="return-annotation">):</span></span>
+        <span class="name">list_models_with_status</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span></span><span class="return-annotation">):</span></span>
 
         
     </div>
-    <a class="headerlink" href="#MultiModelRunner.get_default_model_id"></a>
+    <a class="headerlink" href="#Runner.list_models_with_status"></a>
     
-            <div class="docstring"><p>Get the default model ID.</p>
-</div>
-
-
-                            </div>
-                            <div id="MultiModelRunner.set_default_model_id" class="classattr">
-                                <div class="attr function">
-            
-        <span class="def">def</span>
-        <span class="name">set_default_model_id</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">model_id</span></span><span class="return-annotation">):</span></span>
-
-        
-    </div>
-    <a class="headerlink" href="#MultiModelRunner.set_default_model_id"></a>
-    
-            <div class="docstring"><p>Set the default model ID.</p>
-</div>
-
-
-                            </div>
-                            <div id="MultiModelRunner.remove_model" class="classattr">
-                                <div class="attr function">
-            
-        <span class="def">def</span>
-        <span class="name">remove_model</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">model_id</span></span><span class="return-annotation">):</span></span>
-
-        
-    </div>
-    <a class="headerlink" href="#MultiModelRunner.remove_model"></a>
-    
-            <div class="docstring"><p>Remove a model by ID.</p>
-</div>
-
-
-                            </div>
-                            <div id="MultiModelRunner.send_chat_completion_request" class="classattr">
-                                <div class="attr function">
-            
-        <span class="def">def</span>
-        <span class="name">send_chat_completion_request</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">request</span>, </span><span class="param"><span class="n">model_id</span><span class="o">=</span><span class="kc">None</span></span><span class="return-annotation">):</span></span>
-
-        
-    </div>
-    <a class="headerlink" href="#MultiModelRunner.send_chat_completion_request"></a>
-    
-            <div class="docstring"><p>Send a chat completion request to the specified model.</p>
-</div>
-
-
-                            </div>
-                            <div id="MultiModelRunner.send_completion_request" class="classattr">
-                                <div class="attr function">
-            
-        <span class="def">def</span>
-        <span class="name">send_completion_request</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">request</span>, </span><span class="param"><span class="n">model_id</span><span class="o">=</span><span class="kc">None</span></span><span class="return-annotation">):</span></span>
-
-        
-    </div>
-    <a class="headerlink" href="#MultiModelRunner.send_completion_request"></a>
-    
-            <div class="docstring"><p>Send a completion request to the specified model.</p>
-</div>
-
-
-                            </div>
-                            <div id="MultiModelRunner.send_embedding_request" class="classattr">
-                                <div class="attr function">
-            
-        <span class="def">def</span>
-        <span class="name">send_embedding_request</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">request</span>, </span><span class="param"><span class="n">model_id</span><span class="o">=</span><span class="kc">None</span></span><span class="return-annotation">):</span></span>
-
-        
-    </div>
-    <a class="headerlink" href="#MultiModelRunner.send_embedding_request"></a>
-    
-            <div class="docstring"><p>Send an embeddings request to the specified model.
-This returns the embeddings as [batch size, embedding dim]</p>
-</div>
-
-
-                            </div>
-                            <div id="MultiModelRunner.generate_image" class="classattr">
-                                <div class="attr function">
-            
-        <span class="def">def</span>
-        <span class="name">generate_image</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="bp">self</span>,</span><span class="param">	<span class="o">/</span>,</span><span class="param">	<span class="n">prompt</span>,</span><span class="param">	<span class="n">response_format</span>,</span><span class="param">	<span class="n">height</span><span class="o">=</span><span class="mi">720</span>,</span><span class="param">	<span class="n">width</span><span class="o">=</span><span class="mi">1280</span>,</span><span class="param">	<span class="n">model_id</span><span class="o">=</span><span class="kc">None</span></span><span class="return-annotation">):</span></span>
-
-        
-    </div>
-    <a class="headerlink" href="#MultiModelRunner.generate_image"></a>
-    
-            <div class="docstring"><p>Generate an image using the specified model.</p>
-</div>
-
-
-                            </div>
-                            <div id="MultiModelRunner.generate_audio" class="classattr">
-                                <div class="attr function">
-            
-        <span class="def">def</span>
-        <span class="name">generate_audio</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">prompt</span>, </span><span class="param"><span class="n">model_id</span><span class="o">=</span><span class="kc">None</span></span><span class="return-annotation">):</span></span>
-
-        
-    </div>
-    <a class="headerlink" href="#MultiModelRunner.generate_audio"></a>
-    
-            <div class="docstring"><p>Generate audio using the specified model.</p>
-</div>
-
-
-                            </div>
-                            <div id="MultiModelRunner.send_re_isq" class="classattr">
-                                <div class="attr function">
-            
-        <span class="def">def</span>
-        <span class="name">send_re_isq</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">dtype</span>, </span><span class="param"><span class="n">model_id</span><span class="o">=</span><span class="kc">None</span></span><span class="return-annotation">):</span></span>
-
-        
-    </div>
-    <a class="headerlink" href="#MultiModelRunner.send_re_isq"></a>
-    
-            <div class="docstring"><p>Send a request to re-ISQ the specified model.</p>
-</div>
-
-
-                            </div>
-                            <div id="MultiModelRunner.tokenize_text" class="classattr">
-                                <div class="attr function">
-            
-        <span class="def">def</span>
-        <span class="name">tokenize_text</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">text</span>, </span><span class="param"><span class="n">add_special_tokens</span>, </span><span class="param"><span class="n">enable_thinking</span>, </span><span class="param"><span class="n">model_id</span><span class="o">=</span><span class="kc">None</span></span><span class="return-annotation">):</span></span>
-
-        
-    </div>
-    <a class="headerlink" href="#MultiModelRunner.tokenize_text"></a>
-    
-            <div class="docstring"><p>Tokenize some text using the specified model.</p>
-</div>
-
-
-                            </div>
-                            <div id="MultiModelRunner.detokenize_text" class="classattr">
-                                <div class="attr function">
-            
-        <span class="def">def</span>
-        <span class="name">detokenize_text</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span>, </span><span class="param"><span class="n">tokens</span>, </span><span class="param"><span class="n">skip_special_tokens</span>, </span><span class="param"><span class="n">model_id</span><span class="o">=</span><span class="kc">None</span></span><span class="return-annotation">):</span></span>
-
-        
-    </div>
-    <a class="headerlink" href="#MultiModelRunner.detokenize_text"></a>
-    
-            <div class="docstring"><p>Detokenize some tokens using the specified model.</p>
-</div>
-
-
-                            </div>
-                            <div id="MultiModelRunner.inner" class="classattr">
-                                <div class="attr function">
-            
-        <span class="def">def</span>
-        <span class="name">inner</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="o">/</span></span><span class="return-annotation">):</span></span>
-
-        
-    </div>
-    <a class="headerlink" href="#MultiModelRunner.inner"></a>
-    
-            <div class="docstring"><p>Get a copy of the underlying Runner instance.</p>
+            <div class="docstring"><p>List all models with their status (loaded, unloaded, reloading).</p>
 </div>
 
 
@@ -2143,6 +1924,17 @@ This returns the embeddings as [batch size, embedding dim]</p>
 </div>
 
 
+                            <div id="ResponseMessage.content" class="classattr">
+                                <div class="attr variable">
+            <span class="name">content</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResponseMessage.content"></a>
+    
+    
+
+                            </div>
                             <div id="ResponseMessage.reasoning_content" class="classattr">
                                 <div class="attr variable">
             <span class="name">reasoning_content</span>
@@ -2157,28 +1949,6 @@ This contains chain-of-thought reasoning that is not intended for end users.</p>
 
 
                             </div>
-                            <div id="ResponseMessage.role" class="classattr">
-                                <div class="attr variable">
-            <span class="name">role</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ResponseMessage.role"></a>
-    
-    
-
-                            </div>
-                            <div id="ResponseMessage.content" class="classattr">
-                                <div class="attr variable">
-            <span class="name">content</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ResponseMessage.content"></a>
-    
-    
-
-                            </div>
                             <div id="ResponseMessage.tool_calls" class="classattr">
                                 <div class="attr variable">
             <span class="name">tool_calls</span>
@@ -2186,6 +1956,17 @@ This contains chain-of-thought reasoning that is not intended for end users.</p>
         
     </div>
     <a class="headerlink" href="#ResponseMessage.tool_calls"></a>
+    
+    
+
+                            </div>
+                            <div id="ResponseMessage.role" class="classattr">
+                                <div class="attr variable">
+            <span class="name">role</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResponseMessage.role"></a>
     
     
 
@@ -2205,6 +1986,28 @@ This contains chain-of-thought reasoning that is not intended for end users.</p>
 </div>
 
 
+                            <div id="Delta.tool_calls" class="classattr">
+                                <div class="attr variable">
+            <span class="name">tool_calls</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Delta.tool_calls"></a>
+    
+    
+
+                            </div>
+                            <div id="Delta.role" class="classattr">
+                                <div class="attr variable">
+            <span class="name">role</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Delta.role"></a>
+    
+    
+
+                            </div>
                             <div id="Delta.reasoning_content" class="classattr">
                                 <div class="attr variable">
             <span class="name">reasoning_content</span>
@@ -2219,17 +2022,6 @@ This contains incremental chain-of-thought reasoning.</p>
 
 
                             </div>
-                            <div id="Delta.role" class="classattr">
-                                <div class="attr variable">
-            <span class="name">role</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Delta.role"></a>
-    
-    
-
-                            </div>
                             <div id="Delta.content" class="classattr">
                                 <div class="attr variable">
             <span class="name">content</span>
@@ -2237,17 +2029,6 @@ This contains incremental chain-of-thought reasoning.</p>
         
     </div>
     <a class="headerlink" href="#Delta.content"></a>
-    
-    
-
-                            </div>
-                            <div id="Delta.tool_calls" class="classattr">
-                                <div class="attr variable">
-            <span class="name">tool_calls</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Delta.tool_calls"></a>
     
     
 
@@ -2267,6 +2048,17 @@ This contains incremental chain-of-thought reasoning.</p>
 </div>
 
 
+                            <div id="ResponseLogprob.token" class="classattr">
+                                <div class="attr variable">
+            <span class="name">token</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResponseLogprob.token"></a>
+    
+    
+
+                            </div>
                             <div id="ResponseLogprob.logprob" class="classattr">
                                 <div class="attr variable">
             <span class="name">logprob</span>
@@ -2296,17 +2088,6 @@ This contains incremental chain-of-thought reasoning.</p>
         
     </div>
     <a class="headerlink" href="#ResponseLogprob.top_logprobs"></a>
-    
-    
-
-                            </div>
-                            <div id="ResponseLogprob.token" class="classattr">
-                                <div class="attr variable">
-            <span class="name">token</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ResponseLogprob.token"></a>
     
     
 
@@ -2352,17 +2133,6 @@ This contains incremental chain-of-thought reasoning.</p>
 </div>
 
 
-                            <div id="Choice.finish_reason" class="classattr">
-                                <div class="attr variable">
-            <span class="name">finish_reason</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Choice.finish_reason"></a>
-    
-    
-
-                            </div>
                             <div id="Choice.index" class="classattr">
                                 <div class="attr variable">
             <span class="name">index</span>
@@ -2374,17 +2144,6 @@ This contains incremental chain-of-thought reasoning.</p>
     
 
                             </div>
-                            <div id="Choice.logprobs" class="classattr">
-                                <div class="attr variable">
-            <span class="name">logprobs</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Choice.logprobs"></a>
-    
-    
-
-                            </div>
                             <div id="Choice.message" class="classattr">
                                 <div class="attr variable">
             <span class="name">message</span>
@@ -2392,6 +2151,28 @@ This contains incremental chain-of-thought reasoning.</p>
         
     </div>
     <a class="headerlink" href="#Choice.message"></a>
+    
+    
+
+                            </div>
+                            <div id="Choice.finish_reason" class="classattr">
+                                <div class="attr variable">
+            <span class="name">finish_reason</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Choice.finish_reason"></a>
+    
+    
+
+                            </div>
+                            <div id="Choice.logprobs" class="classattr">
+                                <div class="attr variable">
+            <span class="name">logprobs</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Choice.logprobs"></a>
     
     
 
@@ -2411,13 +2192,13 @@ This contains incremental chain-of-thought reasoning.</p>
 </div>
 
 
-                            <div id="ChunkChoice.logprobs" class="classattr">
+                            <div id="ChunkChoice.delta" class="classattr">
                                 <div class="attr variable">
-            <span class="name">logprobs</span>
+            <span class="name">delta</span>
 
         
     </div>
-    <a class="headerlink" href="#ChunkChoice.logprobs"></a>
+    <a class="headerlink" href="#ChunkChoice.delta"></a>
     
     
 
@@ -2433,17 +2214,6 @@ This contains incremental chain-of-thought reasoning.</p>
     
 
                             </div>
-                            <div id="ChunkChoice.delta" class="classattr">
-                                <div class="attr variable">
-            <span class="name">delta</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChunkChoice.delta"></a>
-    
-    
-
-                            </div>
                             <div id="ChunkChoice.index" class="classattr">
                                 <div class="attr variable">
             <span class="name">index</span>
@@ -2451,6 +2221,17 @@ This contains incremental chain-of-thought reasoning.</p>
         
     </div>
     <a class="headerlink" href="#ChunkChoice.index"></a>
+    
+    
+
+                            </div>
+                            <div id="ChunkChoice.logprobs" class="classattr">
+                                <div class="attr variable">
+            <span class="name">logprobs</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChunkChoice.logprobs"></a>
     
     
 
@@ -2470,6 +2251,17 @@ This contains incremental chain-of-thought reasoning.</p>
 </div>
 
 
+                            <div id="Usage.avg_compl_tok_per_sec" class="classattr">
+                                <div class="attr variable">
+            <span class="name">avg_compl_tok_per_sec</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Usage.avg_compl_tok_per_sec"></a>
+    
+    
+
+                            </div>
                             <div id="Usage.completion_tokens" class="classattr">
                                 <div class="attr variable">
             <span class="name">completion_tokens</span>
@@ -2477,28 +2269,6 @@ This contains incremental chain-of-thought reasoning.</p>
         
     </div>
     <a class="headerlink" href="#Usage.completion_tokens"></a>
-    
-    
-
-                            </div>
-                            <div id="Usage.avg_prompt_tok_per_sec" class="classattr">
-                                <div class="attr variable">
-            <span class="name">avg_prompt_tok_per_sec</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Usage.avg_prompt_tok_per_sec"></a>
-    
-    
-
-                            </div>
-                            <div id="Usage.total_completion_time_sec" class="classattr">
-                                <div class="attr variable">
-            <span class="name">total_completion_time_sec</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Usage.total_completion_time_sec"></a>
     
     
 
@@ -2514,24 +2284,24 @@ This contains incremental chain-of-thought reasoning.</p>
     
 
                             </div>
-                            <div id="Usage.avg_compl_tok_per_sec" class="classattr">
+                            <div id="Usage.total_tokens" class="classattr">
                                 <div class="attr variable">
-            <span class="name">avg_compl_tok_per_sec</span>
+            <span class="name">total_tokens</span>
 
         
     </div>
-    <a class="headerlink" href="#Usage.avg_compl_tok_per_sec"></a>
+    <a class="headerlink" href="#Usage.total_tokens"></a>
     
     
 
                             </div>
-                            <div id="Usage.total_prompt_time_sec" class="classattr">
+                            <div id="Usage.avg_prompt_tok_per_sec" class="classattr">
                                 <div class="attr variable">
-            <span class="name">total_prompt_time_sec</span>
+            <span class="name">avg_prompt_tok_per_sec</span>
 
         
     </div>
-    <a class="headerlink" href="#Usage.total_prompt_time_sec"></a>
+    <a class="headerlink" href="#Usage.avg_prompt_tok_per_sec"></a>
     
     
 
@@ -2547,6 +2317,17 @@ This contains incremental chain-of-thought reasoning.</p>
     
 
                             </div>
+                            <div id="Usage.total_completion_time_sec" class="classattr">
+                                <div class="attr variable">
+            <span class="name">total_completion_time_sec</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Usage.total_completion_time_sec"></a>
+    
+    
+
+                            </div>
                             <div id="Usage.prompt_tokens" class="classattr">
                                 <div class="attr variable">
             <span class="name">prompt_tokens</span>
@@ -2558,13 +2339,13 @@ This contains incremental chain-of-thought reasoning.</p>
     
 
                             </div>
-                            <div id="Usage.total_tokens" class="classattr">
+                            <div id="Usage.total_prompt_time_sec" class="classattr">
                                 <div class="attr variable">
-            <span class="name">total_tokens</span>
+            <span class="name">total_prompt_time_sec</span>
 
         
     </div>
-    <a class="headerlink" href="#Usage.total_tokens"></a>
+    <a class="headerlink" href="#Usage.total_prompt_time_sec"></a>
     
     
 
@@ -2584,24 +2365,13 @@ This contains incremental chain-of-thought reasoning.</p>
 </div>
 
 
-                            <div id="ChatCompletionResponse.object" class="classattr">
+                            <div id="ChatCompletionResponse.usage" class="classattr">
                                 <div class="attr variable">
-            <span class="name">object</span>
+            <span class="name">usage</span>
 
         
     </div>
-    <a class="headerlink" href="#ChatCompletionResponse.object"></a>
-    
-    
-
-                            </div>
-                            <div id="ChatCompletionResponse.system_fingerprint" class="classattr">
-                                <div class="attr variable">
-            <span class="name">system_fingerprint</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionResponse.system_fingerprint"></a>
+    <a class="headerlink" href="#ChatCompletionResponse.usage"></a>
     
     
 
@@ -2628,17 +2398,6 @@ This contains incremental chain-of-thought reasoning.</p>
     
 
                             </div>
-                            <div id="ChatCompletionResponse.usage" class="classattr">
-                                <div class="attr variable">
-            <span class="name">usage</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionResponse.usage"></a>
-    
-    
-
-                            </div>
                             <div id="ChatCompletionResponse.created" class="classattr">
                                 <div class="attr variable">
             <span class="name">created</span>
@@ -2646,6 +2405,28 @@ This contains incremental chain-of-thought reasoning.</p>
         
     </div>
     <a class="headerlink" href="#ChatCompletionResponse.created"></a>
+    
+    
+
+                            </div>
+                            <div id="ChatCompletionResponse.system_fingerprint" class="classattr">
+                                <div class="attr variable">
+            <span class="name">system_fingerprint</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionResponse.system_fingerprint"></a>
+    
+    
+
+                            </div>
+                            <div id="ChatCompletionResponse.object" class="classattr">
+                                <div class="attr variable">
+            <span class="name">object</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionResponse.object"></a>
     
     
 
@@ -2676,17 +2457,6 @@ This contains incremental chain-of-thought reasoning.</p>
 </div>
 
 
-                            <div id="ChatCompletionChunkResponse.id" class="classattr">
-                                <div class="attr variable">
-            <span class="name">id</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionChunkResponse.id"></a>
-    
-    
-
-                            </div>
                             <div id="ChatCompletionChunkResponse.choices" class="classattr">
                                 <div class="attr variable">
             <span class="name">choices</span>
@@ -2698,24 +2468,13 @@ This contains incremental chain-of-thought reasoning.</p>
     
 
                             </div>
-                            <div id="ChatCompletionChunkResponse.system_fingerprint" class="classattr">
+                            <div id="ChatCompletionChunkResponse.created" class="classattr">
                                 <div class="attr variable">
-            <span class="name">system_fingerprint</span>
+            <span class="name">created</span>
 
         
     </div>
-    <a class="headerlink" href="#ChatCompletionChunkResponse.system_fingerprint"></a>
-    
-    
-
-                            </div>
-                            <div id="ChatCompletionChunkResponse.object" class="classattr">
-                                <div class="attr variable">
-            <span class="name">object</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionChunkResponse.object"></a>
+    <a class="headerlink" href="#ChatCompletionChunkResponse.created"></a>
     
     
 
@@ -2731,6 +2490,28 @@ This contains incremental chain-of-thought reasoning.</p>
     
 
                             </div>
+                            <div id="ChatCompletionChunkResponse.object" class="classattr">
+                                <div class="attr variable">
+            <span class="name">object</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionChunkResponse.object"></a>
+    
+    
+
+                            </div>
+                            <div id="ChatCompletionChunkResponse.system_fingerprint" class="classattr">
+                                <div class="attr variable">
+            <span class="name">system_fingerprint</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionChunkResponse.system_fingerprint"></a>
+    
+    
+
+                            </div>
                             <div id="ChatCompletionChunkResponse.usage" class="classattr">
                                 <div class="attr variable">
             <span class="name">usage</span>
@@ -2742,13 +2523,13 @@ This contains incremental chain-of-thought reasoning.</p>
     
 
                             </div>
-                            <div id="ChatCompletionChunkResponse.created" class="classattr">
+                            <div id="ChatCompletionChunkResponse.id" class="classattr">
                                 <div class="attr variable">
-            <span class="name">created</span>
+            <span class="name">id</span>
 
         
     </div>
-    <a class="headerlink" href="#ChatCompletionChunkResponse.created"></a>
+    <a class="headerlink" href="#ChatCompletionChunkResponse.id"></a>
     
     
 
@@ -2768,28 +2549,6 @@ This contains incremental chain-of-thought reasoning.</p>
 </div>
 
 
-                            <div id="CompletionChoice.finish_reason" class="classattr">
-                                <div class="attr variable">
-            <span class="name">finish_reason</span>
-
-        
-    </div>
-    <a class="headerlink" href="#CompletionChoice.finish_reason"></a>
-    
-    
-
-                            </div>
-                            <div id="CompletionChoice.text" class="classattr">
-                                <div class="attr variable">
-            <span class="name">text</span>
-
-        
-    </div>
-    <a class="headerlink" href="#CompletionChoice.text"></a>
-    
-    
-
-                            </div>
                             <div id="CompletionChoice.logprobs" class="classattr">
                                 <div class="attr variable">
             <span class="name">logprobs</span>
@@ -2808,6 +2567,28 @@ This contains incremental chain-of-thought reasoning.</p>
         
     </div>
     <a class="headerlink" href="#CompletionChoice.index"></a>
+    
+    
+
+                            </div>
+                            <div id="CompletionChoice.finish_reason" class="classattr">
+                                <div class="attr variable">
+            <span class="name">finish_reason</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CompletionChoice.finish_reason"></a>
+    
+    
+
+                            </div>
+                            <div id="CompletionChoice.text" class="classattr">
+                                <div class="attr variable">
+            <span class="name">text</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CompletionChoice.text"></a>
     
     
 
@@ -2838,13 +2619,13 @@ This contains incremental chain-of-thought reasoning.</p>
     
 
                             </div>
-                            <div id="CompletionResponse.created" class="classattr">
+                            <div id="CompletionResponse.choices" class="classattr">
                                 <div class="attr variable">
-            <span class="name">created</span>
+            <span class="name">choices</span>
 
         
     </div>
-    <a class="headerlink" href="#CompletionResponse.created"></a>
+    <a class="headerlink" href="#CompletionResponse.choices"></a>
     
     
 
@@ -2856,6 +2637,17 @@ This contains incremental chain-of-thought reasoning.</p>
         
     </div>
     <a class="headerlink" href="#CompletionResponse.system_fingerprint"></a>
+    
+    
+
+                            </div>
+                            <div id="CompletionResponse.model" class="classattr">
+                                <div class="attr variable">
+            <span class="name">model</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CompletionResponse.model"></a>
     
     
 
@@ -2882,24 +2674,13 @@ This contains incremental chain-of-thought reasoning.</p>
     
 
                             </div>
-                            <div id="CompletionResponse.model" class="classattr">
+                            <div id="CompletionResponse.created" class="classattr">
                                 <div class="attr variable">
-            <span class="name">model</span>
+            <span class="name">created</span>
 
         
     </div>
-    <a class="headerlink" href="#CompletionResponse.model"></a>
-    
-    
-
-                            </div>
-                            <div id="CompletionResponse.choices" class="classattr">
-                                <div class="attr variable">
-            <span class="name">choices</span>
-
-        
-    </div>
-    <a class="headerlink" href="#CompletionResponse.choices"></a>
+    <a class="headerlink" href="#CompletionResponse.created"></a>
     
     
 
@@ -2930,17 +2711,6 @@ This contains incremental chain-of-thought reasoning.</p>
     
 
                             </div>
-                            <div id="TopLogprob.logprob" class="classattr">
-                                <div class="attr variable">
-            <span class="name">logprob</span>
-
-        
-    </div>
-    <a class="headerlink" href="#TopLogprob.logprob"></a>
-    
-    
-
-                            </div>
                             <div id="TopLogprob.bytes" class="classattr">
                                 <div class="attr variable">
             <span class="name">bytes</span>
@@ -2948,6 +2718,17 @@ This contains incremental chain-of-thought reasoning.</p>
         
     </div>
     <a class="headerlink" href="#TopLogprob.bytes"></a>
+    
+    
+
+                            </div>
+                            <div id="TopLogprob.logprob" class="classattr">
+                                <div class="attr variable">
+            <span class="name">logprob</span>
+
+        
+    </div>
+    <a class="headerlink" href="#TopLogprob.logprob"></a>
     
     
 
@@ -3124,6 +2905,39 @@ This contains incremental chain-of-thought reasoning.</p>
 </div>
 
 
+                            <div id="McpServerConfigPy.bearer_token" class="classattr">
+                                <div class="attr variable">
+            <span class="name">bearer_token</span>
+
+        
+    </div>
+    <a class="headerlink" href="#McpServerConfigPy.bearer_token"></a>
+    
+    
+
+                            </div>
+                            <div id="McpServerConfigPy.tool_prefix" class="classattr">
+                                <div class="attr variable">
+            <span class="name">tool_prefix</span>
+
+        
+    </div>
+    <a class="headerlink" href="#McpServerConfigPy.tool_prefix"></a>
+    
+    
+
+                            </div>
+                            <div id="McpServerConfigPy.name" class="classattr">
+                                <div class="attr variable">
+            <span class="name">name</span>
+
+        
+    </div>
+    <a class="headerlink" href="#McpServerConfigPy.name"></a>
+    
+    
+
+                            </div>
                             <div id="McpServerConfigPy.source" class="classattr">
                                 <div class="attr variable">
             <span class="name">source</span>
@@ -3168,39 +2982,6 @@ This contains incremental chain-of-thought reasoning.</p>
     
 
                             </div>
-                            <div id="McpServerConfigPy.bearer_token" class="classattr">
-                                <div class="attr variable">
-            <span class="name">bearer_token</span>
-
-        
-    </div>
-    <a class="headerlink" href="#McpServerConfigPy.bearer_token"></a>
-    
-    
-
-                            </div>
-                            <div id="McpServerConfigPy.name" class="classattr">
-                                <div class="attr variable">
-            <span class="name">name</span>
-
-        
-    </div>
-    <a class="headerlink" href="#McpServerConfigPy.name"></a>
-    
-    
-
-                            </div>
-                            <div id="McpServerConfigPy.tool_prefix" class="classattr">
-                                <div class="attr variable">
-            <span class="name">tool_prefix</span>
-
-        
-    </div>
-    <a class="headerlink" href="#McpServerConfigPy.tool_prefix"></a>
-    
-    
-
-                            </div>
                 </section>
                 <section id="McpClientConfigPy">
                     <div class="attr class">
@@ -3227,17 +3008,6 @@ This contains incremental chain-of-thought reasoning.</p>
     
 
                             </div>
-                            <div id="McpClientConfigPy.servers" class="classattr">
-                                <div class="attr variable">
-            <span class="name">servers</span>
-
-        
-    </div>
-    <a class="headerlink" href="#McpClientConfigPy.servers"></a>
-    
-    
-
-                            </div>
                             <div id="McpClientConfigPy.max_concurrent_calls" class="classattr">
                                 <div class="attr variable">
             <span class="name">max_concurrent_calls</span>
@@ -3256,6 +3026,17 @@ This contains incremental chain-of-thought reasoning.</p>
         
     </div>
     <a class="headerlink" href="#McpClientConfigPy.tool_timeout_secs"></a>
+    
+    
+
+                            </div>
+                            <div id="McpClientConfigPy.servers" class="classattr">
+                                <div class="attr variable">
+            <span class="name">servers</span>
+
+        
+    </div>
+    <a class="headerlink" href="#McpClientConfigPy.servers"></a>
     
     
 

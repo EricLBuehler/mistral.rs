@@ -4,10 +4,10 @@
 <a href=#4 id=4 data-nosnippet>4</a>
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>anyhow::Result;
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>candle_core::{DType, Device, Tensor};
-<a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>serde::Deserialize;
+<a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>tracing::info;
 <a href=#9 id=9 data-nosnippet>9</a>
-<a href=#10 id=10 data-nosnippet>10</a><span class="attr">#[derive(Clone, Copy, Default, Debug, Deserialize, PartialEq)]
+<a href=#10 id=10 data-nosnippet>10</a><span class="attr">#[derive(Clone, Copy, Default, Debug, Deserialize, Serialize, PartialEq)]
 <a href=#11 id=11 data-nosnippet>11</a>#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3::pyclass(eq, eq_int))]
 <a href=#12 id=12 data-nosnippet>12</a></span><span class="doccomment">/// DType for the model.
 <a href=#13 id=13 data-nosnippet>13</a>///
