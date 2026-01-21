@@ -72,7 +72,7 @@
 <a href=#72 id=72 data-nosnippet>72</a>    </span><span class="kw">pub fn </span>set_prefix_caching_enabled_sync(<span class="kw-2">&amp;mut </span><span class="self">self</span>, enabled: bool) {
 <a href=#73 id=73 data-nosnippet>73</a>        <span class="self">self</span>.prefix_caching_enabled = enabled;
 <a href=#74 id=74 data-nosnippet>74</a>        <span class="kw">if </span>enabled {
-<a href=#75 id=75 data-nosnippet>75</a>            <span class="macro">info!</span>(<span class="string">"PagedAttention prefix caching is enabled."</span>);
+<a href=#75 id=75 data-nosnippet>75</a>            <span class="macro">info!</span>(<span class="string">"Prefix caching enabled (block-level, PagedAttention). Expect higher multi-turn throughput for both text and multimodal."</span>);
 <a href=#76 id=76 data-nosnippet>76</a>        }
 <a href=#77 id=77 data-nosnippet>77</a>        <span class="comment">// Update the block engine - we need to block on the async mutex
 <a href=#78 id=78 data-nosnippet>78</a>        // This is called once at startup, so blocking is acceptable
