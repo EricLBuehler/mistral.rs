@@ -3,6 +3,8 @@ pub(crate) mod deepseek3;
 pub(crate) mod gemma;
 pub(crate) mod gemma2;
 pub(crate) mod glm4;
+pub(crate) mod glm4_moe;
+pub(crate) mod glm4_moe_lite;
 pub(crate) mod gpt_oss;
 pub(crate) mod granite;
 pub(crate) mod llama;
