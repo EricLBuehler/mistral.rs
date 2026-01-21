@@ -407,6 +407,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
    - [Sampling & penalty options](docs/SAMPLING.md)
    - Prompt chunking for large inputs
    - Integrated [tool calling](docs/TOOL_CALLING.md) with customizable Python/Rust native tool and search callbacks
+   - Load [multiple models](docs/multi_model/README.md) and unload/reload at runtime.
 
 5. **Advanced Features**
    - High-throughput with [PagedAttention](docs/PAGED_ATTENTION.md) & FlashAttention V2/V3
@@ -678,6 +679,8 @@ curl http://localhost:1234/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "meta-llama/Llama-3.2-3B-Instruct", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
+
+**Model unloading**: Free memory by unloading models while preserving configuration for automatic reload on next request.
 
 📖 **[Complete multi-model documentation →](docs/multi_model/README.md)**
 
