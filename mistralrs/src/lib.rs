@@ -10,6 +10,10 @@
 //! - [`VisionModelBuilder`]
 //! - [`AnyMoeModelBuilder`]
 //!
+//! For loading multiple models simultaneously, use [`MultiModelBuilder`].
+//! The returned [`Model`] supports `_with_model` method variants and runtime
+//! model management (unload/reload).
+//!
 //! ## Example
 //! ```no_run
 //! use anyhow::Result;
