@@ -292,6 +292,43 @@ runner.set_default_model_id("Qwen/Qwen3-4B")
 runner.remove_model("meta-llama/Llama-3.2-3B-Instruct")
 ```
 
+### Model Unloading and Reloading
+
+You can unload models to free memory and reload them on demand:
+
+```python
+# Check model status
+status = runner.get_model_status("meta-llama/Llama-3.2-3B-Instruct")
+print(f"Model status: {status}")  # "loaded", "unloaded", or "reloading"
+
+# List models with their status
+models_with_status = runner.list_models_with_status()
+for model_id, status in models_with_status:
+    print(f"{model_id}: {status}")
+
+# Unload a model to free memory
+runner.unload_model("meta-llama/Llama-3.2-3B-Instruct")
+
+# Check if model is loaded
+is_loaded = runner.is_model_loaded("meta-llama/Llama-3.2-3B-Instruct")
+print(f"Model loaded: {is_loaded}")  # False
+
+# List unloaded models
+unloaded = runner.list_unloaded_models()
+print(f"Unloaded models: {unloaded}")
+
+# Manually reload a model
+runner.reload_model("meta-llama/Llama-3.2-3B-Instruct")
+
+# Auto-reload: sending a request to an unloaded model will reload it automatically
+response = runner.send_chat_completion_request(
+    mistralrs.ChatCompletionRequest(
+        model="meta-llama/Llama-3.2-3B-Instruct",  # Will auto-reload if unloaded
+        messages=[{"role": "user", "content": "Hello!"}]
+    )
+)
+```
+
 ### Server Configuration
 For server-based multi-model deployment, see the [multi-model documentation](../docs/multi_model/README.md).
 

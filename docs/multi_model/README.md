@@ -190,6 +190,113 @@ mistralrs-server [OPTIONS] --multi-model --multi-model-config <CONFIG> [--defaul
 }
 ```
 
+## Model Unloading and Reloading
+
+You can dynamically unload models to free memory and reload them on demand. This is useful for managing GPU memory when working with multiple large models.
+
+### Unload a Model
+
+Unload a model from memory while preserving its configuration for later reload:
+
+```bash
+curl -X POST http://localhost:1234/v1/models/unload \
+  -H "Content-Type: application/json" \
+  -d '{"model_id": "meta-llama/Llama-3.2-3B-Instruct"}'
+```
+
+Response:
+```json
+{
+  "model_id": "meta-llama/Llama-3.2-3B-Instruct",
+  "status": "unloaded"
+}
+```
+
+### Reload a Model
+
+Manually reload a previously unloaded model:
+
+```bash
+curl -X POST http://localhost:1234/v1/models/reload \
+  -H "Content-Type: application/json" \
+  -d '{"model_id": "meta-llama/Llama-3.2-3B-Instruct"}'
+```
+
+Response:
+```json
+{
+  "model_id": "meta-llama/Llama-3.2-3B-Instruct",
+  "status": "loaded"
+}
+```
+
+### Check Model Status
+
+Get the current status of a specific model:
+
+```bash
+curl -X POST http://localhost:1234/v1/models/status \
+  -H "Content-Type: application/json" \
+  -d '{"model_id": "meta-llama/Llama-3.2-3B-Instruct"}'
+```
+
+Response:
+```json
+{
+  "model_id": "meta-llama/Llama-3.2-3B-Instruct",
+  "status": "loaded"
+}
+```
+
+Possible status values:
+- `loaded`: Model is loaded and ready
+- `unloaded`: Model is unloaded but can be reloaded
+- `reloading`: Model is currently being reloaded
+- `not_found`: Model ID not recognized
+- `no_loader_config`: Model cannot be reloaded (missing loader configuration)
+- `internal_error`: An internal error occurred
+
+### Auto-Reload
+
+When a request is sent to an unloaded model, it will automatically reload before processing the request. This enables a "lazy loading" pattern where models are only loaded when needed.
+
+### List Models with Status
+
+The `/v1/models` endpoint now includes status information:
+
+```bash
+curl http://localhost:1234/v1/models
+```
+
+Response:
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "default",
+      "object": "model",
+      "created": 1234567890,
+      "owned_by": "local"
+    },
+    {
+      "id": "meta-llama/Llama-3.2-3B-Instruct",
+      "object": "model",
+      "created": 1234567890,
+      "owned_by": "local",
+      "status": "loaded"
+    },
+    {
+      "id": "Qwen/Qwen3-4B",
+      "object": "model",
+      "created": 1234567890,
+      "owned_by": "local",
+      "status": "unloaded"
+    }
+  ]
+}
+```
+
 ## Notes
 
 - Each model runs in its own engine thread
@@ -197,3 +304,4 @@ mistralrs-server [OPTIONS] --multi-model --multi-model-config <CONFIG> [--defaul
 - Memory usage scales with the number of loaded models
 - All models share the same server configuration (port, logging, etc.)
 - Interactive mode uses the default model or the first model if no default is set
+- You can unload all models (including the last one) - they will auto-reload when accessed

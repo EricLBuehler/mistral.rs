@@ -427,3 +427,141 @@ Example with `curl`:
 ```bash
 curl http://localhost:<port>/re_isq -H "Content-Type: application/json" -H "Authorization: Bearer EMPTY" -d '{"ggml_type":"4"}'
 ```
+
+## Model Management Endpoints
+
+These endpoints allow dynamic management of loaded models, enabling you to free memory by unloading models and reload them on demand.
+
+### `POST`: `/v1/models/unload`
+
+Unload a model from memory while preserving its configuration for later reload. The model can be reloaded manually or will auto-reload when a request is sent to it.
+
+**Request body:**
+```json
+{
+  "model_id": "meta-llama/Llama-3.2-3B-Instruct"
+}
+```
+
+**Response:**
+```json
+{
+  "model_id": "meta-llama/Llama-3.2-3B-Instruct",
+  "status": "unloaded"
+}
+```
+
+Example with `curl`:
+```bash
+curl -X POST http://localhost:1234/v1/models/unload \
+  -H "Content-Type: application/json" \
+  -d '{"model_id": "meta-llama/Llama-3.2-3B-Instruct"}'
+```
+
+### `POST`: `/v1/models/reload`
+
+Manually reload a previously unloaded model. This is also triggered automatically when a request is sent to an unloaded model.
+
+**Request body:**
+```json
+{
+  "model_id": "meta-llama/Llama-3.2-3B-Instruct"
+}
+```
+
+**Response:**
+```json
+{
+  "model_id": "meta-llama/Llama-3.2-3B-Instruct",
+  "status": "loaded"
+}
+```
+
+Example with `curl`:
+```bash
+curl -X POST http://localhost:1234/v1/models/reload \
+  -H "Content-Type: application/json" \
+  -d '{"model_id": "meta-llama/Llama-3.2-3B-Instruct"}'
+```
+
+### `POST`: `/v1/models/status`
+
+Get the current status of a specific model.
+
+**Request body:**
+```json
+{
+  "model_id": "meta-llama/Llama-3.2-3B-Instruct"
+}
+```
+
+**Response:**
+```json
+{
+  "model_id": "meta-llama/Llama-3.2-3B-Instruct",
+  "status": "loaded"
+}
+```
+
+Example with `curl`:
+```bash
+curl -X POST http://localhost:1234/v1/models/status \
+  -H "Content-Type: application/json" \
+  -d '{"model_id": "meta-llama/Llama-3.2-3B-Instruct"}'
+```
+
+### Status Values
+
+The `status` field in responses can be one of:
+
+| Status | Description |
+|--------|-------------|
+| `loaded` | Model is loaded and ready to serve requests |
+| `unloaded` | Model is unloaded but can be reloaded |
+| `reloading` | Model is currently being reloaded |
+| `not_found` | Model ID not recognized |
+| `no_loader_config` | Model cannot be reloaded (missing loader configuration) |
+| `internal_error` | An internal error occurred (check `error` field for details) |
+
+When an error occurs, the response may include an `error` field with additional details:
+```json
+{
+  "model_id": "unknown-model",
+  "status": "not_found",
+  "error": null
+}
+```
+
+### Auto-Reload Behavior
+
+When a request (e.g., chat completion) is sent to an unloaded model, the model will automatically reload before processing the request. This enables a "lazy loading" pattern where models are only loaded when needed, helping manage GPU memory efficiently.
+
+### Models List with Status
+
+The `/v1/models` endpoint includes a `status` field for each model:
+
+```bash
+curl http://localhost:1234/v1/models
+```
+
+Response:
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "default",
+      "object": "model",
+      "created": 1234567890,
+      "owned_by": "local"
+    },
+    {
+      "id": "meta-llama/Llama-3.2-3B-Instruct",
+      "object": "model",
+      "created": 1234567890,
+      "owned_by": "local",
+      "status": "loaded"
+    }
+  ]
+}
+```

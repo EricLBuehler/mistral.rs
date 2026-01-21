@@ -549,6 +549,41 @@ class MultiModelRunner:
         Unload and remove the given model ID.
         """
 
+    def unload_model(self, model_id: str) -> None:
+        """
+        Unload a model from memory while preserving its configuration for later reload.
+        The model can be reloaded manually with reload_model() or automatically when
+        a request is sent to it.
+        """
+
+    def reload_model(self, model_id: str) -> None:
+        """
+        Manually reload a previously unloaded model.
+        """
+
+    def get_model_status(self, model_id: str) -> str:
+        """
+        Get the current status of a model.
+        Returns: "loaded", "unloaded", or "reloading"
+        """
+
+    def list_models_with_status(self) -> list[tuple[str, str]]:
+        """
+        List all models with their current status.
+        Returns a list of (model_id, status) tuples where status is
+        "loaded", "unloaded", or "reloading".
+        """
+
+    def is_model_loaded(self, model_id: str) -> bool:
+        """
+        Check if a model is currently loaded.
+        """
+
+    def list_unloaded_models(self) -> list[str]:
+        """
+        List all unloaded model IDs that can be reloaded.
+        """
+
     def send_chat_completion_request(
         self,
         request: ChatCompletionRequest,
