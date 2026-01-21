@@ -434,16 +434,26 @@ class Runner:
         ...
 
     def send_chat_completion_request(
-        self, request: ChatCompletionRequest
+        self, request: ChatCompletionRequest, model_id: str | None = None
     ) -> ChatCompletionResponse | Iterator[ChatCompletionChunkResponse]:
         """
         Send a chat completion request to the mistral.rs engine, returning the response object or a generator
         over chunk objects.
+
+        Args:
+            request: The chat completion request.
+            model_id: Optional model ID to send the request to. If None, uses the default model.
         """
 
-    def send_completion_request(self, request: CompletionRequest) -> CompletionResponse:
+    def send_completion_request(
+        self, request: CompletionRequest, model_id: str | None = None
+    ) -> CompletionResponse:
         """
-        Send a chat completion request to the mistral.rs engine, returning the response object.
+        Send a completion request to the mistral.rs engine, returning the response object.
+
+        Args:
+            request: The completion request.
+            model_id: Optional model ID to send the request to. If None, uses the default model.
         """
 
     def send_embedding_request(
@@ -451,6 +461,10 @@ class Runner:
     ) -> list[list[float]]:
         """
         Generate embeddings for the supplied inputs and return one embedding vector per input.
+
+        Args:
+            request: The embedding request.
+            model_id: Optional model ID to send the request to. If None, uses the default model.
         """
 
     def generate_image(
@@ -459,39 +473,142 @@ class Runner:
         response_format: ImageGenerationResponseFormat,
         height: int = 720,
         width: int = 1280,
+        model_id: str | None = None,
     ) -> ImageGenerationResponse:
         """
         Generate an image.
+
+        Args:
+            prompt: The image generation prompt.
+            response_format: The response format (url or b64_json).
+            height: Image height in pixels.
+            width: Image width in pixels.
+            model_id: Optional model ID to send the request to. If None, uses the default model.
         """
 
-    def generate_audio(self, prompt: str) -> SpeechGenerationResponse:
+    def generate_audio(self, prompt: str, model_id: str | None = None) -> SpeechGenerationResponse:
         """
         Generate audio given a (model specific) prompt. PCM and sampling rate as well as the number of channels is returned.
+
+        Args:
+            prompt: The audio generation prompt.
+            model_id: Optional model ID to send the request to. If None, uses the default model.
         """
 
-    def send_re_isq(self, dtype: str) -> CompletionResponse:
+    def send_re_isq(self, dtype: str, model_id: str | None = None) -> None:
         """
         Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then nothing will happen.
+
+        Args:
+            dtype: The ISQ dtype (e.g., "Q4K", "Q8_0").
+            model_id: Optional model ID to re-ISQ. If None, uses the default model.
         """
 
     def tokenize_text(
-        self, text: str, add_special_tokens: bool, enable_thinking: bool | None = None
+        self,
+        text: str,
+        add_special_tokens: bool,
+        enable_thinking: bool | None = None,
+        model_id: str | None = None,
     ) -> list[int]:
         """
         Tokenize some text, returning raw tokens.
 
-        `enable_thinking` enables thinking for models that support this configuration.
+        Args:
+            text: The text to tokenize.
+            add_special_tokens: Whether to add special tokens.
+            enable_thinking: Enables thinking for models that support this configuration.
+            model_id: Optional model ID to use for tokenization. If None, uses the default model.
         """
 
-    def detokenize_text(self, tokens: list[int], skip_special_tokens: bool) -> str:
+    def detokenize_text(
+        self, tokens: list[int], skip_special_tokens: bool, model_id: str | None = None
+    ) -> str:
         """
         Detokenize some tokens, returning text.
+
+        Args:
+            tokens: The tokens to detokenize.
+            skip_special_tokens: Whether to skip special tokens.
+            model_id: Optional model ID to use for detokenization. If None, uses the default model.
         """
 
     def max_sequence_length(self, model_id: str | None = None) -> int | None:
         """
         Return the maximum supported sequence length for the current or specified model, or None when
         the concept does not apply (such as diffusion or speech models).
+
+        Args:
+            model_id: Optional model ID to query. If None, uses the default model.
+        """
+
+    # Multi-model management methods
+
+    def list_models(self) -> list[str]:
+        """
+        List all available model IDs.
+
+        Returns:
+            A list of model ID strings.
+        """
+
+    def get_default_model_id(self) -> str | None:
+        """
+        Get the current default model ID.
+
+        Returns:
+            The default model ID, or None if no default is set.
+        """
+
+    def set_default_model_id(self, model_id: str) -> None:
+        """
+        Set the default model ID. The model must already be loaded.
+
+        Args:
+            model_id: The model ID to set as default.
+
+        Raises:
+            ValueError: If the model ID is not found.
+        """
+
+    def is_model_loaded(self, model_id: str) -> bool:
+        """
+        Check if a model is currently loaded in memory.
+
+        Args:
+            model_id: The model ID to check.
+
+        Returns:
+            True if the model is loaded, False otherwise.
+        """
+
+    def unload_model(self, model_id: str) -> None:
+        """
+        Unload a model from memory while preserving its configuration for later reload.
+        The model can be reloaded manually with reload_model() or automatically when
+        a request is sent to it.
+
+        Args:
+            model_id: The model ID to unload.
+        """
+
+    def reload_model(self, model_id: str) -> None:
+        """
+        Manually reload a previously unloaded model.
+
+        Args:
+            model_id: The model ID to reload.
+        """
+
+    def list_models_with_status(self) -> list[tuple[str, str]]:
+        """
+        List all models with their current status.
+
+        Returns:
+            A list of (model_id, status) tuples where status is one of:
+            - "loaded": Model is loaded and ready
+            - "unloaded": Model is unloaded but can be reloaded
+            - "reloading": Model is currently being reloaded
         """
 
 class AnyMoeExpertType(Enum):
