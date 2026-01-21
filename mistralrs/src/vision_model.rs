@@ -45,6 +45,7 @@ pub struct VisionModelBuilder {
 
     // Model running
     pub(crate) topology: Option<Topology>,
+    pub(crate) topology_path: Option<String>,
     pub(crate) loader_type: Option<VisionLoaderType>,
     pub(crate) dtype: ModelDType,
     pub(crate) force_cpu: bool,
@@ -68,6 +69,7 @@ impl VisionModelBuilder {
         Self {
             model_id: model_id.to_string(),
             topology: None,
+            topology_path: None,
             write_uqff: None,
             from_uqff: None,
             chat_template: None,
@@ -150,6 +152,18 @@ impl VisionModelBuilder {
     pub fn with_topology(mut self, topology: Topology) -> Self {
         self.topology = Some(topology);
         self
+    }
+
+    /// Set the model topology from a path. This preserves the path for unload/reload support.
+    /// If there is an overlap, the topology type is used over the ISQ type.
+    pub fn with_topology_from_path<P: AsRef<std::path::Path>>(
+        mut self,
+        path: P,
+    ) -> anyhow::Result<Self> {
+        let path_str = path.as_ref().to_string_lossy().to_string();
+        self.topology = Some(Topology::from_path(&path)?);
+        self.topology_path = Some(path_str);
+        Ok(self)
     }
 
     /// Literal Jinja chat template OR Path (ending in `.json`) to one.

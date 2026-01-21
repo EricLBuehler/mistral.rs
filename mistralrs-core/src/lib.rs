@@ -261,6 +261,17 @@ struct EngineInstance {
 /// It is the core multi-threaded component of mistral.rs, and uses `mpsc`
 /// `Sender` and `Receiver` primitives to send and receive requests to the
 /// appropriate engine based on model ID.
+///
+/// ## Lock Ordering Convention
+///
+/// This struct uses multiple `RwLock`s. To prevent deadlocks, locks must be
+/// acquired in this order:
+/// 1. `reloading_models`
+/// 2. `engines`
+/// 3. `unloaded_models`
+/// 4. `default_engine_id`
+///
+/// Use scope-based lock management and explicit `drop()` calls.
 pub struct MistralRs {
     engines: RwLock<HashMap<String, EngineInstance>>,
     /// Models that have been unloaded but can be reloaded on demand
@@ -1481,11 +1492,30 @@ impl MistralRs {
         Ok(())
     }
 
-    /// Synchronous version of reload_model for use in non-async contexts
+    /// Synchronous version of reload_model for use in non-async contexts.
+    ///
+    /// This method handles different runtime contexts appropriately:
+    /// - If called from a multi-threaded tokio runtime, uses `block_in_place`
+    /// - If called from a single-threaded runtime, returns an error (use `reload_model()` instead)
+    /// - If called outside any runtime, creates a temporary runtime
     pub fn reload_model_blocking(&self, model_id: &str) -> Result<(), MistralRsError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(self.reload_model(model_id))
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread {
+                    Err(MistralRsError::ReloadFailed(
+                        "Cannot reload model blocking from single-threaded runtime. Use reload_model() instead.".to_string()
+                    ))
+                } else {
+                    tokio::task::block_in_place(|| handle.block_on(self.reload_model(model_id)))
+                }
+            }
+            Err(_) => {
+                let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                    MistralRsError::ReloadFailed(format!("Failed to create runtime: {e}"))
+                })?;
+                rt.block_on(self.reload_model(model_id))
+            }
+        }
     }
 
     /// List all unloaded model IDs

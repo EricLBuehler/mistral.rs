@@ -362,7 +362,7 @@ pub async fn build_text_pipeline(
             tokenizer_json: builder.tokenizer_json.clone(),
             arch: builder.loader_type,
             dtype: builder.dtype,
-            topology: None, // Topology struct doesn't store original path
+            topology: builder.topology_path.clone(),
             organization: Some(builder.organization),
             write_uqff: builder.write_uqff.clone(),
             from_uqff: from_uqff_str,
@@ -520,7 +520,7 @@ pub async fn build_vision_pipeline(
             tokenizer_json: builder.tokenizer_json.clone(),
             arch: builder.loader_type,
             dtype: builder.dtype,
-            topology: None, // Topology struct doesn't store original path
+            topology: builder.topology_path.clone(),
             write_uqff: builder.write_uqff.clone(),
             from_uqff: from_uqff_str,
             max_edge: builder.max_edge,
@@ -644,11 +644,42 @@ pub async fn build_gguf_pipeline(
         disable_eos_stop: false,
     };
 
-    // GGUF models don't support unload/reload yet - need to implement ModelSelected::GGUF conversion
+    // Create loader config for unload/reload support
+    let device = builder
+        .device
+        .clone()
+        .unwrap_or(best_device(builder.force_cpu).unwrap());
+    let device_map_setting = builder
+        .device_mapping
+        .clone()
+        .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()));
+
+    let loader_config = ModelLoaderConfig {
+        model_selected: ModelSelected::GGUF {
+            tok_model_id: builder.tok_model_id.clone(),
+            quantized_model_id: builder.model_id.clone(),
+            quantized_filename: builder.files.join(GGUF_MULTI_FILE_DELIMITER),
+            dtype: ModelDType::Auto,
+            topology: builder.topology_path.clone(),
+            max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
+        },
+        token_source: builder.token_source.clone(),
+        hf_revision: builder.hf_revision.clone(),
+        dtype: ModelDType::Auto,
+        device,
+        device_map_setting,
+        isq: None,
+        paged_attn_config: builder.paged_attn_cfg,
+        silent: !builder.with_logging,
+        chat_template: builder.chat_template.clone(),
+        jinja_explicit: builder.jinja_explicit.clone(),
+    };
+
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: None,
-        loader_config: None,
+        loader_config: Some(loader_config),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -666,8 +697,8 @@ pub async fn build_diffusion_pipeline(
         initialize_logging();
     }
 
-    let loader =
-        DiffusionLoaderBuilder::new(Some(builder.model_id.clone())).build(builder.loader_type);
+    let loader = DiffusionLoaderBuilder::new(Some(builder.model_id.clone()))
+        .build(builder.loader_type.clone());
 
     let pipeline = loader.load_model_from_hf(
         builder.hf_revision.clone(),
@@ -686,11 +717,31 @@ pub async fn build_diffusion_pipeline(
 
     let engine_config = EngineConfig::default();
 
-    // Diffusion models don't support unload/reload yet
+    // Create loader config for unload/reload support
+    let device = best_device(builder.force_cpu)?;
+
+    let loader_config = ModelLoaderConfig {
+        model_selected: ModelSelected::DiffusionPlain {
+            model_id: builder.model_id.clone(),
+            arch: builder.loader_type,
+            dtype: builder.dtype,
+        },
+        token_source: builder.token_source.clone(),
+        hf_revision: builder.hf_revision.clone(),
+        dtype: builder.dtype,
+        device,
+        device_map_setting: DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()),
+        isq: None,
+        paged_attn_config: None,
+        silent: !builder.with_logging,
+        chat_template: None,
+        jinja_explicit: None,
+    };
+
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: None,
-        loader_config: None,
+        loader_config: Some(loader_config),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -732,11 +783,32 @@ pub async fn build_speech_pipeline(
 
     let engine_config = EngineConfig::default();
 
-    // Speech models don't support unload/reload yet
+    // Create loader config for unload/reload support
+    let device = best_device(builder.force_cpu)?;
+
+    let loader_config = ModelLoaderConfig {
+        model_selected: ModelSelected::Speech {
+            model_id: builder.model_id.clone(),
+            dac_model_id: builder.dac_model_id.clone(),
+            arch: builder.loader_type,
+            dtype: builder.dtype,
+        },
+        token_source: builder.token_source.clone(),
+        hf_revision: builder.hf_revision.clone(),
+        dtype: builder.dtype,
+        device,
+        device_map_setting: DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()),
+        isq: None,
+        paged_attn_config: None,
+        silent: !builder.with_logging,
+        chat_template: None,
+        jinja_explicit: None,
+    };
+
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: None,
-        loader_config: None,
+        loader_config: Some(loader_config),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -766,7 +838,7 @@ pub async fn build_embedding_pipeline(
         builder.tokenizer_json.clone(),
         Some(builder.model_id.clone()),
     )
-    .build(builder.loader_type);
+    .build(builder.loader_type.clone());
 
     let pipeline = loader.load_model_from_hf(
         builder.hf_revision.clone(),
@@ -794,11 +866,52 @@ pub async fn build_embedding_pipeline(
         ..Default::default()
     };
 
-    // Embedding models don't support unload/reload yet
+    // Create loader config for unload/reload support
+    let device = builder
+        .device
+        .clone()
+        .unwrap_or(best_device(builder.force_cpu).unwrap());
+    let device_map_setting = builder
+        .device_mapping
+        .clone()
+        .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()));
+
+    // Convert from_uqff Vec<PathBuf> to semicolon-separated string if present
+    let from_uqff_str = builder.from_uqff.as_ref().map(|paths| {
+        paths
+            .iter()
+            .map(|p| p.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(";")
+    });
+
+    let loader_config = ModelLoaderConfig {
+        model_selected: ModelSelected::Embedding {
+            model_id: builder.model_id.clone(),
+            tokenizer_json: builder.tokenizer_json.clone(),
+            arch: builder.loader_type,
+            dtype: builder.dtype,
+            topology: builder.topology_path.clone(),
+            write_uqff: builder.write_uqff.clone(),
+            from_uqff: from_uqff_str,
+            hf_cache_path: builder.hf_cache_path.clone(),
+        },
+        token_source: builder.token_source.clone(),
+        hf_revision: builder.hf_revision.clone(),
+        dtype: builder.dtype,
+        device,
+        device_map_setting,
+        isq: builder.isq,
+        paged_attn_config: None,
+        silent: !builder.with_logging,
+        chat_template: None,
+        jinja_explicit: None,
+    };
+
     let add_model_config = AddModelConfig {
         engine_config,
         mcp_client_config: None,
-        loader_config: None,
+        loader_config: Some(loader_config),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))

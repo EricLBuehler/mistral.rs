@@ -24,6 +24,7 @@ pub struct EmbeddingModelBuilder {
 
     // Model running
     pub(crate) topology: Option<Topology>,
+    pub(crate) topology_path: Option<String>,
     pub(crate) loader_type: Option<EmbeddingLoaderType>,
     pub(crate) dtype: ModelDType,
     pub(crate) force_cpu: bool,
@@ -44,6 +45,7 @@ impl EmbeddingModelBuilder {
         Self {
             model_id: model_id.to_string(),
             topology: None,
+            topology_path: None,
             write_uqff: None,
             from_uqff: None,
             tokenizer_json: None,
@@ -72,6 +74,18 @@ impl EmbeddingModelBuilder {
     pub fn with_topology(mut self, topology: Topology) -> Self {
         self.topology = Some(topology);
         self
+    }
+
+    /// Set the model topology from a path. This preserves the path for unload/reload support.
+    /// If there is an overlap, the topology type is used over the ISQ type.
+    pub fn with_topology_from_path<P: AsRef<std::path::Path>>(
+        mut self,
+        path: P,
+    ) -> anyhow::Result<Self> {
+        let path_str = path.as_ref().to_string_lossy().to_string();
+        self.topology = Some(Topology::from_path(&path)?);
+        self.topology_path = Some(path_str);
+        Ok(self)
     }
 
     /// Path to a discrete `tokenizer.json` file.

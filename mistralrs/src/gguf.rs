@@ -35,6 +35,7 @@ pub struct GgufModelBuilder {
     // Model running
     pub(crate) force_cpu: bool,
     pub(crate) topology: Option<Topology>,
+    pub(crate) topology_path: Option<String>,
     pub(crate) throughput_logging: bool,
 
     // Other things
@@ -67,6 +68,7 @@ impl GgufModelBuilder {
             prefix_cache_n: Some(16),
             with_logging: false,
             topology: None,
+            topology_path: None,
             tok_model_id: None,
             device_mapping: None,
             jinja_explicit: None,
@@ -136,6 +138,18 @@ impl GgufModelBuilder {
     pub fn with_topology(mut self, topology: Topology) -> Self {
         self.topology = Some(topology);
         self
+    }
+
+    /// Set the model topology from a path. This preserves the path for unload/reload support.
+    /// If there is an overlap, the topology type is used over the ISQ type.
+    pub fn with_topology_from_path<P: AsRef<std::path::Path>>(
+        mut self,
+        path: P,
+    ) -> anyhow::Result<Self> {
+        let path_str = path.as_ref().to_string_lossy().to_string();
+        self.topology = Some(Topology::from_path(&path)?);
+        self.topology_path = Some(path_str);
+        Ok(self)
     }
 
     /// Literal Jinja chat template OR Path (ending in `.json`) to one.
