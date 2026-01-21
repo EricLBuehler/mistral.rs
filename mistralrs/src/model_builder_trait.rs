@@ -187,9 +187,58 @@ impl MultiModelBuilder {
     }
 }
 
-// Pipeline building functions for each model type
+// Pipeline building functions for each model type.
+// These are public so individual builders can reuse them to avoid code duplication.
 
-async fn build_text_pipeline(
+/// Create a Model from pipeline components.
+/// This is the common code path used by all individual builder `build()` methods.
+pub async fn build_model_from_pipeline(
+    pipeline: Arc<Mutex<dyn mistralrs_core::Pipeline>>,
+    scheduler_config: SchedulerConfig,
+    add_model_config: AddModelConfig,
+) -> Model {
+    let mut runner_builder = mistralrs_core::MistralRsBuilder::new(
+        pipeline,
+        scheduler_config,
+        add_model_config.engine_config.throughput_logging_enabled,
+        add_model_config.engine_config.search_embedding_model,
+    );
+
+    if let Some(cb) = add_model_config.engine_config.search_callback.clone() {
+        runner_builder = runner_builder.with_search_callback(cb);
+    }
+
+    for (name, cb) in &add_model_config.engine_config.tool_callbacks {
+        runner_builder = runner_builder.with_tool_callback(name.clone(), cb.clone());
+    }
+
+    for (name, callback_with_tool) in &add_model_config.engine_config.tool_callbacks_with_tools {
+        runner_builder = runner_builder.with_tool_callback_and_tool(
+            name.clone(),
+            callback_with_tool.callback.clone(),
+            callback_with_tool.tool.clone(),
+        );
+    }
+
+    if let Some(mcp_config) = add_model_config.mcp_client_config.clone() {
+        runner_builder = runner_builder.with_mcp_client(mcp_config);
+    }
+
+    if let Some(loader_config) = add_model_config.loader_config.clone() {
+        runner_builder = runner_builder.with_loader_config(loader_config);
+    }
+
+    runner_builder = runner_builder
+        .with_no_kv_cache(add_model_config.engine_config.no_kv_cache)
+        .with_no_prefix_cache(add_model_config.engine_config.no_prefix_cache)
+        .with_prefix_cache_n(add_model_config.engine_config.prefix_cache_n);
+
+    Model::new(runner_builder.build().await)
+}
+
+/// Build a text model pipeline from a TextModelBuilder.
+/// Returns the pipeline, scheduler config, and AddModelConfig needed for Model creation.
+pub async fn build_text_pipeline(
     builder: crate::TextModelBuilder,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use crate::best_device;
@@ -346,7 +395,9 @@ async fn build_text_pipeline(
     Ok((pipeline, scheduler_config, add_model_config))
 }
 
-async fn build_vision_pipeline(
+/// Build a vision model pipeline from a VisionModelBuilder.
+/// Returns the pipeline, scheduler config, and AddModelConfig needed for Model creation.
+pub async fn build_vision_pipeline(
     builder: crate::VisionModelBuilder,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use crate::best_device;
@@ -504,7 +555,9 @@ async fn build_vision_pipeline(
     Ok((pipeline, scheduler_config, add_model_config))
 }
 
-async fn build_gguf_pipeline(
+/// Build a GGUF model pipeline from a GgufModelBuilder.
+/// Returns the pipeline, scheduler config, and AddModelConfig needed for Model creation.
+pub async fn build_gguf_pipeline(
     builder: crate::GgufModelBuilder,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use crate::best_device;
@@ -601,7 +654,9 @@ async fn build_gguf_pipeline(
     Ok((pipeline, scheduler_config, add_model_config))
 }
 
-async fn build_diffusion_pipeline(
+/// Build a diffusion model pipeline from a DiffusionModelBuilder.
+/// Returns the pipeline, scheduler config, and AddModelConfig needed for Model creation.
+pub async fn build_diffusion_pipeline(
     builder: crate::DiffusionModelBuilder,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use crate::best_device;
@@ -641,7 +696,9 @@ async fn build_diffusion_pipeline(
     Ok((pipeline, scheduler_config, add_model_config))
 }
 
-async fn build_speech_pipeline(
+/// Build a speech model pipeline from a SpeechModelBuilder.
+/// Returns the pipeline, scheduler config, and AddModelConfig needed for Model creation.
+pub async fn build_speech_pipeline(
     builder: crate::SpeechModelBuilder,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use crate::best_device;
@@ -685,7 +742,9 @@ async fn build_speech_pipeline(
     Ok((pipeline, scheduler_config, add_model_config))
 }
 
-async fn build_embedding_pipeline(
+/// Build an embedding model pipeline from an EmbeddingModelBuilder.
+/// Returns the pipeline, scheduler config, and AddModelConfig needed for Model creation.
+pub async fn build_embedding_pipeline(
     builder: crate::EmbeddingModelBuilder,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use crate::best_device;

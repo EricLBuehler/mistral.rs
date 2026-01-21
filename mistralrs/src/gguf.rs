@@ -3,7 +3,8 @@ use mistralrs_core::*;
 use mistralrs_core::{SearchCallback, Tool, ToolCallback};
 use std::collections::HashMap;
 
-use crate::{best_device, Model};
+use crate::model_builder_trait::{build_gguf_pipeline, build_model_from_pipeline};
+use crate::Model;
 use std::sync::Arc;
 
 /// A tool callback with its associated Tool definition.
@@ -222,90 +223,7 @@ impl GgufModelBuilder {
     }
 
     pub async fn build(self) -> anyhow::Result<Model> {
-        let config = GGUFSpecificConfig {
-            topology: self.topology.clone(),
-        };
-
-        if self.with_logging {
-            initialize_logging();
-        }
-
-        let loader = GGUFLoaderBuilder::new(
-            self.chat_template.clone(),
-            self.tok_model_id.clone(),
-            self.model_id.clone(),
-            self.files.clone(),
-            config,
-            self.no_kv_cache,
-            self.jinja_explicit.clone(),
-        )
-        .build();
-
-        // Load, into a Pipeline
-        let pipeline = loader.load_model_from_hf(
-            self.hf_revision.clone(),
-            self.token_source.clone(),
-            &ModelDType::Auto,
-            &self
-                .device
-                .clone()
-                .unwrap_or(best_device(self.force_cpu).unwrap()),
-            !self.with_logging,
-            self.device_mapping
-                .clone()
-                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
-            None,
-            self.paged_attn_cfg,
-        )?;
-
-        let scheduler_method = match self.paged_attn_cfg {
-            Some(_) => {
-                let config = pipeline
-                    .lock()
-                    .await
-                    .get_metadata()
-                    .cache_config
-                    .as_ref()
-                    .unwrap()
-                    .clone();
-
-                SchedulerConfig::PagedAttentionMeta {
-                    max_num_seqs: self.max_num_seqs,
-                    config,
-                }
-            }
-            None => SchedulerConfig::DefaultScheduler {
-                method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
-            },
-        };
-
-        let mut runner = MistralRsBuilder::new(
-            pipeline,
-            scheduler_method,
-            self.throughput_logging,
-            self.search_embedding_model,
-        );
-        if let Some(cb) = self.search_callback.clone() {
-            runner = runner.with_search_callback(cb);
-        }
-        for (name, cb) in &self.tool_callbacks {
-            runner = runner.with_tool_callback(name.clone(), cb.clone());
-        }
-        for (name, callback_with_tool) in &self.tool_callbacks_with_tools {
-            runner = runner.with_tool_callback_and_tool(
-                name.clone(),
-                callback_with_tool.callback.clone(),
-                callback_with_tool.tool.clone(),
-            );
-        }
-        runner = runner
-            .with_no_kv_cache(self.no_kv_cache)
-            .with_no_prefix_cache(self.prefix_cache_n.is_none());
-
-        if let Some(n) = self.prefix_cache_n {
-            runner = runner.with_prefix_cache_n(n)
-        }
-
-        Ok(Model::new(runner.build().await))
+        let (pipeline, scheduler_config, add_model_config) = build_gguf_pipeline(self).await?;
+        Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)
     }
 }
