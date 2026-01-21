@@ -63,7 +63,13 @@ Prefix caching is **enabled by default** when using PagedAttention and controlle
 - **Python API**: `prefix_cache_n=<N>` (default 16). Set to `None` or `0` to disable.
 - **Rust API**: `.with_prefix_cache_n(Some(N))` (default 16). Pass `None` to disable.
 
-Both PagedAttention block-level prefix caching and the sequence-level prefix cacher are controlled by this single setting - users don't need to know which backend is being used.
+**Important:** The two prefix caching systems are mutually exclusive:
+- **PagedAttention** uses block-level prefix caching (handled by `PrefixCacher` in `BlockEngine`)
+- **Non-PagedAttention** uses sequence-level prefix caching (handled by `PrefixCacheManagerV2`)
+
+The `prefix_cache_n` setting controls both systems, but only one is active depending on whether PagedAttention is enabled. You'll see one of these log messages at startup indicating which system is active:
+- `Prefix caching enabled (block-level, PagedAttention).`
+- `Prefix caching enabled (sequence-level, non-paged attention).`
 
 ### Implementation Details
 

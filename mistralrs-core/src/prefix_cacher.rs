@@ -5,11 +5,7 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use tracing::info;
 
-use crate::{
-    paged_attention::{BlockEngine, BlockRef, LogicalTokenBlock},
-    pipeline::KvCache,
-    sequence::Sequence,
-};
+use crate::{paged_attention::BlockEngine, pipeline::KvCache, sequence::Sequence};
 
 #[derive(PartialEq, Eq, Debug, Hash)]
 struct Tokens(Vec<u32>);
@@ -54,14 +50,6 @@ pub enum MatchingCache {
         toks: Vec<u32>,
         offset: usize,
     },
-    Paged {
-        logical_blocks: Vec<LogicalTokenBlock>,
-        physical_blocks: Vec<BlockRef>,
-        toks: Vec<u32>,
-        offset: usize,
-        images_to_keep: usize,
-        audios_to_keep: usize,
-    },
 }
 
 impl PrefixCacheManagerV2 {
@@ -70,8 +58,8 @@ impl PrefixCacheManagerV2 {
         no_prefix_cache: bool,
         block_engine: Option<Arc<tokio::sync::Mutex<BlockEngine>>>,
     ) -> Self {
-        if !no_prefix_cache {
-            info!("PrefixCacherV2 is enabled. Expect higher multi-turn throughput for both text and multimodal.");
+        if !no_prefix_cache && block_engine.is_none() {
+            info!("Prefix caching enabled (sequence-level, non-paged attention). Expect higher multi-turn throughput for both text and multimodal.");
         }
         PrefixCacheManagerV2 {
             caches: IndexMap::new(),
