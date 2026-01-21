@@ -77,12 +77,13 @@ impl DiffusionModelBuilder {
             initialize_logging();
         }
 
-        let loader = DiffusionLoaderBuilder::new(Some(self.model_id)).build(self.loader_type);
+        let loader = DiffusionLoaderBuilder::new(Some(self.model_id.clone()))
+            .build(self.loader_type.clone());
 
         // Load, into a Pipeline
         let pipeline = loader.load_model_from_hf(
-            self.hf_revision,
-            self.token_source,
+            self.hf_revision.clone(),
+            self.token_source.clone(),
             &self.dtype,
             &best_device(self.force_cpu)?,
             !self.with_logging,

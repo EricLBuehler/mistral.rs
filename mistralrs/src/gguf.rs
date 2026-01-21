@@ -223,7 +223,7 @@ impl GgufModelBuilder {
 
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = GGUFSpecificConfig {
-            topology: self.topology,
+            topology: self.topology.clone(),
         };
 
         if self.with_logging {
@@ -231,27 +231,31 @@ impl GgufModelBuilder {
         }
 
         let loader = GGUFLoaderBuilder::new(
-            self.chat_template,
-            self.tok_model_id,
-            self.model_id,
-            self.files,
+            self.chat_template.clone(),
+            self.tok_model_id.clone(),
+            self.model_id.clone(),
+            self.files.clone(),
             config,
             self.no_kv_cache,
-            self.jinja_explicit,
+            self.jinja_explicit.clone(),
         )
         .build();
 
         // Load, into a Pipeline
         let pipeline = loader.load_model_from_hf(
-            self.hf_revision,
-            self.token_source,
+            self.hf_revision.clone(),
+            self.token_source.clone(),
             &ModelDType::Auto,
-            &self.device.unwrap_or(best_device(self.force_cpu).unwrap()),
+            &self
+                .device
+                .clone()
+                .unwrap_or(best_device(self.force_cpu).unwrap()),
             !self.with_logging,
             self.device_mapping
+                .clone()
                 .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
             None,
-            self.paged_attn_cfg,
+            self.paged_attn_cfg.clone(),
         )?;
 
         let scheduler_method = match self.paged_attn_cfg {
@@ -279,7 +283,7 @@ impl GgufModelBuilder {
             pipeline,
             scheduler_method,
             self.throughput_logging,
-            self.search_embedding_model,
+            self.search_embedding_model.clone(),
         );
         if let Some(cb) = self.search_callback.clone() {
             runner = runner.with_search_callback(cb);

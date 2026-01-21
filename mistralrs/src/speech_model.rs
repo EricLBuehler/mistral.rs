@@ -89,16 +89,16 @@ impl SpeechModelBuilder {
         }
 
         let loader = SpeechLoader {
-            model_id: self.model_id,
-            dac_model_id: self.dac_model_id,
-            arch: self.loader_type,
-            cfg: self.cfg,
+            model_id: self.model_id.clone(),
+            dac_model_id: self.dac_model_id.clone(),
+            arch: self.loader_type.clone(),
+            cfg: self.cfg.clone(),
         };
 
         // Load, into a Pipeline
         let pipeline = loader.load_model_from_hf(
-            self.hf_revision,
-            self.token_source,
+            self.hf_revision.clone(),
+            self.token_source.clone(),
             &self.dtype,
             &best_device(self.force_cpu)?,
             !self.with_logging,

@@ -1031,6 +1031,7 @@ impl MistralRs {
                 .write()
                 .map_err(|_| "Failed to acquire write lock on default_engine_id")?;
             *default_lock = Some(model_id.clone());
+            info!("First model added, setting '{}' as default", model_id);
         }
 
         Ok(())
@@ -1102,7 +1103,14 @@ impl MistralRs {
             .default_engine_id
             .write()
             .map_err(|_| "Failed to acquire write lock on default_engine_id")?;
+        let old_default = default_lock.clone();
         *default_lock = Some(model_id.to_string());
+
+        // Log the change
+        info!(
+            "Default model changed: {:?} -> {:?}",
+            old_default, model_id
+        );
 
         Ok(())
     }

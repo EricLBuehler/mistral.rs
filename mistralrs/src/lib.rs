@@ -135,7 +135,7 @@ mod gguf_xlora_model;
 mod lora_model;
 mod messages;
 mod model;
-mod multi_model;
+pub mod model_builder_trait;
 mod speculative;
 mod speech_model;
 mod text_model;
@@ -162,7 +162,7 @@ pub use mistralrs_core::{
 };
 pub use mistralrs_core::{SearchCallback, SearchResult, ToolCallback};
 pub use model::{best_device, Model};
-pub use multi_model::MultiModel;
+pub use model_builder_trait::{AnyModelBuilder, MultiModelBuilder};
 pub use speculative::TextSpeculativeBuilder;
 pub use speech_model::SpeechModelBuilder;
 pub use text_model::{PagedAttentionMetaBuilder, TextModelBuilder, UqffTextModelBuilder};
