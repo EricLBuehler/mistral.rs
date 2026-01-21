@@ -1107,10 +1107,7 @@ impl MistralRs {
         *default_lock = Some(model_id.to_string());
 
         // Log the change
-        info!(
-            "Default model changed: {:?} -> {:?}",
-            old_default, model_id
-        );
+        info!("Default model changed: {:?} -> {:?}", old_default, model_id);
 
         Ok(())
     }

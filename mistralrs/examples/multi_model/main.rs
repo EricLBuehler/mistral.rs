@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Result};
 use mistralrs::{
-    IsqType, MultiModelBuilder, TextMessageRole, TextMessages, TextModelBuilder,
-    VisionModelBuilder,
+    IsqType, MultiModelBuilder, TextMessageRole, TextMessages, TextModelBuilder, VisionModelBuilder,
 };
 
 #[tokio::main]
@@ -16,8 +15,7 @@ async fn main() -> Result<()> {
             Some("gemma".to_string()),
         )
         .add_model(
-            TextModelBuilder::new("Qwen/Qwen3-4B")
-                .with_isq(IsqType::Q4K),
+            TextModelBuilder::new("Qwen/Qwen3-4B").with_isq(IsqType::Q4K),
             Some("qwen".to_string()),
         )
         .with_default_model("gemma")
@@ -44,8 +42,8 @@ async fn main() -> Result<()> {
 
     // Send a request to the default model (gemma - vision model)
     println!("\n=== Request to Default Model (gemma) ===");
-    let messages = TextMessages::new()
-        .add_message(TextMessageRole::User, "What is 2 + 2? Answer briefly.");
+    let messages =
+        TextMessages::new().add_message(TextMessageRole::User, "What is 2 + 2? Answer briefly.");
 
     let response = model.send_chat_request(messages).await?;
     println!(
@@ -55,8 +53,7 @@ async fn main() -> Result<()> {
 
     // Send a request to a specific model (qwen - text model)
     println!("\n=== Request to Specific Model (qwen) ===");
-    let messages =
-        TextMessages::new().add_message(TextMessageRole::User, "Say hello in one word.");
+    let messages = TextMessages::new().add_message(TextMessageRole::User, "Say hello in one word.");
 
     let response = model
         .send_chat_request_with_model(messages, Some("qwen"))
@@ -68,9 +65,7 @@ async fn main() -> Result<()> {
 
     // Change the default model
     println!("\n=== Changing Default Model ===");
-    model
-        .set_default_model_id("qwen")
-        .map_err(|e| anyhow!(e))?;
+    model.set_default_model_id("qwen").map_err(|e| anyhow!(e))?;
     let new_default = model.get_default_model_id().map_err(|e| anyhow!(e))?;
     println!("New default model: {:?}", new_default);
 

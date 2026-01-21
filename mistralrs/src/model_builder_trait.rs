@@ -129,15 +129,17 @@ impl MultiModelBuilder {
         let mut builders_iter = self.builders.into_iter();
         let (first_model_id, first_builder) = builders_iter.next().unwrap();
 
-        let (pipeline, scheduler_config, add_model_config) =
-            first_builder.build_pipeline().await?;
+        let (pipeline, scheduler_config, add_model_config) = first_builder.build_pipeline().await?;
 
         // Create the MistralRsBuilder for the first model
         let mut runner_builder = mistralrs_core::MistralRsBuilder::new(
             pipeline,
             scheduler_config,
             add_model_config.engine_config.throughput_logging_enabled,
-            add_model_config.engine_config.search_embedding_model.clone(),
+            add_model_config
+                .engine_config
+                .search_embedding_model
+                .clone(),
         );
 
         if let Some(cb) = add_model_config.engine_config.search_callback.clone() {
