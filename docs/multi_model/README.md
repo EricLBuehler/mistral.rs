@@ -2,6 +2,13 @@
 
 The mistralrs-server supports loading and serving multiple models simultaneously, allowing you to switch between different models in the same server instance.
 
+- Each model runs in its own engine thread
+- Models can have different configurations (quantization, device layers, etc.)
+- Memory usage scales with the number of loaded models
+- All models share the same server configuration (port, logging, etc.)
+- Interactive mode uses the default model or the first model if no default is set
+- You can unload all models (including the last one) - they will auto-reload when accessed
+
 ## Usage
 
 ### Single-Model Mode (Default)
@@ -296,12 +303,3 @@ Response:
   ]
 }
 ```
-
-## Notes
-
-- Each model runs in its own engine thread
-- Models can have different configurations (quantization, device layers, etc.)
-- Memory usage scales with the number of loaded models
-- All models share the same server configuration (port, logging, etc.)
-- Interactive mode uses the default model or the first model if no default is set
-- You can unload all models (including the last one) - they will auto-reload when accessed
