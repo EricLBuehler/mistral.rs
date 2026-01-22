@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-quant/src/afq/ops.rs`."><title>ops.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_quant" data-themes="" data-resource-suffix="" data-rustdoc-version="1.92.0 (ded5c06cf 2025-12-08)" data-channel="1.92.0" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_quant/afq/</div>ops.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="attr">#![allow(unused)]
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-quant/src/afq/ops.rs`."><title>ops.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_quant" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0 (254b59607 2026-01-19)" data-channel="1.93.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_quant/afq/</div>ops.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="attr">#![allow(unused)]
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a></span><span class="kw">use </span>candle_core::{backend::BackendStorage, DType, <span class="prelude-ty">Result</span>, Shape, Storage, Tensor, D};
 <a href=#4 id=4 data-nosnippet>4</a>
@@ -28,7 +28,7 @@
 <a href=#28 id=28 data-nosnippet>28</a>    <span class="kw">if </span>w.rank() &lt; <span class="number">2 </span>{
 <a href=#29 id=29 data-nosnippet>29</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"AFQ quantize expects weight matrix of at least rank 2"</span>);
 <a href=#30 id=30 data-nosnippet>30</a>    }
-<a href=#31 id=31 data-nosnippet>31</a>    <span class="kw">if </span>w.dim(D::Minus1)<span class="question-mark">? </span>% group_size != <span class="number">0 </span>{
+<a href=#31 id=31 data-nosnippet>31</a>    <span class="kw">if </span>w.dim(D::Minus1)<span class="question-mark">? </span>% <span class="macro">group_size !</span>= <span class="number">0 </span>{
 <a href=#32 id=32 data-nosnippet>32</a>        <span class="macro">candle_core::bail!</span>(
 <a href=#33 id=33 data-nosnippet>33</a>            <span class="string">"Last dim of weight matrix ({:?}) must be divisible by group size {group_size}."</span>,
 <a href=#34 id=34 data-nosnippet>34</a>            w.dims()
@@ -154,8 +154,8 @@
 <a href=#154 id=154 data-nosnippet>154</a>        <span class="kw">let </span><span class="kw-2">mut </span>w_shape = w_q.dims().to_vec();
 <a href=#155 id=155 data-nosnippet>155</a>        <span class="kw-2">*</span>w_shape.last_mut().unwrap() = out_size;
 <a href=#156 id=156 data-nosnippet>156</a>
-<a href=#157 id=157 data-nosnippet>157</a>        <span class="kw">if </span>out_size != scales.dim(D::Minus1)<span class="question-mark">? </span>* group_size
-<a href=#158 id=158 data-nosnippet>158</a>            || out_size != biases.dim(D::Minus1)<span class="question-mark">? </span>* group_size
+<a href=#157 id=157 data-nosnippet>157</a>        <span class="kw">if </span><span class="macro">out_size !</span>= scales.dim(D::Minus1)<span class="question-mark">? </span>* group_size
+<a href=#158 id=158 data-nosnippet>158</a>            || <span class="macro">out_size !</span>= biases.dim(D::Minus1)<span class="question-mark">? </span>* group_size
 <a href=#159 id=159 data-nosnippet>159</a>        {
 <a href=#160 id=160 data-nosnippet>160</a>            <span class="macro">candle_core::bail!</span>(
 <a href=#161 id=161 data-nosnippet>161</a>                <span class="string">"Scales and biases do not match the matrix given dequantization parameters."
@@ -251,7 +251,7 @@
 <a href=#251 id=251 data-nosnippet>251</a>        <span class="kw">if </span>scales.dims() != biases.dims() {
 <a href=#252 id=252 data-nosnippet>252</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"Scales and biases should have the same shapes"</span>);
 <a href=#253 id=253 data-nosnippet>253</a>        }
-<a href=#254 id=254 data-nosnippet>254</a>        <span class="kw">if </span>w.dim(D::Minus1)<span class="question-mark">? </span>* <span class="number">32 </span>/ bits != scales.dim(D::Minus1)<span class="question-mark">? </span>* group_size {
+<a href=#254 id=254 data-nosnippet>254</a>        <span class="kw">if </span>w.dim(D::Minus1)<span class="question-mark">? </span>* <span class="number">32 </span>/ <span class="macro">bits !</span>= scales.dim(D::Minus1)<span class="question-mark">? </span>* group_size {
 <a href=#255 id=255 data-nosnippet>255</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"Last dims of w and scales must be compatible."</span>);
 <a href=#256 id=256 data-nosnippet>256</a>        }
 <a href=#257 id=257 data-nosnippet>257</a>
@@ -269,7 +269,7 @@
 <a href=#269 id=269 data-nosnippet>269</a>            w.dim(D::Minus1)<span class="question-mark">? </span>* <span class="number">32 </span>/ bits
 <a href=#270 id=270 data-nosnippet>270</a>        };
 <a href=#271 id=271 data-nosnippet>271</a>
-<a href=#272 id=272 data-nosnippet>272</a>        <span class="kw">if </span>w_inner_dims != x_inner_dims {
+<a href=#272 id=272 data-nosnippet>272</a>        <span class="kw">if </span><span class="macro">w_inner_dims !</span>= x_inner_dims {
 <a href=#273 id=273 data-nosnippet>273</a>            <span class="macro">candle_core::bail!</span>(
 <a href=#274 id=274 data-nosnippet>274</a>                <span class="string">"w inner dims ({:?}) must match x inner dims ({:?}). transpose={transpose}"</span>,
 <a href=#275 id=275 data-nosnippet>275</a>                w.dims(),
@@ -1728,7 +1728,7 @@
 <a href=#1728 id=1728 data-nosnippet>1728</a>        </span><span class="kw">let </span>groups_per_row = scales.dim(D::Minus1)<span class="question-mark">?</span>;
 <a href=#1729 id=1729 data-nosnippet>1729</a>        <span class="kw">let </span>actual_k = groups_per_row * group_size;
 <a href=#1730 id=1730 data-nosnippet>1730</a>
-<a href=#1731 id=1731 data-nosnippet>1731</a>        <span class="kw">if </span>k != actual_k {
+<a href=#1731 id=1731 data-nosnippet>1731</a>        <span class="kw">if </span><span class="macro">k !</span>= actual_k {
 <a href=#1732 id=1732 data-nosnippet>1732</a>            <span class="macro">candle_core::bail!</span>(
 <a href=#1733 id=1733 data-nosnippet>1733</a>                <span class="string">"x inner dim ({k}) does not match w inner dim ({actual_k}) for transposed matmul"
 <a href=#1734 id=1734 data-nosnippet>1734</a>            </span>);
@@ -2308,4 +2308,5 @@
 <a href=#2308 id=2308 data-nosnippet>2308</a>            other =&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"Unsupported dtype for AFQ CUDA matmul: {other:?}"</span>),
 <a href=#2309 id=2309 data-nosnippet>2309</a>        }
 <a href=#2310 id=2310 data-nosnippet>2310</a>    }
-<a href=#2311 id=2311 data-nosnippet>2311</a>}</code></pre></div></section></main></body></html>
+<a href=#2311 id=2311 data-nosnippet>2311</a>}
+</code></pre></div></section></main></body></html>

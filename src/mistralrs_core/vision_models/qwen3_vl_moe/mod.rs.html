@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/vision_models/qwen3_vl_moe/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.92.0 (ded5c06cf 2025-12-08)" data-channel="1.92.0" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/vision_models/qwen3_vl_moe/</div>mod.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/vision_models/qwen3_vl_moe/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0 (254b59607 2026-01-19)" data-channel="1.93.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/vision_models/qwen3_vl_moe/</div>mod.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a></span><span class="kw">use </span>std::{any::Any, sync::Arc};
 <a href=#4 id=4 data-nosnippet>4</a>
@@ -144,7 +144,7 @@
 <a href=#144 id=144 data-nosnippet>144</a>                <span class="kw">let </span><span class="kw-2">mut </span>filtered_tokens = Vec::new();
 <a href=#145 id=145 data-nosnippet>145</a>                <span class="kw">for </span>(idx, (<span class="kw-2">&amp;</span>token, <span class="kw-2">&amp;</span>mask_val)) <span class="kw">in </span>input_row.iter().zip(mask_row.iter()).enumerate()
 <a href=#146 id=146 data-nosnippet>146</a>                {
-<a href=#147 id=147 data-nosnippet>147</a>                    <span class="kw">if </span>mask_val != <span class="number">0.0 </span>{
+<a href=#147 id=147 data-nosnippet>147</a>                    <span class="kw">if </span><span class="macro">mask_val !</span>= <span class="number">0.0 </span>{
 <a href=#148 id=148 data-nosnippet>148</a>                        valid_indices.push(idx);
 <a href=#149 id=149 data-nosnippet>149</a>                        filtered_tokens.push(token);
 <a href=#150 id=150 data-nosnippet>150</a>                    }
@@ -239,8 +239,8 @@
 <a href=#239 id=239 data-nosnippet>239</a>                            <span class="kw">let </span>grid = img_grid[image_index];
 <a href=#240 id=240 data-nosnippet>240</a>                            image_index += <span class="number">1</span>;
 <a href=#241 id=241 data-nosnippet>241</a>                            <span class="kw">if </span>merge_size == <span class="number">0
-<a href=#242 id=242 data-nosnippet>242</a>                                </span>|| grid[<span class="number">1</span>] % merge_size != <span class="number">0
-<a href=#243 id=243 data-nosnippet>243</a>                                </span>|| grid[<span class="number">2</span>] % merge_size != <span class="number">0
+<a href=#242 id=242 data-nosnippet>242</a>                                </span>|| grid[<span class="number">1</span>] % <span class="macro">merge_size !</span>= <span class="number">0
+<a href=#243 id=243 data-nosnippet>243</a>                                </span>|| grid[<span class="number">2</span>] % <span class="macro">merge_size !</span>= <span class="number">0
 <a href=#244 id=244 data-nosnippet>244</a>                            </span>{
 <a href=#245 id=245 data-nosnippet>245</a>                                <span class="macro">candle_core::bail!</span>(
 <a href=#246 id=246 data-nosnippet>246</a>                                    <span class="string">"image grid dimensions must be divisible by spatial_merge_size"
@@ -266,8 +266,8 @@
 <a href=#266 id=266 data-nosnippet>266</a>                            <span class="kw">let </span>grid = vid_grid[video_index];
 <a href=#267 id=267 data-nosnippet>267</a>                            video_index += <span class="number">1</span>;
 <a href=#268 id=268 data-nosnippet>268</a>                            <span class="kw">if </span>merge_size == <span class="number">0
-<a href=#269 id=269 data-nosnippet>269</a>                                </span>|| grid[<span class="number">1</span>] % merge_size != <span class="number">0
-<a href=#270 id=270 data-nosnippet>270</a>                                </span>|| grid[<span class="number">2</span>] % merge_size != <span class="number">0
+<a href=#269 id=269 data-nosnippet>269</a>                                </span>|| grid[<span class="number">1</span>] % <span class="macro">merge_size !</span>= <span class="number">0
+<a href=#270 id=270 data-nosnippet>270</a>                                </span>|| grid[<span class="number">2</span>] % <span class="macro">merge_size !</span>= <span class="number">0
 <a href=#271 id=271 data-nosnippet>271</a>                            </span>{
 <a href=#272 id=272 data-nosnippet>272</a>                                <span class="macro">candle_core::bail!</span>(
 <a href=#273 id=273 data-nosnippet>273</a>                                    <span class="string">"video grid dimensions must be divisible by spatial_merge_size"
@@ -289,7 +289,7 @@
 <a href=#289 id=289 data-nosnippet>289</a>                    }
 <a href=#290 id=290 data-nosnippet>290</a>
 <a href=#291 id=291 data-nosnippet>291</a>                    <span class="kw">let </span>expected_len = grid_t * grid_h * grid_w;
-<a href=#292 id=292 data-nosnippet>292</a>                    <span class="kw">if </span>placeholder_len != expected_len {
+<a href=#292 id=292 data-nosnippet>292</a>                    <span class="kw">if </span><span class="macro">placeholder_len !</span>= expected_len {
 <a href=#293 id=293 data-nosnippet>293</a>                        <span class="macro">candle_core::bail!</span>(
 <a href=#294 id=294 data-nosnippet>294</a>                            <span class="string">"Placeholder token count {placeholder_len} does not match expected {expected_len}"
 <a href=#295 id=295 data-nosnippet>295</a>                        </span>);
@@ -561,7 +561,7 @@
 <a href=#561 id=561 data-nosnippet>561</a>                            vid_offset += <span class="number">1</span>;
 <a href=#562 id=562 data-nosnippet>562</a>                        }
 <a href=#563 id=563 data-nosnippet>563</a>                    }
-<a href=#564 id=564 data-nosnippet>564</a>                    <span class="kw">if </span>img_offset != img_layer.dim(<span class="number">0</span>)<span class="question-mark">? </span>|| vid_offset != vid_layer.dim(<span class="number">0</span>)<span class="question-mark">? </span>{
+<a href=#564 id=564 data-nosnippet>564</a>                    <span class="kw">if </span><span class="macro">img_offset !</span>= img_layer.dim(<span class="number">0</span>)<span class="question-mark">? </span>|| <span class="macro">vid_offset !</span>= vid_layer.dim(<span class="number">0</span>)<span class="question-mark">? </span>{
 <a href=#565 id=565 data-nosnippet>565</a>                        <span class="macro">candle_core::bail!</span>(
 <a href=#566 id=566 data-nosnippet>566</a>                                <span class="string">"DeepStack feature alignment failed for images ({}/{}) or videos ({}/{})"</span>,
 <a href=#567 id=567 data-nosnippet>567</a>                                img_offset,
@@ -721,4 +721,5 @@
 <a href=#721 id=721 data-nosnippet>721</a>    }
 <a href=#722 id=722 data-nosnippet>722</a>}
 <a href=#723 id=723 data-nosnippet>723</a>
-<a href=#724 id=724 data-nosnippet>724</a><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>Qwen3VLMoEModel {}</code></pre></div></section></main></body></html>
+<a href=#724 id=724 data-nosnippet>724</a><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>Qwen3VLMoEModel {}
+</code></pre></div></section></main></body></html>

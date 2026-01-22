@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/macros.rs`."><title>macros.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.92.0 (ded5c06cf 2025-12-08)" data-channel="1.92.0" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/pipeline/</div>macros.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="attr">#[doc(hidden)]
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/macros.rs`."><title>macros.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0 (254b59607 2026-01-19)" data-channel="1.93.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/pipeline/</div>macros.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="attr">#[doc(hidden)]
 <a href=#2 id=2 data-nosnippet>2</a>#[macro_export]
 <a href=#3 id=3 data-nosnippet>3</a></span><span class="macro">macro_rules!</span> api_dir_list {
 <a href=#4 id=4 data-nosnippet>4</a>    (<span class="macro-nonterminal">$api</span>:expr, <span class="macro-nonterminal">$model_id</span>:expr, <span class="macro-nonterminal">$should_panic</span>:expr) =&gt; {
@@ -139,10 +139,10 @@
 <a href=#139 id=139 data-nosnippet>139</a>            PathBuf::from_str(p)<span class="question-mark">?
 <a href=#140 id=140 data-nosnippet>140</a>        </span>} <span class="kw">else </span>{
 <a href=#141 id=141 data-nosnippet>141</a>            <span class="macro">info!</span>(<span class="string">"Loading `tokenizer.json` at `{}`"</span>, <span class="macro-nonterminal">$this</span>.model_id);
-<a href=#142 id=142 data-nosnippet>142</a>            <span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(<span class="macro-nonterminal">api</span>, <span class="string">"tokenizer.json"</span>, model_id)
+<a href=#142 id=142 data-nosnippet>142</a>            <span class="macro-nonterminal">$crate::api_get_file</span>!(api, <span class="string">"tokenizer.json"</span>, model_id)
 <a href=#143 id=143 data-nosnippet>143</a>        };
 <a href=#144 id=144 data-nosnippet>144</a>        <span class="macro">info!</span>(<span class="string">"Loading `config.json` at `{}`"</span>, <span class="macro-nonterminal">$this</span>.model_id);
-<a href=#145 id=145 data-nosnippet>145</a>        <span class="kw">let </span>config_filename = <span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(<span class="macro-nonterminal">api</span>, <span class="string">"config.json"</span>, model_id);
+<a href=#145 id=145 data-nosnippet>145</a>        <span class="kw">let </span>config_filename = <span class="macro-nonterminal">$crate::api_get_file</span>!(api, <span class="string">"config.json"</span>, model_id);
 <a href=#146 id=146 data-nosnippet>146</a>        <span class="kw">let </span>filenames = get_model_paths(
 <a href=#147 id=147 data-nosnippet>147</a>            revision.clone(),
 <a href=#148 id=148 data-nosnippet>148</a>            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$token_source</span>,
@@ -160,12 +160,12 @@
 <a href=#160 id=160 data-nosnippet>160</a>            revision.clone(),
 <a href=#161 id=161 data-nosnippet>161</a>            <span class="macro-nonterminal">$this</span>.xlora_order.as_ref(),
 <a href=#162 id=162 data-nosnippet>162</a>        )<span class="question-mark">?</span>;
-<a href=#163 id=163 data-nosnippet>163</a>        <span class="kw">let </span>dir_list = <span class="macro-nonterminal">$</span><span class="macro">crate::api_dir_list!</span>(<span class="macro-nonterminal">api</span>, model_id, <span class="bool-val">false</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#163 id=163 data-nosnippet>163</a>        <span class="kw">let </span>dir_list = <span class="macro-nonterminal">$crate::api_dir_list</span>!(api, model_id, <span class="bool-val">false</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 <a href=#164 id=164 data-nosnippet>164</a>
 <a href=#165 id=165 data-nosnippet>165</a>        <span class="kw">let </span>gen_conf = <span class="kw">if </span>dir_list.contains(<span class="kw-2">&amp;</span><span class="string">"generation_config.json"</span>.to_string()) {
 <a href=#166 id=166 data-nosnippet>166</a>            <span class="macro">info!</span>(<span class="string">"Loading `generation_config.json` at `{}`"</span>, <span class="macro-nonterminal">$this</span>.model_id);
-<a href=#167 id=167 data-nosnippet>167</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(
-<a href=#168 id=168 data-nosnippet>168</a>                <span class="macro-nonterminal">api</span>,
+<a href=#167 id=167 data-nosnippet>167</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$crate::api_get_file</span>!(
+<a href=#168 id=168 data-nosnippet>168</a>                api,
 <a href=#169 id=169 data-nosnippet>169</a>                <span class="string">"generation_config.json"</span>,
 <a href=#170 id=170 data-nosnippet>170</a>                model_id
 <a href=#171 id=171 data-nosnippet>171</a>            ))
@@ -174,8 +174,8 @@
 <a href=#174 id=174 data-nosnippet>174</a>        </span>};
 <a href=#175 id=175 data-nosnippet>175</a>        <span class="kw">let </span>preprocessor_config = <span class="kw">if </span>dir_list.contains(<span class="kw-2">&amp;</span><span class="string">"preprocessor_config.json"</span>.to_string()) {
 <a href=#176 id=176 data-nosnippet>176</a>            <span class="macro">info!</span>(<span class="string">"Loading `preprocessor_config.json` at `{}`"</span>, <span class="macro-nonterminal">$this</span>.model_id);
-<a href=#177 id=177 data-nosnippet>177</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(
-<a href=#178 id=178 data-nosnippet>178</a>                <span class="macro-nonterminal">api</span>,
+<a href=#177 id=177 data-nosnippet>177</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$crate::api_get_file</span>!(
+<a href=#178 id=178 data-nosnippet>178</a>                api,
 <a href=#179 id=179 data-nosnippet>179</a>                <span class="string">"preprocessor_config.json"</span>,
 <a href=#180 id=180 data-nosnippet>180</a>                model_id
 <a href=#181 id=181 data-nosnippet>181</a>            ))
@@ -184,8 +184,8 @@
 <a href=#184 id=184 data-nosnippet>184</a>        </span>};
 <a href=#185 id=185 data-nosnippet>185</a>        <span class="kw">let </span>processor_config = <span class="kw">if </span>dir_list.contains(<span class="kw-2">&amp;</span><span class="string">"processor_config.json"</span>.to_string()) {
 <a href=#186 id=186 data-nosnippet>186</a>            <span class="macro">info!</span>(<span class="string">"Loading `processor_config.json` at `{}`"</span>, <span class="macro-nonterminal">$this</span>.model_id);
-<a href=#187 id=187 data-nosnippet>187</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(
-<a href=#188 id=188 data-nosnippet>188</a>                <span class="macro-nonterminal">api</span>,
+<a href=#187 id=187 data-nosnippet>187</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$crate::api_get_file</span>!(
+<a href=#188 id=188 data-nosnippet>188</a>                api,
 <a href=#189 id=189 data-nosnippet>189</a>                <span class="string">"processor_config.json"</span>,
 <a href=#190 id=190 data-nosnippet>190</a>                model_id
 <a href=#191 id=191 data-nosnippet>191</a>            ))
@@ -197,18 +197,18 @@
 <a href=#197 id=197 data-nosnippet>197</a>            <span class="prelude-val">Some</span>(PathBuf::from_str(p)<span class="question-mark">?</span>)
 <a href=#198 id=198 data-nosnippet>198</a>        } <span class="kw">else if </span>dir_list.contains(<span class="kw-2">&amp;</span><span class="string">"chat_template.jinja"</span>.to_string()) {
 <a href=#199 id=199 data-nosnippet>199</a>            <span class="macro">info!</span>(<span class="string">"Loading `chat_template.jinja` at `{}`"</span>, <span class="macro-nonterminal">$this</span>.model_id);
-<a href=#200 id=200 data-nosnippet>200</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(<span class="macro-nonterminal">api</span>, <span class="string">"chat_template.jinja"</span>, model_id))
+<a href=#200 id=200 data-nosnippet>200</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$crate::api_get_file</span>!(api, <span class="string">"chat_template.jinja"</span>, model_id))
 <a href=#201 id=201 data-nosnippet>201</a>        } <span class="kw">else </span>{
 <a href=#202 id=202 data-nosnippet>202</a>            <span class="macro">info!</span>(<span class="string">"Loading `tokenizer_config.json` at `{}`"</span>, <span class="macro-nonterminal">$this</span>.model_id);
-<a href=#203 id=203 data-nosnippet>203</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(
-<a href=#204 id=204 data-nosnippet>204</a>                <span class="macro-nonterminal">api</span>,
+<a href=#203 id=203 data-nosnippet>203</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$crate::api_get_file</span>!(
+<a href=#204 id=204 data-nosnippet>204</a>                api,
 <a href=#205 id=205 data-nosnippet>205</a>                <span class="string">"tokenizer_config.json"</span>,
 <a href=#206 id=206 data-nosnippet>206</a>                model_id
 <a href=#207 id=207 data-nosnippet>207</a>            ))
 <a href=#208 id=208 data-nosnippet>208</a>        };
 <a href=#209 id=209 data-nosnippet>209</a>        <span class="kw">let </span>chat_template_json_filename = <span class="kw">if </span>dir_list.contains(<span class="kw-2">&amp;</span><span class="string">"chat_template.json"</span>.to_string()) {
 <a href=#210 id=210 data-nosnippet>210</a>            <span class="macro">info!</span>(<span class="string">"Loading `chat_template.json` at `{}`"</span>, <span class="macro-nonterminal">$this</span>.model_id);
-<a href=#211 id=211 data-nosnippet>211</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(<span class="macro-nonterminal">api</span>, <span class="string">"chat_template.json"</span>, model_id))
+<a href=#211 id=211 data-nosnippet>211</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$crate::api_get_file</span>!(api, <span class="string">"chat_template.json"</span>, model_id))
 <a href=#212 id=212 data-nosnippet>212</a>        } <span class="kw">else </span>{
 <a href=#213 id=213 data-nosnippet>213</a>            <span class="prelude-val">None
 <a href=#214 id=214 data-nosnippet>214</a>        </span>};
@@ -262,10 +262,10 @@
 <a href=#262 id=262 data-nosnippet>262</a>            PathBuf::from_str(p)<span class="question-mark">?
 <a href=#263 id=263 data-nosnippet>263</a>        </span>} <span class="kw">else </span>{
 <a href=#264 id=264 data-nosnippet>264</a>            <span class="macro">info!</span>(<span class="string">"Loading `tokenizer.json` at `{}`"</span>, <span class="macro-nonterminal">$this</span>.model_id);
-<a href=#265 id=265 data-nosnippet>265</a>            <span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(<span class="macro-nonterminal">api</span>, <span class="string">"tokenizer.json"</span>, model_id)
+<a href=#265 id=265 data-nosnippet>265</a>            <span class="macro-nonterminal">$crate::api_get_file</span>!(api, <span class="string">"tokenizer.json"</span>, model_id)
 <a href=#266 id=266 data-nosnippet>266</a>        };
 <a href=#267 id=267 data-nosnippet>267</a>        <span class="macro">info!</span>(<span class="string">"Loading `config.json` at `{}`"</span>, <span class="macro-nonterminal">$this</span>.model_id);
-<a href=#268 id=268 data-nosnippet>268</a>        <span class="kw">let </span>config_filename = <span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(<span class="macro-nonterminal">api</span>, <span class="string">"config.json"</span>, model_id);
+<a href=#268 id=268 data-nosnippet>268</a>        <span class="kw">let </span>config_filename = <span class="macro-nonterminal">$crate::api_get_file</span>!(api, <span class="string">"config.json"</span>, model_id);
 <a href=#269 id=269 data-nosnippet>269</a>        <span class="kw">let </span>filenames = get_model_paths(
 <a href=#270 id=270 data-nosnippet>270</a>            revision.clone(),
 <a href=#271 id=271 data-nosnippet>271</a>            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$token_source</span>,
@@ -289,7 +289,7 @@
 <a href=#289 id=289 data-nosnippet>289</a>        <span class="kw">let </span>modules_path = <span class="kw">if </span>is_local {
 <a href=#290 id=290 data-nosnippet>290</a>            model_id.join(<span class="string">"modules.json"</span>)
 <a href=#291 id=291 data-nosnippet>291</a>        } <span class="kw">else </span>{
-<a href=#292 id=292 data-nosnippet>292</a>            <span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(<span class="macro-nonterminal">api</span>, <span class="string">"modules.json"</span>, model_id)
+<a href=#292 id=292 data-nosnippet>292</a>            <span class="macro-nonterminal">$crate::api_get_file</span>!(api, <span class="string">"modules.json"</span>, model_id)
 <a href=#293 id=293 data-nosnippet>293</a>        };
 <a href=#294 id=294 data-nosnippet>294</a>
 <a href=#295 id=295 data-nosnippet>295</a>        <span class="kw">if </span>modules_path.exists() {
@@ -305,8 +305,8 @@
 <a href=#305 id=305 data-nosnippet>305</a>                    <span class="macro-nonterminal">$crate::pipeline::EmbeddingModuleType::Pooling </span>=&gt; {
 <a href=#306 id=306 data-nosnippet>306</a>                        parsed_modules.push(<span class="macro-nonterminal">$crate::pipeline::EmbeddingModulePaths::Pooling </span>{
 <a href=#307 id=307 data-nosnippet>307</a>                            path: module.path.clone(),
-<a href=#308 id=308 data-nosnippet>308</a>                            config: <span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(
-<a href=#309 id=309 data-nosnippet>309</a>                                <span class="macro-nonterminal">api</span>,
+<a href=#308 id=308 data-nosnippet>308</a>                            config: <span class="macro-nonterminal">$crate::api_get_file</span>!(
+<a href=#309 id=309 data-nosnippet>309</a>                                api,
 <a href=#310 id=310 data-nosnippet>310</a>                                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{}/config.json"</span>, module.path),
 <a href=#311 id=311 data-nosnippet>311</a>                                model_id
 <a href=#312 id=312 data-nosnippet>312</a>                            ),
@@ -315,13 +315,13 @@
 <a href=#315 id=315 data-nosnippet>315</a>                    <span class="macro-nonterminal">$crate::pipeline::EmbeddingModuleType::Dense </span>=&gt; {
 <a href=#316 id=316 data-nosnippet>316</a>                        parsed_modules.push(<span class="macro-nonterminal">$crate::pipeline::EmbeddingModulePaths::Dense </span>{
 <a href=#317 id=317 data-nosnippet>317</a>                            path: module.path.clone(),
-<a href=#318 id=318 data-nosnippet>318</a>                            config: <span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(
-<a href=#319 id=319 data-nosnippet>319</a>                                <span class="macro-nonterminal">api</span>,
+<a href=#318 id=318 data-nosnippet>318</a>                            config: <span class="macro-nonterminal">$crate::api_get_file</span>!(
+<a href=#319 id=319 data-nosnippet>319</a>                                api,
 <a href=#320 id=320 data-nosnippet>320</a>                                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{}/config.json"</span>, module.path),
 <a href=#321 id=321 data-nosnippet>321</a>                                model_id
 <a href=#322 id=322 data-nosnippet>322</a>                            ),
-<a href=#323 id=323 data-nosnippet>323</a>                            model: <span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(
-<a href=#324 id=324 data-nosnippet>324</a>                                <span class="macro-nonterminal">api</span>,
+<a href=#323 id=323 data-nosnippet>323</a>                            model: <span class="macro-nonterminal">$crate::api_get_file</span>!(
+<a href=#324 id=324 data-nosnippet>324</a>                                api,
 <a href=#325 id=325 data-nosnippet>325</a>                                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{}/model.safetensors"</span>, module.path),
 <a href=#326 id=326 data-nosnippet>326</a>                                model_id
 <a href=#327 id=327 data-nosnippet>327</a>                            ),
@@ -422,7 +422,7 @@
 <a href=#422 id=422 data-nosnippet>422</a>        ));
 <a href=#423 id=423 data-nosnippet>423</a>        <span class="kw">let </span>model_id = std::path::Path::new(<span class="kw-2">&amp;</span>this_model_id);
 <a href=#424 id=424 data-nosnippet>424</a>
-<a href=#425 id=425 data-nosnippet>425</a>        <span class="kw">let </span>dir_list = <span class="macro-nonterminal">$</span><span class="macro">crate::api_dir_list!</span>(<span class="macro-nonterminal">api</span>, model_id, <span class="bool-val">false</span>)
+<a href=#425 id=425 data-nosnippet>425</a>        <span class="kw">let </span>dir_list = <span class="macro-nonterminal">$crate::api_dir_list</span>!(api, model_id, <span class="bool-val">false</span>)
 <a href=#426 id=426 data-nosnippet>426</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 <a href=#427 id=427 data-nosnippet>427</a>
 <a href=#428 id=428 data-nosnippet>428</a>        <span class="kw">let </span>chat_template = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>p) = <span class="macro-nonterminal">$this</span>.chat_template {
@@ -437,15 +437,15 @@
 <a href=#437 id=437 data-nosnippet>437</a>                <span class="prelude-val">None
 <a href=#438 id=438 data-nosnippet>438</a>            </span>} <span class="kw">else if </span>dir_list.contains(<span class="kw-2">&amp;</span><span class="string">"chat_template.jinja"</span>.to_string()) {
 <a href=#439 id=439 data-nosnippet>439</a>                <span class="macro">info!</span>(<span class="string">"Loading `chat_template.jinja` at `{}`"</span>, this_model_id);
-<a href=#440 id=440 data-nosnippet>440</a>                <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(
-<a href=#441 id=441 data-nosnippet>441</a>                    <span class="macro-nonterminal">api</span>,
+<a href=#440 id=440 data-nosnippet>440</a>                <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$crate::api_get_file</span>!(
+<a href=#441 id=441 data-nosnippet>441</a>                    api,
 <a href=#442 id=442 data-nosnippet>442</a>                    <span class="string">"chat_template.jinja"</span>,
 <a href=#443 id=443 data-nosnippet>443</a>                    model_id
 <a href=#444 id=444 data-nosnippet>444</a>                ))
 <a href=#445 id=445 data-nosnippet>445</a>            } <span class="kw">else </span>{
 <a href=#446 id=446 data-nosnippet>446</a>                <span class="macro">info!</span>(<span class="string">"Loading `tokenizer_config.json` at `{}` because no chat template file was specified."</span>, this_model_id);
-<a href=#447 id=447 data-nosnippet>447</a>                <span class="kw">let </span>res = <span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(
-<a href=#448 id=448 data-nosnippet>448</a>                    <span class="macro-nonterminal">api</span>,
+<a href=#447 id=447 data-nosnippet>447</a>                <span class="kw">let </span>res = <span class="macro-nonterminal">$crate::api_get_file</span>!(
+<a href=#448 id=448 data-nosnippet>448</a>                    api,
 <a href=#449 id=449 data-nosnippet>449</a>                    <span class="string">"tokenizer_config.json"</span>,
 <a href=#450 id=450 data-nosnippet>450</a>                    model_id
 <a href=#451 id=451 data-nosnippet>451</a>                );
@@ -475,8 +475,8 @@
 <a href=#475 id=475 data-nosnippet>475</a>
 <a href=#476 id=476 data-nosnippet>476</a>        <span class="kw">let </span>gen_conf = <span class="kw">if </span>dir_list.contains(<span class="kw-2">&amp;</span><span class="string">"generation_config.json"</span>.to_string()) {
 <a href=#477 id=477 data-nosnippet>477</a>            <span class="macro">info!</span>(<span class="string">"Loading `generation_config.json` at `{}`"</span>, this_model_id);
-<a href=#478 id=478 data-nosnippet>478</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(
-<a href=#479 id=479 data-nosnippet>479</a>                <span class="macro-nonterminal">api</span>,
+<a href=#478 id=478 data-nosnippet>478</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$crate::api_get_file</span>!(
+<a href=#479 id=479 data-nosnippet>479</a>                api,
 <a href=#480 id=480 data-nosnippet>480</a>                <span class="string">"generation_config.json"</span>,
 <a href=#481 id=481 data-nosnippet>481</a>                model_id
 <a href=#482 id=482 data-nosnippet>482</a>            ))
@@ -487,8 +487,8 @@
 <a href=#487 id=487 data-nosnippet>487</a>        <span class="kw">let </span>preprocessor_config = <span class="kw">if </span>dir_list.contains(<span class="kw-2">&amp;</span><span class="string">"preprocessor_config.json"</span>.to_string())
 <a href=#488 id=488 data-nosnippet>488</a>        {
 <a href=#489 id=489 data-nosnippet>489</a>            <span class="macro">info!</span>(<span class="string">"Loading `preprocessor_config.json` at `{}`"</span>, this_model_id);
-<a href=#490 id=490 data-nosnippet>490</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(
-<a href=#491 id=491 data-nosnippet>491</a>                <span class="macro-nonterminal">api</span>,
+<a href=#490 id=490 data-nosnippet>490</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$crate::api_get_file</span>!(
+<a href=#491 id=491 data-nosnippet>491</a>                api,
 <a href=#492 id=492 data-nosnippet>492</a>                <span class="string">"preprocessor_config.json"</span>,
 <a href=#493 id=493 data-nosnippet>493</a>                model_id
 <a href=#494 id=494 data-nosnippet>494</a>            ))
@@ -498,8 +498,8 @@
 <a href=#498 id=498 data-nosnippet>498</a>
 <a href=#499 id=499 data-nosnippet>499</a>        <span class="kw">let </span>processor_config = <span class="kw">if </span>dir_list.contains(<span class="kw-2">&amp;</span><span class="string">"processor_config.json"</span>.to_string()) {
 <a href=#500 id=500 data-nosnippet>500</a>            <span class="macro">info!</span>(<span class="string">"Loading `processor_config.json` at `{}`"</span>, this_model_id);
-<a href=#501 id=501 data-nosnippet>501</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(
-<a href=#502 id=502 data-nosnippet>502</a>                <span class="macro-nonterminal">api</span>,
+<a href=#501 id=501 data-nosnippet>501</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$crate::api_get_file</span>!(
+<a href=#502 id=502 data-nosnippet>502</a>                api,
 <a href=#503 id=503 data-nosnippet>503</a>                <span class="string">"processor_config.json"</span>,
 <a href=#504 id=504 data-nosnippet>504</a>                model_id
 <a href=#505 id=505 data-nosnippet>505</a>            ))
@@ -509,15 +509,15 @@
 <a href=#509 id=509 data-nosnippet>509</a>
 <a href=#510 id=510 data-nosnippet>510</a>        <span class="kw">let </span>tokenizer_filename = <span class="kw">if </span><span class="macro-nonterminal">$this</span>.model_id.is_some() &amp;&amp; dir_list.contains(<span class="kw-2">&amp;</span><span class="string">"tokenizer.json"</span>.to_string()) {
 <a href=#511 id=511 data-nosnippet>511</a>            <span class="macro">info!</span>(<span class="string">"Loading `tokenizer.json` at `{}`"</span>, this_model_id);
-<a href=#512 id=512 data-nosnippet>512</a>            <span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(<span class="macro-nonterminal">api</span>, <span class="string">"tokenizer.json"</span>, model_id)
+<a href=#512 id=512 data-nosnippet>512</a>            <span class="macro-nonterminal">$crate::api_get_file</span>!(api, <span class="string">"tokenizer.json"</span>, model_id)
 <a href=#513 id=513 data-nosnippet>513</a>        } <span class="kw">else </span>{
 <a href=#514 id=514 data-nosnippet>514</a>            PathBuf::from_str(<span class="string">""</span>)<span class="question-mark">?
 <a href=#515 id=515 data-nosnippet>515</a>        </span>};
 <a href=#516 id=516 data-nosnippet>516</a>
 <a href=#517 id=517 data-nosnippet>517</a>        <span class="kw">let </span>chat_template_json_filename = <span class="kw">if </span>dir_list.contains(<span class="kw-2">&amp;</span><span class="string">"chat_template.json"</span>.to_string()) {
 <a href=#518 id=518 data-nosnippet>518</a>            <span class="macro">info!</span>(<span class="string">"Loading `chat_template.json` at `{}`"</span>, this_model_id);
-<a href=#519 id=519 data-nosnippet>519</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(
-<a href=#520 id=520 data-nosnippet>520</a>                <span class="macro-nonterminal">api</span>,
+<a href=#519 id=519 data-nosnippet>519</a>            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$crate::api_get_file</span>!(
+<a href=#520 id=520 data-nosnippet>520</a>                api,
 <a href=#521 id=521 data-nosnippet>521</a>                <span class="string">"chat_template.json"</span>,
 <a href=#522 id=522 data-nosnippet>522</a>                model_id
 <a href=#523 id=523 data-nosnippet>523</a>            ))
@@ -953,4 +953,5 @@
 <a href=#953 id=953 data-nosnippet>953</a>            <span class="macro-nonterminal">$attention_mechanism</span>,
 <a href=#954 id=954 data-nosnippet>954</a>        )<span class="question-mark">?
 <a href=#955 id=955 data-nosnippet>955</a>    </span>}};
-<a href=#956 id=956 data-nosnippet>956</a>}</code></pre></div></section></main></body></html>
+<a href=#956 id=956 data-nosnippet>956</a>}
+</code></pre></div></section></main></body></html>

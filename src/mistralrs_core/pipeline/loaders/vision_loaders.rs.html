@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/loaders/vision_loaders.rs`."><title>vision_loaders.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.92.0 (ded5c06cf 2025-12-08)" data-channel="1.92.0" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/pipeline/loaders/</div>vision_loaders.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>std::any::Any;
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/loaders/vision_loaders.rs`."><title>vision_loaders.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0 (254b59607 2026-01-19)" data-channel="1.93.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/pipeline/loaders/</div>vision_loaders.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>std::any::Any;
 <a href=#2 id=2 data-nosnippet>2</a><span class="kw">use </span>std::sync::Arc;
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>std::{fmt::Debug, str::FromStr};
 <a href=#4 id=4 data-nosnippet>4</a>
@@ -641,7 +641,7 @@
 <a href=#641 id=641 data-nosnippet>641</a>        <span class="kw">let </span>elems = {
 <a href=#642 id=642 data-nosnippet>642</a>            <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
 <a href=#643 id=643 data-nosnippet>643</a>            <span class="comment">// If embeddings are tied and no packing, reuse weights -&gt; no separate lm_head needed
-<a href=#644 id=644 data-nosnippet>644</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings || weight_pack_factor != <span class="number">1 </span>{
+<a href=#644 id=644 data-nosnippet>644</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings || <span class="macro">weight_pack_factor !</span>= <span class="number">1 </span>{
 <a href=#645 id=645 data-nosnippet>645</a>                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
 <a href=#646 id=646 data-nosnippet>646</a>            } <span class="kw">else </span>{
 <a href=#647 id=647 data-nosnippet>647</a>                <span class="number">0
@@ -1859,7 +1859,7 @@
 <a href=#1859 id=1859 data-nosnippet>1859</a>            <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>config.text_config;
 <a href=#1860 id=1860 data-nosnippet>1860</a>            <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
 <a href=#1861 id=1861 data-nosnippet>1861</a>            <span class="comment">// If embeddings are tied and no packing, reuse weights -&gt; no separate lm_head needed
-<a href=#1862 id=1862 data-nosnippet>1862</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings || weight_pack_factor != <span class="number">1 </span>{
+<a href=#1862 id=1862 data-nosnippet>1862</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings || <span class="macro">weight_pack_factor !</span>= <span class="number">1 </span>{
 <a href=#1863 id=1863 data-nosnippet>1863</a>                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
 <a href=#1864 id=1864 data-nosnippet>1864</a>            } <span class="kw">else </span>{
 <a href=#1865 id=1865 data-nosnippet>1865</a>                <span class="number">0
@@ -2199,7 +2199,7 @@
 <a href=#2199 id=2199 data-nosnippet>2199</a>        <span class="kw">let </span>text_elems = {
 <a href=#2200 id=2200 data-nosnippet>2200</a>            <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
 <a href=#2201 id=2201 data-nosnippet>2201</a>            <span class="comment">// If embeddings are tied and no packing, reuse weights -&gt; no separate lm_head needed
-<a href=#2202 id=2202 data-nosnippet>2202</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings || weight_pack_factor != <span class="number">1 </span>{
+<a href=#2202 id=2202 data-nosnippet>2202</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings || <span class="macro">weight_pack_factor !</span>= <span class="number">1 </span>{
 <a href=#2203 id=2203 data-nosnippet>2203</a>                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
 <a href=#2204 id=2204 data-nosnippet>2204</a>            } <span class="kw">else </span>{
 <a href=#2205 id=2205 data-nosnippet>2205</a>                <span class="number">0
@@ -3110,7 +3110,7 @@
 <a href=#3110 id=3110 data-nosnippet>3110</a>        <span class="kw">let </span>elems = {
 <a href=#3111 id=3111 data-nosnippet>3111</a>            <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
 <a href=#3112 id=3112 data-nosnippet>3112</a>            <span class="comment">// If embeddings are tied and no packing, reuse weights -&gt; no separate lm_head needed
-<a href=#3113 id=3113 data-nosnippet>3113</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings || weight_pack_factor != <span class="number">1 </span>{
+<a href=#3113 id=3113 data-nosnippet>3113</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings || <span class="macro">weight_pack_factor !</span>= <span class="number">1 </span>{
 <a href=#3114 id=3114 data-nosnippet>3114</a>                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
 <a href=#3115 id=3115 data-nosnippet>3115</a>            } <span class="kw">else </span>{
 <a href=#3116 id=3116 data-nosnippet>3116</a>                <span class="number">0
@@ -3435,7 +3435,7 @@
 <a href=#3435 id=3435 data-nosnippet>3435</a>        <span class="kw">let </span>text_elems = {
 <a href=#3436 id=3436 data-nosnippet>3436</a>            <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
 <a href=#3437 id=3437 data-nosnippet>3437</a>            <span class="comment">// If embeddings are tied and no packing, reuse weights -&gt; no separate lm_head needed
-<a href=#3438 id=3438 data-nosnippet>3438</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings || weight_pack_factor != <span class="number">1 </span>{
+<a href=#3438 id=3438 data-nosnippet>3438</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings || <span class="macro">weight_pack_factor !</span>= <span class="number">1 </span>{
 <a href=#3439 id=3439 data-nosnippet>3439</a>                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
 <a href=#3440 id=3440 data-nosnippet>3440</a>            } <span class="kw">else </span>{
 <a href=#3441 id=3441 data-nosnippet>3441</a>                <span class="number">0
@@ -3751,7 +3751,7 @@
 <a href=#3751 id=3751 data-nosnippet>3751</a>            };
 <a href=#3752 id=3752 data-nosnippet>3752</a>            <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
 <a href=#3753 id=3753 data-nosnippet>3753</a>            <span class="comment">// If embeddings are tied and no packing, reuse weights -&gt; no separate lm_head needed
-<a href=#3754 id=3754 data-nosnippet>3754</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings || weight_pack_factor != <span class="number">1 </span>{
+<a href=#3754 id=3754 data-nosnippet>3754</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings || <span class="macro">weight_pack_factor !</span>= <span class="number">1 </span>{
 <a href=#3755 id=3755 data-nosnippet>3755</a>                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
 <a href=#3756 id=3756 data-nosnippet>3756</a>            } <span class="kw">else </span>{
 <a href=#3757 id=3757 data-nosnippet>3757</a>                <span class="number">0
@@ -4101,7 +4101,7 @@
 <a href=#4101 id=4101 data-nosnippet>4101</a>
 <a href=#4102 id=4102 data-nosnippet>4102</a>            <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
 <a href=#4103 id=4103 data-nosnippet>4103</a>            <span class="comment">// If embeddings are tied and no packing, reuse weights -&gt; no separate lm_head needed
-<a href=#4104 id=4104 data-nosnippet>4104</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings || weight_pack_factor != <span class="number">1 </span>{
+<a href=#4104 id=4104 data-nosnippet>4104</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings || <span class="macro">weight_pack_factor !</span>= <span class="number">1 </span>{
 <a href=#4105 id=4105 data-nosnippet>4105</a>                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
 <a href=#4106 id=4106 data-nosnippet>4106</a>            } <span class="kw">else </span>{
 <a href=#4107 id=4107 data-nosnippet>4107</a>                <span class="number">0
@@ -4994,7 +4994,7 @@
 <a href=#4994 id=4994 data-nosnippet>4994</a>                * text_cfg.vocab_size_per_layer_input;
 <a href=#4995 id=4995 data-nosnippet>4995</a>
 <a href=#4996 id=4996 data-nosnippet>4996</a>            <span class="comment">// LM head (if not tied)
-<a href=#4997 id=4997 data-nosnippet>4997</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!text_cfg.tie_word_embeddings || weight_pack_factor != <span class="number">1 </span>{
+<a href=#4997 id=4997 data-nosnippet>4997</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!text_cfg.tie_word_embeddings || <span class="macro">weight_pack_factor !</span>= <span class="number">1 </span>{
 <a href=#4998 id=4998 data-nosnippet>4998</a>                text_cfg.hidden_size * text_cfg.vocab_size / weight_pack_factor
 <a href=#4999 id=4999 data-nosnippet>4999</a>            } <span class="kw">else </span>{
 <a href=#5000 id=5000 data-nosnippet>5000</a>                <span class="number">0
@@ -5083,7 +5083,7 @@
 <a href=#5083 id=5083 data-nosnippet>5083</a>                                <span class="attr">#[allow(clippy::cast_precision_loss)]
 <a href=#5084 id=5084 data-nosnippet>5084</a>                                </span><span class="kw">let </span>mid_chs = make_divisible(in_chs <span class="kw">as </span>f64 * expand_ratio, <span class="number">8</span>);
 <a href=#5085 id=5085 data-nosnippet>5085</a>                                <span class="comment">// UniversalInvertedResidual: all Conv2d layers, not quantizable
-<a href=#5086 id=5086 data-nosnippet>5086</a>                                </span><span class="kw">if </span><span class="kw-2">*</span>expand_ratio != <span class="number">1.0 </span>{
+<a href=#5086 id=5086 data-nosnippet>5086</a>                                </span><span class="kw">if </span><span class="kw-2">*</span><span class="macro">expand_ratio !</span>= <span class="number">1.0 </span>{
 <a href=#5087 id=5087 data-nosnippet>5087</a>                                    total_elems += in_chs * mid_chs; <span class="comment">// expand conv (Conv2d)
 <a href=#5088 id=5088 data-nosnippet>5088</a>                                    </span>total_elems += mid_chs; <span class="comment">// expand norm
 <a href=#5089 id=5089 data-nosnippet>5089</a>                                </span>}
@@ -5666,7 +5666,7 @@
 <a href=#5666 id=5666 data-nosnippet>5666</a>            <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>cfg.text_config;
 <a href=#5667 id=5667 data-nosnippet>5667</a>            <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
 <a href=#5668 id=5668 data-nosnippet>5668</a>            <span class="comment">// If embeddings are tied and no packing, reuse weights -&gt; no separate lm_head needed
-<a href=#5669 id=5669 data-nosnippet>5669</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!tie || weight_pack_factor != <span class="number">1 </span>{
+<a href=#5669 id=5669 data-nosnippet>5669</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!tie || <span class="macro">weight_pack_factor !</span>= <span class="number">1 </span>{
 <a href=#5670 id=5670 data-nosnippet>5670</a>                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
 <a href=#5671 id=5671 data-nosnippet>5671</a>            } <span class="kw">else </span>{
 <a href=#5672 id=5672 data-nosnippet>5672</a>                <span class="number">0
@@ -5973,7 +5973,7 @@
 <a href=#5973 id=5973 data-nosnippet>5973</a>            <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>cfg.text_config;
 <a href=#5974 id=5974 data-nosnippet>5974</a>            <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
 <a href=#5975 id=5975 data-nosnippet>5975</a>            <span class="comment">// If embeddings are tied and no packing, reuse weights -&gt; no separate lm_head needed
-<a href=#5976 id=5976 data-nosnippet>5976</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!tie || weight_pack_factor != <span class="number">1 </span>{
+<a href=#5976 id=5976 data-nosnippet>5976</a>            </span><span class="kw">let </span>lm_head = <span class="kw">if </span>!tie || <span class="macro">weight_pack_factor !</span>= <span class="number">1 </span>{
 <a href=#5977 id=5977 data-nosnippet>5977</a>                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
 <a href=#5978 id=5978 data-nosnippet>5978</a>            } <span class="kw">else </span>{
 <a href=#5979 id=5979 data-nosnippet>5979</a>                <span class="number">0
@@ -6122,4 +6122,5 @@
 <a href=#6122 id=6122 data-nosnippet>6122</a>    <span class="kw">fn </span>non_mapped_sub_models(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;NonMappedSubModel&gt;&gt; {
 <a href=#6123 id=6123 data-nosnippet>6123</a>        <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[NonMappedSubModel::Vision])
 <a href=#6124 id=6124 data-nosnippet>6124</a>    }
-<a href=#6125 id=6125 data-nosnippet>6125</a>}</code></pre></div></section></main></body></html>
+<a href=#6125 id=6125 data-nosnippet>6125</a>}
+</code></pre></div></section></main></body></html>

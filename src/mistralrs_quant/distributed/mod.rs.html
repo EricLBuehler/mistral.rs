@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-quant/src/distributed/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_quant" data-themes="" data-resource-suffix="" data-rustdoc-version="1.92.0 (ded5c06cf 2025-12-08)" data-channel="1.92.0" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_quant/distributed/</div>mod.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>std::{fmt::Debug, fs::File, sync::Barrier};
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-quant/src/distributed/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_quant" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0 (254b59607 2026-01-19)" data-channel="1.93.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_quant/distributed/</div>mod.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>std::{fmt::Debug, fs::File, sync::Barrier};
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>candle_core::Result;
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">pub mod </span>layers;
@@ -90,7 +90,7 @@
 <a href=#90 id=90 data-nosnippet>90</a>
 <a href=#91 id=91 data-nosnippet>91</a><span class="kw">pub fn </span>use_nccl() -&gt; bool {
 <a href=#92 id=92 data-nosnippet>92</a>    (std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_err()
-<a href=#93 id=93 data-nosnippet>93</a>        || std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_ok_and(|x| x != <span class="string">"1"</span>))
+<a href=#93 id=93 data-nosnippet>93</a>        || std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_ok_and(|x| <span class="macro">x !</span>= <span class="string">"1"</span>))
 <a href=#94 id=94 data-nosnippet>94</a>        &amp;&amp; (<span class="macro">cfg!</span>(feature = <span class="string">"nccl"</span>) &amp;&amp; <span class="macro">cfg!</span>(feature = <span class="string">"cuda"</span>))
 <a href=#95 id=95 data-nosnippet>95</a>}
 <a href=#96 id=96 data-nosnippet>96</a>
@@ -227,7 +227,7 @@
 <a href=#227 id=227 data-nosnippet>227</a>            }
 <a href=#228 id=228 data-nosnippet>228</a>            <span class="kw">let </span>stream = dev.as_cuda_device()<span class="question-mark">?</span>.cuda_stream();
 <a href=#229 id=229 data-nosnippet>229</a>            <span class="kw">let </span>device_ordinal = stream.context().ordinal();
-<a href=#230 id=230 data-nosnippet>230</a>            <span class="kw">if </span>rank != device_ordinal {
+<a href=#230 id=230 data-nosnippet>230</a>            <span class="kw">if </span><span class="macro">rank !</span>= device_ordinal {
 <a href=#231 id=231 data-nosnippet>231</a>                <span class="macro">candle_core::bail!</span>(
 <a href=#232 id=232 data-nosnippet>232</a>                    <span class="string">"NCCL rank {} must match device ordinal, but device ordinal is {}. \
 <a href=#233 id=233 data-nosnippet>233</a>                     Ensure GPUs are visible in the correct order (check CUDA_VISIBLE_DEVICES)."</span>,
@@ -520,7 +520,7 @@
 <a href=#520 id=520 data-nosnippet>520</a>                                <span class="macro">candle_core::bail!</span>(<span class="string">"NCCL all_reduce: elem_count must be &gt; 0"</span>);
 <a href=#521 id=521 data-nosnippet>521</a>                            }
 <a href=#522 id=522 data-nosnippet>522</a>                            <span class="kw">let </span>device_ordinal = dev.cuda_stream().context().ordinal();
-<a href=#523 id=523 data-nosnippet>523</a>                            <span class="kw">if </span>device_ordinal != nccl_comm.rank() {
+<a href=#523 id=523 data-nosnippet>523</a>                            <span class="kw">if </span><span class="macro">device_ordinal !</span>= nccl_comm.rank() {
 <a href=#524 id=524 data-nosnippet>524</a>                                <span class="macro">candle_core::bail!</span>(
 <a href=#525 id=525 data-nosnippet>525</a>                                    <span class="string">"NCCL device mismatch: tensor on device {} but NCCL rank is {}. \
 <a href=#526 id=526 data-nosnippet>526</a>                                     Ensure each rank uses the correct GPU."</span>,
@@ -551,7 +551,7 @@
 <a href=#551 id=551 data-nosnippet>551</a>                                <span class="macro">candle_core::bail!</span>(<span class="string">"NCCL all_reduce: elem_count must be &gt; 0"</span>);
 <a href=#552 id=552 data-nosnippet>552</a>                            }
 <a href=#553 id=553 data-nosnippet>553</a>                            <span class="kw">let </span>device_ordinal = dev.cuda_stream().context().ordinal();
-<a href=#554 id=554 data-nosnippet>554</a>                            <span class="kw">if </span>device_ordinal != nccl_comm.rank() {
+<a href=#554 id=554 data-nosnippet>554</a>                            <span class="kw">if </span><span class="macro">device_ordinal !</span>= nccl_comm.rank() {
 <a href=#555 id=555 data-nosnippet>555</a>                                <span class="macro">candle_core::bail!</span>(
 <a href=#556 id=556 data-nosnippet>556</a>                                    <span class="string">"NCCL device mismatch: tensor on device {} but NCCL rank is {}. \
 <a href=#557 id=557 data-nosnippet>557</a>                                     Ensure each rank uses the correct GPU."</span>,
@@ -582,7 +582,7 @@
 <a href=#582 id=582 data-nosnippet>582</a>                                <span class="macro">candle_core::bail!</span>(<span class="string">"NCCL all_reduce: elem_count must be &gt; 0"</span>);
 <a href=#583 id=583 data-nosnippet>583</a>                            }
 <a href=#584 id=584 data-nosnippet>584</a>                            <span class="kw">let </span>device_ordinal = dev.cuda_stream().context().ordinal();
-<a href=#585 id=585 data-nosnippet>585</a>                            <span class="kw">if </span>device_ordinal != nccl_comm.rank() {
+<a href=#585 id=585 data-nosnippet>585</a>                            <span class="kw">if </span><span class="macro">device_ordinal !</span>= nccl_comm.rank() {
 <a href=#586 id=586 data-nosnippet>586</a>                                <span class="macro">candle_core::bail!</span>(
 <a href=#587 id=587 data-nosnippet>587</a>                                    <span class="string">"NCCL device mismatch: tensor on device {} but NCCL rank is {}. \
 <a href=#588 id=588 data-nosnippet>588</a>                                     Ensure each rank uses the correct GPU."</span>,
@@ -669,7 +669,7 @@
 <a href=#669 id=669 data-nosnippet>669</a>                                <span class="macro">candle_core::bail!</span>(<span class="string">"NCCL all_gather: elem_count must be &gt; 0"</span>);
 <a href=#670 id=670 data-nosnippet>670</a>                            }
 <a href=#671 id=671 data-nosnippet>671</a>                            <span class="kw">let </span>device_ordinal = dev.cuda_stream().context().ordinal();
-<a href=#672 id=672 data-nosnippet>672</a>                            <span class="kw">if </span>device_ordinal != nccl_comm.rank() {
+<a href=#672 id=672 data-nosnippet>672</a>                            <span class="kw">if </span><span class="macro">device_ordinal !</span>= nccl_comm.rank() {
 <a href=#673 id=673 data-nosnippet>673</a>                                <span class="macro">candle_core::bail!</span>(
 <a href=#674 id=674 data-nosnippet>674</a>                                    <span class="string">"NCCL device mismatch: tensor on device {} but NCCL rank is {}. \
 <a href=#675 id=675 data-nosnippet>675</a>                                     Ensure each rank uses the correct GPU."</span>,
@@ -700,7 +700,7 @@
 <a href=#700 id=700 data-nosnippet>700</a>                                <span class="macro">candle_core::bail!</span>(<span class="string">"NCCL all_gather: elem_count must be &gt; 0"</span>);
 <a href=#701 id=701 data-nosnippet>701</a>                            }
 <a href=#702 id=702 data-nosnippet>702</a>                            <span class="kw">let </span>device_ordinal = dev.cuda_stream().context().ordinal();
-<a href=#703 id=703 data-nosnippet>703</a>                            <span class="kw">if </span>device_ordinal != nccl_comm.rank() {
+<a href=#703 id=703 data-nosnippet>703</a>                            <span class="kw">if </span><span class="macro">device_ordinal !</span>= nccl_comm.rank() {
 <a href=#704 id=704 data-nosnippet>704</a>                                <span class="macro">candle_core::bail!</span>(
 <a href=#705 id=705 data-nosnippet>705</a>                                    <span class="string">"NCCL device mismatch: tensor on device {} but NCCL rank is {}. \
 <a href=#706 id=706 data-nosnippet>706</a>                                     Ensure each rank uses the correct GPU."</span>,
@@ -731,7 +731,7 @@
 <a href=#731 id=731 data-nosnippet>731</a>                                <span class="macro">candle_core::bail!</span>(<span class="string">"NCCL all_gather: elem_count must be &gt; 0"</span>);
 <a href=#732 id=732 data-nosnippet>732</a>                            }
 <a href=#733 id=733 data-nosnippet>733</a>                            <span class="kw">let </span>device_ordinal = dev.cuda_stream().context().ordinal();
-<a href=#734 id=734 data-nosnippet>734</a>                            <span class="kw">if </span>device_ordinal != nccl_comm.rank() {
+<a href=#734 id=734 data-nosnippet>734</a>                            <span class="kw">if </span><span class="macro">device_ordinal !</span>= nccl_comm.rank() {
 <a href=#735 id=735 data-nosnippet>735</a>                                <span class="macro">candle_core::bail!</span>(
 <a href=#736 id=736 data-nosnippet>736</a>                                    <span class="string">"NCCL device mismatch: tensor on device {} but NCCL rank is {}. \
 <a href=#737 id=737 data-nosnippet>737</a>                                     Ensure each rank uses the correct GPU."</span>,
@@ -1093,4 +1093,5 @@
 <a href=#1093 id=1093 data-nosnippet>1093</a>            <span class="prelude-val">Ok</span>(xs.clone())
 <a href=#1094 id=1094 data-nosnippet>1094</a>        }
 <a href=#1095 id=1095 data-nosnippet>1095</a>    }
-<a href=#1096 id=1096 data-nosnippet>1096</a>}</code></pre></div></section></main></body></html>
+<a href=#1096 id=1096 data-nosnippet>1096</a>}
+</code></pre></div></section></main></body></html>

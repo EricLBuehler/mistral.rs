@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/vision_models/conformer/encoder.rs`."><title>encoder.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.92.0 (ded5c06cf 2025-12-08)" data-channel="1.92.0" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/vision_models/conformer/</div>encoder.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/vision_models/conformer/encoder.rs`."><title>encoder.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0 (254b59607 2026-01-19)" data-channel="1.93.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../../../static.files/storage-e2aeef58.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/vision_models/conformer/</div>encoder.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a></span><span class="kw">use </span>std::sync::Arc;
 <a href=#4 id=4 data-nosnippet>4</a>
@@ -182,7 +182,7 @@
 <a href=#182 id=182 data-nosnippet>182</a>            vb.pp(<span class="string">"dw_conv"</span>).set_dtype(DType::F32),
 <a href=#183 id=183 data-nosnippet>183</a>        )<span class="question-mark">?</span>;
 <a href=#184 id=184 data-nosnippet>184</a>
-<a href=#185 id=185 data-nosnippet>185</a>        <span class="kw">let </span>pw_conv = <span class="kw">if </span>cfg.depthwise_seperable_out_channel != <span class="number">0 </span>{
+<a href=#185 id=185 data-nosnippet>185</a>        <span class="kw">let </span>pw_conv = <span class="kw">if </span>cfg.<span class="macro">depthwise_seperable_out_channel !</span>= <span class="number">0 </span>{
 <a href=#186 id=186 data-nosnippet>186</a>            <span class="prelude-val">Some</span>(layers::conv1d(
 <a href=#187 id=187 data-nosnippet>187</a>                cfg.attention_dim * cfg.depthwise_multiplier,
 <a href=#188 id=188 data-nosnippet>188</a>                cfg.attention_dim,
@@ -337,15 +337,15 @@
 <a href=#337 id=337 data-nosnippet>337</a>
 <a href=#338 id=338 data-nosnippet>338</a>        <span class="macro">assert_ne!</span>(cfg.ext_pw_out_channel, <span class="number">0</span>);
 <a href=#339 id=339 data-nosnippet>339</a>
-<a href=#340 id=340 data-nosnippet>340</a>        <span class="kw">let </span>ln2 = <span class="kw">if </span>cfg.depthwise_seperable_out_channel != <span class="number">0
-<a href=#341 id=341 data-nosnippet>341</a>            </span>&amp;&amp; cfg.attention_dim != cfg.depthwise_seperable_out_channel
+<a href=#340 id=340 data-nosnippet>340</a>        <span class="kw">let </span>ln2 = <span class="kw">if </span>cfg.<span class="macro">depthwise_seperable_out_channel !</span>= <span class="number">0
+<a href=#341 id=341 data-nosnippet>341</a>            </span>&amp;&amp; cfg.<span class="macro">attention_dim !</span>= cfg.depthwise_seperable_out_channel
 <a href=#342 id=342 data-nosnippet>342</a>        {
 <a href=#343 id=343 data-nosnippet>343</a>            <span class="prelude-val">Some</span>(layers::linear(
 <a href=#344 id=344 data-nosnippet>344</a>                cfg.depthwise_seperable_out_channel,
 <a href=#345 id=345 data-nosnippet>345</a>                cfg.attention_dim,
 <a href=#346 id=346 data-nosnippet>346</a>                vb.pp(<span class="string">"ln2"</span>),
 <a href=#347 id=347 data-nosnippet>347</a>            )<span class="question-mark">?</span>)
-<a href=#348 id=348 data-nosnippet>348</a>        } <span class="kw">else if </span>cfg.depthwise_multiplier != <span class="number">1 </span>{
+<a href=#348 id=348 data-nosnippet>348</a>        } <span class="kw">else if </span>cfg.<span class="macro">depthwise_multiplier !</span>= <span class="number">1 </span>{
 <a href=#349 id=349 data-nosnippet>349</a>            <span class="prelude-val">Some</span>(layers::linear(
 <a href=#350 id=350 data-nosnippet>350</a>                cfg.attention_dim * cfg.depthwise_multiplier,
 <a href=#351 id=351 data-nosnippet>351</a>                cfg.attention_dim,
@@ -388,7 +388,7 @@
 <a href=#388 id=388 data-nosnippet>388</a>            )<span class="question-mark">?
 <a href=#389 id=389 data-nosnippet>389</a>        </span>};
 <a href=#390 id=390 data-nosnippet>390</a>
-<a href=#391 id=391 data-nosnippet>391</a>        <span class="kw">let </span>ln1 = <span class="kw">if </span>cfg.attention_dim != cfg.ext_pw_out_channel {
+<a href=#391 id=391 data-nosnippet>391</a>        <span class="kw">let </span>ln1 = <span class="kw">if </span>cfg.<span class="macro">attention_dim !</span>= cfg.ext_pw_out_channel {
 <a href=#392 id=392 data-nosnippet>392</a>            <span class="prelude-val">Some</span>(layers::linear(
 <a href=#393 id=393 data-nosnippet>393</a>                cfg.ext_pw_out_channel,
 <a href=#394 id=394 data-nosnippet>394</a>                cfg.attention_dim,
@@ -716,4 +716,5 @@
 <a href=#716 id=716 data-nosnippet>716</a>
 <a href=#717 id=717 data-nosnippet>717</a>        </span><span class="prelude-val">Ok</span>(())
 <a href=#718 id=718 data-nosnippet>718</a>    }
-<a href=#719 id=719 data-nosnippet>719</a>}</code></pre></div></section></main></body></html>
+<a href=#719 id=719 data-nosnippet>719</a>}
+</code></pre></div></section></main></body></html>
