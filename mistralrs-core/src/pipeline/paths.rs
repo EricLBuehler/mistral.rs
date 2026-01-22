@@ -535,23 +535,14 @@ pub(crate) fn get_chat_template(
                         "chat_template".to_string(),
                         Value::String(templ.chat_template),
                     );
-                    if templ.bos_token.is_some() {
-                        deser.insert(
-                            "bos_token".to_string(),
-                            Value::String(templ.bos_token.unwrap()),
-                        );
+                    if let Some(bos_token) = templ.bos_token {
+                        deser.insert("bos_token".to_string(), Value::String(bos_token));
                     }
-                    if templ.eos_token.is_some() {
-                        deser.insert(
-                            "eos_token".to_string(),
-                            Value::String(templ.eos_token.unwrap()),
-                        );
+                    if let Some(eos_token) = templ.eos_token {
+                        deser.insert("eos_token".to_string(), Value::String(eos_token));
                     }
-                    if templ.unk_token.is_some() {
-                        deser.insert(
-                            "unk_token".to_string(),
-                            Value::String(templ.unk_token.unwrap()),
-                        );
+                    if let Some(unk_token) = templ.unk_token {
+                        deser.insert("unk_token".to_string(), Value::String(unk_token));
                     }
                 }
                 None => {
