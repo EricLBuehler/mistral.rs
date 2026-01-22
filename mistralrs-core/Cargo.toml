@@ -72,7 +72,7 @@ mistralrs-quant.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 utoipa = { workspace = true, optional = true }
 schemars.workspace = true
-serde_yaml.workspace = true
+serde-saphyr.workspace = true
 regex.workspace = true
 serde_plain.workspace = true
 as-any.workspace = true

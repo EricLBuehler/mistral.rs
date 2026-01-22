@@ -87,18 +87,19 @@ impl LayerWeights {
             (q, k, v)
         };
 
-        let (q, k) = if self.q_norm.is_some() && self.k_norm.is_some() {
-            //Per‑head RMSNorm in qwen3
-            let q_flat = q.flatten(0, 2)?; // (B*H, L, D) -> (BHL, D) after transpose later
-            let k_flat = k.flatten(0, 2)?;
-            //q_norm and k_norm weights stored in f32 format in qwen3 gguf
-            let q_flat = self.q_norm.as_ref().unwrap().forward(&q_flat)?;
-            let k_flat = self.k_norm.as_ref().unwrap().forward(&k_flat)?;
-            let q = q_flat.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
-            let k = k_flat.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
-            (q, k)
-        } else {
-            (q, k)
+        let (q, k) = match (&self.q_norm, &self.k_norm) {
+            (Some(q_norm), Some(k_norm)) => {
+                //Per‑head RMSNorm in qwen3
+                let q_flat = q.flatten(0, 2)?; // (B*H, L, D) -> (BHL, D) after transpose later
+                let k_flat = k.flatten(0, 2)?;
+                //q_norm and k_norm weights stored in f32 format in qwen3 gguf
+                let q_flat = q_norm.forward(&q_flat)?;
+                let k_flat = k_norm.forward(&k_flat)?;
+                let q = q_flat.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
+                let k = k_flat.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+                (q, k)
+            }
+            _ => (q, k),
         };
 
         let (q, k) = self.rotary.forward(&q, &k, start_offsets)?;

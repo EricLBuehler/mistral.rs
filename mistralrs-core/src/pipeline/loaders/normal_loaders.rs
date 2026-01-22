@@ -2471,11 +2471,10 @@ impl IsqModelLoader for DeepSeekV2Loader {
             )?);
         }
         for layer_idx in 0..cfg.num_hidden_layers {
-            if cfg.n_routed_experts.is_some()
-                && layer_idx >= cfg.first_k_dense_replace
-                && layer_idx % cfg.moe_layer_freq == 0
-            {
-                for i in 0..cfg.n_routed_experts.unwrap() {
+            if let Some(n_routed_experts) = cfg.n_routed_experts.filter(|_| {
+                layer_idx >= cfg.first_k_dense_replace && layer_idx % cfg.moe_layer_freq == 0
+            }) {
+                for i in 0..n_routed_experts {
                     data.extend(vec![
                         Regex::new(&format!(
                             r"layers\.{layer_idx}\.mlp\.experts\.{i}\.gate_proj\.(weight|bias)$"
@@ -2523,11 +2522,10 @@ impl IsqModelLoader for DeepSeekV2Loader {
         let mut data = vec![Regex::new(r"lm_head\.(weight|bias)$")?];
         let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
         for layer_idx in 0..cfg.num_hidden_layers {
-            if cfg.n_routed_experts.is_some()
-                && layer_idx >= cfg.first_k_dense_replace
-                && layer_idx % cfg.moe_layer_freq == 0
-            {
-                for i in 0..cfg.n_routed_experts.unwrap() {
+            if let Some(n_routed_experts) = cfg.n_routed_experts.filter(|_| {
+                layer_idx >= cfg.first_k_dense_replace && layer_idx % cfg.moe_layer_freq == 0
+            }) {
+                for i in 0..n_routed_experts {
                     data.extend(vec![
                         Regex::new(&format!(
                             r"layers\.{layer_idx}\.mlp\.experts\.{i}\.gate_proj\.(weight|bias)$"
@@ -2661,17 +2659,16 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
 
             let moe_block = {
                 let mut sum = 0;
-                if cfg.n_routed_experts.is_some()
-                    && layer_idx >= cfg.first_k_dense_replace
-                    && layer_idx % cfg.moe_layer_freq == 0
-                {
+                if let Some(n_routed_experts) = cfg.n_routed_experts.filter(|_| {
+                    layer_idx >= cfg.first_k_dense_replace && layer_idx % cfg.moe_layer_freq == 0
+                }) {
                     let h_size = cfg.hidden_size;
-                    let gate_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
-                        * cfg.n_routed_experts.unwrap();
-                    let up_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
-                        * cfg.n_routed_experts.unwrap();
-                    let down_proj = cfg.moe_intermediate_size * h_size / weight_pack_factor
-                        * cfg.n_routed_experts.unwrap();
+                    let gate_proj =
+                        h_size * cfg.moe_intermediate_size / weight_pack_factor * n_routed_experts;
+                    let up_proj =
+                        h_size * cfg.moe_intermediate_size / weight_pack_factor * n_routed_experts;
+                    let down_proj =
+                        cfg.moe_intermediate_size * h_size / weight_pack_factor * n_routed_experts;
                     let shared_experts = if let Some(n_shared_experts) = cfg.n_shared_experts {
                         let gate_proj = h_size * (cfg.intermediate_size * n_shared_experts)
                             / weight_pack_factor;
@@ -2683,7 +2680,7 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
                     } else {
                         0
                     };
-                    let gate_weight = cfg.n_routed_experts.unwrap() * cfg.hidden_size;
+                    let gate_weight = n_routed_experts * cfg.hidden_size;
                     sum += gate_proj + up_proj + down_proj + shared_experts + gate_weight;
                 } else {
                     let h_size = cfg.hidden_size;
@@ -2801,11 +2798,10 @@ impl IsqModelLoader for DeepSeekV3Loader {
             )?);
         }
         for layer_idx in 0..cfg.num_hidden_layers {
-            if cfg.n_routed_experts.is_some()
-                && layer_idx >= cfg.first_k_dense_replace
-                && layer_idx % cfg.moe_layer_freq == 0
-            {
-                for i in 0..cfg.n_routed_experts.unwrap() {
+            if let Some(n_routed_experts) = cfg.n_routed_experts.filter(|_| {
+                layer_idx >= cfg.first_k_dense_replace && layer_idx % cfg.moe_layer_freq == 0
+            }) {
+                for i in 0..n_routed_experts {
                     data.extend(vec![
                         Regex::new(&format!(
                             r"layers\.{layer_idx}\.mlp\.experts\.{i}\.gate_proj\.(weight|bias)$"
@@ -2853,11 +2849,10 @@ impl IsqModelLoader for DeepSeekV3Loader {
         let mut data = vec![Regex::new(r"lm_head\.(weight|bias)$")?];
         let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
         for layer_idx in 0..cfg.num_hidden_layers {
-            if cfg.n_routed_experts.is_some()
-                && layer_idx >= cfg.first_k_dense_replace
-                && layer_idx % cfg.moe_layer_freq == 0
-            {
-                for i in 0..cfg.n_routed_experts.unwrap() {
+            if let Some(n_routed_experts) = cfg.n_routed_experts.filter(|_| {
+                layer_idx >= cfg.first_k_dense_replace && layer_idx % cfg.moe_layer_freq == 0
+            }) {
+                for i in 0..n_routed_experts {
                     data.extend(vec![
                         Regex::new(&format!(
                             r"layers\.{layer_idx}\.mlp\.experts\.{i}\.gate_proj\.(weight|bias)$"
@@ -2991,17 +2986,16 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
 
             let moe_block = {
                 let mut sum = 0;
-                if cfg.n_routed_experts.is_some()
-                    && layer_idx >= cfg.first_k_dense_replace
-                    && layer_idx % cfg.moe_layer_freq == 0
-                {
+                if let Some(n_routed_experts) = cfg.n_routed_experts.filter(|_| {
+                    layer_idx >= cfg.first_k_dense_replace && layer_idx % cfg.moe_layer_freq == 0
+                }) {
                     let h_size = cfg.hidden_size;
-                    let gate_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
-                        * cfg.n_routed_experts.unwrap();
-                    let up_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
-                        * cfg.n_routed_experts.unwrap();
-                    let down_proj = cfg.moe_intermediate_size * h_size / weight_pack_factor
-                        * cfg.n_routed_experts.unwrap();
+                    let gate_proj =
+                        h_size * cfg.moe_intermediate_size / weight_pack_factor * n_routed_experts;
+                    let up_proj =
+                        h_size * cfg.moe_intermediate_size / weight_pack_factor * n_routed_experts;
+                    let down_proj =
+                        cfg.moe_intermediate_size * h_size / weight_pack_factor * n_routed_experts;
                     let shared_experts = if let Some(n_shared_experts) = cfg.n_shared_experts {
                         let gate_proj = h_size * (cfg.intermediate_size * n_shared_experts)
                             / weight_pack_factor;
@@ -3013,7 +3007,7 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
                     } else {
                         0
                     };
-                    let gate_weight = cfg.n_routed_experts.unwrap() * cfg.hidden_size;
+                    let gate_weight = n_routed_experts * cfg.hidden_size;
                     sum += gate_proj + up_proj + down_proj + shared_experts + gate_weight;
                 } else {
                     let h_size = cfg.hidden_size;
