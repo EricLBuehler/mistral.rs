@@ -402,7 +402,7 @@
 <a href=#402 id=402 data-nosnippet>402</a>        nm_device: available_devices[<span class="number">0</span>].clone(),
 <a href=#403 id=403 data-nosnippet>403</a>        comm: Arc::new(comm),
 <a href=#404 id=404 data-nosnippet>404</a>    }
-<a href=#405 id=405 data-nosnippet>405</a>    .into_mapper(model.num_layers(config)<span class="question-mark">?</span>, device, <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
+<a href=#405 id=405 data-nosnippet>405</a>    .into_mapper(model.num_layers(config)<span class="question-mark">?</span>, device, <span class="prelude-val">None</span>, available_devices)<span class="question-mark">?</span>;
 <a href=#406 id=406 data-nosnippet>406</a>
 <a href=#407 id=407 data-nosnippet>407</a>    <span class="kw">let </span>sharded_vb = <span class="kw">if </span>!loading_isq {
 <a href=#408 id=408 data-nosnippet>408</a>        sharded_vb.clone().set_device(device.clone())
