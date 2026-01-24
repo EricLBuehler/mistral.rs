@@ -63,6 +63,7 @@ impl DeviceMapSetting {
         model_layers: usize,
         device: &Device,
         topology: Option<&Topology>,
+        all_devices: &[Device],
     ) -> Result<Box<dyn DeviceMapper + Send + Sync>> {
         match self {
             Self::Nccl { nm_device, comm } => {
@@ -160,7 +161,30 @@ impl DeviceMapSetting {
                                 if device_ord == *ordinal {
                                     device.clone()
                                 } else {
-                                    Device::new_cuda(*ordinal)?
+                                    let cuda_device = all_devices
+                                        .iter()
+                                        .filter(|d| d.is_cuda())
+                                        .map(|d| {
+                                            // should implement this in candle and get the ordinal back from the device location directly
+                                            let ordinal = match d.location() {
+                                                DeviceLocation::Cpu => 0,
+                                                DeviceLocation::Cuda { gpu_id } => gpu_id,
+                                                DeviceLocation::Metal { gpu_id } => gpu_id,
+                                            };
+                                            (d.clone(), ordinal)
+                                        })
+                                        .find(|(_, other_device_ordinal)| {
+                                            other_device_ordinal == ordinal
+                                        });
+
+                                    if let Some((device, _)) = cuda_device {
+                                        device
+                                    } else {
+                                        candle_core::bail!(
+                                            "Could not find cuda device with ordinal {}",
+                                            ordinal
+                                        )
+                                    }
                                 }
                             }
                             DeviceLocation::Metal { gpu_id: device_ord } => {

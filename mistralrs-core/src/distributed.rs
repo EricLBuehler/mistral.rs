@@ -402,7 +402,7 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
         nm_device: available_devices[0].clone(),
         comm: Arc::new(comm),
     }
-    .into_mapper(model.num_layers(config)?, device, None)?;
+    .into_mapper(model.num_layers(config)?, device, None, available_devices)?;
 
     let sharded_vb = if !loading_isq {
         sharded_vb.clone().set_device(device.clone())

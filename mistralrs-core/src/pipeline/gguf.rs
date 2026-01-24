@@ -10,6 +10,7 @@ use super::{
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
+use crate::distributed::WorkerTransferData;
 use crate::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
@@ -32,8 +33,8 @@ use crate::utils::progress::ProgressScopeGuard;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
-    get_mut_arcmutex, get_paths_gguf, DeviceMapSetting, LocalModelPaths, PagedAttentionConfig,
-    Pipeline, Topology, TryIntoDType,
+    distributed, get_mut_arcmutex, get_paths_gguf, DeviceMapSetting, LocalModelPaths,
+    PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
@@ -53,10 +54,10 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
-use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -363,9 +364,29 @@ impl Loader for GGUFLoader {
             unsafe { dev.disable_event_tracking() };
         }
 
-        let pipeline_mapper =
-            mapper.into_mapper(num_layers, device, self.config.topology.as_ref())?;
-        let mapper = mapper.into_mapper(num_layers, device, self.config.topology.as_ref())?;
+        let use_nccl = mistralrs_quant::distributed::use_nccl();
+        let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
+            let payload: WorkerTransferData = serde_json::from_str(&payload)?;
+            let WorkerTransferData::Init { id: _, worker_rank } = payload;
+            vec![candle_core::Device::new_cuda(worker_rank + 1)?]
+        } else if use_nccl {
+            vec![candle_core::Device::new_cuda(0)?]
+        } else {
+            device_map::get_all_similar_devices(device)?
+        };
+
+        let pipeline_mapper = mapper.into_mapper(
+            num_layers,
+            device,
+            self.config.topology.as_ref(),
+            &available_devices,
+        )?;
+        let mapper = mapper.into_mapper(
+            num_layers,
+            device,
+            self.config.topology.as_ref(),
+            &available_devices,
+        )?;
         let mut layer_devices = Vec::new();
         for layer in 0..num_layers {
             let device = mapper.device_for(layer, false).cloned();

@@ -378,11 +378,13 @@ impl Loader for EmbeddingLoader {
             self.inner.num_layers(&config)?,
             &device,
             self.config.topology.as_ref(),
+            &available_devices,
         )?;
         let mapper = mapper.into_mapper(
             self.inner.num_layers(&config)?,
             &device,
             self.config.topology.as_ref(),
+            &available_devices,
         )?;
         let mut layer_devices = Vec::new();
         for layer in 0..self.inner.num_layers(&config)? {
