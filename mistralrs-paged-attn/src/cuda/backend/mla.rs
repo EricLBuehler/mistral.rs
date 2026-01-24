@@ -223,6 +223,7 @@ pub fn concat_and_cache_mla(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn flashinfer_mla_decode(
     q_nope: &Tensor,
     q_pe: &Tensor,

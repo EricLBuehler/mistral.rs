@@ -19,9 +19,11 @@ use crate::layers::Sdpa;
 use crate::ops::SplitOp;
 
 /// Environment variable to disable MLA optimization.
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 const MISTRALRS_NO_MLA: &str = "MISTRALRS_NO_MLA";
 
 /// Check if MLA is disabled via environment variable.
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn is_mla_disabled() -> bool {
     std::env::var(MISTRALRS_NO_MLA).is_ok_and(|x| x == "1")
 }
@@ -380,7 +382,7 @@ pub fn mla_cache_forward(
                 if offset < block_tables_vec.len() {
                     block_tables_seq.extend(block_tables_vec[offset].iter().map(|&v| v as i32));
                 } else {
-                    block_tables_seq.extend(std::iter::repeat(0).take(block_stride));
+                    block_tables_seq.extend(std::iter::repeat_n(0, block_stride));
                 }
                 offset = offset.saturating_add(*len);
             }
@@ -408,10 +410,11 @@ pub fn mla_cache_forward(
             let mut cu_seq_lens = Vec::with_capacity(bs + 1);
             cu_seq_lens.push(0i32);
             let mut token_to_seq = Vec::with_capacity(total_prefix_tokens);
+            #[allow(clippy::cast_possible_truncation)]
             for (seq_idx, len) in prefix_lens.iter().enumerate() {
                 let next = *cu_seq_lens.last().unwrap() + *len as i32;
                 cu_seq_lens.push(next);
-                token_to_seq.extend(std::iter::repeat(seq_idx as i32).take(*len));
+                token_to_seq.extend(std::iter::repeat_n(seq_idx as i32, *len));
             }
 
             let cu_seq_lens =

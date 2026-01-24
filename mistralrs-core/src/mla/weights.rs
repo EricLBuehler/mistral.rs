@@ -134,6 +134,7 @@ impl MlaWeights {
     }
 
     #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+    #[allow(dead_code)]
     pub fn get_or_compute(
         &self,
         _kv_b_proj: &dyn mistralrs_quant::QuantMethod,

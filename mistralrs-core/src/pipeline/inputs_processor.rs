@@ -512,7 +512,7 @@ pub mod text_models_inputs_processor {
             (0, 0, HashMap::new(), HashMap::new())
         };
 
-        let paged_attn_meta = if paged_attn_metadata.is_some() {
+        let paged_attn_meta = if let Some(paged_attn_input) = &paged_attn_metadata {
             // Create paged attention tensors on CPU first (see make_prompt_chunk for explanation)
             let slot_mappings =
                 _make_tensor_with_pad(slot_mappings, 1, _PAD_SLOT_ID, &Device::Cpu)?;
@@ -529,7 +529,7 @@ pub mod text_models_inputs_processor {
             let mut paged_kv_last_page_len = Vec::with_capacity(batch_size);
             paged_kv_indptr.push(0i32);
             let mut nnz_pages = 0i32;
-            let block_size = paged_attn_metadata.as_ref().unwrap().block_size;
+            let block_size = paged_attn_input.block_size;
             for (table, context_len) in block_tables.iter().zip(paged_attn_context_lens.iter()) {
                 let num_blocks = table.len();
                 nnz_pages += num_blocks as i32;
