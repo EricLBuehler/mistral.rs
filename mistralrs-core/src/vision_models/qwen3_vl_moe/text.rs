@@ -633,6 +633,7 @@ impl Qwen3VLMoETextModel {
                 sliding_window: cfg.sliding_window,
                 k_head_dim: cfg.head_dim,
                 v_head_dim: cfg.head_dim,
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             device: normal_loading_metadata.real_device.clone(),
             dtype: vb.dtype(),

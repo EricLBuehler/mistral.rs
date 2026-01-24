@@ -888,6 +888,7 @@ impl DeepSeekV2 {
                 } else {
                     cfg.v_head_dim
                 },
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
         })

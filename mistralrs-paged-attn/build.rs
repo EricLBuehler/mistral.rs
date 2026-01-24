@@ -16,14 +16,35 @@ pub const USE_FP8: bool = false;
 mod backend;
 mod ffi;
 
-pub use backend::{copy_blocks, kv_scale_update, paged_attention, reshape_and_cache, swap_blocks};
+pub use backend::{
+    concat_and_cache_mla, flashinfer_mla_decode, gather_mla_cache, copy_blocks, kv_scale_update,
+    paged_attention, reshape_and_cache, swap_blocks,
+};
     "#;
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/cuda/pagedattention.cuh");
     println!("cargo:rerun-if-changed=src/cuda/copy_blocks_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/reshape_and_cache_kernel.cu");
+    println!("cargo:rerun-if-changed=src/cuda/concat_and_cache_mla_kernel.cu");
+    println!("cargo:rerun-if-changed=src/cuda/gather_mla_cache_kernel.cu");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer_mla_decode.cu");
     println!("cargo:rerun-if-changed=src/cuda/update_kvscales.cu");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/cp_async.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/exception.h");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/fastdiv.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/layout.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/math.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/page.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/pos_enc.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/utils.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/vec_dtypes.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/cascade.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/decode.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/default_decode_params.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/state.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/variant_helper.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/variants.cuh");
     // Detect CUDA compute capability for FP8 support
     let compute_cap = {
         if let Ok(var) = std::env::var("CUDA_COMPUTE_CAP") {

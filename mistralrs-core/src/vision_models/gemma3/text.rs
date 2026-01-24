@@ -535,6 +535,7 @@ impl TextModel {
                 sliding_window: None,
                 k_head_dim: cfg.head_dim,
                 v_head_dim: cfg.head_dim,
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
         })

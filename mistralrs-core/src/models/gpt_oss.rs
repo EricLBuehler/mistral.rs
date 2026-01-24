@@ -785,6 +785,7 @@ impl Model {
             sliding_window: cfg.sliding_window,
             k_head_dim: head_dim,
             v_head_dim: head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         let cache_types: Vec<NormalCacheType> = (0..cfg.num_hidden_layers)

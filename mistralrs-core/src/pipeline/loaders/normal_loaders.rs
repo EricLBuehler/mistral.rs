@@ -620,6 +620,7 @@ impl DeviceMappedModelLoader for MistralLoader {
             sliding_window: cfg.sliding_window,
             k_head_dim: cfg.head_dim(),
             v_head_dim: cfg.head_dim(),
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -820,6 +821,7 @@ impl DeviceMappedModelLoader for GemmaLoader {
             sliding_window: None,
             k_head_dim: cfg.head_dim,
             v_head_dim: cfg.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -1016,6 +1018,7 @@ impl DeviceMappedModelLoader for LlamaLoader {
             sliding_window: None,
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -1215,6 +1218,7 @@ impl DeviceMappedModelLoader for MixtralLoader {
             sliding_window: cfg.sliding_window,
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -1407,6 +1411,7 @@ impl DeviceMappedModelLoader for Phi2Loader {
             sliding_window: None,
             k_head_dim: cfg.head_dim(),
             v_head_dim: cfg.head_dim(),
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -1599,6 +1604,7 @@ impl DeviceMappedModelLoader for Phi3Loader {
             sliding_window: cfg.sliding_window,
             k_head_dim: cfg.head_dim(),
             v_head_dim: cfg.head_dim(),
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -1786,6 +1792,7 @@ impl DeviceMappedModelLoader for Qwen2Loader {
             sliding_window: cfg.sliding_window,
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -1987,6 +1994,7 @@ impl DeviceMappedModelLoader for Gemma2Loader {
             sliding_window: None, // None to be more forgiving, some do not
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -2182,6 +2190,7 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
             sliding_window: cfg.sliding_window,
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -2400,6 +2409,7 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
             sliding_window: cfg.sliding_window,
             k_head_dim: cfg.head_dim(),
             v_head_dim: cfg.head_dim(),
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -2728,6 +2738,7 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
             sliding_window: None,
             k_head_dim: cfg.qk_rope_head_dim + cfg.qk_nope_head_dim,
             v_head_dim: cfg.v_head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -3055,6 +3066,7 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
             sliding_window: None,
             k_head_dim: cfg.qk_rope_head_dim + cfg.qk_nope_head_dim,
             v_head_dim: cfg.v_head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -3242,6 +3254,7 @@ impl DeviceMappedModelLoader for Qwen3Loader {
             sliding_window: cfg.sliding_window,
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -3424,6 +3437,7 @@ impl DeviceMappedModelLoader for GLM4Loader {
             sliding_window: cfg.sliding_window,
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -3748,6 +3762,7 @@ impl DeviceMappedModelLoader for GLM4MoeLiteLoader {
             sliding_window: None,
             k_head_dim: cfg.qk_rope_head_dim + cfg.qk_nope_head_dim,
             v_head_dim: cfg.v_head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -4069,6 +4084,7 @@ impl DeviceMappedModelLoader for GLM4MoeLoader {
             sliding_window: None,
             k_head_dim: head_dim,
             v_head_dim: head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -4280,6 +4296,7 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
             sliding_window: cfg.sliding_window,
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -4465,6 +4482,7 @@ impl DeviceMappedModelLoader for SmolLm3Loader {
             sliding_window: None,
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -4648,6 +4666,7 @@ impl DeviceMappedModelLoader for GraniteMoeHybridLoader {
             sliding_window: None,
             k_head_dim: cfg.head_dim(),
             v_head_dim: cfg.head_dim(),
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
@@ -4858,6 +4877,7 @@ impl DeviceMappedModelLoader for GptOssLoader {
             sliding_window: cfg.sliding_window,
             k_head_dim: head_dim,
             v_head_dim: head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
         Ok(Box::new(cfg))
