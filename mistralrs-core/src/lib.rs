@@ -56,6 +56,7 @@ pub mod layers;
 mod layers_masker;
 mod layers_utils;
 pub mod matformer;
+mod mla;
 mod models;
 mod paged_attention;
 mod pipeline;

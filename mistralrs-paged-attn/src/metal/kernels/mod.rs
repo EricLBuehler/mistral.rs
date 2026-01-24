@@ -344,7 +344,8 @@ pub fn call_copy_blocks(
     block_mapping: &Buffer,
     block_mapping_offset: usize,
     num_pairs: u64,
-    numel_per_block: u64,
+    numel_per_block_key: u64,
+    numel_per_block_value: u64,
 ) -> Result<(), MetalKernelError> {
     let name = match ty {
         DType::F32 => "copy_blocks_float",
@@ -368,7 +369,8 @@ pub fn call_copy_blocks(
             (key_cache, key_cache_offset),
             (value_cache, value_cache_offset),
             (block_mapping, block_mapping_offset),
-            numel_per_block
+            numel_per_block_key,
+            numel_per_block_value
         )
     );
 

@@ -21,7 +21,7 @@ Blazingly fast LLM inference.
 - All-in-one multimodal workflow: text↔text, text+vision↔text, text+vision+audio↔text, text→speech, text→image, text→embeddings
 - APIs: Rust, Python, OpenAI HTTP server (with Chat Completions, [Responses API compatible with OpenResponses](docs/OPENRESPONSES.md)), MCP server
 - 🔗 **MCP Client**: Connect to external tools and services automatically (file systems, web search, databases, APIs)
-- Performance: ISQ, PagedAttention, FlashAttention, **per-layer topology optimization**
+- Performance: ISQ, PagedAttention, FlashAttention, [MLA](docs/MLA.md), **per-layer topology optimization**
 - Support for embedding, speech generation, and image generation models
 
 Please submit requests for new models [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
@@ -998,6 +998,7 @@ If you want to add a new model, please contact us via an issue and we can coordi
 |----------|-------------|
 | `MISTRALRS_DEBUG=1` | Enable debug mode: outputs tensor info files for GGUF/GGML models, increases logging verbosity |
 | `MISTRALRS_NO_MMAP=1` | Disable memory-mapped file loading, forcing all tensor data into memory |
+| `MISTRALRS_NO_MLA=1` | Disable [MLA](docs/MLA.md) (Multi-head Latent Attention) optimization for DeepSeek V2/V3 and GLM-4.7-Flash |
 | `MISTRALRS_ISQ_SINGLETHREAD=1` | Force ISQ (In-Situ Quantization) to run single-threaded |
 | `MCP_CONFIG_PATH` | Fallback path for MCP client configuration (used if `--mcp-config` not provided) |
 | `KEEP_ALIVE_INTERVAL` | SSE keep-alive interval in milliseconds (default: 10000) |

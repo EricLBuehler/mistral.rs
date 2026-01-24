@@ -17,7 +17,7 @@ pub use block_engine::{BlockEngine, BlockRef, BlockTables, LogicalTokenBlock};
 pub use block_engine_sequence::BlockEngineSequence;
 pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
 use candle_core::{DType, Device};
-pub use config::{ModelConfigLike, ModelConfigMetadata};
+pub use config::{KvCacheLayout, ModelConfigLike, ModelConfigMetadata};
 pub use layers::PagedAttention;
 pub use scheduler::{
     PagedAttentionScheduler, PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
@@ -74,21 +74,14 @@ macro_rules! mb_to_blocks {
         $mb_size
             / $dtype_size
             / $block_size
-            / $config.num_kv_heads()
-            / ($config.k_head_dim().max($config.v_head_dim()))
             / $config.num_layers()
-            / 2
+            / $config.kv_cache_elements_per_token()
     };
 }
 
 macro_rules! ctxt_to_blocks {
     ($context_len:expr, $dtype_size:expr, $block_size:expr, $config:expr) => {
-        $context_len
-            * $dtype_size
-            * $config.num_kv_heads()
-            * ($config.k_head_dim().max($config.v_head_dim()))
-            * $config.num_layers()
-            * 2
+        $context_len * $dtype_size * $config.num_layers() * $config.kv_cache_elements_per_token()
     };
 }
 

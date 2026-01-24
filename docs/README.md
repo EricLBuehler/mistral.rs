@@ -56,6 +56,7 @@
 - [Chat templates and tokenizers](CHAT_TOK.md)
 - [Paged Attention](PAGED_ATTENTION.md)
 - [Flash Attention](FLASH_ATTENTION.md)
+- [MLA (Multi-head Latent Attention)](MLA.md)
 - [Sampling](SAMPLING.md)
 - [TOML selector](TOML_SELECTOR.md)
 - [Tool calling](TOOL_CALLING.md)

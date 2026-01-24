@@ -25,6 +25,64 @@ extern "C" {
         v_scale: *const f32,
     );
 
+    pub fn concat_and_cache_mla(
+        ckv: *const c_void,
+        k_pe: *const c_void,
+        ckv_cache: *const c_void,
+        kpe_cache: *const c_void,
+        slot_mapping: *const c_long,
+        num_tokens: c_int,
+        kv_lora_rank: c_int,
+        kpe_head_dim: c_int,
+        block_size: c_int,
+        ckv_stride: c_int,
+        kpe_stride: c_int,
+        stream: CUstream,
+        dtype: u32,
+    );
+
+    pub fn flashinfer_mla_decode(
+        q_nope: *const c_void,
+        q_pe: *const c_void,
+        ckv_cache: *const c_void,
+        kpe_cache: *const c_void,
+        kv_indptr: *const c_int,
+        kv_indices: *const c_int,
+        kv_last_page_len: *const c_int,
+        out: *const c_void,
+        batch_size: c_int,
+        num_qo_heads: c_int,
+        page_size: c_int,
+        sm_scale: f32,
+        window_left: c_int,
+        logits_soft_cap: f32,
+        rope_scale: f32,
+        rope_theta: f32,
+        request_indices: *const c_int,
+        kv_tile_indices: *const c_int,
+        o_indptr: *const c_int,
+        kv_chunk_size_ptr: *const c_int,
+        dtype: u32,
+        stream: CUstream,
+    );
+
+    pub fn gather_mla_cache(
+        ckv_cache: *const c_void,
+        kpe_cache: *const c_void,
+        ckv_out: *const c_void,
+        kpe_out: *const c_void,
+        block_table: *const c_int,
+        cu_seq_lens: *const c_int,
+        token_to_seq: *const c_int,
+        num_tokens: c_int,
+        block_size: c_int,
+        block_table_stride: c_int,
+        kv_lora_rank: c_int,
+        kpe_head_dim: c_int,
+        stream: CUstream,
+        dtype: u32,
+    );
+
     pub fn paged_attention_v1_f16(
         out: *const c_void,
         query: *const c_void,
@@ -196,7 +254,8 @@ extern "C" {
         block_mapping: *const c_void,
         num_layers: i32,
         num_pairs: i32,
-        numel_per_block: i32,
+        numel_per_block_key: i32,
+        numel_per_block_value: i32,
         stream: i64,
     );
 
@@ -206,7 +265,8 @@ extern "C" {
         block_mapping: *const c_void,
         num_layers: i32,
         num_pairs: i32,
-        numel_per_block: i32,
+        numel_per_block_key: i32,
+        numel_per_block_value: i32,
         stream: i64,
     );
 
@@ -216,7 +276,8 @@ extern "C" {
         block_mapping: *const c_void,
         num_layers: i32,
         num_pairs: i32,
-        numel_per_block: i32,
+        numel_per_block_key: i32,
+        numel_per_block_value: i32,
         stream: i64,
     );
 

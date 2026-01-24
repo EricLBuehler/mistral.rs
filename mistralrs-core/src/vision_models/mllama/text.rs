@@ -662,6 +662,7 @@ impl MLlamaTextModel {
                 sliding_window: None,
                 k_head_dim: cfg.head_dim(),
                 v_head_dim: cfg.head_dim(),
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             cache: EitherCache::Normal(NormalCache::new(
                 cfg.num_hidden_layers,

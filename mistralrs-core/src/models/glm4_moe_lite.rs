@@ -19,6 +19,10 @@ use crate::{
         RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
+    mla::{
+        mla_cache_forward, mla_decode_forward, should_use_mla_cache, should_use_mla_decode,
+        MlaWeights,
+    },
     moe::{MoEExperts, MoEExpertsConfig},
     ops::{SplitOp, TopKLastDimOp},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -118,6 +122,7 @@ struct Attention {
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     num_attention_heads: usize,
+    mla_weights: MlaWeights,
 }
 
 impl Attention {
@@ -189,6 +194,11 @@ impl Attention {
             mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
         )?;
 
+        let mla_weights = MlaWeights::new(
+            paged_attn.is_some(),
+            mapper.device_for(layer_idx, loading_isq),
+        );
+
         Ok(Self {
             q,
             kv_a_proj_with_mqa,
@@ -206,6 +216,7 @@ impl Attention {
                 softmax_scale: cfg.softmax_scale(),
                 sliding_window: None,
             },
+            mla_weights,
         })
     }
 
@@ -241,86 +252,149 @@ impl Attention {
         k_pe = k_pe
             .reshape((bs, seq_len, 1, self.cfg.qk_rope_head_dim))?
             .transpose(1, 2)?;
-        let mut kv = self
-            .kv_b_proj
-            .forward_autocast(&self.kv_a_layernorm.forward(&compressed_kv)?)?;
-        kv = kv
-            .reshape((
-                bs,
-                seq_len,
-                self.num_attention_heads,
-                self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
-            ))?
-            .transpose(1, 2)?;
 
-        let kv_split = kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
-        let k_nope = kv_split[0].clone();
-        let mut v = kv_split[1].clone();
+        let ckv = self.kv_a_layernorm.forward(&compressed_kv)?;
 
         (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
 
-        let q = Tensor::cat(&[&q_nope, &q_pe], D::Minus1)?.contiguous()?;
-        let mut k = Tensor::cat(
-            &[&k_nope, &k_pe.repeat((1, self.num_attention_heads, 1, 1))?],
-            D::Minus1,
-        )?
-        .contiguous()?;
+        let use_mla_decode = should_use_mla_decode(
+            attention_mask,
+            seq_len,
+            self.paged_attn.is_some(),
+            q_nope.device(),
+            &metadata,
+        );
 
-        let mut attn_out = match &self.paged_attn {
-            Some(paged_attn) => match metadata {
-                Some(((key_cache, value_cache), input_metadata)) => {
-                    let v = v
-                        .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
-                        .contiguous()?;
-                    paged_attn
-                        .forward(
-                            &q,
-                            &k,
-                            &v,
-                            attention_mask,
-                            Some(key_cache),
-                            Some(value_cache),
-                            input_metadata,
-                            &self.sdpa_params,
-                            Some(flash_params),
-                        )?
-                        .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
-                }
-                None => {
-                    // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
-                    // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
-                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                    // Sanity check.
-                    assert!(attention_mask.is_some());
-                    let v = v
-                        .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
-                        .contiguous()?;
-                    paged_attn
-                        .forward(
-                            &q,
-                            &k,
-                            &v,
-                            attention_mask,
-                            None,
-                            None,
-                            &input_metadata,
-                            &self.sdpa_params,
-                            Some(flash_params),
-                        )?
-                        .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
-                }
-            },
-            None => {
-                (k, v) = kv_cache.append(&k, &v)?;
+        let mut attn_out = if use_mla_decode {
+            mla_decode_forward(
+                &q_nope,
+                &q_pe,
+                &ckv,
+                &k_pe,
+                &metadata,
+                &self.mla_weights,
+                self.kv_b_proj.as_ref(),
+                &self.sdpa_params,
+                self.num_attention_heads,
+                self.cfg.kv_lora_rank,
+                self.cfg.qk_rope_head_dim,
+                self.cfg.qk_nope_head_dim,
+                self.cfg.v_head_dim,
+                bs,
+                seq_len,
+            )?
+        } else {
+            let mut kv = self.kv_b_proj.forward_autocast(&ckv)?;
+            kv = kv
+                .reshape((
+                    bs,
+                    seq_len,
+                    self.num_attention_heads,
+                    self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
+                ))?
+                .transpose(1, 2)?;
 
-                Sdpa.run_attention(
+            let kv_split =
+                kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
+            let k_nope = kv_split[0].clone();
+            let mut v = kv_split[1].clone();
+
+            let q = Tensor::cat(&[&q_nope, &q_pe], D::Minus1)?.contiguous()?;
+            let mut k = Tensor::cat(
+                &[&k_nope, &k_pe.repeat((1, self.num_attention_heads, 1, 1))?],
+                D::Minus1,
+            )?
+            .contiguous()?;
+
+            let use_mla_cache = should_use_mla_cache(self.paged_attn.is_some(), q.device());
+
+            if use_mla_cache {
+                mla_cache_forward(
                     &q,
                     &k,
                     &v,
+                    &ckv,
+                    &k_pe,
                     attention_mask,
-                    Some(flash_params),
+                    seqlen_offsets,
+                    &metadata,
+                    flash_params,
+                    self.kv_b_proj.as_ref(),
                     &self.sdpa_params,
+                    self.num_attention_heads,
+                    self.cfg.kv_lora_rank,
+                    self.cfg.qk_rope_head_dim,
+                    self.cfg.qk_nope_head_dim,
+                    self.cfg.v_head_dim,
+                    bs,
+                    seq_len,
                 )?
+            } else {
+                match &self.paged_attn {
+                    Some(paged_attn) => match metadata {
+                        Some(((key_cache, value_cache), input_metadata)) => {
+                            let v = v
+                                .pad_with_zeros(
+                                    D::Minus1,
+                                    0,
+                                    self.q_head_dim - self.cfg.v_head_dim,
+                                )?
+                                .contiguous()?;
+                            paged_attn
+                                .forward(
+                                    &q,
+                                    &k,
+                                    &v,
+                                    attention_mask,
+                                    Some(key_cache),
+                                    Some(value_cache),
+                                    input_metadata,
+                                    &self.sdpa_params,
+                                    Some(flash_params),
+                                )?
+                                .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
+                        }
+                        None => {
+                            // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
+                            // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
+                            let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                            // Sanity check.
+                            assert!(attention_mask.is_some());
+                            let v = v
+                                .pad_with_zeros(
+                                    D::Minus1,
+                                    0,
+                                    self.q_head_dim - self.cfg.v_head_dim,
+                                )?
+                                .contiguous()?;
+                            paged_attn
+                                .forward(
+                                    &q,
+                                    &k,
+                                    &v,
+                                    attention_mask,
+                                    None,
+                                    None,
+                                    &input_metadata,
+                                    &self.sdpa_params,
+                                    Some(flash_params),
+                                )?
+                                .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
+                        }
+                    },
+                    None => {
+                        (k, v) = kv_cache.append(&k, &v)?;
+
+                        Sdpa.run_attention(
+                            &q,
+                            &k,
+                            &v,
+                            attention_mask,
+                            Some(flash_params),
+                            &self.sdpa_params,
+                        )?
+                    }
+                }
             }
         };
 
@@ -832,6 +906,26 @@ impl Glm4MoeLite {
                     cfg.q_head_dim()
                 } else {
                     cfg.v_head_dim
+                },
+                kv_cache_layout: if matches!(
+                    attention_mechanism,
+                    AttentionImplementation::PagedAttention
+                ) && {
+                    #[cfg(all(feature = "cuda", target_family = "unix"))]
+                    {
+                        matches!(normal_loading_metadata.real_device, Device::Cuda(_))
+                    }
+                    #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+                    {
+                        false
+                    }
+                } {
+                    crate::paged_attention::KvCacheLayout::Mla {
+                        kv_lora_rank: cfg.kv_lora_rank,
+                        kpe_head_dim: cfg.qk_rope_head_dim,
+                    }
+                } else {
+                    crate::paged_attention::KvCacheLayout::Standard
                 },
             },
             mapper,
