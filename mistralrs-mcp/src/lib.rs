@@ -231,7 +231,7 @@ pub struct McpClientConfig {
     /// Maximum number of concurrent tool calls across all MCP servers
     ///
     /// Limits resource usage and prevents overwhelming servers with too many
-    /// simultaneous requests. Defaults to 1 if not specified.
+    /// simultaneous requests. Defaults to 10 if not specified.
     pub max_concurrent_calls: Option<usize>,
 }
 
