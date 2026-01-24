@@ -359,7 +359,11 @@ impl Attention {
         let q_nope = q_nope.squeeze(2)?.contiguous()?;
         let q_pe = q_pe.squeeze(2)?.contiguous()?;
         let (w_uk, w_uv_t) = self.get_mla_weights(q_nope.device())?;
-        let ql_nope = q_nope.matmul(w_uk)?.contiguous()?;
+        let ql_nope = q_nope
+            .unsqueeze(D::Minus2)?
+            .broadcast_matmul(&w_uk.unsqueeze(0)?)?
+            .squeeze(D::Minus2)?
+            .contiguous()?;
 
         let attn_latent = mistralrs_paged_attn::flashinfer_mla_decode(
             &ql_nope,
@@ -376,7 +380,10 @@ impl Attention {
             self.sdpa_params.softmax_scale,
         )?;
 
-        attn_latent.matmul(w_uv_t)
+        attn_latent
+            .unsqueeze(D::Minus2)?
+            .broadcast_matmul(&w_uv_t.unsqueeze(0)?)?
+            .squeeze(D::Minus2)
     }
 
     #[cfg(not(all(feature = "cuda", target_family = "unix")))]

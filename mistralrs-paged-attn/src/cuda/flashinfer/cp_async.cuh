@@ -141,7 +141,7 @@ __device__ __forceinline__ void pred_load_128b(T* smem_ptr, const T* gmem_ptr, b
 
 /*!
  * \brief Load specified number of bits per thread from global memory to shared memory
- * \tparam num_bits Number of bits to load, must be 128 or 256
+ * \tparam num_bits Number of bits to load, must be 128, 256, or 512
  * \tparam prefetch_mode Whether to fetch additional data from global memory to L2
  * \tparam T Data type
  * \param smem_ptr Pointer to shared memory
@@ -149,19 +149,22 @@ __device__ __forceinline__ void pred_load_128b(T* smem_ptr, const T* gmem_ptr, b
  */
 template <size_t num_bits, PrefetchMode prefetch_mode, typename T>
 __device__ __forceinline__ void load(T* smem_ptr, const T* gmem_ptr) {
-  static_assert(num_bits == 128 || num_bits == 256, "num_bits must be 128 or 256");
-  if constexpr (num_bits == 128) {
-    load_128b<prefetch_mode>(smem_ptr, gmem_ptr);
-  } else {
-    load_128b<prefetch_mode>(smem_ptr, gmem_ptr);
+  static_assert(num_bits == 128 || num_bits == 256 || num_bits == 512,
+                "num_bits must be 128, 256, or 512");
+  load_128b<prefetch_mode>(smem_ptr, gmem_ptr);
+  if constexpr (num_bits >= 256) {
     load_128b<prefetch_mode>(smem_ptr + 16 / sizeof(T), gmem_ptr + 16 / sizeof(T));
+  }
+  if constexpr (num_bits == 512) {
+    load_128b<prefetch_mode>(smem_ptr + 32 / sizeof(T), gmem_ptr + 32 / sizeof(T));
+    load_128b<prefetch_mode>(smem_ptr + 48 / sizeof(T), gmem_ptr + 48 / sizeof(T));
   }
 }
 
 /*!
  * \brief Load specified number of bits per thread from global memory to shared memory with
  *   predicate
- * \tparam num_bits Number of bits to load, must be 128 or 256
+ * \tparam num_bits Number of bits to load, must be 128, 256, or 512
  * \tparam prefetch_mode Whether to fetch additional data from global memory to L2
  * \tparam fill_mode Whether to fill zero to shared memory when predicate is false
  * \tparam T Data type
@@ -172,13 +175,18 @@ __device__ __forceinline__ void load(T* smem_ptr, const T* gmem_ptr) {
  */
 template <size_t num_bits, PrefetchMode prefetch_mode, SharedMemFillMode fill_mode, typename T>
 __device__ __forceinline__ void pred_load(T* smem_ptr, const T* gmem_ptr, bool predicate) {
-  static_assert(num_bits == 128 || num_bits == 256, "num_bits must be 128 or 256");
-  if constexpr (num_bits == 128) {
-    pred_load_128b<prefetch_mode, fill_mode>(smem_ptr, gmem_ptr, predicate);
-  } else {
-    pred_load_128b<prefetch_mode, fill_mode>(smem_ptr, gmem_ptr, predicate);
-    pred_load_128b<prefetch_mode, fill_mode>(smem_ptr + 16 / sizeof(T), gmem_ptr + 16 / sizeof(T),
-                                             predicate);
+  static_assert(num_bits == 128 || num_bits == 256 || num_bits == 512,
+                "num_bits must be 128, 256, or 512");
+  pred_load_128b<prefetch_mode, fill_mode>(smem_ptr, gmem_ptr, predicate);
+  if constexpr (num_bits >= 256) {
+    pred_load_128b<prefetch_mode, fill_mode>(smem_ptr + 16 / sizeof(T),
+                                             gmem_ptr + 16 / sizeof(T), predicate);
+  }
+  if constexpr (num_bits == 512) {
+    pred_load_128b<prefetch_mode, fill_mode>(smem_ptr + 32 / sizeof(T),
+                                             gmem_ptr + 32 / sizeof(T), predicate);
+    pred_load_128b<prefetch_mode, fill_mode>(smem_ptr + 48 / sizeof(T),
+                                             gmem_ptr + 48 / sizeof(T), predicate);
   }
 }
 

@@ -1,5 +1,9 @@
 use crate::cuda::backend::slice_ptr;
-use crate::cuda::ffi::{concat_and_cache_mla, flashinfer_mla_decode, gather_mla_cache};
+use crate::cuda::ffi::{
+    concat_and_cache_mla as ffi_concat_and_cache_mla,
+    flashinfer_mla_decode as ffi_flashinfer_mla_decode, gather_mla_cache as ffi_gather_mla_cache,
+};
+use candle_core::backend::BackendStorage;
 use candle_core::cuda_backend::CudaStorageSlice;
 use candle_core::{DType, Result, Storage, Tensor};
 
@@ -96,7 +100,7 @@ pub fn concat_and_cache_mla(
     let ckv_stride = ckv_l.stride()[0];
     let kpe_stride = kpe_l.stride()[0];
 
-    let dev = ckv.device();
+    let dev = ckv_s.device();
 
     let (
         ckv_ptr,
@@ -199,7 +203,7 @@ pub fn concat_and_cache_mla(
     };
 
     unsafe {
-        concat_and_cache_mla(
+        ffi_concat_and_cache_mla(
             ckv_ptr as *const core::ffi::c_void,
             kpe_ptr as *const core::ffi::c_void,
             ckv_cache_ptr as *const core::ffi::c_void,
@@ -369,253 +373,264 @@ pub fn flashinfer_mla_decode(
         q_nope.device(),
     )?;
 
-    let (output_s, output_l) = output.storage_and_layout();
-    let output_s = match &*output_s {
-        Storage::Cuda(s) => s,
-        _ => candle_core::bail!("output must be a cuda tensor"),
-    };
+    {
+        let (output_s, output_l) = output.storage_and_layout();
+        let output_s = match &*output_s {
+            Storage::Cuda(s) => s,
+            _ => candle_core::bail!("output must be a cuda tensor"),
+        };
 
-    let dev = q_nope.device();
+        let dev = q_nope_s.device();
 
-    let (
-        q_nope_ptr,
-        _q_nope_guard,
-        q_pe_ptr,
-        _q_pe_guard,
-        ckv_cache_ptr,
-        _ckv_cache_guard,
-        kpe_cache_ptr,
-        _kpe_cache_guard,
-        kv_indptr_ptr,
-        _kv_indptr_guard,
-        kv_indices_ptr,
-        _kv_indices_guard,
-        kv_last_ptr,
-        _kv_last_guard,
-        request_indices_ptr,
-        _request_indices_guard,
-        kv_tile_indices_ptr,
-        _kv_tile_indices_guard,
-        o_indptr_ptr,
-        _o_indptr_guard,
-        kv_chunk_ptr,
-        _kv_chunk_guard,
-        output_ptr,
-        _output_guard,
-    ) = match (
-        &q_nope_s.slice,
-        &q_pe_s.slice,
-        &ckv_cache_s.slice,
-        &kpe_cache_s.slice,
-        &kv_indptr_s.slice,
-        &kv_indices_s.slice,
-        &kv_last_s.slice,
-        &request_indices_s.slice,
-        &kv_tile_indices_s.slice,
-        &o_indptr_s.slice,
-        &kv_chunk_s.slice,
-        &output_s.slice,
-    ) {
-        (
-            CudaStorageSlice::F16(q_nope),
-            CudaStorageSlice::F16(q_pe),
-            CudaStorageSlice::F16(ckv_cache),
-            CudaStorageSlice::F16(kpe_cache),
-            CudaStorageSlice::I32(kv_indptr),
-            CudaStorageSlice::I32(kv_indices),
-            CudaStorageSlice::I32(kv_last),
-            CudaStorageSlice::I32(request_indices),
-            CudaStorageSlice::I32(kv_tile_indices),
-            CudaStorageSlice::I32(o_indptr),
-            CudaStorageSlice::I32(kv_chunk),
-            CudaStorageSlice::F16(output),
-        ) => {
-            let (q_nope_ptr, q_nope_guard) = slice_ptr(q_nope, q_nope_l.start_offset());
-            let (q_pe_ptr, q_pe_guard) = slice_ptr(q_pe, q_pe_l.start_offset());
-            let (ckv_cache_ptr, ckv_cache_guard) = slice_ptr(ckv_cache, ckv_cache_l.start_offset());
-            let (kpe_cache_ptr, kpe_cache_guard) = slice_ptr(kpe_cache, kpe_cache_l.start_offset());
-            let (kv_indptr_ptr, kv_indptr_guard) = slice_ptr(kv_indptr, kv_indptr_l.start_offset());
-            let (kv_indices_ptr, kv_indices_guard) =
-                slice_ptr(kv_indices, kv_indices_l.start_offset());
-            let (kv_last_ptr, kv_last_guard) = slice_ptr(kv_last, kv_last_l.start_offset());
-            let (request_indices_ptr, request_indices_guard) =
-                slice_ptr(request_indices, request_indices_l.start_offset());
-            let (kv_tile_indices_ptr, kv_tile_indices_guard) =
-                slice_ptr(kv_tile_indices, kv_tile_indices_l.start_offset());
-            let (o_indptr_ptr, o_indptr_guard) = slice_ptr(o_indptr, o_indptr_l.start_offset());
-            let (kv_chunk_ptr, kv_chunk_guard) = slice_ptr(kv_chunk, kv_chunk_l.start_offset());
-            let (output_ptr, output_guard) = slice_ptr(output, output_l.start_offset());
+        let (
+            q_nope_ptr,
+            _q_nope_guard,
+            q_pe_ptr,
+            _q_pe_guard,
+            ckv_cache_ptr,
+            _ckv_cache_guard,
+            kpe_cache_ptr,
+            _kpe_cache_guard,
+            kv_indptr_ptr,
+            _kv_indptr_guard,
+            kv_indices_ptr,
+            _kv_indices_guard,
+            kv_last_ptr,
+            _kv_last_guard,
+            request_indices_ptr,
+            _request_indices_guard,
+            kv_tile_indices_ptr,
+            _kv_tile_indices_guard,
+            o_indptr_ptr,
+            _o_indptr_guard,
+            kv_chunk_ptr,
+            _kv_chunk_guard,
+            output_ptr,
+            _output_guard,
+        ) = match (
+            &q_nope_s.slice,
+            &q_pe_s.slice,
+            &ckv_cache_s.slice,
+            &kpe_cache_s.slice,
+            &kv_indptr_s.slice,
+            &kv_indices_s.slice,
+            &kv_last_s.slice,
+            &request_indices_s.slice,
+            &kv_tile_indices_s.slice,
+            &o_indptr_s.slice,
+            &kv_chunk_s.slice,
+            &output_s.slice,
+        ) {
             (
-                q_nope_ptr,
-                q_nope_guard,
-                q_pe_ptr,
-                q_pe_guard,
-                ckv_cache_ptr,
-                ckv_cache_guard,
-                kpe_cache_ptr,
-                kpe_cache_guard,
-                kv_indptr_ptr,
-                kv_indptr_guard,
-                kv_indices_ptr,
-                kv_indices_guard,
-                kv_last_ptr,
-                kv_last_guard,
-                request_indices_ptr,
-                request_indices_guard,
-                kv_tile_indices_ptr,
-                kv_tile_indices_guard,
-                o_indptr_ptr,
-                o_indptr_guard,
-                kv_chunk_ptr,
-                kv_chunk_guard,
-                output_ptr,
-                output_guard,
-            )
-        }
-        (
-            CudaStorageSlice::BF16(q_nope),
-            CudaStorageSlice::BF16(q_pe),
-            CudaStorageSlice::BF16(ckv_cache),
-            CudaStorageSlice::BF16(kpe_cache),
-            CudaStorageSlice::I32(kv_indptr),
-            CudaStorageSlice::I32(kv_indices),
-            CudaStorageSlice::I32(kv_last),
-            CudaStorageSlice::I32(request_indices),
-            CudaStorageSlice::I32(kv_tile_indices),
-            CudaStorageSlice::I32(o_indptr),
-            CudaStorageSlice::I32(kv_chunk),
-            CudaStorageSlice::BF16(output),
-        ) => {
-            let (q_nope_ptr, q_nope_guard) = slice_ptr(q_nope, q_nope_l.start_offset());
-            let (q_pe_ptr, q_pe_guard) = slice_ptr(q_pe, q_pe_l.start_offset());
-            let (ckv_cache_ptr, ckv_cache_guard) = slice_ptr(ckv_cache, ckv_cache_l.start_offset());
-            let (kpe_cache_ptr, kpe_cache_guard) = slice_ptr(kpe_cache, kpe_cache_l.start_offset());
-            let (kv_indptr_ptr, kv_indptr_guard) = slice_ptr(kv_indptr, kv_indptr_l.start_offset());
-            let (kv_indices_ptr, kv_indices_guard) =
-                slice_ptr(kv_indices, kv_indices_l.start_offset());
-            let (kv_last_ptr, kv_last_guard) = slice_ptr(kv_last, kv_last_l.start_offset());
-            let (request_indices_ptr, request_indices_guard) =
-                slice_ptr(request_indices, request_indices_l.start_offset());
-            let (kv_tile_indices_ptr, kv_tile_indices_guard) =
-                slice_ptr(kv_tile_indices, kv_tile_indices_l.start_offset());
-            let (o_indptr_ptr, o_indptr_guard) = slice_ptr(o_indptr, o_indptr_l.start_offset());
-            let (kv_chunk_ptr, kv_chunk_guard) = slice_ptr(kv_chunk, kv_chunk_l.start_offset());
-            let (output_ptr, output_guard) = slice_ptr(output, output_l.start_offset());
+                CudaStorageSlice::F16(q_nope),
+                CudaStorageSlice::F16(q_pe),
+                CudaStorageSlice::F16(ckv_cache),
+                CudaStorageSlice::F16(kpe_cache),
+                CudaStorageSlice::I32(kv_indptr),
+                CudaStorageSlice::I32(kv_indices),
+                CudaStorageSlice::I32(kv_last),
+                CudaStorageSlice::I32(request_indices),
+                CudaStorageSlice::I32(kv_tile_indices),
+                CudaStorageSlice::I32(o_indptr),
+                CudaStorageSlice::I32(kv_chunk),
+                CudaStorageSlice::F16(output),
+            ) => {
+                let (q_nope_ptr, q_nope_guard) = slice_ptr(q_nope, q_nope_l.start_offset());
+                let (q_pe_ptr, q_pe_guard) = slice_ptr(q_pe, q_pe_l.start_offset());
+                let (ckv_cache_ptr, ckv_cache_guard) =
+                    slice_ptr(ckv_cache, ckv_cache_l.start_offset());
+                let (kpe_cache_ptr, kpe_cache_guard) =
+                    slice_ptr(kpe_cache, kpe_cache_l.start_offset());
+                let (kv_indptr_ptr, kv_indptr_guard) =
+                    slice_ptr(kv_indptr, kv_indptr_l.start_offset());
+                let (kv_indices_ptr, kv_indices_guard) =
+                    slice_ptr(kv_indices, kv_indices_l.start_offset());
+                let (kv_last_ptr, kv_last_guard) = slice_ptr(kv_last, kv_last_l.start_offset());
+                let (request_indices_ptr, request_indices_guard) =
+                    slice_ptr(request_indices, request_indices_l.start_offset());
+                let (kv_tile_indices_ptr, kv_tile_indices_guard) =
+                    slice_ptr(kv_tile_indices, kv_tile_indices_l.start_offset());
+                let (o_indptr_ptr, o_indptr_guard) = slice_ptr(o_indptr, o_indptr_l.start_offset());
+                let (kv_chunk_ptr, kv_chunk_guard) = slice_ptr(kv_chunk, kv_chunk_l.start_offset());
+                let (output_ptr, output_guard) = slice_ptr(output, output_l.start_offset());
+                (
+                    q_nope_ptr,
+                    q_nope_guard,
+                    q_pe_ptr,
+                    q_pe_guard,
+                    ckv_cache_ptr,
+                    ckv_cache_guard,
+                    kpe_cache_ptr,
+                    kpe_cache_guard,
+                    kv_indptr_ptr,
+                    kv_indptr_guard,
+                    kv_indices_ptr,
+                    kv_indices_guard,
+                    kv_last_ptr,
+                    kv_last_guard,
+                    request_indices_ptr,
+                    request_indices_guard,
+                    kv_tile_indices_ptr,
+                    kv_tile_indices_guard,
+                    o_indptr_ptr,
+                    o_indptr_guard,
+                    kv_chunk_ptr,
+                    kv_chunk_guard,
+                    output_ptr,
+                    output_guard,
+                )
+            }
             (
-                q_nope_ptr,
-                q_nope_guard,
-                q_pe_ptr,
-                q_pe_guard,
-                ckv_cache_ptr,
-                ckv_cache_guard,
-                kpe_cache_ptr,
-                kpe_cache_guard,
-                kv_indptr_ptr,
-                kv_indptr_guard,
-                kv_indices_ptr,
-                kv_indices_guard,
-                kv_last_ptr,
-                kv_last_guard,
-                request_indices_ptr,
-                request_indices_guard,
-                kv_tile_indices_ptr,
-                kv_tile_indices_guard,
-                o_indptr_ptr,
-                o_indptr_guard,
-                kv_chunk_ptr,
-                kv_chunk_guard,
-                output_ptr,
-                output_guard,
-            )
-        }
-        (
-            CudaStorageSlice::F32(q_nope),
-            CudaStorageSlice::F32(q_pe),
-            CudaStorageSlice::F32(ckv_cache),
-            CudaStorageSlice::F32(kpe_cache),
-            CudaStorageSlice::I32(kv_indptr),
-            CudaStorageSlice::I32(kv_indices),
-            CudaStorageSlice::I32(kv_last),
-            CudaStorageSlice::I32(request_indices),
-            CudaStorageSlice::I32(kv_tile_indices),
-            CudaStorageSlice::I32(o_indptr),
-            CudaStorageSlice::I32(kv_chunk),
-            CudaStorageSlice::F32(output),
-        ) => {
-            let (q_nope_ptr, q_nope_guard) = slice_ptr(q_nope, q_nope_l.start_offset());
-            let (q_pe_ptr, q_pe_guard) = slice_ptr(q_pe, q_pe_l.start_offset());
-            let (ckv_cache_ptr, ckv_cache_guard) = slice_ptr(ckv_cache, ckv_cache_l.start_offset());
-            let (kpe_cache_ptr, kpe_cache_guard) = slice_ptr(kpe_cache, kpe_cache_l.start_offset());
-            let (kv_indptr_ptr, kv_indptr_guard) = slice_ptr(kv_indptr, kv_indptr_l.start_offset());
-            let (kv_indices_ptr, kv_indices_guard) =
-                slice_ptr(kv_indices, kv_indices_l.start_offset());
-            let (kv_last_ptr, kv_last_guard) = slice_ptr(kv_last, kv_last_l.start_offset());
-            let (request_indices_ptr, request_indices_guard) =
-                slice_ptr(request_indices, request_indices_l.start_offset());
-            let (kv_tile_indices_ptr, kv_tile_indices_guard) =
-                slice_ptr(kv_tile_indices, kv_tile_indices_l.start_offset());
-            let (o_indptr_ptr, o_indptr_guard) = slice_ptr(o_indptr, o_indptr_l.start_offset());
-            let (kv_chunk_ptr, kv_chunk_guard) = slice_ptr(kv_chunk, kv_chunk_l.start_offset());
-            let (output_ptr, output_guard) = slice_ptr(output, output_l.start_offset());
+                CudaStorageSlice::BF16(q_nope),
+                CudaStorageSlice::BF16(q_pe),
+                CudaStorageSlice::BF16(ckv_cache),
+                CudaStorageSlice::BF16(kpe_cache),
+                CudaStorageSlice::I32(kv_indptr),
+                CudaStorageSlice::I32(kv_indices),
+                CudaStorageSlice::I32(kv_last),
+                CudaStorageSlice::I32(request_indices),
+                CudaStorageSlice::I32(kv_tile_indices),
+                CudaStorageSlice::I32(o_indptr),
+                CudaStorageSlice::I32(kv_chunk),
+                CudaStorageSlice::BF16(output),
+            ) => {
+                let (q_nope_ptr, q_nope_guard) = slice_ptr(q_nope, q_nope_l.start_offset());
+                let (q_pe_ptr, q_pe_guard) = slice_ptr(q_pe, q_pe_l.start_offset());
+                let (ckv_cache_ptr, ckv_cache_guard) =
+                    slice_ptr(ckv_cache, ckv_cache_l.start_offset());
+                let (kpe_cache_ptr, kpe_cache_guard) =
+                    slice_ptr(kpe_cache, kpe_cache_l.start_offset());
+                let (kv_indptr_ptr, kv_indptr_guard) =
+                    slice_ptr(kv_indptr, kv_indptr_l.start_offset());
+                let (kv_indices_ptr, kv_indices_guard) =
+                    slice_ptr(kv_indices, kv_indices_l.start_offset());
+                let (kv_last_ptr, kv_last_guard) = slice_ptr(kv_last, kv_last_l.start_offset());
+                let (request_indices_ptr, request_indices_guard) =
+                    slice_ptr(request_indices, request_indices_l.start_offset());
+                let (kv_tile_indices_ptr, kv_tile_indices_guard) =
+                    slice_ptr(kv_tile_indices, kv_tile_indices_l.start_offset());
+                let (o_indptr_ptr, o_indptr_guard) = slice_ptr(o_indptr, o_indptr_l.start_offset());
+                let (kv_chunk_ptr, kv_chunk_guard) = slice_ptr(kv_chunk, kv_chunk_l.start_offset());
+                let (output_ptr, output_guard) = slice_ptr(output, output_l.start_offset());
+                (
+                    q_nope_ptr,
+                    q_nope_guard,
+                    q_pe_ptr,
+                    q_pe_guard,
+                    ckv_cache_ptr,
+                    ckv_cache_guard,
+                    kpe_cache_ptr,
+                    kpe_cache_guard,
+                    kv_indptr_ptr,
+                    kv_indptr_guard,
+                    kv_indices_ptr,
+                    kv_indices_guard,
+                    kv_last_ptr,
+                    kv_last_guard,
+                    request_indices_ptr,
+                    request_indices_guard,
+                    kv_tile_indices_ptr,
+                    kv_tile_indices_guard,
+                    o_indptr_ptr,
+                    o_indptr_guard,
+                    kv_chunk_ptr,
+                    kv_chunk_guard,
+                    output_ptr,
+                    output_guard,
+                )
+            }
             (
-                q_nope_ptr,
-                q_nope_guard,
-                q_pe_ptr,
-                q_pe_guard,
-                ckv_cache_ptr,
-                ckv_cache_guard,
-                kpe_cache_ptr,
-                kpe_cache_guard,
-                kv_indptr_ptr,
-                kv_indptr_guard,
-                kv_indices_ptr,
-                kv_indices_guard,
-                kv_last_ptr,
-                kv_last_guard,
-                request_indices_ptr,
-                request_indices_guard,
-                kv_tile_indices_ptr,
-                kv_tile_indices_guard,
-                o_indptr_ptr,
-                o_indptr_guard,
-                kv_chunk_ptr,
-                kv_chunk_guard,
-                output_ptr,
-                output_guard,
-            )
-        }
-        _ => {
-            candle_core::bail!(
-                "flashinfer_mla_decode expects q/cache dtype to match and indices to be i32"
-            )
-        }
-    };
+                CudaStorageSlice::F32(q_nope),
+                CudaStorageSlice::F32(q_pe),
+                CudaStorageSlice::F32(ckv_cache),
+                CudaStorageSlice::F32(kpe_cache),
+                CudaStorageSlice::I32(kv_indptr),
+                CudaStorageSlice::I32(kv_indices),
+                CudaStorageSlice::I32(kv_last),
+                CudaStorageSlice::I32(request_indices),
+                CudaStorageSlice::I32(kv_tile_indices),
+                CudaStorageSlice::I32(o_indptr),
+                CudaStorageSlice::I32(kv_chunk),
+                CudaStorageSlice::F32(output),
+            ) => {
+                let (q_nope_ptr, q_nope_guard) = slice_ptr(q_nope, q_nope_l.start_offset());
+                let (q_pe_ptr, q_pe_guard) = slice_ptr(q_pe, q_pe_l.start_offset());
+                let (ckv_cache_ptr, ckv_cache_guard) =
+                    slice_ptr(ckv_cache, ckv_cache_l.start_offset());
+                let (kpe_cache_ptr, kpe_cache_guard) =
+                    slice_ptr(kpe_cache, kpe_cache_l.start_offset());
+                let (kv_indptr_ptr, kv_indptr_guard) =
+                    slice_ptr(kv_indptr, kv_indptr_l.start_offset());
+                let (kv_indices_ptr, kv_indices_guard) =
+                    slice_ptr(kv_indices, kv_indices_l.start_offset());
+                let (kv_last_ptr, kv_last_guard) = slice_ptr(kv_last, kv_last_l.start_offset());
+                let (request_indices_ptr, request_indices_guard) =
+                    slice_ptr(request_indices, request_indices_l.start_offset());
+                let (kv_tile_indices_ptr, kv_tile_indices_guard) =
+                    slice_ptr(kv_tile_indices, kv_tile_indices_l.start_offset());
+                let (o_indptr_ptr, o_indptr_guard) = slice_ptr(o_indptr, o_indptr_l.start_offset());
+                let (kv_chunk_ptr, kv_chunk_guard) = slice_ptr(kv_chunk, kv_chunk_l.start_offset());
+                let (output_ptr, output_guard) = slice_ptr(output, output_l.start_offset());
+                (
+                    q_nope_ptr,
+                    q_nope_guard,
+                    q_pe_ptr,
+                    q_pe_guard,
+                    ckv_cache_ptr,
+                    ckv_cache_guard,
+                    kpe_cache_ptr,
+                    kpe_cache_guard,
+                    kv_indptr_ptr,
+                    kv_indptr_guard,
+                    kv_indices_ptr,
+                    kv_indices_guard,
+                    kv_last_ptr,
+                    kv_last_guard,
+                    request_indices_ptr,
+                    request_indices_guard,
+                    kv_tile_indices_ptr,
+                    kv_tile_indices_guard,
+                    o_indptr_ptr,
+                    o_indptr_guard,
+                    kv_chunk_ptr,
+                    kv_chunk_guard,
+                    output_ptr,
+                    output_guard,
+                )
+            }
+            _ => {
+                candle_core::bail!(
+                    "flashinfer_mla_decode expects q/cache dtype to match and indices to be i32"
+                )
+            }
+        };
 
-    unsafe {
-        flashinfer_mla_decode(
-            q_nope_ptr as *const core::ffi::c_void,
-            q_pe_ptr as *const core::ffi::c_void,
-            ckv_cache_ptr as *const core::ffi::c_void,
-            kpe_cache_ptr as *const core::ffi::c_void,
-            kv_indptr_ptr as *const i32,
-            kv_indices_ptr as *const i32,
-            kv_last_ptr as *const i32,
-            output_ptr as *const core::ffi::c_void,
-            batch_size as i32,
-            num_heads as i32,
-            block_size as i32,
-            sm_scale,
-            -1,
-            0.0,
-            1.0,
-            1.0,
-            request_indices_ptr as *const i32,
-            kv_tile_indices_ptr as *const i32,
-            o_indptr_ptr as *const i32,
-            kv_chunk_ptr as *const i32,
-            dtype_code,
-            dev.cuda_stream().cu_stream(),
-        );
+        unsafe {
+            ffi_flashinfer_mla_decode(
+                q_nope_ptr as *const core::ffi::c_void,
+                q_pe_ptr as *const core::ffi::c_void,
+                ckv_cache_ptr as *const core::ffi::c_void,
+                kpe_cache_ptr as *const core::ffi::c_void,
+                kv_indptr_ptr as *const i32,
+                kv_indices_ptr as *const i32,
+                kv_last_ptr as *const i32,
+                output_ptr as *const core::ffi::c_void,
+                batch_size as i32,
+                num_heads as i32,
+                block_size as i32,
+                sm_scale,
+                -1,
+                0.0,
+                1.0,
+                1.0,
+                request_indices_ptr as *const i32,
+                kv_tile_indices_ptr as *const i32,
+                o_indptr_ptr as *const i32,
+                kv_chunk_ptr as *const i32,
+                dtype_code,
+                dev.cuda_stream().cu_stream(),
+            );
+        }
     }
 
     Ok(output)
@@ -658,212 +673,220 @@ pub fn gather_mla_cache(
     let ckv_out = Tensor::zeros((num_tokens, kv_lora_rank), dtype, ckv_cache.device())?;
     let kpe_out = Tensor::zeros((num_tokens, kpe_head_dim), dtype, kpe_cache.device())?;
 
-    let (ckv_cache_s, ckv_cache_l) = ckv_cache.storage_and_layout();
-    let (kpe_cache_s, kpe_cache_l) = kpe_cache.storage_and_layout();
-    let (block_table_s, block_table_l) = block_table.storage_and_layout();
-    let (cu_seq_lens_s, cu_seq_lens_l) = cu_seq_lens.storage_and_layout();
-    let (token_to_seq_s, token_to_seq_l) = token_to_seq.storage_and_layout();
-    let (ckv_out_s, ckv_out_l) = ckv_out.storage_and_layout();
-    let (kpe_out_s, kpe_out_l) = kpe_out.storage_and_layout();
+    {
+        let (ckv_cache_s, ckv_cache_l) = ckv_cache.storage_and_layout();
+        let (kpe_cache_s, kpe_cache_l) = kpe_cache.storage_and_layout();
+        let (block_table_s, block_table_l) = block_table.storage_and_layout();
+        let (cu_seq_lens_s, cu_seq_lens_l) = cu_seq_lens.storage_and_layout();
+        let (token_to_seq_s, token_to_seq_l) = token_to_seq.storage_and_layout();
+        let (ckv_out_s, ckv_out_l) = ckv_out.storage_and_layout();
+        let (kpe_out_s, kpe_out_l) = kpe_out.storage_and_layout();
 
-    let ckv_cache_s = match &*ckv_cache_s {
-        Storage::Cuda(s) => s,
-        _ => candle_core::bail!("ckv_cache must be a cuda tensor"),
-    };
-    let kpe_cache_s = match &*kpe_cache_s {
-        Storage::Cuda(s) => s,
-        _ => candle_core::bail!("kpe_cache must be a cuda tensor"),
-    };
-    let block_table_s = match &*block_table_s {
-        Storage::Cuda(s) => s,
-        _ => candle_core::bail!("block_table must be a cuda tensor"),
-    };
-    let cu_seq_lens_s = match &*cu_seq_lens_s {
-        Storage::Cuda(s) => s,
-        _ => candle_core::bail!("cu_seq_lens must be a cuda tensor"),
-    };
-    let token_to_seq_s = match &*token_to_seq_s {
-        Storage::Cuda(s) => s,
-        _ => candle_core::bail!("token_to_seq must be a cuda tensor"),
-    };
-    let ckv_out_s = match &*ckv_out_s {
-        Storage::Cuda(s) => s,
-        _ => candle_core::bail!("ckv_out must be a cuda tensor"),
-    };
-    let kpe_out_s = match &*kpe_out_s {
-        Storage::Cuda(s) => s,
-        _ => candle_core::bail!("kpe_out must be a cuda tensor"),
-    };
+        let ckv_cache_s = match &*ckv_cache_s {
+            Storage::Cuda(s) => s,
+            _ => candle_core::bail!("ckv_cache must be a cuda tensor"),
+        };
+        let kpe_cache_s = match &*kpe_cache_s {
+            Storage::Cuda(s) => s,
+            _ => candle_core::bail!("kpe_cache must be a cuda tensor"),
+        };
+        let block_table_s = match &*block_table_s {
+            Storage::Cuda(s) => s,
+            _ => candle_core::bail!("block_table must be a cuda tensor"),
+        };
+        let cu_seq_lens_s = match &*cu_seq_lens_s {
+            Storage::Cuda(s) => s,
+            _ => candle_core::bail!("cu_seq_lens must be a cuda tensor"),
+        };
+        let token_to_seq_s = match &*token_to_seq_s {
+            Storage::Cuda(s) => s,
+            _ => candle_core::bail!("token_to_seq must be a cuda tensor"),
+        };
+        let ckv_out_s = match &*ckv_out_s {
+            Storage::Cuda(s) => s,
+            _ => candle_core::bail!("ckv_out must be a cuda tensor"),
+        };
+        let kpe_out_s = match &*kpe_out_s {
+            Storage::Cuda(s) => s,
+            _ => candle_core::bail!("kpe_out must be a cuda tensor"),
+        };
 
-    let dtype_code = match dtype {
-        DType::F16 => 0,
-        DType::BF16 => 1,
-        DType::F32 => 2,
-        other => {
-            candle_core::bail!("gather_mla_cache only supports f16, bf16, f32 (got {other:?})")
-        }
-    };
+        let dtype_code = match dtype {
+            DType::F16 => 0,
+            DType::BF16 => 1,
+            DType::F32 => 2,
+            other => {
+                candle_core::bail!("gather_mla_cache only supports f16, bf16, f32 (got {other:?})")
+            }
+        };
 
-    let dev = ckv_cache.device();
+        let dev = ckv_cache_s.device();
 
-    let (
-        ckv_cache_ptr,
-        _ckv_cache_guard,
-        kpe_cache_ptr,
-        _kpe_cache_guard,
-        block_table_ptr,
-        _block_table_guard,
-        cu_seq_lens_ptr,
-        _cu_seq_lens_guard,
-        token_to_seq_ptr,
-        _token_to_seq_guard,
-        ckv_out_ptr,
-        _ckv_out_guard,
-        kpe_out_ptr,
-        _kpe_out_guard,
-    ) = match (
-        &ckv_cache_s.slice,
-        &kpe_cache_s.slice,
-        &block_table_s.slice,
-        &cu_seq_lens_s.slice,
-        &token_to_seq_s.slice,
-        &ckv_out_s.slice,
-        &kpe_out_s.slice,
-    ) {
-        (
-            CudaStorageSlice::F16(ckv_cache),
-            CudaStorageSlice::F16(kpe_cache),
-            CudaStorageSlice::I32(block_table),
-            CudaStorageSlice::I32(cu_seq_lens),
-            CudaStorageSlice::I32(token_to_seq),
-            CudaStorageSlice::F16(ckv_out),
-            CudaStorageSlice::F16(kpe_out),
-        ) => {
-            let (ckv_cache_ptr, ckv_cache_guard) = slice_ptr(ckv_cache, ckv_cache_l.start_offset());
-            let (kpe_cache_ptr, kpe_cache_guard) = slice_ptr(kpe_cache, kpe_cache_l.start_offset());
-            let (block_table_ptr, block_table_guard) =
-                slice_ptr(block_table, block_table_l.start_offset());
-            let (cu_seq_lens_ptr, cu_seq_lens_guard) =
-                slice_ptr(cu_seq_lens, cu_seq_lens_l.start_offset());
-            let (token_to_seq_ptr, token_to_seq_guard) =
-                slice_ptr(token_to_seq, token_to_seq_l.start_offset());
-            let (ckv_out_ptr, ckv_out_guard) = slice_ptr(ckv_out, ckv_out_l.start_offset());
-            let (kpe_out_ptr, kpe_out_guard) = slice_ptr(kpe_out, kpe_out_l.start_offset());
+        let (
+            ckv_cache_ptr,
+            _ckv_cache_guard,
+            kpe_cache_ptr,
+            _kpe_cache_guard,
+            block_table_ptr,
+            _block_table_guard,
+            cu_seq_lens_ptr,
+            _cu_seq_lens_guard,
+            token_to_seq_ptr,
+            _token_to_seq_guard,
+            ckv_out_ptr,
+            _ckv_out_guard,
+            kpe_out_ptr,
+            _kpe_out_guard,
+        ) = match (
+            &ckv_cache_s.slice,
+            &kpe_cache_s.slice,
+            &block_table_s.slice,
+            &cu_seq_lens_s.slice,
+            &token_to_seq_s.slice,
+            &ckv_out_s.slice,
+            &kpe_out_s.slice,
+        ) {
             (
-                ckv_cache_ptr,
-                ckv_cache_guard,
-                kpe_cache_ptr,
-                kpe_cache_guard,
-                block_table_ptr,
-                block_table_guard,
-                cu_seq_lens_ptr,
-                cu_seq_lens_guard,
-                token_to_seq_ptr,
-                token_to_seq_guard,
-                ckv_out_ptr,
-                ckv_out_guard,
-                kpe_out_ptr,
-                kpe_out_guard,
-            )
-        }
-        (
-            CudaStorageSlice::BF16(ckv_cache),
-            CudaStorageSlice::BF16(kpe_cache),
-            CudaStorageSlice::I32(block_table),
-            CudaStorageSlice::I32(cu_seq_lens),
-            CudaStorageSlice::I32(token_to_seq),
-            CudaStorageSlice::BF16(ckv_out),
-            CudaStorageSlice::BF16(kpe_out),
-        ) => {
-            let (ckv_cache_ptr, ckv_cache_guard) = slice_ptr(ckv_cache, ckv_cache_l.start_offset());
-            let (kpe_cache_ptr, kpe_cache_guard) = slice_ptr(kpe_cache, kpe_cache_l.start_offset());
-            let (block_table_ptr, block_table_guard) =
-                slice_ptr(block_table, block_table_l.start_offset());
-            let (cu_seq_lens_ptr, cu_seq_lens_guard) =
-                slice_ptr(cu_seq_lens, cu_seq_lens_l.start_offset());
-            let (token_to_seq_ptr, token_to_seq_guard) =
-                slice_ptr(token_to_seq, token_to_seq_l.start_offset());
-            let (ckv_out_ptr, ckv_out_guard) = slice_ptr(ckv_out, ckv_out_l.start_offset());
-            let (kpe_out_ptr, kpe_out_guard) = slice_ptr(kpe_out, kpe_out_l.start_offset());
+                CudaStorageSlice::F16(ckv_cache),
+                CudaStorageSlice::F16(kpe_cache),
+                CudaStorageSlice::I32(block_table),
+                CudaStorageSlice::I32(cu_seq_lens),
+                CudaStorageSlice::I32(token_to_seq),
+                CudaStorageSlice::F16(ckv_out),
+                CudaStorageSlice::F16(kpe_out),
+            ) => {
+                let (ckv_cache_ptr, ckv_cache_guard) =
+                    slice_ptr(ckv_cache, ckv_cache_l.start_offset());
+                let (kpe_cache_ptr, kpe_cache_guard) =
+                    slice_ptr(kpe_cache, kpe_cache_l.start_offset());
+                let (block_table_ptr, block_table_guard) =
+                    slice_ptr(block_table, block_table_l.start_offset());
+                let (cu_seq_lens_ptr, cu_seq_lens_guard) =
+                    slice_ptr(cu_seq_lens, cu_seq_lens_l.start_offset());
+                let (token_to_seq_ptr, token_to_seq_guard) =
+                    slice_ptr(token_to_seq, token_to_seq_l.start_offset());
+                let (ckv_out_ptr, ckv_out_guard) = slice_ptr(ckv_out, ckv_out_l.start_offset());
+                let (kpe_out_ptr, kpe_out_guard) = slice_ptr(kpe_out, kpe_out_l.start_offset());
+                (
+                    ckv_cache_ptr,
+                    ckv_cache_guard,
+                    kpe_cache_ptr,
+                    kpe_cache_guard,
+                    block_table_ptr,
+                    block_table_guard,
+                    cu_seq_lens_ptr,
+                    cu_seq_lens_guard,
+                    token_to_seq_ptr,
+                    token_to_seq_guard,
+                    ckv_out_ptr,
+                    ckv_out_guard,
+                    kpe_out_ptr,
+                    kpe_out_guard,
+                )
+            }
             (
-                ckv_cache_ptr,
-                ckv_cache_guard,
-                kpe_cache_ptr,
-                kpe_cache_guard,
-                block_table_ptr,
-                block_table_guard,
-                cu_seq_lens_ptr,
-                cu_seq_lens_guard,
-                token_to_seq_ptr,
-                token_to_seq_guard,
-                ckv_out_ptr,
-                ckv_out_guard,
-                kpe_out_ptr,
-                kpe_out_guard,
-            )
-        }
-        (
-            CudaStorageSlice::F32(ckv_cache),
-            CudaStorageSlice::F32(kpe_cache),
-            CudaStorageSlice::I32(block_table),
-            CudaStorageSlice::I32(cu_seq_lens),
-            CudaStorageSlice::I32(token_to_seq),
-            CudaStorageSlice::F32(ckv_out),
-            CudaStorageSlice::F32(kpe_out),
-        ) => {
-            let (ckv_cache_ptr, ckv_cache_guard) = slice_ptr(ckv_cache, ckv_cache_l.start_offset());
-            let (kpe_cache_ptr, kpe_cache_guard) = slice_ptr(kpe_cache, kpe_cache_l.start_offset());
-            let (block_table_ptr, block_table_guard) =
-                slice_ptr(block_table, block_table_l.start_offset());
-            let (cu_seq_lens_ptr, cu_seq_lens_guard) =
-                slice_ptr(cu_seq_lens, cu_seq_lens_l.start_offset());
-            let (token_to_seq_ptr, token_to_seq_guard) =
-                slice_ptr(token_to_seq, token_to_seq_l.start_offset());
-            let (ckv_out_ptr, ckv_out_guard) = slice_ptr(ckv_out, ckv_out_l.start_offset());
-            let (kpe_out_ptr, kpe_out_guard) = slice_ptr(kpe_out, kpe_out_l.start_offset());
+                CudaStorageSlice::BF16(ckv_cache),
+                CudaStorageSlice::BF16(kpe_cache),
+                CudaStorageSlice::I32(block_table),
+                CudaStorageSlice::I32(cu_seq_lens),
+                CudaStorageSlice::I32(token_to_seq),
+                CudaStorageSlice::BF16(ckv_out),
+                CudaStorageSlice::BF16(kpe_out),
+            ) => {
+                let (ckv_cache_ptr, ckv_cache_guard) =
+                    slice_ptr(ckv_cache, ckv_cache_l.start_offset());
+                let (kpe_cache_ptr, kpe_cache_guard) =
+                    slice_ptr(kpe_cache, kpe_cache_l.start_offset());
+                let (block_table_ptr, block_table_guard) =
+                    slice_ptr(block_table, block_table_l.start_offset());
+                let (cu_seq_lens_ptr, cu_seq_lens_guard) =
+                    slice_ptr(cu_seq_lens, cu_seq_lens_l.start_offset());
+                let (token_to_seq_ptr, token_to_seq_guard) =
+                    slice_ptr(token_to_seq, token_to_seq_l.start_offset());
+                let (ckv_out_ptr, ckv_out_guard) = slice_ptr(ckv_out, ckv_out_l.start_offset());
+                let (kpe_out_ptr, kpe_out_guard) = slice_ptr(kpe_out, kpe_out_l.start_offset());
+                (
+                    ckv_cache_ptr,
+                    ckv_cache_guard,
+                    kpe_cache_ptr,
+                    kpe_cache_guard,
+                    block_table_ptr,
+                    block_table_guard,
+                    cu_seq_lens_ptr,
+                    cu_seq_lens_guard,
+                    token_to_seq_ptr,
+                    token_to_seq_guard,
+                    ckv_out_ptr,
+                    ckv_out_guard,
+                    kpe_out_ptr,
+                    kpe_out_guard,
+                )
+            }
             (
-                ckv_cache_ptr,
-                ckv_cache_guard,
-                kpe_cache_ptr,
-                kpe_cache_guard,
-                block_table_ptr,
-                block_table_guard,
-                cu_seq_lens_ptr,
-                cu_seq_lens_guard,
-                token_to_seq_ptr,
-                token_to_seq_guard,
-                ckv_out_ptr,
-                ckv_out_guard,
-                kpe_out_ptr,
-                kpe_out_guard,
-            )
-        }
-        _ => {
-            candle_core::bail!(
-                "gather_mla_cache expects cache dtypes to match and metadata tensors to be i32"
-            )
-        }
-    };
+                CudaStorageSlice::F32(ckv_cache),
+                CudaStorageSlice::F32(kpe_cache),
+                CudaStorageSlice::I32(block_table),
+                CudaStorageSlice::I32(cu_seq_lens),
+                CudaStorageSlice::I32(token_to_seq),
+                CudaStorageSlice::F32(ckv_out),
+                CudaStorageSlice::F32(kpe_out),
+            ) => {
+                let (ckv_cache_ptr, ckv_cache_guard) =
+                    slice_ptr(ckv_cache, ckv_cache_l.start_offset());
+                let (kpe_cache_ptr, kpe_cache_guard) =
+                    slice_ptr(kpe_cache, kpe_cache_l.start_offset());
+                let (block_table_ptr, block_table_guard) =
+                    slice_ptr(block_table, block_table_l.start_offset());
+                let (cu_seq_lens_ptr, cu_seq_lens_guard) =
+                    slice_ptr(cu_seq_lens, cu_seq_lens_l.start_offset());
+                let (token_to_seq_ptr, token_to_seq_guard) =
+                    slice_ptr(token_to_seq, token_to_seq_l.start_offset());
+                let (ckv_out_ptr, ckv_out_guard) = slice_ptr(ckv_out, ckv_out_l.start_offset());
+                let (kpe_out_ptr, kpe_out_guard) = slice_ptr(kpe_out, kpe_out_l.start_offset());
+                (
+                    ckv_cache_ptr,
+                    ckv_cache_guard,
+                    kpe_cache_ptr,
+                    kpe_cache_guard,
+                    block_table_ptr,
+                    block_table_guard,
+                    cu_seq_lens_ptr,
+                    cu_seq_lens_guard,
+                    token_to_seq_ptr,
+                    token_to_seq_guard,
+                    ckv_out_ptr,
+                    ckv_out_guard,
+                    kpe_out_ptr,
+                    kpe_out_guard,
+                )
+            }
+            _ => {
+                candle_core::bail!(
+                    "gather_mla_cache expects cache dtypes to match and metadata tensors to be i32"
+                )
+            }
+        };
 
-    let (_, block_table_stride) = block_table_l.shape().dims2()?;
+        let (_, block_table_stride) = block_table_l.shape().dims2()?;
 
-    unsafe {
-        gather_mla_cache(
-            ckv_cache_ptr as *const core::ffi::c_void,
-            kpe_cache_ptr as *const core::ffi::c_void,
-            ckv_out_ptr as *const core::ffi::c_void,
-            kpe_out_ptr as *const core::ffi::c_void,
-            block_table_ptr as *const i32,
-            cu_seq_lens_ptr as *const i32,
-            token_to_seq_ptr as *const i32,
-            num_tokens as i32,
-            block_size as i32,
-            block_table_stride as i32,
-            kv_lora_rank as i32,
-            kpe_head_dim as i32,
-            dev.cuda_stream().cu_stream(),
-            dtype_code,
-        );
+        unsafe {
+            ffi_gather_mla_cache(
+                ckv_cache_ptr as *const core::ffi::c_void,
+                kpe_cache_ptr as *const core::ffi::c_void,
+                ckv_out_ptr as *const core::ffi::c_void,
+                kpe_out_ptr as *const core::ffi::c_void,
+                block_table_ptr as *const i32,
+                cu_seq_lens_ptr as *const i32,
+                token_to_seq_ptr as *const i32,
+                num_tokens as i32,
+                block_size as i32,
+                block_table_stride as i32,
+                kv_lora_rank as i32,
+                kpe_head_dim as i32,
+                dev.cuda_stream().cu_stream(),
+                dtype_code,
+            );
+        }
     }
 
     Ok((ckv_out, kpe_out))
