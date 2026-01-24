@@ -2,11 +2,11 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
-    ColumnParallelLayer, NonZeroOp, QuantMethod, QuantizedConfig, ReplicatedLayer,
-    RowParallelLayer, ShardedVarBuilder, SumAllReduce,
+    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
+    ShardedVarBuilder,
 };
 use serde::Deserialize;
 
@@ -23,6 +23,7 @@ use crate::{
         mla_cache_forward, mla_decode_forward, should_use_mla_cache, should_use_mla_decode,
         MlaWeights,
     },
+    moe::{MoEExperts, MoEExpertsConfig},
     ops::{SplitOp, TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -33,9 +34,6 @@ use crate::{
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
-
-use std::collections::HashSet;
-use std::iter::FromIterator;
 serde_default_fn!(f64, routed_scaling_factor, 1.0);
 serde_default_fn!(TopkMethod, topk_method, TopkMethod::Greedy);
 serde_default_fn!(usize, moe_layer_freq, 1);
@@ -449,67 +447,6 @@ impl Attention {
     }
 }
 
-struct Expert {
-    gate: Arc<dyn QuantMethod>,
-    up: Arc<dyn QuantMethod>,
-    down: Arc<dyn QuantMethod>,
-    act: Activation,
-}
-
-impl Expert {
-    fn new(
-        cfg: &DeepSeekV3Config,
-        vb: ShardedVarBuilder,
-        hidden_size: Option<usize>,
-        intermediate_size: Option<usize>,
-    ) -> Result<Self> {
-        let hidden_size = hidden_size.unwrap_or(cfg.hidden_size);
-        let intermediate_size = intermediate_size.unwrap_or(cfg.intermediate_size);
-
-        Ok(Self {
-            gate: ReplicatedLayer::new(
-                hidden_size,
-                intermediate_size,
-                &cfg.quantization_config,
-                false,
-                vb.pp("gate_proj"),
-            )?,
-            up: ReplicatedLayer::new(
-                hidden_size,
-                intermediate_size,
-                &cfg.quantization_config,
-                false,
-                vb.pp("up_proj"),
-            )?,
-            down: ReplicatedLayer::new(
-                intermediate_size,
-                hidden_size,
-                &cfg.quantization_config,
-                false,
-                vb.pp("down_proj"),
-            )?,
-            act: cfg.hidden_act,
-        })
-    }
-
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let lhs = self.gate.forward(&xs)?;
-        let rhs = self.up.forward(&xs)?;
-        let mut res = self
-            .down
-            .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?)?;
-        if self.gate.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
-        Ok(res)
-    }
-}
-
 struct MoeGate {
     weight: Tensor,
     cfg: DeepSeekV3Config,
@@ -642,13 +579,9 @@ impl MoeGate {
 }
 
 struct Moe {
-    experts: Vec<Option<Expert>>,
+    experts: MoEExperts,
     shared_experts: Option<Mlp>,
     gate: MoeGate,
-    all_reduce: SumAllReduce,
-    experts_start_idx: usize,
-    experts_end_idx: usize,
-    world_size: usize,
 }
 
 impl Moe {
@@ -662,24 +595,31 @@ impl Moe {
         n_shared_experts: Option<usize>,
         n_routed_experts: usize,
         comm: &Arc<mistralrs_quant::Comm>,
+        real_device: Device,
     ) -> Result<Self> {
-        let mut experts = Vec::with_capacity(n_routed_experts);
-        let n_local_experts = n_routed_experts / comm.world_size();
-        let experts_start_idx = comm.rank() * n_local_experts;
-        let experts_end_idx = experts_start_idx + n_local_experts;
-        for i in 0..n_routed_experts {
-            if i >= experts_start_idx && i < experts_end_idx {
-                let vb_e = vb.pp("experts").pp(i);
-                experts.push(Some(Expert::new(
-                    cfg,
-                    mapper.set_device(layer_idx, vb_e, loading_isq),
-                    None,
-                    Some(cfg.moe_intermediate_size),
-                )?));
-            } else {
-                experts.push(None);
-            }
-        }
+        let layer_device = mapper
+            .device_for(layer_idx, false)
+            .cloned()
+            .unwrap_or(real_device);
+
+        let moe_cfg = MoEExpertsConfig {
+            num_experts: n_routed_experts,
+            num_experts_per_tok: cfg.num_experts_per_tok.unwrap(),
+            hidden_size: cfg.hidden_size,
+            moe_intermediate_size: cfg.moe_intermediate_size,
+        };
+
+        // Use the optimized MoEExperts with automatic backend selection
+        let experts = MoEExperts::new(
+            &moe_cfg,
+            mapper.set_device(layer_idx, vb.clone(), loading_isq),
+            layer_device,
+            comm,
+            loading_isq,
+            &cfg.quantization_config,
+            cfg.hidden_act,
+        )?;
+
         let shared_experts = if let Some(n_shared_experts) = n_shared_experts {
             let intermediate_size = cfg.moe_intermediate_size * n_shared_experts;
             Some(Mlp::new(
@@ -702,67 +642,36 @@ impl Moe {
             experts,
             shared_experts,
             gate,
-            all_reduce: SumAllReduce::new(comm),
-            experts_end_idx,
-            experts_start_idx,
-            world_size: comm.world_size(),
         })
-    }
-
-    fn moe_infer(&self, xs: &Tensor, topk_ids: &Tensor, topk_weight: &Tensor) -> Result<Tensor> {
-        let mut y = xs.zeros_like()?;
-        let topk_weight = if topk_weight.dtype() != xs.dtype() {
-            topk_weight.to_dtype(xs.dtype())?
-        } else {
-            topk_weight.to_owned()
-        };
-        let unique_ids: HashSet<u32> =
-            HashSet::from_iter(topk_ids.to_device(&Device::Cpu)?.flatten_all()?.to_vec1()?);
-        for i in self.experts_start_idx..self.experts_end_idx {
-            if !unique_ids.contains(&(i as u32)) {
-                continue;
-            }
-            let idx_top = topk_ids.eq(i as f64)?.nonzero()?.t()?;
-            let idx = &idx_top.i(0)?.contiguous()?;
-            let top = &idx_top.i(1)?.contiguous()?;
-
-            let expert = self.experts[i]
-                .as_ref()
-                .context("Expert is not present for this rank.")?;
-
-            y = y.index_add(
-                idx,
-                &expert.forward(&xs.index_select(idx, 0)?)?.broadcast_mul(
-                    &topk_weight
-                        .index_select(idx, 0)?
-                        .gather(&top.unsqueeze(1)?, 1)?
-                        .squeeze(1)?
-                        .unsqueeze(D::Minus1)?,
-                )?,
-                0,
-            )?;
-        }
-
-        if self.world_size > 1 {
-            y = self.all_reduce.sum_all_reduce(&y)?;
-        }
-
-        Ok(y)
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let identity = xs.clone();
-        let orig_shape = xs.shape();
-        let (topk_idx, topk_weight) = self.gate.forward(xs)?;
-        let xs = xs.reshape(((), xs.dim(D::Minus1)?))?;
+        let (b_size, seq_len, hidden_dim) = xs.dims3()?;
 
-        let mut y = self
-            .moe_infer(&xs, &topk_idx, &topk_weight)?
-            .reshape(orig_shape)?;
+        // Get routing weights from gate
+        let (topk_idx, topk_weight) = self.gate.forward(xs)?;
+
+        // Forward through routed experts using optimized MoEExperts
+        let mut y = self.experts.forward(xs, topk_weight, &topk_idx)?;
+        y = y.reshape((b_size, seq_len, hidden_dim))?;
+
+        // Add shared expert output
         if let Some(ref shared_experts) = self.shared_experts {
             y = (y + shared_experts.forward(&identity)?)?;
         }
+
         Ok(y)
+    }
+
+    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
+        let mut layers = self.experts.get_isq_layers();
+        if let Some(ref mut shared) = self.shared_experts {
+            layers.push(&mut shared.gate);
+            layers.push(&mut shared.up);
+            layers.push(&mut shared.down);
+        }
+        layers
     }
 }
 
@@ -798,6 +707,7 @@ impl DecoderLayer {
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
+        real_device: Device,
     ) -> Result<Self> {
         let attn = Attention::new(
             rotary_emb,
@@ -831,6 +741,7 @@ impl DecoderLayer {
                 cfg.n_shared_experts,
                 n_routed_experts,
                 comm,
+                real_device,
             )?))
         } else {
             MoeOrMlp::Mlp(Mlp::new(
@@ -984,6 +895,7 @@ impl DeepSeekV3 {
                 normal_loading_metadata.loading_isq,
                 paged_attn,
                 &comm,
+                normal_loading_metadata.real_device.clone(),
             )
         })?;
 
@@ -1113,15 +1025,8 @@ impl IsqModel for DeepSeekV3 {
                     tensors.push((&mut mlp.down, Some(i)));
                 }
                 MoeOrMlp::Moe(moe) => {
-                    for mlp in moe.experts.iter_mut().filter_map(|e| e.as_mut()) {
-                        tensors.push((&mut mlp.gate, Some(i)));
-                        tensors.push((&mut mlp.up, Some(i)));
-                        tensors.push((&mut mlp.down, Some(i)));
-                    }
-                    if let Some(mlp) = &mut moe.shared_experts {
-                        tensors.push((&mut mlp.gate, Some(i)));
-                        tensors.push((&mut mlp.up, Some(i)));
-                        tensors.push((&mut mlp.down, Some(i)));
+                    for layer in moe.get_isq_layers() {
+                        tensors.push((layer, Some(i)));
                     }
                 }
             }
@@ -1145,15 +1050,8 @@ impl IsqModel for DeepSeekV3 {
                     tensors.push((&mut mlp.down, Some(i)));
                 }
                 MoeOrMlp::Moe(moe) => {
-                    for mlp in moe.experts.iter_mut().filter_map(|e| e.as_mut()) {
-                        tensors.push((&mut mlp.gate, Some(i)));
-                        tensors.push((&mut mlp.up, Some(i)));
-                        tensors.push((&mut mlp.down, Some(i)));
-                    }
-                    if let Some(mlp) = &mut moe.shared_experts {
-                        tensors.push((&mut mlp.gate, Some(i)));
-                        tensors.push((&mut mlp.up, Some(i)));
-                        tensors.push((&mut mlp.down, Some(i)));
+                    for layer in moe.get_isq_layers() {
+                        tensors.push((layer, Some(i)));
                     }
                 }
             }
