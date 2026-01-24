@@ -302,9 +302,9 @@ pub fn qtensor_indexed_moe_forward(qtensor: &QTensor, x: &Tensor, ids: &Tensor) 
         weight_ptr,
         qtensor.shape(),
         dtype,
-        &input_storage,
+        input_storage,
         x.shape(),
-        &ids_slice,
+        ids_slice,
         ids.shape(),
         &dev,
     )?;

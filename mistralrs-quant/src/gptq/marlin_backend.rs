@@ -72,8 +72,8 @@ impl MarlinMatMul {
             workspace_ as *const core::ffi::c_void
         };
 
-        let qzeros_ptr = if self.qzeros.is_some() {
-            let (qzeros, qzeros_l) = self.qzeros.as_ref().unwrap().storage_and_layout();
+        let qzeros_ptr = if let Some(qzeros_tensor) = &self.qzeros {
+            let (qzeros, qzeros_l) = qzeros_tensor.storage_and_layout();
             let qzeros = match &*qzeros {
                 Storage::Cuda(p) => p,
                 _ => candle::bail!("qzeros must be a cuda tensor"),
@@ -258,8 +258,8 @@ impl MarlinRepack {
         let (out_ptr, out_guard) = out.device_ptr(out.stream());
         let (q_ptr, _q_guard) = slice_ptr(q, qweight_l.start_offset());
 
-        let perm_ptr = if self.perm.is_some() {
-            let (perm_, perm_l) = self.perm.as_ref().unwrap().storage_and_layout();
+        let perm_ptr = if let Some(perm_tensor) = &self.perm {
+            let (perm_, perm_l) = perm_tensor.storage_and_layout();
             let perm_ = match &*perm_ {
                 Storage::Cuda(p) => p,
                 _ => candle::bail!("perm must be a cuda tensor"),

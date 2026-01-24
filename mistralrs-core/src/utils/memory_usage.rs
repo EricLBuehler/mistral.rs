@@ -10,7 +10,7 @@ impl MemoryUsage {
         match device {
             Device::Cpu => {
                 let mut sys = System::new_all();
-                sys.refresh_cpu();
+                sys.refresh_cpu_all();
                 Ok(usize::try_from(sys.available_memory())?)
             }
             #[cfg(feature = "cuda")]
@@ -36,7 +36,7 @@ impl MemoryUsage {
                     // For integrated GPUs with unified memory, use system memory
                     // Apply 3/4 fraction to leave room for OS and other processes
                     let mut sys = System::new_all();
-                    sys.refresh_cpu();
+                    sys.refresh_cpu_all();
                     let avail = usize::try_from(sys.available_memory())?;
                     Ok((avail * 3) / 4)
                 } else {
@@ -70,7 +70,7 @@ impl MemoryUsage {
         match device {
             Device::Cpu => {
                 let mut sys = System::new_all();
-                sys.refresh_cpu();
+                sys.refresh_cpu_all();
                 Ok(usize::try_from(sys.total_memory())?)
             }
             #[cfg(feature = "cuda")]
@@ -96,7 +96,7 @@ impl MemoryUsage {
                     // For integrated GPUs with unified memory, use system total memory
                     // Apply 3/4 fraction similar to Metal's approach
                     let mut sys = System::new_all();
-                    sys.refresh_cpu();
+                    sys.refresh_cpu_all();
                     let total = usize::try_from(sys.total_memory())?;
                     Ok((total * 3) / 4)
                 } else {
@@ -116,7 +116,7 @@ impl MemoryUsage {
                 // Get system RAM in MB
                 let system_ram_mb = {
                     let mut sys = System::new_all();
-                    sys.refresh_cpu();
+                    sys.refresh_cpu_all();
                     usize::try_from(sys.total_memory())? / SIZE_IN_MB
                 };
 

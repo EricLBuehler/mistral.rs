@@ -240,7 +240,7 @@ fn generate_tool_impl(args: ToolArgs, input_fn: ItemFn) -> syn::Result<TokenStre
             quote! {
                 {
                     let schema = schemars::schema_for!(#schema_type);
-                    let mut prop_schema = serde_json::to_value(&schema.schema).unwrap_or(serde_json::json!({}));
+                    let mut prop_schema = serde_json::to_value(&schema).unwrap_or(serde_json::json!({}));
                     #desc_insert
                     properties.insert(#name_str.to_string(), prop_schema);
                 }

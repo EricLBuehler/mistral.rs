@@ -1,9 +1,16 @@
 [package]
 name = "mistralrs-macros"
+readme = "README.md"
+authors = ["Eric Buehler"]
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+rust-version.workspace = true
 description = "Proc macros for mistral.rs tool definitions"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
 
 [lib]
 proc-macro = true
@@ -12,4 +19,4 @@ proc-macro = true
 syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
 quote = "1.0"
 proc-macro2 = "1.0"
-darling = "0.20"
+darling = "0.23"
