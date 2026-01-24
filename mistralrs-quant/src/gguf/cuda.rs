@@ -92,8 +92,10 @@ fn indexed_moe_forward_fused_q8_1_input(
     w_shape: &Shape,
     w_dtype: GgmlDType,
     input: &CudaSlice<f32>,
+    input_offset: usize,
     in_shape: &Shape,
     ids: &CudaSlice<u32>,
+    ids_offset: usize,
     idx_shape: &Shape,
     dev: &CudaDevice,
 ) -> Result<(CudaStorage, Shape)> {
@@ -115,7 +117,9 @@ fn indexed_moe_forward_fused_q8_1_input(
     let y_size_in_bytes = total_rows * dst_row_size_bytes;
     let mut input_quant = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
 
-    quantize_q8_1(input, &mut input_quant, k, total_rows, dev)?;
+    let (src_ptr, _src_guard) = slice_ptr(input, input_offset);
+    let src_slice = unsafe { dev.upgrade_device_ptr(src_ptr, total_rows * k) };
+    quantize_q8_1(&src_slice, &mut input_quant, k, total_rows, dev)?;
 
     // Output buffer
     let outsize = batch * topk * n;
@@ -132,7 +136,7 @@ fn indexed_moe_forward_fused_q8_1_input(
     let input_dim1_i32 = input_dim1 as i32;
 
     let (inputs_ptr, _inputs_guard) = slice_ptr(&input_quant, 0);
-    let (indices_ptr, _indices_guard) = slice_ptr(ids, 0);
+    let (indices_ptr, _indices_guard) = slice_ptr(ids, ids_offset);
     let (outputs_ptr, _outputs_guard) = slice_ptr(&out, 0);
 
     unsafe {
@@ -282,12 +286,12 @@ pub fn qtensor_indexed_moe_forward(qtensor: &QTensor, x: &Tensor, ids: &Tensor) 
         candle_core::bail!("indexed_moe_forward requires CUDA device for weights");
     };
 
-    let (x_storage, _x_layout) = x.storage_and_layout();
+    let (x_storage, x_layout) = x.storage_and_layout();
     let Storage::Cuda(x_cuda) = &*x_storage else {
         candle_core::bail!("indexed_moe_forward requires CUDA device for input");
     };
 
-    let (ids_storage, _ids_layout) = ids.storage_and_layout();
+    let (ids_storage, ids_layout) = ids.storage_and_layout();
     let Storage::Cuda(ids_cuda) = &*ids_storage else {
         candle_core::bail!("indexed_moe_forward requires CUDA device for indices");
     };
@@ -303,8 +307,10 @@ pub fn qtensor_indexed_moe_forward(qtensor: &QTensor, x: &Tensor, ids: &Tensor) 
         qtensor.shape(),
         dtype,
         input_storage,
+        x_layout.start_offset(),
         x.shape(),
         ids_slice,
+        ids_layout.start_offset(),
         ids.shape(),
         &dev,
     )?;

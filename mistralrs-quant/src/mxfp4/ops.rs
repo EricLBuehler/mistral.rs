@@ -88,11 +88,12 @@ pub fn mxfp4_matmul(
             let bias_ptr = if has_bias {
                 let b = bias.unwrap();
                 let b_storage = b.storage_and_layout().0;
+                let b_l = b.layout();
                 let b_s = match &*b_storage {
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
                     _ => candle_core::bail!("Expected CUDA storage for bias"),
                 };
-                let (ptr, _guard) = slice_ptr(b_s, 0);
+                let (ptr, _guard) = slice_ptr(b_s, b_l.start_offset());
                 ptr as *const f16
             } else {
                 std::ptr::null()
@@ -133,11 +134,12 @@ pub fn mxfp4_matmul(
             let bias_ptr = if has_bias {
                 let b = bias.unwrap();
                 let b_storage = b.storage_and_layout().0;
+                let b_l = b.layout();
                 let b_s = match &*b_storage {
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
                     _ => candle_core::bail!("Expected CUDA storage for bias"),
                 };
-                let (ptr, _guard) = slice_ptr(b_s, 0);
+                let (ptr, _guard) = slice_ptr(b_s, b_l.start_offset());
                 ptr as *const bf16
             } else {
                 std::ptr::null()
@@ -281,11 +283,12 @@ pub fn mxfp4_indexed_moe_gemm(
             let bias_ptr = if has_bias {
                 let b = bias.unwrap();
                 let b_storage = b.storage_and_layout().0;
+                let b_l = b.layout();
                 let b_s = match &*b_storage {
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
                     _ => candle_core::bail!("Expected CUDA storage for bias"),
                 };
-                let (ptr, _guard) = slice_ptr(b_s, 0);
+                let (ptr, _guard) = slice_ptr(b_s, b_l.start_offset());
                 ptr as *const f16
             } else {
                 std::ptr::null()
@@ -330,11 +333,12 @@ pub fn mxfp4_indexed_moe_gemm(
             let bias_ptr = if has_bias {
                 let b = bias.unwrap();
                 let b_storage = b.storage_and_layout().0;
+                let b_l = b.layout();
                 let b_s = match &*b_storage {
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
                     _ => candle_core::bail!("Expected CUDA storage for bias"),
                 };
-                let (ptr, _guard) = slice_ptr(b_s, 0);
+                let (ptr, _guard) = slice_ptr(b_s, b_l.start_offset());
                 ptr as *const bf16
             } else {
                 std::ptr::null()
