@@ -552,7 +552,7 @@ impl McpClient {
     /// ```
     pub async fn shutdown(&mut self) -> Result<()> {
         // Close all connections
-        for (_, connection) in &self.servers {
+        for connection in self.servers.values() {
             let _ = connection.close().await;
         }
 
@@ -1064,13 +1064,13 @@ impl HttpMcpConnection {
 
     async fn initialize(&self) -> Result<()> {
         let init_params = serde_json::json!({
-            "protocolVersion": "2025-11-25",
+            "protocolVersion": rust_mcp_schema::ProtocolVersion::latest().to_string(),
             "capabilities": {
                 "tools": {}
             },
             "clientInfo": {
                 "name": "mistral.rs",
-                "version": "0.6.0"
+                "version": env!("CARGO_PKG_VERSION"),
             }
         });
 
@@ -1234,13 +1234,13 @@ impl ProcessMcpConnection {
 
     async fn initialize(&self) -> Result<()> {
         let init_params = serde_json::json!({
-            "protocolVersion": "2025-11-25",
+            "protocolVersion": rust_mcp_schema::ProtocolVersion::latest().to_string(),
             "capabilities": {
                 "tools": {}
             },
             "clientInfo": {
                 "name": "mistral.rs",
-                "version": "0.6.0"
+                "version": env!("CARGO_PKG_VERSION"),
             }
         });
 
@@ -1403,13 +1403,13 @@ impl WebSocketMcpConnection {
 
     async fn initialize(&self) -> Result<()> {
         let init_params = serde_json::json!({
-            "protocolVersion": "2025-11-25",
+            "protocolVersion": rust_mcp_schema::ProtocolVersion::latest().to_string(),
             "capabilities": {
                 "tools": {}
             },
             "clientInfo": {
                 "name": "mistral.rs",
-                "version": "0.6.0"
+                "version": env!("CARGO_PKG_VERSION"),
             }
         });
 

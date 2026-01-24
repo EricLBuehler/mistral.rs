@@ -156,6 +156,8 @@ pub use client::{McpClient, McpServerConnection};
 pub use tools::{CalledFunction, Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType};
 pub use types::McpToolResult;
 
+pub use rust_mcp_schema;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
