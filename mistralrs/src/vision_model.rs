@@ -11,13 +11,6 @@ use std::{
 use crate::model_builder_trait::{build_model_from_pipeline, build_vision_pipeline};
 use crate::Model;
 
-/// A tool callback with its associated Tool definition.
-#[derive(Clone)]
-pub struct ToolCallbackWithTool {
-    pub callback: Arc<ToolCallback>,
-    pub tool: Tool,
-}
-
 #[derive(Clone)]
 /// Configure a vision model with the various parameters for loading, running, and other inference behaviors.
 pub struct VisionModelBuilder {

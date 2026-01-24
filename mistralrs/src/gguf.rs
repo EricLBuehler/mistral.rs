@@ -7,13 +7,6 @@ use crate::model_builder_trait::{build_gguf_pipeline, build_model_from_pipeline}
 use crate::Model;
 use std::sync::Arc;
 
-/// A tool callback with its associated Tool definition.
-#[derive(Clone)]
-pub struct ToolCallbackWithTool {
-    pub callback: Arc<ToolCallback>,
-    pub tool: Tool,
-}
-
 /// Configure a text GGUF model with the various parameters for loading, running, and other inference behaviors.
 pub struct GgufModelBuilder {
     // Loading model

@@ -3464,7 +3464,7 @@ dependencies = [
  "regex-automata",
  "reqwest 0.13.1",
  "rubato",
- "rust-mcp-schema 0.1.11",
+ "rust-mcp-schema",
  "rustc-hash 2.1.1",
  "rustfft",
  "safetensors 0.7.0",
@@ -3516,7 +3516,7 @@ dependencies = [
  "http",
  "pyo3",
  "reqwest 0.13.1",
- "rust-mcp-schema 0.1.11",
+ "rust-mcp-schema",
  "serde",
  "serde_json",
  "tokio",
@@ -3937,6 +3937,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91df4bbde75afed763b708b7eee1e8e7651e02d97f6d5dd763e89367e957b23b"
 dependencies = [
  "hermit-abi",
+ "libc",
+]
+
+[[package]]
+name = "num_threads"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c7398b9c8b70908f6371f47ed36737907c87c52af34c268fed0bf0ceb92ead9"
+dependencies = [
  "libc",
 ]
 
@@ -5049,33 +5058,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-mcp-macros"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "375eba9388d9d5ffc8951e5f25296f9739be4e5700375ac7c74ad957a903b92b"
-dependencies = [
- "proc-macro2",
- "quote",
- "serde",
- "serde_json",
- "syn 2.0.113",
-]
-
-[[package]]
 name = "rust-mcp-schema"
-version = "0.1.11"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69c8c97bf79c576f8dc582be9f6c9825ed91bd921aac65bd7990992257727e39"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "rust-mcp-schema"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a794de25669a2d21c5074ec5082f74f5e88863a112339fe90264d9e480b0ee8b"
+checksum = "5ed324cdee4b735926a1eaa7741b63a5d103ee08bbe0d3701398279b0c3bf3ce"
 dependencies = [
  "serde",
  "serde_json",
@@ -5083,21 +5069,26 @@ dependencies = [
 
 [[package]]
 name = "rust-mcp-sdk"
-version = "0.4.7"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83f03dc968444ec56bdcddf17536b4b6860136a0d81d987f2fb909d5aec61ed7"
+checksum = "f26451e57e1872f1727e29b961cb2a1f7793c567a349aeb52b5b7716475dbf05"
 dependencies = [
  "async-trait",
  "axum",
  "axum-server",
+ "base64 0.22.1",
+ "bytes",
  "futures",
+ "http",
+ "http-body",
+ "http-body-util",
  "hyper",
- "rust-mcp-macros",
- "rust-mcp-schema 0.6.0",
+ "rust-mcp-schema",
  "rust-mcp-transport",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
+ "time",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -5106,15 +5097,15 @@ dependencies = [
 
 [[package]]
 name = "rust-mcp-transport"
-version = "0.3.6"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94b5a7f8e688f8b15d67f8d94cc0481cd08c9f4e848f4b9e832677dd5fdb063e"
+checksum = "cc5c1534d052a9ccb136539e4014645d6b3d77d8ab92ef5730cb7448c893d910"
 dependencies = [
  "async-trait",
  "bytes",
  "futures",
  "reqwest 0.12.28",
- "rust-mcp-schema 0.6.0",
+ "rust-mcp-schema",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
@@ -6291,7 +6282,9 @@ checksum = "91e7d9e3bb61134e77bde20dd4825b97c010155709965fedf0f49bb138e52a9d"
 dependencies = [
  "deranged",
  "itoa",
+ "libc",
  "num-conv",
+ "num_threads",
  "powerfmt",
  "serde",
  "time-core",
