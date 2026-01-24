@@ -938,7 +938,7 @@ impl McpTransport for WebSocketTransport {
         });
 
         // Send request
-        let message = Message::Text(serde_json::to_string(&request_body)?);
+        let message = Message::Text(serde_json::to_string(&request_body)?.into());
 
         {
             let mut write = self.write.lock().await;
@@ -1011,7 +1011,7 @@ impl McpTransport for WebSocketTransport {
     /// - WebSocket send errors
     /// - Connection closure
     async fn ping(&self) -> Result<()> {
-        let ping_message = Message::Ping(vec![]);
+        let ping_message = Message::Ping(vec![].into());
         let mut write = self.write.lock().await;
         write
             .send(ping_message)
@@ -1052,7 +1052,7 @@ impl McpTransport for WebSocketTransport {
         });
 
         // Send request
-        let message = Message::Text(serde_json::to_string(&request_body)?);
+        let message = Message::Text(serde_json::to_string(&request_body)?.into());
 
         {
             let mut write = self.write.lock().await;
