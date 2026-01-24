@@ -156,187 +156,189 @@
 <a href=#156 id=156 data-nosnippet>156</a><span class="kw">pub use </span>tools::{CalledFunction, Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType};
 <a href=#157 id=157 data-nosnippet>157</a><span class="kw">pub use </span>types::McpToolResult;
 <a href=#158 id=158 data-nosnippet>158</a>
-<a href=#159 id=159 data-nosnippet>159</a><span class="kw">use </span>serde::{Deserialize, Serialize};
-<a href=#160 id=160 data-nosnippet>160</a><span class="kw">use </span>std::collections::HashMap;
-<a href=#161 id=161 data-nosnippet>161</a><span class="kw">use </span>uuid::Uuid;
-<a href=#162 id=162 data-nosnippet>162</a>
-<a href=#163 id=163 data-nosnippet>163</a><span class="doccomment">/// Supported MCP server transport sources
-<a href=#164 id=164 data-nosnippet>164</a>///
-<a href=#165 id=165 data-nosnippet>165</a>/// Defines the different ways to connect to MCP servers, each optimized for
-<a href=#166 id=166 data-nosnippet>166</a>/// specific use cases and deployment scenarios.
-<a href=#167 id=167 data-nosnippet>167</a></span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
-<a href=#168 id=168 data-nosnippet>168</a>#[serde(tag = <span class="string">"type"</span>)]
-<a href=#169 id=169 data-nosnippet>169</a></span><span class="kw">pub enum </span>McpServerSource {
-<a href=#170 id=170 data-nosnippet>170</a>    <span class="doccomment">/// HTTP-based MCP server using JSON-RPC over HTTP
-<a href=#171 id=171 data-nosnippet>171</a>    ///
-<a href=#172 id=172 data-nosnippet>172</a>    /// Best for: Public APIs, RESTful services, servers behind load balancers
-<a href=#173 id=173 data-nosnippet>173</a>    /// Features: SSE support, standard HTTP semantics, easy debugging
-<a href=#174 id=174 data-nosnippet>174</a>    </span>Http {
-<a href=#175 id=175 data-nosnippet>175</a>        <span class="doccomment">/// Base URL of the MCP server (http:// or https://)
-<a href=#176 id=176 data-nosnippet>176</a>        </span>url: String,
-<a href=#177 id=177 data-nosnippet>177</a>        <span class="doccomment">/// Optional timeout in seconds for HTTP requests
-<a href=#178 id=178 data-nosnippet>178</a>        /// Defaults to no timeout if not specified.
-<a href=#179 id=179 data-nosnippet>179</a>        </span>timeout_secs: <span class="prelude-ty">Option</span>&lt;u64&gt;,
-<a href=#180 id=180 data-nosnippet>180</a>        <span class="doccomment">/// Optional headers to include in requests (e.g., API keys, custom headers)
-<a href=#181 id=181 data-nosnippet>181</a>        </span>headers: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, String&gt;&gt;,
-<a href=#182 id=182 data-nosnippet>182</a>    },
-<a href=#183 id=183 data-nosnippet>183</a>    <span class="doccomment">/// Local process-based MCP server using stdin/stdout communication
-<a href=#184 id=184 data-nosnippet>184</a>    ///
-<a href=#185 id=185 data-nosnippet>185</a>    /// Best for: Local tools, development servers, sandboxed environments
-<a href=#186 id=186 data-nosnippet>186</a>    /// Features: Process isolation, no network overhead, easy deployment
-<a href=#187 id=187 data-nosnippet>187</a>    </span>Process {
-<a href=#188 id=188 data-nosnippet>188</a>        <span class="doccomment">/// Command to execute (e.g., "mcp-server-filesystem")
-<a href=#189 id=189 data-nosnippet>189</a>        </span>command: String,
-<a href=#190 id=190 data-nosnippet>190</a>        <span class="doccomment">/// Arguments to pass to the command
-<a href=#191 id=191 data-nosnippet>191</a>        </span>args: Vec&lt;String&gt;,
-<a href=#192 id=192 data-nosnippet>192</a>        <span class="doccomment">/// Optional working directory for the process
-<a href=#193 id=193 data-nosnippet>193</a>        </span>work_dir: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#194 id=194 data-nosnippet>194</a>        <span class="doccomment">/// Optional environment variables for the process
-<a href=#195 id=195 data-nosnippet>195</a>        </span>env: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, String&gt;&gt;,
-<a href=#196 id=196 data-nosnippet>196</a>    },
-<a href=#197 id=197 data-nosnippet>197</a>    <span class="doccomment">/// WebSocket-based MCP server for real-time bidirectional communication
-<a href=#198 id=198 data-nosnippet>198</a>    ///
-<a href=#199 id=199 data-nosnippet>199</a>    /// Best for: Interactive applications, real-time data, low-latency requirements
-<a href=#200 id=200 data-nosnippet>200</a>    /// Features: Persistent connections, server-initiated notifications, minimal overhead
-<a href=#201 id=201 data-nosnippet>201</a>    </span>WebSocket {
-<a href=#202 id=202 data-nosnippet>202</a>        <span class="doccomment">/// WebSocket URL (ws:// or wss://)
-<a href=#203 id=203 data-nosnippet>203</a>        </span>url: String,
-<a href=#204 id=204 data-nosnippet>204</a>        <span class="doccomment">/// Optional timeout in seconds for connection establishment
-<a href=#205 id=205 data-nosnippet>205</a>        /// Defaults to no timeout if not specified.
-<a href=#206 id=206 data-nosnippet>206</a>        </span>timeout_secs: <span class="prelude-ty">Option</span>&lt;u64&gt;,
-<a href=#207 id=207 data-nosnippet>207</a>        <span class="doccomment">/// Optional headers for the WebSocket handshake
-<a href=#208 id=208 data-nosnippet>208</a>        </span>headers: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, String&gt;&gt;,
-<a href=#209 id=209 data-nosnippet>209</a>    },
-<a href=#210 id=210 data-nosnippet>210</a>}
-<a href=#211 id=211 data-nosnippet>211</a>
-<a href=#212 id=212 data-nosnippet>212</a><span class="doccomment">/// Configuration for MCP client integration
-<a href=#213 id=213 data-nosnippet>213</a>///
-<a href=#214 id=214 data-nosnippet>214</a>/// This structure defines how the MCP client should connect to and manage
-<a href=#215 id=215 data-nosnippet>215</a>/// multiple MCP servers, including authentication, tool registration, and
-<a href=#216 id=216 data-nosnippet>216</a>/// execution policies.
-<a href=#217 id=217 data-nosnippet>217</a></span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
-<a href=#218 id=218 data-nosnippet>218</a></span><span class="kw">pub struct </span>McpClientConfig {
-<a href=#219 id=219 data-nosnippet>219</a>    <span class="doccomment">/// List of MCP servers to connect to
-<a href=#220 id=220 data-nosnippet>220</a>    </span><span class="kw">pub </span>servers: Vec&lt;McpServerConfig&gt;,
-<a href=#221 id=221 data-nosnippet>221</a>    <span class="doccomment">/// Whether to automatically register discovered tools with the model
-<a href=#222 id=222 data-nosnippet>222</a>    ///
-<a href=#223 id=223 data-nosnippet>223</a>    /// When enabled, tools from MCP servers are automatically converted to
-<a href=#224 id=224 data-nosnippet>224</a>    /// the internal Tool format and registered for automatic tool calling.
-<a href=#225 id=225 data-nosnippet>225</a>    </span><span class="kw">pub </span>auto_register_tools: bool,
-<a href=#226 id=226 data-nosnippet>226</a>    <span class="doccomment">/// Timeout for individual tool execution in seconds
-<a href=#227 id=227 data-nosnippet>227</a>    ///
-<a href=#228 id=228 data-nosnippet>228</a>    /// Controls how long to wait for a tool call to complete before timing out.
-<a href=#229 id=229 data-nosnippet>229</a>    /// Defaults to no timeout if not specified.
-<a href=#230 id=230 data-nosnippet>230</a>    </span><span class="kw">pub </span>tool_timeout_secs: <span class="prelude-ty">Option</span>&lt;u64&gt;,
-<a href=#231 id=231 data-nosnippet>231</a>    <span class="doccomment">/// Maximum number of concurrent tool calls across all MCP servers
-<a href=#232 id=232 data-nosnippet>232</a>    ///
-<a href=#233 id=233 data-nosnippet>233</a>    /// Limits resource usage and prevents overwhelming servers with too many
-<a href=#234 id=234 data-nosnippet>234</a>    /// simultaneous requests. Defaults to 1 if not specified.
-<a href=#235 id=235 data-nosnippet>235</a>    </span><span class="kw">pub </span>max_concurrent_calls: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#236 id=236 data-nosnippet>236</a>}
-<a href=#237 id=237 data-nosnippet>237</a>
-<a href=#238 id=238 data-nosnippet>238</a><span class="doccomment">/// Configuration for an individual MCP server
-<a href=#239 id=239 data-nosnippet>239</a>///
-<a href=#240 id=240 data-nosnippet>240</a>/// Defines connection parameters, authentication, and tool management
-<a href=#241 id=241 data-nosnippet>241</a>/// settings for a single MCP server instance.
-<a href=#242 id=242 data-nosnippet>242</a></span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
-<a href=#243 id=243 data-nosnippet>243</a>#[serde(default)]
-<a href=#244 id=244 data-nosnippet>244</a></span><span class="kw">pub struct </span>McpServerConfig {
-<a href=#245 id=245 data-nosnippet>245</a>    <span class="doccomment">/// Unique identifier for this server
-<a href=#246 id=246 data-nosnippet>246</a>    ///
-<a href=#247 id=247 data-nosnippet>247</a>    /// Used internally to track connections and route tool calls.
-<a href=#248 id=248 data-nosnippet>248</a>    /// Must be unique across all servers in a single MCP client configuration.
-<a href=#249 id=249 data-nosnippet>249</a>    /// Defaults to a UUID if not specified.
-<a href=#250 id=250 data-nosnippet>250</a>    </span><span class="attr">#[serde(default = <span class="string">"generate_uuid"</span>)]
-<a href=#251 id=251 data-nosnippet>251</a>    </span><span class="kw">pub </span>id: String,
-<a href=#252 id=252 data-nosnippet>252</a>    <span class="doccomment">/// Human-readable name for this server
-<a href=#253 id=253 data-nosnippet>253</a>    ///
-<a href=#254 id=254 data-nosnippet>254</a>    /// Used for logging, debugging, and user-facing displays.
-<a href=#255 id=255 data-nosnippet>255</a>    </span><span class="kw">pub </span>name: String,
-<a href=#256 id=256 data-nosnippet>256</a>    <span class="doccomment">/// Transport-specific connection configuration
-<a href=#257 id=257 data-nosnippet>257</a>    </span><span class="kw">pub </span>source: McpServerSource,
-<a href=#258 id=258 data-nosnippet>258</a>    <span class="doccomment">/// Whether this server should be activated
-<a href=#259 id=259 data-nosnippet>259</a>    ///
-<a href=#260 id=260 data-nosnippet>260</a>    /// Disabled servers are ignored during client initialization.
-<a href=#261 id=261 data-nosnippet>261</a>    /// Defaults to true if not specified.
-<a href=#262 id=262 data-nosnippet>262</a>    </span><span class="attr">#[serde(default = <span class="string">"default_true"</span>)]
-<a href=#263 id=263 data-nosnippet>263</a>    </span><span class="kw">pub </span>enabled: bool,
-<a href=#264 id=264 data-nosnippet>264</a>    <span class="doccomment">/// Optional prefix to add to all tool names from this server
-<a href=#265 id=265 data-nosnippet>265</a>    ///
-<a href=#266 id=266 data-nosnippet>266</a>    /// Helps prevent naming conflicts when multiple servers provide
-<a href=#267 id=267 data-nosnippet>267</a>    /// tools with similar names. For example, with prefix "web",
-<a href=#268 id=268 data-nosnippet>268</a>    /// a tool named "search" becomes "web_search".
-<a href=#269 id=269 data-nosnippet>269</a>    /// Defaults to a UUID-based prefix if not specified.
-<a href=#270 id=270 data-nosnippet>270</a>    </span><span class="attr">#[serde(default = <span class="string">"generate_uuid_prefix"</span>)]
-<a href=#271 id=271 data-nosnippet>271</a>    </span><span class="kw">pub </span>tool_prefix: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#272 id=272 data-nosnippet>272</a>    <span class="doccomment">/// Optional resource URI patterns this server provides
-<a href=#273 id=273 data-nosnippet>273</a>    ///
-<a href=#274 id=274 data-nosnippet>274</a>    /// Used for resource discovery and subscription.
-<a href=#275 id=275 data-nosnippet>275</a>    /// Supports glob patterns like "file://**" for filesystem access.
-<a href=#276 id=276 data-nosnippet>276</a>    </span><span class="kw">pub </span>resources: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
-<a href=#277 id=277 data-nosnippet>277</a>    <span class="doccomment">/// Optional Bearer token for authentication
-<a href=#278 id=278 data-nosnippet>278</a>    ///
-<a href=#279 id=279 data-nosnippet>279</a>    /// Automatically included as `Authorization: Bearer &lt;token&gt;` header
-<a href=#280 id=280 data-nosnippet>280</a>    /// for HTTP and WebSocket connections. Process connections typically
-<a href=#281 id=281 data-nosnippet>281</a>    /// don't require authentication tokens.
-<a href=#282 id=282 data-nosnippet>282</a>    </span><span class="kw">pub </span>bearer_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#283 id=283 data-nosnippet>283</a>}
-<a href=#284 id=284 data-nosnippet>284</a>
-<a href=#285 id=285 data-nosnippet>285</a><span class="doccomment">/// Information about a tool discovered from an MCP server
-<a href=#286 id=286 data-nosnippet>286</a></span><span class="attr">#[derive(Debug, Clone)]
-<a href=#287 id=287 data-nosnippet>287</a></span><span class="kw">pub struct </span>McpToolInfo {
-<a href=#288 id=288 data-nosnippet>288</a>    <span class="doccomment">/// Name of the tool as reported by the MCP server
-<a href=#289 id=289 data-nosnippet>289</a>    </span><span class="kw">pub </span>name: String,
-<a href=#290 id=290 data-nosnippet>290</a>    <span class="doccomment">/// Optional human-readable description of what the tool does
-<a href=#291 id=291 data-nosnippet>291</a>    </span><span class="kw">pub </span>description: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#292 id=292 data-nosnippet>292</a>    <span class="doccomment">/// JSON schema describing the tool's input parameters
-<a href=#293 id=293 data-nosnippet>293</a>    </span><span class="kw">pub </span>input_schema: serde_json::Value,
-<a href=#294 id=294 data-nosnippet>294</a>    <span class="doccomment">/// ID of the server this tool comes from
-<a href=#295 id=295 data-nosnippet>295</a>    ///
-<a href=#296 id=296 data-nosnippet>296</a>    /// Used to route tool calls to the correct MCP server connection.
-<a href=#297 id=297 data-nosnippet>297</a>    </span><span class="kw">pub </span>server_id: String,
-<a href=#298 id=298 data-nosnippet>298</a>    <span class="doccomment">/// Display name of the server for logging and debugging
-<a href=#299 id=299 data-nosnippet>299</a>    </span><span class="kw">pub </span>server_name: String,
-<a href=#300 id=300 data-nosnippet>300</a>}
-<a href=#301 id=301 data-nosnippet>301</a>
-<a href=#302 id=302 data-nosnippet>302</a><span class="kw">impl </span>Default <span class="kw">for </span>McpClientConfig {
-<a href=#303 id=303 data-nosnippet>303</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-<a href=#304 id=304 data-nosnippet>304</a>        <span class="self">Self </span>{
-<a href=#305 id=305 data-nosnippet>305</a>            servers: Vec::new(),
-<a href=#306 id=306 data-nosnippet>306</a>            auto_register_tools: <span class="bool-val">true</span>,
-<a href=#307 id=307 data-nosnippet>307</a>            tool_timeout_secs: <span class="prelude-val">None</span>,
-<a href=#308 id=308 data-nosnippet>308</a>            max_concurrent_calls: <span class="prelude-val">Some</span>(<span class="number">1</span>),
-<a href=#309 id=309 data-nosnippet>309</a>        }
-<a href=#310 id=310 data-nosnippet>310</a>    }
-<a href=#311 id=311 data-nosnippet>311</a>}
-<a href=#312 id=312 data-nosnippet>312</a>
-<a href=#313 id=313 data-nosnippet>313</a><span class="kw">fn </span>generate_uuid() -&gt; String {
-<a href=#314 id=314 data-nosnippet>314</a>    Uuid::new_v4().to_string()
-<a href=#315 id=315 data-nosnippet>315</a>}
-<a href=#316 id=316 data-nosnippet>316</a>
-<a href=#317 id=317 data-nosnippet>317</a><span class="kw">fn </span>default_true() -&gt; bool {
-<a href=#318 id=318 data-nosnippet>318</a>    <span class="bool-val">true
-<a href=#319 id=319 data-nosnippet>319</a></span>}
-<a href=#320 id=320 data-nosnippet>320</a>
-<a href=#321 id=321 data-nosnippet>321</a><span class="kw">fn </span>generate_uuid_prefix() -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
-<a href=#322 id=322 data-nosnippet>322</a>    <span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"mcp_{}"</span>, Uuid::new_v4().simple()))
-<a href=#323 id=323 data-nosnippet>323</a>}
-<a href=#324 id=324 data-nosnippet>324</a>
-<a href=#325 id=325 data-nosnippet>325</a><span class="kw">impl </span>Default <span class="kw">for </span>McpServerConfig {
-<a href=#326 id=326 data-nosnippet>326</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-<a href=#327 id=327 data-nosnippet>327</a>        <span class="self">Self </span>{
-<a href=#328 id=328 data-nosnippet>328</a>            id: generate_uuid(),
-<a href=#329 id=329 data-nosnippet>329</a>            name: String::new(),
-<a href=#330 id=330 data-nosnippet>330</a>            source: McpServerSource::Http {
-<a href=#331 id=331 data-nosnippet>331</a>                url: String::new(),
-<a href=#332 id=332 data-nosnippet>332</a>                timeout_secs: <span class="prelude-val">None</span>,
-<a href=#333 id=333 data-nosnippet>333</a>                headers: <span class="prelude-val">None</span>,
-<a href=#334 id=334 data-nosnippet>334</a>            },
-<a href=#335 id=335 data-nosnippet>335</a>            enabled: <span class="bool-val">true</span>,
-<a href=#336 id=336 data-nosnippet>336</a>            tool_prefix: generate_uuid_prefix(),
-<a href=#337 id=337 data-nosnippet>337</a>            resources: <span class="prelude-val">None</span>,
-<a href=#338 id=338 data-nosnippet>338</a>            bearer_token: <span class="prelude-val">None</span>,
-<a href=#339 id=339 data-nosnippet>339</a>        }
-<a href=#340 id=340 data-nosnippet>340</a>    }
-<a href=#341 id=341 data-nosnippet>341</a>}
+<a href=#159 id=159 data-nosnippet>159</a><span class="kw">pub use </span>rust_mcp_schema;
+<a href=#160 id=160 data-nosnippet>160</a>
+<a href=#161 id=161 data-nosnippet>161</a><span class="kw">use </span>serde::{Deserialize, Serialize};
+<a href=#162 id=162 data-nosnippet>162</a><span class="kw">use </span>std::collections::HashMap;
+<a href=#163 id=163 data-nosnippet>163</a><span class="kw">use </span>uuid::Uuid;
+<a href=#164 id=164 data-nosnippet>164</a>
+<a href=#165 id=165 data-nosnippet>165</a><span class="doccomment">/// Supported MCP server transport sources
+<a href=#166 id=166 data-nosnippet>166</a>///
+<a href=#167 id=167 data-nosnippet>167</a>/// Defines the different ways to connect to MCP servers, each optimized for
+<a href=#168 id=168 data-nosnippet>168</a>/// specific use cases and deployment scenarios.
+<a href=#169 id=169 data-nosnippet>169</a></span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
+<a href=#170 id=170 data-nosnippet>170</a>#[serde(tag = <span class="string">"type"</span>)]
+<a href=#171 id=171 data-nosnippet>171</a></span><span class="kw">pub enum </span>McpServerSource {
+<a href=#172 id=172 data-nosnippet>172</a>    <span class="doccomment">/// HTTP-based MCP server using JSON-RPC over HTTP
+<a href=#173 id=173 data-nosnippet>173</a>    ///
+<a href=#174 id=174 data-nosnippet>174</a>    /// Best for: Public APIs, RESTful services, servers behind load balancers
+<a href=#175 id=175 data-nosnippet>175</a>    /// Features: SSE support, standard HTTP semantics, easy debugging
+<a href=#176 id=176 data-nosnippet>176</a>    </span>Http {
+<a href=#177 id=177 data-nosnippet>177</a>        <span class="doccomment">/// Base URL of the MCP server (http:// or https://)
+<a href=#178 id=178 data-nosnippet>178</a>        </span>url: String,
+<a href=#179 id=179 data-nosnippet>179</a>        <span class="doccomment">/// Optional timeout in seconds for HTTP requests
+<a href=#180 id=180 data-nosnippet>180</a>        /// Defaults to no timeout if not specified.
+<a href=#181 id=181 data-nosnippet>181</a>        </span>timeout_secs: <span class="prelude-ty">Option</span>&lt;u64&gt;,
+<a href=#182 id=182 data-nosnippet>182</a>        <span class="doccomment">/// Optional headers to include in requests (e.g., API keys, custom headers)
+<a href=#183 id=183 data-nosnippet>183</a>        </span>headers: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, String&gt;&gt;,
+<a href=#184 id=184 data-nosnippet>184</a>    },
+<a href=#185 id=185 data-nosnippet>185</a>    <span class="doccomment">/// Local process-based MCP server using stdin/stdout communication
+<a href=#186 id=186 data-nosnippet>186</a>    ///
+<a href=#187 id=187 data-nosnippet>187</a>    /// Best for: Local tools, development servers, sandboxed environments
+<a href=#188 id=188 data-nosnippet>188</a>    /// Features: Process isolation, no network overhead, easy deployment
+<a href=#189 id=189 data-nosnippet>189</a>    </span>Process {
+<a href=#190 id=190 data-nosnippet>190</a>        <span class="doccomment">/// Command to execute (e.g., "mcp-server-filesystem")
+<a href=#191 id=191 data-nosnippet>191</a>        </span>command: String,
+<a href=#192 id=192 data-nosnippet>192</a>        <span class="doccomment">/// Arguments to pass to the command
+<a href=#193 id=193 data-nosnippet>193</a>        </span>args: Vec&lt;String&gt;,
+<a href=#194 id=194 data-nosnippet>194</a>        <span class="doccomment">/// Optional working directory for the process
+<a href=#195 id=195 data-nosnippet>195</a>        </span>work_dir: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#196 id=196 data-nosnippet>196</a>        <span class="doccomment">/// Optional environment variables for the process
+<a href=#197 id=197 data-nosnippet>197</a>        </span>env: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, String&gt;&gt;,
+<a href=#198 id=198 data-nosnippet>198</a>    },
+<a href=#199 id=199 data-nosnippet>199</a>    <span class="doccomment">/// WebSocket-based MCP server for real-time bidirectional communication
+<a href=#200 id=200 data-nosnippet>200</a>    ///
+<a href=#201 id=201 data-nosnippet>201</a>    /// Best for: Interactive applications, real-time data, low-latency requirements
+<a href=#202 id=202 data-nosnippet>202</a>    /// Features: Persistent connections, server-initiated notifications, minimal overhead
+<a href=#203 id=203 data-nosnippet>203</a>    </span>WebSocket {
+<a href=#204 id=204 data-nosnippet>204</a>        <span class="doccomment">/// WebSocket URL (ws:// or wss://)
+<a href=#205 id=205 data-nosnippet>205</a>        </span>url: String,
+<a href=#206 id=206 data-nosnippet>206</a>        <span class="doccomment">/// Optional timeout in seconds for connection establishment
+<a href=#207 id=207 data-nosnippet>207</a>        /// Defaults to no timeout if not specified.
+<a href=#208 id=208 data-nosnippet>208</a>        </span>timeout_secs: <span class="prelude-ty">Option</span>&lt;u64&gt;,
+<a href=#209 id=209 data-nosnippet>209</a>        <span class="doccomment">/// Optional headers for the WebSocket handshake
+<a href=#210 id=210 data-nosnippet>210</a>        </span>headers: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, String&gt;&gt;,
+<a href=#211 id=211 data-nosnippet>211</a>    },
+<a href=#212 id=212 data-nosnippet>212</a>}
+<a href=#213 id=213 data-nosnippet>213</a>
+<a href=#214 id=214 data-nosnippet>214</a><span class="doccomment">/// Configuration for MCP client integration
+<a href=#215 id=215 data-nosnippet>215</a>///
+<a href=#216 id=216 data-nosnippet>216</a>/// This structure defines how the MCP client should connect to and manage
+<a href=#217 id=217 data-nosnippet>217</a>/// multiple MCP servers, including authentication, tool registration, and
+<a href=#218 id=218 data-nosnippet>218</a>/// execution policies.
+<a href=#219 id=219 data-nosnippet>219</a></span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
+<a href=#220 id=220 data-nosnippet>220</a></span><span class="kw">pub struct </span>McpClientConfig {
+<a href=#221 id=221 data-nosnippet>221</a>    <span class="doccomment">/// List of MCP servers to connect to
+<a href=#222 id=222 data-nosnippet>222</a>    </span><span class="kw">pub </span>servers: Vec&lt;McpServerConfig&gt;,
+<a href=#223 id=223 data-nosnippet>223</a>    <span class="doccomment">/// Whether to automatically register discovered tools with the model
+<a href=#224 id=224 data-nosnippet>224</a>    ///
+<a href=#225 id=225 data-nosnippet>225</a>    /// When enabled, tools from MCP servers are automatically converted to
+<a href=#226 id=226 data-nosnippet>226</a>    /// the internal Tool format and registered for automatic tool calling.
+<a href=#227 id=227 data-nosnippet>227</a>    </span><span class="kw">pub </span>auto_register_tools: bool,
+<a href=#228 id=228 data-nosnippet>228</a>    <span class="doccomment">/// Timeout for individual tool execution in seconds
+<a href=#229 id=229 data-nosnippet>229</a>    ///
+<a href=#230 id=230 data-nosnippet>230</a>    /// Controls how long to wait for a tool call to complete before timing out.
+<a href=#231 id=231 data-nosnippet>231</a>    /// Defaults to no timeout if not specified.
+<a href=#232 id=232 data-nosnippet>232</a>    </span><span class="kw">pub </span>tool_timeout_secs: <span class="prelude-ty">Option</span>&lt;u64&gt;,
+<a href=#233 id=233 data-nosnippet>233</a>    <span class="doccomment">/// Maximum number of concurrent tool calls across all MCP servers
+<a href=#234 id=234 data-nosnippet>234</a>    ///
+<a href=#235 id=235 data-nosnippet>235</a>    /// Limits resource usage and prevents overwhelming servers with too many
+<a href=#236 id=236 data-nosnippet>236</a>    /// simultaneous requests. Defaults to 10 if not specified.
+<a href=#237 id=237 data-nosnippet>237</a>    </span><span class="kw">pub </span>max_concurrent_calls: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#238 id=238 data-nosnippet>238</a>}
+<a href=#239 id=239 data-nosnippet>239</a>
+<a href=#240 id=240 data-nosnippet>240</a><span class="doccomment">/// Configuration for an individual MCP server
+<a href=#241 id=241 data-nosnippet>241</a>///
+<a href=#242 id=242 data-nosnippet>242</a>/// Defines connection parameters, authentication, and tool management
+<a href=#243 id=243 data-nosnippet>243</a>/// settings for a single MCP server instance.
+<a href=#244 id=244 data-nosnippet>244</a></span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
+<a href=#245 id=245 data-nosnippet>245</a>#[serde(default)]
+<a href=#246 id=246 data-nosnippet>246</a></span><span class="kw">pub struct </span>McpServerConfig {
+<a href=#247 id=247 data-nosnippet>247</a>    <span class="doccomment">/// Unique identifier for this server
+<a href=#248 id=248 data-nosnippet>248</a>    ///
+<a href=#249 id=249 data-nosnippet>249</a>    /// Used internally to track connections and route tool calls.
+<a href=#250 id=250 data-nosnippet>250</a>    /// Must be unique across all servers in a single MCP client configuration.
+<a href=#251 id=251 data-nosnippet>251</a>    /// Defaults to a UUID if not specified.
+<a href=#252 id=252 data-nosnippet>252</a>    </span><span class="attr">#[serde(default = <span class="string">"generate_uuid"</span>)]
+<a href=#253 id=253 data-nosnippet>253</a>    </span><span class="kw">pub </span>id: String,
+<a href=#254 id=254 data-nosnippet>254</a>    <span class="doccomment">/// Human-readable name for this server
+<a href=#255 id=255 data-nosnippet>255</a>    ///
+<a href=#256 id=256 data-nosnippet>256</a>    /// Used for logging, debugging, and user-facing displays.
+<a href=#257 id=257 data-nosnippet>257</a>    </span><span class="kw">pub </span>name: String,
+<a href=#258 id=258 data-nosnippet>258</a>    <span class="doccomment">/// Transport-specific connection configuration
+<a href=#259 id=259 data-nosnippet>259</a>    </span><span class="kw">pub </span>source: McpServerSource,
+<a href=#260 id=260 data-nosnippet>260</a>    <span class="doccomment">/// Whether this server should be activated
+<a href=#261 id=261 data-nosnippet>261</a>    ///
+<a href=#262 id=262 data-nosnippet>262</a>    /// Disabled servers are ignored during client initialization.
+<a href=#263 id=263 data-nosnippet>263</a>    /// Defaults to true if not specified.
+<a href=#264 id=264 data-nosnippet>264</a>    </span><span class="attr">#[serde(default = <span class="string">"default_true"</span>)]
+<a href=#265 id=265 data-nosnippet>265</a>    </span><span class="kw">pub </span>enabled: bool,
+<a href=#266 id=266 data-nosnippet>266</a>    <span class="doccomment">/// Optional prefix to add to all tool names from this server
+<a href=#267 id=267 data-nosnippet>267</a>    ///
+<a href=#268 id=268 data-nosnippet>268</a>    /// Helps prevent naming conflicts when multiple servers provide
+<a href=#269 id=269 data-nosnippet>269</a>    /// tools with similar names. For example, with prefix "web",
+<a href=#270 id=270 data-nosnippet>270</a>    /// a tool named "search" becomes "web_search".
+<a href=#271 id=271 data-nosnippet>271</a>    /// Defaults to a UUID-based prefix if not specified.
+<a href=#272 id=272 data-nosnippet>272</a>    </span><span class="attr">#[serde(default = <span class="string">"generate_uuid_prefix"</span>)]
+<a href=#273 id=273 data-nosnippet>273</a>    </span><span class="kw">pub </span>tool_prefix: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#274 id=274 data-nosnippet>274</a>    <span class="doccomment">/// Optional resource URI patterns this server provides
+<a href=#275 id=275 data-nosnippet>275</a>    ///
+<a href=#276 id=276 data-nosnippet>276</a>    /// Used for resource discovery and subscription.
+<a href=#277 id=277 data-nosnippet>277</a>    /// Supports glob patterns like "file://**" for filesystem access.
+<a href=#278 id=278 data-nosnippet>278</a>    </span><span class="kw">pub </span>resources: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
+<a href=#279 id=279 data-nosnippet>279</a>    <span class="doccomment">/// Optional Bearer token for authentication
+<a href=#280 id=280 data-nosnippet>280</a>    ///
+<a href=#281 id=281 data-nosnippet>281</a>    /// Automatically included as `Authorization: Bearer &lt;token&gt;` header
+<a href=#282 id=282 data-nosnippet>282</a>    /// for HTTP and WebSocket connections. Process connections typically
+<a href=#283 id=283 data-nosnippet>283</a>    /// don't require authentication tokens.
+<a href=#284 id=284 data-nosnippet>284</a>    </span><span class="kw">pub </span>bearer_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#285 id=285 data-nosnippet>285</a>}
+<a href=#286 id=286 data-nosnippet>286</a>
+<a href=#287 id=287 data-nosnippet>287</a><span class="doccomment">/// Information about a tool discovered from an MCP server
+<a href=#288 id=288 data-nosnippet>288</a></span><span class="attr">#[derive(Debug, Clone)]
+<a href=#289 id=289 data-nosnippet>289</a></span><span class="kw">pub struct </span>McpToolInfo {
+<a href=#290 id=290 data-nosnippet>290</a>    <span class="doccomment">/// Name of the tool as reported by the MCP server
+<a href=#291 id=291 data-nosnippet>291</a>    </span><span class="kw">pub </span>name: String,
+<a href=#292 id=292 data-nosnippet>292</a>    <span class="doccomment">/// Optional human-readable description of what the tool does
+<a href=#293 id=293 data-nosnippet>293</a>    </span><span class="kw">pub </span>description: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#294 id=294 data-nosnippet>294</a>    <span class="doccomment">/// JSON schema describing the tool's input parameters
+<a href=#295 id=295 data-nosnippet>295</a>    </span><span class="kw">pub </span>input_schema: serde_json::Value,
+<a href=#296 id=296 data-nosnippet>296</a>    <span class="doccomment">/// ID of the server this tool comes from
+<a href=#297 id=297 data-nosnippet>297</a>    ///
+<a href=#298 id=298 data-nosnippet>298</a>    /// Used to route tool calls to the correct MCP server connection.
+<a href=#299 id=299 data-nosnippet>299</a>    </span><span class="kw">pub </span>server_id: String,
+<a href=#300 id=300 data-nosnippet>300</a>    <span class="doccomment">/// Display name of the server for logging and debugging
+<a href=#301 id=301 data-nosnippet>301</a>    </span><span class="kw">pub </span>server_name: String,
+<a href=#302 id=302 data-nosnippet>302</a>}
+<a href=#303 id=303 data-nosnippet>303</a>
+<a href=#304 id=304 data-nosnippet>304</a><span class="kw">impl </span>Default <span class="kw">for </span>McpClientConfig {
+<a href=#305 id=305 data-nosnippet>305</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+<a href=#306 id=306 data-nosnippet>306</a>        <span class="self">Self </span>{
+<a href=#307 id=307 data-nosnippet>307</a>            servers: Vec::new(),
+<a href=#308 id=308 data-nosnippet>308</a>            auto_register_tools: <span class="bool-val">true</span>,
+<a href=#309 id=309 data-nosnippet>309</a>            tool_timeout_secs: <span class="prelude-val">None</span>,
+<a href=#310 id=310 data-nosnippet>310</a>            max_concurrent_calls: <span class="prelude-val">Some</span>(<span class="number">1</span>),
+<a href=#311 id=311 data-nosnippet>311</a>        }
+<a href=#312 id=312 data-nosnippet>312</a>    }
+<a href=#313 id=313 data-nosnippet>313</a>}
+<a href=#314 id=314 data-nosnippet>314</a>
+<a href=#315 id=315 data-nosnippet>315</a><span class="kw">fn </span>generate_uuid() -&gt; String {
+<a href=#316 id=316 data-nosnippet>316</a>    Uuid::new_v4().to_string()
+<a href=#317 id=317 data-nosnippet>317</a>}
+<a href=#318 id=318 data-nosnippet>318</a>
+<a href=#319 id=319 data-nosnippet>319</a><span class="kw">fn </span>default_true() -&gt; bool {
+<a href=#320 id=320 data-nosnippet>320</a>    <span class="bool-val">true
+<a href=#321 id=321 data-nosnippet>321</a></span>}
+<a href=#322 id=322 data-nosnippet>322</a>
+<a href=#323 id=323 data-nosnippet>323</a><span class="kw">fn </span>generate_uuid_prefix() -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
+<a href=#324 id=324 data-nosnippet>324</a>    <span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"mcp_{}"</span>, Uuid::new_v4().simple()))
+<a href=#325 id=325 data-nosnippet>325</a>}
+<a href=#326 id=326 data-nosnippet>326</a>
+<a href=#327 id=327 data-nosnippet>327</a><span class="kw">impl </span>Default <span class="kw">for </span>McpServerConfig {
+<a href=#328 id=328 data-nosnippet>328</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+<a href=#329 id=329 data-nosnippet>329</a>        <span class="self">Self </span>{
+<a href=#330 id=330 data-nosnippet>330</a>            id: generate_uuid(),
+<a href=#331 id=331 data-nosnippet>331</a>            name: String::new(),
+<a href=#332 id=332 data-nosnippet>332</a>            source: McpServerSource::Http {
+<a href=#333 id=333 data-nosnippet>333</a>                url: String::new(),
+<a href=#334 id=334 data-nosnippet>334</a>                timeout_secs: <span class="prelude-val">None</span>,
+<a href=#335 id=335 data-nosnippet>335</a>                headers: <span class="prelude-val">None</span>,
+<a href=#336 id=336 data-nosnippet>336</a>            },
+<a href=#337 id=337 data-nosnippet>337</a>            enabled: <span class="bool-val">true</span>,
+<a href=#338 id=338 data-nosnippet>338</a>            tool_prefix: generate_uuid_prefix(),
+<a href=#339 id=339 data-nosnippet>339</a>            resources: <span class="prelude-val">None</span>,
+<a href=#340 id=340 data-nosnippet>340</a>            bearer_token: <span class="prelude-val">None</span>,
+<a href=#341 id=341 data-nosnippet>341</a>        }
+<a href=#342 id=342 data-nosnippet>342</a>    }
+<a href=#343 id=343 data-nosnippet>343</a>}
 </code></pre></div></section></main></body></html>
