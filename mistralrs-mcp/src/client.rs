@@ -113,19 +113,110 @@ impl McpClient {
         Ok(())
     }
 
-    /// Get tool callbacks that can be used with the existing tool calling system
+    /// Get tool callbacks for use with legacy tool calling systems.
+    ///
+    /// Returns a map of tool names to their callback functions. These callbacks
+    /// handle argument parsing, concurrency control, and timeout enforcement
+    /// automatically.
+    ///
+    /// For new integrations, prefer [`get_tool_callbacks_with_tools`] which
+    /// includes tool definitions alongside callbacks.
     pub fn get_tool_callbacks(&self) -> &HashMap<String, Arc<ToolCallback>> {
         &self.tool_callbacks
     }
 
-    /// Get tool callbacks with their associated Tool definitions
+    /// Get tool callbacks paired with their tool definitions.
+    ///
+    /// This is the primary method for integrating MCP tools with the model's
+    /// automatic tool calling system. Each entry contains:
+    /// - A callback function that executes the tool with timeout and concurrency controls
+    /// - A [`Tool`] definition with name, description, and parameter schema
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use mistralrs_mcp::{McpClient, McpClientConfig};
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let config = McpClientConfig::default();
+    /// let mut client = McpClient::new(config);
+    /// client.initialize().await?;
+    ///
+    /// let tools = client.get_tool_callbacks_with_tools();
+    /// for (name, tool_with_callback) in tools {
+    ///     println!("Tool: {} - {:?}", name, tool_with_callback.tool.function.description);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn get_tool_callbacks_with_tools(&self) -> &HashMap<String, ToolCallbackWithTool> {
         &self.tool_callbacks_with_tools
     }
 
-    /// Get discovered tools information
+    /// Get information about all discovered tools.
+    ///
+    /// Returns metadata about tools discovered from connected MCP servers,
+    /// including their names, descriptions, input schemas, and which server
+    /// they came from.
     pub fn get_tools(&self) -> &HashMap<String, McpToolInfo> {
         &self.tools
+    }
+
+    /// Get a reference to all connected MCP server connections.
+    ///
+    /// This provides direct access to server connections, allowing you to:
+    /// - List available resources with [`McpServerConnection::list_resources`]
+    /// - Read resources with [`McpServerConnection::read_resource`]
+    /// - Check server health with [`McpServerConnection::ping`]
+    /// - Call tools directly with [`McpServerConnection::call_tool`]
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use mistralrs_mcp::{McpClient, McpClientConfig};
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let config = McpClientConfig::default();
+    /// let mut client = McpClient::new(config);
+    /// client.initialize().await?;
+    ///
+    /// for (server_id, connection) in client.servers() {
+    ///     println!("Server: {} ({})", connection.server_name(), server_id);
+    ///     let resources = connection.list_resources().await?;
+    ///     println!("  Resources: {:?}", resources);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn servers(&self) -> &HashMap<String, Arc<dyn McpServerConnection>> {
+        &self.servers
+    }
+
+    /// Get a specific server connection by its ID.
+    ///
+    /// Returns `None` if no server with the given ID is connected.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use mistralrs_mcp::{McpClient, McpClientConfig};
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let config = McpClientConfig::default();
+    /// let mut client = McpClient::new(config);
+    /// client.initialize().await?;
+    ///
+    /// if let Some(server) = client.server("my_server_id") {
+    ///     server.ping().await?;
+    ///     let resources = server.list_resources().await?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn server(&self, id: &str) -> Option<&Arc<dyn McpServerConnection>> {
+        self.servers.get(id)
+    }
+
+    /// Get the client configuration.
+    pub fn config(&self) -> &McpClientConfig {
+        &self.config
     }
 
     /// Create connection based on server source type
