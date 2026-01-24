@@ -62,6 +62,15 @@ pub fn copy_blocks(
         .product::<usize>()
         .try_into()
         .unwrap();
+    assert_eq!(
+        numel_per_block_key, numel_per_block_value,
+        "key and value blocks must be the same size"
+    );
+    if numel_per_block_key != numel_per_block_key {
+        candle_core::bail!(
+            "numel_per_block_key ({numel_per_block_key}) and numel_per_block_value ({numel_per_block_value}) must be the same",
+        );
+    }
 
     for (key_cache, value_cache) in zip(&key_caches, &value_caches) {
         key_cache.to_device(cache_dev)?;

@@ -363,6 +363,10 @@ pub fn call_copy_blocks(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
+    assert_eq!(
+        numel_per_block_key, numel_per_block_value,
+        "key and value blocks must be the same size"
+    );
     set_params!(
         encoder,
         (
@@ -380,7 +384,7 @@ pub fn call_copy_blocks(
         depth: 1,
     };
     let thread_group_size = MTLSize {
-        width: (numel_per_block.min(1024)) as usize,
+        width: (numel_per_block_key.min(1024)) as usize,
         height: 1,
         depth: 1,
     };
