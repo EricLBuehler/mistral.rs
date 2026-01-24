@@ -1221,378 +1221,379 @@
 <a href=#1221 id=1221 data-nosnippet>1221</a>                sliding_window: <span class="prelude-val">None</span>,
 <a href=#1222 id=1222 data-nosnippet>1222</a>                k_head_dim: cfg.head_dim,
 <a href=#1223 id=1223 data-nosnippet>1223</a>                v_head_dim: cfg.head_dim,
-<a href=#1224 id=1224 data-nosnippet>1224</a>            },
-<a href=#1225 id=1225 data-nosnippet>1225</a>            mapper,
-<a href=#1226 id=1226 data-nosnippet>1226</a>            per_layer_input_scale: <span class="number">1. </span>/ (<span class="number">2f64</span>.sqrt()),
-<a href=#1227 id=1227 data-nosnippet>1227</a>            <span class="comment">// Keep scale factors in float64 for maximum precision
-<a href=#1228 id=1228 data-nosnippet>1228</a>            </span>per_layer_projection_scale: <span class="number">1. </span>/ (cfg.hidden_size <span class="kw">as </span>f64).sqrt(),
-<a href=#1229 id=1229 data-nosnippet>1229</a>            altup_projections,
-<a href=#1230 id=1230 data-nosnippet>1230</a>            altup_unembed_projections,
-<a href=#1231 id=1231 data-nosnippet>1231</a>            per_layer_model_projection,
-<a href=#1232 id=1232 data-nosnippet>1232</a>            per_layer_projection_norm,
-<a href=#1233 id=1233 data-nosnippet>1233</a>            hidden_size_per_layer_input: cfg.hidden_size_per_layer_input,
-<a href=#1234 id=1234 data-nosnippet>1234</a>            final_logit_softcapping: cfg.final_logit_softcapping,
-<a href=#1235 id=1235 data-nosnippet>1235</a>        })
-<a href=#1236 id=1236 data-nosnippet>1236</a>    }
-<a href=#1237 id=1237 data-nosnippet>1237</a>
-<a href=#1238 id=1238 data-nosnippet>1238</a>    <span class="kw">pub fn </span>embed_tokens(<span class="kw-2">&amp;</span><span class="self">self</span>, input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#1239 id=1239 data-nosnippet>1239</a>        <span class="self">self</span>.embed_tokens.forward(input_ids)
-<a href=#1240 id=1240 data-nosnippet>1240</a>    }
-<a href=#1241 id=1241 data-nosnippet>1241</a>
-<a href=#1242 id=1242 data-nosnippet>1242</a>    <span class="kw">fn </span>get_per_layer_inputs(<span class="kw-2">&amp;</span><span class="self">self</span>, input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#1243 id=1243 data-nosnippet>1243</a>        <span class="kw">let </span>shape = [
-<a href=#1244 id=1244 data-nosnippet>1244</a>            input_ids.dims().to_vec(),
-<a href=#1245 id=1245 data-nosnippet>1245</a>            <span class="macro">vec!</span>[<span class="self">self</span>.layers.len(), <span class="self">self</span>.hidden_size_per_layer_input],
-<a href=#1246 id=1246 data-nosnippet>1246</a>        ]
-<a href=#1247 id=1247 data-nosnippet>1247</a>        .concat();
-<a href=#1248 id=1248 data-nosnippet>1248</a>        <span class="comment">// Cast to float32 for better precision
-<a href=#1249 id=1249 data-nosnippet>1249</a>        </span><span class="kw">let </span>input_ids_device = input_ids.device();
-<a href=#1250 id=1250 data-nosnippet>1250</a>
-<a href=#1251 id=1251 data-nosnippet>1251</a>        <span class="comment">// Only cast to CPU if not using Metal
-<a href=#1252 id=1252 data-nosnippet>1252</a>        </span><span class="kw">let </span>per_layer_embeds = <span class="kw">if </span>input_ids_device.is_metal() {
-<a href=#1253 id=1253 data-nosnippet>1253</a>            <span class="comment">// On Metal, use input_ids directly
-<a href=#1254 id=1254 data-nosnippet>1254</a>            </span><span class="self">self</span>.embed_tokens_per_layer.forward(input_ids)<span class="question-mark">?
-<a href=#1255 id=1255 data-nosnippet>1255</a>        </span>} <span class="kw">else </span>{
-<a href=#1256 id=1256 data-nosnippet>1256</a>            <span class="comment">// On non-Metal devices, cast input to CPU for embedding computation
-<a href=#1257 id=1257 data-nosnippet>1257</a>            </span><span class="kw">let </span>input_ids_cpu = input_ids.to_device(<span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
-<a href=#1258 id=1258 data-nosnippet>1258</a>            <span class="self">self</span>.embed_tokens_per_layer.forward(<span class="kw-2">&amp;</span>input_ids_cpu)<span class="question-mark">?
-<a href=#1259 id=1259 data-nosnippet>1259</a>        </span>};
-<a href=#1260 id=1260 data-nosnippet>1260</a>
-<a href=#1261 id=1261 data-nosnippet>1261</a>        <span class="kw">let </span>original_dtype = per_layer_embeds.dtype();
-<a href=#1262 id=1262 data-nosnippet>1262</a>        <span class="comment">// Move result back to original device after computation (if needed)
-<a href=#1263 id=1263 data-nosnippet>1263</a>        </span><span class="kw">let </span>result = per_layer_embeds
-<a href=#1264 id=1264 data-nosnippet>1264</a>            .to_dtype(DType::F32)<span class="question-mark">?
-<a href=#1265 id=1265 data-nosnippet>1265</a>            </span>.reshape(shape)<span class="question-mark">?
-<a href=#1266 id=1266 data-nosnippet>1266</a>            </span>.to_dtype(original_dtype)<span class="question-mark">?</span>;
-<a href=#1267 id=1267 data-nosnippet>1267</a>
-<a href=#1268 id=1268 data-nosnippet>1268</a>        <span class="comment">// Only move back to device if we computed on CPU
-<a href=#1269 id=1269 data-nosnippet>1269</a>        </span><span class="kw">if </span>!input_ids_device.is_metal() &amp;&amp; input_ids_device.location() != Device::Cpu.location() {
-<a href=#1270 id=1270 data-nosnippet>1270</a>            result.to_device(input_ids_device)
-<a href=#1271 id=1271 data-nosnippet>1271</a>        } <span class="kw">else </span>{
-<a href=#1272 id=1272 data-nosnippet>1272</a>            <span class="prelude-val">Ok</span>(result)
-<a href=#1273 id=1273 data-nosnippet>1273</a>        }
-<a href=#1274 id=1274 data-nosnippet>1274</a>    }
-<a href=#1275 id=1275 data-nosnippet>1275</a>    <span class="kw">fn </span>project_per_layer_inputs(
-<a href=#1276 id=1276 data-nosnippet>1276</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1277 id=1277 data-nosnippet>1277</a>        xs: <span class="kw-2">&amp;</span>Tensor,
-<a href=#1278 id=1278 data-nosnippet>1278</a>        per_layer_inputs: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
-<a href=#1279 id=1279 data-nosnippet>1279</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#1280 id=1280 data-nosnippet>1280</a>        <span class="comment">// Cast to float32 for per-layer projection scaling
-<a href=#1281 id=1281 data-nosnippet>1281</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>per_layer_projection = <span class="self">self</span>.per_layer_model_projection.forward_autocast(xs)<span class="question-mark">?</span>;
-<a href=#1282 id=1282 data-nosnippet>1282</a>        <span class="kw">let </span>original_dtype = per_layer_projection.dtype();
-<a href=#1283 id=1283 data-nosnippet>1283</a>        <span class="kw">let </span>per_layer_projection_f32 = per_layer_projection.to_dtype(DType::F32)<span class="question-mark">?</span>;
-<a href=#1284 id=1284 data-nosnippet>1284</a>        per_layer_projection = (per_layer_projection_f32 * <span class="self">self</span>.per_layer_projection_scale)<span class="question-mark">?</span>;
-<a href=#1285 id=1285 data-nosnippet>1285</a>        <span class="kw">let </span>shape = [
-<a href=#1286 id=1286 data-nosnippet>1286</a>            xs.dims()[..xs.dims().len() - <span class="number">1</span>].to_vec(),
-<a href=#1287 id=1287 data-nosnippet>1287</a>            <span class="macro">vec!</span>[<span class="self">self</span>.layers.len(), <span class="self">self</span>.hidden_size_per_layer_input],
-<a href=#1288 id=1288 data-nosnippet>1288</a>        ]
-<a href=#1289 id=1289 data-nosnippet>1289</a>        .concat();
-<a href=#1290 id=1290 data-nosnippet>1290</a>        per_layer_projection = per_layer_projection
-<a href=#1291 id=1291 data-nosnippet>1291</a>            .reshape(shape)<span class="question-mark">?
-<a href=#1292 id=1292 data-nosnippet>1292</a>            </span>.to_dtype(original_dtype)<span class="question-mark">?</span>; <span class="comment">// Convert back to model dtype before RMSNorm
-<a href=#1293 id=1293 data-nosnippet>1293</a>        </span>per_layer_projection = <span class="self">self
-<a href=#1294 id=1294 data-nosnippet>1294</a>            </span>.per_layer_projection_norm
-<a href=#1295 id=1295 data-nosnippet>1295</a>            .forward(<span class="kw-2">&amp;</span>per_layer_projection)<span class="question-mark">?</span>;
-<a href=#1296 id=1296 data-nosnippet>1296</a>
-<a href=#1297 id=1297 data-nosnippet>1297</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="kw-2">mut </span>per_layer_inputs) = per_layer_inputs <span class="kw">else </span>{
-<a href=#1298 id=1298 data-nosnippet>1298</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(per_layer_projection.clone());
-<a href=#1299 id=1299 data-nosnippet>1299</a>        };
-<a href=#1300 id=1300 data-nosnippet>1300</a>
-<a href=#1301 id=1301 data-nosnippet>1301</a>        <span class="kw">if </span>per_layer_projection.shape() != per_layer_inputs.shape() {
-<a href=#1302 id=1302 data-nosnippet>1302</a>            <span class="comment">// per-layer inputs are sometimes padded with zeros, slice the relevant embeddings.
-<a href=#1303 id=1303 data-nosnippet>1303</a>            </span>per_layer_inputs = per_layer_inputs.narrow(D::Minus2, <span class="number">0</span>, <span class="self">self</span>.layers.len())<span class="question-mark">?</span>;
-<a href=#1304 id=1304 data-nosnippet>1304</a>        }
-<a href=#1305 id=1305 data-nosnippet>1305</a>        <span class="comment">// Perform addition and scaling in float32 for better precision
-<a href=#1306 id=1306 data-nosnippet>1306</a>        </span><span class="kw">let </span>per_layer_projection_f32 = per_layer_projection.to_dtype(DType::F32)<span class="question-mark">?</span>;
-<a href=#1307 id=1307 data-nosnippet>1307</a>        <span class="kw">let </span>per_layer_inputs_f32 = per_layer_inputs.to_dtype(DType::F32)<span class="question-mark">?</span>;
-<a href=#1308 id=1308 data-nosnippet>1308</a>        <span class="kw">let </span>result_f32 = (per_layer_projection_f32 + per_layer_inputs_f32)<span class="question-mark">?</span>;
-<a href=#1309 id=1309 data-nosnippet>1309</a>        (result_f32 * <span class="self">self</span>.per_layer_input_scale)<span class="question-mark">?</span>.to_dtype(per_layer_projection.dtype())
-<a href=#1310 id=1310 data-nosnippet>1310</a>    }
-<a href=#1311 id=1311 data-nosnippet>1311</a>
-<a href=#1312 id=1312 data-nosnippet>1312</a>    <span class="kw">pub fn </span>forward_embeds(
-<a href=#1313 id=1313 data-nosnippet>1313</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1314 id=1314 data-nosnippet>1314</a>        input_ids: <span class="kw-2">&amp;</span>Tensor,
-<a href=#1315 id=1315 data-nosnippet>1315</a>        ple_input_ids: <span class="kw-2">&amp;</span>Tensor,
-<a href=#1316 id=1316 data-nosnippet>1316</a>        <span class="kw-2">mut </span>xs: Tensor,
-<a href=#1317 id=1317 data-nosnippet>1317</a>        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-<a href=#1318 id=1318 data-nosnippet>1318</a>        context_lens: Vec&lt;(usize, usize)&gt;,
-<a href=#1319 id=1319 data-nosnippet>1319</a>        flash_params: <span class="kw-2">&amp;</span>FlashParams,
-<a href=#1320 id=1320 data-nosnippet>1320</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#1321 id=1321 data-nosnippet>1321</a>        <span class="kw">let </span>per_layer_inputs = <span class="prelude-val">Some</span>(<span class="self">self</span>.get_per_layer_inputs(ple_input_ids)<span class="question-mark">?</span>);
-<a href=#1322 id=1322 data-nosnippet>1322</a>        <span class="kw">let </span>per_layer_inputs = <span class="self">self</span>.project_per_layer_inputs(<span class="kw-2">&amp;</span>xs, per_layer_inputs)<span class="question-mark">?</span>;
-<a href=#1323 id=1323 data-nosnippet>1323</a>        <span class="comment">// Cast per_layer_inputs back to model dtype after float32 operations
-<a href=#1324 id=1324 data-nosnippet>1324</a>        </span><span class="kw">let </span>per_layer_inputs = per_layer_inputs.to_dtype(xs.dtype())<span class="question-mark">?</span>;
-<a href=#1325 id=1325 data-nosnippet>1325</a>
-<a href=#1326 id=1326 data-nosnippet>1326</a>        <span class="kw">let </span>cache = <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache.normal().<span class="number">0</span>;
-<a href=#1327 id=1327 data-nosnippet>1327</a>        <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask_matrix(
-<a href=#1328 id=1328 data-nosnippet>1328</a>            input_ids,
-<a href=#1329 id=1329 data-nosnippet>1329</a>            <span class="kw-2">&amp;*</span>cache,
-<a href=#1330 id=1330 data-nosnippet>1330</a>            xs.dtype(),
-<a href=#1331 id=1331 data-nosnippet>1331</a>            <span class="self">self</span>.cfg.num_attn_heads,
-<a href=#1332 id=1332 data-nosnippet>1332</a>        )<span class="question-mark">?</span>;
-<a href=#1333 id=1333 data-nosnippet>1333</a>        <span class="kw">let </span>sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
-<a href=#1334 id=1334 data-nosnippet>1334</a>            input_ids,
-<a href=#1335 id=1335 data-nosnippet>1335</a>            <span class="kw-2">&amp;*</span>cache,
-<a href=#1336 id=1336 data-nosnippet>1336</a>            <span class="prelude-val">Some</span>(<span class="self">self</span>.sliding_window),
-<a href=#1337 id=1337 data-nosnippet>1337</a>            xs.dtype(),
-<a href=#1338 id=1338 data-nosnippet>1338</a>            <span class="self">self</span>.cfg.num_attn_heads,
-<a href=#1339 id=1339 data-nosnippet>1339</a>        )<span class="question-mark">?</span>;
-<a href=#1340 id=1340 data-nosnippet>1340</a>
-<a href=#1341 id=1341 data-nosnippet>1341</a>        <span class="comment">// Already using float32 for magnitude calculations
-<a href=#1342 id=1342 data-nosnippet>1342</a>        </span><span class="kw">let </span>target_magnitude = xs
-<a href=#1343 id=1343 data-nosnippet>1343</a>            .to_dtype(DType::F32)<span class="question-mark">?
-<a href=#1344 id=1344 data-nosnippet>1344</a>            </span>.sqr()<span class="question-mark">?
-<a href=#1345 id=1345 data-nosnippet>1345</a>            </span>.mean_keepdim(D::Minus1)<span class="question-mark">?
-<a href=#1346 id=1346 data-nosnippet>1346</a>            </span>.sqrt()<span class="question-mark">?</span>;
-<a href=#1347 id=1347 data-nosnippet>1347</a>        <span class="kw">let </span>eps = Tensor::new(<span class="kw-2">&amp;</span>[EPS <span class="kw">as </span>f32], target_magnitude.device())<span class="question-mark">?</span>;
-<a href=#1348 id=1348 data-nosnippet>1348</a>
-<a href=#1349 id=1349 data-nosnippet>1349</a>        <span class="kw">let </span><span class="kw-2">mut </span>temp_hidden_states = <span class="macro">vec!</span>[xs.clone()];
-<a href=#1350 id=1350 data-nosnippet>1350</a>        <span class="kw">for </span>altup_proj <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.altup_projections {
-<a href=#1351 id=1351 data-nosnippet>1351</a>            <span class="kw">let </span>altup_proj = altup_proj.forward_autocast(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
-<a href=#1352 id=1352 data-nosnippet>1352</a>            <span class="kw">let </span>new_magnitude = altup_proj
-<a href=#1353 id=1353 data-nosnippet>1353</a>                .to_dtype(DType::F32)<span class="question-mark">?
-<a href=#1354 id=1354 data-nosnippet>1354</a>                </span>.sqr()<span class="question-mark">?
-<a href=#1355 id=1355 data-nosnippet>1355</a>                </span>.mean_keepdim(D::Minus1)<span class="question-mark">?
-<a href=#1356 id=1356 data-nosnippet>1356</a>                </span>.sqrt()<span class="question-mark">?</span>;
-<a href=#1357 id=1357 data-nosnippet>1357</a>
-<a href=#1358 id=1358 data-nosnippet>1358</a>            <span class="kw">let </span>current_hidden_state = altup_proj
-<a href=#1359 id=1359 data-nosnippet>1359</a>                .to_dtype(DType::F32)<span class="question-mark">?
-<a href=#1360 id=1360 data-nosnippet>1360</a>                </span>.broadcast_mul(
-<a href=#1361 id=1361 data-nosnippet>1361</a>                    <span class="kw-2">&amp;</span>target_magnitude.broadcast_div(<span class="kw-2">&amp;</span>new_magnitude.broadcast_maximum(<span class="kw-2">&amp;</span>eps)<span class="question-mark">?</span>)<span class="question-mark">?</span>,
-<a href=#1362 id=1362 data-nosnippet>1362</a>                )<span class="question-mark">?
-<a href=#1363 id=1363 data-nosnippet>1363</a>                </span>.to_dtype(altup_proj.dtype())<span class="question-mark">?</span>;
-<a href=#1364 id=1364 data-nosnippet>1364</a>            temp_hidden_states.push(current_hidden_state);
-<a href=#1365 id=1365 data-nosnippet>1365</a>        }
-<a href=#1366 id=1366 data-nosnippet>1366</a>        xs = Tensor::stack(<span class="kw-2">&amp;</span>temp_hidden_states, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#1367 id=1367 data-nosnippet>1367</a>
-<a href=#1368 id=1368 data-nosnippet>1368</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
-<a href=#1369 id=1369 data-nosnippet>1369</a>            <span class="kw">let </span>per_layer_input = per_layer_inputs.i((.., .., i, ..))<span class="question-mark">?</span>;
-<a href=#1370 id=1370 data-nosnippet>1370</a>            xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
-<a href=#1371 id=1371 data-nosnippet>1371</a>            xs = layer.forward(
-<a href=#1372 id=1372 data-nosnippet>1372</a>                <span class="kw-2">&amp;</span>xs,
-<a href=#1373 id=1373 data-nosnippet>1373</a>                <span class="kw-2">&amp;</span>per_layer_input.to_device(xs.device())<span class="question-mark">?</span>,
-<a href=#1374 id=1374 data-nosnippet>1374</a>                attention_mask
-<a href=#1375 id=1375 data-nosnippet>1375</a>                    .as_ref()
-<a href=#1376 id=1376 data-nosnippet>1376</a>                    .map(|m| m.to_device(xs.device()).unwrap())
-<a href=#1377 id=1377 data-nosnippet>1377</a>                    .as_ref(),
-<a href=#1378 id=1378 data-nosnippet>1378</a>                sliding_attention_mask
-<a href=#1379 id=1379 data-nosnippet>1379</a>                    .as_ref()
-<a href=#1380 id=1380 data-nosnippet>1380</a>                    .map(|m| m.to_device(xs.device()).unwrap())
-<a href=#1381 id=1381 data-nosnippet>1381</a>                    .as_ref(),
-<a href=#1382 id=1382 data-nosnippet>1382</a>                seqlen_offsets,
-<a href=#1383 id=1383 data-nosnippet>1383</a>                <span class="kw-2">&amp;mut *</span>cache,
-<a href=#1384 id=1384 data-nosnippet>1384</a>                flash_params,
-<a href=#1385 id=1385 data-nosnippet>1385</a>            )<span class="question-mark">?</span>;
-<a href=#1386 id=1386 data-nosnippet>1386</a>        }
-<a href=#1387 id=1387 data-nosnippet>1387</a>        xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
-<a href=#1388 id=1388 data-nosnippet>1388</a>
-<a href=#1389 id=1389 data-nosnippet>1389</a>        <span class="kw">let </span>target_magnitude = xs
-<a href=#1390 id=1390 data-nosnippet>1390</a>            .i(<span class="number">0</span>)<span class="question-mark">?
-<a href=#1391 id=1391 data-nosnippet>1391</a>            </span>.to_dtype(DType::F32)<span class="question-mark">?
-<a href=#1392 id=1392 data-nosnippet>1392</a>            </span>.sqr()<span class="question-mark">?
-<a href=#1393 id=1393 data-nosnippet>1393</a>            </span>.mean_keepdim(D::Minus1)<span class="question-mark">?
-<a href=#1394 id=1394 data-nosnippet>1394</a>            </span>.sqrt()<span class="question-mark">?</span>;
-<a href=#1395 id=1395 data-nosnippet>1395</a>
-<a href=#1396 id=1396 data-nosnippet>1396</a>        <span class="kw">let </span><span class="kw-2">mut </span>temp_hidden_states = <span class="macro">vec!</span>[xs.i(<span class="number">0</span>)<span class="question-mark">?</span>];
-<a href=#1397 id=1397 data-nosnippet>1397</a>        <span class="kw">for </span>(i, altup_proj) <span class="kw">in </span><span class="self">self</span>.altup_unembed_projections.iter().enumerate() {
-<a href=#1398 id=1398 data-nosnippet>1398</a>            <span class="kw">let </span>altup_proj = altup_proj.forward_autocast(<span class="kw-2">&amp;</span>xs.i(i + <span class="number">1</span>)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-<a href=#1399 id=1399 data-nosnippet>1399</a>            <span class="kw">let </span>new_magnitude = altup_proj
-<a href=#1400 id=1400 data-nosnippet>1400</a>                .to_dtype(DType::F32)<span class="question-mark">?
-<a href=#1401 id=1401 data-nosnippet>1401</a>                </span>.sqr()<span class="question-mark">?
-<a href=#1402 id=1402 data-nosnippet>1402</a>                </span>.mean_keepdim(D::Minus1)<span class="question-mark">?
-<a href=#1403 id=1403 data-nosnippet>1403</a>                </span>.sqrt()<span class="question-mark">?</span>;
-<a href=#1404 id=1404 data-nosnippet>1404</a>
-<a href=#1405 id=1405 data-nosnippet>1405</a>            <span class="kw">let </span>current_hidden_state = altup_proj
-<a href=#1406 id=1406 data-nosnippet>1406</a>                .to_dtype(DType::F32)<span class="question-mark">?
-<a href=#1407 id=1407 data-nosnippet>1407</a>                </span>.broadcast_mul(
-<a href=#1408 id=1408 data-nosnippet>1408</a>                    <span class="kw-2">&amp;</span>target_magnitude.broadcast_div(<span class="kw-2">&amp;</span>new_magnitude.broadcast_maximum(<span class="kw-2">&amp;</span>eps)<span class="question-mark">?</span>)<span class="question-mark">?</span>,
-<a href=#1409 id=1409 data-nosnippet>1409</a>                )<span class="question-mark">?
-<a href=#1410 id=1410 data-nosnippet>1410</a>                </span>.to_dtype(altup_proj.dtype())<span class="question-mark">?</span>;
-<a href=#1411 id=1411 data-nosnippet>1411</a>            temp_hidden_states.push(current_hidden_state);
-<a href=#1412 id=1412 data-nosnippet>1412</a>        }
-<a href=#1413 id=1413 data-nosnippet>1413</a>        <span class="comment">// Perform mean operation in float32 for better precision
-<a href=#1414 id=1414 data-nosnippet>1414</a>        </span><span class="kw">let </span>stacked = Tensor::stack(<span class="kw-2">&amp;</span>temp_hidden_states, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#1415 id=1415 data-nosnippet>1415</a>        <span class="kw">let </span>stacked_f32 = stacked.to_dtype(DType::F32)<span class="question-mark">?</span>;
-<a href=#1416 id=1416 data-nosnippet>1416</a>        xs = stacked_f32.mean(<span class="number">0</span>)<span class="question-mark">?</span>.to_dtype(stacked.dtype())<span class="question-mark">?</span>;
-<a href=#1417 id=1417 data-nosnippet>1417</a>
-<a href=#1418 id=1418 data-nosnippet>1418</a>        xs = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.norm)<span class="question-mark">?</span>;
-<a href=#1419 id=1419 data-nosnippet>1419</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.lm_head.quantized_act_type() {
-<a href=#1420 id=1420 data-nosnippet>1420</a>            xs = xs.to_dtype(t)<span class="question-mark">?</span>;
-<a href=#1421 id=1421 data-nosnippet>1421</a>        }
-<a href=#1422 id=1422 data-nosnippet>1422</a>
-<a href=#1423 id=1423 data-nosnippet>1423</a>        xs = MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>xs, <span class="kw-2">&amp;*</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>;
-<a href=#1424 id=1424 data-nosnippet>1424</a>
-<a href=#1425 id=1425 data-nosnippet>1425</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(final_logit_softcapping) = <span class="self">self</span>.final_logit_softcapping {
-<a href=#1426 id=1426 data-nosnippet>1426</a>            <span class="comment">// Perform logit softcapping in float32 for precision
-<a href=#1427 id=1427 data-nosnippet>1427</a>            </span><span class="kw">let </span>xs_f32 = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
-<a href=#1428 id=1428 data-nosnippet>1428</a>            <span class="kw">let </span>capped = (xs_f32 / final_logit_softcapping)<span class="question-mark">?</span>;
-<a href=#1429 id=1429 data-nosnippet>1429</a>            <span class="kw">let </span>tanh_capped = capped.tanh()<span class="question-mark">?</span>;
-<a href=#1430 id=1430 data-nosnippet>1430</a>            xs = (tanh_capped * final_logit_softcapping)<span class="question-mark">?</span>.to_dtype(xs.dtype())<span class="question-mark">?</span>;
-<a href=#1431 id=1431 data-nosnippet>1431</a>        }
-<a href=#1432 id=1432 data-nosnippet>1432</a>
-<a href=#1433 id=1433 data-nosnippet>1433</a>        extract_logits(<span class="kw-2">&amp;</span>xs, context_lens)
-<a href=#1434 id=1434 data-nosnippet>1434</a>    }
-<a href=#1435 id=1435 data-nosnippet>1435</a>}
-<a href=#1436 id=1436 data-nosnippet>1436</a>
-<a href=#1437 id=1437 data-nosnippet>1437</a><span class="kw">impl </span>IsqModel <span class="kw">for </span>TextModel {
-<a href=#1438 id=1438 data-nosnippet>1438</a>    <span class="kw">fn </span>get_layers(
-<a href=#1439 id=1439 data-nosnippet>1439</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#1440 id=1440 data-nosnippet>1440</a>    ) -&gt; (
-<a href=#1441 id=1441 data-nosnippet>1441</a>        Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
-<a href=#1442 id=1442 data-nosnippet>1442</a>        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
-<a href=#1443 id=1443 data-nosnippet>1443</a>    ) {
-<a href=#1444 id=1444 data-nosnippet>1444</a>        <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::new();
-<a href=#1445 id=1445 data-nosnippet>1445</a>
-<a href=#1446 id=1446 data-nosnippet>1446</a>        <span class="comment">// Add the lm_head
-<a href=#1447 id=1447 data-nosnippet>1447</a>        </span>layers.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head, <span class="prelude-val">None</span>));
-<a href=#1448 id=1448 data-nosnippet>1448</a>
-<a href=#1449 id=1449 data-nosnippet>1449</a>        <span class="comment">// Add all the layer components
-<a href=#1450 id=1450 data-nosnippet>1450</a>        </span><span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
-<a href=#1451 id=1451 data-nosnippet>1451</a>            <span class="comment">// Attention projections
-<a href=#1452 id=1452 data-nosnippet>1452</a>            </span><span class="kw">let </span>layer_ptr = layer <span class="kw">as </span><span class="kw-2">*const </span><span class="kw">_ as </span><span class="kw-2">*mut </span>DecoderLayer;
-<a href=#1453 id=1453 data-nosnippet>1453</a>            <span class="kw">unsafe </span>{
-<a href=#1454 id=1454 data-nosnippet>1454</a>                <span class="kw">let </span>layer_mut = <span class="kw-2">&amp;mut *</span>layer_ptr;
-<a href=#1455 id=1455 data-nosnippet>1455</a>                layers.push((<span class="kw-2">&amp;mut </span>layer_mut.self_attn.q_proj, <span class="prelude-val">Some</span>(layer_idx)));
-<a href=#1456 id=1456 data-nosnippet>1456</a>                layers.push((<span class="kw-2">&amp;mut </span>layer_mut.self_attn.k_proj, <span class="prelude-val">Some</span>(layer_idx)));
-<a href=#1457 id=1457 data-nosnippet>1457</a>                layers.push((<span class="kw-2">&amp;mut </span>layer_mut.self_attn.v_proj, <span class="prelude-val">Some</span>(layer_idx)));
-<a href=#1458 id=1458 data-nosnippet>1458</a>                layers.push((<span class="kw-2">&amp;mut </span>layer_mut.self_attn.o_proj, <span class="prelude-val">Some</span>(layer_idx)));
-<a href=#1459 id=1459 data-nosnippet>1459</a>
-<a href=#1460 id=1460 data-nosnippet>1460</a>                <span class="comment">// MLP projections
-<a href=#1461 id=1461 data-nosnippet>1461</a>                </span>layers.push((<span class="kw-2">&amp;mut </span>layer_mut.mlp.gate, <span class="prelude-val">Some</span>(layer_idx)));
-<a href=#1462 id=1462 data-nosnippet>1462</a>                layers.push((<span class="kw-2">&amp;mut </span>layer_mut.mlp.up, <span class="prelude-val">Some</span>(layer_idx)));
-<a href=#1463 id=1463 data-nosnippet>1463</a>                layers.push((<span class="kw-2">&amp;mut </span>layer_mut.mlp.down, <span class="prelude-val">Some</span>(layer_idx)));
-<a href=#1464 id=1464 data-nosnippet>1464</a>            }
-<a href=#1465 id=1465 data-nosnippet>1465</a>        }
-<a href=#1466 id=1466 data-nosnippet>1466</a>
-<a href=#1467 id=1467 data-nosnippet>1467</a>        <span class="comment">// Add AltUp projections
-<a href=#1468 id=1468 data-nosnippet>1468</a>        </span><span class="kw">for </span>altup_proj <span class="kw">in </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.altup_projections {
-<a href=#1469 id=1469 data-nosnippet>1469</a>            layers.push((altup_proj, <span class="prelude-val">None</span>));
-<a href=#1470 id=1470 data-nosnippet>1470</a>        }
-<a href=#1471 id=1471 data-nosnippet>1471</a>
-<a href=#1472 id=1472 data-nosnippet>1472</a>        <span class="kw">for </span>altup_unembed_proj <span class="kw">in </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.altup_unembed_projections {
-<a href=#1473 id=1473 data-nosnippet>1473</a>            layers.push((altup_unembed_proj, <span class="prelude-val">None</span>));
-<a href=#1474 id=1474 data-nosnippet>1474</a>        }
-<a href=#1475 id=1475 data-nosnippet>1475</a>
-<a href=#1476 id=1476 data-nosnippet>1476</a>        layers.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.per_layer_model_projection, <span class="prelude-val">None</span>));
-<a href=#1477 id=1477 data-nosnippet>1477</a>
-<a href=#1478 id=1478 data-nosnippet>1478</a>        (layers, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
-<a href=#1479 id=1479 data-nosnippet>1479</a>    }
-<a href=#1480 id=1480 data-nosnippet>1480</a>
-<a href=#1481 id=1481 data-nosnippet>1481</a>    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
-<a href=#1482 id=1482 data-nosnippet>1482</a>        <span class="kw">let </span>uvb = UnVarBuilder::new();
-<a href=#1483 id=1483 data-nosnippet>1483</a>
-<a href=#1484 id=1484 data-nosnippet>1484</a>        <span class="comment">// Embeddings
-<a href=#1485 id=1485 data-nosnippet>1485</a>        </span>uvb.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
-<a href=#1486 id=1486 data-nosnippet>1486</a>        uvb.pp(<span class="string">"embed_tokens_per_layer"</span>)
-<a href=#1487 id=1487 data-nosnippet>1487</a>            .add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens_per_layer);
-<a href=#1488 id=1488 data-nosnippet>1488</a>
-<a href=#1489 id=1489 data-nosnippet>1489</a>        <span class="comment">// Layer components
-<a href=#1490 id=1490 data-nosnippet>1490</a>        </span><span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
-<a href=#1491 id=1491 data-nosnippet>1491</a>            <span class="kw">let </span>layer_uvb = uvb.pp(<span class="macro">format!</span>(<span class="string">"layers.{layer_idx}"</span>));
-<a href=#1492 id=1492 data-nosnippet>1492</a>
-<a href=#1493 id=1493 data-nosnippet>1493</a>            <span class="comment">// Layer norms
-<a href=#1494 id=1494 data-nosnippet>1494</a>            </span>layer_uvb.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.input_layernorm);
-<a href=#1495 id=1495 data-nosnippet>1495</a>            layer_uvb
-<a href=#1496 id=1496 data-nosnippet>1496</a>                .pp(<span class="string">"post_attention_layernorm"</span>)
-<a href=#1497 id=1497 data-nosnippet>1497</a>                .add(<span class="kw-2">&amp;</span>layer.post_attention_layernorm);
-<a href=#1498 id=1498 data-nosnippet>1498</a>            layer_uvb
-<a href=#1499 id=1499 data-nosnippet>1499</a>                .pp(<span class="string">"pre_feedforward_layernorm"</span>)
-<a href=#1500 id=1500 data-nosnippet>1500</a>                .add(<span class="kw-2">&amp;</span>layer.pre_feedforward_layernorm);
-<a href=#1501 id=1501 data-nosnippet>1501</a>            layer_uvb
-<a href=#1502 id=1502 data-nosnippet>1502</a>                .pp(<span class="string">"post_feedforward_layernorm"</span>)
-<a href=#1503 id=1503 data-nosnippet>1503</a>                .add(<span class="kw-2">&amp;</span>layer.post_feedforward_layernorm);
-<a href=#1504 id=1504 data-nosnippet>1504</a>            layer_uvb
-<a href=#1505 id=1505 data-nosnippet>1505</a>                .pp(<span class="string">"post_per_layer_input_norm"</span>)
-<a href=#1506 id=1506 data-nosnippet>1506</a>                .add(<span class="kw-2">&amp;</span>layer.post_per_layer_input_norm);
-<a href=#1507 id=1507 data-nosnippet>1507</a>
-<a href=#1508 id=1508 data-nosnippet>1508</a>            <span class="comment">// Attention norms
-<a href=#1509 id=1509 data-nosnippet>1509</a>            </span><span class="kw">let </span>attn_uvb = layer_uvb.pp(<span class="string">"self_attn"</span>);
-<a href=#1510 id=1510 data-nosnippet>1510</a>            attn_uvb.pp(<span class="string">"q_norm"</span>).add(<span class="kw-2">&amp;</span>layer.self_attn.q_norm);
-<a href=#1511 id=1511 data-nosnippet>1511</a>            attn_uvb.pp(<span class="string">"k_norm"</span>).add(<span class="kw-2">&amp;</span>layer.self_attn.k_norm);
-<a href=#1512 id=1512 data-nosnippet>1512</a>            attn_uvb.pp(<span class="string">"v_norm"</span>).add(<span class="kw-2">&amp;</span>layer.self_attn.v_norm);
-<a href=#1513 id=1513 data-nosnippet>1513</a>
-<a href=#1514 id=1514 data-nosnippet>1514</a>            <span class="comment">// AltUp components
-<a href=#1515 id=1515 data-nosnippet>1515</a>            </span><span class="kw">let </span>altup_uvb = layer_uvb.pp(<span class="string">"altup"</span>);
-<a href=#1516 id=1516 data-nosnippet>1516</a>            altup_uvb.add_tensor(
-<a href=#1517 id=1517 data-nosnippet>1517</a>                <span class="string">"correct_output_scale"</span>,
-<a href=#1518 id=1518 data-nosnippet>1518</a>                layer.altup.correct_output_scale.clone(),
-<a href=#1519 id=1519 data-nosnippet>1519</a>            );
-<a href=#1520 id=1520 data-nosnippet>1520</a>            altup_uvb
-<a href=#1521 id=1521 data-nosnippet>1521</a>                .pp(<span class="string">"correction_coefs"</span>)
-<a href=#1522 id=1522 data-nosnippet>1522</a>                .add(<span class="kw-2">&amp;</span>layer.altup.correction_coefs);
-<a href=#1523 id=1523 data-nosnippet>1523</a>            altup_uvb
-<a href=#1524 id=1524 data-nosnippet>1524</a>                .pp(<span class="string">"prediction_coefs"</span>)
-<a href=#1525 id=1525 data-nosnippet>1525</a>                .add(<span class="kw-2">&amp;</span>layer.altup.prediction_coefs);
-<a href=#1526 id=1526 data-nosnippet>1526</a>            altup_uvb
-<a href=#1527 id=1527 data-nosnippet>1527</a>                .pp(<span class="string">"modality_router"</span>)
-<a href=#1528 id=1528 data-nosnippet>1528</a>                .add(<span class="kw-2">&amp;</span>layer.altup.modality_router);
-<a href=#1529 id=1529 data-nosnippet>1529</a>            altup_uvb.pp(<span class="string">"router_norm"</span>).add(<span class="kw-2">&amp;</span>layer.altup.router_norm);
-<a href=#1530 id=1530 data-nosnippet>1530</a>
-<a href=#1531 id=1531 data-nosnippet>1531</a>            <span class="comment">// Laurel block
-<a href=#1532 id=1532 data-nosnippet>1532</a>            </span><span class="kw">let </span>laurel_uvb = layer_uvb.pp(<span class="string">"laurel"</span>);
-<a href=#1533 id=1533 data-nosnippet>1533</a>            laurel_uvb.pp(<span class="string">"linear_left"</span>).add(<span class="kw-2">&amp;</span>layer.laurel.left);
-<a href=#1534 id=1534 data-nosnippet>1534</a>            laurel_uvb.pp(<span class="string">"linear_right"</span>).add(<span class="kw-2">&amp;</span>layer.laurel.right);
-<a href=#1535 id=1535 data-nosnippet>1535</a>            laurel_uvb
-<a href=#1536 id=1536 data-nosnippet>1536</a>                .pp(<span class="string">"post_laurel_norm"</span>)
-<a href=#1537 id=1537 data-nosnippet>1537</a>                .add(<span class="kw-2">&amp;</span>layer.laurel.post_norm);
-<a href=#1538 id=1538 data-nosnippet>1538</a>
-<a href=#1539 id=1539 data-nosnippet>1539</a>            <span class="comment">// Per-layer input components
-<a href=#1540 id=1540 data-nosnippet>1540</a>            </span>layer_uvb
-<a href=#1541 id=1541 data-nosnippet>1541</a>                .pp(<span class="string">"per_layer_input_gate"</span>)
-<a href=#1542 id=1542 data-nosnippet>1542</a>                .add(<span class="kw-2">&amp;</span>layer.per_layer_input_gate);
-<a href=#1543 id=1543 data-nosnippet>1543</a>            layer_uvb
-<a href=#1544 id=1544 data-nosnippet>1544</a>                .pp(<span class="string">"per_layer_projection"</span>)
-<a href=#1545 id=1545 data-nosnippet>1545</a>                .add(<span class="kw-2">&amp;</span>layer.per_layer_projection);
-<a href=#1546 id=1546 data-nosnippet>1546</a>        }
-<a href=#1547 id=1547 data-nosnippet>1547</a>
-<a href=#1548 id=1548 data-nosnippet>1548</a>        <span class="comment">// Final norm
-<a href=#1549 id=1549 data-nosnippet>1549</a>        </span>uvb.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm);
-<a href=#1550 id=1550 data-nosnippet>1550</a>
-<a href=#1551 id=1551 data-nosnippet>1551</a>        <span class="comment">// Per-layer projection components
-<a href=#1552 id=1552 data-nosnippet>1552</a>        </span>uvb.pp(<span class="string">"per_layer_projection_norm"</span>)
-<a href=#1553 id=1553 data-nosnippet>1553</a>            .add(<span class="kw-2">&amp;</span><span class="self">self</span>.per_layer_projection_norm);
-<a href=#1554 id=1554 data-nosnippet>1554</a>
-<a href=#1555 id=1555 data-nosnippet>1555</a>        uvb.to_safetensors()
-<a href=#1556 id=1556 data-nosnippet>1556</a>    }
-<a href=#1557 id=1557 data-nosnippet>1557</a>
-<a href=#1558 id=1558 data-nosnippet>1558</a>    <span class="kw">fn </span>imatrix_names(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; candle_core::Result&lt;Vec&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;&gt; {
-<a href=#1559 id=1559 data-nosnippet>1559</a>        <span class="macro">todo!</span>()
-<a href=#1560 id=1560 data-nosnippet>1560</a>    }
-<a href=#1561 id=1561 data-nosnippet>1561</a>}
-<a href=#1562 id=1562 data-nosnippet>1562</a>
-<a href=#1563 id=1563 data-nosnippet>1563</a><span class="kw">impl </span>VisionModel <span class="kw">for </span>TextModel {
-<a href=#1564 id=1564 data-nosnippet>1564</a>    <span class="kw">fn </span>forward(
-<a href=#1565 id=1565 data-nosnippet>1565</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1566 id=1566 data-nosnippet>1566</a>        _input_ids: <span class="kw-2">&amp;</span>Tensor,
-<a href=#1567 id=1567 data-nosnippet>1567</a>        _pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
-<a href=#1568 id=1568 data-nosnippet>1568</a>        _seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-<a href=#1569 id=1569 data-nosnippet>1569</a>        _context_lens: Vec&lt;(usize, usize)&gt;,
-<a href=#1570 id=1570 data-nosnippet>1570</a>        _position_ids: Vec&lt;usize&gt;,
-<a href=#1571 id=1571 data-nosnippet>1571</a>        _model_specific_args: Box&lt;<span class="kw">dyn </span>std::any::Any&gt;, <span class="comment">// pixel attention mask, or image sizes, or anything else
-<a href=#1572 id=1572 data-nosnippet>1572</a>        </span>_metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;</span>PagedAttentionInputMetadata)&gt;,
-<a href=#1573 id=1573 data-nosnippet>1573</a>        _flash_params: <span class="kw-2">&amp;</span>FlashParams,
-<a href=#1574 id=1574 data-nosnippet>1574</a>    ) -&gt; candle_core::Result&lt;Tensor&gt; {
-<a href=#1575 id=1575 data-nosnippet>1575</a>        <span class="macro">unreachable!</span>()
-<a href=#1576 id=1576 data-nosnippet>1576</a>    }
-<a href=#1577 id=1577 data-nosnippet>1577</a>    <span class="kw">fn </span>default_model_specific_args(<span class="kw-2">&amp;</span><span class="self">self</span>, _input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; Box&lt;<span class="kw">dyn </span>std::any::Any&gt; {
-<a href=#1578 id=1578 data-nosnippet>1578</a>        <span class="macro">unreachable!</span>()
-<a href=#1579 id=1579 data-nosnippet>1579</a>    }
-<a href=#1580 id=1580 data-nosnippet>1580</a>    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
-<a href=#1581 id=1581 data-nosnippet>1581</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.cache
-<a href=#1582 id=1582 data-nosnippet>1582</a>    }
-<a href=#1583 id=1583 data-nosnippet>1583</a>    <span class="kw">fn </span>cache_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>EitherCache {
-<a href=#1584 id=1584 data-nosnippet>1584</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache
-<a href=#1585 id=1585 data-nosnippet>1585</a>    }
-<a href=#1586 id=1586 data-nosnippet>1586</a>    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
-<a href=#1587 id=1587 data-nosnippet>1587</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.device
-<a href=#1588 id=1588 data-nosnippet>1588</a>    }
-<a href=#1589 id=1589 data-nosnippet>1589</a>    <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-<a href=#1590 id=1590 data-nosnippet>1590</a>        <span class="self">self</span>.max_seq_len
-<a href=#1591 id=1591 data-nosnippet>1591</a>    }
-<a href=#1592 id=1592 data-nosnippet>1592</a>    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
-<a href=#1593 id=1593 data-nosnippet>1593</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.cfg
-<a href=#1594 id=1594 data-nosnippet>1594</a>    }
-<a href=#1595 id=1595 data-nosnippet>1595</a>}
-<a href=#1596 id=1596 data-nosnippet>1596</a>
-<a href=#1597 id=1597 data-nosnippet>1597</a><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>TextModel {}
+<a href=#1224 id=1224 data-nosnippet>1224</a>                kv_cache_layout: <span class="kw">crate</span>::paged_attention::KvCacheLayout::Standard,
+<a href=#1225 id=1225 data-nosnippet>1225</a>            },
+<a href=#1226 id=1226 data-nosnippet>1226</a>            mapper,
+<a href=#1227 id=1227 data-nosnippet>1227</a>            per_layer_input_scale: <span class="number">1. </span>/ (<span class="number">2f64</span>.sqrt()),
+<a href=#1228 id=1228 data-nosnippet>1228</a>            <span class="comment">// Keep scale factors in float64 for maximum precision
+<a href=#1229 id=1229 data-nosnippet>1229</a>            </span>per_layer_projection_scale: <span class="number">1. </span>/ (cfg.hidden_size <span class="kw">as </span>f64).sqrt(),
+<a href=#1230 id=1230 data-nosnippet>1230</a>            altup_projections,
+<a href=#1231 id=1231 data-nosnippet>1231</a>            altup_unembed_projections,
+<a href=#1232 id=1232 data-nosnippet>1232</a>            per_layer_model_projection,
+<a href=#1233 id=1233 data-nosnippet>1233</a>            per_layer_projection_norm,
+<a href=#1234 id=1234 data-nosnippet>1234</a>            hidden_size_per_layer_input: cfg.hidden_size_per_layer_input,
+<a href=#1235 id=1235 data-nosnippet>1235</a>            final_logit_softcapping: cfg.final_logit_softcapping,
+<a href=#1236 id=1236 data-nosnippet>1236</a>        })
+<a href=#1237 id=1237 data-nosnippet>1237</a>    }
+<a href=#1238 id=1238 data-nosnippet>1238</a>
+<a href=#1239 id=1239 data-nosnippet>1239</a>    <span class="kw">pub fn </span>embed_tokens(<span class="kw-2">&amp;</span><span class="self">self</span>, input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#1240 id=1240 data-nosnippet>1240</a>        <span class="self">self</span>.embed_tokens.forward(input_ids)
+<a href=#1241 id=1241 data-nosnippet>1241</a>    }
+<a href=#1242 id=1242 data-nosnippet>1242</a>
+<a href=#1243 id=1243 data-nosnippet>1243</a>    <span class="kw">fn </span>get_per_layer_inputs(<span class="kw-2">&amp;</span><span class="self">self</span>, input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#1244 id=1244 data-nosnippet>1244</a>        <span class="kw">let </span>shape = [
+<a href=#1245 id=1245 data-nosnippet>1245</a>            input_ids.dims().to_vec(),
+<a href=#1246 id=1246 data-nosnippet>1246</a>            <span class="macro">vec!</span>[<span class="self">self</span>.layers.len(), <span class="self">self</span>.hidden_size_per_layer_input],
+<a href=#1247 id=1247 data-nosnippet>1247</a>        ]
+<a href=#1248 id=1248 data-nosnippet>1248</a>        .concat();
+<a href=#1249 id=1249 data-nosnippet>1249</a>        <span class="comment">// Cast to float32 for better precision
+<a href=#1250 id=1250 data-nosnippet>1250</a>        </span><span class="kw">let </span>input_ids_device = input_ids.device();
+<a href=#1251 id=1251 data-nosnippet>1251</a>
+<a href=#1252 id=1252 data-nosnippet>1252</a>        <span class="comment">// Only cast to CPU if not using Metal
+<a href=#1253 id=1253 data-nosnippet>1253</a>        </span><span class="kw">let </span>per_layer_embeds = <span class="kw">if </span>input_ids_device.is_metal() {
+<a href=#1254 id=1254 data-nosnippet>1254</a>            <span class="comment">// On Metal, use input_ids directly
+<a href=#1255 id=1255 data-nosnippet>1255</a>            </span><span class="self">self</span>.embed_tokens_per_layer.forward(input_ids)<span class="question-mark">?
+<a href=#1256 id=1256 data-nosnippet>1256</a>        </span>} <span class="kw">else </span>{
+<a href=#1257 id=1257 data-nosnippet>1257</a>            <span class="comment">// On non-Metal devices, cast input to CPU for embedding computation
+<a href=#1258 id=1258 data-nosnippet>1258</a>            </span><span class="kw">let </span>input_ids_cpu = input_ids.to_device(<span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
+<a href=#1259 id=1259 data-nosnippet>1259</a>            <span class="self">self</span>.embed_tokens_per_layer.forward(<span class="kw-2">&amp;</span>input_ids_cpu)<span class="question-mark">?
+<a href=#1260 id=1260 data-nosnippet>1260</a>        </span>};
+<a href=#1261 id=1261 data-nosnippet>1261</a>
+<a href=#1262 id=1262 data-nosnippet>1262</a>        <span class="kw">let </span>original_dtype = per_layer_embeds.dtype();
+<a href=#1263 id=1263 data-nosnippet>1263</a>        <span class="comment">// Move result back to original device after computation (if needed)
+<a href=#1264 id=1264 data-nosnippet>1264</a>        </span><span class="kw">let </span>result = per_layer_embeds
+<a href=#1265 id=1265 data-nosnippet>1265</a>            .to_dtype(DType::F32)<span class="question-mark">?
+<a href=#1266 id=1266 data-nosnippet>1266</a>            </span>.reshape(shape)<span class="question-mark">?
+<a href=#1267 id=1267 data-nosnippet>1267</a>            </span>.to_dtype(original_dtype)<span class="question-mark">?</span>;
+<a href=#1268 id=1268 data-nosnippet>1268</a>
+<a href=#1269 id=1269 data-nosnippet>1269</a>        <span class="comment">// Only move back to device if we computed on CPU
+<a href=#1270 id=1270 data-nosnippet>1270</a>        </span><span class="kw">if </span>!input_ids_device.is_metal() &amp;&amp; input_ids_device.location() != Device::Cpu.location() {
+<a href=#1271 id=1271 data-nosnippet>1271</a>            result.to_device(input_ids_device)
+<a href=#1272 id=1272 data-nosnippet>1272</a>        } <span class="kw">else </span>{
+<a href=#1273 id=1273 data-nosnippet>1273</a>            <span class="prelude-val">Ok</span>(result)
+<a href=#1274 id=1274 data-nosnippet>1274</a>        }
+<a href=#1275 id=1275 data-nosnippet>1275</a>    }
+<a href=#1276 id=1276 data-nosnippet>1276</a>    <span class="kw">fn </span>project_per_layer_inputs(
+<a href=#1277 id=1277 data-nosnippet>1277</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#1278 id=1278 data-nosnippet>1278</a>        xs: <span class="kw-2">&amp;</span>Tensor,
+<a href=#1279 id=1279 data-nosnippet>1279</a>        per_layer_inputs: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+<a href=#1280 id=1280 data-nosnippet>1280</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#1281 id=1281 data-nosnippet>1281</a>        <span class="comment">// Cast to float32 for per-layer projection scaling
+<a href=#1282 id=1282 data-nosnippet>1282</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>per_layer_projection = <span class="self">self</span>.per_layer_model_projection.forward_autocast(xs)<span class="question-mark">?</span>;
+<a href=#1283 id=1283 data-nosnippet>1283</a>        <span class="kw">let </span>original_dtype = per_layer_projection.dtype();
+<a href=#1284 id=1284 data-nosnippet>1284</a>        <span class="kw">let </span>per_layer_projection_f32 = per_layer_projection.to_dtype(DType::F32)<span class="question-mark">?</span>;
+<a href=#1285 id=1285 data-nosnippet>1285</a>        per_layer_projection = (per_layer_projection_f32 * <span class="self">self</span>.per_layer_projection_scale)<span class="question-mark">?</span>;
+<a href=#1286 id=1286 data-nosnippet>1286</a>        <span class="kw">let </span>shape = [
+<a href=#1287 id=1287 data-nosnippet>1287</a>            xs.dims()[..xs.dims().len() - <span class="number">1</span>].to_vec(),
+<a href=#1288 id=1288 data-nosnippet>1288</a>            <span class="macro">vec!</span>[<span class="self">self</span>.layers.len(), <span class="self">self</span>.hidden_size_per_layer_input],
+<a href=#1289 id=1289 data-nosnippet>1289</a>        ]
+<a href=#1290 id=1290 data-nosnippet>1290</a>        .concat();
+<a href=#1291 id=1291 data-nosnippet>1291</a>        per_layer_projection = per_layer_projection
+<a href=#1292 id=1292 data-nosnippet>1292</a>            .reshape(shape)<span class="question-mark">?
+<a href=#1293 id=1293 data-nosnippet>1293</a>            </span>.to_dtype(original_dtype)<span class="question-mark">?</span>; <span class="comment">// Convert back to model dtype before RMSNorm
+<a href=#1294 id=1294 data-nosnippet>1294</a>        </span>per_layer_projection = <span class="self">self
+<a href=#1295 id=1295 data-nosnippet>1295</a>            </span>.per_layer_projection_norm
+<a href=#1296 id=1296 data-nosnippet>1296</a>            .forward(<span class="kw-2">&amp;</span>per_layer_projection)<span class="question-mark">?</span>;
+<a href=#1297 id=1297 data-nosnippet>1297</a>
+<a href=#1298 id=1298 data-nosnippet>1298</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="kw-2">mut </span>per_layer_inputs) = per_layer_inputs <span class="kw">else </span>{
+<a href=#1299 id=1299 data-nosnippet>1299</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(per_layer_projection.clone());
+<a href=#1300 id=1300 data-nosnippet>1300</a>        };
+<a href=#1301 id=1301 data-nosnippet>1301</a>
+<a href=#1302 id=1302 data-nosnippet>1302</a>        <span class="kw">if </span>per_layer_projection.shape() != per_layer_inputs.shape() {
+<a href=#1303 id=1303 data-nosnippet>1303</a>            <span class="comment">// per-layer inputs are sometimes padded with zeros, slice the relevant embeddings.
+<a href=#1304 id=1304 data-nosnippet>1304</a>            </span>per_layer_inputs = per_layer_inputs.narrow(D::Minus2, <span class="number">0</span>, <span class="self">self</span>.layers.len())<span class="question-mark">?</span>;
+<a href=#1305 id=1305 data-nosnippet>1305</a>        }
+<a href=#1306 id=1306 data-nosnippet>1306</a>        <span class="comment">// Perform addition and scaling in float32 for better precision
+<a href=#1307 id=1307 data-nosnippet>1307</a>        </span><span class="kw">let </span>per_layer_projection_f32 = per_layer_projection.to_dtype(DType::F32)<span class="question-mark">?</span>;
+<a href=#1308 id=1308 data-nosnippet>1308</a>        <span class="kw">let </span>per_layer_inputs_f32 = per_layer_inputs.to_dtype(DType::F32)<span class="question-mark">?</span>;
+<a href=#1309 id=1309 data-nosnippet>1309</a>        <span class="kw">let </span>result_f32 = (per_layer_projection_f32 + per_layer_inputs_f32)<span class="question-mark">?</span>;
+<a href=#1310 id=1310 data-nosnippet>1310</a>        (result_f32 * <span class="self">self</span>.per_layer_input_scale)<span class="question-mark">?</span>.to_dtype(per_layer_projection.dtype())
+<a href=#1311 id=1311 data-nosnippet>1311</a>    }
+<a href=#1312 id=1312 data-nosnippet>1312</a>
+<a href=#1313 id=1313 data-nosnippet>1313</a>    <span class="kw">pub fn </span>forward_embeds(
+<a href=#1314 id=1314 data-nosnippet>1314</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#1315 id=1315 data-nosnippet>1315</a>        input_ids: <span class="kw-2">&amp;</span>Tensor,
+<a href=#1316 id=1316 data-nosnippet>1316</a>        ple_input_ids: <span class="kw-2">&amp;</span>Tensor,
+<a href=#1317 id=1317 data-nosnippet>1317</a>        <span class="kw-2">mut </span>xs: Tensor,
+<a href=#1318 id=1318 data-nosnippet>1318</a>        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+<a href=#1319 id=1319 data-nosnippet>1319</a>        context_lens: Vec&lt;(usize, usize)&gt;,
+<a href=#1320 id=1320 data-nosnippet>1320</a>        flash_params: <span class="kw-2">&amp;</span>FlashParams,
+<a href=#1321 id=1321 data-nosnippet>1321</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#1322 id=1322 data-nosnippet>1322</a>        <span class="kw">let </span>per_layer_inputs = <span class="prelude-val">Some</span>(<span class="self">self</span>.get_per_layer_inputs(ple_input_ids)<span class="question-mark">?</span>);
+<a href=#1323 id=1323 data-nosnippet>1323</a>        <span class="kw">let </span>per_layer_inputs = <span class="self">self</span>.project_per_layer_inputs(<span class="kw-2">&amp;</span>xs, per_layer_inputs)<span class="question-mark">?</span>;
+<a href=#1324 id=1324 data-nosnippet>1324</a>        <span class="comment">// Cast per_layer_inputs back to model dtype after float32 operations
+<a href=#1325 id=1325 data-nosnippet>1325</a>        </span><span class="kw">let </span>per_layer_inputs = per_layer_inputs.to_dtype(xs.dtype())<span class="question-mark">?</span>;
+<a href=#1326 id=1326 data-nosnippet>1326</a>
+<a href=#1327 id=1327 data-nosnippet>1327</a>        <span class="kw">let </span>cache = <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache.normal().<span class="number">0</span>;
+<a href=#1328 id=1328 data-nosnippet>1328</a>        <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask_matrix(
+<a href=#1329 id=1329 data-nosnippet>1329</a>            input_ids,
+<a href=#1330 id=1330 data-nosnippet>1330</a>            <span class="kw-2">&amp;*</span>cache,
+<a href=#1331 id=1331 data-nosnippet>1331</a>            xs.dtype(),
+<a href=#1332 id=1332 data-nosnippet>1332</a>            <span class="self">self</span>.cfg.num_attn_heads,
+<a href=#1333 id=1333 data-nosnippet>1333</a>        )<span class="question-mark">?</span>;
+<a href=#1334 id=1334 data-nosnippet>1334</a>        <span class="kw">let </span>sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+<a href=#1335 id=1335 data-nosnippet>1335</a>            input_ids,
+<a href=#1336 id=1336 data-nosnippet>1336</a>            <span class="kw-2">&amp;*</span>cache,
+<a href=#1337 id=1337 data-nosnippet>1337</a>            <span class="prelude-val">Some</span>(<span class="self">self</span>.sliding_window),
+<a href=#1338 id=1338 data-nosnippet>1338</a>            xs.dtype(),
+<a href=#1339 id=1339 data-nosnippet>1339</a>            <span class="self">self</span>.cfg.num_attn_heads,
+<a href=#1340 id=1340 data-nosnippet>1340</a>        )<span class="question-mark">?</span>;
+<a href=#1341 id=1341 data-nosnippet>1341</a>
+<a href=#1342 id=1342 data-nosnippet>1342</a>        <span class="comment">// Already using float32 for magnitude calculations
+<a href=#1343 id=1343 data-nosnippet>1343</a>        </span><span class="kw">let </span>target_magnitude = xs
+<a href=#1344 id=1344 data-nosnippet>1344</a>            .to_dtype(DType::F32)<span class="question-mark">?
+<a href=#1345 id=1345 data-nosnippet>1345</a>            </span>.sqr()<span class="question-mark">?
+<a href=#1346 id=1346 data-nosnippet>1346</a>            </span>.mean_keepdim(D::Minus1)<span class="question-mark">?
+<a href=#1347 id=1347 data-nosnippet>1347</a>            </span>.sqrt()<span class="question-mark">?</span>;
+<a href=#1348 id=1348 data-nosnippet>1348</a>        <span class="kw">let </span>eps = Tensor::new(<span class="kw-2">&amp;</span>[EPS <span class="kw">as </span>f32], target_magnitude.device())<span class="question-mark">?</span>;
+<a href=#1349 id=1349 data-nosnippet>1349</a>
+<a href=#1350 id=1350 data-nosnippet>1350</a>        <span class="kw">let </span><span class="kw-2">mut </span>temp_hidden_states = <span class="macro">vec!</span>[xs.clone()];
+<a href=#1351 id=1351 data-nosnippet>1351</a>        <span class="kw">for </span>altup_proj <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.altup_projections {
+<a href=#1352 id=1352 data-nosnippet>1352</a>            <span class="kw">let </span>altup_proj = altup_proj.forward_autocast(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
+<a href=#1353 id=1353 data-nosnippet>1353</a>            <span class="kw">let </span>new_magnitude = altup_proj
+<a href=#1354 id=1354 data-nosnippet>1354</a>                .to_dtype(DType::F32)<span class="question-mark">?
+<a href=#1355 id=1355 data-nosnippet>1355</a>                </span>.sqr()<span class="question-mark">?
+<a href=#1356 id=1356 data-nosnippet>1356</a>                </span>.mean_keepdim(D::Minus1)<span class="question-mark">?
+<a href=#1357 id=1357 data-nosnippet>1357</a>                </span>.sqrt()<span class="question-mark">?</span>;
+<a href=#1358 id=1358 data-nosnippet>1358</a>
+<a href=#1359 id=1359 data-nosnippet>1359</a>            <span class="kw">let </span>current_hidden_state = altup_proj
+<a href=#1360 id=1360 data-nosnippet>1360</a>                .to_dtype(DType::F32)<span class="question-mark">?
+<a href=#1361 id=1361 data-nosnippet>1361</a>                </span>.broadcast_mul(
+<a href=#1362 id=1362 data-nosnippet>1362</a>                    <span class="kw-2">&amp;</span>target_magnitude.broadcast_div(<span class="kw-2">&amp;</span>new_magnitude.broadcast_maximum(<span class="kw-2">&amp;</span>eps)<span class="question-mark">?</span>)<span class="question-mark">?</span>,
+<a href=#1363 id=1363 data-nosnippet>1363</a>                )<span class="question-mark">?
+<a href=#1364 id=1364 data-nosnippet>1364</a>                </span>.to_dtype(altup_proj.dtype())<span class="question-mark">?</span>;
+<a href=#1365 id=1365 data-nosnippet>1365</a>            temp_hidden_states.push(current_hidden_state);
+<a href=#1366 id=1366 data-nosnippet>1366</a>        }
+<a href=#1367 id=1367 data-nosnippet>1367</a>        xs = Tensor::stack(<span class="kw-2">&amp;</span>temp_hidden_states, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#1368 id=1368 data-nosnippet>1368</a>
+<a href=#1369 id=1369 data-nosnippet>1369</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+<a href=#1370 id=1370 data-nosnippet>1370</a>            <span class="kw">let </span>per_layer_input = per_layer_inputs.i((.., .., i, ..))<span class="question-mark">?</span>;
+<a href=#1371 id=1371 data-nosnippet>1371</a>            xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
+<a href=#1372 id=1372 data-nosnippet>1372</a>            xs = layer.forward(
+<a href=#1373 id=1373 data-nosnippet>1373</a>                <span class="kw-2">&amp;</span>xs,
+<a href=#1374 id=1374 data-nosnippet>1374</a>                <span class="kw-2">&amp;</span>per_layer_input.to_device(xs.device())<span class="question-mark">?</span>,
+<a href=#1375 id=1375 data-nosnippet>1375</a>                attention_mask
+<a href=#1376 id=1376 data-nosnippet>1376</a>                    .as_ref()
+<a href=#1377 id=1377 data-nosnippet>1377</a>                    .map(|m| m.to_device(xs.device()).unwrap())
+<a href=#1378 id=1378 data-nosnippet>1378</a>                    .as_ref(),
+<a href=#1379 id=1379 data-nosnippet>1379</a>                sliding_attention_mask
+<a href=#1380 id=1380 data-nosnippet>1380</a>                    .as_ref()
+<a href=#1381 id=1381 data-nosnippet>1381</a>                    .map(|m| m.to_device(xs.device()).unwrap())
+<a href=#1382 id=1382 data-nosnippet>1382</a>                    .as_ref(),
+<a href=#1383 id=1383 data-nosnippet>1383</a>                seqlen_offsets,
+<a href=#1384 id=1384 data-nosnippet>1384</a>                <span class="kw-2">&amp;mut *</span>cache,
+<a href=#1385 id=1385 data-nosnippet>1385</a>                flash_params,
+<a href=#1386 id=1386 data-nosnippet>1386</a>            )<span class="question-mark">?</span>;
+<a href=#1387 id=1387 data-nosnippet>1387</a>        }
+<a href=#1388 id=1388 data-nosnippet>1388</a>        xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
+<a href=#1389 id=1389 data-nosnippet>1389</a>
+<a href=#1390 id=1390 data-nosnippet>1390</a>        <span class="kw">let </span>target_magnitude = xs
+<a href=#1391 id=1391 data-nosnippet>1391</a>            .i(<span class="number">0</span>)<span class="question-mark">?
+<a href=#1392 id=1392 data-nosnippet>1392</a>            </span>.to_dtype(DType::F32)<span class="question-mark">?
+<a href=#1393 id=1393 data-nosnippet>1393</a>            </span>.sqr()<span class="question-mark">?
+<a href=#1394 id=1394 data-nosnippet>1394</a>            </span>.mean_keepdim(D::Minus1)<span class="question-mark">?
+<a href=#1395 id=1395 data-nosnippet>1395</a>            </span>.sqrt()<span class="question-mark">?</span>;
+<a href=#1396 id=1396 data-nosnippet>1396</a>
+<a href=#1397 id=1397 data-nosnippet>1397</a>        <span class="kw">let </span><span class="kw-2">mut </span>temp_hidden_states = <span class="macro">vec!</span>[xs.i(<span class="number">0</span>)<span class="question-mark">?</span>];
+<a href=#1398 id=1398 data-nosnippet>1398</a>        <span class="kw">for </span>(i, altup_proj) <span class="kw">in </span><span class="self">self</span>.altup_unembed_projections.iter().enumerate() {
+<a href=#1399 id=1399 data-nosnippet>1399</a>            <span class="kw">let </span>altup_proj = altup_proj.forward_autocast(<span class="kw-2">&amp;</span>xs.i(i + <span class="number">1</span>)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+<a href=#1400 id=1400 data-nosnippet>1400</a>            <span class="kw">let </span>new_magnitude = altup_proj
+<a href=#1401 id=1401 data-nosnippet>1401</a>                .to_dtype(DType::F32)<span class="question-mark">?
+<a href=#1402 id=1402 data-nosnippet>1402</a>                </span>.sqr()<span class="question-mark">?
+<a href=#1403 id=1403 data-nosnippet>1403</a>                </span>.mean_keepdim(D::Minus1)<span class="question-mark">?
+<a href=#1404 id=1404 data-nosnippet>1404</a>                </span>.sqrt()<span class="question-mark">?</span>;
+<a href=#1405 id=1405 data-nosnippet>1405</a>
+<a href=#1406 id=1406 data-nosnippet>1406</a>            <span class="kw">let </span>current_hidden_state = altup_proj
+<a href=#1407 id=1407 data-nosnippet>1407</a>                .to_dtype(DType::F32)<span class="question-mark">?
+<a href=#1408 id=1408 data-nosnippet>1408</a>                </span>.broadcast_mul(
+<a href=#1409 id=1409 data-nosnippet>1409</a>                    <span class="kw-2">&amp;</span>target_magnitude.broadcast_div(<span class="kw-2">&amp;</span>new_magnitude.broadcast_maximum(<span class="kw-2">&amp;</span>eps)<span class="question-mark">?</span>)<span class="question-mark">?</span>,
+<a href=#1410 id=1410 data-nosnippet>1410</a>                )<span class="question-mark">?
+<a href=#1411 id=1411 data-nosnippet>1411</a>                </span>.to_dtype(altup_proj.dtype())<span class="question-mark">?</span>;
+<a href=#1412 id=1412 data-nosnippet>1412</a>            temp_hidden_states.push(current_hidden_state);
+<a href=#1413 id=1413 data-nosnippet>1413</a>        }
+<a href=#1414 id=1414 data-nosnippet>1414</a>        <span class="comment">// Perform mean operation in float32 for better precision
+<a href=#1415 id=1415 data-nosnippet>1415</a>        </span><span class="kw">let </span>stacked = Tensor::stack(<span class="kw-2">&amp;</span>temp_hidden_states, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#1416 id=1416 data-nosnippet>1416</a>        <span class="kw">let </span>stacked_f32 = stacked.to_dtype(DType::F32)<span class="question-mark">?</span>;
+<a href=#1417 id=1417 data-nosnippet>1417</a>        xs = stacked_f32.mean(<span class="number">0</span>)<span class="question-mark">?</span>.to_dtype(stacked.dtype())<span class="question-mark">?</span>;
+<a href=#1418 id=1418 data-nosnippet>1418</a>
+<a href=#1419 id=1419 data-nosnippet>1419</a>        xs = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.norm)<span class="question-mark">?</span>;
+<a href=#1420 id=1420 data-nosnippet>1420</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.lm_head.quantized_act_type() {
+<a href=#1421 id=1421 data-nosnippet>1421</a>            xs = xs.to_dtype(t)<span class="question-mark">?</span>;
+<a href=#1422 id=1422 data-nosnippet>1422</a>        }
+<a href=#1423 id=1423 data-nosnippet>1423</a>
+<a href=#1424 id=1424 data-nosnippet>1424</a>        xs = MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>xs, <span class="kw-2">&amp;*</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>;
+<a href=#1425 id=1425 data-nosnippet>1425</a>
+<a href=#1426 id=1426 data-nosnippet>1426</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(final_logit_softcapping) = <span class="self">self</span>.final_logit_softcapping {
+<a href=#1427 id=1427 data-nosnippet>1427</a>            <span class="comment">// Perform logit softcapping in float32 for precision
+<a href=#1428 id=1428 data-nosnippet>1428</a>            </span><span class="kw">let </span>xs_f32 = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
+<a href=#1429 id=1429 data-nosnippet>1429</a>            <span class="kw">let </span>capped = (xs_f32 / final_logit_softcapping)<span class="question-mark">?</span>;
+<a href=#1430 id=1430 data-nosnippet>1430</a>            <span class="kw">let </span>tanh_capped = capped.tanh()<span class="question-mark">?</span>;
+<a href=#1431 id=1431 data-nosnippet>1431</a>            xs = (tanh_capped * final_logit_softcapping)<span class="question-mark">?</span>.to_dtype(xs.dtype())<span class="question-mark">?</span>;
+<a href=#1432 id=1432 data-nosnippet>1432</a>        }
+<a href=#1433 id=1433 data-nosnippet>1433</a>
+<a href=#1434 id=1434 data-nosnippet>1434</a>        extract_logits(<span class="kw-2">&amp;</span>xs, context_lens)
+<a href=#1435 id=1435 data-nosnippet>1435</a>    }
+<a href=#1436 id=1436 data-nosnippet>1436</a>}
+<a href=#1437 id=1437 data-nosnippet>1437</a>
+<a href=#1438 id=1438 data-nosnippet>1438</a><span class="kw">impl </span>IsqModel <span class="kw">for </span>TextModel {
+<a href=#1439 id=1439 data-nosnippet>1439</a>    <span class="kw">fn </span>get_layers(
+<a href=#1440 id=1440 data-nosnippet>1440</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#1441 id=1441 data-nosnippet>1441</a>    ) -&gt; (
+<a href=#1442 id=1442 data-nosnippet>1442</a>        Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
+<a href=#1443 id=1443 data-nosnippet>1443</a>        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
+<a href=#1444 id=1444 data-nosnippet>1444</a>    ) {
+<a href=#1445 id=1445 data-nosnippet>1445</a>        <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::new();
+<a href=#1446 id=1446 data-nosnippet>1446</a>
+<a href=#1447 id=1447 data-nosnippet>1447</a>        <span class="comment">// Add the lm_head
+<a href=#1448 id=1448 data-nosnippet>1448</a>        </span>layers.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head, <span class="prelude-val">None</span>));
+<a href=#1449 id=1449 data-nosnippet>1449</a>
+<a href=#1450 id=1450 data-nosnippet>1450</a>        <span class="comment">// Add all the layer components
+<a href=#1451 id=1451 data-nosnippet>1451</a>        </span><span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+<a href=#1452 id=1452 data-nosnippet>1452</a>            <span class="comment">// Attention projections
+<a href=#1453 id=1453 data-nosnippet>1453</a>            </span><span class="kw">let </span>layer_ptr = layer <span class="kw">as </span><span class="kw-2">*const </span><span class="kw">_ as </span><span class="kw-2">*mut </span>DecoderLayer;
+<a href=#1454 id=1454 data-nosnippet>1454</a>            <span class="kw">unsafe </span>{
+<a href=#1455 id=1455 data-nosnippet>1455</a>                <span class="kw">let </span>layer_mut = <span class="kw-2">&amp;mut *</span>layer_ptr;
+<a href=#1456 id=1456 data-nosnippet>1456</a>                layers.push((<span class="kw-2">&amp;mut </span>layer_mut.self_attn.q_proj, <span class="prelude-val">Some</span>(layer_idx)));
+<a href=#1457 id=1457 data-nosnippet>1457</a>                layers.push((<span class="kw-2">&amp;mut </span>layer_mut.self_attn.k_proj, <span class="prelude-val">Some</span>(layer_idx)));
+<a href=#1458 id=1458 data-nosnippet>1458</a>                layers.push((<span class="kw-2">&amp;mut </span>layer_mut.self_attn.v_proj, <span class="prelude-val">Some</span>(layer_idx)));
+<a href=#1459 id=1459 data-nosnippet>1459</a>                layers.push((<span class="kw-2">&amp;mut </span>layer_mut.self_attn.o_proj, <span class="prelude-val">Some</span>(layer_idx)));
+<a href=#1460 id=1460 data-nosnippet>1460</a>
+<a href=#1461 id=1461 data-nosnippet>1461</a>                <span class="comment">// MLP projections
+<a href=#1462 id=1462 data-nosnippet>1462</a>                </span>layers.push((<span class="kw-2">&amp;mut </span>layer_mut.mlp.gate, <span class="prelude-val">Some</span>(layer_idx)));
+<a href=#1463 id=1463 data-nosnippet>1463</a>                layers.push((<span class="kw-2">&amp;mut </span>layer_mut.mlp.up, <span class="prelude-val">Some</span>(layer_idx)));
+<a href=#1464 id=1464 data-nosnippet>1464</a>                layers.push((<span class="kw-2">&amp;mut </span>layer_mut.mlp.down, <span class="prelude-val">Some</span>(layer_idx)));
+<a href=#1465 id=1465 data-nosnippet>1465</a>            }
+<a href=#1466 id=1466 data-nosnippet>1466</a>        }
+<a href=#1467 id=1467 data-nosnippet>1467</a>
+<a href=#1468 id=1468 data-nosnippet>1468</a>        <span class="comment">// Add AltUp projections
+<a href=#1469 id=1469 data-nosnippet>1469</a>        </span><span class="kw">for </span>altup_proj <span class="kw">in </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.altup_projections {
+<a href=#1470 id=1470 data-nosnippet>1470</a>            layers.push((altup_proj, <span class="prelude-val">None</span>));
+<a href=#1471 id=1471 data-nosnippet>1471</a>        }
+<a href=#1472 id=1472 data-nosnippet>1472</a>
+<a href=#1473 id=1473 data-nosnippet>1473</a>        <span class="kw">for </span>altup_unembed_proj <span class="kw">in </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.altup_unembed_projections {
+<a href=#1474 id=1474 data-nosnippet>1474</a>            layers.push((altup_unembed_proj, <span class="prelude-val">None</span>));
+<a href=#1475 id=1475 data-nosnippet>1475</a>        }
+<a href=#1476 id=1476 data-nosnippet>1476</a>
+<a href=#1477 id=1477 data-nosnippet>1477</a>        layers.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.per_layer_model_projection, <span class="prelude-val">None</span>));
+<a href=#1478 id=1478 data-nosnippet>1478</a>
+<a href=#1479 id=1479 data-nosnippet>1479</a>        (layers, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+<a href=#1480 id=1480 data-nosnippet>1480</a>    }
+<a href=#1481 id=1481 data-nosnippet>1481</a>
+<a href=#1482 id=1482 data-nosnippet>1482</a>    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+<a href=#1483 id=1483 data-nosnippet>1483</a>        <span class="kw">let </span>uvb = UnVarBuilder::new();
+<a href=#1484 id=1484 data-nosnippet>1484</a>
+<a href=#1485 id=1485 data-nosnippet>1485</a>        <span class="comment">// Embeddings
+<a href=#1486 id=1486 data-nosnippet>1486</a>        </span>uvb.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
+<a href=#1487 id=1487 data-nosnippet>1487</a>        uvb.pp(<span class="string">"embed_tokens_per_layer"</span>)
+<a href=#1488 id=1488 data-nosnippet>1488</a>            .add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens_per_layer);
+<a href=#1489 id=1489 data-nosnippet>1489</a>
+<a href=#1490 id=1490 data-nosnippet>1490</a>        <span class="comment">// Layer components
+<a href=#1491 id=1491 data-nosnippet>1491</a>        </span><span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+<a href=#1492 id=1492 data-nosnippet>1492</a>            <span class="kw">let </span>layer_uvb = uvb.pp(<span class="macro">format!</span>(<span class="string">"layers.{layer_idx}"</span>));
+<a href=#1493 id=1493 data-nosnippet>1493</a>
+<a href=#1494 id=1494 data-nosnippet>1494</a>            <span class="comment">// Layer norms
+<a href=#1495 id=1495 data-nosnippet>1495</a>            </span>layer_uvb.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.input_layernorm);
+<a href=#1496 id=1496 data-nosnippet>1496</a>            layer_uvb
+<a href=#1497 id=1497 data-nosnippet>1497</a>                .pp(<span class="string">"post_attention_layernorm"</span>)
+<a href=#1498 id=1498 data-nosnippet>1498</a>                .add(<span class="kw-2">&amp;</span>layer.post_attention_layernorm);
+<a href=#1499 id=1499 data-nosnippet>1499</a>            layer_uvb
+<a href=#1500 id=1500 data-nosnippet>1500</a>                .pp(<span class="string">"pre_feedforward_layernorm"</span>)
+<a href=#1501 id=1501 data-nosnippet>1501</a>                .add(<span class="kw-2">&amp;</span>layer.pre_feedforward_layernorm);
+<a href=#1502 id=1502 data-nosnippet>1502</a>            layer_uvb
+<a href=#1503 id=1503 data-nosnippet>1503</a>                .pp(<span class="string">"post_feedforward_layernorm"</span>)
+<a href=#1504 id=1504 data-nosnippet>1504</a>                .add(<span class="kw-2">&amp;</span>layer.post_feedforward_layernorm);
+<a href=#1505 id=1505 data-nosnippet>1505</a>            layer_uvb
+<a href=#1506 id=1506 data-nosnippet>1506</a>                .pp(<span class="string">"post_per_layer_input_norm"</span>)
+<a href=#1507 id=1507 data-nosnippet>1507</a>                .add(<span class="kw-2">&amp;</span>layer.post_per_layer_input_norm);
+<a href=#1508 id=1508 data-nosnippet>1508</a>
+<a href=#1509 id=1509 data-nosnippet>1509</a>            <span class="comment">// Attention norms
+<a href=#1510 id=1510 data-nosnippet>1510</a>            </span><span class="kw">let </span>attn_uvb = layer_uvb.pp(<span class="string">"self_attn"</span>);
+<a href=#1511 id=1511 data-nosnippet>1511</a>            attn_uvb.pp(<span class="string">"q_norm"</span>).add(<span class="kw-2">&amp;</span>layer.self_attn.q_norm);
+<a href=#1512 id=1512 data-nosnippet>1512</a>            attn_uvb.pp(<span class="string">"k_norm"</span>).add(<span class="kw-2">&amp;</span>layer.self_attn.k_norm);
+<a href=#1513 id=1513 data-nosnippet>1513</a>            attn_uvb.pp(<span class="string">"v_norm"</span>).add(<span class="kw-2">&amp;</span>layer.self_attn.v_norm);
+<a href=#1514 id=1514 data-nosnippet>1514</a>
+<a href=#1515 id=1515 data-nosnippet>1515</a>            <span class="comment">// AltUp components
+<a href=#1516 id=1516 data-nosnippet>1516</a>            </span><span class="kw">let </span>altup_uvb = layer_uvb.pp(<span class="string">"altup"</span>);
+<a href=#1517 id=1517 data-nosnippet>1517</a>            altup_uvb.add_tensor(
+<a href=#1518 id=1518 data-nosnippet>1518</a>                <span class="string">"correct_output_scale"</span>,
+<a href=#1519 id=1519 data-nosnippet>1519</a>                layer.altup.correct_output_scale.clone(),
+<a href=#1520 id=1520 data-nosnippet>1520</a>            );
+<a href=#1521 id=1521 data-nosnippet>1521</a>            altup_uvb
+<a href=#1522 id=1522 data-nosnippet>1522</a>                .pp(<span class="string">"correction_coefs"</span>)
+<a href=#1523 id=1523 data-nosnippet>1523</a>                .add(<span class="kw-2">&amp;</span>layer.altup.correction_coefs);
+<a href=#1524 id=1524 data-nosnippet>1524</a>            altup_uvb
+<a href=#1525 id=1525 data-nosnippet>1525</a>                .pp(<span class="string">"prediction_coefs"</span>)
+<a href=#1526 id=1526 data-nosnippet>1526</a>                .add(<span class="kw-2">&amp;</span>layer.altup.prediction_coefs);
+<a href=#1527 id=1527 data-nosnippet>1527</a>            altup_uvb
+<a href=#1528 id=1528 data-nosnippet>1528</a>                .pp(<span class="string">"modality_router"</span>)
+<a href=#1529 id=1529 data-nosnippet>1529</a>                .add(<span class="kw-2">&amp;</span>layer.altup.modality_router);
+<a href=#1530 id=1530 data-nosnippet>1530</a>            altup_uvb.pp(<span class="string">"router_norm"</span>).add(<span class="kw-2">&amp;</span>layer.altup.router_norm);
+<a href=#1531 id=1531 data-nosnippet>1531</a>
+<a href=#1532 id=1532 data-nosnippet>1532</a>            <span class="comment">// Laurel block
+<a href=#1533 id=1533 data-nosnippet>1533</a>            </span><span class="kw">let </span>laurel_uvb = layer_uvb.pp(<span class="string">"laurel"</span>);
+<a href=#1534 id=1534 data-nosnippet>1534</a>            laurel_uvb.pp(<span class="string">"linear_left"</span>).add(<span class="kw-2">&amp;</span>layer.laurel.left);
+<a href=#1535 id=1535 data-nosnippet>1535</a>            laurel_uvb.pp(<span class="string">"linear_right"</span>).add(<span class="kw-2">&amp;</span>layer.laurel.right);
+<a href=#1536 id=1536 data-nosnippet>1536</a>            laurel_uvb
+<a href=#1537 id=1537 data-nosnippet>1537</a>                .pp(<span class="string">"post_laurel_norm"</span>)
+<a href=#1538 id=1538 data-nosnippet>1538</a>                .add(<span class="kw-2">&amp;</span>layer.laurel.post_norm);
+<a href=#1539 id=1539 data-nosnippet>1539</a>
+<a href=#1540 id=1540 data-nosnippet>1540</a>            <span class="comment">// Per-layer input components
+<a href=#1541 id=1541 data-nosnippet>1541</a>            </span>layer_uvb
+<a href=#1542 id=1542 data-nosnippet>1542</a>                .pp(<span class="string">"per_layer_input_gate"</span>)
+<a href=#1543 id=1543 data-nosnippet>1543</a>                .add(<span class="kw-2">&amp;</span>layer.per_layer_input_gate);
+<a href=#1544 id=1544 data-nosnippet>1544</a>            layer_uvb
+<a href=#1545 id=1545 data-nosnippet>1545</a>                .pp(<span class="string">"per_layer_projection"</span>)
+<a href=#1546 id=1546 data-nosnippet>1546</a>                .add(<span class="kw-2">&amp;</span>layer.per_layer_projection);
+<a href=#1547 id=1547 data-nosnippet>1547</a>        }
+<a href=#1548 id=1548 data-nosnippet>1548</a>
+<a href=#1549 id=1549 data-nosnippet>1549</a>        <span class="comment">// Final norm
+<a href=#1550 id=1550 data-nosnippet>1550</a>        </span>uvb.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm);
+<a href=#1551 id=1551 data-nosnippet>1551</a>
+<a href=#1552 id=1552 data-nosnippet>1552</a>        <span class="comment">// Per-layer projection components
+<a href=#1553 id=1553 data-nosnippet>1553</a>        </span>uvb.pp(<span class="string">"per_layer_projection_norm"</span>)
+<a href=#1554 id=1554 data-nosnippet>1554</a>            .add(<span class="kw-2">&amp;</span><span class="self">self</span>.per_layer_projection_norm);
+<a href=#1555 id=1555 data-nosnippet>1555</a>
+<a href=#1556 id=1556 data-nosnippet>1556</a>        uvb.to_safetensors()
+<a href=#1557 id=1557 data-nosnippet>1557</a>    }
+<a href=#1558 id=1558 data-nosnippet>1558</a>
+<a href=#1559 id=1559 data-nosnippet>1559</a>    <span class="kw">fn </span>imatrix_names(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; candle_core::Result&lt;Vec&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;&gt; {
+<a href=#1560 id=1560 data-nosnippet>1560</a>        <span class="macro">todo!</span>()
+<a href=#1561 id=1561 data-nosnippet>1561</a>    }
+<a href=#1562 id=1562 data-nosnippet>1562</a>}
+<a href=#1563 id=1563 data-nosnippet>1563</a>
+<a href=#1564 id=1564 data-nosnippet>1564</a><span class="kw">impl </span>VisionModel <span class="kw">for </span>TextModel {
+<a href=#1565 id=1565 data-nosnippet>1565</a>    <span class="kw">fn </span>forward(
+<a href=#1566 id=1566 data-nosnippet>1566</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#1567 id=1567 data-nosnippet>1567</a>        _input_ids: <span class="kw-2">&amp;</span>Tensor,
+<a href=#1568 id=1568 data-nosnippet>1568</a>        _pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+<a href=#1569 id=1569 data-nosnippet>1569</a>        _seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+<a href=#1570 id=1570 data-nosnippet>1570</a>        _context_lens: Vec&lt;(usize, usize)&gt;,
+<a href=#1571 id=1571 data-nosnippet>1571</a>        _position_ids: Vec&lt;usize&gt;,
+<a href=#1572 id=1572 data-nosnippet>1572</a>        _model_specific_args: Box&lt;<span class="kw">dyn </span>std::any::Any&gt;, <span class="comment">// pixel attention mask, or image sizes, or anything else
+<a href=#1573 id=1573 data-nosnippet>1573</a>        </span>_metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;</span>PagedAttentionInputMetadata)&gt;,
+<a href=#1574 id=1574 data-nosnippet>1574</a>        _flash_params: <span class="kw-2">&amp;</span>FlashParams,
+<a href=#1575 id=1575 data-nosnippet>1575</a>    ) -&gt; candle_core::Result&lt;Tensor&gt; {
+<a href=#1576 id=1576 data-nosnippet>1576</a>        <span class="macro">unreachable!</span>()
+<a href=#1577 id=1577 data-nosnippet>1577</a>    }
+<a href=#1578 id=1578 data-nosnippet>1578</a>    <span class="kw">fn </span>default_model_specific_args(<span class="kw-2">&amp;</span><span class="self">self</span>, _input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; Box&lt;<span class="kw">dyn </span>std::any::Any&gt; {
+<a href=#1579 id=1579 data-nosnippet>1579</a>        <span class="macro">unreachable!</span>()
+<a href=#1580 id=1580 data-nosnippet>1580</a>    }
+<a href=#1581 id=1581 data-nosnippet>1581</a>    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
+<a href=#1582 id=1582 data-nosnippet>1582</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.cache
+<a href=#1583 id=1583 data-nosnippet>1583</a>    }
+<a href=#1584 id=1584 data-nosnippet>1584</a>    <span class="kw">fn </span>cache_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>EitherCache {
+<a href=#1585 id=1585 data-nosnippet>1585</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache
+<a href=#1586 id=1586 data-nosnippet>1586</a>    }
+<a href=#1587 id=1587 data-nosnippet>1587</a>    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
+<a href=#1588 id=1588 data-nosnippet>1588</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.device
+<a href=#1589 id=1589 data-nosnippet>1589</a>    }
+<a href=#1590 id=1590 data-nosnippet>1590</a>    <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#1591 id=1591 data-nosnippet>1591</a>        <span class="self">self</span>.max_seq_len
+<a href=#1592 id=1592 data-nosnippet>1592</a>    }
+<a href=#1593 id=1593 data-nosnippet>1593</a>    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
+<a href=#1594 id=1594 data-nosnippet>1594</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.cfg
+<a href=#1595 id=1595 data-nosnippet>1595</a>    }
+<a href=#1596 id=1596 data-nosnippet>1596</a>}
+<a href=#1597 id=1597 data-nosnippet>1597</a>
+<a href=#1598 id=1598 data-nosnippet>1598</a><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>TextModel {}
 </code></pre></div></section></main></body></html>

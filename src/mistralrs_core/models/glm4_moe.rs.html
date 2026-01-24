@@ -838,252 +838,253 @@
 <a href=#838 id=838 data-nosnippet>838</a>                sliding_window: <span class="prelude-val">None</span>,
 <a href=#839 id=839 data-nosnippet>839</a>                k_head_dim: cfg.head_dim(),
 <a href=#840 id=840 data-nosnippet>840</a>                v_head_dim: cfg.head_dim(),
-<a href=#841 id=841 data-nosnippet>841</a>            },
-<a href=#842 id=842 data-nosnippet>842</a>            mapper,
-<a href=#843 id=843 data-nosnippet>843</a>        })
-<a href=#844 id=844 data-nosnippet>844</a>    }
-<a href=#845 id=845 data-nosnippet>845</a>
-<a href=#846 id=846 data-nosnippet>846</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
-<a href=#847 id=847 data-nosnippet>847</a>    </span><span class="kw">pub fn </span>forward(
-<a href=#848 id=848 data-nosnippet>848</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#849 id=849 data-nosnippet>849</a>        input_ids: <span class="kw-2">&amp;</span>Tensor,
-<a href=#850 id=850 data-nosnippet>850</a>        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-<a href=#851 id=851 data-nosnippet>851</a>        context_lens: Vec&lt;(usize, usize)&gt;,
-<a href=#852 id=852 data-nosnippet>852</a>        metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;</span>PagedAttentionInputMetadata)&gt;,
-<a href=#853 id=853 data-nosnippet>853</a>        flash_params: <span class="kw-2">&amp;</span>FlashParams,
-<a href=#854 id=854 data-nosnippet>854</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#855 id=855 data-nosnippet>855</a>        <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
-<a href=#856 id=856 data-nosnippet>856</a>        <span class="kw">let </span>cache = <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache.normal().<span class="number">0</span>;
-<a href=#857 id=857 data-nosnippet>857</a>        <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask_matrix(
-<a href=#858 id=858 data-nosnippet>858</a>            input_ids,
-<a href=#859 id=859 data-nosnippet>859</a>            metadata
-<a href=#860 id=860 data-nosnippet>860</a>                .as_ref()
-<a href=#861 id=861 data-nosnippet>861</a>                .map(|(<span class="kw">_</span>, <span class="kw">_</span>)| <span class="kw-2">&amp;</span>seqlen_offsets <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache)
-<a href=#862 id=862 data-nosnippet>862</a>                .unwrap_or(cache <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache),
-<a href=#863 id=863 data-nosnippet>863</a>            xs.dtype(),
-<a href=#864 id=864 data-nosnippet>864</a>            <span class="self">self</span>.cfg.num_attn_heads,
-<a href=#865 id=865 data-nosnippet>865</a>        )<span class="question-mark">?</span>;
-<a href=#866 id=866 data-nosnippet>866</a>        <span class="kw">let </span>attention_mask = attention_mask.filter(|<span class="kw">_</span>| {
-<a href=#867 id=867 data-nosnippet>867</a>            metadata
-<a href=#868 id=868 data-nosnippet>868</a>                .as_ref()
-<a href=#869 id=869 data-nosnippet>869</a>                .map(|(<span class="kw">_</span>, meta)| meta.is_first_prompt_chunk)
-<a href=#870 id=870 data-nosnippet>870</a>                .unwrap_or(<span class="bool-val">true</span>)
-<a href=#871 id=871 data-nosnippet>871</a>        });
-<a href=#872 id=872 data-nosnippet>872</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
-<a href=#873 id=873 data-nosnippet>873</a>            xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
-<a href=#874 id=874 data-nosnippet>874</a>            xs = layer.forward(
-<a href=#875 id=875 data-nosnippet>875</a>                <span class="kw-2">&amp;</span>xs,
-<a href=#876 id=876 data-nosnippet>876</a>                attention_mask
-<a href=#877 id=877 data-nosnippet>877</a>                    .as_ref()
-<a href=#878 id=878 data-nosnippet>878</a>                    .map(|m| m.to_device(xs.device()).unwrap())
-<a href=#879 id=879 data-nosnippet>879</a>                    .as_ref(),
-<a href=#880 id=880 data-nosnippet>880</a>                seqlen_offsets,
-<a href=#881 id=881 data-nosnippet>881</a>                <span class="kw-2">&amp;mut </span>cache[i],
-<a href=#882 id=882 data-nosnippet>882</a>                metadata
-<a href=#883 id=883 data-nosnippet>883</a>                    .as_ref()
-<a href=#884 id=884 data-nosnippet>884</a>                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), <span class="kw-2">*</span>metadata)),
-<a href=#885 id=885 data-nosnippet>885</a>                flash_params,
-<a href=#886 id=886 data-nosnippet>886</a>            )<span class="question-mark">?</span>;
-<a href=#887 id=887 data-nosnippet>887</a>        }
-<a href=#888 id=888 data-nosnippet>888</a>        <span class="kw">let </span>xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
-<a href=#889 id=889 data-nosnippet>889</a>        <span class="kw">let </span>xs = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.norm)<span class="question-mark">?</span>;
-<a href=#890 id=890 data-nosnippet>890</a>        extract_logits(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head.forward_autocast(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>, context_lens)
-<a href=#891 id=891 data-nosnippet>891</a>    }
-<a href=#892 id=892 data-nosnippet>892</a>}
-<a href=#893 id=893 data-nosnippet>893</a>
-<a href=#894 id=894 data-nosnippet>894</a><span class="kw">impl </span>IsqModel <span class="kw">for </span>Glm4Moe {
-<a href=#895 id=895 data-nosnippet>895</a>    <span class="kw">fn </span>get_layers(
-<a href=#896 id=896 data-nosnippet>896</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#897 id=897 data-nosnippet>897</a>    ) -&gt; (
-<a href=#898 id=898 data-nosnippet>898</a>        Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
-<a href=#899 id=899 data-nosnippet>899</a>        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
-<a href=#900 id=900 data-nosnippet>900</a>    ) {
-<a href=#901 id=901 data-nosnippet>901</a>        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-<a href=#902 id=902 data-nosnippet>902</a>        tensors.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head, <span class="prelude-val">None</span>));
-<a href=#903 id=903 data-nosnippet>903</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
-<a href=#904 id=904 data-nosnippet>904</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.q_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#905 id=905 data-nosnippet>905</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.k_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#906 id=906 data-nosnippet>906</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.v_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#907 id=907 data-nosnippet>907</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.o_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#908 id=908 data-nosnippet>908</a>            <span class="kw">match </span><span class="kw-2">&amp;mut </span>layer.moe_or_mlp {
-<a href=#909 id=909 data-nosnippet>909</a>                MoeOrMlp::Mlp(mlp) =&gt; {
-<a href=#910 id=910 data-nosnippet>910</a>                    tensors.push((<span class="kw-2">&amp;mut </span>mlp.gate, <span class="prelude-val">Some</span>(i)));
-<a href=#911 id=911 data-nosnippet>911</a>                    tensors.push((<span class="kw-2">&amp;mut </span>mlp.up, <span class="prelude-val">Some</span>(i)));
-<a href=#912 id=912 data-nosnippet>912</a>                    tensors.push((<span class="kw-2">&amp;mut </span>mlp.down, <span class="prelude-val">Some</span>(i)));
-<a href=#913 id=913 data-nosnippet>913</a>                }
-<a href=#914 id=914 data-nosnippet>914</a>                MoeOrMlp::Moe(moe) =&gt; {
-<a href=#915 id=915 data-nosnippet>915</a>                    <span class="kw">for </span>layer <span class="kw">in </span>moe.get_isq_layers() {
-<a href=#916 id=916 data-nosnippet>916</a>                        tensors.push((layer, <span class="prelude-val">Some</span>(i)));
-<a href=#917 id=917 data-nosnippet>917</a>                    }
-<a href=#918 id=918 data-nosnippet>918</a>                }
-<a href=#919 id=919 data-nosnippet>919</a>            }
-<a href=#920 id=920 data-nosnippet>920</a>        }
-<a href=#921 id=921 data-nosnippet>921</a>        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
-<a href=#922 id=922 data-nosnippet>922</a>    }
-<a href=#923 id=923 data-nosnippet>923</a>
-<a href=#924 id=924 data-nosnippet>924</a>    <span class="kw">fn </span>get_layers_moe_experts_only(
-<a href=#925 id=925 data-nosnippet>925</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#926 id=926 data-nosnippet>926</a>    ) -&gt; (
-<a href=#927 id=927 data-nosnippet>927</a>        Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
-<a href=#928 id=928 data-nosnippet>928</a>        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
-<a href=#929 id=929 data-nosnippet>929</a>    ) {
-<a href=#930 id=930 data-nosnippet>930</a>        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-<a href=#931 id=931 data-nosnippet>931</a>        tensors.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head, <span class="prelude-val">None</span>));
-<a href=#932 id=932 data-nosnippet>932</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
-<a href=#933 id=933 data-nosnippet>933</a>            <span class="kw">match </span><span class="kw-2">&amp;mut </span>layer.moe_or_mlp {
-<a href=#934 id=934 data-nosnippet>934</a>                MoeOrMlp::Mlp(mlp) =&gt; {
-<a href=#935 id=935 data-nosnippet>935</a>                    tensors.push((<span class="kw-2">&amp;mut </span>mlp.gate, <span class="prelude-val">Some</span>(i)));
-<a href=#936 id=936 data-nosnippet>936</a>                    tensors.push((<span class="kw-2">&amp;mut </span>mlp.up, <span class="prelude-val">Some</span>(i)));
-<a href=#937 id=937 data-nosnippet>937</a>                    tensors.push((<span class="kw-2">&amp;mut </span>mlp.down, <span class="prelude-val">Some</span>(i)));
-<a href=#938 id=938 data-nosnippet>938</a>                }
-<a href=#939 id=939 data-nosnippet>939</a>                MoeOrMlp::Moe(moe) =&gt; {
-<a href=#940 id=940 data-nosnippet>940</a>                    <span class="kw">for </span>layer <span class="kw">in </span>moe.get_isq_layers() {
-<a href=#941 id=941 data-nosnippet>941</a>                        tensors.push((layer, <span class="prelude-val">Some</span>(i)));
-<a href=#942 id=942 data-nosnippet>942</a>                    }
-<a href=#943 id=943 data-nosnippet>943</a>                }
-<a href=#944 id=944 data-nosnippet>944</a>            }
-<a href=#945 id=945 data-nosnippet>945</a>        }
-<a href=#946 id=946 data-nosnippet>946</a>        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
-<a href=#947 id=947 data-nosnippet>947</a>    }
-<a href=#948 id=948 data-nosnippet>948</a>
-<a href=#949 id=949 data-nosnippet>949</a>    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
-<a href=#950 id=950 data-nosnippet>950</a>        <span class="kw">let </span>uvb = UnVarBuilder::new();
-<a href=#951 id=951 data-nosnippet>951</a>
-<a href=#952 id=952 data-nosnippet>952</a>        <span class="kw">let </span>uvb_m = uvb.pp(<span class="string">"model"</span>);
-<a href=#953 id=953 data-nosnippet>953</a>        uvb_m.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
-<a href=#954 id=954 data-nosnippet>954</a>        uvb_m.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm);
-<a href=#955 id=955 data-nosnippet>955</a>
-<a href=#956 id=956 data-nosnippet>956</a>        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
-<a href=#957 id=957 data-nosnippet>957</a>            <span class="kw">let </span>uvb_l = uvb_m.pp(<span class="string">"layers"</span>).pp(layer_idx);
-<a href=#958 id=958 data-nosnippet>958</a>            uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.input_layernorm);
-<a href=#959 id=959 data-nosnippet>959</a>            uvb_l
-<a href=#960 id=960 data-nosnippet>960</a>                .pp(<span class="string">"post_attention_layernorm"</span>)
-<a href=#961 id=961 data-nosnippet>961</a>                .add(<span class="kw-2">&amp;</span>layer.post_attention_layernorm);
-<a href=#962 id=962 data-nosnippet>962</a>
-<a href=#963 id=963 data-nosnippet>963</a>            <span class="comment">// QK norm if present
-<a href=#964 id=964 data-nosnippet>964</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>q_norm) = layer.attn.q_norm {
-<a href=#965 id=965 data-nosnippet>965</a>                uvb_l.pp(<span class="string">"self_attn"</span>).pp(<span class="string">"q_norm"</span>).add(q_norm);
-<a href=#966 id=966 data-nosnippet>966</a>            }
-<a href=#967 id=967 data-nosnippet>967</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>k_norm) = layer.attn.k_norm {
-<a href=#968 id=968 data-nosnippet>968</a>                uvb_l.pp(<span class="string">"self_attn"</span>).pp(<span class="string">"k_norm"</span>).add(k_norm);
-<a href=#969 id=969 data-nosnippet>969</a>            }
-<a href=#970 id=970 data-nosnippet>970</a>
-<a href=#971 id=971 data-nosnippet>971</a>            <span class="kw">match </span><span class="kw-2">&amp;</span>layer.moe_or_mlp {
-<a href=#972 id=972 data-nosnippet>972</a>                MoeOrMlp::Moe(moe) =&gt; {
-<a href=#973 id=973 data-nosnippet>973</a>                    uvb_l
-<a href=#974 id=974 data-nosnippet>974</a>                        .pp(<span class="string">"mlp"</span>)
-<a href=#975 id=975 data-nosnippet>975</a>                        .pp(<span class="string">"gate"</span>)
-<a href=#976 id=976 data-nosnippet>976</a>                        .add_tensor(<span class="string">"weight"</span>, moe.gate.weight.clone());
-<a href=#977 id=977 data-nosnippet>977</a>                    uvb_l.pp(<span class="string">"mlp"</span>).pp(<span class="string">"gate"</span>).add_tensor(
-<a href=#978 id=978 data-nosnippet>978</a>                        <span class="string">"e_score_correction_bias"</span>,
-<a href=#979 id=979 data-nosnippet>979</a>                        moe.gate.e_score_correction_bias.clone(),
-<a href=#980 id=980 data-nosnippet>980</a>                    );
-<a href=#981 id=981 data-nosnippet>981</a>                }
-<a href=#982 id=982 data-nosnippet>982</a>                MoeOrMlp::Mlp(<span class="kw">_</span>) =&gt; (),
-<a href=#983 id=983 data-nosnippet>983</a>            }
-<a href=#984 id=984 data-nosnippet>984</a>        }
-<a href=#985 id=985 data-nosnippet>985</a>
-<a href=#986 id=986 data-nosnippet>986</a>        uvb.to_safetensors()
-<a href=#987 id=987 data-nosnippet>987</a>    }
-<a href=#988 id=988 data-nosnippet>988</a>
-<a href=#989 id=989 data-nosnippet>989</a>    <span class="kw">fn </span>residual_tensors_moe_experts_only(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;(String, Tensor)&gt;&gt; {
-<a href=#990 id=990 data-nosnippet>990</a>        <span class="kw">let </span>uvb = UnVarBuilder::new();
-<a href=#991 id=991 data-nosnippet>991</a>
-<a href=#992 id=992 data-nosnippet>992</a>        <span class="kw">let </span>uvb_m = uvb.pp(<span class="string">"model"</span>);
-<a href=#993 id=993 data-nosnippet>993</a>        uvb_m.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
-<a href=#994 id=994 data-nosnippet>994</a>        uvb_m.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm);
-<a href=#995 id=995 data-nosnippet>995</a>
-<a href=#996 id=996 data-nosnippet>996</a>        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
-<a href=#997 id=997 data-nosnippet>997</a>            <span class="kw">let </span>uvb_l = uvb_m.pp(<span class="string">"layers"</span>).pp(layer_idx);
-<a href=#998 id=998 data-nosnippet>998</a>            uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.input_layernorm);
-<a href=#999 id=999 data-nosnippet>999</a>            uvb_l
-<a href=#1000 id=1000 data-nosnippet>1000</a>                .pp(<span class="string">"post_attention_layernorm"</span>)
-<a href=#1001 id=1001 data-nosnippet>1001</a>                .add(<span class="kw-2">&amp;</span>layer.post_attention_layernorm);
-<a href=#1002 id=1002 data-nosnippet>1002</a>
-<a href=#1003 id=1003 data-nosnippet>1003</a>            <span class="comment">// QK norm if present
-<a href=#1004 id=1004 data-nosnippet>1004</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>q_norm) = layer.attn.q_norm {
-<a href=#1005 id=1005 data-nosnippet>1005</a>                uvb_l.pp(<span class="string">"self_attn"</span>).pp(<span class="string">"q_norm"</span>).add(q_norm);
-<a href=#1006 id=1006 data-nosnippet>1006</a>            }
-<a href=#1007 id=1007 data-nosnippet>1007</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>k_norm) = layer.attn.k_norm {
-<a href=#1008 id=1008 data-nosnippet>1008</a>                uvb_l.pp(<span class="string">"self_attn"</span>).pp(<span class="string">"k_norm"</span>).add(k_norm);
-<a href=#1009 id=1009 data-nosnippet>1009</a>            }
-<a href=#1010 id=1010 data-nosnippet>1010</a>
-<a href=#1011 id=1011 data-nosnippet>1011</a>            uvb_l.pp(<span class="string">"self_attn"</span>).pp(<span class="string">"q_proj"</span>).add(<span class="kw-2">&amp;</span>layer.attn.q_proj);
-<a href=#1012 id=1012 data-nosnippet>1012</a>            uvb_l.pp(<span class="string">"self_attn"</span>).pp(<span class="string">"k_proj"</span>).add(<span class="kw-2">&amp;</span>layer.attn.k_proj);
-<a href=#1013 id=1013 data-nosnippet>1013</a>            uvb_l.pp(<span class="string">"self_attn"</span>).pp(<span class="string">"v_proj"</span>).add(<span class="kw-2">&amp;</span>layer.attn.v_proj);
-<a href=#1014 id=1014 data-nosnippet>1014</a>            uvb_l.pp(<span class="string">"self_attn"</span>).pp(<span class="string">"o_proj"</span>).add(<span class="kw-2">&amp;</span>layer.attn.o_proj);
-<a href=#1015 id=1015 data-nosnippet>1015</a>
-<a href=#1016 id=1016 data-nosnippet>1016</a>            <span class="kw">match </span><span class="kw-2">&amp;</span>layer.moe_or_mlp {
-<a href=#1017 id=1017 data-nosnippet>1017</a>                MoeOrMlp::Moe(moe) =&gt; {
-<a href=#1018 id=1018 data-nosnippet>1018</a>                    uvb_l
-<a href=#1019 id=1019 data-nosnippet>1019</a>                        .pp(<span class="string">"mlp"</span>)
-<a href=#1020 id=1020 data-nosnippet>1020</a>                        .pp(<span class="string">"gate"</span>)
-<a href=#1021 id=1021 data-nosnippet>1021</a>                        .add_tensor(<span class="string">"weight"</span>, moe.gate.weight.clone());
-<a href=#1022 id=1022 data-nosnippet>1022</a>                    uvb_l.pp(<span class="string">"mlp"</span>).pp(<span class="string">"gate"</span>).add_tensor(
-<a href=#1023 id=1023 data-nosnippet>1023</a>                        <span class="string">"e_score_correction_bias"</span>,
-<a href=#1024 id=1024 data-nosnippet>1024</a>                        moe.gate.e_score_correction_bias.clone(),
-<a href=#1025 id=1025 data-nosnippet>1025</a>                    );
-<a href=#1026 id=1026 data-nosnippet>1026</a>                }
-<a href=#1027 id=1027 data-nosnippet>1027</a>                MoeOrMlp::Mlp(<span class="kw">_</span>) =&gt; (),
-<a href=#1028 id=1028 data-nosnippet>1028</a>            }
-<a href=#1029 id=1029 data-nosnippet>1029</a>        }
-<a href=#1030 id=1030 data-nosnippet>1030</a>
-<a href=#1031 id=1031 data-nosnippet>1031</a>        <span class="prelude-val">Some</span>(uvb.to_safetensors())
-<a href=#1032 id=1032 data-nosnippet>1032</a>    }
-<a href=#1033 id=1033 data-nosnippet>1033</a>}
-<a href=#1034 id=1034 data-nosnippet>1034</a>
-<a href=#1035 id=1035 data-nosnippet>1035</a><span class="kw">impl </span>NormalModel <span class="kw">for </span>Glm4Moe {
-<a href=#1036 id=1036 data-nosnippet>1036</a>    <span class="kw">fn </span>forward(
-<a href=#1037 id=1037 data-nosnippet>1037</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1038 id=1038 data-nosnippet>1038</a>        input_ids: <span class="kw-2">&amp;</span>Tensor,
-<a href=#1039 id=1039 data-nosnippet>1039</a>        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-<a href=#1040 id=1040 data-nosnippet>1040</a>        context_lens: Vec&lt;(usize, usize)&gt;,
-<a href=#1041 id=1041 data-nosnippet>1041</a>        _position_ids: Vec&lt;usize&gt;,
-<a href=#1042 id=1042 data-nosnippet>1042</a>        metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;</span>PagedAttentionInputMetadata)&gt;,
-<a href=#1043 id=1043 data-nosnippet>1043</a>        flash_params: <span class="kw-2">&amp;</span>FlashParams,
-<a href=#1044 id=1044 data-nosnippet>1044</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#1045 id=1045 data-nosnippet>1045</a>        <span class="self">self</span>.forward(
-<a href=#1046 id=1046 data-nosnippet>1046</a>            input_ids,
-<a href=#1047 id=1047 data-nosnippet>1047</a>            seqlen_offsets,
-<a href=#1048 id=1048 data-nosnippet>1048</a>            context_lens,
-<a href=#1049 id=1049 data-nosnippet>1049</a>            metadata,
-<a href=#1050 id=1050 data-nosnippet>1050</a>            flash_params,
-<a href=#1051 id=1051 data-nosnippet>1051</a>        )
-<a href=#1052 id=1052 data-nosnippet>1052</a>    }
-<a href=#1053 id=1053 data-nosnippet>1053</a>    <span class="kw">fn </span>xlora_forward(
-<a href=#1054 id=1054 data-nosnippet>1054</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1055 id=1055 data-nosnippet>1055</a>        _input_ids: <span class="kw-2">&amp;</span>Tensor,
-<a href=#1056 id=1056 data-nosnippet>1056</a>        _input_ids_full: <span class="kw-2">&amp;</span>Tensor,
-<a href=#1057 id=1057 data-nosnippet>1057</a>        _seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-<a href=#1058 id=1058 data-nosnippet>1058</a>        _seqlen_offsets_full: <span class="kw-2">&amp;</span>[usize],
-<a href=#1059 id=1059 data-nosnippet>1059</a>        _no_kv_cache: bool,
-<a href=#1060 id=1060 data-nosnippet>1060</a>        _non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::xlora_models::NonGranularState&gt;,
-<a href=#1061 id=1061 data-nosnippet>1061</a>        _context_lens: Vec&lt;(usize, usize)&gt;,
-<a href=#1062 id=1062 data-nosnippet>1062</a>        _position_ids: Vec&lt;usize&gt;,
-<a href=#1063 id=1063 data-nosnippet>1063</a>        _flash_params: <span class="kw-2">&amp;</span>FlashParams,
-<a href=#1064 id=1064 data-nosnippet>1064</a>        _flash_params_full: <span class="kw-2">&amp;</span>FlashParams,
-<a href=#1065 id=1065 data-nosnippet>1065</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#1066 id=1066 data-nosnippet>1066</a>        <span class="macro">unimplemented!</span>()
-<a href=#1067 id=1067 data-nosnippet>1067</a>    }
-<a href=#1068 id=1068 data-nosnippet>1068</a>    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
-<a href=#1069 id=1069 data-nosnippet>1069</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.cache
-<a href=#1070 id=1070 data-nosnippet>1070</a>    }
-<a href=#1071 id=1071 data-nosnippet>1071</a>    <span class="kw">fn </span>cache_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>EitherCache {
-<a href=#1072 id=1072 data-nosnippet>1072</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache
-<a href=#1073 id=1073 data-nosnippet>1073</a>    }
-<a href=#1074 id=1074 data-nosnippet>1074</a>    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
-<a href=#1075 id=1075 data-nosnippet>1075</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.device
-<a href=#1076 id=1076 data-nosnippet>1076</a>    }
-<a href=#1077 id=1077 data-nosnippet>1077</a>    <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#1078 id=1078 data-nosnippet>1078</a>        <span class="bool-val">false
-<a href=#1079 id=1079 data-nosnippet>1079</a>    </span>}
-<a href=#1080 id=1080 data-nosnippet>1080</a>    <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-<a href=#1081 id=1081 data-nosnippet>1081</a>        <span class="self">self</span>.max_seq_len
-<a href=#1082 id=1082 data-nosnippet>1082</a>    }
-<a href=#1083 id=1083 data-nosnippet>1083</a>    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
-<a href=#1084 id=1084 data-nosnippet>1084</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.cfg
-<a href=#1085 id=1085 data-nosnippet>1085</a>    }
-<a href=#1086 id=1086 data-nosnippet>1086</a>}
-<a href=#1087 id=1087 data-nosnippet>1087</a>
-<a href=#1088 id=1088 data-nosnippet>1088</a><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>Glm4Moe {}
+<a href=#841 id=841 data-nosnippet>841</a>                kv_cache_layout: <span class="kw">crate</span>::paged_attention::KvCacheLayout::Standard,
+<a href=#842 id=842 data-nosnippet>842</a>            },
+<a href=#843 id=843 data-nosnippet>843</a>            mapper,
+<a href=#844 id=844 data-nosnippet>844</a>        })
+<a href=#845 id=845 data-nosnippet>845</a>    }
+<a href=#846 id=846 data-nosnippet>846</a>
+<a href=#847 id=847 data-nosnippet>847</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
+<a href=#848 id=848 data-nosnippet>848</a>    </span><span class="kw">pub fn </span>forward(
+<a href=#849 id=849 data-nosnippet>849</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#850 id=850 data-nosnippet>850</a>        input_ids: <span class="kw-2">&amp;</span>Tensor,
+<a href=#851 id=851 data-nosnippet>851</a>        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+<a href=#852 id=852 data-nosnippet>852</a>        context_lens: Vec&lt;(usize, usize)&gt;,
+<a href=#853 id=853 data-nosnippet>853</a>        metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;</span>PagedAttentionInputMetadata)&gt;,
+<a href=#854 id=854 data-nosnippet>854</a>        flash_params: <span class="kw-2">&amp;</span>FlashParams,
+<a href=#855 id=855 data-nosnippet>855</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#856 id=856 data-nosnippet>856</a>        <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
+<a href=#857 id=857 data-nosnippet>857</a>        <span class="kw">let </span>cache = <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache.normal().<span class="number">0</span>;
+<a href=#858 id=858 data-nosnippet>858</a>        <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask_matrix(
+<a href=#859 id=859 data-nosnippet>859</a>            input_ids,
+<a href=#860 id=860 data-nosnippet>860</a>            metadata
+<a href=#861 id=861 data-nosnippet>861</a>                .as_ref()
+<a href=#862 id=862 data-nosnippet>862</a>                .map(|(<span class="kw">_</span>, <span class="kw">_</span>)| <span class="kw-2">&amp;</span>seqlen_offsets <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache)
+<a href=#863 id=863 data-nosnippet>863</a>                .unwrap_or(cache <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache),
+<a href=#864 id=864 data-nosnippet>864</a>            xs.dtype(),
+<a href=#865 id=865 data-nosnippet>865</a>            <span class="self">self</span>.cfg.num_attn_heads,
+<a href=#866 id=866 data-nosnippet>866</a>        )<span class="question-mark">?</span>;
+<a href=#867 id=867 data-nosnippet>867</a>        <span class="kw">let </span>attention_mask = attention_mask.filter(|<span class="kw">_</span>| {
+<a href=#868 id=868 data-nosnippet>868</a>            metadata
+<a href=#869 id=869 data-nosnippet>869</a>                .as_ref()
+<a href=#870 id=870 data-nosnippet>870</a>                .map(|(<span class="kw">_</span>, meta)| meta.is_first_prompt_chunk)
+<a href=#871 id=871 data-nosnippet>871</a>                .unwrap_or(<span class="bool-val">true</span>)
+<a href=#872 id=872 data-nosnippet>872</a>        });
+<a href=#873 id=873 data-nosnippet>873</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+<a href=#874 id=874 data-nosnippet>874</a>            xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
+<a href=#875 id=875 data-nosnippet>875</a>            xs = layer.forward(
+<a href=#876 id=876 data-nosnippet>876</a>                <span class="kw-2">&amp;</span>xs,
+<a href=#877 id=877 data-nosnippet>877</a>                attention_mask
+<a href=#878 id=878 data-nosnippet>878</a>                    .as_ref()
+<a href=#879 id=879 data-nosnippet>879</a>                    .map(|m| m.to_device(xs.device()).unwrap())
+<a href=#880 id=880 data-nosnippet>880</a>                    .as_ref(),
+<a href=#881 id=881 data-nosnippet>881</a>                seqlen_offsets,
+<a href=#882 id=882 data-nosnippet>882</a>                <span class="kw-2">&amp;mut </span>cache[i],
+<a href=#883 id=883 data-nosnippet>883</a>                metadata
+<a href=#884 id=884 data-nosnippet>884</a>                    .as_ref()
+<a href=#885 id=885 data-nosnippet>885</a>                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), <span class="kw-2">*</span>metadata)),
+<a href=#886 id=886 data-nosnippet>886</a>                flash_params,
+<a href=#887 id=887 data-nosnippet>887</a>            )<span class="question-mark">?</span>;
+<a href=#888 id=888 data-nosnippet>888</a>        }
+<a href=#889 id=889 data-nosnippet>889</a>        <span class="kw">let </span>xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
+<a href=#890 id=890 data-nosnippet>890</a>        <span class="kw">let </span>xs = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.norm)<span class="question-mark">?</span>;
+<a href=#891 id=891 data-nosnippet>891</a>        extract_logits(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head.forward_autocast(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>, context_lens)
+<a href=#892 id=892 data-nosnippet>892</a>    }
+<a href=#893 id=893 data-nosnippet>893</a>}
+<a href=#894 id=894 data-nosnippet>894</a>
+<a href=#895 id=895 data-nosnippet>895</a><span class="kw">impl </span>IsqModel <span class="kw">for </span>Glm4Moe {
+<a href=#896 id=896 data-nosnippet>896</a>    <span class="kw">fn </span>get_layers(
+<a href=#897 id=897 data-nosnippet>897</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#898 id=898 data-nosnippet>898</a>    ) -&gt; (
+<a href=#899 id=899 data-nosnippet>899</a>        Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
+<a href=#900 id=900 data-nosnippet>900</a>        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
+<a href=#901 id=901 data-nosnippet>901</a>    ) {
+<a href=#902 id=902 data-nosnippet>902</a>        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
+<a href=#903 id=903 data-nosnippet>903</a>        tensors.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head, <span class="prelude-val">None</span>));
+<a href=#904 id=904 data-nosnippet>904</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+<a href=#905 id=905 data-nosnippet>905</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.q_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#906 id=906 data-nosnippet>906</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.k_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#907 id=907 data-nosnippet>907</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.v_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#908 id=908 data-nosnippet>908</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.o_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#909 id=909 data-nosnippet>909</a>            <span class="kw">match </span><span class="kw-2">&amp;mut </span>layer.moe_or_mlp {
+<a href=#910 id=910 data-nosnippet>910</a>                MoeOrMlp::Mlp(mlp) =&gt; {
+<a href=#911 id=911 data-nosnippet>911</a>                    tensors.push((<span class="kw-2">&amp;mut </span>mlp.gate, <span class="prelude-val">Some</span>(i)));
+<a href=#912 id=912 data-nosnippet>912</a>                    tensors.push((<span class="kw-2">&amp;mut </span>mlp.up, <span class="prelude-val">Some</span>(i)));
+<a href=#913 id=913 data-nosnippet>913</a>                    tensors.push((<span class="kw-2">&amp;mut </span>mlp.down, <span class="prelude-val">Some</span>(i)));
+<a href=#914 id=914 data-nosnippet>914</a>                }
+<a href=#915 id=915 data-nosnippet>915</a>                MoeOrMlp::Moe(moe) =&gt; {
+<a href=#916 id=916 data-nosnippet>916</a>                    <span class="kw">for </span>layer <span class="kw">in </span>moe.get_isq_layers() {
+<a href=#917 id=917 data-nosnippet>917</a>                        tensors.push((layer, <span class="prelude-val">Some</span>(i)));
+<a href=#918 id=918 data-nosnippet>918</a>                    }
+<a href=#919 id=919 data-nosnippet>919</a>                }
+<a href=#920 id=920 data-nosnippet>920</a>            }
+<a href=#921 id=921 data-nosnippet>921</a>        }
+<a href=#922 id=922 data-nosnippet>922</a>        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+<a href=#923 id=923 data-nosnippet>923</a>    }
+<a href=#924 id=924 data-nosnippet>924</a>
+<a href=#925 id=925 data-nosnippet>925</a>    <span class="kw">fn </span>get_layers_moe_experts_only(
+<a href=#926 id=926 data-nosnippet>926</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#927 id=927 data-nosnippet>927</a>    ) -&gt; (
+<a href=#928 id=928 data-nosnippet>928</a>        Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
+<a href=#929 id=929 data-nosnippet>929</a>        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
+<a href=#930 id=930 data-nosnippet>930</a>    ) {
+<a href=#931 id=931 data-nosnippet>931</a>        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
+<a href=#932 id=932 data-nosnippet>932</a>        tensors.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head, <span class="prelude-val">None</span>));
+<a href=#933 id=933 data-nosnippet>933</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+<a href=#934 id=934 data-nosnippet>934</a>            <span class="kw">match </span><span class="kw-2">&amp;mut </span>layer.moe_or_mlp {
+<a href=#935 id=935 data-nosnippet>935</a>                MoeOrMlp::Mlp(mlp) =&gt; {
+<a href=#936 id=936 data-nosnippet>936</a>                    tensors.push((<span class="kw-2">&amp;mut </span>mlp.gate, <span class="prelude-val">Some</span>(i)));
+<a href=#937 id=937 data-nosnippet>937</a>                    tensors.push((<span class="kw-2">&amp;mut </span>mlp.up, <span class="prelude-val">Some</span>(i)));
+<a href=#938 id=938 data-nosnippet>938</a>                    tensors.push((<span class="kw-2">&amp;mut </span>mlp.down, <span class="prelude-val">Some</span>(i)));
+<a href=#939 id=939 data-nosnippet>939</a>                }
+<a href=#940 id=940 data-nosnippet>940</a>                MoeOrMlp::Moe(moe) =&gt; {
+<a href=#941 id=941 data-nosnippet>941</a>                    <span class="kw">for </span>layer <span class="kw">in </span>moe.get_isq_layers() {
+<a href=#942 id=942 data-nosnippet>942</a>                        tensors.push((layer, <span class="prelude-val">Some</span>(i)));
+<a href=#943 id=943 data-nosnippet>943</a>                    }
+<a href=#944 id=944 data-nosnippet>944</a>                }
+<a href=#945 id=945 data-nosnippet>945</a>            }
+<a href=#946 id=946 data-nosnippet>946</a>        }
+<a href=#947 id=947 data-nosnippet>947</a>        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+<a href=#948 id=948 data-nosnippet>948</a>    }
+<a href=#949 id=949 data-nosnippet>949</a>
+<a href=#950 id=950 data-nosnippet>950</a>    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+<a href=#951 id=951 data-nosnippet>951</a>        <span class="kw">let </span>uvb = UnVarBuilder::new();
+<a href=#952 id=952 data-nosnippet>952</a>
+<a href=#953 id=953 data-nosnippet>953</a>        <span class="kw">let </span>uvb_m = uvb.pp(<span class="string">"model"</span>);
+<a href=#954 id=954 data-nosnippet>954</a>        uvb_m.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
+<a href=#955 id=955 data-nosnippet>955</a>        uvb_m.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm);
+<a href=#956 id=956 data-nosnippet>956</a>
+<a href=#957 id=957 data-nosnippet>957</a>        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+<a href=#958 id=958 data-nosnippet>958</a>            <span class="kw">let </span>uvb_l = uvb_m.pp(<span class="string">"layers"</span>).pp(layer_idx);
+<a href=#959 id=959 data-nosnippet>959</a>            uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.input_layernorm);
+<a href=#960 id=960 data-nosnippet>960</a>            uvb_l
+<a href=#961 id=961 data-nosnippet>961</a>                .pp(<span class="string">"post_attention_layernorm"</span>)
+<a href=#962 id=962 data-nosnippet>962</a>                .add(<span class="kw-2">&amp;</span>layer.post_attention_layernorm);
+<a href=#963 id=963 data-nosnippet>963</a>
+<a href=#964 id=964 data-nosnippet>964</a>            <span class="comment">// QK norm if present
+<a href=#965 id=965 data-nosnippet>965</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>q_norm) = layer.attn.q_norm {
+<a href=#966 id=966 data-nosnippet>966</a>                uvb_l.pp(<span class="string">"self_attn"</span>).pp(<span class="string">"q_norm"</span>).add(q_norm);
+<a href=#967 id=967 data-nosnippet>967</a>            }
+<a href=#968 id=968 data-nosnippet>968</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>k_norm) = layer.attn.k_norm {
+<a href=#969 id=969 data-nosnippet>969</a>                uvb_l.pp(<span class="string">"self_attn"</span>).pp(<span class="string">"k_norm"</span>).add(k_norm);
+<a href=#970 id=970 data-nosnippet>970</a>            }
+<a href=#971 id=971 data-nosnippet>971</a>
+<a href=#972 id=972 data-nosnippet>972</a>            <span class="kw">match </span><span class="kw-2">&amp;</span>layer.moe_or_mlp {
+<a href=#973 id=973 data-nosnippet>973</a>                MoeOrMlp::Moe(moe) =&gt; {
+<a href=#974 id=974 data-nosnippet>974</a>                    uvb_l
+<a href=#975 id=975 data-nosnippet>975</a>                        .pp(<span class="string">"mlp"</span>)
+<a href=#976 id=976 data-nosnippet>976</a>                        .pp(<span class="string">"gate"</span>)
+<a href=#977 id=977 data-nosnippet>977</a>                        .add_tensor(<span class="string">"weight"</span>, moe.gate.weight.clone());
+<a href=#978 id=978 data-nosnippet>978</a>                    uvb_l.pp(<span class="string">"mlp"</span>).pp(<span class="string">"gate"</span>).add_tensor(
+<a href=#979 id=979 data-nosnippet>979</a>                        <span class="string">"e_score_correction_bias"</span>,
+<a href=#980 id=980 data-nosnippet>980</a>                        moe.gate.e_score_correction_bias.clone(),
+<a href=#981 id=981 data-nosnippet>981</a>                    );
+<a href=#982 id=982 data-nosnippet>982</a>                }
+<a href=#983 id=983 data-nosnippet>983</a>                MoeOrMlp::Mlp(<span class="kw">_</span>) =&gt; (),
+<a href=#984 id=984 data-nosnippet>984</a>            }
+<a href=#985 id=985 data-nosnippet>985</a>        }
+<a href=#986 id=986 data-nosnippet>986</a>
+<a href=#987 id=987 data-nosnippet>987</a>        uvb.to_safetensors()
+<a href=#988 id=988 data-nosnippet>988</a>    }
+<a href=#989 id=989 data-nosnippet>989</a>
+<a href=#990 id=990 data-nosnippet>990</a>    <span class="kw">fn </span>residual_tensors_moe_experts_only(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;(String, Tensor)&gt;&gt; {
+<a href=#991 id=991 data-nosnippet>991</a>        <span class="kw">let </span>uvb = UnVarBuilder::new();
+<a href=#992 id=992 data-nosnippet>992</a>
+<a href=#993 id=993 data-nosnippet>993</a>        <span class="kw">let </span>uvb_m = uvb.pp(<span class="string">"model"</span>);
+<a href=#994 id=994 data-nosnippet>994</a>        uvb_m.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
+<a href=#995 id=995 data-nosnippet>995</a>        uvb_m.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm);
+<a href=#996 id=996 data-nosnippet>996</a>
+<a href=#997 id=997 data-nosnippet>997</a>        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+<a href=#998 id=998 data-nosnippet>998</a>            <span class="kw">let </span>uvb_l = uvb_m.pp(<span class="string">"layers"</span>).pp(layer_idx);
+<a href=#999 id=999 data-nosnippet>999</a>            uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.input_layernorm);
+<a href=#1000 id=1000 data-nosnippet>1000</a>            uvb_l
+<a href=#1001 id=1001 data-nosnippet>1001</a>                .pp(<span class="string">"post_attention_layernorm"</span>)
+<a href=#1002 id=1002 data-nosnippet>1002</a>                .add(<span class="kw-2">&amp;</span>layer.post_attention_layernorm);
+<a href=#1003 id=1003 data-nosnippet>1003</a>
+<a href=#1004 id=1004 data-nosnippet>1004</a>            <span class="comment">// QK norm if present
+<a href=#1005 id=1005 data-nosnippet>1005</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>q_norm) = layer.attn.q_norm {
+<a href=#1006 id=1006 data-nosnippet>1006</a>                uvb_l.pp(<span class="string">"self_attn"</span>).pp(<span class="string">"q_norm"</span>).add(q_norm);
+<a href=#1007 id=1007 data-nosnippet>1007</a>            }
+<a href=#1008 id=1008 data-nosnippet>1008</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>k_norm) = layer.attn.k_norm {
+<a href=#1009 id=1009 data-nosnippet>1009</a>                uvb_l.pp(<span class="string">"self_attn"</span>).pp(<span class="string">"k_norm"</span>).add(k_norm);
+<a href=#1010 id=1010 data-nosnippet>1010</a>            }
+<a href=#1011 id=1011 data-nosnippet>1011</a>
+<a href=#1012 id=1012 data-nosnippet>1012</a>            uvb_l.pp(<span class="string">"self_attn"</span>).pp(<span class="string">"q_proj"</span>).add(<span class="kw-2">&amp;</span>layer.attn.q_proj);
+<a href=#1013 id=1013 data-nosnippet>1013</a>            uvb_l.pp(<span class="string">"self_attn"</span>).pp(<span class="string">"k_proj"</span>).add(<span class="kw-2">&amp;</span>layer.attn.k_proj);
+<a href=#1014 id=1014 data-nosnippet>1014</a>            uvb_l.pp(<span class="string">"self_attn"</span>).pp(<span class="string">"v_proj"</span>).add(<span class="kw-2">&amp;</span>layer.attn.v_proj);
+<a href=#1015 id=1015 data-nosnippet>1015</a>            uvb_l.pp(<span class="string">"self_attn"</span>).pp(<span class="string">"o_proj"</span>).add(<span class="kw-2">&amp;</span>layer.attn.o_proj);
+<a href=#1016 id=1016 data-nosnippet>1016</a>
+<a href=#1017 id=1017 data-nosnippet>1017</a>            <span class="kw">match </span><span class="kw-2">&amp;</span>layer.moe_or_mlp {
+<a href=#1018 id=1018 data-nosnippet>1018</a>                MoeOrMlp::Moe(moe) =&gt; {
+<a href=#1019 id=1019 data-nosnippet>1019</a>                    uvb_l
+<a href=#1020 id=1020 data-nosnippet>1020</a>                        .pp(<span class="string">"mlp"</span>)
+<a href=#1021 id=1021 data-nosnippet>1021</a>                        .pp(<span class="string">"gate"</span>)
+<a href=#1022 id=1022 data-nosnippet>1022</a>                        .add_tensor(<span class="string">"weight"</span>, moe.gate.weight.clone());
+<a href=#1023 id=1023 data-nosnippet>1023</a>                    uvb_l.pp(<span class="string">"mlp"</span>).pp(<span class="string">"gate"</span>).add_tensor(
+<a href=#1024 id=1024 data-nosnippet>1024</a>                        <span class="string">"e_score_correction_bias"</span>,
+<a href=#1025 id=1025 data-nosnippet>1025</a>                        moe.gate.e_score_correction_bias.clone(),
+<a href=#1026 id=1026 data-nosnippet>1026</a>                    );
+<a href=#1027 id=1027 data-nosnippet>1027</a>                }
+<a href=#1028 id=1028 data-nosnippet>1028</a>                MoeOrMlp::Mlp(<span class="kw">_</span>) =&gt; (),
+<a href=#1029 id=1029 data-nosnippet>1029</a>            }
+<a href=#1030 id=1030 data-nosnippet>1030</a>        }
+<a href=#1031 id=1031 data-nosnippet>1031</a>
+<a href=#1032 id=1032 data-nosnippet>1032</a>        <span class="prelude-val">Some</span>(uvb.to_safetensors())
+<a href=#1033 id=1033 data-nosnippet>1033</a>    }
+<a href=#1034 id=1034 data-nosnippet>1034</a>}
+<a href=#1035 id=1035 data-nosnippet>1035</a>
+<a href=#1036 id=1036 data-nosnippet>1036</a><span class="kw">impl </span>NormalModel <span class="kw">for </span>Glm4Moe {
+<a href=#1037 id=1037 data-nosnippet>1037</a>    <span class="kw">fn </span>forward(
+<a href=#1038 id=1038 data-nosnippet>1038</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#1039 id=1039 data-nosnippet>1039</a>        input_ids: <span class="kw-2">&amp;</span>Tensor,
+<a href=#1040 id=1040 data-nosnippet>1040</a>        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+<a href=#1041 id=1041 data-nosnippet>1041</a>        context_lens: Vec&lt;(usize, usize)&gt;,
+<a href=#1042 id=1042 data-nosnippet>1042</a>        _position_ids: Vec&lt;usize&gt;,
+<a href=#1043 id=1043 data-nosnippet>1043</a>        metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;</span>PagedAttentionInputMetadata)&gt;,
+<a href=#1044 id=1044 data-nosnippet>1044</a>        flash_params: <span class="kw-2">&amp;</span>FlashParams,
+<a href=#1045 id=1045 data-nosnippet>1045</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#1046 id=1046 data-nosnippet>1046</a>        <span class="self">self</span>.forward(
+<a href=#1047 id=1047 data-nosnippet>1047</a>            input_ids,
+<a href=#1048 id=1048 data-nosnippet>1048</a>            seqlen_offsets,
+<a href=#1049 id=1049 data-nosnippet>1049</a>            context_lens,
+<a href=#1050 id=1050 data-nosnippet>1050</a>            metadata,
+<a href=#1051 id=1051 data-nosnippet>1051</a>            flash_params,
+<a href=#1052 id=1052 data-nosnippet>1052</a>        )
+<a href=#1053 id=1053 data-nosnippet>1053</a>    }
+<a href=#1054 id=1054 data-nosnippet>1054</a>    <span class="kw">fn </span>xlora_forward(
+<a href=#1055 id=1055 data-nosnippet>1055</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#1056 id=1056 data-nosnippet>1056</a>        _input_ids: <span class="kw-2">&amp;</span>Tensor,
+<a href=#1057 id=1057 data-nosnippet>1057</a>        _input_ids_full: <span class="kw-2">&amp;</span>Tensor,
+<a href=#1058 id=1058 data-nosnippet>1058</a>        _seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+<a href=#1059 id=1059 data-nosnippet>1059</a>        _seqlen_offsets_full: <span class="kw-2">&amp;</span>[usize],
+<a href=#1060 id=1060 data-nosnippet>1060</a>        _no_kv_cache: bool,
+<a href=#1061 id=1061 data-nosnippet>1061</a>        _non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::xlora_models::NonGranularState&gt;,
+<a href=#1062 id=1062 data-nosnippet>1062</a>        _context_lens: Vec&lt;(usize, usize)&gt;,
+<a href=#1063 id=1063 data-nosnippet>1063</a>        _position_ids: Vec&lt;usize&gt;,
+<a href=#1064 id=1064 data-nosnippet>1064</a>        _flash_params: <span class="kw-2">&amp;</span>FlashParams,
+<a href=#1065 id=1065 data-nosnippet>1065</a>        _flash_params_full: <span class="kw-2">&amp;</span>FlashParams,
+<a href=#1066 id=1066 data-nosnippet>1066</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#1067 id=1067 data-nosnippet>1067</a>        <span class="macro">unimplemented!</span>()
+<a href=#1068 id=1068 data-nosnippet>1068</a>    }
+<a href=#1069 id=1069 data-nosnippet>1069</a>    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
+<a href=#1070 id=1070 data-nosnippet>1070</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.cache
+<a href=#1071 id=1071 data-nosnippet>1071</a>    }
+<a href=#1072 id=1072 data-nosnippet>1072</a>    <span class="kw">fn </span>cache_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>EitherCache {
+<a href=#1073 id=1073 data-nosnippet>1073</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache
+<a href=#1074 id=1074 data-nosnippet>1074</a>    }
+<a href=#1075 id=1075 data-nosnippet>1075</a>    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
+<a href=#1076 id=1076 data-nosnippet>1076</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.device
+<a href=#1077 id=1077 data-nosnippet>1077</a>    }
+<a href=#1078 id=1078 data-nosnippet>1078</a>    <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#1079 id=1079 data-nosnippet>1079</a>        <span class="bool-val">false
+<a href=#1080 id=1080 data-nosnippet>1080</a>    </span>}
+<a href=#1081 id=1081 data-nosnippet>1081</a>    <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#1082 id=1082 data-nosnippet>1082</a>        <span class="self">self</span>.max_seq_len
+<a href=#1083 id=1083 data-nosnippet>1083</a>    }
+<a href=#1084 id=1084 data-nosnippet>1084</a>    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
+<a href=#1085 id=1085 data-nosnippet>1085</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.cfg
+<a href=#1086 id=1086 data-nosnippet>1086</a>    }
+<a href=#1087 id=1087 data-nosnippet>1087</a>}
+<a href=#1088 id=1088 data-nosnippet>1088</a>
+<a href=#1089 id=1089 data-nosnippet>1089</a><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>Glm4Moe {}
 </code></pre></div></section></main></body></html>

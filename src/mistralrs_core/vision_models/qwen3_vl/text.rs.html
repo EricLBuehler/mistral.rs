@@ -507,167 +507,168 @@
 <a href=#507 id=507 data-nosnippet>507</a>                sliding_window: cfg.sliding_window,
 <a href=#508 id=508 data-nosnippet>508</a>                k_head_dim: cfg.head_dim,
 <a href=#509 id=509 data-nosnippet>509</a>                v_head_dim: cfg.head_dim,
-<a href=#510 id=510 data-nosnippet>510</a>            },
-<a href=#511 id=511 data-nosnippet>511</a>            device: normal_loading_metadata.real_device.clone(),
-<a href=#512 id=512 data-nosnippet>512</a>            dtype: vb.dtype(),
-<a href=#513 id=513 data-nosnippet>513</a>            mapper,
-<a href=#514 id=514 data-nosnippet>514</a>        })
-<a href=#515 id=515 data-nosnippet>515</a>    }
-<a href=#516 id=516 data-nosnippet>516</a>
-<a href=#517 id=517 data-nosnippet>517</a>    <span class="kw">pub fn </span>embed_tokens(<span class="kw-2">&amp;</span><span class="self">self</span>, input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#518 id=518 data-nosnippet>518</a>        <span class="self">self</span>.embed_tokens.forward(input_ids)
-<a href=#519 id=519 data-nosnippet>519</a>    }
-<a href=#520 id=520 data-nosnippet>520</a>
-<a href=#521 id=521 data-nosnippet>521</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
-<a href=#522 id=522 data-nosnippet>522</a>    </span><span class="kw">pub fn </span>forward_embeds(
-<a href=#523 id=523 data-nosnippet>523</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#524 id=524 data-nosnippet>524</a>        <span class="kw-2">mut </span>xs: Tensor,
-<a href=#525 id=525 data-nosnippet>525</a>        attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
-<a href=#526 id=526 data-nosnippet>526</a>        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-<a href=#527 id=527 data-nosnippet>527</a>        _position_ids: <span class="kw-2">&amp;</span>Tensor,
-<a href=#528 id=528 data-nosnippet>528</a>        context_lens: Vec&lt;(usize, usize)&gt;,
-<a href=#529 id=529 data-nosnippet>529</a>        metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;</span>PagedAttentionInputMetadata)&gt;,
-<a href=#530 id=530 data-nosnippet>530</a>        flash_params: <span class="kw-2">&amp;</span>FlashParams,
-<a href=#531 id=531 data-nosnippet>531</a>        visual_pos_masks: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
-<a href=#532 id=532 data-nosnippet>532</a>        deepstack_visual_embeds: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[Tensor]&gt;,
-<a href=#533 id=533 data-nosnippet>533</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#534 id=534 data-nosnippet>534</a>        <span class="kw">let </span>cache = <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache.normal().<span class="number">0</span>;
-<a href=#535 id=535 data-nosnippet>535</a>
-<a href=#536 id=536 data-nosnippet>536</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
-<a href=#537 id=537 data-nosnippet>537</a>            xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
-<a href=#538 id=538 data-nosnippet>538</a>            xs = layer.forward(
-<a href=#539 id=539 data-nosnippet>539</a>                <span class="kw-2">&amp;</span>xs,
-<a href=#540 id=540 data-nosnippet>540</a>                attention_mask
-<a href=#541 id=541 data-nosnippet>541</a>                    .as_ref()
-<a href=#542 id=542 data-nosnippet>542</a>                    .map(|m| m.to_device(xs.device()).unwrap())
-<a href=#543 id=543 data-nosnippet>543</a>                    .as_ref(),
-<a href=#544 id=544 data-nosnippet>544</a>                seqlen_offsets,
-<a href=#545 id=545 data-nosnippet>545</a>                <span class="kw-2">&amp;mut </span>cache[i],
-<a href=#546 id=546 data-nosnippet>546</a>                metadata
-<a href=#547 id=547 data-nosnippet>547</a>                    .as_ref()
-<a href=#548 id=548 data-nosnippet>548</a>                    .map(|(kv_cache, meta)| (kv_cache[i].clone(), <span class="kw-2">*</span>meta)),
-<a href=#549 id=549 data-nosnippet>549</a>                flash_params,
-<a href=#550 id=550 data-nosnippet>550</a>            )<span class="question-mark">?</span>;
-<a href=#551 id=551 data-nosnippet>551</a>
-<a href=#552 id=552 data-nosnippet>552</a>            <span class="comment">// Integrate DeepStack visual features when provided.
-<a href=#553 id=553 data-nosnippet>553</a>            </span><span class="kw">if let </span>(<span class="prelude-val">Some</span>(visual_pos_masks), <span class="prelude-val">Some</span>(deepstack)) =
-<a href=#554 id=554 data-nosnippet>554</a>                (visual_pos_masks, deepstack_visual_embeds)
-<a href=#555 id=555 data-nosnippet>555</a>            {
-<a href=#556 id=556 data-nosnippet>556</a>                <span class="kw">if </span>i &lt; deepstack.len() {
-<a href=#557 id=557 data-nosnippet>557</a>                    xs = <span class="self">self</span>.deepstack_process(xs, visual_pos_masks, <span class="kw-2">&amp;</span>deepstack[i])<span class="question-mark">?</span>;
-<a href=#558 id=558 data-nosnippet>558</a>                }
-<a href=#559 id=559 data-nosnippet>559</a>            }
-<a href=#560 id=560 data-nosnippet>560</a>        }
-<a href=#561 id=561 data-nosnippet>561</a>        <span class="kw">let </span>xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
-<a href=#562 id=562 data-nosnippet>562</a>        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.norm)<span class="question-mark">?</span>;
-<a href=#563 id=563 data-nosnippet>563</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.lm_head.quantized_act_type() {
-<a href=#564 id=564 data-nosnippet>564</a>            xs = xs.to_dtype(t)<span class="question-mark">?</span>;
-<a href=#565 id=565 data-nosnippet>565</a>        }
-<a href=#566 id=566 data-nosnippet>566</a>        extract_logits(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>, context_lens)
-<a href=#567 id=567 data-nosnippet>567</a>    }
-<a href=#568 id=568 data-nosnippet>568</a>
-<a href=#569 id=569 data-nosnippet>569</a>    <span class="kw">fn </span>deepstack_process(
-<a href=#570 id=570 data-nosnippet>570</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#571 id=571 data-nosnippet>571</a>        hidden_states: Tensor,
-<a href=#572 id=572 data-nosnippet>572</a>        visual_pos_masks: <span class="kw-2">&amp;</span>Tensor,
-<a href=#573 id=573 data-nosnippet>573</a>        visual_embeds: <span class="kw-2">&amp;</span>Tensor,
-<a href=#574 id=574 data-nosnippet>574</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#575 id=575 data-nosnippet>575</a>        <span class="kw">let </span>device = hidden_states.device();
-<a href=#576 id=576 data-nosnippet>576</a>        <span class="kw">let </span>dtype = hidden_states.dtype();
-<a href=#577 id=577 data-nosnippet>577</a>
-<a href=#578 id=578 data-nosnippet>578</a>        <span class="kw">let </span>mask = visual_pos_masks.to_device(device)<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
-<a href=#579 id=579 data-nosnippet>579</a>        <span class="kw">let </span>mask_flat = mask.flatten_all()<span class="question-mark">?</span>;
-<a href=#580 id=580 data-nosnippet>580</a>
-<a href=#581 id=581 data-nosnippet>581</a>        <span class="kw">let </span>masked_count = mask_flat.sum_all()<span class="question-mark">?</span>.to_scalar::&lt;f32&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
-<a href=#582 id=582 data-nosnippet>582</a>        <span class="kw">let </span>visual_embeds = visual_embeds.to_device(device)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
-<a href=#583 id=583 data-nosnippet>583</a>
-<a href=#584 id=584 data-nosnippet>584</a>        <span class="kw">if </span>masked_count == <span class="number">0 </span>{
-<a href=#585 id=585 data-nosnippet>585</a>            <span class="kw">if </span>visual_embeds.dim(<span class="number">0</span>)<span class="question-mark">? </span>!= <span class="number">0 </span>{
-<a href=#586 id=586 data-nosnippet>586</a>                <span class="macro">candle_core::bail!</span>(
-<a href=#587 id=587 data-nosnippet>587</a>                    <span class="string">"DeepStack visual embeds ({}) provided but mask is empty"</span>,
-<a href=#588 id=588 data-nosnippet>588</a>                    visual_embeds.dim(<span class="number">0</span>)<span class="question-mark">?
-<a href=#589 id=589 data-nosnippet>589</a>                </span>);
-<a href=#590 id=590 data-nosnippet>590</a>            }
-<a href=#591 id=591 data-nosnippet>591</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(hidden_states);
-<a href=#592 id=592 data-nosnippet>592</a>        }
-<a href=#593 id=593 data-nosnippet>593</a>
-<a href=#594 id=594 data-nosnippet>594</a>        <span class="kw">if </span>visual_embeds.dim(<span class="number">0</span>)<span class="question-mark">? </span>!= masked_count {
-<a href=#595 id=595 data-nosnippet>595</a>            <span class="macro">candle_core::bail!</span>(
-<a href=#596 id=596 data-nosnippet>596</a>                <span class="string">"Mismatch between DeepStack visual embeds ({}) and mask positions ({})"</span>,
-<a href=#597 id=597 data-nosnippet>597</a>                visual_embeds.dim(<span class="number">0</span>)<span class="question-mark">?</span>,
-<a href=#598 id=598 data-nosnippet>598</a>                masked_count
-<a href=#599 id=599 data-nosnippet>599</a>            );
-<a href=#600 id=600 data-nosnippet>600</a>        }
-<a href=#601 id=601 data-nosnippet>601</a>
-<a href=#602 id=602 data-nosnippet>602</a>        <span class="kw">let </span>(batch, seq, hidden) = hidden_states.dims3()<span class="question-mark">?</span>;
-<a href=#603 id=603 data-nosnippet>603</a>        <span class="kw">let </span>total_positions = batch * seq;
-<a href=#604 id=604 data-nosnippet>604</a>        <span class="kw">let </span><span class="kw-2">mut </span>hidden_flat = hidden_states.reshape((total_positions, hidden))<span class="question-mark">?</span>;
-<a href=#605 id=605 data-nosnippet>605</a>
-<a href=#606 id=606 data-nosnippet>606</a>        <span class="kw">let </span>prefix = mask_flat.cumsum(<span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#607 id=607 data-nosnippet>607</a>        <span class="kw">let </span>rank = (prefix - <span class="kw-2">&amp;</span>mask_flat)<span class="question-mark">?</span>.mul(<span class="kw-2">&amp;</span>mask_flat)<span class="question-mark">?</span>;
-<a href=#608 id=608 data-nosnippet>608</a>        <span class="kw">let </span>rank_u32 = rank.to_dtype(DType::U32)<span class="question-mark">?</span>;
-<a href=#609 id=609 data-nosnippet>609</a>
-<a href=#610 id=610 data-nosnippet>610</a>        <span class="kw">let </span>positions = Tensor::arange(<span class="number">0u32</span>, total_positions <span class="kw">as </span>u32, device)<span class="question-mark">?</span>;
-<a href=#611 id=611 data-nosnippet>611</a>        <span class="kw">let </span>positions_f32 = positions.to_dtype(DType::F32)<span class="question-mark">?</span>;
-<a href=#612 id=612 data-nosnippet>612</a>        <span class="kw">let </span>masked_positions = positions_f32.mul(<span class="kw-2">&amp;</span>mask_flat)<span class="question-mark">?</span>;
-<a href=#613 id=613 data-nosnippet>613</a>
-<a href=#614 id=614 data-nosnippet>614</a>        <span class="kw">let </span><span class="kw-2">mut </span>position_per_rank = Tensor::zeros((masked_count,), DType::F32, device)<span class="question-mark">?</span>;
-<a href=#615 id=615 data-nosnippet>615</a>        position_per_rank = position_per_rank.scatter_add(<span class="kw-2">&amp;</span>rank_u32, <span class="kw-2">&amp;</span>masked_positions, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#616 id=616 data-nosnippet>616</a>        <span class="kw">let </span>position_per_rank = position_per_rank.to_dtype(DType::U32)<span class="question-mark">?</span>;
-<a href=#617 id=617 data-nosnippet>617</a>
-<a href=#618 id=618 data-nosnippet>618</a>        <span class="kw">let </span>linear_index = position_per_rank.unsqueeze(<span class="number">1</span>)<span class="question-mark">?</span>.repeat((<span class="number">1</span>, hidden))<span class="question-mark">?</span>;
-<a href=#619 id=619 data-nosnippet>619</a>
-<a href=#620 id=620 data-nosnippet>620</a>        hidden_flat = hidden_flat.scatter_add(<span class="kw-2">&amp;</span>linear_index, <span class="kw-2">&amp;</span>visual_embeds, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#621 id=621 data-nosnippet>621</a>        hidden_flat.reshape((batch, seq, hidden))
-<a href=#622 id=622 data-nosnippet>622</a>    }
-<a href=#623 id=623 data-nosnippet>623</a>}
-<a href=#624 id=624 data-nosnippet>624</a>
-<a href=#625 id=625 data-nosnippet>625</a><span class="kw">impl </span>IsqModel <span class="kw">for </span>Qwen3VLTextModel {
-<a href=#626 id=626 data-nosnippet>626</a>    <span class="kw">fn </span>get_layers(
-<a href=#627 id=627 data-nosnippet>627</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#628 id=628 data-nosnippet>628</a>    ) -&gt; (
-<a href=#629 id=629 data-nosnippet>629</a>        Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
-<a href=#630 id=630 data-nosnippet>630</a>        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
-<a href=#631 id=631 data-nosnippet>631</a>    ) {
-<a href=#632 id=632 data-nosnippet>632</a>        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-<a href=#633 id=633 data-nosnippet>633</a>        tensors.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head, <span class="prelude-val">None</span>));
-<a href=#634 id=634 data-nosnippet>634</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
-<a href=#635 id=635 data-nosnippet>635</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#636 id=636 data-nosnippet>636</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.self_attn.k_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#637 id=637 data-nosnippet>637</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.self_attn.v_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#638 id=638 data-nosnippet>638</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#639 id=639 data-nosnippet>639</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.gate_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#640 id=640 data-nosnippet>640</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.up_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#641 id=641 data-nosnippet>641</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.down_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#642 id=642 data-nosnippet>642</a>        }
-<a href=#643 id=643 data-nosnippet>643</a>        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
-<a href=#644 id=644 data-nosnippet>644</a>    }
-<a href=#645 id=645 data-nosnippet>645</a>
-<a href=#646 id=646 data-nosnippet>646</a>    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
-<a href=#647 id=647 data-nosnippet>647</a>        <span class="kw">let </span>uvb = UnVarBuilder::new();
-<a href=#648 id=648 data-nosnippet>648</a>
-<a href=#649 id=649 data-nosnippet>649</a>        <span class="kw">let </span>uvb_lm = uvb.pp(<span class="string">"model"</span>).pp(<span class="string">"language_model"</span>);
-<a href=#650 id=650 data-nosnippet>650</a>        uvb_lm.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
-<a href=#651 id=651 data-nosnippet>651</a>        uvb_lm.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm);
-<a href=#652 id=652 data-nosnippet>652</a>
-<a href=#653 id=653 data-nosnippet>653</a>        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
-<a href=#654 id=654 data-nosnippet>654</a>            <span class="kw">let </span>uvb_l = uvb_lm.pp(<span class="string">"layers"</span>).pp(layer_idx);
-<a href=#655 id=655 data-nosnippet>655</a>            uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.input_layernorm);
-<a href=#656 id=656 data-nosnippet>656</a>            uvb_l
-<a href=#657 id=657 data-nosnippet>657</a>                .pp(<span class="string">"post_attention_layernorm"</span>)
-<a href=#658 id=658 data-nosnippet>658</a>                .add(<span class="kw-2">&amp;</span>layer.post_attention_layernorm);
-<a href=#659 id=659 data-nosnippet>659</a>
-<a href=#660 id=660 data-nosnippet>660</a>            uvb_l
-<a href=#661 id=661 data-nosnippet>661</a>                .pp(<span class="string">"self_attn"</span>)
-<a href=#662 id=662 data-nosnippet>662</a>                .pp(<span class="string">"q_norm"</span>)
-<a href=#663 id=663 data-nosnippet>663</a>                .add(<span class="kw-2">&amp;</span>layer.self_attn.q_norm);
-<a href=#664 id=664 data-nosnippet>664</a>            uvb_l
-<a href=#665 id=665 data-nosnippet>665</a>                .pp(<span class="string">"self_attn"</span>)
-<a href=#666 id=666 data-nosnippet>666</a>                .pp(<span class="string">"k_norm"</span>)
-<a href=#667 id=667 data-nosnippet>667</a>                .add(<span class="kw-2">&amp;</span>layer.self_attn.k_norm);
-<a href=#668 id=668 data-nosnippet>668</a>        }
-<a href=#669 id=669 data-nosnippet>669</a>
-<a href=#670 id=670 data-nosnippet>670</a>        uvb.to_safetensors()
-<a href=#671 id=671 data-nosnippet>671</a>    }
-<a href=#672 id=672 data-nosnippet>672</a>}
+<a href=#510 id=510 data-nosnippet>510</a>                kv_cache_layout: <span class="kw">crate</span>::paged_attention::KvCacheLayout::Standard,
+<a href=#511 id=511 data-nosnippet>511</a>            },
+<a href=#512 id=512 data-nosnippet>512</a>            device: normal_loading_metadata.real_device.clone(),
+<a href=#513 id=513 data-nosnippet>513</a>            dtype: vb.dtype(),
+<a href=#514 id=514 data-nosnippet>514</a>            mapper,
+<a href=#515 id=515 data-nosnippet>515</a>        })
+<a href=#516 id=516 data-nosnippet>516</a>    }
+<a href=#517 id=517 data-nosnippet>517</a>
+<a href=#518 id=518 data-nosnippet>518</a>    <span class="kw">pub fn </span>embed_tokens(<span class="kw-2">&amp;</span><span class="self">self</span>, input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#519 id=519 data-nosnippet>519</a>        <span class="self">self</span>.embed_tokens.forward(input_ids)
+<a href=#520 id=520 data-nosnippet>520</a>    }
+<a href=#521 id=521 data-nosnippet>521</a>
+<a href=#522 id=522 data-nosnippet>522</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
+<a href=#523 id=523 data-nosnippet>523</a>    </span><span class="kw">pub fn </span>forward_embeds(
+<a href=#524 id=524 data-nosnippet>524</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#525 id=525 data-nosnippet>525</a>        <span class="kw-2">mut </span>xs: Tensor,
+<a href=#526 id=526 data-nosnippet>526</a>        attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
+<a href=#527 id=527 data-nosnippet>527</a>        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+<a href=#528 id=528 data-nosnippet>528</a>        _position_ids: <span class="kw-2">&amp;</span>Tensor,
+<a href=#529 id=529 data-nosnippet>529</a>        context_lens: Vec&lt;(usize, usize)&gt;,
+<a href=#530 id=530 data-nosnippet>530</a>        metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;</span>PagedAttentionInputMetadata)&gt;,
+<a href=#531 id=531 data-nosnippet>531</a>        flash_params: <span class="kw-2">&amp;</span>FlashParams,
+<a href=#532 id=532 data-nosnippet>532</a>        visual_pos_masks: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
+<a href=#533 id=533 data-nosnippet>533</a>        deepstack_visual_embeds: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[Tensor]&gt;,
+<a href=#534 id=534 data-nosnippet>534</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#535 id=535 data-nosnippet>535</a>        <span class="kw">let </span>cache = <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache.normal().<span class="number">0</span>;
+<a href=#536 id=536 data-nosnippet>536</a>
+<a href=#537 id=537 data-nosnippet>537</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+<a href=#538 id=538 data-nosnippet>538</a>            xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
+<a href=#539 id=539 data-nosnippet>539</a>            xs = layer.forward(
+<a href=#540 id=540 data-nosnippet>540</a>                <span class="kw-2">&amp;</span>xs,
+<a href=#541 id=541 data-nosnippet>541</a>                attention_mask
+<a href=#542 id=542 data-nosnippet>542</a>                    .as_ref()
+<a href=#543 id=543 data-nosnippet>543</a>                    .map(|m| m.to_device(xs.device()).unwrap())
+<a href=#544 id=544 data-nosnippet>544</a>                    .as_ref(),
+<a href=#545 id=545 data-nosnippet>545</a>                seqlen_offsets,
+<a href=#546 id=546 data-nosnippet>546</a>                <span class="kw-2">&amp;mut </span>cache[i],
+<a href=#547 id=547 data-nosnippet>547</a>                metadata
+<a href=#548 id=548 data-nosnippet>548</a>                    .as_ref()
+<a href=#549 id=549 data-nosnippet>549</a>                    .map(|(kv_cache, meta)| (kv_cache[i].clone(), <span class="kw-2">*</span>meta)),
+<a href=#550 id=550 data-nosnippet>550</a>                flash_params,
+<a href=#551 id=551 data-nosnippet>551</a>            )<span class="question-mark">?</span>;
+<a href=#552 id=552 data-nosnippet>552</a>
+<a href=#553 id=553 data-nosnippet>553</a>            <span class="comment">// Integrate DeepStack visual features when provided.
+<a href=#554 id=554 data-nosnippet>554</a>            </span><span class="kw">if let </span>(<span class="prelude-val">Some</span>(visual_pos_masks), <span class="prelude-val">Some</span>(deepstack)) =
+<a href=#555 id=555 data-nosnippet>555</a>                (visual_pos_masks, deepstack_visual_embeds)
+<a href=#556 id=556 data-nosnippet>556</a>            {
+<a href=#557 id=557 data-nosnippet>557</a>                <span class="kw">if </span>i &lt; deepstack.len() {
+<a href=#558 id=558 data-nosnippet>558</a>                    xs = <span class="self">self</span>.deepstack_process(xs, visual_pos_masks, <span class="kw-2">&amp;</span>deepstack[i])<span class="question-mark">?</span>;
+<a href=#559 id=559 data-nosnippet>559</a>                }
+<a href=#560 id=560 data-nosnippet>560</a>            }
+<a href=#561 id=561 data-nosnippet>561</a>        }
+<a href=#562 id=562 data-nosnippet>562</a>        <span class="kw">let </span>xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
+<a href=#563 id=563 data-nosnippet>563</a>        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.norm)<span class="question-mark">?</span>;
+<a href=#564 id=564 data-nosnippet>564</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.lm_head.quantized_act_type() {
+<a href=#565 id=565 data-nosnippet>565</a>            xs = xs.to_dtype(t)<span class="question-mark">?</span>;
+<a href=#566 id=566 data-nosnippet>566</a>        }
+<a href=#567 id=567 data-nosnippet>567</a>        extract_logits(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>, context_lens)
+<a href=#568 id=568 data-nosnippet>568</a>    }
+<a href=#569 id=569 data-nosnippet>569</a>
+<a href=#570 id=570 data-nosnippet>570</a>    <span class="kw">fn </span>deepstack_process(
+<a href=#571 id=571 data-nosnippet>571</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#572 id=572 data-nosnippet>572</a>        hidden_states: Tensor,
+<a href=#573 id=573 data-nosnippet>573</a>        visual_pos_masks: <span class="kw-2">&amp;</span>Tensor,
+<a href=#574 id=574 data-nosnippet>574</a>        visual_embeds: <span class="kw-2">&amp;</span>Tensor,
+<a href=#575 id=575 data-nosnippet>575</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#576 id=576 data-nosnippet>576</a>        <span class="kw">let </span>device = hidden_states.device();
+<a href=#577 id=577 data-nosnippet>577</a>        <span class="kw">let </span>dtype = hidden_states.dtype();
+<a href=#578 id=578 data-nosnippet>578</a>
+<a href=#579 id=579 data-nosnippet>579</a>        <span class="kw">let </span>mask = visual_pos_masks.to_device(device)<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
+<a href=#580 id=580 data-nosnippet>580</a>        <span class="kw">let </span>mask_flat = mask.flatten_all()<span class="question-mark">?</span>;
+<a href=#581 id=581 data-nosnippet>581</a>
+<a href=#582 id=582 data-nosnippet>582</a>        <span class="kw">let </span>masked_count = mask_flat.sum_all()<span class="question-mark">?</span>.to_scalar::&lt;f32&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
+<a href=#583 id=583 data-nosnippet>583</a>        <span class="kw">let </span>visual_embeds = visual_embeds.to_device(device)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
+<a href=#584 id=584 data-nosnippet>584</a>
+<a href=#585 id=585 data-nosnippet>585</a>        <span class="kw">if </span>masked_count == <span class="number">0 </span>{
+<a href=#586 id=586 data-nosnippet>586</a>            <span class="kw">if </span>visual_embeds.dim(<span class="number">0</span>)<span class="question-mark">? </span>!= <span class="number">0 </span>{
+<a href=#587 id=587 data-nosnippet>587</a>                <span class="macro">candle_core::bail!</span>(
+<a href=#588 id=588 data-nosnippet>588</a>                    <span class="string">"DeepStack visual embeds ({}) provided but mask is empty"</span>,
+<a href=#589 id=589 data-nosnippet>589</a>                    visual_embeds.dim(<span class="number">0</span>)<span class="question-mark">?
+<a href=#590 id=590 data-nosnippet>590</a>                </span>);
+<a href=#591 id=591 data-nosnippet>591</a>            }
+<a href=#592 id=592 data-nosnippet>592</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(hidden_states);
+<a href=#593 id=593 data-nosnippet>593</a>        }
+<a href=#594 id=594 data-nosnippet>594</a>
+<a href=#595 id=595 data-nosnippet>595</a>        <span class="kw">if </span>visual_embeds.dim(<span class="number">0</span>)<span class="question-mark">? </span>!= masked_count {
+<a href=#596 id=596 data-nosnippet>596</a>            <span class="macro">candle_core::bail!</span>(
+<a href=#597 id=597 data-nosnippet>597</a>                <span class="string">"Mismatch between DeepStack visual embeds ({}) and mask positions ({})"</span>,
+<a href=#598 id=598 data-nosnippet>598</a>                visual_embeds.dim(<span class="number">0</span>)<span class="question-mark">?</span>,
+<a href=#599 id=599 data-nosnippet>599</a>                masked_count
+<a href=#600 id=600 data-nosnippet>600</a>            );
+<a href=#601 id=601 data-nosnippet>601</a>        }
+<a href=#602 id=602 data-nosnippet>602</a>
+<a href=#603 id=603 data-nosnippet>603</a>        <span class="kw">let </span>(batch, seq, hidden) = hidden_states.dims3()<span class="question-mark">?</span>;
+<a href=#604 id=604 data-nosnippet>604</a>        <span class="kw">let </span>total_positions = batch * seq;
+<a href=#605 id=605 data-nosnippet>605</a>        <span class="kw">let </span><span class="kw-2">mut </span>hidden_flat = hidden_states.reshape((total_positions, hidden))<span class="question-mark">?</span>;
+<a href=#606 id=606 data-nosnippet>606</a>
+<a href=#607 id=607 data-nosnippet>607</a>        <span class="kw">let </span>prefix = mask_flat.cumsum(<span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#608 id=608 data-nosnippet>608</a>        <span class="kw">let </span>rank = (prefix - <span class="kw-2">&amp;</span>mask_flat)<span class="question-mark">?</span>.mul(<span class="kw-2">&amp;</span>mask_flat)<span class="question-mark">?</span>;
+<a href=#609 id=609 data-nosnippet>609</a>        <span class="kw">let </span>rank_u32 = rank.to_dtype(DType::U32)<span class="question-mark">?</span>;
+<a href=#610 id=610 data-nosnippet>610</a>
+<a href=#611 id=611 data-nosnippet>611</a>        <span class="kw">let </span>positions = Tensor::arange(<span class="number">0u32</span>, total_positions <span class="kw">as </span>u32, device)<span class="question-mark">?</span>;
+<a href=#612 id=612 data-nosnippet>612</a>        <span class="kw">let </span>positions_f32 = positions.to_dtype(DType::F32)<span class="question-mark">?</span>;
+<a href=#613 id=613 data-nosnippet>613</a>        <span class="kw">let </span>masked_positions = positions_f32.mul(<span class="kw-2">&amp;</span>mask_flat)<span class="question-mark">?</span>;
+<a href=#614 id=614 data-nosnippet>614</a>
+<a href=#615 id=615 data-nosnippet>615</a>        <span class="kw">let </span><span class="kw-2">mut </span>position_per_rank = Tensor::zeros((masked_count,), DType::F32, device)<span class="question-mark">?</span>;
+<a href=#616 id=616 data-nosnippet>616</a>        position_per_rank = position_per_rank.scatter_add(<span class="kw-2">&amp;</span>rank_u32, <span class="kw-2">&amp;</span>masked_positions, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#617 id=617 data-nosnippet>617</a>        <span class="kw">let </span>position_per_rank = position_per_rank.to_dtype(DType::U32)<span class="question-mark">?</span>;
+<a href=#618 id=618 data-nosnippet>618</a>
+<a href=#619 id=619 data-nosnippet>619</a>        <span class="kw">let </span>linear_index = position_per_rank.unsqueeze(<span class="number">1</span>)<span class="question-mark">?</span>.repeat((<span class="number">1</span>, hidden))<span class="question-mark">?</span>;
+<a href=#620 id=620 data-nosnippet>620</a>
+<a href=#621 id=621 data-nosnippet>621</a>        hidden_flat = hidden_flat.scatter_add(<span class="kw-2">&amp;</span>linear_index, <span class="kw-2">&amp;</span>visual_embeds, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#622 id=622 data-nosnippet>622</a>        hidden_flat.reshape((batch, seq, hidden))
+<a href=#623 id=623 data-nosnippet>623</a>    }
+<a href=#624 id=624 data-nosnippet>624</a>}
+<a href=#625 id=625 data-nosnippet>625</a>
+<a href=#626 id=626 data-nosnippet>626</a><span class="kw">impl </span>IsqModel <span class="kw">for </span>Qwen3VLTextModel {
+<a href=#627 id=627 data-nosnippet>627</a>    <span class="kw">fn </span>get_layers(
+<a href=#628 id=628 data-nosnippet>628</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#629 id=629 data-nosnippet>629</a>    ) -&gt; (
+<a href=#630 id=630 data-nosnippet>630</a>        Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
+<a href=#631 id=631 data-nosnippet>631</a>        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
+<a href=#632 id=632 data-nosnippet>632</a>    ) {
+<a href=#633 id=633 data-nosnippet>633</a>        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
+<a href=#634 id=634 data-nosnippet>634</a>        tensors.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head, <span class="prelude-val">None</span>));
+<a href=#635 id=635 data-nosnippet>635</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+<a href=#636 id=636 data-nosnippet>636</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#637 id=637 data-nosnippet>637</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.self_attn.k_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#638 id=638 data-nosnippet>638</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.self_attn.v_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#639 id=639 data-nosnippet>639</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#640 id=640 data-nosnippet>640</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.gate_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#641 id=641 data-nosnippet>641</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.up_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#642 id=642 data-nosnippet>642</a>            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.down_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#643 id=643 data-nosnippet>643</a>        }
+<a href=#644 id=644 data-nosnippet>644</a>        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+<a href=#645 id=645 data-nosnippet>645</a>    }
+<a href=#646 id=646 data-nosnippet>646</a>
+<a href=#647 id=647 data-nosnippet>647</a>    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+<a href=#648 id=648 data-nosnippet>648</a>        <span class="kw">let </span>uvb = UnVarBuilder::new();
+<a href=#649 id=649 data-nosnippet>649</a>
+<a href=#650 id=650 data-nosnippet>650</a>        <span class="kw">let </span>uvb_lm = uvb.pp(<span class="string">"model"</span>).pp(<span class="string">"language_model"</span>);
+<a href=#651 id=651 data-nosnippet>651</a>        uvb_lm.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
+<a href=#652 id=652 data-nosnippet>652</a>        uvb_lm.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm);
+<a href=#653 id=653 data-nosnippet>653</a>
+<a href=#654 id=654 data-nosnippet>654</a>        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+<a href=#655 id=655 data-nosnippet>655</a>            <span class="kw">let </span>uvb_l = uvb_lm.pp(<span class="string">"layers"</span>).pp(layer_idx);
+<a href=#656 id=656 data-nosnippet>656</a>            uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.input_layernorm);
+<a href=#657 id=657 data-nosnippet>657</a>            uvb_l
+<a href=#658 id=658 data-nosnippet>658</a>                .pp(<span class="string">"post_attention_layernorm"</span>)
+<a href=#659 id=659 data-nosnippet>659</a>                .add(<span class="kw-2">&amp;</span>layer.post_attention_layernorm);
+<a href=#660 id=660 data-nosnippet>660</a>
+<a href=#661 id=661 data-nosnippet>661</a>            uvb_l
+<a href=#662 id=662 data-nosnippet>662</a>                .pp(<span class="string">"self_attn"</span>)
+<a href=#663 id=663 data-nosnippet>663</a>                .pp(<span class="string">"q_norm"</span>)
+<a href=#664 id=664 data-nosnippet>664</a>                .add(<span class="kw-2">&amp;</span>layer.self_attn.q_norm);
+<a href=#665 id=665 data-nosnippet>665</a>            uvb_l
+<a href=#666 id=666 data-nosnippet>666</a>                .pp(<span class="string">"self_attn"</span>)
+<a href=#667 id=667 data-nosnippet>667</a>                .pp(<span class="string">"k_norm"</span>)
+<a href=#668 id=668 data-nosnippet>668</a>                .add(<span class="kw-2">&amp;</span>layer.self_attn.k_norm);
+<a href=#669 id=669 data-nosnippet>669</a>        }
+<a href=#670 id=670 data-nosnippet>670</a>
+<a href=#671 id=671 data-nosnippet>671</a>        uvb.to_safetensors()
+<a href=#672 id=672 data-nosnippet>672</a>    }
+<a href=#673 id=673 data-nosnippet>673</a>}
 </code></pre></div></section></main></body></html>
