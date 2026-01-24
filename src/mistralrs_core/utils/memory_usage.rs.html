@@ -10,7 +10,7 @@
 <a href=#10 id=10 data-nosnippet>10</a>        <span class="kw">match </span>device {
 <a href=#11 id=11 data-nosnippet>11</a>            Device::Cpu =&gt; {
 <a href=#12 id=12 data-nosnippet>12</a>                <span class="kw">let </span><span class="kw-2">mut </span>sys = System::new_all();
-<a href=#13 id=13 data-nosnippet>13</a>                sys.refresh_cpu();
+<a href=#13 id=13 data-nosnippet>13</a>                sys.refresh_cpu_all();
 <a href=#14 id=14 data-nosnippet>14</a>                <span class="prelude-val">Ok</span>(usize::try_from(sys.available_memory())<span class="question-mark">?</span>)
 <a href=#15 id=15 data-nosnippet>15</a>            }
 <a href=#16 id=16 data-nosnippet>16</a>            <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
@@ -36,7 +36,7 @@
 <a href=#36 id=36 data-nosnippet>36</a>                    <span class="comment">// For integrated GPUs with unified memory, use system memory
 <a href=#37 id=37 data-nosnippet>37</a>                    // Apply 3/4 fraction to leave room for OS and other processes
 <a href=#38 id=38 data-nosnippet>38</a>                    </span><span class="kw">let </span><span class="kw-2">mut </span>sys = System::new_all();
-<a href=#39 id=39 data-nosnippet>39</a>                    sys.refresh_cpu();
+<a href=#39 id=39 data-nosnippet>39</a>                    sys.refresh_cpu_all();
 <a href=#40 id=40 data-nosnippet>40</a>                    <span class="kw">let </span>avail = usize::try_from(sys.available_memory())<span class="question-mark">?</span>;
 <a href=#41 id=41 data-nosnippet>41</a>                    <span class="prelude-val">Ok</span>((avail * <span class="number">3</span>) / <span class="number">4</span>)
 <a href=#42 id=42 data-nosnippet>42</a>                } <span class="kw">else </span>{
@@ -70,7 +70,7 @@
 <a href=#70 id=70 data-nosnippet>70</a>        <span class="kw">match </span>device {
 <a href=#71 id=71 data-nosnippet>71</a>            Device::Cpu =&gt; {
 <a href=#72 id=72 data-nosnippet>72</a>                <span class="kw">let </span><span class="kw-2">mut </span>sys = System::new_all();
-<a href=#73 id=73 data-nosnippet>73</a>                sys.refresh_cpu();
+<a href=#73 id=73 data-nosnippet>73</a>                sys.refresh_cpu_all();
 <a href=#74 id=74 data-nosnippet>74</a>                <span class="prelude-val">Ok</span>(usize::try_from(sys.total_memory())<span class="question-mark">?</span>)
 <a href=#75 id=75 data-nosnippet>75</a>            }
 <a href=#76 id=76 data-nosnippet>76</a>            <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
@@ -96,7 +96,7 @@
 <a href=#96 id=96 data-nosnippet>96</a>                    <span class="comment">// For integrated GPUs with unified memory, use system total memory
 <a href=#97 id=97 data-nosnippet>97</a>                    // Apply 3/4 fraction similar to Metal's approach
 <a href=#98 id=98 data-nosnippet>98</a>                    </span><span class="kw">let </span><span class="kw-2">mut </span>sys = System::new_all();
-<a href=#99 id=99 data-nosnippet>99</a>                    sys.refresh_cpu();
+<a href=#99 id=99 data-nosnippet>99</a>                    sys.refresh_cpu_all();
 <a href=#100 id=100 data-nosnippet>100</a>                    <span class="kw">let </span>total = usize::try_from(sys.total_memory())<span class="question-mark">?</span>;
 <a href=#101 id=101 data-nosnippet>101</a>                    <span class="prelude-val">Ok</span>((total * <span class="number">3</span>) / <span class="number">4</span>)
 <a href=#102 id=102 data-nosnippet>102</a>                } <span class="kw">else </span>{
@@ -116,7 +116,7 @@
 <a href=#116 id=116 data-nosnippet>116</a>                <span class="comment">// Get system RAM in MB
 <a href=#117 id=117 data-nosnippet>117</a>                </span><span class="kw">let </span>system_ram_mb = {
 <a href=#118 id=118 data-nosnippet>118</a>                    <span class="kw">let </span><span class="kw-2">mut </span>sys = System::new_all();
-<a href=#119 id=119 data-nosnippet>119</a>                    sys.refresh_cpu();
+<a href=#119 id=119 data-nosnippet>119</a>                    sys.refresh_cpu_all();
 <a href=#120 id=120 data-nosnippet>120</a>                    usize::try_from(sys.total_memory())<span class="question-mark">? </span>/ SIZE_IN_MB
 <a href=#121 id=121 data-nosnippet>121</a>                };
 <a href=#122 id=122 data-nosnippet>122</a>

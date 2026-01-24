@@ -240,7 +240,7 @@
 <a href=#240 id=240 data-nosnippet>240</a>            <span class="macro">quote!</span> {
 <a href=#241 id=241 data-nosnippet>241</a>                {
 <a href=#242 id=242 data-nosnippet>242</a>                    <span class="kw">let </span>schema = <span class="macro">schemars::schema_for!</span>(#schema_type);
-<a href=#243 id=243 data-nosnippet>243</a>                    <span class="kw">let </span><span class="kw-2">mut </span>prop_schema = serde_json::to_value(<span class="kw-2">&amp;</span>schema.schema).unwrap_or(<span class="macro">serde_json::json!</span>({}));
+<a href=#243 id=243 data-nosnippet>243</a>                    <span class="kw">let </span><span class="kw-2">mut </span>prop_schema = serde_json::to_value(<span class="kw-2">&amp;</span>schema).unwrap_or(<span class="macro">serde_json::json!</span>({}));
 <a href=#244 id=244 data-nosnippet>244</a>                    #desc_insert
 <a href=#245 id=245 data-nosnippet>245</a>                    properties.insert(#name_str.to_string(), prop_schema);
 <a href=#246 id=246 data-nosnippet>246</a>                }
