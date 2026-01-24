@@ -27,8 +27,8 @@ use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
-use std::{env, io};
 use std::sync::Arc;
+use std::{env, io};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -177,7 +177,8 @@ impl Loader for DiffusionLoader {
             device_map::get_all_similar_devices(device)?
         };
 
-        let mapper = DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None,&available_devices)?;
+        let mapper =
+            DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None, &available_devices)?;
         let dtype = mapper.get_min_dtype(dtype)?;
 
         let attention_mechanism = if paged_attn_config.is_some() {

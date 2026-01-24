@@ -15,7 +15,8 @@ use crate::utils::progress::ProgressScopeGuard;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::{
-    DeviceMapSetting, MessageContent, PagedAttentionConfig, Pipeline, SpeechGenerationConfig, TryIntoDType, api_get_file, distributed
+    api_get_file, distributed, DeviceMapSetting, MessageContent, PagedAttentionConfig, Pipeline,
+    SpeechGenerationConfig, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor};
@@ -273,8 +274,8 @@ impl Loader for SpeechLoader {
             device_map::get_all_similar_devices(device)?
         };
 
-
-        let mapper = DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None, &available_devices)?;
+        let mapper =
+            DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None, &available_devices)?;
         let dtype = mapper.get_min_dtype(dtype)?;
 
         // Last weight is the dac.
