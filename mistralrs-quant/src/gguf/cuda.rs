@@ -26,6 +26,7 @@ fn pad(p: usize, q: usize) -> usize {
 /// Quantize f32 input to Q8_1 format for use with quantized matmul kernels.
 fn quantize_q8_1(
     src: &CudaSlice<f32>,
+    src_offset: usize,
     dst: &mut CudaSlice<u8>,
     k: usize,
     ky: usize,
@@ -54,7 +55,7 @@ fn quantize_q8_1(
 
         let dst_start_byte = rows_processed * dst_row_size_bytes;
 
-        let (src_ptr, _src_guard) = slice_ptr(src, src_start_elem);
+        let (src_ptr, _src_guard) = slice_ptr(src, src_offset + src_start_elem);
         let (dst_ptr, _dst_guard) = slice_ptr(dst, dst_start_byte);
 
         unsafe {
@@ -117,9 +118,7 @@ fn indexed_moe_forward_fused_q8_1_input(
     let y_size_in_bytes = total_rows * dst_row_size_bytes;
     let mut input_quant = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
 
-    let (src_ptr, _src_guard) = slice_ptr(input, input_offset);
-    let src_slice = unsafe { dev.upgrade_device_ptr(src_ptr, total_rows * k) };
-    quantize_q8_1(&src_slice, &mut input_quant, k, total_rows, dev)?;
+    quantize_q8_1(input, input_offset, &mut input_quant, k, total_rows, dev)?;
 
     // Output buffer
     let outsize = batch * topk * n;
