@@ -353,7 +353,7 @@ impl HttpMcpConnection {
 
     async fn initialize(&self) -> Result<()> {
         let init_params = serde_json::json!({
-            "protocolVersion": "2025-03-26",
+            "protocolVersion": "2025-11-25",
             "capabilities": {
                 "tools": {}
             },
@@ -519,7 +519,7 @@ impl ProcessMcpConnection {
 
     async fn initialize(&self) -> Result<()> {
         let init_params = serde_json::json!({
-            "protocolVersion": "2025-03-26",
+            "protocolVersion": "2025-11-25",
             "capabilities": {
                 "tools": {}
             },
@@ -684,7 +684,7 @@ impl WebSocketMcpConnection {
 
     async fn initialize(&self) -> Result<()> {
         let init_params = serde_json::json!({
-            "protocolVersion": "2025-03-26",
+            "protocolVersion": "2025-11-25",
             "capabilities": {
                 "tools": {}
             },
