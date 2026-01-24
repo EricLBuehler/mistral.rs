@@ -18,9 +18,18 @@ use crate::layers::Sdpa;
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::ops::SplitOp;
 
+/// Environment variable to disable MLA optimization.
+const MISTRALRS_NO_MLA: &str = "MISTRALRS_NO_MLA";
+
+/// Check if MLA is disabled via environment variable.
+fn is_mla_disabled() -> bool {
+    std::env::var(MISTRALRS_NO_MLA).is_ok_and(|x| x == "1")
+}
+
 /// Check if MLA decode should be used for single-token generation.
 ///
 /// MLA decode is used when:
+/// - `MISTRALRS_NO_MLA` is not set to "1"
 /// - No attention mask (single-token decode)
 /// - Sequence length is 1
 /// - Paged attention is enabled
@@ -34,7 +43,8 @@ pub fn should_use_mla_decode(
     device: &Device,
     metadata: &Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
 ) -> bool {
-    attention_mask.is_none()
+    !is_mla_disabled()
+        && attention_mask.is_none()
         && seq_len == 1
         && paged_attn_enabled
         && matches!(device, Device::Cuda(_))
@@ -58,11 +68,12 @@ pub fn should_use_mla_decode(
 /// Check if MLA cache forward should be used for prefill with prefix caching.
 ///
 /// MLA cache is used when:
+/// - `MISTRALRS_NO_MLA` is not set to "1"
 /// - Paged attention is enabled
 /// - Running on CUDA
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 pub fn should_use_mla_cache(paged_attn_enabled: bool, device: &Device) -> bool {
-    paged_attn_enabled && matches!(device, Device::Cuda(_))
+    !is_mla_disabled() && paged_attn_enabled && matches!(device, Device::Cuda(_))
 }
 
 #[cfg(not(all(feature = "cuda", target_family = "unix")))]
