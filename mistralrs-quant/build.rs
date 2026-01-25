@@ -445,6 +445,7 @@ fn main() -> Result<(), String> {
 /// Get CUDA compute capability using cudarc driver detection.
 /// Falls back to CUDA_COMPUTE_CAP env var if driver detection fails.
 /// Returns the MINIMUM compute cap to ensure compatibility with all GPUs.
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn get_compute_cap() -> usize {
     #[cfg(feature = "cuda")]
     {

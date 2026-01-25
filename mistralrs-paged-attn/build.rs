@@ -98,6 +98,14 @@ pub use backend::{
         build_dir.join("libmistralrspagedattention.a")
     };
     builder.build_lib(out_file);
+    
+    let kernel_dir = PathBuf::from("../mistralrs-paged-attn");
+    let absolute_kernel_dir = std::fs::canonicalize(kernel_dir).unwrap();
+
+    println!(
+        "cargo:rustc-link-search=native={}",
+        absolute_kernel_dir.display()
+    );
 
     println!("cargo:rustc-link-search={}", build_dir.display());
     println!("cargo:rustc-link-lib=mistralrspagedattention");
@@ -273,9 +281,11 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+
 /// Get CUDA compute capability using cudarc driver detection.
 /// Falls back to CUDA_COMPUTE_CAP env var if driver detection fails.
 /// Returns the MINIMUM compute cap to ensure compatibility with all GPUs.
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn get_compute_cap() -> usize {
     #[cfg(feature = "cuda")]
     {
