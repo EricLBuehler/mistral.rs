@@ -285,9 +285,7 @@ impl AutoLoader {
             None => None,
         };
         let sentence_transformers_present =
-            model_id
-                .join("config_sentence_transformers.json")
-                .exists()
+            model_id.join("config_sentence_transformers.json").exists()
                 || Self::fetch_sentence_transformers_config(&api, model_id);
         let repo_files = if model_id.exists() {
             Self::list_local_repo_files(model_id)
@@ -330,7 +328,8 @@ impl AutoLoader {
         }
 
         if let Some(ref config) = artifacts.contents {
-            if let Some(tp) = crate::speech_models::SpeechLoaderType::auto_detect_from_config(config)
+            if let Some(tp) =
+                crate::speech_models::SpeechLoaderType::auto_detect_from_config(config)
             {
                 return Ok(Detected::Speech(tp));
             }
