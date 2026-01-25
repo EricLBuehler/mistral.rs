@@ -1,0 +1,46 @@
+[package]
+name = "mistralrs-cli"
+version.workspace = true
+edition.workspace = true
+description = "Command-line interface for mistral.rs LLM inference"
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "mistralrs"
+path = "src/main.rs"
+
+[dependencies]
+mistralrs-core = { workspace = true }
+mistralrs-server-core = { workspace = true }
+
+clap = { workspace = true }
+clap_complete = "4.5"
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+ctrlc = { workspace = true }
+rustyline = { workspace = true }
+directories = { workspace = true }
+axum = { workspace = true }
+either = { workspace = true }
+indexmap = { workspace = true }
+regex = { workspace = true }
+
+[features]
+default = []
+cuda = ["mistralrs-core/cuda", "mistralrs-server-core/cuda"]
+cudnn = ["mistralrs-core/cudnn", "mistralrs-server-core/cudnn"]
+flash-attn = ["cuda", "mistralrs-core/flash-attn", "mistralrs-server-core/flash-attn"]
+flash-attn-v3 = ["cuda", "mistralrs-core/flash-attn-v3", "mistralrs-server-core/flash-attn-v3"]
+accelerate = ["mistralrs-core/accelerate", "mistralrs-server-core/accelerate"]
+metal = ["mistralrs-core/metal", "mistralrs-server-core/metal"]
+mkl = ["mistralrs-core/mkl", "mistralrs-server-core/mkl"]

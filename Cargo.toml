@@ -2,6 +2,7 @@
 members = [
     "mistralrs-server-core",
     "mistralrs-server",
+    "mistralrs-cli",
     "mistralrs-core",
     "mistralrs-pyo3",
     "mistralrs",

@@ -41,6 +41,11 @@ flash-attn = [
   "mistralrs-core/flash-attn",
   "mistralrs-server-core/flash-attn",
 ]
+flash-attn-v3 = [
+  "cuda",
+  "mistralrs-core/flash-attn-v3",
+  "mistralrs-server-core/flash-attn-v3",
+]
 accelerate = ["mistralrs-core/accelerate", "mistralrs-server-core/accelerate"]
 mkl = ["mistralrs-core/mkl", "mistralrs-server-core/mkl"]
 nccl = ["mistralrs-core/nccl", "mistralrs-server-core/nccl"]
