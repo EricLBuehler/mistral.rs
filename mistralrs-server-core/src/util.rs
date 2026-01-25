@@ -156,6 +156,13 @@ pub fn validate_model_name(
         return Ok(());
     }
 
+    if state
+        .model_exists(requested_model)
+        .map_err(|e| anyhow::anyhow!("Failed to resolve model: {}", e))?
+    {
+        return Ok(());
+    }
+
     let available_models = state
         .list_models()
         .map_err(|e| anyhow::anyhow!("Failed to get available models: {}", e))?;
@@ -164,14 +171,11 @@ pub fn validate_model_name(
         anyhow::bail!("No models are currently loaded.");
     }
 
-    if !available_models.contains(&requested_model.to_string()) {
-        anyhow::bail!(
-            "Requested model '{}' is not available. Available models: {}. Use 'default' to use the default model.",
-            requested_model,
-            available_models.join(", ")
-        );
-    }
-    Ok(())
+    anyhow::bail!(
+        "Requested model '{}' is not available. Available models: {}. Use 'default' to use the default model.",
+        requested_model,
+        available_models.join(", ")
+    )
 }
 
 /// Sanitize error messages to remove internal implementation details like stack traces.

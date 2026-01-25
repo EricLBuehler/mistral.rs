@@ -25,6 +25,17 @@ impl FromStr for SpeechLoaderType {
     }
 }
 
+impl SpeechLoaderType {
+    /// Auto-detect speech loader type from a config.json string.
+    /// Extend this when adding new speech pipelines.
+    pub fn auto_detect_from_config(config: &str) -> Option<Self> {
+        if serde_json::from_str::<DiaConfig>(config).is_ok() {
+            return Some(Self::Dia);
+        }
+        None
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum SpeechGenerationConfig {
     Dia {

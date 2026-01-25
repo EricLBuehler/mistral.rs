@@ -82,6 +82,33 @@ impl FromStr for DiffusionLoaderType {
     }
 }
 
+impl DiffusionLoaderType {
+    /// Auto-detect diffusion loader type from a repo file listing.
+    /// Extend this when adding new diffusion pipelines.
+    pub fn auto_detect_from_files(files: &[String]) -> Option<Self> {
+        if Self::matches_flux(files) {
+            return Some(Self::Flux);
+        }
+        None
+    }
+
+    fn matches_flux(files: &[String]) -> bool {
+        let flux_regex = Regex::new(r"^flux\\d+-(schnell|dev)\\.safetensors$");
+        let Ok(flux_regex) = flux_regex else {
+            return false;
+        };
+        let has_transformer = files.iter().any(|f| f == "transformer/config.json");
+        let has_vae = files.iter().any(|f| f == "vae/config.json");
+        let has_ae = files.iter().any(|f| f == "ae.safetensors");
+        let has_flux = files.iter().any(|f| {
+            let name = f.rsplit('/').next().unwrap_or(f);
+            flux_regex.is_match(name)
+        });
+
+        has_transformer && has_vae && has_ae && has_flux
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DiffusionModelPathsInner {
     pub config_filenames: Vec<PathBuf>,

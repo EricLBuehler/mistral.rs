@@ -116,7 +116,7 @@ def my_search_callback(query: str) -> list[dict[str, str]]:
         {
             "title": "Mistral.rs GitHub",
             "description": "Official mistral.rs repository",
-            "url": "https://github.com/huggingface/mistral.rs",
+            "url": "https://github.com/EricLBuehler/mistral.rs",
             "content": "mistral.rs is a Rust binding for Mistral models...",
         },
     ]
