@@ -39,7 +39,8 @@ tokio.workspace = true
 cuda = [
     "candle-core/cuda",
     "candle-nn/cuda",
-    "dep:bindgen_cuda"
+    "dep:bindgen_cuda",
+    "dep:candle-core"
 ]
 nccl = ["cuda", "candle-core/nccl"]
 metal = [
@@ -70,3 +71,5 @@ cuda-13000 = []
 
 [build-dependencies]
 bindgen_cuda = { workspace = true, optional = true }
+candle-core = { workspace = true, optional = true }
+

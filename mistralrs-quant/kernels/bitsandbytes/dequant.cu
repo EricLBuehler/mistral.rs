@@ -2,6 +2,15 @@
 #include <cub/block/block_store.cuh>
 #include <cub/cub.cuh>
 #include <float.h>
+#include <cuda_fp16.h>
+#ifndef NO_BF16_KERNEL
+#include <cuda_bf16.h>
+#else
+#ifndef __CUDA_BF16_TYPES_EXIST__
+struct __nv_bfloat16 { uint16_t x; };
+#endif
+#endif
+#include <stdio.h>
 
 typedef enum DataType_t {
   General8bit = 0,
@@ -202,7 +211,8 @@ extern "C" void dequantize_blockwise_f16_nf4(float *code, unsigned char *A,
   dequantizeBlockwise<__half, NF4>(code, A, absmax, out, blocksize, n, stream);
 }
 
-// #if __CUDA_ARCH__ >= 800
+#ifndef NO_BF16_KERNEL
+#include <cuda_bf16.h>
 extern "C" void dequantize_blockwise_bf16_int8(float *code, unsigned char *A,
                                                float *absmax,
                                                __nv_bfloat16 *out,
@@ -225,4 +235,26 @@ extern "C" void dequantize_blockwise_bf16_nf4(float *code, unsigned char *A,
   dequantizeBlockwise<__nv_bfloat16, NF4>(code, A, absmax, out, blocksize, n,
                                           stream);
 }
-// #endif
+#else
+extern "C" void dequantize_blockwise_bf16_int8(float *code, unsigned char *A,
+                                               float *absmax, void *out,
+                                               int blocksize, const int n,
+                                               cudaStream_t stream) {
+    (void)code; (void)A; (void)absmax; (void)out; (void)blocksize; (void)n; (void)stream;
+    fprintf(stderr, "ERROR: dequantize_blockwise_bf16_int8 requires BF16 support (SM 8.0+)\n");
+}
+extern "C" void dequantize_blockwise_bf16_fp4(float *code, unsigned char *A,
+                                              float *absmax, void *out,
+                                              int blocksize, const int n,
+                                              cudaStream_t stream) {
+    (void)code; (void)A; (void)absmax; (void)out; (void)blocksize; (void)n; (void)stream;
+    fprintf(stderr, "ERROR: dequantize_blockwise_bf16_fp4 requires BF16 support (SM 8.0+)\n");
+}
+extern "C" void dequantize_blockwise_bf16_nf4(float *code, unsigned char *A,
+                                              float *absmax, void *out,
+                                              int blocksize, const int n,
+                                              cudaStream_t stream) {
+    (void)code; (void)A; (void)absmax; (void)out; (void)blocksize; (void)n; (void)stream;
+    fprintf(stderr, "ERROR: dequantize_blockwise_bf16_nf4 requires BF16 support (SM 8.0+)\n");
+}
+#endif

@@ -56,16 +56,41 @@ template <> struct LoadVecSize<nv_bfloat16> {
 }; // 8 bf16s in a float4
 
 inline __device__ void zero(__nv_bfloat162 &dst) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
-#else
-  dst.x = __ushort_as_bfloat16((unsigned short)0x0000U);
+  // Use a safe initialization that works on all architectures
+  unsigned short zero_bits = 0;
+  dst.x = *reinterpret_cast<const __nv_bfloat16*>(&zero_bits);
   dst.y = dst.x;
-#endif
 }
 inline __device__ void zero(half2 &dst) {
   dst.x = __half_as_ushort(__float2half(0));
   dst.y = __half_as_ushort(__float2half(0));
+}
+
+// Robust FMA helper for different CUDA architectures
+template <typename VecT>
+__device__ __forceinline__ VecT moe_hfma2(VecT a, VecT b, VecT c) {
+  return __hfma2(a, b, c);
+}
+
+template <>
+__device__ __forceinline__ nv_bfloat162 moe_hfma2(nv_bfloat162 a, nv_bfloat162 b, nv_bfloat162 c) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+  return __hbfma2(a, b, c);
+#else
+  // Fallback for SM < 8.0: convert to float, compute, and convert back
+  // Using explicit element access since vector intrinsics are missing
+  float fa_x = __bfloat162float(a.x);
+  float fa_y = __bfloat162float(a.y);
+  float fb_x = __bfloat162float(b.x);
+  float fb_y = __bfloat162float(b.y);
+  float fc_x = __bfloat162float(c.x);
+  float fc_y = __bfloat162float(c.y);
+  
+  nv_bfloat162 res;
+  res.x = __float2bfloat16(fa_x * fb_x + fc_x);
+  res.y = __float2bfloat16(fa_y * fb_y + fc_y);
+  return res;
+#endif
 }
 
 } // namespace vllm_rs
@@ -187,7 +212,7 @@ __global__ void moe_gemm_vectorized_kernel(
     VecT *weight_vec = reinterpret_cast<VecT *>(s_weights[tid_n]);
 #pragma unroll
     for (int k_vec = 0; k_vec < k_compute_vec_tile_size; ++k_vec) {
-      acc = __hfma2(input_vec[k_vec], weight_vec[k_vec], acc);
+      acc = vllm_rs::moe_hfma2(input_vec[k_vec], weight_vec[k_vec], acc);
     }
   }
 
@@ -325,7 +350,7 @@ __global__ void moe_gemm_transposed_kernel(
     VecT *weight_vec = reinterpret_cast<VecT *>(s_weights[tid_n]);
 #pragma unroll
     for (int k_vec = 0; k_vec < k_compute_vec_tile_size; ++k_vec) {
-      acc = __hfma2(input_vec[k_vec], weight_vec[k_vec], acc);
+      acc = vllm_rs::moe_hfma2(input_vec[k_vec], weight_vec[k_vec], acc);
     }
   }
 

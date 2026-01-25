@@ -11,6 +11,7 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <cstdint>
+#include <stdio.h>
 
 // ============================================================================
 // Configuration
@@ -469,21 +470,72 @@ DEFINE_QMV_LAUNCHER(8, 64, __half, f16)
 DEFINE_QMV_LAUNCHER(8, 128, __half, f16)
 
 // BFloat16 QMV
+#ifndef NO_BF16_KERNEL
+// 2-bit QMV launchers
 DEFINE_QMV_LAUNCHER(2, 32, __nv_bfloat16, bf16)
 DEFINE_QMV_LAUNCHER(2, 64, __nv_bfloat16, bf16)
 DEFINE_QMV_LAUNCHER(2, 128, __nv_bfloat16, bf16)
+
+// 3-bit QMV launchers
 DEFINE_QMV_3BIT_LAUNCHER(32, __nv_bfloat16, bf16)
 DEFINE_QMV_3BIT_LAUNCHER(64, __nv_bfloat16, bf16)
 DEFINE_QMV_3BIT_LAUNCHER(128, __nv_bfloat16, bf16)
+
+// 4-bit QMV launchers
 DEFINE_QMV_LAUNCHER(4, 32, __nv_bfloat16, bf16)
 DEFINE_QMV_LAUNCHER(4, 64, __nv_bfloat16, bf16)
 DEFINE_QMV_LAUNCHER(4, 128, __nv_bfloat16, bf16)
+
+// 6-bit QMV launchers
 DEFINE_QMV_6BIT_LAUNCHER(32, __nv_bfloat16, bf16)
 DEFINE_QMV_6BIT_LAUNCHER(64, __nv_bfloat16, bf16)
 DEFINE_QMV_6BIT_LAUNCHER(128, __nv_bfloat16, bf16)
+
+// 8-bit QMV launchers
 DEFINE_QMV_LAUNCHER(8, 32, __nv_bfloat16, bf16)
 DEFINE_QMV_LAUNCHER(8, 64, __nv_bfloat16, bf16)
 DEFINE_QMV_LAUNCHER(8, 128, __nv_bfloat16, bf16)
+#else
+#define DEFINE_QMV_BF16_STUB(bits, gs)                                         \
+  extern "C" void afq_qmv_##bits##bit_gs##gs##_bf16(                           \
+      const void *x, const uint32_t *w_q, const void *scales,                  \
+      const void *biases, void *y, int M, int N, int K) {                      \
+    (void)x; (void)w_q; (void)scales; (void)biases; (void)y; (void)M; (void)N; (void)K; \
+    fprintf(stderr, "ERROR: afq_qmv_""#bits""bit_gs""#gs""_bf16 requires BF16 support (SM 8.0+)\n"); \
+  }
+
+#define DEFINE_QMV_3BIT_BF16_STUB(gs)                                          \
+  extern "C" void afq_qmv_3bit_gs##gs##_bf16(                                  \
+      const void *x, const uint8_t *w_q, const void *scales,                   \
+      const void *biases, void *y, int M, int N, int K) {                      \
+    (void)x; (void)w_q; (void)scales; (void)biases; (void)y; (void)M; (void)N; (void)K; \
+    fprintf(stderr, "ERROR: afq_qmv_3bit_gs""#gs""_bf16 requires BF16 support (SM 8.0+)\n"); \
+  }
+
+#define DEFINE_QMV_6BIT_BF16_STUB(gs)                                          \
+  extern "C" void afq_qmv_6bit_gs##gs##_bf16(                                  \
+      const void *x, const uint8_t *w_q, const void *scales,                   \
+      const void *biases, void *y, int M, int N, int K) {                      \
+    (void)x; (void)w_q; (void)scales; (void)biases; (void)y; (void)M; (void)N; (void)K; \
+    fprintf(stderr, "ERROR: afq_qmv_6bit_gs""#gs""_bf16 requires BF16 support (SM 8.0+)\n"); \
+  }
+
+DEFINE_QMV_BF16_STUB(2, 32)
+DEFINE_QMV_BF16_STUB(2, 64)
+DEFINE_QMV_BF16_STUB(2, 128)
+DEFINE_QMV_3BIT_BF16_STUB(32)
+DEFINE_QMV_3BIT_BF16_STUB(64)
+DEFINE_QMV_3BIT_BF16_STUB(128)
+DEFINE_QMV_BF16_STUB(4, 32)
+DEFINE_QMV_BF16_STUB(4, 64)
+DEFINE_QMV_BF16_STUB(4, 128)
+DEFINE_QMV_6BIT_BF16_STUB(32)
+DEFINE_QMV_6BIT_BF16_STUB(64)
+DEFINE_QMV_6BIT_BF16_STUB(128)
+DEFINE_QMV_BF16_STUB(8, 32)
+DEFINE_QMV_BF16_STUB(8, 64)
+DEFINE_QMV_BF16_STUB(8, 128)
+#endif
 
 // ============================================================================
 // Extern "C" Launch Functions - QMM (for larger batch sizes)
@@ -527,12 +579,37 @@ DEFINE_QMM_LAUNCHER(2, 64, __half, f16)
 DEFINE_QMM_LAUNCHER(2, 128, __half, f16)
 
 // BFloat16 QMM
+#ifndef NO_BF16_KERNEL
+// 4-bit QMM launchers
 DEFINE_QMM_LAUNCHER(4, 32, __nv_bfloat16, bf16)
 DEFINE_QMM_LAUNCHER(4, 64, __nv_bfloat16, bf16)
 DEFINE_QMM_LAUNCHER(4, 128, __nv_bfloat16, bf16)
+
+// 8-bit QMM launchers
 DEFINE_QMM_LAUNCHER(8, 32, __nv_bfloat16, bf16)
 DEFINE_QMM_LAUNCHER(8, 64, __nv_bfloat16, bf16)
 DEFINE_QMM_LAUNCHER(8, 128, __nv_bfloat16, bf16)
+
+// 2-bit QMM launchers
 DEFINE_QMM_LAUNCHER(2, 32, __nv_bfloat16, bf16)
 DEFINE_QMM_LAUNCHER(2, 64, __nv_bfloat16, bf16)
 DEFINE_QMM_LAUNCHER(2, 128, __nv_bfloat16, bf16)
+#else
+#define DEFINE_QMM_BF16_STUB(bits, gs)                                         \
+  extern "C" void afq_qmm_##bits##bit_gs##gs##_bf16(                           \
+      const void *x, const uint32_t *w_q, const void *scales,                  \
+      const void *biases, void *y, int M, int N, int K) {                      \
+    (void)x; (void)w_q; (void)scales; (void)biases; (void)y; (void)M; (void)N; (void)K; \
+    fprintf(stderr, "ERROR: afq_qmm_""#bits""bit_gs""#gs""_bf16 requires BF16 support (SM 8.0+)\n"); \
+  }
+
+DEFINE_QMM_BF16_STUB(4, 32)
+DEFINE_QMM_BF16_STUB(4, 64)
+DEFINE_QMM_BF16_STUB(4, 128)
+DEFINE_QMM_BF16_STUB(8, 32)
+DEFINE_QMM_BF16_STUB(8, 64)
+DEFINE_QMM_BF16_STUB(8, 128)
+DEFINE_QMM_BF16_STUB(2, 32)
+DEFINE_QMM_BF16_STUB(2, 64)
+DEFINE_QMM_BF16_STUB(2, 128)
+#endif

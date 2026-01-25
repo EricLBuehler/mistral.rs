@@ -1533,11 +1533,12 @@ impl GraniteHybridCache {
     pub fn new(
         layer_types: &[GraniteLayerType],
         cfg: &Config,
-        device: &Device,
+        devices: &[Device],
         dtype: candle_core::DType,
     ) -> Result<Self> {
         let mut caches = Vec::with_capacity(layer_types.len());
-        for layer_type in layer_types {
+        for (i, layer_type) in layer_types.iter().enumerate() {
+            let device = &devices[i];
             match layer_type {
                 GraniteLayerType::Attention => {
                     caches.push(GraniteLayerCache::Attention(KvCache::new_normal(
@@ -1790,11 +1791,21 @@ impl GraniteMoeHybrid {
             layers.push(layer);
         }
 
+        let mut devices = Vec::with_capacity(cfg.num_hidden_layers);
+        for i in 0..cfg.num_hidden_layers {
+            devices.push(
+                mapper
+                    .device_for(i, false)
+                    .cloned()
+                    .unwrap_or(normal_loading_metadata.real_device.clone()),
+            );
+        }
+
         // Create hybrid cache for internal use
         let hybrid_cache = Arc::new(Mutex::new(GraniteHybridCache::new(
             &layer_types,
             cfg,
-            &normal_loading_metadata.real_device,
+            &devices,
             vb_m.dtype(),
         )?));
 
@@ -1823,7 +1834,7 @@ impl GraniteMoeHybrid {
             HybridCache::new(
                 hybrid_cache_config,
                 vb_m.dtype(),
-                &normal_loading_metadata.real_device,
+                &devices,
             )
             .map_err(|e| {
                 candle_core::Error::Msg(format!("Failed to create hybrid cache: {}", e))

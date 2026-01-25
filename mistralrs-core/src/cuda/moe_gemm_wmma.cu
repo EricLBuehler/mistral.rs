@@ -1,3 +1,4 @@
+#ifndef NO_WMMA_KERNEL
 /**
  *  @brief  WMMA-based grouped MoE GEMM kernel.
  *
@@ -28,9 +29,12 @@
 #include <cstring>
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <mma.h>
 #include <vector>
+
+#ifndef NO_WMMA_KERNEL
+#include <mma.h>
 using namespace nvcuda::wmma;
+#endif
 
 #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
 
@@ -516,3 +520,40 @@ extern "C" void moe_gemm_wmma_transposed(
 
   cudaFreeAsync(expert_offsets, stream);
 }
+#else
+
+#include <cuda_runtime.h>
+#include <cstdint>
+#include <cstdio>
+
+// Stub implementation when WMMA is not available (SM < 70)
+// These are needed for linking but should not be called at runtime on old GPUs
+extern "C" void
+moe_gemm_wmma(const void *input,
+              const void *weights,
+              const int32_t *sorted_token_ids,
+              const int32_t *expert_ids,
+              const float *topk_weights,
+              void *output,
+              int num_experts, int topk, int size_m, int size_n, int size_k,
+              int data_type,
+              cudaStream_t stream) {
+  // WMMA requires SM 7.0+ (Volta), this stub should never be called at runtime
+  fprintf(stderr, "ERROR: moe_gemm_wmma called but WMMA is not available (requires SM >= 70)\n");
+}
+
+extern "C" void moe_gemm_wmma_transposed(
+    const void *input,
+    const void *weights,
+    const int32_t *sorted_token_ids,
+    const int32_t *expert_ids,
+    const float *topk_weights,
+    void *output,
+    int num_experts, int topk, int size_m, int size_n, int size_k,
+    int data_type,
+    cudaStream_t stream) {
+  // WMMA requires SM 7.0+ (Volta), this stub should never be called at runtime
+  fprintf(stderr, "ERROR: moe_gemm_wmma_transposed called but WMMA is not available (requires SM >= 70)\n");
+}
+
+#endif

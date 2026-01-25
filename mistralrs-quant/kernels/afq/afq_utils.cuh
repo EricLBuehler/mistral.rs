@@ -302,4 +302,4 @@ __device__ __forceinline__ int get_group_idx(int col, int group_size) {
   return col / group_size;
 }
 
-#endif // AFQ_UTILS_CUH
+#endif

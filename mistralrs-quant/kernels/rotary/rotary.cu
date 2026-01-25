@@ -1,6 +1,9 @@
+#ifndef NO_BF16_KERNEL
 #include <cuda_bf16.h>
+#endif
 #include <cuda_fp16.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "cuda_compat.h"
 
@@ -96,7 +99,11 @@ rotary_embedding(void *query,     // [num_tokens, num_heads, head_size]
     if (dtype == 0) {
       CALL_ROTARY(half, true);
     } else if (dtype == 1) {
+#ifndef NO_BF16_KERNEL
       CALL_ROTARY(__nv_bfloat16, true);
+#else
+      fprintf(stderr, "ERROR: rotary_embedding BF16 requires BF16 support (SM 8.0+)\n");
+#endif
     } else if (dtype == 2) {
       CALL_ROTARY(float, true);
     }
@@ -104,7 +111,11 @@ rotary_embedding(void *query,     // [num_tokens, num_heads, head_size]
     if (dtype == 0) {
       CALL_ROTARY(half, false);
     } else if (dtype == 1) {
+#ifndef NO_BF16_KERNEL
       CALL_ROTARY(__nv_bfloat16, false);
+#else
+      fprintf(stderr, "ERROR: rotary_embedding BF16 requires BF16 support (SM 8.0+)\n");
+#endif
     } else if (dtype == 2) {
       CALL_ROTARY(float, false);
     }

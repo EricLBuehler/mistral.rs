@@ -17,10 +17,20 @@
  */
 
 #include <cuda.h>
-#include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#ifndef NO_BF16_KERNEL
+#include <cuda_bf16.h>
+#else
+#ifndef __CUDA_BF16_TYPES_EXIST__
+struct __nv_bfloat16 { uint16_t x; };
+struct __nv_bfloat162 { __nv_bfloat16 x, y; };
+#endif
+__device__ __forceinline__ float __bfloat162float(__nv_bfloat16 x) { (void)x; return 0.0f; }
+__device__ __forceinline__ __nv_bfloat16 __float2bfloat16(float x) { (void)x; __nv_bfloat16 res; res.x = 0; return res; }
+#endif
 #include <cstdint>
+#include <stdio.h>
 
 #define WARP_SIZE 32
 #define MAX_BATCH_SIZE 8
@@ -92,7 +102,7 @@ __global__ void gemv_kernel_batched(
                 acc[b] = fmaf(a_f.x, x_f.x, acc[b]);
                 acc[b] = fmaf(a_f.y, x_f.y, acc[b]);
             }
-#if __CUDA_ARCH__ >= 800
+#ifndef NO_BF16_KERNEL
             else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
                 acc[b] = fmaf(__bfloat162float(a_val.x), __bfloat162float(x_val.x), acc[b]);
                 acc[b] = fmaf(__bfloat162float(a_val.y), __bfloat162float(x_val.y), acc[b]);
@@ -153,7 +163,7 @@ __global__ void gemv_kernel_batched(
             } else if constexpr (std::is_same_v<T, __half>) {
                 Y[b * M + row] = __float2half(result);
             }
-#if __CUDA_ARCH__ >= 800
+#ifndef NO_BF16_KERNEL
             else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
                 Y[b * M + row] = __float2bfloat16(result);
             }
@@ -208,6 +218,7 @@ __host__ int get_optimal_block_size(int K) {
 // Launch Functions - BF16
 // ============================================================================
 
+#ifndef NO_BF16_KERNEL
 extern "C" void launch_gemv_bf16(
     const __nv_bfloat16* A,
     const __nv_bfloat16* X,
@@ -223,6 +234,21 @@ extern "C" void launch_gemv_bf16(
 
     DISPATCH_BLOCK_SIZE(__nv_bfloat16, __nv_bfloat162);
 }
+#else
+extern "C" void launch_gemv_bf16(
+    const void* A,
+    const void* X,
+    const void* bias,
+    void* Y,
+    int M, int K,
+    int batch_size,
+    bool has_bias,
+    cudaStream_t stream
+) {
+    (void)A; (void)X; (void)bias; (void)Y; (void)M; (void)K; (void)batch_size; (void)has_bias; (void)stream;
+    fprintf(stderr, "ERROR: launch_gemv_bf16 requires BF16 support (SM 8.0+)\n");
+}
+#endif
 
 // ============================================================================
 // Launch Functions - F16

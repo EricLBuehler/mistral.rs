@@ -11,8 +11,16 @@
 #include <cstdint>
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <cuda_bf16.h>
 #include <cuda_fp16.h>
+#ifndef NO_BF16_KERNEL
+#include <cuda_bf16.h>
+#else
+#ifndef __CUDA_BF16_TYPES_EXIST__
+struct __nv_bfloat16 { uint16_t x; };
+#endif
+__device__ __forceinline__ float __bfloat162float(__nv_bfloat16 x) { (void)x; return 0.0f; }
+__device__ __forceinline__ __nv_bfloat16 __float2bfloat16(float x) { (void)x; __nv_bfloat16 res; res.x = 0; return res; }
+#endif
 #include <stdio.h>
 
 #define CUDA_CHECK(call)                                                       \
@@ -395,6 +403,7 @@ extern "C" void launch_mxfp4_matmul_f16(
     CUDA_CHECK(cudaGetLastError());
 }
 
+#ifndef NO_BF16_KERNEL
 extern "C" void launch_mxfp4_matmul_bf16(
     const __nv_bfloat16 *input,
     const uint8_t *weight,
@@ -418,6 +427,21 @@ extern "C" void launch_mxfp4_matmul_bf16(
     );
     CUDA_CHECK(cudaGetLastError());
 }
+#else
+extern "C" void launch_mxfp4_matmul_bf16(
+    const void *input,
+    const uint8_t *weight,
+    const uint8_t *weight_scale,
+    const void *bias,
+    void *output,
+    int M, int N, int K,
+    bool has_bias,
+    cudaStream_t stream
+) {
+    (void)input; (void)weight; (void)weight_scale; (void)bias; (void)output; (void)M; (void)N; (void)K; (void)has_bias; (void)stream;
+    fprintf(stderr, "ERROR: launch_mxfp4_matmul_bf16 requires BF16 support (SM 8.0+)\n");
+}
+#endif
 
 extern "C" void launch_mxfp4_indexed_moe_gemm_f16(
     const __half *input,
@@ -453,6 +477,7 @@ extern "C" void launch_mxfp4_indexed_moe_gemm_f16(
     CUDA_CHECK(cudaGetLastError());
 }
 
+#ifndef NO_BF16_KERNEL
 extern "C" void launch_mxfp4_indexed_moe_gemm_bf16(
     const __nv_bfloat16 *input,
     const uint8_t *weights,
@@ -486,3 +511,23 @@ extern "C" void launch_mxfp4_indexed_moe_gemm_bf16(
     );
     CUDA_CHECK(cudaGetLastError());
 }
+#else
+extern "C" void launch_mxfp4_indexed_moe_gemm_bf16(
+    const void *input,
+    const uint8_t *weights,
+    const uint8_t *weight_scales,
+    const void *biases,
+    const uint32_t *indices,
+    void *output,
+    int num_tokens,
+    int topk,
+    int num_experts,
+    int N, int K,
+    bool has_bias,
+    bool input_has_topk_dim,
+    cudaStream_t stream
+) {
+    (void)input; (void)weights; (void)weight_scales; (void)biases; (void)indices; (void)output; (void)num_tokens; (void)topk; (void)num_experts; (void)N; (void)K; (void)has_bias; (void)input_has_topk_dim; (void)stream;
+    fprintf(stderr, "ERROR: launch_mxfp4_indexed_moe_gemm_bf16 requires BF16 support (SM 8.0+)\n");
+}
+#endif
