@@ -207,12 +207,14 @@ impl MultiModelBuilder {
             let (pipeline, scheduler_config, add_model_config) =
                 entry.builder.build_pipeline().await?;
             let pipeline_name = pipeline.lock().await.name();
-            let primary_id = entry
-                .alias
-                .clone()
-                .unwrap_or_else(|| pipeline_name.clone());
+            let primary_id = entry.alias.clone().unwrap_or_else(|| pipeline_name.clone());
             mistralrs
-                .add_model(primary_id.clone(), pipeline, scheduler_config, add_model_config)
+                .add_model(
+                    primary_id.clone(),
+                    pipeline,
+                    scheduler_config,
+                    add_model_config,
+                )
                 .await
                 .map_err(|e| anyhow::anyhow!(e))?;
 

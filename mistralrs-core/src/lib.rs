@@ -954,10 +954,7 @@ impl MistralRs {
         }
     }
 
-    fn resolve_alias_or_default(
-        &self,
-        model_id: Option<&str>,
-    ) -> Result<String, MistralRsError> {
+    fn resolve_alias_or_default(&self, model_id: Option<&str>) -> Result<String, MistralRsError> {
         match model_id {
             Some(id) => self.resolve_alias(id),
             None => {
@@ -980,9 +977,7 @@ impl MistralRs {
         model_id: &str,
     ) -> Result<(), String> {
         let alias = alias.into();
-        let resolved_model_id = self
-            .resolve_alias(model_id)
-            .map_err(|e| e.to_string())?;
+        let resolved_model_id = self.resolve_alias(model_id).map_err(|e| e.to_string())?;
 
         if alias == resolved_model_id {
             return Ok(());
@@ -1220,9 +1215,7 @@ impl MistralRs {
 
     /// Remove a model engine from the MistralRs instance
     pub fn remove_model(&self, model_id: &str) -> Result<(), String> {
-        let resolved_model_id = self
-            .resolve_alias(model_id)
-            .map_err(|e| e.to_string())?;
+        let resolved_model_id = self.resolve_alias(model_id).map_err(|e| e.to_string())?;
         let mut engines = self
             .engines
             .write()
@@ -1283,9 +1276,7 @@ impl MistralRs {
 
     /// Set the default model ID
     pub fn set_default_model_id(&self, model_id: &str) -> Result<(), String> {
-        let resolved_model_id = self
-            .resolve_alias(model_id)
-            .map_err(|e| e.to_string())?;
+        let resolved_model_id = self.resolve_alias(model_id).map_err(|e| e.to_string())?;
         let engines = self
             .engines
             .read()
@@ -1519,9 +1510,7 @@ impl MistralRs {
                 .read()
                 .map_err(|_| MistralRsError::EnginePoisoned)?;
             if reloading.contains(&resolved_model_id) {
-                return Err(MistralRsError::ModelReloading(
-                    resolved_model_id.clone(),
-                ));
+                return Err(MistralRsError::ModelReloading(resolved_model_id.clone()));
             }
         }
 
@@ -1547,7 +1536,9 @@ impl MistralRs {
         };
 
         // Attempt to reload
-        let result = self.do_reload_model(&resolved_model_id, unloaded_state).await;
+        let result = self
+            .do_reload_model(&resolved_model_id, unloaded_state)
+            .await;
 
         // Remove from reloading set
         {
