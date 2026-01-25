@@ -117,6 +117,7 @@ cuda = [
     "candle-core/cuda",
     "candle-nn/cuda",
     "dep:bindgen_cuda",
+    "dep:candle-core",
     "mistralrs-quant/cuda",
     "dep:mistralrs-paged-attn",
     "mistralrs-paged-attn/cuda",
@@ -143,3 +144,5 @@ ring = ["mistralrs-quant/ring"]
 
 [build-dependencies]
 bindgen_cuda = { workspace = true, optional = true }
+candle-core = { workspace = true, optional = true }
+anyhow.workspace = true
