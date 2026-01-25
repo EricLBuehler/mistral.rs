@@ -98,7 +98,7 @@ pub use backend::{
         build_dir.join("libmistralrspagedattention.a")
     };
     builder.build_lib(out_file);
-    
+
     let kernel_dir = PathBuf::from("../mistralrs-paged-attn");
     let absolute_kernel_dir = std::fs::canonicalize(kernel_dir).unwrap();
 
@@ -280,7 +280,6 @@ fn main() -> Result<(), String> {
 fn main() -> Result<()> {
     Ok(())
 }
-
 
 /// Get CUDA compute capability using cudarc driver detection.
 /// Falls back to CUDA_COMPUTE_CAP env var if driver detection fails.
