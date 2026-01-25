@@ -6,6 +6,7 @@ use std::{str::FromStr, sync::Arc};
 
 pub use dia::{DiaConfig, DiaPipeline};
 use serde::{Deserialize, Serialize};
+use serde_json;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 pub enum SpeechLoaderType {
@@ -22,6 +23,17 @@ impl FromStr for SpeechLoaderType {
                 "Unknown architecture `{a}`. Possible architectures: `dia`."
             )),
         }
+    }
+}
+
+impl SpeechLoaderType {
+    /// Auto-detect speech loader type from a config.json string.
+    /// Extend this when adding new speech pipelines.
+    pub fn auto_detect_from_config(config: &str) -> Option<Self> {
+        if serde_json::from_str::<DiaConfig>(config).is_ok() {
+            return Some(Self::Dia);
+        }
+        None
     }
 }
 

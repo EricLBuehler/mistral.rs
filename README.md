@@ -584,16 +584,12 @@ cargo build --release --features "cuda flash-attn cudnn"
 
 Mistral.rs uses subcommands to control the model type. Please run `./mistralrs-server --help` to see the subcommands which categorize the models by kind.
 
-> **🚨 Important:** The `run` subcommand (alias for `plain`/`vision-plain`) only auto-detects and runs **text** and **vision** models. It does **not** support **diffusion** or **speech** models.
-> To run a diffusion model (e.g. FLUX series), use the `diffusion` subcommand:
+> **ℹ️ Auto-detection:** The `run` subcommand now auto-detects and runs **text**, **vision**, **embedding**, **diffusion**, and **speech** models.
+> For diffusion and speech, auto-detection uses the default architectures (Flux and Dia). Use the explicit subcommands if you need non-default variants (e.g., `flux-offloaded`) or custom DAC models:
 > ```bash
 > mistralrs-server -i diffusion -m <model-id> [options]
-> ```
-> To run a speech model (e.g. Dia), use the `speech` subcommand:
-> ```bash
 > mistralrs-server -i speech -m <model-id> [options]
 > ```
-> If you attempt to use `run` with diffusion or speech models, model loading will fail.
 
 ### Global CLI options
 
