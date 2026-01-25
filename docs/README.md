@@ -2,6 +2,7 @@
 
 ## API
 - [HTTP API](HTTP.md) - OpenAI-compatible HTTP server endpoints
+- [OpenResponses API](OPENRESPONSES.md) - Responses API compatibility
 
 ## Models
 - Image generation [models](IMAGEGEN_MODELS.md)
@@ -46,11 +47,19 @@
 - [Docs](QUANTS.md)
 - [ISQ](ISQ.md)
 - [UQFF](UQFF.md)
+- [UQFF layout](UQFF/LAYOUT.md)
 - [Topology](TOPOLOGY.md)
 - [Importance Matrix (ISQ Enhancement)](IMATRIX.md)
 
 ## Multi-Model & Runtime Management
 - [Multi-model support](multi_model/README.md) - Load multiple models, switch between them, unload/reload at runtime
+
+## MCP (Model Context Protocol)
+- [MCP Client](MCP/README.md)
+- [MCP Server](MCP/server.md)
+- [MCP configuration](MCP/configuration.md)
+- [MCP transports](MCP/transports.md)
+- [MCP advanced usage](MCP/advanced.md)
 
 ## Other
 - [Chat templates and tokenizers](CHAT_TOK.md)
@@ -62,9 +71,10 @@
 - [Tool calling](TOOL_CALLING.md)
 - [Web Search](WEB_SEARCH.md)
 - [MatFormer](MATFORMER.md) - Dynamic model sizing
-- [MCP Client](mcp/README.md)
-- [MCP Server](mcp/server.md)
 
 ## Cross-device inference
 - [Device mapping](DEVICE_MAPPING.md)
 - [Topology](TOPOLOGY.md)
+- [Distributed inference](DISTRIBUTED/DISTRIBUTED.md)
+- [NCCL backend](DISTRIBUTED/NCCL.md)
+- [Ring backend](DISTRIBUTED/RING.md)

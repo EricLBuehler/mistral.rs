@@ -5,7 +5,7 @@ Mistral.rs provides a lightweight OpenAI API compatible HTTP server based on [ax
 The API consists of the following endpoints. They can be viewed in your browser interactively by going to `http://localhost:<port>/docs`.
 
 > ℹ️  Besides the HTTP endpoints described below `mistralrs-server` can also expose the same functionality via the **MCP protocol**.  
-> Enable it with `--mcp-port <port>` and see [MCP_SERVER.md](MCP_SERVER.md) for details.
+> Enable it with `--mcp-port <port>` and see [MCP/server.md](MCP/server.md) for details.
 
 ## Additional object keys
 
@@ -17,7 +17,7 @@ To support additional features, we have extended the completion and chat complet
 - `enable_thinking`: `bool`, default to `false`. Enable thinking for models that support it.
 - `truncate_sequence`: `bool` | `null`. When `true`, requests that exceed the model context length will be truncated instead of rejected; otherwise the server returns a validation error. Embedding requests truncate tokens at the end of the prompt, while chat/completion requests truncate tokens at the start of the prompt.
 - `repetition_penalty`: `float` | `null`. Penalty for repeating tokens. This is distinct from `frequency_penalty` and `presence_penalty` - it applies a direct multiplicative penalty to repeated token logits.
-- `web_search_options`: `object` | `null`. Enable web search integration. Contains optional fields: `search_context_size` ("low", "medium", "high"), `user_location` (object with location info), `search_description` (override search tool description), `extract_description` (override extraction tool description).
+- `web_search_options`: `object` | `null`. Enable web search integration (see [WEB_SEARCH.md](WEB_SEARCH.md)). Contains optional fields: `search_context_size` ("low", "medium", "high"), `user_location` (object with location info), `search_description` (override search tool description), `extract_description` (override extraction tool description).
 - `reasoning_effort`: `string` | `null`. For Harmony-format models (like GPT-OSS), controls the depth of reasoning: `"low"`, `"medium"`, or `"high"`.
 - `dry_multiplier`: `float` | `null`. DRY (Don't Repeat Yourself) sampling multiplier. Controls the strength of the anti-repetition penalty.
 - `dry_base`: `float` | `null`. DRY sampling base value.

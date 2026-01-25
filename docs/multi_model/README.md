@@ -144,11 +144,6 @@ Use the `multi-model` subcommand with these options:
 mistralrs-server [GLOBAL_OPTIONS] multi-model --config <CONFIG> [--default-model-id <ID>]
 ```
 
-**Legacy syntax (deprecated):**
-```bash
-mistralrs-server [OPTIONS] --multi-model --multi-model-config <CONFIG> [--default-model-id <ID>]
-```
-
 ## Examples
 
 ### Example 1: Text Models
