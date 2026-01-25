@@ -22,7 +22,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
     // Build the MistralRs instance - this triggers model loading and UQFF generation
     let _mistralrs = MistralRsForServerBuilder::new()
         .with_model(model_selected)
-        .with_max_seqs(defaults::MAX_SEQS)
+        .with_max_seqs(1)
         .with_no_kv_cache(defaults::NO_KV_CACHE)
         .with_token_source(global.token_source)
         .with_interactive_mode(defaults::INTERACTIVE_MODE)
