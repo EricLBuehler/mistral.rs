@@ -62,8 +62,8 @@
 - [Tool calling](TOOL_CALLING.md)
 - [Web Search](WEB_SEARCH.md)
 - [MatFormer](MATFORMER.md) - Dynamic model sizing
-- [MCP Client](mcp/README.md)
-- [MCP Server](mcp/server.md)
+- [MCP Client](MCP/README.md)
+- [MCP Server](MCP/server.md)
 
 ## Cross-device inference
 - [Device mapping](DEVICE_MAPPING.md)
