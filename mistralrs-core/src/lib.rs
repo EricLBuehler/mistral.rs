@@ -271,6 +271,7 @@ struct EngineInstance {
 /// 2. `engines`
 /// 3. `unloaded_models`
 /// 4. `default_engine_id`
+/// 5. `model_aliases`
 ///
 /// Use scope-based lock management and explicit `drop()` calls.
 pub struct MistralRs {
@@ -280,6 +281,8 @@ pub struct MistralRs {
     /// Models currently being reloaded (to prevent concurrent reloads)
     reloading_models: RwLock<HashSet<String>>,
     default_engine_id: RwLock<Option<String>>,
+    /// Alternate IDs that resolve to primary model IDs.
+    model_aliases: RwLock<HashMap<String, String>>,
     log: Option<String>,
     id: String,
     creation_time: u64,
@@ -361,6 +364,7 @@ impl From<MistralRsError> for pyo3::PyErr {
 pub struct MistralRsBuilder {
     pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     method: SchedulerConfig,
+    model_id_override: Option<String>,
     log: Option<String>,
     no_kv_cache: Option<bool>,
     no_prefix_cache: Option<bool>,
@@ -388,6 +392,7 @@ impl MistralRsBuilder {
         Self {
             pipeline,
             method,
+            model_id_override: None,
             log: None,
             no_kv_cache: None,
             no_prefix_cache: None,
@@ -401,6 +406,12 @@ impl MistralRsBuilder {
             mcp_client_config: None,
             loader_config: None,
         }
+    }
+
+    /// Override the model ID used by MistralRs. Defaults to the pipeline name.
+    pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
+        self.model_id_override = Some(model_id.into());
+        self
     }
 
     /// Set the loader config for enabling model unload/reload support.
@@ -589,6 +600,7 @@ impl MistralRs {
         let MistralRsBuilder {
             pipeline,
             method,
+            model_id_override,
             log,
             no_kv_cache,
             no_prefix_cache,
@@ -698,7 +710,17 @@ impl MistralRs {
             Self::create_engine_instance(pipeline.clone(), method, engine_config, reboot_state)
                 .expect("Failed to create engine instance");
 
-        let id = pipeline.try_lock().unwrap().name();
+        let pipeline_name = pipeline.try_lock().unwrap().name();
+        let (id, alias_map) = match model_id_override {
+            Some(override_id) => {
+                let mut alias_map = HashMap::new();
+                if override_id != pipeline_name {
+                    alias_map.insert(pipeline_name.clone(), override_id.clone());
+                }
+                (override_id, alias_map)
+            }
+            None => (pipeline_name.clone(), HashMap::new()),
+        };
 
         if distributed::is_daemon() {
             let request_sender = engine_instance.sender.clone();
@@ -785,6 +807,7 @@ impl MistralRs {
             unloaded_models: RwLock::new(HashMap::new()),
             reloading_models: RwLock::new(HashSet::new()),
             default_engine_id: RwLock::new(Some(id.clone())),
+            model_aliases: RwLock::new(alias_map),
             log,
             id,
             creation_time: SystemTime::now()
@@ -855,19 +878,7 @@ impl MistralRs {
     /// Get sender for a specific model. If model_id is None, uses default engine.
     /// If the model is unloaded, it will be automatically reloaded before returning the sender.
     pub fn get_sender(&self, model_id: Option<&str>) -> Result<Sender<Request>, MistralRsError> {
-        let resolved_model_id = match model_id {
-            Some(id) => id.to_string(),
-            None => {
-                let default_lock = self
-                    .default_engine_id
-                    .read()
-                    .map_err(|_| MistralRsError::SenderPoisoned)?;
-                default_lock
-                    .as_ref()
-                    .ok_or(MistralRsError::EnginePoisoned)?
-                    .clone()
-            }
-        };
+        let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         // Check if model is loaded
         let is_loaded = {
@@ -931,24 +942,138 @@ impl MistralRs {
         self.creation_time
     }
 
-    /// Get model category for a specific model. If model_id is None, uses default engine.
-    pub fn get_model_category(
-        &self,
-        model_id: Option<&str>,
-    ) -> Result<ModelCategory, MistralRsError> {
-        let resolved_model_id = match model_id {
-            Some(id) => id.to_string(),
+    fn resolve_alias(&self, model_id: &str) -> Result<String, MistralRsError> {
+        let aliases = self
+            .model_aliases
+            .read()
+            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        if let Some(primary_id) = aliases.get(model_id) {
+            Ok(primary_id.clone())
+        } else {
+            Ok(model_id.to_string())
+        }
+    }
+
+    fn resolve_alias_or_default(&self, model_id: Option<&str>) -> Result<String, MistralRsError> {
+        match model_id {
+            Some(id) => self.resolve_alias(id),
             None => {
                 let default_lock = self
                     .default_engine_id
                     .read()
                     .map_err(|_| MistralRsError::SenderPoisoned)?;
-                default_lock
+                Ok(default_lock
                     .as_ref()
                     .ok_or(MistralRsError::EnginePoisoned)?
-                    .clone()
+                    .clone())
             }
-        };
+        }
+    }
+
+    /// Register an alternate model ID that resolves to an existing model.
+    pub fn register_model_alias(
+        &self,
+        alias: impl Into<String>,
+        model_id: &str,
+    ) -> Result<(), String> {
+        let alias = alias.into();
+        let resolved_model_id = self.resolve_alias(model_id).map_err(|e| e.to_string())?;
+
+        if alias == resolved_model_id {
+            return Ok(());
+        }
+
+        let reloading = self
+            .reloading_models
+            .read()
+            .map_err(|_| "Failed to acquire read lock on reloading_models")?;
+        let model_reloading = reloading.contains(&resolved_model_id);
+        let alias_conflict = reloading.contains(&alias);
+        drop(reloading);
+
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| "Failed to acquire read lock on engines")?;
+        let model_loaded = engines.contains_key(&resolved_model_id);
+        let alias_conflict = alias_conflict || engines.contains_key(&alias);
+        drop(engines);
+
+        let unloaded = self
+            .unloaded_models
+            .read()
+            .map_err(|_| "Failed to acquire read lock on unloaded_models")?;
+        let model_unloaded = unloaded.contains_key(&resolved_model_id);
+        let alias_conflict = alias_conflict || unloaded.contains_key(&alias);
+        drop(unloaded);
+
+        if !(model_loaded || model_unloaded || model_reloading) {
+            return Err(format!("Model {resolved_model_id} not found"));
+        }
+
+        if alias_conflict {
+            return Err(format!(
+                "Alias '{}' conflicts with an existing model ID",
+                alias
+            ));
+        }
+
+        let mut aliases = self
+            .model_aliases
+            .write()
+            .map_err(|_| "Failed to acquire write lock on model_aliases")?;
+        if let Some(existing) = aliases.get(&alias) {
+            if existing == &resolved_model_id {
+                return Ok(());
+            }
+            return Err(format!(
+                "Alias '{}' is already assigned to model '{}'",
+                alias, existing
+            ));
+        }
+        aliases.insert(alias, resolved_model_id);
+        Ok(())
+    }
+
+    /// Check if a model is known (loaded, unloaded, or reloading), resolving aliases if needed.
+    pub fn model_exists(&self, model_id: &str) -> Result<bool, MistralRsError> {
+        let resolved_model_id = self.resolve_alias(model_id)?;
+
+        let reloading = self
+            .reloading_models
+            .read()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
+        if reloading.contains(&resolved_model_id) {
+            return Ok(true);
+        }
+        drop(reloading);
+
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
+        if engines.contains_key(&resolved_model_id) {
+            return Ok(true);
+        }
+        drop(engines);
+
+        let unloaded = self
+            .unloaded_models
+            .read()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
+        if unloaded.contains_key(&resolved_model_id) {
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    /// Get model category for a specific model. If model_id is None, uses default engine.
+    pub fn get_model_category(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<ModelCategory, MistralRsError> {
+        let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         let engines = self
             .engines
@@ -966,19 +1091,7 @@ impl MistralRs {
         &self,
         model_id: Option<&str>,
     ) -> Result<Option<usize>, MistralRsError> {
-        let resolved_model_id = match model_id {
-            Some(id) => id.to_string(),
-            None => {
-                let default_lock = self
-                    .default_engine_id
-                    .read()
-                    .map_err(|_| MistralRsError::SenderPoisoned)?;
-                default_lock
-                    .as_ref()
-                    .ok_or(MistralRsError::EnginePoisoned)?
-                    .clone()
-            }
-        };
+        let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         let engines = self
             .engines
@@ -1007,6 +1120,46 @@ impl MistralRs {
         method: SchedulerConfig,
         config: AddModelConfig,
     ) -> Result<(), String> {
+        {
+            let reloading = self
+                .reloading_models
+                .read()
+                .map_err(|_| "Failed to acquire read lock on reloading_models")?;
+            if reloading.contains(&model_id) {
+                return Err(format!("Model {model_id} is currently reloading"));
+            }
+        }
+        {
+            let engines = self
+                .engines
+                .read()
+                .map_err(|_| "Failed to acquire read lock on engines")?;
+            if engines.contains_key(&model_id) {
+                return Err(format!("Model {model_id} already exists"));
+            }
+        }
+        {
+            let unloaded = self
+                .unloaded_models
+                .read()
+                .map_err(|_| "Failed to acquire read lock on unloaded_models")?;
+            if unloaded.contains_key(&model_id) {
+                return Err(format!("Model {model_id} already exists (unloaded)"));
+            }
+        }
+        {
+            let aliases = self
+                .model_aliases
+                .read()
+                .map_err(|_| "Failed to acquire read lock on model_aliases")?;
+            if aliases.contains_key(&model_id) {
+                return Err(format!(
+                    "Model ID '{}' conflicts with an existing alias",
+                    model_id
+                ));
+            }
+        }
+
         // For hybrid models (Mamba-Attention), force batch_size=1 to prevent state bleeding
         let method = {
             let pipeline_guard = pipeline.try_lock().unwrap();
@@ -1062,6 +1215,7 @@ impl MistralRs {
 
     /// Remove a model engine from the MistralRs instance
     pub fn remove_model(&self, model_id: &str) -> Result<(), String> {
+        let resolved_model_id = self.resolve_alias(model_id).map_err(|e| e.to_string())?;
         let mut engines = self
             .engines
             .write()
@@ -1071,7 +1225,7 @@ impl MistralRs {
             return Err("Cannot remove the last model from MistralRs".to_string());
         }
 
-        if let Some(engine_instance) = engines.remove(model_id) {
+        if let Some(engine_instance) = engines.remove(&resolved_model_id) {
             // Send terminate signal to the engine
             let _ = engine_instance.sender.blocking_send(Request::Terminate);
 
@@ -1081,15 +1235,24 @@ impl MistralRs {
                 .write()
                 .map_err(|_| "Failed to acquire write lock on default_engine_id")?;
             if let Some(ref default_id) = *default_lock {
-                if default_id == model_id {
+                if default_id == &resolved_model_id {
                     // Set the first available engine as the new default
                     *default_lock = engines.keys().next().cloned();
                 }
             }
+            drop(default_lock);
+            drop(engines);
+
+            // Remove any aliases pointing to the removed model
+            let mut aliases = self
+                .model_aliases
+                .write()
+                .map_err(|_| "Failed to acquire write lock on model_aliases")?;
+            aliases.retain(|_, target| target != &resolved_model_id);
 
             Ok(())
         } else {
-            Err(format!("Model {model_id} not found"))
+            Err(format!("Model {resolved_model_id} not found"))
         }
     }
 
@@ -1113,12 +1276,13 @@ impl MistralRs {
 
     /// Set the default model ID
     pub fn set_default_model_id(&self, model_id: &str) -> Result<(), String> {
+        let resolved_model_id = self.resolve_alias(model_id).map_err(|e| e.to_string())?;
         let engines = self
             .engines
             .read()
             .map_err(|_| "Failed to acquire read lock on engines")?;
-        if !engines.contains_key(model_id) {
-            return Err(format!("Model {model_id} not found"));
+        if !engines.contains_key(&resolved_model_id) {
+            return Err(format!("Model {resolved_model_id} not found"));
         }
         drop(engines);
 
@@ -1127,10 +1291,13 @@ impl MistralRs {
             .write()
             .map_err(|_| "Failed to acquire write lock on default_engine_id")?;
         let old_default = default_lock.clone();
-        *default_lock = Some(model_id.to_string());
+        *default_lock = Some(resolved_model_id.clone());
 
         // Log the change
-        info!("Default model changed: {:?} -> {:?}", old_default, model_id);
+        info!(
+            "Default model changed: {:?} -> {:?}",
+            old_default, resolved_model_id
+        );
 
         Ok(())
     }
@@ -1190,19 +1357,9 @@ impl MistralRs {
 
     /// Get the number of tools available for a specific model (including MCP tools)
     pub fn get_tools_count(&self, model_id: Option<&str>) -> Result<usize, String> {
-        let resolved_model_id = match model_id {
-            Some(id) => id.to_string(),
-            None => {
-                let default_lock = self
-                    .default_engine_id
-                    .read()
-                    .map_err(|_| "Failed to acquire read lock")?;
-                default_lock
-                    .as_ref()
-                    .ok_or("No default engine set")?
-                    .clone()
-            }
-        };
+        let resolved_model_id = self
+            .resolve_alias_or_default(model_id)
+            .map_err(|e| e.to_string())?;
 
         let engines = self
             .engines
@@ -1217,19 +1374,9 @@ impl MistralRs {
 
     /// Check if MCP client is configured for a specific model
     pub fn has_mcp_client(&self, model_id: Option<&str>) -> Result<bool, String> {
-        let resolved_model_id = match model_id {
-            Some(id) => id.to_string(),
-            None => {
-                let default_lock = self
-                    .default_engine_id
-                    .read()
-                    .map_err(|_| "Failed to acquire read lock")?;
-                default_lock
-                    .as_ref()
-                    .ok_or("No default engine set")?
-                    .clone()
-            }
-        };
+        let resolved_model_id = self
+            .resolve_alias_or_default(model_id)
+            .map_err(|e| e.to_string())?;
 
         let engines = self
             .engines
@@ -1244,19 +1391,9 @@ impl MistralRs {
 
     /// Get config for a specific model
     pub fn config(&self, model_id: Option<&str>) -> Result<MistralRsConfig, String> {
-        let resolved_model_id = match model_id {
-            Some(id) => id.to_string(),
-            None => {
-                let default_lock = self
-                    .default_engine_id
-                    .read()
-                    .map_err(|_| "Failed to acquire read lock")?;
-                default_lock
-                    .as_ref()
-                    .ok_or("No default engine set")?
-                    .clone()
-            }
-        };
+        let resolved_model_id = self
+            .resolve_alias_or_default(model_id)
+            .map_err(|e| e.to_string())?;
 
         let engines = self
             .engines
@@ -1276,14 +1413,17 @@ impl MistralRs {
     /// Note: The model must have been added with a `ModelLoaderConfig` for auto-reload to work.
     /// Models added via `MistralRsBuilder` without explicit loader config cannot be reloaded.
     pub fn unload_model(&self, model_id: &str) -> Result<(), MistralRsError> {
+        let resolved_model_id = self.resolve_alias(model_id)?;
         // Check if already unloaded
         {
             let unloaded = self
                 .unloaded_models
                 .read()
                 .map_err(|_| MistralRsError::EnginePoisoned)?;
-            if unloaded.contains_key(model_id) {
-                return Err(MistralRsError::ModelAlreadyUnloaded(model_id.to_string()));
+            if unloaded.contains_key(&resolved_model_id) {
+                return Err(MistralRsError::ModelAlreadyUnloaded(
+                    resolved_model_id.clone(),
+                ));
             }
         }
 
@@ -1294,15 +1434,15 @@ impl MistralRs {
             .map_err(|_| MistralRsError::EnginePoisoned)?;
 
         let engine_instance = engines
-            .remove(model_id)
-            .ok_or_else(|| MistralRsError::ModelNotFound(model_id.to_string()))?;
+            .remove(&resolved_model_id)
+            .ok_or_else(|| MistralRsError::ModelNotFound(resolved_model_id.clone()))?;
 
         // Check if we have loader config for reloading
         let loader_config = engine_instance
             .reboot_state
             .loader_config
             .clone()
-            .ok_or_else(|| MistralRsError::NoLoaderConfig(model_id.to_string()))?;
+            .ok_or_else(|| MistralRsError::NoLoaderConfig(resolved_model_id.clone()))?;
 
         // Create the unloaded state
         let unloaded_state = UnloadedModelState {
@@ -1337,7 +1477,7 @@ impl MistralRs {
             .unloaded_models
             .write()
             .map_err(|_| MistralRsError::EnginePoisoned)?;
-        unloaded.insert(model_id.to_string(), unloaded_state);
+        unloaded.insert(resolved_model_id.to_string(), unloaded_state);
 
         // Update default if needed
         let mut default_lock = self
@@ -1345,7 +1485,7 @@ impl MistralRs {
             .write()
             .map_err(|_| MistralRsError::EnginePoisoned)?;
         if let Some(ref default_id) = *default_lock {
-            if default_id == model_id {
+            if default_id == &resolved_model_id {
                 // Set the first available engine as the new default
                 let engines = self
                     .engines
@@ -1355,21 +1495,22 @@ impl MistralRs {
             }
         }
 
-        info!("Model {} unloaded successfully", model_id);
+        info!("Model {} unloaded successfully", resolved_model_id);
         Ok(())
     }
 
     /// Manually reload a previously unloaded model.
     /// This is also called automatically by `get_sender()` when a request targets an unloaded model.
     pub async fn reload_model(&self, model_id: &str) -> Result<(), MistralRsError> {
+        let resolved_model_id = self.resolve_alias(model_id)?;
         // Check if already reloading
         {
             let reloading = self
                 .reloading_models
                 .read()
                 .map_err(|_| MistralRsError::EnginePoisoned)?;
-            if reloading.contains(model_id) {
-                return Err(MistralRsError::ModelReloading(model_id.to_string()));
+            if reloading.contains(&resolved_model_id) {
+                return Err(MistralRsError::ModelReloading(resolved_model_id.clone()));
             }
         }
 
@@ -1379,7 +1520,7 @@ impl MistralRs {
                 .reloading_models
                 .write()
                 .map_err(|_| MistralRsError::EnginePoisoned)?;
-            reloading.insert(model_id.to_string());
+            reloading.insert(resolved_model_id.clone());
         }
 
         // Get the unloaded state
@@ -1389,13 +1530,15 @@ impl MistralRs {
                 .read()
                 .map_err(|_| MistralRsError::EnginePoisoned)?;
             unloaded
-                .get(model_id)
+                .get(&resolved_model_id)
                 .cloned()
-                .ok_or_else(|| MistralRsError::ModelNotFound(model_id.to_string()))?
+                .ok_or_else(|| MistralRsError::ModelNotFound(resolved_model_id.clone()))?
         };
 
         // Attempt to reload
-        let result = self.do_reload_model(model_id, unloaded_state).await;
+        let result = self
+            .do_reload_model(&resolved_model_id, unloaded_state)
+            .await;
 
         // Remove from reloading set
         {
@@ -1403,7 +1546,7 @@ impl MistralRs {
                 .reloading_models
                 .write()
                 .map_err(|_| MistralRsError::EnginePoisoned)?;
-            reloading.remove(model_id);
+            reloading.remove(&resolved_model_id);
         }
 
         result
@@ -1530,22 +1673,24 @@ impl MistralRs {
 
     /// Check if a model is currently loaded (as opposed to unloaded)
     pub fn is_model_loaded(&self, model_id: &str) -> Result<bool, MistralRsError> {
+        let resolved_model_id = self.resolve_alias(model_id)?;
         let engines = self
             .engines
             .read()
             .map_err(|_| MistralRsError::EnginePoisoned)?;
-        Ok(engines.contains_key(model_id))
+        Ok(engines.contains_key(&resolved_model_id))
     }
 
     /// Get the status of a model, or None if not found
     pub fn get_model_status(&self, model_id: &str) -> Result<Option<ModelStatus>, MistralRsError> {
+        let resolved_model_id = self.resolve_alias(model_id)?;
         // Check if reloading
         {
             let reloading = self
                 .reloading_models
                 .read()
                 .map_err(|_| MistralRsError::EnginePoisoned)?;
-            if reloading.contains(model_id) {
+            if reloading.contains(&resolved_model_id) {
                 return Ok(Some(ModelStatus::Reloading));
             }
         }
@@ -1556,7 +1701,7 @@ impl MistralRs {
                 .engines
                 .read()
                 .map_err(|_| MistralRsError::EnginePoisoned)?;
-            if engines.contains_key(model_id) {
+            if engines.contains_key(&resolved_model_id) {
                 return Ok(Some(ModelStatus::Loaded));
             }
         }
@@ -1567,7 +1712,7 @@ impl MistralRs {
                 .unloaded_models
                 .read()
                 .map_err(|_| MistralRsError::EnginePoisoned)?;
-            if unloaded.contains_key(model_id) {
+            if unloaded.contains_key(&resolved_model_id) {
                 return Ok(Some(ModelStatus::Unloaded));
             }
         }

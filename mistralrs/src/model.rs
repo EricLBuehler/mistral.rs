@@ -604,7 +604,7 @@ impl Model {
     // Multi-Model Management Methods
     // ========================================================================
 
-    /// List all available model IDs.
+    /// List all available model IDs (aliases if configured).
     pub fn list_models(&self) -> std::result::Result<Vec<String>, String> {
         self.runner.list_models()
     }

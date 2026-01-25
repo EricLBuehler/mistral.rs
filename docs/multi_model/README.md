@@ -20,7 +20,7 @@ mistralrs-server --port 1234 plain -m meta-llama/Llama-3.2-3B-Instruct
 ### Multi-Model Mode
 ```bash
 # Load multiple models from configuration file
-mistralrs-server --port 1234 multi-model --config config.json --default-model-id meta-llama/Llama-3.2-3B-Instruct
+mistralrs-server --port 1234 multi-model --config config.json --default-model-id llama3-3b
 ```
 
 ## Configuration File Format
@@ -30,11 +30,13 @@ Create a JSON file with model configurations as object keys:
 ```json
 {
   "llama3-3b": {
+    "alias": "llama3-3b",
     "Plain": {
       "model_id": "meta-llama/Llama-3.2-3B-Instruct"
     }
   },
   "qwen3-4b": {
+    "alias": "qwen3-4b",
     "Plain": {
       "model_id": "Qwen/Qwen3-4B"
     },
@@ -46,9 +48,10 @@ Create a JSON file with model configurations as object keys:
 ### Configuration Structure
 
 - **Object keys** (e.g., `"llama3-3b"`, `"qwen3-4b"`): Organizational labels (for human readability)
-- **Actual API identifiers**: Derived automatically from the model path (e.g., `"meta-llama/Llama-3.2-3B-Instruct"`)
+- **API identifiers**: By default the pipeline name (usually the `model_id` inside the model spec). You can override this with `alias`.
 - **Model specification**: The model type and configuration (same format as CLI subcommands)
 - **Optional fields**:
+  - `alias`: Custom model ID (nickname) used in API requests
   - `chat_template`: Custom chat template
   - `jinja_explicit`: JINJA template file
   - `num_device_layers`: Device layer configuration  
@@ -56,9 +59,9 @@ Create a JSON file with model configurations as object keys:
 
 **How API identifiers work:**
 - ✅ Object keys are **organizational only** (for config readability)
-- ✅ **Real API identifiers** are derived from `model_id` field inside the model spec
-- ✅ Use the full model path in API requests (e.g., `"meta-llama/Llama-3.2-3B-Instruct"`)
-- ✅ No naming conflicts - each model has its canonical identifier
+- ✅ If `alias` is set, it becomes the API model ID
+- ✅ Otherwise, the pipeline name (usually the `model_id` field) is used
+- ✅ The canonical pipeline name remains accepted as an alias for compatibility
 
 ## API Usage
 
@@ -70,7 +73,7 @@ Use the `model` field in your requests to specify which model to use:
 curl http://localhost:1234/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "meta-llama/Llama-3.2-3B-Instruct",
+    "model": "llama3-3b",
     "messages": [
       {"role": "user", "content": "Hello!"}
     ]
@@ -79,7 +82,7 @@ curl http://localhost:1234/v1/chat/completions \
 
 #### Default Model Behavior
 
-- **Explicit model**: Use the full pipeline name (e.g., `"meta-llama/Llama-3.2-3B-Instruct"`)
+- **Explicit model**: Use the alias if configured (e.g., `"llama3-3b"`), otherwise the full pipeline name (e.g., `"meta-llama/Llama-3.2-3B-Instruct"`)
 - **Default model**: Use `"default"` to explicitly request the default model
 - **Auto-fallback**: If the `model` field is omitted entirely, the default model will be used
 
@@ -115,13 +118,13 @@ Returns:
       "owned_by": "local"
     },
     {
-      "id": "meta-llama/Llama-3.2-3B-Instruct",
+      "id": "llama3-3b",
       "object": "model",
       "created": 1234567890,
       "owned_by": "local"
     },
     {
-      "id": "Qwen/Qwen3-4B", 
+      "id": "qwen3-4b", 
       "object": "model",
       "created": 1234567890,
       "owned_by": "local"
@@ -130,14 +133,14 @@ Returns:
 }
 ```
 
-**Note**: The `"default"` model is always listed first and represents the server's default model.
+**Note**: The `"default"` model is always listed first and represents the server's default model. If aliases are configured, they will appear in the list while the canonical pipeline names remain accepted.
 
 ## CLI Arguments
 
 Use the `multi-model` subcommand with these options:
 
 - `--config <PATH>` (required): Path to the JSON configuration file
-- `--default-model-id <ID>` (optional): Default model ID for requests that don't specify a model
+- `--default-model-id <ID>` (optional): Default model ID for requests that don't specify a model (alias or pipeline name)
 
 **New syntax:**
 ```bash
@@ -305,7 +308,7 @@ The `mistralrs` crate provides `MultiModelBuilder` for loading multiple models a
 
 ### Loading Multiple Models
 
-Model IDs are always the HuggingFace model path (e.g., `"google/gemma-3-4b-it"`). Custom model IDs are not supported.
+By default, model IDs are the pipeline names (usually the HuggingFace model path, e.g., `"google/gemma-3-4b-it"`). You can provide custom aliases with `add_model_with_alias` for shorter IDs.
 
 ```rust
 use mistralrs::{IsqType, MultiModelBuilder, TextModelBuilder, VisionModelBuilder, TextMessages, TextMessageRole};
@@ -313,18 +316,20 @@ use mistralrs::{IsqType, MultiModelBuilder, TextModelBuilder, VisionModelBuilder
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Build a multi-model instance with a vision model and a text model
-    // Model IDs are the HuggingFace model paths
+    // Use aliases for shorter model IDs in requests
     let model = MultiModelBuilder::new()
-        .add_model(
+        .add_model_with_alias(
+            "gemma-vision",
             VisionModelBuilder::new("google/gemma-3-4b-it")  // Vision model
                 .with_isq(IsqType::Q4K)
                 .with_logging(),
         )
-        .add_model(
+        .add_model_with_alias(
+            "qwen-text",
             TextModelBuilder::new("Qwen/Qwen3-4B")  // Text model
                 .with_isq(IsqType::Q4K),
         )
-        .with_default_model("google/gemma-3-4b-it")
+        .with_default_model("gemma-vision")
         .build()
         .await?;
 
@@ -333,10 +338,10 @@ async fn main() -> anyhow::Result<()> {
         .add_message(TextMessageRole::User, "Hello!");
     let response = model.send_chat_request(messages).await?;
 
-    // Send request to specific model using its HuggingFace path
+    // Send request to specific model using its alias
     let messages = TextMessages::new()
         .add_message(TextMessageRole::User, "Hello from Qwen!");
-    let response = model.send_chat_request_with_model(messages, Some("Qwen/Qwen3-4B")).await?;
+    let response = model.send_chat_request_with_model(messages, Some("qwen-text")).await?;
 
     Ok(())
 }
@@ -345,25 +350,25 @@ async fn main() -> anyhow::Result<()> {
 ### Model Management Methods
 
 ```rust
-// List all models (returns HuggingFace model paths)
+// List all models (returns aliases if configured, otherwise pipeline names)
 let models = model.list_models()?;
 
 // Get/set default model
 let default = model.get_default_model_id()?;
-model.set_default_model_id("Qwen/Qwen3-4B")?;
+model.set_default_model_id("qwen-text")?;
 
 // List models with status
 let status = model.list_models_with_status()?;
 // Returns Vec<(String, ModelStatus)> where ModelStatus is Loaded, Unloaded, or Reloading
 
 // Check if a model is loaded
-let is_loaded = model.is_model_loaded("google/gemma-3-4b-it")?;
+let is_loaded = model.is_model_loaded("gemma-vision")?;
 
 // Unload a model to free memory
-model.unload_model("google/gemma-3-4b-it")?;
+model.unload_model("gemma-vision")?;
 
 // Reload when needed
-model.reload_model("google/gemma-3-4b-it").await?;
+model.reload_model("gemma-vision").await?;
 ```
 
 ### Available `_with_model` Methods
@@ -381,7 +386,7 @@ All request methods have `_with_model` variants that accept an optional model ID
 - `max_sequence_length_with_model(model_id: Option<&str>)`
 - `re_isq_model_with_model(isq_type, model_id: Option<&str>)`
 
-When `model_id` is `None`, the default model is used.
+When `model_id` is `None`, the default model is used. If aliases are configured, you can pass either the alias or the canonical pipeline name.
 
 ## Python API Usage
 
@@ -424,6 +429,8 @@ request = ChatCompletionRequest(
 )
 response = runner.send_chat_completion_request(request, model_id=models[0])
 ```
+
+If aliases are configured (for example via the server config or Rust `MultiModelBuilder`), `list_models()` will return those aliases and you can pass them in `model_id`. The canonical pipeline names remain accepted.
 
 ### Model Management
 
@@ -480,7 +487,7 @@ The `MultiModel` struct has been removed. Use `Model` directly with `MultiModelB
 let multi = MultiModel::new(...);
 multi.send_chat_request_to_model(request, "model-id").await?;
 
-// New - model IDs are HuggingFace paths (e.g., "google/gemma-3-4b-it")
+// New - model IDs are pipeline names by default (aliases optional)
 let model = MultiModelBuilder::new()
     .add_model(VisionModelBuilder::new("google/gemma-3-4b-it"))
     .add_model(TextModelBuilder::new("Qwen/Qwen3-4B"))
@@ -498,7 +505,7 @@ The `MultiModelRunner` class has been removed. Use `Runner` directly:
 multi_runner = MultiModelRunner(runner)
 multi_runner.send_chat_completion_request_to_model(request, "model-id")
 
-# New - model IDs are HuggingFace paths
+# New - model IDs are the registered IDs (aliases if configured)
 runner = Runner(which=Which.Plain(model_id="google/gemma-3-4b-it", ...))
 runner.send_chat_completion_request(request, model_id="google/gemma-3-4b-it")
 ```
