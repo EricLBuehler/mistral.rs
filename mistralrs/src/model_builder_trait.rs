@@ -79,9 +79,14 @@ impl From<crate::EmbeddingModelBuilder> for AnyModelBuilder {
     }
 }
 
+struct MultiModelEntry {
+    builder: AnyModelBuilder,
+    alias: Option<String>,
+}
+
 /// Builder for creating a Model with multiple models.
 pub struct MultiModelBuilder {
-    builders: Vec<AnyModelBuilder>,
+    builders: Vec<MultiModelEntry>,
     default_model_id: Option<String>,
 }
 
@@ -100,13 +105,29 @@ impl MultiModelBuilder {
         }
     }
 
-    /// Add a model. The model ID will be the pipeline's model_id (e.g., "google/gemma-3-4b-it").
+    /// Add a model. The model ID will be the pipeline name (e.g., "google/gemma-3-4b-it").
     pub fn add_model<B: Into<AnyModelBuilder>>(mut self, builder: B) -> Self {
-        self.builders.push(builder.into());
+        self.builders.push(MultiModelEntry {
+            builder: builder.into(),
+            alias: None,
+        });
         self
     }
 
-    /// Set the default model by its model ID (e.g., "google/gemma-3-4b-it").
+    /// Add a model with a custom alias (nickname) used for API requests.
+    pub fn add_model_with_alias<B: Into<AnyModelBuilder>>(
+        mut self,
+        alias: impl Into<String>,
+        builder: B,
+    ) -> Self {
+        self.builders.push(MultiModelEntry {
+            builder: builder.into(),
+            alias: Some(alias.into()),
+        });
+        self
+    }
+
+    /// Set the default model by its model ID or alias.
     pub fn with_default_model(mut self, model_id: impl ToString) -> Self {
         self.default_model_id = Some(model_id.to_string());
         self
@@ -120,18 +141,26 @@ impl MultiModelBuilder {
 
         // Build the first model to create the initial MistralRs instance
         let mut builders_iter = self.builders.into_iter();
-        let first_builder = builders_iter.next().unwrap();
+        let first_entry = builders_iter.next().unwrap();
 
-        let (pipeline, scheduler_config, add_model_config) = first_builder.build_pipeline().await?;
+        let (pipeline, scheduler_config, add_model_config) =
+            first_entry.builder.build_pipeline().await?;
+        let pipeline_name = pipeline.lock().await.name();
+        let primary_id = first_entry
+            .alias
+            .clone()
+            .unwrap_or_else(|| pipeline_name.clone());
 
         // Create the MistralRsBuilder for the first model
-        // The model ID will be taken from the pipeline's name
         let mut runner_builder = mistralrs_core::MistralRsBuilder::new(
             pipeline,
             scheduler_config,
             add_model_config.engine_config.throughput_logging_enabled,
             add_model_config.engine_config.search_embedding_model,
         );
+        if primary_id != pipeline_name {
+            runner_builder = runner_builder.with_model_id(primary_id.clone());
+        }
 
         if let Some(cb) = add_model_config.engine_config.search_callback.clone() {
             runner_builder = runner_builder.with_search_callback(cb);
@@ -165,14 +194,35 @@ impl MultiModelBuilder {
 
         let mistralrs = runner_builder.build().await;
 
-        // Add remaining models using their pipeline names as IDs
-        for builder in builders_iter {
-            let model_id = builder.model_id();
-            let (pipeline, scheduler_config, add_model_config) = builder.build_pipeline().await?;
+        if let Some(alias) = first_entry.alias {
+            if alias != pipeline_name {
+                mistralrs
+                    .register_model_alias(pipeline_name.clone(), &primary_id)
+                    .map_err(|e| anyhow::anyhow!(e))?;
+            }
+        }
+
+        // Add remaining models using their pipeline names as IDs (or aliases when provided)
+        for entry in builders_iter {
+            let (pipeline, scheduler_config, add_model_config) =
+                entry.builder.build_pipeline().await?;
+            let pipeline_name = pipeline.lock().await.name();
+            let primary_id = entry
+                .alias
+                .clone()
+                .unwrap_or_else(|| pipeline_name.clone());
             mistralrs
-                .add_model(model_id, pipeline, scheduler_config, add_model_config)
+                .add_model(primary_id.clone(), pipeline, scheduler_config, add_model_config)
                 .await
                 .map_err(|e| anyhow::anyhow!(e))?;
+
+            if let Some(alias) = entry.alias {
+                if alias != pipeline_name {
+                    mistralrs
+                        .register_model_alias(pipeline_name.clone(), &primary_id)
+                        .map_err(|e| anyhow::anyhow!(e))?;
+                }
+            }
         }
 
         // Set the default model if specified

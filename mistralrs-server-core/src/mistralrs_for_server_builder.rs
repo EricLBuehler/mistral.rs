@@ -14,13 +14,15 @@ use mistralrs_core::{
 use tracing::{info, warn};
 
 use crate::types::{LoadedPipeline, SharedMistralRsState};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Configuration for a single model in a multi-model setup
 #[derive(Clone, serde::Deserialize)]
 pub struct ModelConfig {
-    /// Model identifier (used in API requests)
+    /// Configuration key for this model (human-friendly label)
     pub model_id: String,
+    /// Optional alias used as the API model ID
+    pub alias: Option<String>,
     /// Model selector
     pub model: ModelSelected,
     /// Model-specific chat template
@@ -37,6 +39,7 @@ impl ModelConfig {
     pub fn new(model_id: String, model: ModelSelected) -> Self {
         Self {
             model_id,
+            alias: None,
             model,
             chat_template: None,
             jinja_explicit: None,
@@ -47,6 +50,11 @@ impl ModelConfig {
 
     pub fn with_chat_template(mut self, chat_template: String) -> Self {
         self.chat_template = Some(chat_template);
+        self
+    }
+
+    pub fn with_alias(mut self, alias: String) -> Self {
+        self.alias = Some(alias);
         self
     }
 
@@ -348,6 +356,18 @@ impl MistralRsForServerBuilder {
     /// Add a model with just an ID and ModelSelected (convenience method).
     pub fn add_model(mut self, model_id: String, model: ModelSelected) -> Self {
         self.models.push(ModelConfig::new(model_id, model));
+        self
+    }
+
+    /// Add a model with a custom alias used for API requests.
+    pub fn add_model_with_alias(
+        mut self,
+        model_id: String,
+        alias: String,
+        model: ModelSelected,
+    ) -> Self {
+        self.models
+            .push(ModelConfig::new(model_id, model).with_alias(alias));
         self
     }
 
@@ -763,7 +783,8 @@ impl MistralRsForServerBuilder {
             .or(self.in_situ_quant.as_ref())
             .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
 
-        let mut pipeline_names = Vec::new();
+        let mut loaded_model_ids = Vec::new();
+        let mut registered_ids = HashSet::new();
 
         let pipeline: LoadedPipeline = loader.load_model_from_hf(
             None,
@@ -776,11 +797,31 @@ impl MistralRsForServerBuilder {
             cache_config,
         )?;
         let first_pipeline_name = pipeline.lock().await.name();
-        info!(
-            "First model loaded: `{first_pipeline_name}` (from config key: {})",
-            first_model.model_id
-        );
-        pipeline_names.push(first_pipeline_name);
+        let first_primary_id = first_model
+            .alias
+            .clone()
+            .unwrap_or_else(|| first_pipeline_name.clone());
+
+        if !registered_ids.insert(first_primary_id.clone()) {
+            anyhow::bail!(
+                "Model ID conflict: '{}' is already registered (config key: {}).",
+                first_primary_id,
+                first_model.model_id
+            );
+        }
+
+        if first_primary_id == first_pipeline_name {
+            info!(
+                "First model loaded: `{}` (from config key: {})",
+                first_primary_id, first_model.model_id
+            );
+        } else {
+            info!(
+                "First model loaded: `{}` (pipeline: `{}`; config key: {})",
+                first_primary_id, first_pipeline_name, first_model.model_id
+            );
+        }
+        loaded_model_ids.push(first_primary_id.clone());
 
         let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
         let search_embedding_model =
@@ -796,6 +837,9 @@ impl MistralRsForServerBuilder {
         .with_opt_log(self.log.clone())
         .with_no_kv_cache(self.no_kv_cache)
         .with_prefix_cache_n(self.prefix_cache_n);
+        if first_primary_id != first_pipeline_name {
+            builder = builder.with_model_id(first_primary_id.clone());
+        }
 
         // Add MCP client configuration if provided
         if let Some(mcp_config) = self.mcp_client_config.clone() {
@@ -803,6 +847,14 @@ impl MistralRsForServerBuilder {
         }
 
         let mistralrs = builder.build().await;
+
+        if let Some(alias) = first_model.alias.as_ref() {
+            if alias != &first_pipeline_name {
+                mistralrs
+                    .register_model_alias(first_pipeline_name.clone(), &first_primary_id)
+                    .map_err(|e| anyhow::anyhow!(e))?;
+            }
+        }
 
         // Load additional models
         for model_config in self.models.iter().skip(1) {
@@ -856,14 +908,17 @@ impl MistralRsForServerBuilder {
                 cache_config,
             )?;
 
-            // Use the pipeline's name() as the model ID
+            // Use the pipeline's name() as the canonical ID, but allow an alias.
             let pipeline_name = pipeline.lock().await.name();
+            let primary_id = model_config
+                .alias
+                .clone()
+                .unwrap_or_else(|| pipeline_name.clone());
 
-            // Check for model ID conflicts
-            if pipeline_names.contains(&pipeline_name) {
+            if !registered_ids.insert(primary_id.clone()) {
                 anyhow::bail!(
-                    "Model ID conflict: '{}' is already registered. Models from config keys '{}' and previous models have the same pipeline identifier.",
-                    pipeline_name,
+                    "Model ID conflict: '{}' is already registered (config key: {}).",
+                    primary_id,
                     model_config.model_id
                 );
             }
@@ -888,19 +943,34 @@ impl MistralRsForServerBuilder {
 
             mistralrs
                 .add_model(
-                    pipeline_name.clone(),
+                    primary_id.clone(),
                     pipeline,
                     scheduler_config.clone(),
                     add_model_config,
                 )
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to add model {}: {}", pipeline_name, e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to add model {}: {}", primary_id, e))?;
 
-            info!(
-                "Model `{pipeline_name}` registered successfully (from config key: {})",
-                model_config.model_id
-            );
-            pipeline_names.push(pipeline_name);
+            if let Some(alias) = model_config.alias.as_ref() {
+                if alias != &pipeline_name {
+                    mistralrs
+                        .register_model_alias(pipeline_name.clone(), &primary_id)
+                        .map_err(|e| anyhow::anyhow!(e))?;
+                }
+            }
+
+            if primary_id == pipeline_name {
+                info!(
+                    "Model `{}` registered successfully (from config key: {})",
+                    primary_id, model_config.model_id
+                );
+            } else {
+                info!(
+                    "Model `{}` registered successfully (pipeline: `{}`; config key: {})",
+                    primary_id, pipeline_name, model_config.model_id
+                );
+            }
+            loaded_model_ids.push(primary_id);
         }
 
         // Set the default model if specified
@@ -911,7 +981,7 @@ impl MistralRsForServerBuilder {
         }
 
         // Log all models loaded
-        info!("All models loaded: `{}`", pipeline_names.join("`, `"));
+        info!("All models loaded: `{}`", loaded_model_ids.join("`, `"));
 
         // Log default model
         if let Some(ref default_id) = self.default_model_id {
@@ -919,7 +989,7 @@ impl MistralRsForServerBuilder {
         } else {
             info!(
                 "Default model: {} (first model, from config key: {})",
-                pipeline_names[0], self.models[0].model_id
+                loaded_model_ids[0], self.models[0].model_id
             );
         }
         Ok(mistralrs)

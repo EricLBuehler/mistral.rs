@@ -233,7 +233,7 @@ class Which(Enum):
 
 ## Multi-model Support
 
-The `mistralrs` Python API supports running multiple models using the `Runner` class with the `model_id` parameter. All request methods accept an optional `model_id` to target a specific model. When `model_id` is `None` or omitted, the default model is used.
+The `mistralrs` Python API supports running multiple models using the `Runner` class with the `model_id` parameter. All request methods accept an optional `model_id` to target a specific model. When `model_id` is `None` or omitted, the default model is used. If aliases are configured (for example via the server config or Rust `MultiModelBuilder`), `list_models()` will return those aliases and you can pass them in requests; canonical pipeline names remain accepted.
 
 ### Basic Usage with model_id
 
@@ -249,7 +249,7 @@ runner = mistralrs.Runner(
     in_situ_quant="Q4K",
 )
 
-# List available models (model IDs are HuggingFace paths)
+# List available models (model IDs are registered IDs, aliases if configured)
 models = runner.list_models()
 print(f"Available models: {models}")  # ["google/gemma-3-4b-it"]
 

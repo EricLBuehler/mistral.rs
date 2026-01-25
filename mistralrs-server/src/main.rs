@@ -276,6 +276,8 @@ struct ModelConfigParsed {
     /// Model selector
     #[serde(flatten)]
     model: ModelSelected,
+    /// Optional alias used as the API model ID
+    alias: Option<String>,
     /// Model-specific chat template
     chat_template: Option<String>,
     /// Model-specific JINJA template
@@ -307,6 +309,7 @@ fn load_multi_model_config(config_path: &str) -> Result<Vec<ModelConfig>> {
     for (model_id, parsed_config) in configs_parsed {
         let config = ModelConfig {
             model_id,
+            alias: parsed_config.alias,
             model: parsed_config.model,
             chat_template: parsed_config.chat_template,
             jinja_explicit: parsed_config.jinja_explicit,

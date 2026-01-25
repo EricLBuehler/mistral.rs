@@ -546,7 +546,7 @@ class Runner:
 
     def list_models(self) -> list[str]:
         """
-        List all available model IDs.
+        List all available model IDs (aliases if configured).
 
         Returns:
             A list of model ID strings.

@@ -1687,7 +1687,7 @@ impl Runner {
             .map_err(PyApiErr::from)
     }
 
-    /// List all available model IDs in multi-model mode.
+    /// List all available model IDs in multi-model mode (aliases if configured).
     fn list_models(&self) -> PyApiResult<Vec<String>> {
         self.runner.list_models().map_err(PyApiErr::from)
     }
