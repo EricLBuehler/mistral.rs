@@ -16,7 +16,7 @@ use clap_complete::generate;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use args::{Cli, Command};
-use commands::{run_interactive, run_server};
+use commands::{run_interactive, run_quantize, run_server};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -49,6 +49,10 @@ async fn main() -> Result<()> {
             let mut cmd = Cli::command();
             let name = cmd.get_name().to_string();
             generate(shell, &mut cmd, name, &mut std::io::stdout());
+        }
+
+        Command::Quantize { model_type } => {
+            run_quantize(model_type, cli.global).await?;
         }
     }
 

@@ -5,10 +5,12 @@
 
 mod model;
 mod paged_attn;
+mod quantize;
 mod server;
 
 pub use model::*;
 pub use paged_attn::*;
+pub use quantize::*;
 pub use server::*;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -61,6 +63,12 @@ pub enum Command {
         /// Shell to generate completions for
         #[arg(value_enum)]
         shell: Shell,
+    },
+
+    /// Generate UQFF quantized model file
+    Quantize {
+        #[command(subcommand)]
+        model_type: QuantizeModelType,
     },
 }
 

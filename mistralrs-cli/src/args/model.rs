@@ -88,10 +88,6 @@ pub struct QuantizationOptions {
     #[arg(long)]
     pub from_uqff: Option<String>,
 
-    /// UQFF file to write quantized model to
-    #[arg(long, conflicts_with = "from_uqff")]
-    pub write_uqff: Option<PathBuf>,
-
     /// ISQ organization strategy: default or moqe
     #[arg(long)]
     pub isq_organization: Option<IsqOrganization>,
