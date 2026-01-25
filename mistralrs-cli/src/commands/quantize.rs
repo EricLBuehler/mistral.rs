@@ -4,7 +4,9 @@ use anyhow::Result;
 use tracing::info;
 
 use mistralrs_core::{initialize_logging, ModelSelected};
-use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
+use mistralrs_server_core::mistralrs_for_server_builder::{
+    defaults, MistralRsForServerBuilder,
+};
 
 use crate::args::{GlobalOptions, QuantizeModelType};
 
@@ -20,11 +22,11 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
     // Build the MistralRs instance - this triggers model loading and UQFF generation
     let _mistralrs = MistralRsForServerBuilder::new()
         .with_model(model_selected)
-        .with_max_seqs(1)
-        .with_no_kv_cache(true)
+        .with_max_seqs(defaults::MAX_SEQS)
+        .with_no_kv_cache(defaults::NO_KV_CACHE)
         .with_token_source(global.token_source)
-        .with_interactive_mode(false)
-        .with_prefix_cache_n(0)
+        .with_interactive_mode(true)
+        .with_prefix_cache_n(defaults::PREFIX_CACHE_N)
         .with_cpu(cpu)
         .with_num_device_layers_optional(device_layers)
         .with_in_situ_quant_optional(Some(isq))

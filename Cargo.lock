@@ -3434,6 +3434,7 @@ version = "0.7.0"
 dependencies = [
  "anyhow",
  "axum",
+ "candle-core",
  "clap",
  "clap_complete",
  "ctrlc",
