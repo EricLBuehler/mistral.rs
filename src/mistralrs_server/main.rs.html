@@ -276,198 +276,201 @@
 <a href=#276 id=276 data-nosnippet>276</a>    <span class="doccomment">/// Model selector
 <a href=#277 id=277 data-nosnippet>277</a>    </span><span class="attr">#[serde(flatten)]
 <a href=#278 id=278 data-nosnippet>278</a>    </span>model: ModelSelected,
-<a href=#279 id=279 data-nosnippet>279</a>    <span class="doccomment">/// Model-specific chat template
-<a href=#280 id=280 data-nosnippet>280</a>    </span>chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#281 id=281 data-nosnippet>281</a>    <span class="doccomment">/// Model-specific JINJA template
-<a href=#282 id=282 data-nosnippet>282</a>    </span>jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#283 id=283 data-nosnippet>283</a>    <span class="doccomment">/// Model-specific device layers
-<a href=#284 id=284 data-nosnippet>284</a>    </span>num_device_layers: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
-<a href=#285 id=285 data-nosnippet>285</a>    <span class="doccomment">/// Model-specific in-situ quantization
-<a href=#286 id=286 data-nosnippet>286</a>    </span>in_situ_quant: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#287 id=287 data-nosnippet>287</a>}
-<a href=#288 id=288 data-nosnippet>288</a>
-<a href=#289 id=289 data-nosnippet>289</a><span class="doccomment">/// Load multi-model configuration from file
-<a href=#290 id=290 data-nosnippet>290</a></span><span class="kw">fn </span>load_multi_model_config(config_path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;ModelConfig&gt;&gt; {
-<a href=#291 id=291 data-nosnippet>291</a>    <span class="kw">let </span>config_content = std::fs::read_to_string(config_path).map_err(|e| {
-<a href=#292 id=292 data-nosnippet>292</a>        <span class="macro">anyhow::anyhow!</span>(
-<a href=#293 id=293 data-nosnippet>293</a>            <span class="string">"Failed to read multi-model config file {}: {}"</span>,
-<a href=#294 id=294 data-nosnippet>294</a>            config_path,
-<a href=#295 id=295 data-nosnippet>295</a>            e
-<a href=#296 id=296 data-nosnippet>296</a>        )
-<a href=#297 id=297 data-nosnippet>297</a>    })<span class="question-mark">?</span>;
-<a href=#298 id=298 data-nosnippet>298</a>
-<a href=#299 id=299 data-nosnippet>299</a>    <span class="kw">let </span>configs_parsed: HashMap&lt;String, ModelConfigParsed&gt; = serde_json::from_str(<span class="kw-2">&amp;</span>config_content)
-<a href=#300 id=300 data-nosnippet>300</a>        .map_err(|e| <span class="macro">anyhow::anyhow!</span>(<span class="string">"Failed to parse multi-model config: {}"</span>, e))<span class="question-mark">?</span>;
-<a href=#301 id=301 data-nosnippet>301</a>
-<a href=#302 id=302 data-nosnippet>302</a>    <span class="kw">if </span>configs_parsed.is_empty() {
-<a href=#303 id=303 data-nosnippet>303</a>        <span class="macro">anyhow::bail!</span>(<span class="string">"Multi-model configuration file is empty"</span>);
-<a href=#304 id=304 data-nosnippet>304</a>    }
-<a href=#305 id=305 data-nosnippet>305</a>
-<a href=#306 id=306 data-nosnippet>306</a>    <span class="kw">let </span><span class="kw-2">mut </span>configs = Vec::new();
-<a href=#307 id=307 data-nosnippet>307</a>    <span class="kw">for </span>(model_id, parsed_config) <span class="kw">in </span>configs_parsed {
-<a href=#308 id=308 data-nosnippet>308</a>        <span class="kw">let </span>config = ModelConfig {
-<a href=#309 id=309 data-nosnippet>309</a>            model_id,
-<a href=#310 id=310 data-nosnippet>310</a>            model: parsed_config.model,
-<a href=#311 id=311 data-nosnippet>311</a>            chat_template: parsed_config.chat_template,
-<a href=#312 id=312 data-nosnippet>312</a>            jinja_explicit: parsed_config.jinja_explicit,
-<a href=#313 id=313 data-nosnippet>313</a>            num_device_layers: parsed_config.num_device_layers,
-<a href=#314 id=314 data-nosnippet>314</a>            in_situ_quant: parsed_config.in_situ_quant,
-<a href=#315 id=315 data-nosnippet>315</a>        };
-<a href=#316 id=316 data-nosnippet>316</a>        configs.push(config);
-<a href=#317 id=317 data-nosnippet>317</a>    }
-<a href=#318 id=318 data-nosnippet>318</a>
-<a href=#319 id=319 data-nosnippet>319</a>    <span class="macro">info!</span>(
-<a href=#320 id=320 data-nosnippet>320</a>        <span class="string">"Loaded multi-model configuration with {} models"</span>,
-<a href=#321 id=321 data-nosnippet>321</a>        configs.len()
-<a href=#322 id=322 data-nosnippet>322</a>    );
-<a href=#323 id=323 data-nosnippet>323</a>    <span class="prelude-val">Ok</span>(configs)
-<a href=#324 id=324 data-nosnippet>324</a>}
-<a href=#325 id=325 data-nosnippet>325</a>
-<a href=#326 id=326 data-nosnippet>326</a><span class="attr">#[tokio::main]
-<a href=#327 id=327 data-nosnippet>327</a></span><span class="kw">async fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#328 id=328 data-nosnippet>328</a>    <span class="kw">let </span>args = Args::parse();
-<a href=#329 id=329 data-nosnippet>329</a>
-<a href=#330 id=330 data-nosnippet>330</a>    initialize_logging();
-<a href=#331 id=331 data-nosnippet>331</a>
-<a href=#332 id=332 data-nosnippet>332</a>    <span class="comment">// Load MCP configuration if provided
-<a href=#333 id=333 data-nosnippet>333</a>    </span><span class="kw">let </span>mcp_config = load_mcp_config(args.mcp_config.as_deref())<span class="question-mark">?</span>;
+<a href=#279 id=279 data-nosnippet>279</a>    <span class="doccomment">/// Optional alias used as the API model ID
+<a href=#280 id=280 data-nosnippet>280</a>    </span>alias: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#281 id=281 data-nosnippet>281</a>    <span class="doccomment">/// Model-specific chat template
+<a href=#282 id=282 data-nosnippet>282</a>    </span>chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#283 id=283 data-nosnippet>283</a>    <span class="doccomment">/// Model-specific JINJA template
+<a href=#284 id=284 data-nosnippet>284</a>    </span>jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#285 id=285 data-nosnippet>285</a>    <span class="doccomment">/// Model-specific device layers
+<a href=#286 id=286 data-nosnippet>286</a>    </span>num_device_layers: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
+<a href=#287 id=287 data-nosnippet>287</a>    <span class="doccomment">/// Model-specific in-situ quantization
+<a href=#288 id=288 data-nosnippet>288</a>    </span>in_situ_quant: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#289 id=289 data-nosnippet>289</a>}
+<a href=#290 id=290 data-nosnippet>290</a>
+<a href=#291 id=291 data-nosnippet>291</a><span class="doccomment">/// Load multi-model configuration from file
+<a href=#292 id=292 data-nosnippet>292</a></span><span class="kw">fn </span>load_multi_model_config(config_path: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;ModelConfig&gt;&gt; {
+<a href=#293 id=293 data-nosnippet>293</a>    <span class="kw">let </span>config_content = std::fs::read_to_string(config_path).map_err(|e| {
+<a href=#294 id=294 data-nosnippet>294</a>        <span class="macro">anyhow::anyhow!</span>(
+<a href=#295 id=295 data-nosnippet>295</a>            <span class="string">"Failed to read multi-model config file {}: {}"</span>,
+<a href=#296 id=296 data-nosnippet>296</a>            config_path,
+<a href=#297 id=297 data-nosnippet>297</a>            e
+<a href=#298 id=298 data-nosnippet>298</a>        )
+<a href=#299 id=299 data-nosnippet>299</a>    })<span class="question-mark">?</span>;
+<a href=#300 id=300 data-nosnippet>300</a>
+<a href=#301 id=301 data-nosnippet>301</a>    <span class="kw">let </span>configs_parsed: HashMap&lt;String, ModelConfigParsed&gt; = serde_json::from_str(<span class="kw-2">&amp;</span>config_content)
+<a href=#302 id=302 data-nosnippet>302</a>        .map_err(|e| <span class="macro">anyhow::anyhow!</span>(<span class="string">"Failed to parse multi-model config: {}"</span>, e))<span class="question-mark">?</span>;
+<a href=#303 id=303 data-nosnippet>303</a>
+<a href=#304 id=304 data-nosnippet>304</a>    <span class="kw">if </span>configs_parsed.is_empty() {
+<a href=#305 id=305 data-nosnippet>305</a>        <span class="macro">anyhow::bail!</span>(<span class="string">"Multi-model configuration file is empty"</span>);
+<a href=#306 id=306 data-nosnippet>306</a>    }
+<a href=#307 id=307 data-nosnippet>307</a>
+<a href=#308 id=308 data-nosnippet>308</a>    <span class="kw">let </span><span class="kw-2">mut </span>configs = Vec::new();
+<a href=#309 id=309 data-nosnippet>309</a>    <span class="kw">for </span>(model_id, parsed_config) <span class="kw">in </span>configs_parsed {
+<a href=#310 id=310 data-nosnippet>310</a>        <span class="kw">let </span>config = ModelConfig {
+<a href=#311 id=311 data-nosnippet>311</a>            model_id,
+<a href=#312 id=312 data-nosnippet>312</a>            alias: parsed_config.alias,
+<a href=#313 id=313 data-nosnippet>313</a>            model: parsed_config.model,
+<a href=#314 id=314 data-nosnippet>314</a>            chat_template: parsed_config.chat_template,
+<a href=#315 id=315 data-nosnippet>315</a>            jinja_explicit: parsed_config.jinja_explicit,
+<a href=#316 id=316 data-nosnippet>316</a>            num_device_layers: parsed_config.num_device_layers,
+<a href=#317 id=317 data-nosnippet>317</a>            in_situ_quant: parsed_config.in_situ_quant,
+<a href=#318 id=318 data-nosnippet>318</a>        };
+<a href=#319 id=319 data-nosnippet>319</a>        configs.push(config);
+<a href=#320 id=320 data-nosnippet>320</a>    }
+<a href=#321 id=321 data-nosnippet>321</a>
+<a href=#322 id=322 data-nosnippet>322</a>    <span class="macro">info!</span>(
+<a href=#323 id=323 data-nosnippet>323</a>        <span class="string">"Loaded multi-model configuration with {} models"</span>,
+<a href=#324 id=324 data-nosnippet>324</a>        configs.len()
+<a href=#325 id=325 data-nosnippet>325</a>    );
+<a href=#326 id=326 data-nosnippet>326</a>    <span class="prelude-val">Ok</span>(configs)
+<a href=#327 id=327 data-nosnippet>327</a>}
+<a href=#328 id=328 data-nosnippet>328</a>
+<a href=#329 id=329 data-nosnippet>329</a><span class="attr">#[tokio::main]
+<a href=#330 id=330 data-nosnippet>330</a></span><span class="kw">async fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#331 id=331 data-nosnippet>331</a>    <span class="kw">let </span>args = Args::parse();
+<a href=#332 id=332 data-nosnippet>332</a>
+<a href=#333 id=333 data-nosnippet>333</a>    initialize_logging();
 <a href=#334 id=334 data-nosnippet>334</a>
-<a href=#335 id=335 data-nosnippet>335</a>    <span class="kw">let </span>paged_attn = configure_paged_attn_from_flags(args.paged_attn, args.no_paged_attn)<span class="question-mark">?</span>;
-<a href=#336 id=336 data-nosnippet>336</a>
-<a href=#337 id=337 data-nosnippet>337</a>    <span class="kw">let </span>mistralrs = <span class="kw">match </span>args.model {
-<a href=#338 id=338 data-nosnippet>338</a>        ModelSelected::MultiModel {
-<a href=#339 id=339 data-nosnippet>339</a>            config,
-<a href=#340 id=340 data-nosnippet>340</a>            default_model_id,
-<a href=#341 id=341 data-nosnippet>341</a>        } =&gt; {
-<a href=#342 id=342 data-nosnippet>342</a>            <span class="comment">// Multi-model mode
-<a href=#343 id=343 data-nosnippet>343</a>            </span><span class="kw">let </span>model_configs = load_multi_model_config(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>;
-<a href=#344 id=344 data-nosnippet>344</a>
-<a href=#345 id=345 data-nosnippet>345</a>            <span class="kw">let </span><span class="kw-2">mut </span>builder = MistralRsForServerBuilder::new()
-<a href=#346 id=346 data-nosnippet>346</a>                .with_max_seqs(args.max_seqs)
-<a href=#347 id=347 data-nosnippet>347</a>                .with_no_kv_cache(args.no_kv_cache)
-<a href=#348 id=348 data-nosnippet>348</a>                .with_token_source(args.token_source)
-<a href=#349 id=349 data-nosnippet>349</a>                .with_interactive_mode(args.interactive_mode)
-<a href=#350 id=350 data-nosnippet>350</a>                .with_prefix_cache_n(args.prefix_cache_n)
-<a href=#351 id=351 data-nosnippet>351</a>                .set_paged_attn(paged_attn)
-<a href=#352 id=352 data-nosnippet>352</a>                .with_cpu(args.cpu)
-<a href=#353 id=353 data-nosnippet>353</a>                .with_enable_search(args.enable_search)
-<a href=#354 id=354 data-nosnippet>354</a>                .with_seed_optional(args.seed)
-<a href=#355 id=355 data-nosnippet>355</a>                .with_log_optional(args.log)
-<a href=#356 id=356 data-nosnippet>356</a>                .with_mcp_config_optional(mcp_config)
-<a href=#357 id=357 data-nosnippet>357</a>                .with_paged_attn_cache_type(args.cache_type.unwrap_or_default());
-<a href=#358 id=358 data-nosnippet>358</a>
-<a href=#359 id=359 data-nosnippet>359</a>            <span class="comment">// Add models to builder
-<a href=#360 id=360 data-nosnippet>360</a>            </span><span class="kw">for </span>config <span class="kw">in </span>model_configs {
-<a href=#361 id=361 data-nosnippet>361</a>                builder = builder.add_model_config(config);
-<a href=#362 id=362 data-nosnippet>362</a>            }
-<a href=#363 id=363 data-nosnippet>363</a>
-<a href=#364 id=364 data-nosnippet>364</a>            <span class="comment">// Set default model if specified
-<a href=#365 id=365 data-nosnippet>365</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(default_id) = default_model_id {
-<a href=#366 id=366 data-nosnippet>366</a>                builder = builder.with_default_model_id(default_id);
-<a href=#367 id=367 data-nosnippet>367</a>            }
-<a href=#368 id=368 data-nosnippet>368</a>
-<a href=#369 id=369 data-nosnippet>369</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(model) = args.search_embedding_model {
-<a href=#370 id=370 data-nosnippet>370</a>                builder = builder.with_search_embedding_model(model);
-<a href=#371 id=371 data-nosnippet>371</a>            }
-<a href=#372 id=372 data-nosnippet>372</a>
-<a href=#373 id=373 data-nosnippet>373</a>            builder.build_multi_model().<span class="kw">await</span><span class="question-mark">?
-<a href=#374 id=374 data-nosnippet>374</a>        </span>}
-<a href=#375 id=375 data-nosnippet>375</a>        model =&gt; {
-<a href=#376 id=376 data-nosnippet>376</a>            <span class="comment">// Single-model mode
-<a href=#377 id=377 data-nosnippet>377</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>builder = MistralRsForServerBuilder::new()
-<a href=#378 id=378 data-nosnippet>378</a>                .with_model(model)
-<a href=#379 id=379 data-nosnippet>379</a>                .with_max_seqs(args.max_seqs)
-<a href=#380 id=380 data-nosnippet>380</a>                .with_no_kv_cache(args.no_kv_cache)
-<a href=#381 id=381 data-nosnippet>381</a>                .with_token_source(args.token_source)
-<a href=#382 id=382 data-nosnippet>382</a>                .with_interactive_mode(args.interactive_mode)
-<a href=#383 id=383 data-nosnippet>383</a>                .with_prefix_cache_n(args.prefix_cache_n)
-<a href=#384 id=384 data-nosnippet>384</a>                .set_paged_attn(paged_attn)
-<a href=#385 id=385 data-nosnippet>385</a>                .with_cpu(args.cpu)
-<a href=#386 id=386 data-nosnippet>386</a>                .with_enable_search(args.enable_search)
-<a href=#387 id=387 data-nosnippet>387</a>                .with_seed_optional(args.seed)
-<a href=#388 id=388 data-nosnippet>388</a>                .with_log_optional(args.log)
-<a href=#389 id=389 data-nosnippet>389</a>                .with_chat_template_optional(args.chat_template)
-<a href=#390 id=390 data-nosnippet>390</a>                .with_jinja_explicit_optional(args.jinja_explicit)
-<a href=#391 id=391 data-nosnippet>391</a>                .with_num_device_layers_optional(args.num_device_layers)
-<a href=#392 id=392 data-nosnippet>392</a>                .with_in_situ_quant_optional(args.in_situ_quant)
-<a href=#393 id=393 data-nosnippet>393</a>                .with_paged_attn_gpu_mem_optional(args.paged_attn_gpu_mem)
-<a href=#394 id=394 data-nosnippet>394</a>                .with_paged_attn_gpu_mem_usage_optional(args.paged_attn_gpu_mem_usage)
-<a href=#395 id=395 data-nosnippet>395</a>                .with_paged_ctxt_len_optional(args.paged_ctxt_len)
-<a href=#396 id=396 data-nosnippet>396</a>                .with_paged_attn_block_size_optional(args.paged_attn_block_size)
-<a href=#397 id=397 data-nosnippet>397</a>                .with_mcp_config_optional(mcp_config)
-<a href=#398 id=398 data-nosnippet>398</a>                .with_paged_attn_cache_type(args.cache_type.unwrap_or_default());
-<a href=#399 id=399 data-nosnippet>399</a>
-<a href=#400 id=400 data-nosnippet>400</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(model) = args.search_embedding_model {
-<a href=#401 id=401 data-nosnippet>401</a>                builder = builder.with_search_embedding_model(model);
-<a href=#402 id=402 data-nosnippet>402</a>            }
-<a href=#403 id=403 data-nosnippet>403</a>
-<a href=#404 id=404 data-nosnippet>404</a>            builder.build().<span class="kw">await</span><span class="question-mark">?
-<a href=#405 id=405 data-nosnippet>405</a>        </span>}
-<a href=#406 id=406 data-nosnippet>406</a>    };
-<a href=#407 id=407 data-nosnippet>407</a>
-<a href=#408 id=408 data-nosnippet>408</a>    <span class="comment">// TODO: refactor this
-<a href=#409 id=409 data-nosnippet>409</a>    </span><span class="kw">let </span>search_embedding_model =
-<a href=#410 id=410 data-nosnippet>410</a>        get_search_embedding_model(args.enable_search, args.search_embedding_model);
-<a href=#411 id=411 data-nosnippet>411</a>
-<a href=#412 id=412 data-nosnippet>412</a>    <span class="kw">if </span>args.interactive_mode {
-<a href=#413 id=413 data-nosnippet>413</a>        interactive_mode(
-<a href=#414 id=414 data-nosnippet>414</a>            mistralrs,
-<a href=#415 id=415 data-nosnippet>415</a>            search_embedding_model.is_some(),
-<a href=#416 id=416 data-nosnippet>416</a>            args.enable_thinking.then_some(<span class="bool-val">true</span>),
-<a href=#417 id=417 data-nosnippet>417</a>        )
-<a href=#418 id=418 data-nosnippet>418</a>        .<span class="kw">await</span>;
-<a href=#419 id=419 data-nosnippet>419</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#420 id=420 data-nosnippet>420</a>    }
-<a href=#421 id=421 data-nosnippet>421</a>
-<a href=#422 id=422 data-nosnippet>422</a>    <span class="kw">if </span>!args.interactive_mode &amp;&amp; args.port.is_none() &amp;&amp; args.mcp_port.is_none() {
-<a href=#423 id=423 data-nosnippet>423</a>        <span class="macro">anyhow::bail!</span>(<span class="string">"Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port` or `--mcp-port`?"</span>)
-<a href=#424 id=424 data-nosnippet>424</a>    }
-<a href=#425 id=425 data-nosnippet>425</a>
-<a href=#426 id=426 data-nosnippet>426</a>    <span class="kw">let </span>mcp_port = <span class="kw">if let </span><span class="prelude-val">Some</span>(port) = args.mcp_port {
-<a href=#427 id=427 data-nosnippet>427</a>        <span class="kw">let </span>host = args
-<a href=#428 id=428 data-nosnippet>428</a>            .serve_ip
-<a href=#429 id=429 data-nosnippet>429</a>            .clone()
-<a href=#430 id=430 data-nosnippet>430</a>            .unwrap_or_else(|| <span class="string">"0.0.0.0"</span>.to_string());
-<a href=#431 id=431 data-nosnippet>431</a>        <span class="macro">info!</span>(<span class="string">"MCP server listening on http://{host}:{port}/mcp."</span>);
-<a href=#432 id=432 data-nosnippet>432</a>        <span class="macro">info!</span>(<span class="string">"MCP protocol version is {}."</span>, LATEST_PROTOCOL_VERSION);
-<a href=#433 id=433 data-nosnippet>433</a>        <span class="kw">let </span>mcp_server = mcp_server::create_http_mcp_server(mistralrs.clone(), host, port);
-<a href=#434 id=434 data-nosnippet>434</a>
-<a href=#435 id=435 data-nosnippet>435</a>        tokio::spawn(<span class="kw">async move </span>{
-<a href=#436 id=436 data-nosnippet>436</a>            <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = mcp_server.<span class="kw">await </span>{
-<a href=#437 id=437 data-nosnippet>437</a>                <span class="macro">eprintln!</span>(<span class="string">"MCP server error: {e}"</span>);
-<a href=#438 id=438 data-nosnippet>438</a>            }
-<a href=#439 id=439 data-nosnippet>439</a>        })
-<a href=#440 id=440 data-nosnippet>440</a>    } <span class="kw">else </span>{
-<a href=#441 id=441 data-nosnippet>441</a>        tokio::spawn(<span class="kw">async </span>{})
-<a href=#442 id=442 data-nosnippet>442</a>    };
-<a href=#443 id=443 data-nosnippet>443</a>
-<a href=#444 id=444 data-nosnippet>444</a>    <span class="kw">let </span>oai_port = <span class="kw">if let </span><span class="prelude-val">Some</span>(port) = args.port {
-<a href=#445 id=445 data-nosnippet>445</a>        <span class="kw">let </span>ip = args
-<a href=#446 id=446 data-nosnippet>446</a>            .serve_ip
-<a href=#447 id=447 data-nosnippet>447</a>            .clone()
-<a href=#448 id=448 data-nosnippet>448</a>            .unwrap_or_else(|| <span class="string">"0.0.0.0"</span>.to_string());
-<a href=#449 id=449 data-nosnippet>449</a>
-<a href=#450 id=450 data-nosnippet>450</a>        <span class="comment">// Create listener early to validate address before model loading
-<a href=#451 id=451 data-nosnippet>451</a>        </span><span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="macro">format!</span>(<span class="string">"{ip}:{port}"</span>)).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#335 id=335 data-nosnippet>335</a>    <span class="comment">// Load MCP configuration if provided
+<a href=#336 id=336 data-nosnippet>336</a>    </span><span class="kw">let </span>mcp_config = load_mcp_config(args.mcp_config.as_deref())<span class="question-mark">?</span>;
+<a href=#337 id=337 data-nosnippet>337</a>
+<a href=#338 id=338 data-nosnippet>338</a>    <span class="kw">let </span>paged_attn = configure_paged_attn_from_flags(args.paged_attn, args.no_paged_attn)<span class="question-mark">?</span>;
+<a href=#339 id=339 data-nosnippet>339</a>
+<a href=#340 id=340 data-nosnippet>340</a>    <span class="kw">let </span>mistralrs = <span class="kw">match </span>args.model {
+<a href=#341 id=341 data-nosnippet>341</a>        ModelSelected::MultiModel {
+<a href=#342 id=342 data-nosnippet>342</a>            config,
+<a href=#343 id=343 data-nosnippet>343</a>            default_model_id,
+<a href=#344 id=344 data-nosnippet>344</a>        } =&gt; {
+<a href=#345 id=345 data-nosnippet>345</a>            <span class="comment">// Multi-model mode
+<a href=#346 id=346 data-nosnippet>346</a>            </span><span class="kw">let </span>model_configs = load_multi_model_config(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>;
+<a href=#347 id=347 data-nosnippet>347</a>
+<a href=#348 id=348 data-nosnippet>348</a>            <span class="kw">let </span><span class="kw-2">mut </span>builder = MistralRsForServerBuilder::new()
+<a href=#349 id=349 data-nosnippet>349</a>                .with_max_seqs(args.max_seqs)
+<a href=#350 id=350 data-nosnippet>350</a>                .with_no_kv_cache(args.no_kv_cache)
+<a href=#351 id=351 data-nosnippet>351</a>                .with_token_source(args.token_source)
+<a href=#352 id=352 data-nosnippet>352</a>                .with_interactive_mode(args.interactive_mode)
+<a href=#353 id=353 data-nosnippet>353</a>                .with_prefix_cache_n(args.prefix_cache_n)
+<a href=#354 id=354 data-nosnippet>354</a>                .set_paged_attn(paged_attn)
+<a href=#355 id=355 data-nosnippet>355</a>                .with_cpu(args.cpu)
+<a href=#356 id=356 data-nosnippet>356</a>                .with_enable_search(args.enable_search)
+<a href=#357 id=357 data-nosnippet>357</a>                .with_seed_optional(args.seed)
+<a href=#358 id=358 data-nosnippet>358</a>                .with_log_optional(args.log)
+<a href=#359 id=359 data-nosnippet>359</a>                .with_mcp_config_optional(mcp_config)
+<a href=#360 id=360 data-nosnippet>360</a>                .with_paged_attn_cache_type(args.cache_type.unwrap_or_default());
+<a href=#361 id=361 data-nosnippet>361</a>
+<a href=#362 id=362 data-nosnippet>362</a>            <span class="comment">// Add models to builder
+<a href=#363 id=363 data-nosnippet>363</a>            </span><span class="kw">for </span>config <span class="kw">in </span>model_configs {
+<a href=#364 id=364 data-nosnippet>364</a>                builder = builder.add_model_config(config);
+<a href=#365 id=365 data-nosnippet>365</a>            }
+<a href=#366 id=366 data-nosnippet>366</a>
+<a href=#367 id=367 data-nosnippet>367</a>            <span class="comment">// Set default model if specified
+<a href=#368 id=368 data-nosnippet>368</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(default_id) = default_model_id {
+<a href=#369 id=369 data-nosnippet>369</a>                builder = builder.with_default_model_id(default_id);
+<a href=#370 id=370 data-nosnippet>370</a>            }
+<a href=#371 id=371 data-nosnippet>371</a>
+<a href=#372 id=372 data-nosnippet>372</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(model) = args.search_embedding_model {
+<a href=#373 id=373 data-nosnippet>373</a>                builder = builder.with_search_embedding_model(model);
+<a href=#374 id=374 data-nosnippet>374</a>            }
+<a href=#375 id=375 data-nosnippet>375</a>
+<a href=#376 id=376 data-nosnippet>376</a>            builder.build_multi_model().<span class="kw">await</span><span class="question-mark">?
+<a href=#377 id=377 data-nosnippet>377</a>        </span>}
+<a href=#378 id=378 data-nosnippet>378</a>        model =&gt; {
+<a href=#379 id=379 data-nosnippet>379</a>            <span class="comment">// Single-model mode
+<a href=#380 id=380 data-nosnippet>380</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>builder = MistralRsForServerBuilder::new()
+<a href=#381 id=381 data-nosnippet>381</a>                .with_model(model)
+<a href=#382 id=382 data-nosnippet>382</a>                .with_max_seqs(args.max_seqs)
+<a href=#383 id=383 data-nosnippet>383</a>                .with_no_kv_cache(args.no_kv_cache)
+<a href=#384 id=384 data-nosnippet>384</a>                .with_token_source(args.token_source)
+<a href=#385 id=385 data-nosnippet>385</a>                .with_interactive_mode(args.interactive_mode)
+<a href=#386 id=386 data-nosnippet>386</a>                .with_prefix_cache_n(args.prefix_cache_n)
+<a href=#387 id=387 data-nosnippet>387</a>                .set_paged_attn(paged_attn)
+<a href=#388 id=388 data-nosnippet>388</a>                .with_cpu(args.cpu)
+<a href=#389 id=389 data-nosnippet>389</a>                .with_enable_search(args.enable_search)
+<a href=#390 id=390 data-nosnippet>390</a>                .with_seed_optional(args.seed)
+<a href=#391 id=391 data-nosnippet>391</a>                .with_log_optional(args.log)
+<a href=#392 id=392 data-nosnippet>392</a>                .with_chat_template_optional(args.chat_template)
+<a href=#393 id=393 data-nosnippet>393</a>                .with_jinja_explicit_optional(args.jinja_explicit)
+<a href=#394 id=394 data-nosnippet>394</a>                .with_num_device_layers_optional(args.num_device_layers)
+<a href=#395 id=395 data-nosnippet>395</a>                .with_in_situ_quant_optional(args.in_situ_quant)
+<a href=#396 id=396 data-nosnippet>396</a>                .with_paged_attn_gpu_mem_optional(args.paged_attn_gpu_mem)
+<a href=#397 id=397 data-nosnippet>397</a>                .with_paged_attn_gpu_mem_usage_optional(args.paged_attn_gpu_mem_usage)
+<a href=#398 id=398 data-nosnippet>398</a>                .with_paged_ctxt_len_optional(args.paged_ctxt_len)
+<a href=#399 id=399 data-nosnippet>399</a>                .with_paged_attn_block_size_optional(args.paged_attn_block_size)
+<a href=#400 id=400 data-nosnippet>400</a>                .with_mcp_config_optional(mcp_config)
+<a href=#401 id=401 data-nosnippet>401</a>                .with_paged_attn_cache_type(args.cache_type.unwrap_or_default());
+<a href=#402 id=402 data-nosnippet>402</a>
+<a href=#403 id=403 data-nosnippet>403</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(model) = args.search_embedding_model {
+<a href=#404 id=404 data-nosnippet>404</a>                builder = builder.with_search_embedding_model(model);
+<a href=#405 id=405 data-nosnippet>405</a>            }
+<a href=#406 id=406 data-nosnippet>406</a>
+<a href=#407 id=407 data-nosnippet>407</a>            builder.build().<span class="kw">await</span><span class="question-mark">?
+<a href=#408 id=408 data-nosnippet>408</a>        </span>}
+<a href=#409 id=409 data-nosnippet>409</a>    };
+<a href=#410 id=410 data-nosnippet>410</a>
+<a href=#411 id=411 data-nosnippet>411</a>    <span class="comment">// TODO: refactor this
+<a href=#412 id=412 data-nosnippet>412</a>    </span><span class="kw">let </span>search_embedding_model =
+<a href=#413 id=413 data-nosnippet>413</a>        get_search_embedding_model(args.enable_search, args.search_embedding_model);
+<a href=#414 id=414 data-nosnippet>414</a>
+<a href=#415 id=415 data-nosnippet>415</a>    <span class="kw">if </span>args.interactive_mode {
+<a href=#416 id=416 data-nosnippet>416</a>        interactive_mode(
+<a href=#417 id=417 data-nosnippet>417</a>            mistralrs,
+<a href=#418 id=418 data-nosnippet>418</a>            search_embedding_model.is_some(),
+<a href=#419 id=419 data-nosnippet>419</a>            args.enable_thinking.then_some(<span class="bool-val">true</span>),
+<a href=#420 id=420 data-nosnippet>420</a>        )
+<a href=#421 id=421 data-nosnippet>421</a>        .<span class="kw">await</span>;
+<a href=#422 id=422 data-nosnippet>422</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#423 id=423 data-nosnippet>423</a>    }
+<a href=#424 id=424 data-nosnippet>424</a>
+<a href=#425 id=425 data-nosnippet>425</a>    <span class="kw">if </span>!args.interactive_mode &amp;&amp; args.port.is_none() &amp;&amp; args.mcp_port.is_none() {
+<a href=#426 id=426 data-nosnippet>426</a>        <span class="macro">anyhow::bail!</span>(<span class="string">"Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port` or `--mcp-port`?"</span>)
+<a href=#427 id=427 data-nosnippet>427</a>    }
+<a href=#428 id=428 data-nosnippet>428</a>
+<a href=#429 id=429 data-nosnippet>429</a>    <span class="kw">let </span>mcp_port = <span class="kw">if let </span><span class="prelude-val">Some</span>(port) = args.mcp_port {
+<a href=#430 id=430 data-nosnippet>430</a>        <span class="kw">let </span>host = args
+<a href=#431 id=431 data-nosnippet>431</a>            .serve_ip
+<a href=#432 id=432 data-nosnippet>432</a>            .clone()
+<a href=#433 id=433 data-nosnippet>433</a>            .unwrap_or_else(|| <span class="string">"0.0.0.0"</span>.to_string());
+<a href=#434 id=434 data-nosnippet>434</a>        <span class="macro">info!</span>(<span class="string">"MCP server listening on http://{host}:{port}/mcp."</span>);
+<a href=#435 id=435 data-nosnippet>435</a>        <span class="macro">info!</span>(<span class="string">"MCP protocol version is {}."</span>, LATEST_PROTOCOL_VERSION);
+<a href=#436 id=436 data-nosnippet>436</a>        <span class="kw">let </span>mcp_server = mcp_server::create_http_mcp_server(mistralrs.clone(), host, port);
+<a href=#437 id=437 data-nosnippet>437</a>
+<a href=#438 id=438 data-nosnippet>438</a>        tokio::spawn(<span class="kw">async move </span>{
+<a href=#439 id=439 data-nosnippet>439</a>            <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = mcp_server.<span class="kw">await </span>{
+<a href=#440 id=440 data-nosnippet>440</a>                <span class="macro">eprintln!</span>(<span class="string">"MCP server error: {e}"</span>);
+<a href=#441 id=441 data-nosnippet>441</a>            }
+<a href=#442 id=442 data-nosnippet>442</a>        })
+<a href=#443 id=443 data-nosnippet>443</a>    } <span class="kw">else </span>{
+<a href=#444 id=444 data-nosnippet>444</a>        tokio::spawn(<span class="kw">async </span>{})
+<a href=#445 id=445 data-nosnippet>445</a>    };
+<a href=#446 id=446 data-nosnippet>446</a>
+<a href=#447 id=447 data-nosnippet>447</a>    <span class="kw">let </span>oai_port = <span class="kw">if let </span><span class="prelude-val">Some</span>(port) = args.port {
+<a href=#448 id=448 data-nosnippet>448</a>        <span class="kw">let </span>ip = args
+<a href=#449 id=449 data-nosnippet>449</a>            .serve_ip
+<a href=#450 id=450 data-nosnippet>450</a>            .clone()
+<a href=#451 id=451 data-nosnippet>451</a>            .unwrap_or_else(|| <span class="string">"0.0.0.0"</span>.to_string());
 <a href=#452 id=452 data-nosnippet>452</a>
-<a href=#453 id=453 data-nosnippet>453</a>        <span class="kw">let </span>app = MistralRsServerRouterBuilder::new()
-<a href=#454 id=454 data-nosnippet>454</a>            .with_mistralrs(mistralrs)
-<a href=#455 id=455 data-nosnippet>455</a>            .build()
-<a href=#456 id=456 data-nosnippet>456</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#457 id=457 data-nosnippet>457</a>
-<a href=#458 id=458 data-nosnippet>458</a>        <span class="macro">info!</span>(<span class="string">"OpenAI-compatible server listening on http://{ip}:{port}."</span>);
-<a href=#459 id=459 data-nosnippet>459</a>
-<a href=#460 id=460 data-nosnippet>460</a>        tokio::spawn(<span class="kw">async move </span>{
-<a href=#461 id=461 data-nosnippet>461</a>            <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = axum::serve(listener, app).<span class="kw">await </span>{
-<a href=#462 id=462 data-nosnippet>462</a>                <span class="macro">eprintln!</span>(<span class="string">"OpenAI server error: {e}"</span>);
-<a href=#463 id=463 data-nosnippet>463</a>            }
-<a href=#464 id=464 data-nosnippet>464</a>        })
-<a href=#465 id=465 data-nosnippet>465</a>    } <span class="kw">else </span>{
-<a href=#466 id=466 data-nosnippet>466</a>        tokio::spawn(<span class="kw">async </span>{})
-<a href=#467 id=467 data-nosnippet>467</a>    };
-<a href=#468 id=468 data-nosnippet>468</a>
-<a href=#469 id=469 data-nosnippet>469</a>    <span class="kw">let </span>(<span class="kw">_</span>, <span class="kw">_</span>) = <span class="macro">join!</span>(oai_port, mcp_port);
-<a href=#470 id=470 data-nosnippet>470</a>
-<a href=#471 id=471 data-nosnippet>471</a>    <span class="prelude-val">Ok</span>(())
-<a href=#472 id=472 data-nosnippet>472</a>}
+<a href=#453 id=453 data-nosnippet>453</a>        <span class="comment">// Create listener early to validate address before model loading
+<a href=#454 id=454 data-nosnippet>454</a>        </span><span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="macro">format!</span>(<span class="string">"{ip}:{port}"</span>)).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#455 id=455 data-nosnippet>455</a>
+<a href=#456 id=456 data-nosnippet>456</a>        <span class="kw">let </span>app = MistralRsServerRouterBuilder::new()
+<a href=#457 id=457 data-nosnippet>457</a>            .with_mistralrs(mistralrs)
+<a href=#458 id=458 data-nosnippet>458</a>            .build()
+<a href=#459 id=459 data-nosnippet>459</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#460 id=460 data-nosnippet>460</a>
+<a href=#461 id=461 data-nosnippet>461</a>        <span class="macro">info!</span>(<span class="string">"OpenAI-compatible server listening on http://{ip}:{port}."</span>);
+<a href=#462 id=462 data-nosnippet>462</a>
+<a href=#463 id=463 data-nosnippet>463</a>        tokio::spawn(<span class="kw">async move </span>{
+<a href=#464 id=464 data-nosnippet>464</a>            <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = axum::serve(listener, app).<span class="kw">await </span>{
+<a href=#465 id=465 data-nosnippet>465</a>                <span class="macro">eprintln!</span>(<span class="string">"OpenAI server error: {e}"</span>);
+<a href=#466 id=466 data-nosnippet>466</a>            }
+<a href=#467 id=467 data-nosnippet>467</a>        })
+<a href=#468 id=468 data-nosnippet>468</a>    } <span class="kw">else </span>{
+<a href=#469 id=469 data-nosnippet>469</a>        tokio::spawn(<span class="kw">async </span>{})
+<a href=#470 id=470 data-nosnippet>470</a>    };
+<a href=#471 id=471 data-nosnippet>471</a>
+<a href=#472 id=472 data-nosnippet>472</a>    <span class="kw">let </span>(<span class="kw">_</span>, <span class="kw">_</span>) = <span class="macro">join!</span>(oai_port, mcp_port);
+<a href=#473 id=473 data-nosnippet>473</a>
+<a href=#474 id=474 data-nosnippet>474</a>    <span class="prelude-val">Ok</span>(())
+<a href=#475 id=475 data-nosnippet>475</a>}
 </code></pre></div></section></main></body></html>
