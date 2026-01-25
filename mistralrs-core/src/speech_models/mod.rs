@@ -6,7 +6,6 @@ use std::{str::FromStr, sync::Arc};
 
 pub use dia::{DiaConfig, DiaPipeline};
 use serde::{Deserialize, Serialize};
-use serde_json;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 pub enum SpeechLoaderType {
