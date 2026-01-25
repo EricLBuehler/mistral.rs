@@ -1831,12 +1831,7 @@ impl GraniteMoeHybrid {
         };
 
         let pipeline_cache = Arc::new(Mutex::new(
-            HybridCache::new(
-                hybrid_cache_config,
-                vb_m.dtype(),
-                &devices,
-            )
-            .map_err(|e| {
+            HybridCache::new(hybrid_cache_config, vb_m.dtype(), &devices).map_err(|e| {
                 candle_core::Error::Msg(format!("Failed to create hybrid cache: {}", e))
             })?,
         ));

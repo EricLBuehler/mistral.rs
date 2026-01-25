@@ -28,7 +28,6 @@ pub use backend::{
     println!("cargo:rerun-if-changed=src/cuda/concat_and_cache_mla_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/gather_mla_cache_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer_mla_decode.cu");
-   // println!("cargo:rerun-if-changed=src/cuda/flashinfer_mla_decode_stub.c");
     println!("cargo:rerun-if-changed=src/cuda/update_kvscales.cu");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/cp_async.cuh");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/exception.h");
@@ -88,15 +87,6 @@ pub use backend::{
         builder = builder.arg(cuda_nvcc_flags_env);
     }
     println!("cargo:info={builder:?}");
-    
-    // If compute < 70, skip flashinfer_mla_decode.cu and compile the stub instead
-    // if !use_flashinfer_mla {
-    //     println!("cargo:warning=Compute capability < 7.0, flashinfer_mla_decode disabled (stub compiled instead)");
-    //     // Compile the stub with cc crate
-    //     cc::Build::new()
-    //         .file("src/cuda/flashinfer_mla_decode_stub.c")
-    //         .compile("flashinfer_mla_decode_stub");
-    // }
 
     let target = std::env::var("TARGET").unwrap();
     let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
