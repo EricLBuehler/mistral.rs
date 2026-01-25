@@ -3420,6 +3420,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mistralrs-codex"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "mistralrs",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "mistralrs-core"
 version = "0.7.0"
 dependencies = [
