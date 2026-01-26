@@ -7,7 +7,7 @@ use mistralrs_core::PagedCacheType;
 use serde::Deserialize;
 
 /// Cache and attention configuration
-#[derive(Args, Clone, Deserialize)]
+#[derive(Args, Clone, Deserialize, Default)]
 pub struct CacheOptions {
     #[command(flatten)]
     pub paged_attn: PagedAttentionOptions,
@@ -60,14 +60,6 @@ impl Default for PagedAttentionOptions {
     }
 }
 
-impl Default for CacheOptions {
-    fn default() -> Self {
-        Self {
-            paged_attn: PagedAttentionOptions::default(),
-        }
-    }
-}
-
 /// PagedAttention operation mode
 #[derive(Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -83,16 +75,7 @@ pub enum PagedAttnMode {
 
 impl PagedAttentionOptions {
     /// Convert to the flags expected by MistralRsForServerBuilder
-    pub fn into_builder_flags(
-        self,
-    ) -> (
-        Option<bool>,   // paged_attn enable flag
-        Option<usize>,  // gpu_mem (MBs)
-        Option<f32>,    // gpu_mem_usage (fraction)
-        Option<usize>,  // context_len
-        Option<usize>,  // block_size
-        PagedCacheType, // cache_type
-    ) {
+    pub fn into_builder_flags(self) -> PagedAttnBuilderFlags {
         let enable = match self.mode {
             PagedAttnMode::Auto => None,
             PagedAttnMode::On => Some(true),
@@ -113,3 +96,13 @@ impl PagedAttentionOptions {
 fn parse_cache_type(s: &str) -> Result<PagedCacheType, String> {
     s.parse()
 }
+
+/// PagedAttention builder flags type alias
+pub type PagedAttnBuilderFlags = (
+    Option<bool>,   // paged_attn enable flag
+    Option<usize>,  // gpu_mem (MBs)
+    Option<f32>,    // gpu_mem_usage (fraction)
+    Option<usize>,  // context_len
+    Option<usize>,  // block_size
+    PagedCacheType, // cache_type
+);

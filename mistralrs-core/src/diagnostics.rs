@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use hf_hub::Cache;
 use serde::{Deserialize, Serialize};
@@ -99,8 +99,8 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
         kind: "cpu".to_string(),
         ordinal: None,
         name: cpu_brand,
-        total_memory_bytes: Some(sys.total_memory() as u64),
-        available_memory_bytes: Some(sys.available_memory() as u64),
+        total_memory_bytes: Some(sys.total_memory()),
+        available_memory_bytes: Some(sys.available_memory()),
     });
 
     #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -163,8 +163,8 @@ pub fn collect_system_info() -> SystemInfo {
     };
 
     let memory = MemoryInfo {
-        total_bytes: sys.total_memory() as u64,
-        available_bytes: sys.available_memory() as u64,
+        total_bytes: sys.total_memory(),
+        available_bytes: sys.available_memory(),
     };
 
     let hf_cache = Cache::from_env();
@@ -181,7 +181,7 @@ pub fn collect_system_info() -> SystemInfo {
     }
 }
 
-fn disk_usage_for(path: &PathBuf) -> Option<(u64, u64)> {
+fn disk_usage_for(path: &Path) -> Option<(u64, u64)> {
     let disks = Disks::new_with_refreshed_list();
     let mut best: Option<(usize, u64, u64)> = None;
     for disk in disks.list() {
@@ -262,6 +262,7 @@ pub fn run_doctor() -> DoctorReport {
         checks.push(DoctorCheck {
             name: "disk_space".to_string(),
             status,
+            #[allow(clippy::cast_precision_loss)]
             message: format!(
                 "Disk free: {:.1} GB / {:.1} GB on the volume containing the HF cache at {}.",
                 avail as f64 / 1e9,
@@ -277,13 +278,15 @@ pub fn run_doctor() -> DoctorReport {
     }
 
     let total_ram = system.memory.total_bytes;
+    #[allow(clippy::cast_precision_loss)]
+    let total_ram_gb = total_ram as f64 / 1e9;
     if total_ram < 8_u64 * 1024 * 1024 * 1024 {
         checks.push(DoctorCheck {
             name: "system_memory".to_string(),
             status: DoctorStatus::Warn,
             message: format!(
                 "System RAM is {:.1} GB; larger models may not fit.",
-                total_ram as f64 / 1e9
+                total_ram_gb
             ),
             suggestion: Some("Use smaller models or stronger quantization.".to_string()),
         });
@@ -291,7 +294,7 @@ pub fn run_doctor() -> DoctorReport {
         checks.push(DoctorCheck {
             name: "system_memory".to_string(),
             status: DoctorStatus::Ok,
-            message: format!("System RAM is {:.1} GB.", total_ram as f64 / 1e9),
+            message: format!("System RAM is {:.1} GB.", total_ram_gb),
             suggestion: None,
         });
     }
@@ -314,10 +317,12 @@ pub fn run_doctor() -> DoctorReport {
                     Some(ord) => format!("{}[{}]", dev.kind, ord),
                     None => dev.kind.clone(),
                 };
+                #[allow(clippy::cast_precision_loss)]
+                let avail_gb = avail as f64 / 1e9;
                 checks.push(DoctorCheck {
                     name: format!("{}_memory", label),
                     status: DoctorStatus::Warn,
-                    message: format!("{} has only {:.1} GB free.", label, avail as f64 / 1e9),
+                    message: format!("{} has only {:.1} GB free.", label, avail_gb),
                     suggestion: Some(
                         "Use a smaller model or a stronger quantization level.".to_string(),
                     ),

@@ -77,16 +77,15 @@ fn validate_text_upload(
         if !mime.starts_with("text/")
             && mime != "application/json"
             && mime != "application/javascript"
-        {
-            if !matches!(
+            && !matches!(
                 mime,
                 "application/octet-stream"
                     | "application/x-python"
                     | "application/x-rust"
                     | "application/x-sh"
-            ) {
-                return Err("File must be a text file");
-            }
+            )
+        {
+            return Err("File must be a text file");
         }
     }
 

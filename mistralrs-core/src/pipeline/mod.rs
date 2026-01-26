@@ -53,6 +53,7 @@ pub use loaders::{
     SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader, VisionLoaderType,
     VisionModel, VisionModelLoader,
 };
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(
     loader: &dyn loaders::DeviceMappedModelLoader,
     config: &str,

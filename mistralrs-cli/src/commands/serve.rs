@@ -460,14 +460,7 @@ fn convert_text_model(
 
 pub(crate) fn extract_paged_attn_settings(
     model_type: &ModelType,
-) -> (
-    Option<bool>,
-    Option<usize>,
-    Option<f32>,
-    Option<usize>,
-    Option<usize>,
-    PagedCacheType,
-) {
+) -> crate::args::PagedAttnBuilderFlags {
     let cache = match model_type {
         ModelType::Auto { cache, .. } => cache,
         ModelType::Text { cache, .. } => cache,

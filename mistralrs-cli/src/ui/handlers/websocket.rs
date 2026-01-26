@@ -192,7 +192,9 @@ fn resolve_restore_image(path_or_url: &str) -> Option<PathBuf> {
     let candidate = if Path::new(path_or_url).is_absolute() {
         PathBuf::from(path_or_url)
     } else {
-        let cleaned = path_or_url.trim_start_matches("/ui/").trim_start_matches('/');
+        let cleaned = path_or_url
+            .trim_start_matches("/ui/")
+            .trim_start_matches('/');
         let rel = cleaned.strip_prefix("uploads/")?;
         uploads_dir.join(rel)
     };
@@ -291,10 +293,12 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                                 ) {
                                     vision_msgs = updated;
                                 } else {
-                                    vision_msgs = vision_msgs.add_message(role.clone(), msg.content.clone());
+                                    vision_msgs =
+                                        vision_msgs.add_message(role.clone(), msg.content.clone());
                                 }
                             } else {
-                                vision_msgs = vision_msgs.add_message(role.clone(), msg.content.clone());
+                                vision_msgs =
+                                    vision_msgs.add_message(role.clone(), msg.content.clone());
                             }
                         } else {
                             vision_msgs = vision_msgs.add_message(role, msg.content.clone());
@@ -380,7 +384,11 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 .iter()
                 .filter_map(|path| upload_path_to_url(path))
                 .collect();
-            if urls.is_empty() { None } else { Some(urls) }
+            if urls.is_empty() {
+                None
+            } else {
+                Some(urls)
+            }
         };
         if (!content.is_empty() || images_for_chat.is_some()) && active_chat_id.is_some() {
             if let Some(id) = &active_chat_id {
