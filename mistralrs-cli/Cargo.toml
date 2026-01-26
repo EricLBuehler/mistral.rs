@@ -44,6 +44,8 @@ chrono = { workspace = true }
 futures-util = { workspace = true }
 image = { workspace = true }
 comfy-table = "7"
+dirs = { workspace = true }
+walkdir = { workspace = true }
 
 [features]
 default = []

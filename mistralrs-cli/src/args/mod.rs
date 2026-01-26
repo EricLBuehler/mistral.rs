@@ -37,7 +37,11 @@ pub enum Command {
     /// Start HTTP/MCP server and (optionally) the UI at /ui
     Serve {
         #[command(subcommand)]
-        model_type: ModelType,
+        model_type: Option<ModelType>,
+
+        /// Default model options (used when model type is not specified)
+        #[command(flatten)]
+        default_model: DefaultModelOptions,
 
         #[command(flatten)]
         server: ServerOptions,
@@ -49,7 +53,11 @@ pub enum Command {
     /// Run model in interactive mode
     Run {
         #[command(subcommand)]
-        model_type: ModelType,
+        model_type: Option<ModelType>,
+
+        /// Default model options (used when model type is not specified)
+        #[command(flatten)]
+        default_model: DefaultModelOptions,
 
         #[command(flatten)]
         runtime: RuntimeOptions,
@@ -82,7 +90,11 @@ pub enum Command {
     /// Recommend quantization + device mapping for a model
     Tune {
         #[command(subcommand)]
-        model_type: ModelType,
+        model_type: Option<ModelType>,
+
+        /// Default model options (used when model type is not specified)
+        #[command(flatten)]
+        default_model: DefaultModelOptions,
 
         /// Tuning profile (quality, balanced, fast)
         #[arg(long, value_enum, default_value = "balanced")]
@@ -97,6 +109,48 @@ pub enum Command {
         emit_config: Option<PathBuf>,
     },
 
+    /// Authenticate with HuggingFace Hub
+    Login {
+        /// Provide token directly (non-interactive)
+        #[arg(long)]
+        token: Option<String>,
+    },
+
+    /// Manage the HuggingFace model cache
+    Cache {
+        #[command(subcommand)]
+        cmd: CacheCommand,
+    },
+
+    /// Run performance benchmarks
+    Bench {
+        #[command(subcommand)]
+        model_type: Option<ModelType>,
+
+        /// Default model options (used when model type is not specified)
+        #[command(flatten)]
+        default_model: DefaultModelOptions,
+
+        #[command(flatten)]
+        runtime: RuntimeOptions,
+
+        /// Number of tokens in prompt
+        #[arg(long, default_value = "512")]
+        prompt_len: usize,
+
+        /// Number of tokens to generate
+        #[arg(long, default_value = "128")]
+        gen_len: usize,
+
+        /// Number of benchmark iterations
+        #[arg(short = 'n', long, default_value = "3")]
+        iterations: usize,
+
+        /// Number of warmup runs (discarded)
+        #[arg(long, default_value = "1")]
+        warmup: usize,
+    },
+
     /// Run from a full TOML configuration file
     #[command(name = "from-config")]
     FromConfig {
@@ -104,6 +158,106 @@ pub enum Command {
         #[arg(short, long)]
         file: PathBuf,
     },
+}
+
+/// Cache management subcommands
+#[derive(Subcommand, Clone)]
+pub enum CacheCommand {
+    /// List all cached models
+    List,
+
+    /// Delete a specific model from cache
+    Delete {
+        /// Model ID (e.g., "Qwen/Qwen3-4B")
+        #[arg(short = 'm', long)]
+        model_id: String,
+    },
+
+    /// Clean up incomplete downloads and temporary files
+    Prune,
+}
+
+/// Default model options used when no model type subcommand is specified.
+/// These mirror the Auto variant's options and are used to construct ModelType::Auto.
+#[derive(clap::Args, Clone, Default)]
+pub struct DefaultModelOptions {
+    /// HuggingFace model ID or local path to model directory
+    #[arg(short = 'm', long)]
+    pub model_id: Option<String>,
+
+    /// Path to local tokenizer.json file
+    #[arg(short = 't', long)]
+    pub tokenizer: Option<PathBuf>,
+
+    /// Model architecture (auto-detected if not specified)
+    #[arg(short = 'a', long, value_parser = parse_arch)]
+    pub arch: Option<mistralrs_core::NormalLoaderType>,
+
+    /// Model data type
+    #[arg(long, default_value = "auto", value_parser = parse_dtype)]
+    pub dtype: mistralrs_core::ModelDType,
+
+    #[command(flatten)]
+    pub format: FormatOptions,
+
+    #[command(flatten)]
+    pub adapter: AdapterOptions,
+
+    #[command(flatten)]
+    pub quantization: QuantizationOptions,
+
+    #[command(flatten)]
+    pub device: DeviceOptions,
+
+    #[command(flatten)]
+    pub cache: CacheOptions,
+
+    #[command(flatten)]
+    pub vision: VisionOptions,
+}
+
+impl DefaultModelOptions {
+    /// Convert default options into a ModelType::Auto variant.
+    /// Returns an error if model_id is not provided.
+    pub fn into_model_type(self) -> anyhow::Result<ModelType> {
+        let model_id = self
+            .model_id
+            .ok_or_else(|| anyhow::anyhow!("--model-id (-m) is required"))?;
+        Ok(ModelType::Auto {
+            model: ModelSourceOptions {
+                model_id,
+                tokenizer: self.tokenizer,
+                arch: self.arch,
+                dtype: self.dtype,
+            },
+            format: self.format,
+            adapter: self.adapter,
+            quantization: self.quantization,
+            device: self.device,
+            cache: self.cache,
+            vision: self.vision,
+        })
+    }
+}
+
+/// Get the effective ModelType, using default options if no subcommand was provided.
+/// Returns an error if no subcommand is provided and model_id is missing.
+pub fn resolve_model_type(
+    model_type: Option<ModelType>,
+    default_model: DefaultModelOptions,
+) -> anyhow::Result<ModelType> {
+    match model_type {
+        Some(mt) => Ok(mt),
+        None => default_model.into_model_type(),
+    }
+}
+
+fn parse_arch(s: &str) -> Result<mistralrs_core::NormalLoaderType, String> {
+    s.parse()
+}
+
+fn parse_dtype(s: &str) -> Result<mistralrs_core::ModelDType, String> {
+    s.parse()
 }
 
 /// Model type selection

@@ -3466,6 +3466,7 @@ dependencies = [
  "comfy-table",
  "ctrlc",
  "directories 6.0.0",
+ "dirs",
  "either",
  "futures-util",
  "image",
@@ -3485,6 +3486,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid 1.19.0",
+ "walkdir",
 ]
 
 [[package]]

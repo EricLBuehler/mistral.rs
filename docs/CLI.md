@@ -11,6 +11,9 @@ This is the comprehensive CLI reference for `mistralrs`. The CLI provides comman
   - [quantize](#quantize---uqff-generation): generate UQFF quantized model file
   - [tune](#tune---recommendations): recommend quantization + device mapping for a model
   - [doctor](#doctor---system-diagnostics): run system diagnostics and environment checks
+  - [login](#login---huggingface-authentication): authenticate with HuggingFace Hub
+  - [cache](#cache---model-management): manage the HuggingFace model cache
+  - [bench](#bench---performance-benchmarking): run performance benchmarks
   - [completions](#completions---shell-completions): generate shell completions
 - [Model Types](#model-types)
   - [auto](#auto)
@@ -40,17 +43,22 @@ This is the comprehensive CLI reference for `mistralrs`. The CLI provides comman
 Start a model in interactive mode for conversational use.
 
 ```bash
-mistralrs run <MODEL_TYPE> -m <MODEL_ID> [OPTIONS]
+mistralrs run [MODEL_TYPE] -m <MODEL_ID> [OPTIONS]
 ```
+
+Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified. This allows a shorter syntax.
 
 **Examples:**
 
 ```bash
-# Run a text model interactively
+# Run a text model interactively (shorthand - auto type is implied)
+mistralrs run -m Qwen/Qwen3-4B
+
+# Explicit auto type (equivalent to above)
 mistralrs run auto -m Qwen/Qwen3-4B
 
 # Run with thinking mode enabled
-mistralrs run auto -m Qwen/Qwen3-4B --enable-thinking
+mistralrs run -m Qwen/Qwen3-4B --enable-thinking
 
 # Run a vision model
 mistralrs run vision -m google/gemma-3-4b-it
@@ -71,23 +79,28 @@ The `run` command also accepts all [runtime options](#runtime-options).
 Start an HTTP server with OpenAI-compatible API endpoints.
 
 ```bash
-mistralrs serve <MODEL_TYPE> -m <MODEL_ID> [OPTIONS]
+mistralrs serve [MODEL_TYPE] -m <MODEL_ID> [OPTIONS]
 ```
+
+Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified.
 
 **Examples:**
 
 ```bash
-# Start server on default port 8080
+# Start server on default port 8080 (shorthand)
+mistralrs serve -m Qwen/Qwen3-4B
+
+# Explicit auto type (equivalent to above)
 mistralrs serve auto -m Qwen/Qwen3-4B
 
 # Start server with web UI
-mistralrs serve auto -m Qwen/Qwen3-4B --ui
+mistralrs serve -m Qwen/Qwen3-4B --ui
 
 # Start server on custom port
-mistralrs serve auto -m Qwen/Qwen3-4B -p 3000
+mistralrs serve -m Qwen/Qwen3-4B -p 3000
 
 # Start server with MCP support
-mistralrs serve auto -m Qwen/Qwen3-4B --mcp-port 8081
+mistralrs serve -m Qwen/Qwen3-4B --mcp-port 8081
 ```
 
 **Server Options:**
@@ -146,26 +159,28 @@ mistralrs quantize auto -m Qwen/Qwen3-4B --isq q4k --imatrix imatrix.dat -o qwen
 Get quantization and device mapping recommendations for a model. The tune command analyzes your hardware and shows all quantization options with their estimated memory usage, context room, and quality trade-offs.
 
 ```bash
-mistralrs tune <MODEL_TYPE> -m <MODEL_ID> [OPTIONS]
+mistralrs tune [MODEL_TYPE] -m <MODEL_ID> [OPTIONS]
 ```
+
+Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified, which supports all model types. See [details](#auto).
 
 **Examples:**
 
 ```bash
-# Get balanced recommendations
-mistralrs tune auto -m Qwen/Qwen3-4B
+# Get balanced recommendations (shorthand)
+mistralrs tune -m Qwen/Qwen3-4B
 
 # Get quality-focused recommendations
-mistralrs tune auto -m Qwen/Qwen3-4B --profile quality
+mistralrs tune -m Qwen/Qwen3-4B --profile quality
 
 # Get fast inference recommendations
-mistralrs tune auto -m Qwen/Qwen3-4B --profile fast
+mistralrs tune -m Qwen/Qwen3-4B --profile fast
 
 # Output as JSON
-mistralrs tune auto -m Qwen/Qwen3-4B --json
+mistralrs tune -m Qwen/Qwen3-4B --json
 
 # Generate a TOML config file with recommendations
-mistralrs tune auto -m Qwen/Qwen3-4B --emit-config config.toml
+mistralrs tune -m Qwen/Qwen3-4B --emit-config config.toml
 ```
 
 **Example Output (CUDA):**
@@ -267,6 +282,162 @@ mistralrs doctor --json
 | Option | Description |
 |--------|-------------|
 | `--json` | Output JSON instead of human-readable text |
+
+---
+
+### login - HuggingFace Authentication
+
+Authenticate with HuggingFace Hub by saving your token to the local cache.
+
+```bash
+mistralrs login [OPTIONS]
+```
+
+**Examples:**
+
+```bash
+# Interactive login (prompts for token)
+mistralrs login
+
+# Provide token directly
+mistralrs login --token hf_xxxxxxxxxxxxx
+```
+
+The token is saved to the standard HuggingFace cache location:
+- Linux/macOS: `~/.cache/huggingface/token`
+- Windows: `C:\Users\<user>\.cache\huggingface\token`
+
+If the `HF_HOME` environment variable is set, the token is saved to `$HF_HOME/token`.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--token <TOKEN>` | Provide token directly (non-interactive) |
+
+---
+
+### cache - Model Management
+
+Manage the HuggingFace model cache. List cached models, delete specific models, or clean up incomplete downloads.
+
+```bash
+mistralrs cache <SUBCOMMAND>
+```
+
+**Subcommands:**
+
+#### cache list
+
+List all cached models with their sizes and last used times.
+
+```bash
+mistralrs cache list
+```
+
+**Example output:**
+
+```
+HuggingFace Model Cache
+-----------------------
+
+┌──────────────────────────┬──────────┬─────────────┐
+│ Model                    │ Size     │ Last Used   │
+├──────────────────────────┼──────────┼─────────────┤
+│ Qwen/Qwen3-4B            │ 8.5 GB   │ today       │
+│ google/gemma-3-4b-it     │ 6.2 GB   │ 2 days ago  │
+│ meta-llama/Llama-3.2-3B  │ 5.8 GB   │ 1 week ago  │
+└──────────────────────────┴──────────┴─────────────┘
+
+Total: 3 models, 20.5 GB
+Cache directory: /home/user/.cache/huggingface/hub
+```
+
+#### cache delete
+
+Delete a specific model from the cache.
+
+```bash
+mistralrs cache delete -m <MODEL_ID>
+```
+
+**Examples:**
+
+```bash
+# Delete a specific model
+mistralrs cache delete -m Qwen/Qwen3-4B
+
+# Delete a model with organization
+mistralrs cache delete -m meta-llama/Llama-3.2-3B
+```
+
+#### cache prune
+
+Clean up incomplete downloads and temporary files.
+
+```bash
+mistralrs cache prune
+```
+
+This removes:
+- Files ending with `.incomplete` (interrupted downloads)
+- Files starting with `.tmp` (temporary files)
+
+---
+
+### bench - Performance Benchmarking
+
+Run performance benchmarks to measure prefill and decode speeds.
+
+```bash
+mistralrs bench [MODEL_TYPE] -m <MODEL_ID> [OPTIONS]
+```
+
+Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified.
+
+**Examples:**
+
+```bash
+# Run default benchmark (512 prompt tokens, 128 generated tokens, 3 iterations)
+mistralrs bench -m Qwen/Qwen3-4B
+
+# Custom prompt and generation lengths
+mistralrs bench -m Qwen/Qwen3-4B --prompt-len 1024 --gen-len 256
+
+# More iterations for better statistics
+mistralrs bench -m Qwen/Qwen3-4B -n 10
+
+# With ISQ quantization
+mistralrs bench -m Qwen/Qwen3-4B --isq q4k
+```
+
+**Example output:**
+
+```
+Benchmark Results
+=================
+
+Model: Qwen/Qwen3-4B
+Iterations: 3
+
+┌────────────────────────┬─────────────────┬─────────┐
+│ Test                   │ tok/s           │ ms/tok  │
+├────────────────────────┼─────────────────┼─────────┤
+│ Prefill (512 tokens)   │ 2847.3 ± 45.2   │ 0.35    │
+│ Decode (128 tokens)    │ 87.4 ± 2.1      │ 11.44   │
+└────────────────────────┴─────────────────┴─────────┘
+```
+
+**Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--prompt-len <N>` | `512` | Number of tokens in prompt (prefill test) |
+| `--gen-len <N>` | `128` | Number of tokens to generate (decode test) |
+| `-n, --iterations <N>` | `3` | Number of benchmark iterations |
+| `--warmup <N>` | `1` | Number of warmup runs (discarded) |
+
+The `bench` command also accepts all model loading options (ISQ, device mapping, etc.).
 
 ---
 

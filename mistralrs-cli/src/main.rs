@@ -16,8 +16,11 @@ use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use args::{Cli, Command};
-use commands::{run_doctor, run_from_config, run_interactive, run_quantize, run_server, run_tune};
+use args::{resolve_model_type, CacheCommand, Cli, Command};
+use commands::{
+    run_bench, run_cache_delete, run_cache_list, run_cache_prune, run_doctor, run_from_config,
+    run_interactive, run_login, run_quantize, run_server, run_tune,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -32,17 +35,21 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Serve {
             model_type,
+            default_model,
             server,
             runtime,
         } => {
+            let model_type = resolve_model_type(model_type, default_model)?;
             run_server(model_type, server, runtime, cli.global).await?;
         }
 
         Command::Run {
             model_type,
+            default_model,
             runtime,
             enable_thinking,
         } => {
+            let model_type = resolve_model_type(model_type, default_model)?;
             run_interactive(model_type, runtime, cli.global, enable_thinking).await?;
         }
 
@@ -66,11 +73,39 @@ async fn main() -> Result<()> {
 
         Command::Tune {
             model_type,
+            default_model,
             profile,
             json,
             emit_config,
         } => {
+            let model_type = resolve_model_type(model_type, default_model)?;
             run_tune(model_type, cli.global, profile, json, emit_config).await?;
+        }
+
+        Command::Login { token } => {
+            run_login(token)?;
+        }
+
+        Command::Cache { cmd } => match cmd {
+            CacheCommand::List => run_cache_list()?,
+            CacheCommand::Delete { model_id } => run_cache_delete(&model_id)?,
+            CacheCommand::Prune => run_cache_prune()?,
+        },
+
+        Command::Bench {
+            model_type,
+            default_model,
+            runtime,
+            prompt_len,
+            gen_len,
+            iterations,
+            warmup,
+        } => {
+            let model_type = resolve_model_type(model_type, default_model)?;
+            run_bench(
+                model_type, runtime, cli.global, prompt_len, gen_len, iterations, warmup,
+            )
+            .await?;
         }
     }
 
