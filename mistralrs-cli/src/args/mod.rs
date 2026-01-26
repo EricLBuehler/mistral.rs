@@ -72,6 +72,31 @@ pub enum Command {
         model_type: QuantizeModelType,
     },
 
+    /// Run system diagnostics and environment checks
+    Doctor {
+        /// Output JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Recommend quantization + device mapping for a model
+    Tune {
+        #[command(subcommand)]
+        model_type: ModelType,
+
+        /// Tuning profile (quality, balanced, fast)
+        #[arg(long, value_enum, default_value = "balanced")]
+        profile: TuneProfileArg,
+
+        /// Output JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+
+        /// Emit a TOML config file with the recommended settings
+        #[arg(long)]
+        emit_config: Option<PathBuf>,
+    },
+
     /// Run from a full TOML configuration file
     #[command(name = "from-config")]
     FromConfig {
@@ -261,6 +286,24 @@ pub struct RuntimeOptions {
 #[serde(rename_all = "kebab-case")]
 pub enum SearchEmbeddingModelArg {
     EmbeddingGemma,
+}
+
+/// Tuning profile options
+#[derive(Clone, Copy, ValueEnum)]
+pub enum TuneProfileArg {
+    Quality,
+    Balanced,
+    Fast,
+}
+
+impl From<TuneProfileArg> for mistralrs_core::TuneProfile {
+    fn from(value: TuneProfileArg) -> Self {
+        match value {
+            TuneProfileArg::Quality => mistralrs_core::TuneProfile::Quality,
+            TuneProfileArg::Balanced => mistralrs_core::TuneProfile::Balanced,
+            TuneProfileArg::Fast => mistralrs_core::TuneProfile::Fast,
+        }
+    }
 }
 
 impl From<SearchEmbeddingModelArg> for mistralrs_core::SearchEmbeddingModel {

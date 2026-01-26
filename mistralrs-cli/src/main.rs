@@ -9,6 +9,7 @@
 mod args;
 mod commands;
 mod config;
+mod ui;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
@@ -16,7 +17,7 @@ use clap_complete::generate;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use args::{Cli, Command};
-use commands::{run_from_config, run_interactive, run_quantize, run_server};
+use commands::{run_doctor, run_from_config, run_interactive, run_quantize, run_server, run_tune};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -57,6 +58,19 @@ async fn main() -> Result<()> {
 
         Command::FromConfig { file } => {
             run_from_config(file).await?;
+        }
+
+        Command::Doctor { json } => {
+            run_doctor(json)?;
+        }
+
+        Command::Tune {
+            model_type,
+            profile,
+            json,
+            emit_config,
+        } => {
+            run_tune(model_type, cli.global, profile, json, emit_config).await?;
         }
     }
 

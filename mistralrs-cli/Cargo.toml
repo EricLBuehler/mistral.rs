@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 mistralrs-core = { workspace = true }
 mistralrs-server-core = { workspace = true }
+mistralrs = { workspace = true }
 candle-core = { workspace = true }
 
 clap = { workspace = true }
@@ -35,6 +36,13 @@ axum = { workspace = true }
 either = { workspace = true }
 indexmap = { workspace = true }
 regex = { workspace = true }
+include_dir = { workspace = true }
+mime_guess = { workspace = true }
+tower-http = { workspace = true, features = ["fs"] }
+uuid = { workspace = true }
+chrono = { workspace = true }
+futures-util = { workspace = true }
+image = { workspace = true }
 
 [features]
 default = []

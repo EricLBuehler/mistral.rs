@@ -6,10 +6,10 @@ use crate::{
 use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
 use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::ShardedVarBuilder;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::info;
 
-#[derive(Debug, Default, Deserialize, Clone)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct DeviceLayerMapMetadata {
     pub ordinal: usize,
     pub layers: usize,
@@ -50,6 +50,28 @@ impl DeviceMapMetadata {
             device_layers: None,
             host_layers: None,
         }
+    }
+
+    pub fn device_layers(&self) -> Option<&[DeviceLayerMapMetadata]> {
+        self.device_layers.as_deref()
+    }
+
+    pub fn host_layers(&self) -> Option<usize> {
+        self.host_layers
+    }
+
+    pub fn to_cli_spec(&self) -> Option<String> {
+        let layers = self.device_layers.as_ref()?;
+        if layers.is_empty() {
+            return None;
+        }
+        Some(
+            layers
+                .iter()
+                .map(|l| format!("{}:{}", l.ordinal, l.layers))
+                .collect::<Vec<_>>()
+                .join(";"),
+        )
     }
 }
 

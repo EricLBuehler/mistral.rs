@@ -3,7 +3,9 @@
 use anyhow::Result;
 use axum::extract::{Json, State};
 use mistralrs_core::{
-    parse_isq_value, MistralRs, MistralRsError, ModelStatus as CoreModelStatus, Request,
+    auto_tune, collect_system_info, parse_isq_value, run_doctor, AutoTuneRequest, AutoTuneResult,
+    AutoDeviceMapParams, ModelDType, ModelSelected, MistralRs, MistralRsError,
+    ModelStatus as CoreModelStatus, Request, TokenSource, TuneProfile,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -12,6 +14,24 @@ use crate::{
     openai::{ModelObject, ModelObjects},
     types::ExtractedMistralRsState,
 };
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum TuneProfileRequest {
+    Quality,
+    Balanced,
+    Fast,
+}
+
+impl From<TuneProfileRequest> for TuneProfile {
+    fn from(value: TuneProfileRequest) -> Self {
+        match value {
+            TuneProfileRequest::Quality => TuneProfile::Quality,
+            TuneProfileRequest::Balanced => TuneProfile::Balanced,
+            TuneProfileRequest::Fast => TuneProfile::Fast,
+        }
+    }
+}
 
 #[utoipa::path(
   get,
@@ -79,6 +99,14 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Json<ModelObjects>
 )]
 pub async fn health() -> &'static str {
     "OK"
+}
+
+pub async fn system_info() -> Json<mistralrs_core::SystemInfo> {
+    Json(collect_system_info())
+}
+
+pub async fn system_doctor() -> Json<mistralrs_core::DoctorReport> {
+    Json(run_doctor())
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -253,4 +281,105 @@ pub async fn get_model_status(
             error: Some(e.to_string()),
         }),
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct TuneModelRequest {
+    #[schema(example = "meta-llama/Llama-3.2-3B-Instruct")]
+    pub model_id: String,
+    /// Optional model dtype (auto, f16, bf16, etc)
+    #[serde(default)]
+    pub dtype: Option<String>,
+    /// Optional max sequence length for tuning
+    #[serde(default)]
+    pub max_seq_len: Option<usize>,
+    /// Optional max batch size for tuning
+    #[serde(default)]
+    pub max_batch_size: Option<usize>,
+    /// Optional max num images (vision)
+    #[serde(default)]
+    pub max_num_images: Option<usize>,
+    /// Optional max image length (vision)
+    #[serde(default)]
+    pub max_image_length: Option<usize>,
+    /// Optional tuning profile
+    #[serde(default)]
+    pub profile: Option<TuneProfileRequest>,
+    /// Optional fixed ISQ level to test (e.g., Q4K)
+    #[serde(default)]
+    pub requested_isq: Option<String>,
+    /// Optional HF token source
+    #[serde(default)]
+    pub token_source: Option<String>,
+    /// Optional HF revision
+    #[serde(default)]
+    pub hf_revision: Option<String>,
+    /// Force CPU-only tuning
+    #[serde(default)]
+    pub cpu: Option<bool>,
+}
+
+pub async fn tune_model(Json(request): Json<TuneModelRequest>) -> Result<Json<AutoTuneResult>, String> {
+    let token_source = match request.token_source {
+        Some(value) => value
+            .parse()
+            .map_err(|err| format!("Invalid token_source: {err}"))?,
+        None => TokenSource::CacheToken,
+    };
+
+    let dtype = request
+        .dtype
+        .as_deref()
+        .unwrap_or("auto")
+        .parse::<ModelDType>()
+        .map_err(|err| format!("Invalid dtype: {err}"))?;
+
+    let max_seq_len = request
+        .max_seq_len
+        .unwrap_or(AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN);
+    let max_batch_size = request.max_batch_size.unwrap_or(128);
+
+    let model_selected = ModelSelected::Run {
+        model_id: request.model_id.clone(),
+        tokenizer_json: None,
+        dtype,
+        topology: None,
+        organization: None,
+        write_uqff: None,
+        from_uqff: None,
+        imatrix: None,
+        calibration_file: None,
+        max_edge: None,
+        max_seq_len,
+        max_batch_size,
+        max_num_images: request.max_num_images,
+        max_image_length: request.max_image_length,
+        hf_cache_path: None,
+        matformer_config_path: None,
+        matformer_slice_name: None,
+    };
+
+    let requested_isq = match request.requested_isq {
+        Some(value) => Some(
+            parse_isq_value(&value, None)
+                .map_err(|err| format!("Invalid isq value: {err}"))?,
+        ),
+        None => None,
+    };
+
+    let tune_request = AutoTuneRequest {
+        model: model_selected,
+        token_source,
+        hf_revision: request.hf_revision,
+        force_cpu: request.cpu.unwrap_or(false),
+        profile: request
+            .profile
+            .map(Into::into)
+            .unwrap_or(TuneProfile::Balanced),
+        requested_isq,
+    };
+
+    auto_tune(tune_request)
+        .map(Json)
+        .map_err(|err| err.to_string())
 }

@@ -47,6 +47,7 @@ pub use model_selected::ModelSelected;
 pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_selected_model_dtype};
 
 mod amoe;
+mod diagnostics;
 mod attention;
 mod diffusion_models;
 pub mod distributed;
@@ -74,6 +75,13 @@ mod topology;
 mod utils;
 mod vision_models;
 mod xlora_models;
+
+pub use diagnostics::{
+    collect_system_info, run_doctor, BuildInfo, CpuInfo, DoctorCheck, DoctorReport, DoctorStatus,
+    MemoryInfo, SystemInfo,
+};
+mod tuning;
+pub use tuning::{auto_tune, AutoTuneRequest, AutoTuneResult, TuneProfile};
 
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{

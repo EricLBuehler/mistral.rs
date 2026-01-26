@@ -26,6 +26,11 @@ pub struct ServerOptions {
     #[arg(long)]
     #[serde(default)]
     pub mcp_config: Option<PathBuf>,
+
+    /// Serve the built-in web UI
+    #[arg(long)]
+    #[serde(default)]
+    pub ui: bool,
 }
 
 impl Default for ServerOptions {
@@ -35,6 +40,7 @@ impl Default for ServerOptions {
             host: "0.0.0.0".to_string(),
             mcp_port: None,
             mcp_config: None,
+            ui: false,
         }
     }
 }

@@ -16,6 +16,7 @@ command = "serve"
 [server]
 host = "0.0.0.0"
 port = 8080
+ui = true
 
 [runtime]
 max_seqs = 32

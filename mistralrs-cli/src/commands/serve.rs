@@ -11,6 +11,7 @@ use mistralrs_server_core::{
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
 };
 
+use crate::ui::build_ui_router;
 use crate::args::{
     AdapterOptions, DeviceOptions, FormatOptions, GlobalOptions, ModelFormat,
     ModelSourceOptions, ModelType, QuantizationOptions, RuntimeOptions,
@@ -67,12 +68,23 @@ pub async fn run_server(
     }
 
     let mistralrs = builder.build().await?;
+    let mistralrs_for_ui = mistralrs.clone();
 
     // Build and run the server
-    let app = MistralRsServerRouterBuilder::new()
+    let mut app = MistralRsServerRouterBuilder::new()
         .with_mistralrs(mistralrs)
         .build()
         .await?;
+
+    if server.ui {
+        let ui_router = build_ui_router(
+            mistralrs_for_ui,
+            runtime.enable_search,
+            runtime.search_embedding_model.map(|m| m.into()),
+        )
+        .await?;
+        app = app.merge(ui_router);
+    }
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
 

@@ -11,6 +11,7 @@ use mistralrs_server_core::{
 
 use crate::commands::run::interactive_mode;
 use crate::commands::serve::convert_to_model_selected;
+use crate::ui::build_ui_router;
 use crate::config::{load_cli_config, CliConfig};
 
 /// Execute the CLI using a TOML configuration file.
@@ -74,11 +75,22 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
     }
 
     let mistralrs = builder.build().await?;
+    let mistralrs_for_ui = mistralrs.clone();
 
-    let app = MistralRsServerRouterBuilder::new()
+    let mut app = MistralRsServerRouterBuilder::new()
         .with_mistralrs(mistralrs)
         .build()
         .await?;
+
+    if server.ui {
+        let ui_router = build_ui_router(
+            mistralrs_for_ui,
+            runtime.enable_search,
+            runtime.search_embedding_model.map(|m| m.into()),
+        )
+        .await?;
+        app = app.merge(ui_router);
+    }
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
 

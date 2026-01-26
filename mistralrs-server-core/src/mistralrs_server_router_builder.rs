@@ -14,7 +14,10 @@ use crate::{
     chat_completion::chatcompletions,
     completions::completions,
     embeddings::embeddings,
-    handlers::{get_model_status, health, models, re_isq, reload_model, unload_model},
+    handlers::{
+        get_model_status, health, models, re_isq, reload_model, system_doctor, system_info,
+        tune_model, unload_model,
+    },
     image_generation::image_generation,
     openapi_doc::get_openapi_doc,
     responses::{cancel_response, create_response, delete_response, get_response},
@@ -202,6 +205,9 @@ fn init_router(
         .route("/v1/models/unload", post(unload_model))
         .route("/v1/models/reload", post(reload_model))
         .route("/v1/models/status", post(get_model_status))
+        .route("/v1/models/tune", post(tune_model))
+        .route("/v1/system/info", get(system_info))
+        .route("/v1/system/doctor", post(system_doctor))
         .route("/health", get(health))
         .route("/", get(health))
         .route("/re_isq", post(re_isq))
