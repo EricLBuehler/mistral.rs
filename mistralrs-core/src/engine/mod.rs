@@ -538,6 +538,20 @@ impl Engine {
                     if !output.scheduled.is_empty() {
                         let is_prompt = get_mut_arcmutex!(output.scheduled[0]).is_prompt();
 
+                        // Record prompt timing BEFORE step() so it's available if response is sent inside step()
+                        if is_prompt {
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .expect("Time travel has occurred!")
+                                .as_millis();
+                            for seq in output.scheduled.iter() {
+                                let mut seq_guard = get_mut_arcmutex!(seq);
+                                let prompt_time = now.saturating_sub(seq_guard.timestamp());
+                                seq_guard.prompt_timestamp = Some(now);
+                                seq_guard.total_prompt_time = Some(prompt_time);
+                            }
+                        }
+
                         let mut guards = output
                             .scheduled
                             .iter_mut()

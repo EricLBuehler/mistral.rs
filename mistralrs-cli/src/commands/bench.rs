@@ -4,10 +4,11 @@ use anyhow::Result;
 use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 use mistralrs_core::{
     initialize_logging, Constraint, DrySamplingParams, NormalRequest, Request, RequestMessage,
-    Response, SamplingParams, Usage,
+    Response, SamplingParams,
 };
 use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc::channel;
 use tracing::info;
 
@@ -114,15 +115,24 @@ pub async fn run_bench(
         info!("Iteration {}/{}...", i + 1, iterations);
 
         // Prefill benchmark (prompt processing)
+        // Use external timing since internal Usage timing may not capture prompt time accurately
         if prompt_len > 0 {
-            let result = run_single_bench(&mistralrs, prompt_len, 1).await?;
-            prefill_results.push(result.avg_prompt_tok_per_sec);
+            let start = Instant::now();
+            let _ = run_single_bench(&mistralrs, prompt_len, 1).await?;
+            let elapsed = start.elapsed();
+            // Calculate prefill tok/s: prompt_tokens / elapsed_seconds
+            let prefill_tok_per_sec = prompt_len as f32 / elapsed.as_secs_f32();
+            prefill_results.push(prefill_tok_per_sec);
         }
 
         // Decode benchmark (token generation)
         if gen_len > 0 {
-            let result = run_single_bench(&mistralrs, 4, gen_len).await?;
-            decode_results.push(result.avg_compl_tok_per_sec);
+            let start = Instant::now();
+            let _ = run_single_bench(&mistralrs, 4, gen_len).await?;
+            let elapsed = start.elapsed();
+            // Calculate decode tok/s: gen_tokens / elapsed_seconds
+            let decode_tok_per_sec = gen_len as f32 / elapsed.as_secs_f32();
+            decode_results.push(decode_tok_per_sec);
         }
     }
 
@@ -164,12 +174,12 @@ fn calculate_stats(values: &[f32]) -> (f32, f32) {
     (mean, std_dev)
 }
 
-/// Run a single benchmark iteration and return usage stats
+/// Run a single benchmark iteration
 async fn run_single_bench(
     mistralrs: &Arc<mistralrs_core::MistralRs>,
     prompt_tokens: usize,
     gen_tokens: usize,
-) -> Result<Usage> {
+) -> Result<()> {
     let sampling_params = SamplingParams {
         temperature: Some(0.1),
         top_k: Some(32),
@@ -213,8 +223,7 @@ async fn run_single_bench(
     sender.send(req).await?;
 
     match rx.recv().await {
-        Some(Response::CompletionDone(res)) => Ok(res.usage),
-        Some(Response::Done(res)) => Ok(res.usage),
+        Some(Response::CompletionDone(_)) | Some(Response::Done(_)) => Ok(()),
         Some(Response::InternalError(e)) => anyhow::bail!("Internal error: {e:?}"),
         Some(Response::ModelError(e, _)) => anyhow::bail!("Model error: {e}"),
         Some(Response::ValidationError(e)) => anyhow::bail!("Validation error: {e:?}"),
