@@ -26,8 +26,6 @@ jobs:
         platform:
           - runner: ubuntu-22.04
             target: x86_64
-          - runner: ubuntu-22.04
-            target: aarch64
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -53,8 +51,6 @@ jobs:
         platform:
           - runner: ubuntu-22.04
             target: x86_64
-          - runner: ubuntu-22.04
-            target: aarch64
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -81,9 +77,6 @@ jobs:
           - runner: windows-latest
             target: x64
             python_arch: x64
-          - runner: windows-11-arm
-            target: aarch64
-            python_arch: arm64
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -109,8 +102,6 @@ jobs:
         platform:
           - runner: macos-15-intel
             target: x86_64
-          - runner: macos-latest
-            target: aarch64
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -136,7 +127,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          args: --out dist
+          args: -m mistral-pyo3/Cargo.toml --out dist
       - name: Upload sdist
         uses: actions/upload-artifact@v5
         with:
