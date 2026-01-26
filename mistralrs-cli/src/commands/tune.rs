@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 
-use mistralrs_core::{auto_tune, AutoTuneRequest, ModelSelected};
+use mistralrs_core::{auto_tune, AutoTuneRequest, FitStatus, ModelSelected, QualityTier};
 
 use crate::args::{GlobalOptions, ModelType, TuneProfileArg};
 
@@ -48,29 +49,115 @@ pub async fn run_tune(
         return Ok(());
     }
 
-    println!("mistralrs tune");
+    // Header
+    println!();
+    println!("Tuning Analysis");
+    println!("===============");
+    println!();
     println!("Model: {}", result.model_id);
     println!("Profile: {:?}", result.profile);
     println!("Backend: {}", result.backend);
-    if let Some(isq) = result.recommended_isq {
-        println!("Recommended ISQ: {:?}", isq);
+    if result.total_vram_bytes > 0 {
+        println!("Total VRAM: {:.1} GB", result.total_vram_bytes as f64 / 1e9);
     }
-    if let Some(spec) = &result.device_layers_cli {
-        println!("Device layers: {spec}");
-    }
-    if let Some(mode) = result.paged_attn_mode {
-        println!("PagedAttention: {mode}");
-    }
+    println!();
+
+    // Notes
     if !result.notes.is_empty() {
-        println!();
         for note in &result.notes {
-            println!("note: {note}");
+            println!("[INFO] {note}");
+        }
+        println!();
+    }
+
+    // Analysis Matrix Table
+    println!("Quantization Options");
+    println!("--------------------");
+
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(vec![
+            Cell::new("Quant"),
+            Cell::new("Est. Size"),
+            Cell::new("VRAM %"),
+            Cell::new("Context Room"),
+            Cell::new("Quality"),
+            Cell::new("Status"),
+        ]);
+
+    for candidate in &result.candidates {
+        let size_str = format!("{:.2} GB", candidate.estimated_size_bytes as f64 / 1e9);
+        let vram_pct = format!("{:.0}%", candidate.vram_usage_percent * 100.0);
+        let context_str = if candidate.max_context_tokens >= 1000 {
+            format!("~{}k tokens", candidate.max_context_tokens / 1000)
+        } else {
+            format!("~{} tokens", candidate.max_context_tokens)
+        };
+
+        let quality_str = match candidate.quality {
+            QualityTier::Baseline => "Baseline",
+            QualityTier::NearLossless => "Near-lossless",
+            QualityTier::Good => "Good",
+            QualityTier::Acceptable => "Acceptable",
+            QualityTier::Degraded => "Degraded",
+        };
+
+        let (status_str, status_color) = match candidate.fit_status {
+            FitStatus::Fits if candidate.recommended => ("🚀 Recommended", Color::Green),
+            FitStatus::Fits => ("✅ Fits", Color::Green),
+            FitStatus::Hybrid if candidate.recommended => {
+                ("🚀 Recommended (Hybrid)", Color::Yellow)
+            }
+            FitStatus::Hybrid => ("⚠️ Hybrid", Color::Yellow),
+            FitStatus::TooLarge => ("❌ Too Large", Color::Red),
+        };
+
+        table.add_row(vec![
+            Cell::new(&candidate.isq_name),
+            Cell::new(&size_str),
+            Cell::new(&vram_pct),
+            Cell::new(&context_str),
+            Cell::new(quality_str),
+            Cell::new(status_str).fg(status_color),
+        ]);
+    }
+
+    println!("{table}");
+    println!();
+
+    // Concurrent instances info
+    if let Some(rec) = result.candidates.iter().find(|c| c.recommended) {
+        if rec.concurrent_instances > 1 {
+            println!(
+                "[INFO] At {:?} quantization, you can run ~{} concurrent instances",
+                rec.isq
+                    .map(|i| format!("{i:?}"))
+                    .unwrap_or("None".to_string()),
+                rec.concurrent_instances
+            );
         }
     }
+
+    // Warnings
     if !result.warnings.is_empty() {
         println!();
         for warning in &result.warnings {
-            println!("warning: {warning}");
+            println!("[WARN] {warning}");
+        }
+    }
+
+    // Recommended command
+    println!();
+    println!("Recommended Command");
+    println!("-------------------");
+    println!("  {}", result.recommended_command);
+    println!();
+
+    if let Some(mode) = &result.paged_attn_mode {
+        if mode != "off" {
+            println!("[INFO] PagedAttention is available (mode: {mode})");
         }
     }
 

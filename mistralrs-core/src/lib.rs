@@ -82,11 +82,13 @@ mod vision_models;
 mod xlora_models;
 
 pub use diagnostics::{
-    collect_system_info, run_doctor, BuildInfo, CpuInfo, DoctorCheck, DoctorReport, DoctorStatus,
-    MemoryInfo, SystemInfo,
+    check_hf_gated_access, collect_system_info, run_doctor, BuildInfo, CpuInfo, DeviceInfo,
+    DoctorCheck, DoctorReport, DoctorStatus, HfConnectivityInfo, MemoryInfo, SystemInfo,
 };
 mod tuning;
-pub use tuning::{auto_tune, AutoTuneRequest, AutoTuneResult, TuneProfile};
+pub use tuning::{
+    auto_tune, AutoTuneRequest, AutoTuneResult, FitStatus, QualityTier, TuneCandidate, TuneProfile,
+};
 
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{

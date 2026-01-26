@@ -43,6 +43,7 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 futures-util = { workspace = true }
 image = { workspace = true }
+comfy-table = "7"
 
 [features]
 default = []

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
-use hf_hub::Cache;
+use hf_hub::{api::sync::ApiBuilder, Cache};
 use serde::{Deserialize, Serialize};
 use sysinfo::{Disks, System};
 
@@ -14,6 +15,10 @@ pub struct CpuInfo {
     pub brand: Option<String>,
     pub logical_cores: usize,
     pub physical_cores: Option<usize>,
+    pub avx: bool,
+    pub avx2: bool,
+    pub avx512: bool,
+    pub fma: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +34,12 @@ pub struct DeviceInfo {
     pub name: Option<String>,
     pub total_memory_bytes: Option<u64>,
     pub available_memory_bytes: Option<u64>,
+    /// CUDA compute capability (major, minor) - None for non-CUDA devices
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compute_capability: Option<(u32, u32)>,
+    /// Whether this GPU supports Flash Attention (compute capability >= 7.5)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flash_attn_compatible: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +52,21 @@ pub struct BuildInfo {
     pub accelerate: bool,
     pub mkl: bool,
     pub git_revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HfConnectivityInfo {
+    /// Whether HuggingFace is reachable
+    pub reachable: bool,
+    /// Latency in milliseconds (if reachable)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    /// Whether the token is valid for gated models
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_valid_for_gated: Option<bool>,
+    /// Error message if not reachable
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +127,8 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
         name: cpu_brand,
         total_memory_bytes: Some(sys.total_memory()),
         available_memory_bytes: Some(sys.available_memory()),
+        compute_capability: None,
+        flash_attn_compatible: None,
     });
 
     #[cfg(feature = "cuda")]
@@ -114,12 +142,22 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
                         .get_memory_available(&dev)
                         .ok()
                         .map(|v| v as u64);
+
+                    // Get compute capability
+                    let compute_cap = get_cuda_compute_capability(ord);
+                    let flash_attn_ok = compute_cap.map(|(major, minor)| {
+                        // Flash Attention requires compute capability >= 7.5 (Turing+)
+                        major > 7 || (major == 7 && minor >= 5)
+                    });
+
                     devices.push(DeviceInfo {
                         kind: "cuda".to_string(),
                         ordinal: Some(ord),
                         name: None,
                         total_memory_bytes: total,
                         available_memory_bytes: avail,
+                        compute_capability: compute_cap,
+                        flash_attn_compatible: flash_attn_ok,
                     });
                     ord += 1;
                 }
@@ -144,6 +182,8 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
                     name: None,
                     total_memory_bytes: total,
                     available_memory_bytes: avail,
+                    compute_capability: None,
+                    flash_attn_compatible: Some(true), // Metal always supports flash attention
                 });
             }
         }
@@ -152,14 +192,73 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
     devices
 }
 
+/// Get CUDA compute capability for a device ordinal
+#[cfg(feature = "cuda")]
+fn get_cuda_compute_capability(ordinal: usize) -> Option<(u32, u32)> {
+    // Use nvidia-smi to query compute capability
+    let output = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=compute_cap",
+            "--format=csv,noheader",
+            &format!("-i={ordinal}"),
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let cap = stdout.trim();
+
+    // Parse "8.9" format
+    let parts: Vec<&str> = cap.split('.').collect();
+    if parts.len() == 2 {
+        let major = parts[0].parse().ok()?;
+        let minor = parts[1].parse().ok()?;
+        Some((major, minor))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+#[allow(dead_code)]
+fn get_cuda_compute_capability(_ordinal: usize) -> Option<(u32, u32)> {
+    None
+}
+
+/// Detect CPU extensions (AVX, AVX2, AVX-512, FMA)
+fn detect_cpu_extensions() -> (bool, bool, bool, bool) {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        let avx = std::arch::is_x86_feature_detected!("avx");
+        let avx2 = std::arch::is_x86_feature_detected!("avx2");
+        let avx512 = std::arch::is_x86_feature_detected!("avx512f");
+        let fma = std::arch::is_x86_feature_detected!("fma");
+        (avx, avx2, avx512, fma)
+    }
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    {
+        (false, false, false, false)
+    }
+}
+
 pub fn collect_system_info() -> SystemInfo {
     let mut sys = System::new_all();
     sys.refresh_all();
+
+    let (avx, avx2, avx512, fma) = detect_cpu_extensions();
 
     let cpu = CpuInfo {
         brand: sys.cpus().first().map(|c| c.brand().to_string()),
         logical_cores: sys.cpus().len(),
         physical_cores: System::physical_core_count(),
+        avx,
+        avx2,
+        avx512,
+        fma,
     };
 
     let memory = MemoryInfo {
@@ -178,6 +277,57 @@ pub fn collect_system_info() -> SystemInfo {
         devices: collect_devices(&sys),
         build: build_info(),
         hf_cache_path: Some(hf_cache_path),
+    }
+}
+
+/// Check HuggingFace connectivity and token validity by accessing a gated model
+#[allow(clippy::cast_possible_truncation)]
+pub fn check_hf_gated_access() -> HfConnectivityInfo {
+    let start = Instant::now();
+
+    // Try to access a gated model (google/gemma-3-4b-it)
+    let api_result = ApiBuilder::from_env()
+        .with_progress(false)
+        .build()
+        .and_then(|api| api.model("google/gemma-3-4b-it".to_string()).info());
+
+    let latency_ms = start.elapsed().as_millis() as u64;
+
+    match api_result {
+        Ok(_) => HfConnectivityInfo {
+            reachable: true,
+            latency_ms: Some(latency_ms),
+            token_valid_for_gated: Some(true),
+            error: None,
+        },
+        Err(e) => {
+            let error_str = e.to_string();
+            // Check if it's an auth error vs network error
+            let is_auth_error = error_str.contains("401")
+                || error_str.contains("403")
+                || error_str.contains("unauthorized")
+                || error_str.contains("Unauthorized")
+                || error_str.contains("Access denied")
+                || error_str.contains("gated");
+
+            if is_auth_error {
+                // Network works, but token is invalid/missing
+                HfConnectivityInfo {
+                    reachable: true,
+                    latency_ms: Some(latency_ms),
+                    token_valid_for_gated: Some(false),
+                    error: Some("Token invalid or missing for gated models".to_string()),
+                }
+            } else {
+                // Network/other error
+                HfConnectivityInfo {
+                    reachable: false,
+                    latency_ms: None,
+                    token_valid_for_gated: None,
+                    error: Some(error_str),
+                }
+            }
+        }
     }
 }
 
@@ -201,6 +351,113 @@ fn disk_usage_for(path: &Path) -> Option<(u64, u64)> {
 pub fn run_doctor() -> DoctorReport {
     let system = collect_system_info();
     let mut checks = Vec::new();
+
+    // CPU extensions check
+    {
+        let mut extensions = Vec::new();
+        if system.cpu.avx {
+            extensions.push("AVX");
+        }
+        if system.cpu.avx2 {
+            extensions.push("AVX2");
+        }
+        if system.cpu.fma {
+            extensions.push("FMA");
+        }
+        if system.cpu.avx512 {
+            extensions.push("AVX-512");
+        }
+
+        let has_avx2 = system.cpu.avx2;
+        let ext_str = if extensions.is_empty() {
+            "none detected".to_string()
+        } else {
+            extensions.join(", ")
+        };
+
+        checks.push(DoctorCheck {
+            name: "cpu_extensions".to_string(),
+            status: if has_avx2 {
+                DoctorStatus::Ok
+            } else {
+                DoctorStatus::Warn
+            },
+            message: format!("CPU extensions: {ext_str}"),
+            suggestion: if !has_avx2 {
+                Some("AVX2 is recommended for optimal performance.".to_string())
+            } else {
+                None
+            },
+        });
+    }
+
+    // Binary vs hardware mismatch check
+    {
+        let has_cuda_device = system.devices.iter().any(|d| d.kind == "cuda");
+        let has_metal_device = system.devices.iter().any(|d| d.kind == "metal");
+
+        if has_cuda_device && !system.build.cuda {
+            checks.push(DoctorCheck {
+                name: "binary_hardware_match".to_string(),
+                status: DoctorStatus::Error,
+                message: "NVIDIA GPU detected but binary compiled without CUDA support."
+                    .to_string(),
+                suggestion: Some("Reinstall with CUDA: cargo install --features cuda".to_string()),
+            });
+        } else if has_metal_device && !system.build.metal {
+            checks.push(DoctorCheck {
+                name: "binary_hardware_match".to_string(),
+                status: DoctorStatus::Error,
+                message: "Apple GPU detected but binary compiled without Metal support."
+                    .to_string(),
+                suggestion: Some(
+                    "Reinstall with Metal: cargo install --features metal".to_string(),
+                ),
+            });
+        } else {
+            checks.push(DoctorCheck {
+                name: "binary_hardware_match".to_string(),
+                status: DoctorStatus::Ok,
+                message: "Binary features match detected hardware.".to_string(),
+                suggestion: None,
+            });
+        }
+    }
+
+    // CUDA compute capability + Flash Attention check
+    #[cfg(feature = "cuda")]
+    {
+        for dev in system.devices.iter().filter(|d| d.kind == "cuda") {
+            if let (Some(ord), Some((major, minor)), Some(fa_ok)) = (
+                dev.ordinal,
+                dev.compute_capability,
+                dev.flash_attn_compatible,
+            ) {
+                let fa_status = if fa_ok {
+                    "Flash Attention compatible"
+                } else {
+                    "Flash Attention requires compute >= 7.5"
+                };
+                checks.push(DoctorCheck {
+                    name: format!("cuda_{}_compute", ord),
+                    status: if fa_ok || !system.build.flash_attn {
+                        DoctorStatus::Ok
+                    } else {
+                        DoctorStatus::Warn
+                    },
+                    message: format!(
+                        "GPU {}: compute capability {}.{} - {fa_status}",
+                        ord, major, minor
+                    ),
+                    suggestion: if !fa_ok && system.build.flash_attn {
+                        Some("Flash Attention will be disabled for this GPU.".to_string())
+                    } else {
+                        None
+                    },
+                });
+            }
+        }
+    }
 
     let hf_cache_path = system
         .hf_cache_path
@@ -230,27 +487,48 @@ pub fn run_doctor() -> DoctorReport {
         });
     }
 
-    let token_present = Cache::from_env().token().is_some()
-        || std::env::var("HF_TOKEN").is_ok()
-        || std::env::var("HUGGINGFACE_HUB_TOKEN").is_ok();
-    checks.push(DoctorCheck {
-        name: "hf_token".to_string(),
-        status: if token_present {
-            DoctorStatus::Ok
+    // HuggingFace connectivity + gated model access check
+    {
+        let hf_info = check_hf_gated_access();
+        if hf_info.reachable {
+            if hf_info.token_valid_for_gated == Some(true) {
+                checks.push(DoctorCheck {
+                    name: "hf_connectivity".to_string(),
+                    status: DoctorStatus::Ok,
+                    message: format!(
+                        "Hugging Face: connected ({}ms), token valid for allowed gated models.",
+                        hf_info.latency_ms.unwrap_or(0)
+                    ),
+                    suggestion: None,
+                });
+            } else {
+                checks.push(DoctorCheck {
+                    name: "hf_connectivity".to_string(),
+                    status: DoctorStatus::Warn,
+                    message: format!(
+                        "Hugging Face: connected ({}ms), but token invalid/missing.",
+                        hf_info.latency_ms.unwrap_or(0)
+                    ),
+                    suggestion: Some(
+                        "Run `huggingface-cli login` or set HF_TOKEN to access gated models."
+                            .to_string(),
+                    ),
+                });
+            }
         } else {
-            DoctorStatus::Warn
-        },
-        message: if token_present {
-            "Hugging Face token detected.".to_string()
-        } else {
-            "No Hugging Face token detected.".to_string()
-        },
-        suggestion: if token_present {
-            None
-        } else {
-            Some("Run `huggingface-cli login` or set HF_TOKEN.".to_string())
-        },
-    });
+            checks.push(DoctorCheck {
+                name: "hf_connectivity".to_string(),
+                status: DoctorStatus::Error,
+                message: format!(
+                    "Hugging Face: unreachable - {}",
+                    hf_info.error.unwrap_or_else(|| "unknown error".to_string())
+                ),
+                suggestion: Some(
+                    "Check your internet connection and firewall settings.".to_string(),
+                ),
+            });
+        }
+    }
 
     if let Some((avail, total)) = disk_usage_for(&hf_cache_path) {
         let min_free = 10_u64 * 1024 * 1024 * 1024;

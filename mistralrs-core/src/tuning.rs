@@ -35,15 +35,77 @@ pub struct AutoTuneRequest {
     pub requested_isq: Option<IsqType>,
 }
 
+/// Quality tier for a quantization level
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum QualityTier {
+    /// Full precision, baseline quality
+    Baseline,
+    /// Near-lossless (8-bit)
+    NearLossless,
+    /// Good quality (6-bit, 5-bit)
+    Good,
+    /// Acceptable quality (4-bit)
+    Acceptable,
+    /// Degraded quality (3-bit, 2-bit)
+    Degraded,
+}
+
+/// Fit status for a quantization candidate
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum FitStatus {
+    /// Model fits entirely on GPU(s)
+    Fits,
+    /// Model requires CPU offloading (hybrid)
+    Hybrid,
+    /// Model doesn't fit even with CPU offload
+    TooLarge,
+}
+
+/// A tuning candidate with all calculated metrics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TuneCandidate {
+    /// Quantization type (None = no quantization)
+    pub isq: Option<IsqType>,
+    /// Display name for the quantization
+    pub isq_name: String,
+    /// Estimated model size in bytes
+    pub estimated_size_bytes: u64,
+    /// VRAM usage as percentage (0.0 - 1.0)
+    pub vram_usage_percent: f32,
+    /// Estimated max context length
+    pub max_context_tokens: usize,
+    /// Quality tier
+    pub quality: QualityTier,
+    /// Whether this candidate fits
+    pub fit_status: FitStatus,
+    /// Estimated concurrent instances at this quant level
+    pub concurrent_instances: usize,
+    /// Device layer mapping (if hybrid)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_layers_cli: Option<String>,
+    /// Whether this is the recommended option
+    pub recommended: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutoTuneResult {
     pub model_id: String,
     pub profile: TuneProfile,
     pub backend: String,
+    /// All evaluated candidates with their metrics
+    pub candidates: Vec<TuneCandidate>,
+    /// The recommended ISQ type
     pub recommended_isq: Option<IsqType>,
+    /// Device layers for the recommended option
     pub device_layers: Option<Vec<DeviceLayerMapMetadata>>,
     pub device_layers_cli: Option<String>,
     pub paged_attn_mode: Option<String>,
+    /// Copy-paste command for the recommended option
+    pub recommended_command: String,
+    /// Total VRAM available across all GPUs (bytes)
+    pub total_vram_bytes: u64,
     pub warnings: Vec<String>,
     pub notes: Vec<String>,
 }
@@ -240,6 +302,29 @@ fn infer_kind(config: &str, sentence_transformers: bool) -> Result<TuneKind> {
     Ok(TuneKind::Normal)
 }
 
+/// Get all candidates to evaluate (in order from highest to lowest quality)
+fn all_candidates(backend: TuneBackend) -> Vec<Option<IsqType>> {
+    match backend {
+        TuneBackend::Metal => vec![
+            None, // No quantization
+            Some(IsqType::AFQ8),
+            Some(IsqType::AFQ6),
+            Some(IsqType::AFQ4),
+            Some(IsqType::AFQ3),
+            Some(IsqType::AFQ2),
+        ],
+        _ => vec![
+            None, // No quantization
+            Some(IsqType::Q8_0),
+            Some(IsqType::Q6K),
+            Some(IsqType::Q5K),
+            Some(IsqType::Q4K),
+            Some(IsqType::Q3K),
+            Some(IsqType::Q2K),
+        ],
+    }
+}
+
 fn default_candidates(profile: TuneProfile, backend: TuneBackend) -> Vec<IsqType> {
     match backend {
         TuneBackend::Metal => match profile {
@@ -264,19 +349,87 @@ fn default_candidates(profile: TuneProfile, backend: TuneBackend) -> Vec<IsqType
     }
 }
 
+/// Map ISQ type to quality tier
+fn quality_tier(isq: Option<IsqType>) -> QualityTier {
+    match isq {
+        None => QualityTier::Baseline,
+        Some(t) => match t {
+            IsqType::Q8_0 | IsqType::Q8_1 | IsqType::Q8K | IsqType::AFQ8 | IsqType::HQQ8 => {
+                QualityTier::NearLossless
+            }
+            IsqType::Q6K | IsqType::AFQ6 => QualityTier::Good,
+            IsqType::Q5_0 | IsqType::Q5_1 | IsqType::Q5K => QualityTier::Good,
+            IsqType::Q4_0 | IsqType::Q4_1 | IsqType::Q4K | IsqType::AFQ4 | IsqType::HQQ4 => {
+                QualityTier::Acceptable
+            }
+            IsqType::Q3K | IsqType::AFQ3 => QualityTier::Degraded,
+            IsqType::Q2K | IsqType::AFQ2 => QualityTier::Degraded,
+            _ => QualityTier::Acceptable,
+        },
+    }
+}
+
+/// Get display name for ISQ type
+fn isq_display_name(isq: Option<IsqType>) -> String {
+    match isq {
+        None => "None (FP16)".to_string(),
+        Some(t) => format!("{t:?}"),
+    }
+}
+
+/// Get total VRAM across all GPU devices
+#[allow(clippy::cast_possible_truncation)]
+fn total_vram(devices: &[Device]) -> u64 {
+    use crate::MemoryUsage;
+    devices
+        .iter()
+        .filter(|d| !matches!(d, Device::Cpu))
+        .filter_map(|d| MemoryUsage.get_total_memory(d).ok())
+        .sum::<usize>() as u64
+}
+
+/// Get available VRAM across all GPU devices
+#[allow(clippy::cast_possible_truncation)]
+fn available_vram(devices: &[Device]) -> u64 {
+    use crate::MemoryUsage;
+    devices
+        .iter()
+        .filter(|d| !matches!(d, Device::Cpu))
+        .filter_map(|d| MemoryUsage.get_memory_available(d).ok())
+        .sum::<usize>() as u64
+}
+
+/// Estimate context room based on remaining VRAM after model weights
+/// Returns estimated max tokens (rough calculation)
+#[allow(clippy::cast_possible_truncation)]
+fn estimate_context_room(
+    model_size_bytes: u64,
+    available_vram_bytes: u64,
+    hidden_size: usize,
+) -> usize {
+    if model_size_bytes >= available_vram_bytes {
+        return 0;
+    }
+    let remaining = available_vram_bytes - model_size_bytes;
+    // Rough estimate: KV cache per token ~= 2 * hidden_size * num_layers * 2 bytes (for FP16)
+    // We use a simplified estimate: ~4 bytes per hidden dim per token
+    let bytes_per_token = (hidden_size * 4).max(1024); // minimum 1KB per token
+    (remaining as usize) / bytes_per_token
+}
+
 fn map_for_candidate(
     loader: &dyn DeviceMappedModelLoader,
     config: &str,
     dtype: DType,
     params: &AutoDeviceMapParams,
     devices: &[Device],
-    isq: IsqType,
-) -> Result<DeviceMapMetadata> {
-    let pack_factor = isq.pack_factor(dtype);
+    isq: Option<IsqType>,
+) -> Result<(DeviceMapMetadata, usize)> {
+    let pack_factor = isq.map(|i| i.pack_factor(dtype)).unwrap_or(1);
     let layer_sizes = loader.layer_sizes_in_bytes(config, dtype, pack_factor, None)?;
     let non_mapped = loader.non_mapped_size_in_bytes(config, dtype, pack_factor, None)?;
     let total = layer_sizes.iter().sum::<usize>() + non_mapped;
-    crate::pipeline::get_device_layers_for_loader(
+    let map = crate::pipeline::get_device_layers_for_loader(
         loader,
         config,
         loader.num_layers(config)?,
@@ -287,9 +440,28 @@ fn map_for_candidate(
         dtype,
         params,
         None,
-    )
+    )?;
+    Ok((map, total))
 }
 
+/// Extract hidden_size from config JSON
+fn get_hidden_size(config: &str) -> usize {
+    #[derive(Deserialize)]
+    struct ConfigHidden {
+        hidden_size: Option<usize>,
+        d_model: Option<usize>,
+    }
+    serde_json::from_str::<ConfigHidden>(config)
+        .ok()
+        .and_then(|c| c.hidden_size.or(c.d_model))
+        .unwrap_or(4096)
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
     let model_id = model_id_from_selected(&req.model);
     match &req.model {
@@ -344,10 +516,14 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
         TuneKind::Embedding => &loader_embedding,
     };
 
-    let candidates = req
-        .requested_isq
-        .map(|t| vec![t])
-        .unwrap_or_else(|| default_candidates(req.profile, backend));
+    // Get preferred candidates based on profile (for determining recommendation)
+    let preferred_candidates: Vec<Option<IsqType>> =
+        req.requested_isq.map(|t| vec![Some(t)]).unwrap_or_else(|| {
+            default_candidates(req.profile, backend)
+                .into_iter()
+                .map(Some)
+                .collect()
+        });
 
     let mut warnings = Vec::new();
     let mut notes = Vec::new();
@@ -359,35 +535,152 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
         notes.push("Detected vision model configuration.".to_string());
     }
 
-    for isq in candidates {
-        match map_for_candidate(loader, &config, dtype, &params, &devices, isq) {
-            Ok(map) => {
-                let device_layers = map.device_layers().map(|layers| layers.to_vec());
-                let device_layers_cli = map.to_cli_spec();
-                let paged_attn_mode = if backend != TuneBackend::Cpu && paged_attn_supported() {
-                    Some("auto".to_string())
+    // Get total VRAM for calculations
+    let total_vram_bytes = total_vram(&devices);
+    let avail_vram_bytes = available_vram(&devices);
+    let hidden_size = get_hidden_size(&config);
+
+    // Evaluate ALL candidates
+    let all_isq_candidates = all_candidates(backend);
+    let mut tune_candidates: Vec<TuneCandidate> = Vec::new();
+    let mut recommended_idx: Option<usize> = None;
+
+    for isq in all_isq_candidates {
+        let result = map_for_candidate(loader, &config, dtype, &params, &devices, isq);
+
+        let (fit_status, estimated_size, device_layers_cli) = match &result {
+            Ok((map, total_size)) => {
+                let layers = map.device_layers();
+                let is_hybrid = layers
+                    .map(|l| l.iter().any(|d| d.ordinal == usize::MAX))
+                    .unwrap_or(false);
+                let status = if is_hybrid {
+                    FitStatus::Hybrid
                 } else {
-                    Some("off".to_string())
+                    FitStatus::Fits
                 };
-                return Ok(AutoTuneResult {
-                    model_id,
-                    profile: req.profile,
-                    backend: backend_name(backend),
-                    recommended_isq: Some(isq),
-                    device_layers,
-                    device_layers_cli,
-                    paged_attn_mode,
-                    warnings,
-                    notes,
-                });
+                (status, *total_size as u64, map.to_cli_spec())
             }
-            Err(err) => {
-                warnings.push(format!("ISQ {isq:?} does not fit: {err}"));
+            Err(_) => {
+                // Calculate estimated size even for non-fitting candidates
+                let pack_factor = isq.map(|i| i.pack_factor(dtype)).unwrap_or(1);
+                let layer_sizes = loader
+                    .layer_sizes_in_bytes(&config, dtype, pack_factor, None)
+                    .unwrap_or_default();
+                let non_mapped = loader
+                    .non_mapped_size_in_bytes(&config, dtype, pack_factor, None)
+                    .unwrap_or(0);
+                let est_size = (layer_sizes.iter().sum::<usize>() + non_mapped) as u64;
+                (FitStatus::TooLarge, est_size, None)
             }
+        };
+
+        let vram_usage = if total_vram_bytes > 0 {
+            (estimated_size as f32) / (total_vram_bytes as f32)
+        } else {
+            1.0
+        };
+
+        let context_room = estimate_context_room(estimated_size, avail_vram_bytes, hidden_size);
+
+        let concurrent = if total_vram_bytes > 0 && estimated_size > 0 {
+            ((total_vram_bytes as f64) / (estimated_size as f64)).floor() as usize
+        } else {
+            1
+        };
+
+        let candidate = TuneCandidate {
+            isq,
+            isq_name: isq_display_name(isq),
+            estimated_size_bytes: estimated_size,
+            vram_usage_percent: vram_usage,
+            max_context_tokens: context_room,
+            quality: quality_tier(isq),
+            fit_status,
+            concurrent_instances: concurrent.max(1),
+            device_layers_cli,
+            recommended: false, // Set later
+        };
+
+        tune_candidates.push(candidate);
+    }
+
+    // Mark the recommended candidate (first from preferred list that fits)
+    for pref in &preferred_candidates {
+        if let Some(idx) = tune_candidates.iter().position(|c| {
+            c.isq == *pref && matches!(c.fit_status, FitStatus::Fits | FitStatus::Hybrid)
+        }) {
+            tune_candidates[idx].recommended = true;
+            recommended_idx = Some(idx);
+            break;
         }
     }
 
-    anyhow::bail!(
-        "No suitable quantization level fits on the available devices. Try a smaller model or enable CPU offload."
-    )
+    // If no preferred candidate fits, recommend the first that fits
+    if recommended_idx.is_none() {
+        if let Some(idx) = tune_candidates
+            .iter()
+            .position(|c| matches!(c.fit_status, FitStatus::Fits | FitStatus::Hybrid))
+        {
+            tune_candidates[idx].recommended = true;
+            recommended_idx = Some(idx);
+        }
+    }
+
+    // Build the result
+    let (recommended_isq, device_layers, device_layers_cli, recommended_command) =
+        if let Some(idx) = recommended_idx {
+            let rec = &tune_candidates[idx];
+            let isq_flag = rec
+                .isq
+                .map(|i| format!(" --isq {:?}", i).to_lowercase())
+                .unwrap_or_default();
+            let cmd = format!("mistralrs serve auto -m {model_id}{isq_flag}");
+            (rec.isq, None, rec.device_layers_cli.clone(), cmd)
+        } else {
+            (
+                None,
+                None,
+                None,
+                format!("mistralrs serve auto -m {model_id}"),
+            )
+        };
+
+    let paged_attn_mode = if backend != TuneBackend::Cpu && paged_attn_supported() {
+        Some("auto".to_string())
+    } else {
+        Some("off".to_string())
+    };
+
+    // Add warnings for candidates that don't fit
+    for c in &tune_candidates {
+        if matches!(c.fit_status, FitStatus::TooLarge) && c.isq.is_some() {
+            warnings.push(format!(
+                "{} ({:.1} GB) exceeds available VRAM",
+                c.isq_name,
+                c.estimated_size_bytes as f64 / 1e9
+            ));
+        }
+    }
+
+    if recommended_idx.is_none() {
+        anyhow::bail!(
+            "No suitable quantization level fits on the available devices. Try a smaller model or enable CPU offload."
+        );
+    }
+
+    Ok(AutoTuneResult {
+        model_id,
+        profile: req.profile,
+        backend: backend_name(backend),
+        candidates: tune_candidates,
+        recommended_isq,
+        device_layers,
+        device_layers_cli,
+        paged_attn_mode,
+        recommended_command,
+        total_vram_bytes,
+        warnings,
+        notes,
+    })
 }
