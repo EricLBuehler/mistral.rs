@@ -116,14 +116,47 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
     match model_type {
         ModelType::Auto {
             model,
-            format: _,
-            adapter: _,
+            format,
+            adapter,
             quantization,
             device,
             cache: _,
             vision,
         } => {
-            // Use Run (auto-loader) for auto mode
+            // If user explicitly specified a quantized format, handle it
+            let format_type = format.format.unwrap_or(ModelFormat::Plain);
+            let has_lora = adapter.lora.is_some();
+            let has_xlora = adapter.xlora.is_some();
+
+            // For GGUF/GGML formats, delegate to text model conversion which has proper validation
+            match format_type {
+                ModelFormat::Gguf | ModelFormat::Ggml => {
+                    // Validate that required options are present
+                    if format.quantized_file.is_none() {
+                        let format_name = match format_type {
+                            ModelFormat::Gguf => "GGUF",
+                            ModelFormat::Ggml => "GGML",
+                            _ => unreachable!(),
+                        };
+                        anyhow::bail!(
+                            "{format_name} format requires a quantized file.\n\n\
+                            Usage: mistralrs run auto -m <hf model/local dir> --format {fmt} -f <filename>\n\n\
+                            The -f/--quantized-file flag specifies which {format_name} file to load from the model repository/local dir.",
+                            fmt = format_name.to_lowercase()
+                        );
+                    }
+                    // Use the text model conversion which handles GGUF/GGML properly
+                    return convert_text_model(model, format, adapter, quantization, device);
+                }
+                ModelFormat::Plain => {
+                    // For plain format with adapters, also use text model conversion
+                    if has_lora || has_xlora {
+                        return convert_text_model(model, format, adapter, quantization, device);
+                    }
+                }
+            }
+
+            // Use Run (auto-loader) for auto mode without explicit quantized format
             Ok(ModelSelected::Run {
                 model_id: model.model_id.clone(),
                 tokenizer_json: model
