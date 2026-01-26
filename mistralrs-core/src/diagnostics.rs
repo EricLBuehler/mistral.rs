@@ -255,9 +255,10 @@ pub fn run_doctor() -> DoctorReport {
             name: "disk_space".to_string(),
             status,
             message: format!(
-                "Disk free: {:.1} GB / {:.1} GB (HF cache volume).",
+                "Disk free: {:.1} GB / {:.1} GB on the volume containing the HF cache at {}.",
                 avail as f64 / 1e9,
-                total as f64 / 1e9
+                total as f64 / 1e9,
+                hf_cache_path.display()
             ),
             suggestion: if avail < min_free {
                 Some("Free up disk space or move HF cache.".to_string())
