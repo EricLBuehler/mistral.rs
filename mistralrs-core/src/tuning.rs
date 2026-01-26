@@ -643,12 +643,7 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
             let cmd = format!("mistralrs serve -m {model_id}{isq_flag}");
             (rec.isq, None, rec.device_layers_cli.clone(), cmd)
         } else {
-            (
-                None,
-                None,
-                None,
-                format!("mistralrs serve -m {model_id}"),
-            )
+            (None, None, None, format!("mistralrs serve -m {model_id}"))
         };
 
     let paged_attn_mode = if backend != TuneBackend::Cpu && paged_attn_supported() {

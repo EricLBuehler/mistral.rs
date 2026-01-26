@@ -408,13 +408,16 @@ Benchmark Results
 Model: Qwen/Qwen3-4B
 Iterations: 3
 
-┌────────────────────────┬─────────────────┬─────────┐
-│ Test                   │ tok/s           │ ms/tok  │
-├────────────────────────┼─────────────────┼─────────┤
-│ Prefill (512 tokens)   │ 2847.3 ± 45.2   │ 0.35    │
-│ Decode (128 tokens)    │ 87.4 ± 2.1      │ 11.44   │
-└────────────────────────┴─────────────────┴─────────┘
+┌────────────────────────┬─────────────────┬─────────────────┐
+│ Test                   │ T/s             │ Latency         │
+├────────────────────────┼─────────────────┼─────────────────┤
+│ Prefill (512 tokens)   │ 2847.3 ± 45.2   │ 179.82 ms (TTFT)│
+│ Decode (128 tokens)    │ 87.4 ± 2.1      │ 11.44 ms/T      │
+└────────────────────────┴─────────────────┴─────────────────┘
 ```
+
+- **T/s**: Tokens per second (throughput)
+- **Latency**: For prefill, shows TTFT (Time To First Token) in milliseconds. For decode, shows ms per token.
 
 **Options:**
 

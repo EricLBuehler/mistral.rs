@@ -24,7 +24,8 @@ struct BenchResult {
     test_name: String,
     tok_per_sec: f32,
     std_dev: f32,
-    ms_per_tok: f32,
+    /// For prefill: TTFT in ms; for decode: ms/tok
+    latency_ms: f32,
 }
 
 /// Extract model_id from ModelType
@@ -120,9 +121,10 @@ pub async fn run_bench(
             let start = Instant::now();
             let _ = run_single_bench(&mistralrs, prompt_len, 1).await?;
             let elapsed = start.elapsed();
-            // Calculate prefill tok/s: prompt_tokens / elapsed_seconds
-            let prefill_tok_per_sec = prompt_len as f32 / elapsed.as_secs_f32();
-            prefill_results.push(prefill_tok_per_sec);
+            // Record both tok/s and TTFT (latency in ms)
+            let tok_per_sec = prompt_len as f32 / elapsed.as_secs_f32();
+            let ttft_ms = elapsed.as_secs_f32() * 1000.0;
+            prefill_results.push((tok_per_sec, ttft_ms));
         }
 
         // Decode benchmark (token generation)
@@ -130,9 +132,10 @@ pub async fn run_bench(
             let start = Instant::now();
             let _ = run_single_bench(&mistralrs, 4, gen_len).await?;
             let elapsed = start.elapsed();
-            // Calculate decode tok/s: gen_tokens / elapsed_seconds
-            let decode_tok_per_sec = gen_len as f32 / elapsed.as_secs_f32();
-            decode_results.push(decode_tok_per_sec);
+            // Record both tok/s and ms/tok
+            let tok_per_sec = gen_len as f32 / elapsed.as_secs_f32();
+            let ms_per_tok = 1000.0 / tok_per_sec;
+            decode_results.push((tok_per_sec, ms_per_tok));
         }
     }
 
@@ -140,22 +143,27 @@ pub async fn run_bench(
     let mut results = Vec::new();
 
     if !prefill_results.is_empty() {
-        let (mean, std_dev) = calculate_stats(&prefill_results);
+        let tok_per_sec_vals: Vec<f32> = prefill_results.iter().map(|(t, _)| *t).collect();
+        let ttft_vals: Vec<f32> = prefill_results.iter().map(|(_, l)| *l).collect();
+        let (mean_tps, std_dev_tps) = calculate_stats(&tok_per_sec_vals);
+        let (mean_ttft, _) = calculate_stats(&ttft_vals);
         results.push(BenchResult {
             test_name: format!("Prefill ({} tokens)", prompt_len),
-            tok_per_sec: mean,
-            std_dev,
-            ms_per_tok: 1000.0 / mean,
+            tok_per_sec: mean_tps,
+            std_dev: std_dev_tps,
+            latency_ms: mean_ttft, // TTFT
         });
     }
 
     if !decode_results.is_empty() {
-        let (mean, std_dev) = calculate_stats(&decode_results);
+        let tok_per_sec_vals: Vec<f32> = decode_results.iter().map(|(t, _)| *t).collect();
+        let (mean_tps, std_dev_tps) = calculate_stats(&tok_per_sec_vals);
+        let ms_per_tok = 1000.0 / mean_tps;
         results.push(BenchResult {
             test_name: format!("Decode ({} tokens)", gen_len),
-            tok_per_sec: mean,
-            std_dev,
-            ms_per_tok: 1000.0 / mean,
+            tok_per_sec: mean_tps,
+            std_dev: std_dev_tps,
+            latency_ms: ms_per_tok, // ms/tok
         });
     }
 
@@ -249,16 +257,23 @@ fn print_results(model_id: &str, iterations: usize, results: &[BenchResult]) {
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_header(vec![
             Cell::new("Test"),
-            Cell::new("tok/s"),
-            Cell::new("ms/tok"),
+            Cell::new("T/s"),
+            Cell::new("Latency"),
         ]);
 
     for result in results {
+        // Determine latency label based on test type
+        let latency_str = if result.test_name.contains("Prefill") {
+            format!("{:.2} ms (TTFT)", result.latency_ms)
+        } else {
+            format!("{:.2} ms/T", result.latency_ms)
+        };
+
         table.add_row(vec![
             Cell::new(&result.test_name),
             Cell::new(format!("{:.1} ± {:.1}", result.tok_per_sec, result.std_dev))
                 .fg(Color::Green),
-            Cell::new(format!("{:.2}", result.ms_per_tok)),
+            Cell::new(latency_str),
         ]);
     }
 
