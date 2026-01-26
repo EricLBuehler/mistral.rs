@@ -62,6 +62,7 @@
 - [MCP advanced usage](MCP/advanced.md)
 
 ## Other
+- [CLI TOML config](CLI_CONFIG.md)
 - [Chat templates and tokenizers](CHAT_TOK.md)
 - [Paged Attention](PAGED_ATTENTION.md)
 - [Flash Attention](FLASH_ATTENTION.md)

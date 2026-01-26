@@ -40,7 +40,7 @@ pub async fn run_server(
     let isq = extract_isq_setting(&model_type);
 
     // Build the MistralRs instance
-    let mistralrs = MistralRsForServerBuilder::new()
+    let mut builder = MistralRsForServerBuilder::new()
         .with_model(model_selected)
         .with_max_seqs(runtime.max_seqs)
         .with_no_kv_cache(runtime.no_kv_cache)
@@ -60,9 +60,13 @@ pub async fn run_server(
         .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
         .with_paged_ctxt_len_optional(paged_ctxt_len)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
-        .with_paged_attn_cache_type(paged_cache_type)
-        .build()
-        .await?;
+        .with_paged_attn_cache_type(paged_cache_type);
+
+    if let Some(model) = runtime.search_embedding_model {
+        builder = builder.with_search_embedding_model(model.into());
+    }
+
+    let mistralrs = builder.build().await?;
 
     // Build and run the server
     let app = MistralRsServerRouterBuilder::new()

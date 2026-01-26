@@ -16,7 +16,7 @@ use clap_complete::generate;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use args::{Cli, Command};
-use commands::{run_interactive, run_quantize, run_server};
+use commands::{run_from_config, run_interactive, run_quantize, run_server};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -53,6 +53,10 @@ async fn main() -> Result<()> {
 
         Command::Quantize { model_type } => {
             run_quantize(model_type, cli.global).await?;
+        }
+
+        Command::FromConfig { file } => {
+            run_from_config(file).await?;
         }
     }
 

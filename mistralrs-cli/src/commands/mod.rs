@@ -2,8 +2,10 @@
 
 mod quantize;
 mod run;
+mod config;
 pub(crate) mod serve;
 
+pub use config::run_from_config;
 pub use quantize::run_quantize;
 pub use run::run_interactive;
 pub use serve::run_server;

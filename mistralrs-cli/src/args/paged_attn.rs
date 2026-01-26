@@ -3,23 +3,25 @@
 //! Unified design replacing the confusing 5-flag system with clear semantics.
 
 use clap::{Args, ValueEnum};
+use serde::Deserialize;
 use mistralrs_core::PagedCacheType;
 
 /// Cache and attention configuration
-#[derive(Args, Clone)]
+#[derive(Args, Clone, Deserialize)]
 pub struct CacheOptions {
     #[command(flatten)]
     pub paged_attn: PagedAttentionOptions,
 }
 
 /// PagedAttention configuration
-#[derive(Args, Clone)]
+#[derive(Args, Clone, Deserialize)]
 pub struct PagedAttentionOptions {
     /// PagedAttention mode
     /// - auto: enabled on CUDA, disabled on Metal/CPU (default)
     /// - on: force enable (fails if unsupported)
     /// - off: force disable
     #[arg(long = "paged-attn", default_value = "auto", value_enum)]
+    #[serde(default)]
     pub mode: PagedAttnMode,
 
     /// Allocate KV cache for this context length (recommended option).
@@ -41,6 +43,7 @@ pub struct PagedAttentionOptions {
 
     /// KV cache quantization type
     #[arg(long = "pa-cache-type", default_value = "auto", value_parser = parse_cache_type)]
+    #[serde(default)]
     pub cache_type: PagedCacheType,
 }
 
@@ -66,7 +69,8 @@ impl Default for CacheOptions {
 }
 
 /// PagedAttention operation mode
-#[derive(Clone, Copy, ValueEnum, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum PagedAttnMode {
     /// Automatic: enabled on CUDA, disabled on Metal/CPU
     #[default]

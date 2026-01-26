@@ -16,6 +16,7 @@ pub use server::*;
 use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use mistralrs_core::TokenSource;
+use serde::Deserialize;
 use std::path::PathBuf;
 
 /// Fast LLM inference engine
@@ -69,6 +70,14 @@ pub enum Command {
     Quantize {
         #[command(subcommand)]
         model_type: QuantizeModelType,
+    },
+
+    /// Run from a full TOML configuration file
+    #[command(name = "from-config")]
+    FromConfig {
+        /// Path to configuration file (.toml)
+        #[arg(short, long)]
+        file: PathBuf,
     },
 }
 
@@ -189,60 +198,117 @@ pub enum ModelType {
 }
 
 /// Global options that apply to all commands
-#[derive(clap::Args, Clone)]
+#[derive(clap::Args, Clone, Deserialize)]
 pub struct GlobalOptions {
     /// Random seed for reproducibility
     #[arg(long, global = true)]
+    #[serde(default)]
     pub seed: Option<u64>,
 
     /// Log all requests and responses to this file
     #[arg(long, short, global = true)]
+    #[serde(default)]
     pub log: Option<PathBuf>,
 
     /// Token source for HuggingFace authentication.
     /// Formats: `literal:<token>`, `env:<var>`, `path:<file>`, `cache`, `none`
     #[arg(long, default_value = "cache", global = true, value_parser = parse_token_source)]
+    #[serde(default = "default_token_source")]
     pub token_source: TokenSource,
 }
 
 /// Runtime options for inference
-#[derive(clap::Args, Clone)]
+#[derive(clap::Args, Clone, Deserialize)]
 pub struct RuntimeOptions {
     /// Maximum concurrent sequences
     #[arg(long, default_value_t = 32)]
+    #[serde(default = "default_max_seqs")]
     pub max_seqs: usize,
 
     /// Disable KV cache entirely
     #[arg(long)]
+    #[serde(default)]
     pub no_kv_cache: bool,
 
     /// Number of prefix caches to hold (0 to disable)
     #[arg(long, default_value_t = 16)]
+    #[serde(default = "default_prefix_cache_n")]
     pub prefix_cache_n: usize,
 
     /// Custom chat template file (.json or .jinja)
     #[arg(long, short)]
+    #[serde(default)]
     pub chat_template: Option<PathBuf>,
 
     /// Explicit JINJA template override
     #[arg(long, short)]
+    #[serde(default)]
     pub jinja_explicit: Option<PathBuf>,
 
     /// Enable web search (requires embedding model)
     #[arg(long)]
+    #[serde(default)]
     pub enable_search: bool,
 
     /// Search embedding model to use
     #[arg(long, requires = "enable_search")]
+    #[serde(default)]
     pub search_embedding_model: Option<SearchEmbeddingModelArg>,
 }
 
 /// Search embedding model options
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, ValueEnum, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SearchEmbeddingModelArg {
     EmbeddingGemma,
 }
 
+impl From<SearchEmbeddingModelArg> for mistralrs_core::SearchEmbeddingModel {
+    fn from(value: SearchEmbeddingModelArg) -> Self {
+        match value {
+            SearchEmbeddingModelArg::EmbeddingGemma => {
+                mistralrs_core::SearchEmbeddingModel::EmbeddingGemma300M
+            }
+        }
+    }
+}
+
+impl Default for GlobalOptions {
+    fn default() -> Self {
+        Self {
+            seed: None,
+            log: None,
+            token_source: TokenSource::CacheToken,
+        }
+    }
+}
+
+impl Default for RuntimeOptions {
+    fn default() -> Self {
+        Self {
+            max_seqs: 32,
+            no_kv_cache: false,
+            prefix_cache_n: 16,
+            chat_template: None,
+            jinja_explicit: None,
+            enable_search: false,
+            search_embedding_model: None,
+        }
+    }
+}
+
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
+}
+
+fn default_token_source() -> TokenSource {
+    TokenSource::CacheToken
+}
+
+fn default_max_seqs() -> usize {
+    32
+}
+
+fn default_prefix_cache_n() -> usize {
+    16
 }

@@ -2,10 +2,11 @@
 
 use clap::{Args, ValueEnum};
 use mistralrs_core::{IsqOrganization, ModelDType, NormalLoaderType};
+use serde::Deserialize;
 use std::path::PathBuf;
 
 /// Model source options
-#[derive(Args, Clone)]
+#[derive(Args, Clone, Deserialize)]
 pub struct ModelSourceOptions {
     /// Model ID to load (HuggingFace repo or local path)
     #[arg(short = 'm', long)]
@@ -21,11 +22,12 @@ pub struct ModelSourceOptions {
 
     /// Model data type
     #[arg(long, default_value = "auto", value_parser = parse_dtype)]
+    #[serde(default)]
     pub dtype: ModelDType,
 }
 
 /// Format options for model loading
-#[derive(Args, Clone, Default)]
+#[derive(Args, Clone, Default, Deserialize)]
 pub struct FormatOptions {
     /// Model format: plain (safetensors), gguf, or ggml
     /// Auto-detected if not specified
@@ -42,11 +44,13 @@ pub struct FormatOptions {
 
     /// GQA value for GGML models
     #[arg(long, default_value_t = 1)]
+    #[serde(default = "default_gqa")]
     pub gqa: usize,
 }
 
 /// Model format type
-#[derive(Clone, Copy, ValueEnum, Default)]
+#[derive(Clone, Copy, ValueEnum, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ModelFormat {
     /// Plain model (safetensors)
     #[default]
@@ -58,7 +62,7 @@ pub enum ModelFormat {
 }
 
 /// Adapter options (LoRA/X-LoRA)
-#[derive(Args, Clone, Default)]
+#[derive(Args, Clone, Default, Deserialize)]
 pub struct AdapterOptions {
     /// LoRA adapter model ID(s), semicolon-separated for multiple
     #[arg(long)]
@@ -78,7 +82,7 @@ pub struct AdapterOptions {
 }
 
 /// Quantization options
-#[derive(Args, Clone, Default)]
+#[derive(Args, Clone, Default, Deserialize)]
 pub struct QuantizationOptions {
     /// In-situ quantization level (e.g., "4", "8", "q4_0", "q4_1", etc.)
     #[arg(long = "isq")]
@@ -102,10 +106,11 @@ pub struct QuantizationOptions {
 }
 
 /// Device and compute options
-#[derive(Args, Clone, Default)]
+#[derive(Args, Clone, Default, Deserialize)]
 pub struct DeviceOptions {
     /// Force CPU-only execution
     #[arg(long)]
+    #[serde(default)]
     pub cpu: bool,
 
     /// Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20")
@@ -123,15 +128,17 @@ pub struct DeviceOptions {
 
     /// Max sequence length for automatic device mapping
     #[arg(long, default_value_t = 4096)]
+    #[serde(default = "default_max_seq_len")]
     pub max_seq_len: usize,
 
     /// Max batch size for automatic device mapping
     #[arg(long, default_value_t = 128)]
+    #[serde(default = "default_max_batch_size")]
     pub max_batch_size: usize,
 }
 
 /// Vision model specific options
-#[derive(Args, Clone, Default)]
+#[derive(Args, Clone, Default, Deserialize)]
 pub struct VisionOptions {
     /// Maximum edge length for image resizing (aspect ratio preserved)
     #[arg(long)]
@@ -152,4 +159,16 @@ fn parse_arch(s: &str) -> Result<NormalLoaderType, String> {
 
 fn parse_dtype(s: &str) -> Result<ModelDType, String> {
     s.parse()
+}
+
+fn default_gqa() -> usize {
+    1
+}
+
+fn default_max_seq_len() -> usize {
+    4096
+}
+
+fn default_max_batch_size() -> usize {
+    128
 }
