@@ -37,9 +37,9 @@ pub async fn run_tune(
 
     let result = auto_tune(request)?;
 
-    if let Some(path) = emit_config {
+    if let Some(ref path) = emit_config {
         let toml = emit_toml_config(&model_type, &model_selected, &result)?;
-        std::fs::write(&path, toml)?;
+        std::fs::write(path, toml)?;
         println!("Wrote config to {}", path.display());
     }
 
@@ -146,6 +146,11 @@ pub async fn run_tune(
     println!();
     println!("Recommended Command");
     println!("-------------------");
+    if let Some(ref path) = emit_config {
+        println!("  mistralrs from-config --file {}", path.display());
+        println!();
+        println!("Or equivalently:");
+    }
     println!("  {}", result.recommended_command);
     println!();
 
