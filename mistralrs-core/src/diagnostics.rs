@@ -4,9 +4,9 @@ use hf_hub::Cache;
 use serde::{Deserialize, Serialize};
 use sysinfo::{Disks, System};
 
-#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal"))]
 use crate::MemoryUsage;
-#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal"))]
 use candle_core::Device;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,7 +79,7 @@ pub struct DoctorReport {
 
 fn build_info() -> BuildInfo {
     BuildInfo {
-        cuda: cfg!(all(feature = "cuda", target_family = "unix")),
+        cuda: cfg!(feature = "cuda"),
         metal: cfg!(feature = "metal"),
         cudnn: cfg!(feature = "cudnn"),
         flash_attn: cfg!(feature = "flash-attn"),
@@ -103,7 +103,7 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
         available_memory_bytes: Some(sys.available_memory()),
     });
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(feature = "cuda")]
     {
         let mut ord = 0;
         loop {
@@ -277,28 +277,6 @@ pub fn run_doctor() -> DoctorReport {
         });
     }
 
-    let total_ram = system.memory.total_bytes;
-    #[allow(clippy::cast_precision_loss)]
-    let total_ram_gb = total_ram as f64 / 1e9;
-    if total_ram < 8_u64 * 1024 * 1024 * 1024 {
-        checks.push(DoctorCheck {
-            name: "system_memory".to_string(),
-            status: DoctorStatus::Warn,
-            message: format!(
-                "System RAM is {:.1} GB; larger models may not fit.",
-                total_ram_gb
-            ),
-            suggestion: Some("Use smaller models or stronger quantization.".to_string()),
-        });
-    } else {
-        checks.push(DoctorCheck {
-            name: "system_memory".to_string(),
-            status: DoctorStatus::Ok,
-            message: format!("System RAM is {:.1} GB.", total_ram_gb),
-            suggestion: None,
-        });
-    }
-
     let has_cuda = system.devices.iter().any(|d| d.kind == "cuda");
 
     if system.build.cuda && !has_cuda {
@@ -308,27 +286,6 @@ pub fn run_doctor() -> DoctorReport {
             message: "CUDA support is enabled but no CUDA devices were found.".to_string(),
             suggestion: Some("Check NVIDIA driver installation.".to_string()),
         });
-    }
-
-    for dev in system.devices.iter().filter(|d| d.kind != "cpu") {
-        if let Some(avail) = dev.available_memory_bytes {
-            if avail < 4_u64 * 1024 * 1024 * 1024 {
-                let label = match dev.ordinal {
-                    Some(ord) => format!("{}[{}]", dev.kind, ord),
-                    None => dev.kind.clone(),
-                };
-                #[allow(clippy::cast_precision_loss)]
-                let avail_gb = avail as f64 / 1e9;
-                checks.push(DoctorCheck {
-                    name: format!("{}_memory", label),
-                    status: DoctorStatus::Warn,
-                    message: format!("{} has only {:.1} GB free.", label, avail_gb),
-                    suggestion: Some(
-                        "Use a smaller model or a stronger quantization level.".to_string(),
-                    ),
-                });
-            }
-        }
     }
 
     DoctorReport { system, checks }
