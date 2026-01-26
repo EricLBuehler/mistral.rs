@@ -106,6 +106,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         )
         .await?;
         app = app.nest("/ui", ui_router);
+        info!("UI available at http://{}:{}/ui", server.host, server.port);
     }
 
     let listener =
