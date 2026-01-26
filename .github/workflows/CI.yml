@@ -127,7 +127,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          args: -m mistral-pyo3/Cargo.toml --out dist
+          args: -m mistralrs-pyo3/Cargo.toml --out dist
       - name: Upload sdist
         uses: actions/upload-artifact@v5
         with:
