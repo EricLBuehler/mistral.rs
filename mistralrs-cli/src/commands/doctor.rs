@@ -13,6 +13,7 @@ pub fn run_doctor(json: bool) -> Result<()> {
     let report = run_doctor_report();
     let system = &report.system;
     println!("mistralrs doctor");
+    println!("git revision: {}", system.build.git_revision);
     println!("OS: {}", system.os.as_deref().unwrap_or("unknown"));
     println!(
         "CPU: {} ({} logical cores)",

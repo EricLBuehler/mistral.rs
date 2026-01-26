@@ -40,6 +40,7 @@ pub struct BuildInfo {
     pub flash_attn_v3: bool,
     pub accelerate: bool,
     pub mkl: bool,
+    pub git_revision: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +86,7 @@ fn build_info() -> BuildInfo {
         flash_attn_v3: cfg!(feature = "flash-attn-v3"),
         accelerate: cfg!(feature = "accelerate"),
         mkl: cfg!(feature = "mkl"),
+        git_revision: crate::MISTRALRS_GIT_REVISION.to_string(),
     }
 }
 

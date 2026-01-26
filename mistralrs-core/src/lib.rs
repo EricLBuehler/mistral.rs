@@ -28,6 +28,11 @@ use tokio::sync::mpsc::{channel, Sender};
 use tracing::info;
 use tracing::warn;
 
+pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISION") {
+    Some(value) => value,
+    None => "unknown",
+};
+
 mod cuda;
 mod device_map;
 mod engine;
@@ -605,6 +610,7 @@ impl MistralRs {
     }
 
     async fn new(config: MistralRsBuilder) -> Arc<Self> {
+        info!("git revision: {MISTRALRS_GIT_REVISION}");
         let MistralRsBuilder {
             pipeline,
             method,

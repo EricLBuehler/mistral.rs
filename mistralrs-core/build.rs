@@ -2,6 +2,8 @@
 const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
 fn main() {
+    set_git_revision();
+
     #[cfg(feature = "cuda")]
     {
         use std::{path::PathBuf, vec};
@@ -74,6 +76,34 @@ fn main() {
             println!("cargo:rustc-link-lib=dylib=c++_shared");
         } else {
             println!("cargo:rustc-link-lib=dylib=stdc++");
+        }
+    }
+}
+
+fn set_git_revision() {
+    let commit = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                String::from_utf8(output.stdout).ok()
+            } else {
+                None
+            }
+        })
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    println!("cargo:rustc-env=MISTRALRS_GIT_REVISION={commit}");
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    if let Ok(head) = std::fs::read_to_string(".git/HEAD") {
+        if let Some(ref_path) = head.strip_prefix("ref:") {
+            let ref_path = ref_path.trim();
+            if !ref_path.is_empty() {
+                println!("cargo:rerun-if-changed=.git/{}", ref_path);
+            }
         }
     }
 }
