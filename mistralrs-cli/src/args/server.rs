@@ -27,7 +27,7 @@ pub struct ServerOptions {
     #[serde(default)]
     pub mcp_config: Option<PathBuf>,
 
-    /// Serve the built-in web UI
+    /// Serve the built-in web UI at /ui
     #[arg(long)]
     #[serde(default)]
     pub ui: bool,

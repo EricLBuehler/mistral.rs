@@ -22,7 +22,7 @@ mod handlers;
 mod types;
 mod utils;
 
-static STATIC_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/../mistralrs-web-chat/static");
+static STATIC_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/static");
 
 async fn static_handler(uri: axum::http::Uri) -> Response<Body> {
     let path = uri.path().trim_start_matches('/');

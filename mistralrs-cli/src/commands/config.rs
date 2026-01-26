@@ -89,7 +89,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
             runtime.search_embedding_model.map(|m| m.into()),
         )
         .await?;
-        app = app.merge(ui_router);
+        app = app.nest("/ui", ui_router);
     }
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;

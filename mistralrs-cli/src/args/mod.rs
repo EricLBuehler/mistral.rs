@@ -34,7 +34,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Start HTTP/MCP server with a model
+    /// Start HTTP/MCP server and (optionally) the UI at /ui
     Serve {
         #[command(subcommand)]
         model_type: ModelType,

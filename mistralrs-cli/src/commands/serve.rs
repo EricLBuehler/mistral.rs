@@ -83,7 +83,7 @@ pub async fn run_server(
             runtime.search_embedding_model.map(|m| m.into()),
         )
         .await?;
-        app = app.merge(ui_router);
+        app = app.nest("/ui", ui_router);
     }
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
