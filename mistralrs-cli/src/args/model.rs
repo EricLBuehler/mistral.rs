@@ -132,7 +132,7 @@ pub struct DeviceOptions {
     pub max_seq_len: usize,
 
     /// Max batch size for automatic device mapping
-    #[arg(long, default_value_t = 128)]
+    #[arg(long, default_value_t = 1)]
     #[serde(default = "default_max_batch_size")]
     pub max_batch_size: usize,
 }
@@ -170,5 +170,5 @@ fn default_max_seq_len() -> usize {
 }
 
 fn default_max_batch_size() -> usize {
-    128
+    1
 }

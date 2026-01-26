@@ -337,7 +337,9 @@ pub async fn tune_model(Json(request): Json<TuneModelRequest>) -> Result<Json<Au
     let max_seq_len = request
         .max_seq_len
         .unwrap_or(AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN);
-    let max_batch_size = request.max_batch_size.unwrap_or(128);
+    let max_batch_size = request
+        .max_batch_size
+        .unwrap_or(AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE);
 
     let model_selected = ModelSelected::Run {
         model_id: request.model_id.clone(),
