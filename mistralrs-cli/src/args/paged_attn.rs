@@ -24,8 +24,8 @@ pub struct PagedAttentionOptions {
     #[serde(default)]
     pub mode: PagedAttnMode,
 
-    /// Allocate KV cache for this context length (recommended option).
-    /// Defaults to max_seq_len if not specified.
+    /// Allocate KV cache for this context length.
+    /// If not specified, defaults to using 90% of available VRAM.
     #[arg(long = "pa-context-len")]
     pub context_len: Option<usize>,
 

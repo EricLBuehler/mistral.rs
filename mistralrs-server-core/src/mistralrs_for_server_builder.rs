@@ -618,8 +618,6 @@ impl MistralRsForServerBuilder {
             self.max_seqs = 1;
         }
 
-        let max_seq_len = auto_device_map_params.max_seq_len();
-
         let device = if let Some(device) = self.device {
             device
         } else {
@@ -636,7 +634,6 @@ impl MistralRsForServerBuilder {
             self.paged_ctxt_len,
             self.paged_cache_type,
             !paged_attn,
-            max_seq_len,
         )?;
 
         // Clone values needed for loader config before they're moved
@@ -731,8 +728,6 @@ impl MistralRsForServerBuilder {
             self.max_seqs = 1;
         }
 
-        let max_seq_len = auto_device_map_params.max_seq_len();
-
         let device = if let Some(device) = self.device {
             device
         } else {
@@ -774,7 +769,6 @@ impl MistralRsForServerBuilder {
             self.paged_ctxt_len,
             self.paged_cache_type,
             !paged_attn,
-            max_seq_len,
         )?;
 
         let isq = first_model
@@ -1103,7 +1097,6 @@ fn init_cache_config(
     paged_ctxt_len: Option<usize>,
     cache_type: PagedCacheType,
     no_paged_attn: bool,
-    max_seq_len: usize,
 ) -> Result<Option<PagedAttentionConfig>> {
     match (
         paged_attn_block_size,
@@ -1115,7 +1108,7 @@ fn init_cache_config(
     ) {
         (block_size, None, None, None, true, false) => Ok(Some(PagedAttentionConfig::new(
             block_size,
-            MemoryGpuConfig::ContextSize(max_seq_len),
+            MemoryGpuConfig::Utilization(0.9),
             cache_type,
         )?)),
         (block_size, None, None, Some(ctxt), true, false) => Ok(Some(PagedAttentionConfig::new(
