@@ -134,19 +134,6 @@ pub async fn run_tune(
     println!("{table}");
     println!();
 
-    // Concurrent instances info
-    if let Some(rec) = result.candidates.iter().find(|c| c.recommended) {
-        if rec.concurrent_instances > 1 {
-            println!(
-                "[INFO] At {:?} quantization, you can run ~{} concurrent instances",
-                rec.isq
-                    .map(|i| format!("{i:?}"))
-                    .unwrap_or("None".to_string()),
-                rec.concurrent_instances
-            );
-        }
-    }
-
     // Warnings
     if !result.warnings.is_empty() {
         println!();

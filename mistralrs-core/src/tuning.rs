@@ -82,8 +82,6 @@ pub struct TuneCandidate {
     pub quality: QualityTier,
     /// Whether this candidate fits
     pub fit_status: FitStatus,
-    /// Estimated concurrent instances at this quant level
-    pub concurrent_instances: usize,
     /// Device layer mapping (if hybrid)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_layers_cli: Option<String>,
@@ -596,12 +594,6 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
             calculate_max_context(loader, &config, estimated_size, avail_vram_bytes, dtype)
                 .unwrap_or((0, false));
 
-        let concurrent = if total_vram_bytes > 0 && estimated_size > 0 {
-            ((total_vram_bytes as f64) / (estimated_size as f64)).floor() as usize
-        } else {
-            1
-        };
-
         let candidate = TuneCandidate {
             isq,
             isq_name: isq_display_name(isq),
@@ -611,7 +603,6 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
             context_is_model_max,
             quality: quality_tier(isq),
             fit_status,
-            concurrent_instances: concurrent.max(1),
             device_layers_cli,
             recommended: false, // Set later
         };

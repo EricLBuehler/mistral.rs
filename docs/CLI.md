@@ -193,8 +193,6 @@ Quantization Options
 │ Q2K         │ 1.50 GB   │ 6%     │ 128k (max)   │ Degraded      │ ✅ Fits          │
 └─────────────┴───────────┴────────┴──────────────┴───────────────┴──────────────────┘
 
-[INFO] At Q8_0 quantization, you can run ~5 concurrent instances
-
 Recommended Command
 -------------------
   mistralrs serve auto -m Qwen/Qwen3-4B --isq q8_0
