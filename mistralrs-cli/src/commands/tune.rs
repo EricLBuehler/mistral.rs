@@ -124,7 +124,6 @@ fn model_kind(model_type: &ModelType) -> &'static str {
         ModelType::Diffusion { .. } => "diffusion",
         ModelType::Speech { .. } => "speech",
         ModelType::Embedding { .. } => "embedding",
-        ModelType::Config { .. } => "config",
     }
 }
 

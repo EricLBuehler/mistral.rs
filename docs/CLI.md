@@ -1,0 +1,680 @@
+# mistralrs CLI Reference
+
+This is the comprehensive CLI reference for `mistralrs`. The CLI provides commands for interactive mode, HTTP server, builtin UI, quantization, and system diagnostics.
+
+## Table of Contents
+
+- [Commands](#commands)
+  - [run](#run---interactive-mode): run model in interactive mode
+  - [serve](#serve---http-server): start HTTP/MCP server and (optionally) the UI
+  - [from-config](#from-config---toml-configuration): run from a TOML configuration file
+  - [quantize](#quantize---uqff-generation): generate UQFF quantized model file
+  - [tune](#tune---recommendations): recommend quantization + device mapping for a model
+  - [doctor](#doctor---system-diagnostics): run system diagnostics and environment checks
+  - [completions](#completions---shell-completions): generate shell completions
+- [Model Types](#model-types)
+  - [auto](#auto)
+  - [text](#text)
+  - [vision](#vision)
+  - [diffusion](#diffusion)
+  - [speech](#speech)
+  - [embedding](#embedding)
+- [Features](#features)
+  - [ISQ Quantization](#isq-quantization)
+  - [UQFF Files](#uqff-files)
+  - [PagedAttention](#pagedattention)
+  - [Device Mapping](#device-mapping)
+  - [LoRA and X-LoRA](#lora-and-x-lora)
+  - [Chat Templates](#chat-templates)
+  - [Web Search](#web-search)
+  - [Thinking Mode](#thinking-mode)
+- [Global Options](#global-options)
+- [Interactive Commands](#interactive-commands)
+
+---
+
+## Commands
+
+### run - Interactive Mode
+
+Start a model in interactive mode for conversational use.
+
+```bash
+mistralrs run <MODEL_TYPE> -m <MODEL_ID> [OPTIONS]
+```
+
+**Examples:**
+
+```bash
+# Run a text model interactively
+mistralrs run auto -m Qwen/Qwen3-4B
+
+# Run with thinking mode enabled
+mistralrs run auto -m Qwen/Qwen3-4B --enable-thinking
+
+# Run a vision model
+mistralrs run vision -m google/gemma-3-4b-it
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--enable-thinking` | Enable thinking mode for models that support it |
+
+The `run` command also accepts all [runtime options](#runtime-options).
+
+---
+
+### serve - HTTP Server
+
+Start an HTTP server with OpenAI-compatible API endpoints.
+
+```bash
+mistralrs serve <MODEL_TYPE> -m <MODEL_ID> [OPTIONS]
+```
+
+**Examples:**
+
+```bash
+# Start server on default port 8080
+mistralrs serve auto -m Qwen/Qwen3-4B
+
+# Start server with web UI
+mistralrs serve auto -m Qwen/Qwen3-4B --ui
+
+# Start server on custom port
+mistralrs serve auto -m Qwen/Qwen3-4B -p 3000
+
+# Start server with MCP support
+mistralrs serve auto -m Qwen/Qwen3-4B --mcp-port 8081
+```
+
+**Server Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-p, --port <PORT>` | `8080` | HTTP server port |
+| `--host <HOST>` | `0.0.0.0` | Bind address |
+| `--ui` | disabled | Serve built-in web UI at `/ui` |
+| `--mcp-port <PORT>` | none | MCP protocol server port |
+| `--mcp-config <PATH>` | none | MCP client configuration file |
+
+The `serve` command also accepts all [runtime options](#runtime-options).
+
+---
+
+### quantize - UQFF Generation
+
+Generate a UQFF (Unified Quantized File Format) file from a model.
+
+```bash
+mistralrs quantize <MODEL_TYPE> -m <MODEL_ID> --isq <LEVEL> -o <OUTPUT>
+```
+
+**Examples:**
+
+```bash
+# Quantize a text model to 4-bit
+mistralrs quantize auto -m Qwen/Qwen3-4B --isq 4 -o qwen3-4b-q4.uqff
+
+# Quantize with Q4_K format
+mistralrs quantize auto -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-q4k.uqff
+
+# Quantize a vision model
+mistralrs quantize vision -m google/gemma-3-4b-it --isq 4 -o gemma3-4b-q4.uqff
+
+# Quantize with imatrix for better quality
+mistralrs quantize auto -m Qwen/Qwen3-4B --isq q4k --imatrix imatrix.dat -o qwen3-4b-q4k.uqff
+```
+
+**Quantize Options:**
+
+| Option | Required | Description |
+|--------|----------|-------------|
+| `-m, --model-id <ID>` | Yes | Model ID or local path |
+| `--isq <LEVEL>` | Yes | Quantization level (see [ISQ Quantization](#isq-quantization)) |
+| `-o, --output <PATH>` | Yes | Output UQFF file path |
+| `--isq-organization <TYPE>` | No | ISQ organization strategy: `default` or `moqe` |
+| `--imatrix <PATH>` | No | imatrix file for enhanced quantization |
+| `--calibration-file <PATH>` | No | Calibration file for imatrix generation |
+
+---
+
+### tune - Recommendations
+
+Get quantization and device mapping recommendations for a model.
+
+```bash
+mistralrs tune <MODEL_TYPE> -m <MODEL_ID> [OPTIONS]
+```
+
+**Examples:**
+
+```bash
+# Get balanced recommendations
+mistralrs tune auto -m Qwen/Qwen3-4B
+
+# Get quality-focused recommendations
+mistralrs tune auto -m Qwen/Qwen3-4B --profile quality
+
+# Get fast inference recommendations
+mistralrs tune auto -m Qwen/Qwen3-4B --profile fast
+
+# Output as JSON
+mistralrs tune auto -m Qwen/Qwen3-4B --json
+
+# Generate a TOML config file with recommendations
+mistralrs tune auto -m Qwen/Qwen3-4B --emit-config config.toml
+```
+
+**Tune Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--profile <PROFILE>` | `balanced` | Tuning profile: `quality`, `balanced`, or `fast` |
+| `--json` | disabled | Output JSON instead of human-readable text |
+| `--emit-config <PATH>` | none | Emit a TOML config file with recommended settings |
+
+---
+
+### doctor - System Diagnostics
+
+Run system diagnostics and environment checks.
+
+```bash
+mistralrs doctor [OPTIONS]
+```
+
+**Examples:**
+
+```bash
+# Run diagnostics
+mistralrs doctor
+
+# Output as JSON
+mistralrs doctor --json
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Output JSON instead of human-readable text |
+
+---
+
+### from-config - TOML Configuration
+
+Run the CLI from a TOML configuration file. This is the recommended way to run multiple models simultaneously, including models of different types (e.g., text + vision + embedding).
+
+```bash
+mistralrs from-config --file <PATH>
+```
+
+**Example:**
+
+```bash
+mistralrs from-config --file config.toml
+```
+
+**Multi-model example** (config.toml):
+
+```toml
+command = "serve"
+
+[server]
+port = 8080
+ui = true
+
+[[models]]
+kind = "auto"
+model_id = "Qwen/Qwen3-4B"
+
+[[models]]
+kind = "vision"
+model_id = "google/gemma-3-4b-it"
+
+[[models]]
+kind = "embedding"
+model_id = "google/embeddinggemma-300m"
+```
+
+See [CLI_CONFIG.md](CLI_CONFIG.md) for full TOML configuration format details.
+
+---
+
+### completions - Shell Completions
+
+Generate shell completions for your shell.
+
+```bash
+mistralrs completions <SHELL>
+```
+
+**Examples:**
+
+```bash
+# Generate bash completions
+mistralrs completions bash > ~/.local/share/bash-completion/completions/mistralrs
+
+# Generate zsh completions
+mistralrs completions zsh > ~/.zfunc/_mistralrs
+
+# Generate fish completions
+mistralrs completions fish > ~/.config/fish/completions/mistralrs.fish
+```
+
+**Supported Shells:** `bash`, `zsh`, `fish`, `elvish`, `powershell`
+
+---
+
+## Model Types
+
+### auto
+
+Auto-detect model type. This is the recommended option for most models.
+
+```bash
+mistralrs run auto -m Qwen/Qwen3-4B
+mistralrs serve auto -m Qwen/Qwen3-4B
+```
+
+The `auto` type supports text, vision, and other model types through automatic detection.
+
+### text
+
+Explicit text generation model configuration.
+
+```bash
+mistralrs run text -m Qwen/Qwen3-4B
+mistralrs serve text -m Qwen/Qwen3-4B
+```
+
+### vision
+
+Vision-language models that can process images and text.
+
+```bash
+mistralrs run vision -m google/gemma-3-4b-it
+mistralrs serve vision -m google/gemma-3-4b-it
+```
+
+**Vision Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--max-edge <SIZE>` | Maximum edge length for image resizing (aspect ratio preserved) |
+| `--max-num-images <N>` | Maximum number of images per request |
+| `--max-image-length <SIZE>` | Maximum image dimension for device mapping |
+
+### diffusion
+
+Image generation models using diffusion.
+
+```bash
+mistralrs run diffusion -m black-forest-labs/FLUX.1-schnell
+mistralrs serve diffusion -m black-forest-labs/FLUX.1-schnell
+```
+
+### speech
+
+Speech synthesis models.
+
+```bash
+mistralrs run speech -m nari-labs/Dia-1.6B
+mistralrs serve speech -m nari-labs/Dia-1.6B
+```
+
+### embedding
+
+Text embedding models. These do not support interactive mode but can be used with the HTTP server.
+
+```bash
+mistralrs serve embedding -m google/embeddinggemma-300m
+```
+
+---
+
+## Features
+
+### ISQ Quantization
+
+In-situ quantization (ISQ) reduces model memory usage by quantizing weights at load time. See [details about ISQ here](ISQ.md).
+
+**Usage:**
+
+```bash
+# Simple bit-width quantization
+mistralrs run auto -m Qwen/Qwen3-4B --isq 4
+mistralrs run auto -m Qwen/Qwen3-4B --isq 8
+
+# GGML-style quantization
+mistralrs run auto -m Qwen/Qwen3-4B --isq q4_0
+mistralrs run auto -m Qwen/Qwen3-4B --isq q4_1
+mistralrs run auto -m Qwen/Qwen3-4B --isq q4k
+mistralrs run auto -m Qwen/Qwen3-4B --isq q5k
+mistralrs run auto -m Qwen/Qwen3-4B --isq q6k
+```
+
+**ISQ Organization:**
+
+```bash
+# Use MOQE organization for potentially better quality
+mistralrs run auto -m Qwen/Qwen3-4B --isq q4k --isq-organization moqe
+```
+
+---
+
+### UQFF Files
+
+UQFF (Unified Quantized File Format) provides pre-quantized model files for faster loading.
+
+**Generate a UQFF file:**
+
+```bash
+mistralrs quantize auto -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-q4k.uqff
+```
+
+**Load from UQFF:**
+
+```bash
+mistralrs run auto -m Qwen/Qwen3-4B --from-uqff qwen3-4b-q4k.uqff
+```
+
+**Multiple UQFF files (semicolon-separated):**
+
+```bash
+mistralrs run auto -m Qwen/Qwen3-4B --from-uqff "part1.uqff;part2.uqff"
+```
+
+---
+
+### PagedAttention
+
+PagedAttention enables efficient memory management for the KV cache. It is automatically enabled on CUDA and disabled on Metal/CPU by default.
+
+**Control PagedAttention:**
+
+```bash
+# Auto mode (default): enabled on CUDA, disabled on Metal/CPU
+mistralrs serve auto -m Qwen/Qwen3-4B --paged-attn auto
+
+# Force enable
+mistralrs serve auto -m Qwen/Qwen3-4B --paged-attn on
+
+# Force disable
+mistralrs serve auto -m Qwen/Qwen3-4B --paged-attn off
+```
+
+**Memory allocation options (mutually exclusive):**
+
+```bash
+# Allocate for specific context length (recommended)
+mistralrs serve auto -m Qwen/Qwen3-4B --pa-context-len 8192
+
+# Allocate specific GPU memory in MB
+mistralrs serve auto -m Qwen/Qwen3-4B --pa-memory-mb 4096
+
+# Allocate fraction of GPU memory (0.0-1.0)
+mistralrs serve auto -m Qwen/Qwen3-4B --pa-memory-fraction 0.8
+```
+
+**Additional options:**
+
+| Option | Description |
+|--------|-------------|
+| `--pa-block-size <SIZE>` | Tokens per block (default: 32 on CUDA) |
+| `--pa-cache-type <TYPE>` | KV cache quantization type (default: auto) |
+
+---
+
+### Device Mapping
+
+Control how model layers are distributed across devices.
+
+**Automatic mapping:**
+
+```bash
+# Use defaults (automatic)
+mistralrs run auto -m Qwen/Qwen3-4B
+```
+
+**Manual layer assignment:**
+
+```bash
+# Assign 10 layers to GPU 0, 20 layers to GPU 1
+mistralrs run auto -m Qwen/Qwen3-4B -n "0:10;1:20"
+
+# Equivalent long form
+mistralrs run auto -m Qwen/Qwen3-4B --device-layers "0:10;1:20"
+```
+
+**CPU-only execution:**
+
+```bash
+mistralrs run auto -m Qwen/Qwen3-4B --cpu
+```
+
+**Topology file:**
+
+```bash
+mistralrs run auto -m Qwen/Qwen3-4B --topology topology.yaml
+```
+
+**Custom HuggingFace cache:**
+
+```bash
+mistralrs run auto -m Qwen/Qwen3-4B --hf-cache /path/to/cache
+```
+
+**Device mapping options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-n, --device-layers <MAPPING>` | auto | Device layer mapping (format: `ORD:NUM;...`) |
+| `--topology <PATH>` | none | Topology YAML file for device mapping |
+| `--hf-cache <PATH>` | none | Custom HuggingFace cache directory |
+| `--cpu` | disabled | Force CPU-only execution |
+| `--max-seq-len <LEN>` | `4096` | Max sequence length for automatic device mapping |
+| `--max-batch-size <SIZE>` | `1` | Max batch size for automatic device mapping |
+
+---
+
+### LoRA and X-LoRA
+
+Apply LoRA or X-LoRA adapters to models.
+
+**LoRA:**
+
+```bash
+# Single LoRA adapter
+mistralrs run auto -m Qwen/Qwen3-4B --lora my-lora-adapter
+
+# Multiple LoRA adapters (semicolon-separated)
+mistralrs run auto -m Qwen/Qwen3-4B --lora "adapter1;adapter2"
+```
+
+**X-LoRA:**
+
+```bash
+# X-LoRA adapter with ordering file
+mistralrs run auto -m Qwen/Qwen3-4B --xlora my-xlora-adapter --xlora-order ordering.json
+
+# With target non-granular index
+mistralrs run auto -m Qwen/Qwen3-4B --xlora my-xlora-adapter --xlora-order ordering.json --tgt-non-granular-index 2
+```
+
+---
+
+### Chat Templates
+
+Override the model's default chat template.
+
+**Use a template file:**
+
+```bash
+# JSON template file
+mistralrs run auto -m Qwen/Qwen3-4B --chat-template template.json
+
+# Jinja template file
+mistralrs run auto -m Qwen/Qwen3-4B --chat-template template.jinja
+```
+
+**Explicit Jinja override:**
+
+```bash
+mistralrs run auto -m Qwen/Qwen3-4B --jinja-explicit custom.jinja
+```
+
+---
+
+### Web Search
+
+Enable web search capabilities (requires an embedding model).
+
+```bash
+# Enable search with default embedding model
+mistralrs run auto -m Qwen/Qwen3-4B --enable-search
+
+# Specify embedding model
+mistralrs run auto -m Qwen/Qwen3-4B --enable-search --search-embedding-model embedding-gemma
+```
+
+---
+
+### Thinking Mode
+
+Enable thinking/reasoning mode for models that support it (like DeepSeek, Qwen3).
+
+```bash
+mistralrs run auto -m Qwen/Qwen3-4B --enable-thinking
+```
+
+In interactive mode, thinking content is displayed in gray text before the final response.
+
+---
+
+## Global Options
+
+These options apply to all commands.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--seed <SEED>` | none | Random seed for reproducibility |
+| `-l, --log <PATH>` | none | Log all requests and responses to file |
+| `--token-source <SOURCE>` | `cache` | HuggingFace authentication token source |
+
+**Token source formats:**
+
+- `cache` - Use cached HuggingFace token (default)
+- `literal:<token>` - Use literal token value
+- `env:<var>` - Read token from environment variable
+- `path:<file>` - Read token from file
+- `none` - No authentication
+
+**Examples:**
+
+```bash
+# Set random seed
+mistralrs run auto -m Qwen/Qwen3-4B --seed 42
+
+# Enable logging
+mistralrs run auto -m Qwen/Qwen3-4B --log requests.log
+
+# Use token from environment variable
+mistralrs run auto -m meta-llama/Llama-3.2-3B-Instruct --token-source env:HF_TOKEN
+```
+
+---
+
+## Runtime Options
+
+These options are available for both `run` and `serve` commands.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--max-seqs <N>` | `32` | Maximum concurrent sequences |
+| `--no-kv-cache` | disabled | Disable KV cache entirely |
+| `--prefix-cache-n <N>` | `16` | Number of prefix caches to hold (0 to disable) |
+| `-c, --chat-template <PATH>` | none | Custom chat template file (.json or .jinja) |
+| `-j, --jinja-explicit <PATH>` | none | Explicit JINJA template override |
+| `--enable-search` | disabled | Enable web search |
+| `--search-embedding-model <MODEL>` | none | Embedding model for search |
+
+---
+
+## Model Source Options
+
+These options are common across model types.
+
+| Option | Description |
+|--------|-------------|
+| `-m, --model-id <ID>` | HuggingFace model ID or local path (required) |
+| `-t, --tokenizer <PATH>` | Path to local tokenizer.json file |
+| `-a, --arch <ARCH>` | Model architecture (auto-detected if not specified) |
+| `--dtype <TYPE>` | Model data type (default: `auto`) |
+
+---
+
+## Format Options
+
+For loading quantized models.
+
+| Option | Description |
+|--------|-------------|
+| `--format <FORMAT>` | Model format: `plain`, `gguf`, or `ggml` (auto-detected) |
+| `-f, --quantized-file <FILE>` | Quantized model filename(s) for GGUF/GGML (semicolon-separated) |
+| `--tok-model-id <ID>` | Model ID for tokenizer when using quantized format |
+| `--gqa <VALUE>` | GQA value for GGML models (default: 1) |
+
+**Examples:**
+
+```bash
+# Load a GGUF model
+mistralrs run auto -m Qwen/Qwen3-4B --format gguf -f model.gguf
+
+# Multiple GGUF files
+mistralrs run auto -m Qwen/Qwen3-4B --format gguf -f "model-part1.gguf;model-part2.gguf"
+```
+
+---
+
+## Interactive Commands
+
+When running in interactive mode (`mistralrs run`), the following commands are available:
+
+| Command | Description |
+|---------|-------------|
+| `\help` | Display help message |
+| `\exit` | Quit interactive mode |
+| `\system <message>` | Add a system message without running the model |
+| `\clear` | Clear the chat history |
+| `\temperature <float>` | Set sampling temperature (0.0 to 2.0) |
+| `\topk <int>` | Set top-k sampling value (>0) |
+| `\topp <float>` | Set top-p sampling value (0.0 to 1.0) |
+
+**Examples:**
+
+```
+> \system Always respond as a pirate.
+> \temperature 0.7
+> \topk 50
+> Hello!
+Ahoy there, matey! What brings ye to these waters?
+> \clear
+> \exit
+```
+
+**Vision Model Interactive Mode:**
+
+For vision models, you can include images in your prompts by specifying file paths or URLs:
+
+```
+> Describe this image: /path/to/image.jpg
+> Compare these images: image1.png image2.png
+> Describe the image and transcribe the audio: photo.jpg recording.mp3
+```
+
+Supported image formats: PNG, JPEG, BMP, GIF, WebP
+Supported audio formats: WAV, MP3, FLAC, OGG

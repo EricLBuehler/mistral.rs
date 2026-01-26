@@ -99,6 +99,7 @@ pub async fn run_server(
         )
         .await?;
         app = app.nest("/ui", ui_router);
+        info!("UI available at http://{}:{}/ui", server.host, server.port);
     }
 
     let listener =
@@ -261,10 +262,6 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
             write_uqff: None,
             from_uqff: quantization.from_uqff.clone(),
             hf_cache_path: device.hf_cache.clone(),
-        }),
-
-        ModelType::Config { config } => Ok(ModelSelected::Toml {
-            file: config.to_string_lossy().to_string(),
         }),
     }
 }
@@ -531,7 +528,6 @@ pub(crate) fn extract_device_settings(model_type: &ModelType) -> (bool, Option<V
         ModelType::Diffusion { device, .. } => device,
         ModelType::Speech { device, .. } => device,
         ModelType::Embedding { device, .. } => device,
-        ModelType::Config { .. } => return (false, None),
     };
 
     (device.cpu, device.device_layers.clone())

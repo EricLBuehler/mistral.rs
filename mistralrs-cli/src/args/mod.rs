@@ -213,13 +213,6 @@ pub enum ModelType {
         #[command(flatten)]
         cache: CacheOptions,
     },
-
-    /// Load model configuration from TOML or JSON file
-    Config {
-        /// Path to configuration file (.toml or .json)
-        #[arg(short, long)]
-        config: PathBuf,
-    },
 }
 
 /// Global options that apply to all commands
