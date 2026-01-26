@@ -21,7 +21,7 @@ use std::{
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
     sync::{Arc, RwLock},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{
     mpsc::{error::SendError, Sender},
@@ -448,6 +448,7 @@ pub struct Sequence {
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
     pub total_prompt_time: Option<u128>,
+    pub step_start_instant: Option<Instant>,
     group: Arc<Mutex<SequenceGroup>>,
     state: RwLock<SequenceState>,
 
@@ -628,6 +629,7 @@ impl Sequence {
             token_offset: 0,
             eos_tokens,
             total_prompt_time: None,
+            step_start_instant: None,
             waitlisted_count: 0,
             harmony_context: None,
             think_tag_context: None,
@@ -1040,15 +1042,30 @@ impl Sequence {
         self.prompt_timestamp
     }
 
+    /// Set the step start instant for accurate prompt timing measurement.
+    /// Call this right before step() is called.
+    pub fn set_step_start_instant(&mut self) {
+        self.step_start_instant = Some(Instant::now());
+    }
+
     pub(crate) fn update_time_info(&self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!")
             .as_millis();
 
+        // Calculate prompt time from Instant if available (more accurate)
+        let prompt_time_ms = if let Some(start) = self.step_start_instant {
+            start.elapsed().as_millis()
+        } else if let Some(pt) = self.total_prompt_time {
+            pt
+        } else {
+            0
+        };
+
         if let Some(ts) = self.prompt_timestamp {
             get_mut_group!(self).total_completion_time = now - ts;
-            get_mut_group!(self).total_prompt_time = self.total_prompt_time.unwrap();
+            get_mut_group!(self).total_prompt_time = prompt_time_ms;
         }
 
         get_mut_group!(self).total_time = now - self.timestamp;

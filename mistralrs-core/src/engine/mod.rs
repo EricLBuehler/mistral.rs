@@ -546,9 +546,9 @@ impl Engine {
                                 .as_millis();
                             for seq in output.scheduled.iter() {
                                 let mut seq_guard = get_mut_arcmutex!(seq);
-                                let prompt_time = now.saturating_sub(seq_guard.timestamp());
                                 seq_guard.prompt_timestamp = Some(now);
-                                seq_guard.total_prompt_time = Some(prompt_time);
+                                // Start the timer using Instant for accurate duration measurement
+                                seq_guard.set_step_start_instant();
                             }
                         }
 
@@ -643,17 +643,20 @@ impl Engine {
                         }
 
                         if is_prompt {
+                            #[allow(clippy::cast_precision_loss)]
                             for mut seq in guards {
+                                // Use Instant duration for accurate prompt timing
+                                if let Some(start) = seq.step_start_instant {
+                                    let duration = start.elapsed();
+                                    seq.prompt_tok_per_sec =
+                                        seq.len() as f32 / duration.as_secs_f32();
+                                    seq.total_prompt_time = Some(duration.as_millis());
+                                }
                                 let now = SystemTime::now()
                                     .duration_since(UNIX_EPOCH)
                                     .expect("Time travel has occurred!")
                                     .as_millis();
-                                #[allow(clippy::cast_precision_loss)]
-                                let prompt_tok_per_sec =
-                                    seq.len() as f32 / (now - seq.timestamp()) as f32;
-                                seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
                                 seq.prompt_timestamp = Some(now);
-                                seq.total_prompt_time = Some(now - seq.timestamp());
                             }
                         }
                     }
