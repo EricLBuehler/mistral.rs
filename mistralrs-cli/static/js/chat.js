@@ -3,6 +3,35 @@
 // Global chat state
 let currentChatId = null;
 let pendingClear = false;
+let pendingChatRestore = null;
+
+function sendChatRestore(chatId, messages) {
+  if (typeof ws === 'undefined' || ws.readyState !== WebSocket.OPEN) {
+    pendingChatRestore = { chatId, messages };
+    return;
+  }
+
+  ws.send(JSON.stringify({ chat_id: chatId }));
+  messages.forEach(m => {
+    ws.send(JSON.stringify({
+      restore: {
+        role: m.role,
+        content: m.content,
+        images: m.images || []
+      }
+    }));
+  });
+
+  pendingChatRestore = null;
+}
+
+function flushPendingChatRestore() {
+  if (pendingChatRestore) {
+    sendChatRestore(pendingChatRestore.chatId, pendingChatRestore.messages);
+  }
+}
+
+window.flushPendingChatRestore = flushPendingChatRestore;
 
 /**
  * Refresh the chat list in the sidebar
@@ -126,11 +155,13 @@ async function loadChat(id) {
     modelSelect.value = data.model;
     prevModel = data.model;
     updateImageVisibility(models[data.model]);
+    await selectModel(data.model);
   }
   
   log.innerHTML = '';
   clearImagePreviews();
   clearTextFilePreviews();
+  clearAudioPreviews();
   
   data.messages.forEach(m => {
     // ---- render text ----
@@ -153,23 +184,10 @@ async function loadChat(id) {
       div.appendChild(imgWrap);
     }
 
-    // ---- replay minimal context to the server, now including images ----
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        restore: {
-          role: m.role,
-          content: m.content,
-          images: m.images || []
-        }
-      }));
-    }
   });
-  
-  // No pending attachments to restore on chat load
-  // Notify WebSocket of current chat ID
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ chat_id: id }));
-  }
+
+  // Restore server-side context for this chat
+  sendChatRestore(id, data.messages);
 }
 
 /**
@@ -211,6 +229,7 @@ function initChatHandlers() {
       document.getElementById('log').innerHTML = '';
       clearImagePreviews();
       clearTextFilePreviews();
+      clearAudioPreviews();
       
       // Load the existing blank chat instead of creating a new one
       await loadChat(blankChatId);
@@ -243,6 +262,7 @@ function initChatHandlers() {
     log.innerHTML = '';
     clearImagePreviews();
     clearTextFilePreviews();
+    clearAudioPreviews();
   });
 
   renameBtn.addEventListener('click', async () => {
@@ -284,6 +304,7 @@ function initChatHandlers() {
     document.getElementById('log').innerHTML = '';
     clearImagePreviews();
     clearTextFilePreviews();
+    clearAudioPreviews();
     await refreshChatList();
     
     // Move to newest chat if any, otherwise create a fresh one

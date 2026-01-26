@@ -32,7 +32,7 @@ toml = { workspace = true }
 ctrlc = { workspace = true }
 rustyline = { workspace = true }
 directories = { workspace = true }
-axum = { workspace = true }
+axum = { workspace = true, features = ["multipart", "ws"] }
 either = { workspace = true }
 indexmap = { workspace = true }
 regex = { workspace = true }

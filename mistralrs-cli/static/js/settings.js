@@ -35,7 +35,7 @@ async function loadSettings() {
       searchEnabledOnServer = data.search_enabled;
 
       // Hide web search controls if not enabled on server
-      const webSearchCard = document.querySelector('.sidebar-card');
+      const webSearchCard = document.getElementById('webSearchCard');
       if (webSearchCard) {
         webSearchCard.style.display = searchEnabledOnServer ? 'block' : 'none';
       }

@@ -11,12 +11,12 @@ const UI_BASE = (() => {
 })();
 
 function apiUrl(path) {
-  return `${UI_BASE}${path.replace(/^\\/+/, '')}`;
+  return `${UI_BASE}${path.replace(/^\/+/, '')}`;
 }
 
 function wsUrl(path) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${window.location.host}${UI_BASE}${path.replace(/^\\/+/, '')}`;
+  return `${protocol}//${window.location.host}${UI_BASE}${path.replace(/^\/+/, '')}`;
 }
 
 /**
@@ -204,8 +204,8 @@ function createImagePreview(imageSrc) {
   container.appendChild(img);
   container.appendChild(removeBtn);
 
-  // Store the upload URL for sending to the server
-  container.dataset.uploadUrl = imageSrc;
+  // Store the display URL; upload path will be filled after server upload
+  container.dataset.displayUrl = imageSrc;
 
   return container;
 }
@@ -255,7 +255,7 @@ function createAudioPreview(audioSrc) {
   container.appendChild(audio);
   container.appendChild(removeBtn);
 
-  container.dataset.uploadUrl = audioSrc;
+  container.dataset.displayUrl = audioSrc;
 
   return container;
 }

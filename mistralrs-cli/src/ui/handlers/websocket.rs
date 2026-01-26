@@ -11,7 +11,7 @@ use mistralrs::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::mem;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::ui::chat::append_chat_message;
@@ -30,6 +30,14 @@ pub struct MessageGenerationParams {
     pub max_tokens: Option<usize>,
     #[serde(default)]
     pub repetition_penalty: Option<f32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RestoreMessage {
+    pub role: String,
+    pub content: String,
+    #[serde(default)]
+    pub images: Vec<String>,
 }
 
 const CLEAR_CMD: &str = "__CLEAR__";
@@ -163,10 +171,45 @@ fn validate_audio_path(path: &str) -> Result<String, &'static str> {
     }
 }
 
+fn uploads_dir() -> PathBuf {
+    get_cache_dir().join("uploads")
+}
+
+fn upload_path_to_url(path: &str) -> Option<String> {
+    let uploads_dir = uploads_dir();
+    let canonical_uploads = uploads_dir.canonicalize().ok()?;
+    let canonical_path = Path::new(path).canonicalize().ok()?;
+    if !canonical_path.starts_with(&canonical_uploads) {
+        return None;
+    }
+    let rel = canonical_path.strip_prefix(&canonical_uploads).ok()?;
+    let rel_str = rel.to_string_lossy().replace('\\', "/");
+    Some(format!("uploads/{rel_str}"))
+}
+
+fn resolve_restore_image(path_or_url: &str) -> Option<PathBuf> {
+    let uploads_dir = uploads_dir();
+    let candidate = if Path::new(path_or_url).is_absolute() {
+        PathBuf::from(path_or_url)
+    } else {
+        let cleaned = path_or_url.trim_start_matches("/ui/").trim_start_matches('/');
+        let rel = cleaned.strip_prefix("uploads/")?;
+        uploads_dir.join(rel)
+    };
+    let canonical_uploads = uploads_dir.canonicalize().ok()?;
+    let canonical_path = candidate.canonicalize().ok()?;
+    if canonical_path.starts_with(&canonical_uploads) {
+        Some(canonical_path)
+    } else {
+        None
+    }
+}
+
 pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
     let mut text_msgs = TextMessages::new();
     let mut vision_msgs = VisionMessages::new();
     let mut image_buffer: Vec<image::DynamicImage> = Vec::new();
+    let mut image_path_buffer: Vec<String> = Vec::new();
     let mut audio_buffer: Vec<AudioInput> = Vec::new();
     let mut active_chat_id: Option<String> = None;
     let mut system_prompt: Option<String> = app.default_params.system_prompt.clone();
@@ -180,6 +223,8 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                     text_msgs = TextMessages::new();
                     vision_msgs = VisionMessages::new();
                     image_buffer.clear();
+                    image_path_buffer.clear();
+                    audio_buffer.clear();
                     system_prompt_added = false;
                 }
                 continue;
@@ -196,12 +241,76 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                     .await;
                 continue;
             }
+            if let Some(restore) = val.get("restore") {
+                if let Ok(msg) = serde_json::from_value::<RestoreMessage>(restore.clone()) {
+                    if !system_prompt_added {
+                        if let Some(prompt) = &system_prompt {
+                            text_msgs = text_msgs.add_message(TextMessageRole::System, prompt);
+                            vision_msgs = vision_msgs.add_message(TextMessageRole::System, prompt);
+                        }
+                        system_prompt_added = true;
+                    }
+
+                    let role = if msg.role == "assistant" {
+                        TextMessageRole::Assistant
+                    } else {
+                        TextMessageRole::User
+                    };
+                    let is_user = role == TextMessageRole::User;
+                    text_msgs = text_msgs.add_message(role.clone(), msg.content.clone());
+
+                    let model_id = {
+                        let cur = app.current.read().await;
+                        cur.clone()
+                    };
+                    let model_kind = model_id
+                        .as_ref()
+                        .and_then(|id| app.models.get(id))
+                        .map(|m| m.kind.as_str())
+                        .unwrap_or("text");
+
+                    if model_kind == "vision" {
+                        if is_user && !msg.images.is_empty() {
+                            let mut images = Vec::new();
+                            for src in &msg.images {
+                                if let Some(path) = resolve_restore_image(src) {
+                                    if let Ok(bytes) = std::fs::read(path) {
+                                        if let Ok(img) = image::load_from_memory(&bytes) {
+                                            images.push(img);
+                                        }
+                                    }
+                                }
+                            }
+                            if !images.is_empty() {
+                                if let Ok(updated) = vision_msgs.clone().add_multimodal_message(
+                                    role.clone(),
+                                    msg.content.clone(),
+                                    images,
+                                    Vec::new(),
+                                    &app.model,
+                                ) {
+                                    vision_msgs = updated;
+                                } else {
+                                    vision_msgs = vision_msgs.add_message(role.clone(), msg.content.clone());
+                                }
+                            } else {
+                                vision_msgs = vision_msgs.add_message(role.clone(), msg.content.clone());
+                            }
+                        } else {
+                            vision_msgs = vision_msgs.add_message(role, msg.content.clone());
+                        }
+                    }
+                }
+                continue;
+            }
         }
 
         if user_msg.trim() == CLEAR_CMD {
             text_msgs = TextMessages::new();
             vision_msgs = VisionMessages::new();
             image_buffer.clear();
+            image_path_buffer.clear();
+            audio_buffer.clear();
             system_prompt_added = false;
             let _ = socket.send(Message::Text("[Context cleared]".into())).await;
             continue;
@@ -242,11 +351,12 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             }
             if let Some(image) = val.get("image").and_then(|v| v.as_str()) {
                 if let Ok(path) = validate_image_path(image) {
-                    if let Ok(bytes) = std::fs::read(path) {
+                    if let Ok(bytes) = std::fs::read(&path) {
                         if let Ok(img) = image::load_from_memory(&bytes) {
                             image_buffer.push(img);
                         }
                     }
+                    image_path_buffer.push(path);
                 }
                 continue;
             }
@@ -259,6 +369,22 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                     }
                 }
                 continue;
+            }
+        }
+
+        let image_paths = mem::take(&mut image_path_buffer);
+        let images_for_chat = if image_paths.is_empty() {
+            None
+        } else {
+            let urls: Vec<String> = image_paths
+                .iter()
+                .filter_map(|path| upload_path_to_url(path))
+                .collect();
+            if urls.is_empty() { None } else { Some(urls) }
+        };
+        if (!content.is_empty() || images_for_chat.is_some()) && active_chat_id.is_some() {
+            if let Some(id) = &active_chat_id {
+                let _ = append_chat_message(&app, id, "user", &content, images_for_chat).await;
             }
         }
 
@@ -323,6 +449,8 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 }
             }
         } else {
+            image_buffer.clear();
+            audio_buffer.clear();
             text_msgs = text_msgs.add_message(TextMessageRole::User, content.clone());
             let mut builder =
                 apply_gen_params(text_msgs.clone().into(), &gen_params, &app.default_params);

@@ -83,6 +83,8 @@ pub async fn build_ui_router(
     fs::create_dir_all(&chats_dir).await?;
     let speech_dir = base_cache.join("speech");
     fs::create_dir_all(&speech_dir).await?;
+    let uploads_dir = base_cache.join("uploads");
+    fs::create_dir_all(&uploads_dir).await?;
 
     let mut next_id = 1u32;
     if let Ok(mut dir) = fs::read_dir(&chats_dir).await {
@@ -135,6 +137,7 @@ pub async fn build_ui_router(
         .route("/api/settings", get(get_settings))
         .route("/api/generate_speech", post(generate_speech))
         .nest_service("/speech", get_service(ServeDir::new(speech_dir.clone())))
+        .nest_service("/uploads", get_service(ServeDir::new(uploads_dir.clone())))
         .route("/", get(static_handler))
         .route("/{*path}", get(static_handler))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))

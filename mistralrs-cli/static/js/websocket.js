@@ -15,16 +15,18 @@ function initWebSocket() {
 
   ws.addEventListener('open', () => {
     console.log('WebSocket connected');
-    // Re-send the current chat ID if we have one
-    if (typeof currentChatId !== 'undefined' && currentChatId) {
-      ws.send(JSON.stringify({ chat_id: currentChatId }));
-    }
     // Send system prompt if set
     if (typeof getSetting === 'function') {
       const sysPrompt = getSetting('system_prompt');
       if (sysPrompt) {
         ws.send(JSON.stringify({ set_system_prompt: sysPrompt }));
       }
+    }
+    // Restore pending chat context first, otherwise re-send current chat ID
+    if (typeof flushPendingChatRestore === 'function') {
+      flushPendingChatRestore();
+    } else if (typeof currentChatId !== 'undefined' && currentChatId) {
+      ws.send(JSON.stringify({ chat_id: currentChatId }));
     }
   });
 
@@ -152,6 +154,25 @@ function hasUploadedFiles() {
 }
 
 /**
+ * Check if any uploads are still in progress
+ */
+function hasPendingUploads() {
+  const imageContainer = document.getElementById('image-container');
+  const audioContainer = document.getElementById('audio-container');
+  const imageContainers = imageContainer.querySelectorAll('.image-preview-container');
+  const audioContainers = audioContainer.querySelectorAll('.audio-preview-container');
+
+  const hasPendingImages = Array.from(imageContainers).some(container =>
+    container.dataset.uploading === 'true' || !container.dataset.uploadPath
+  );
+  const hasPendingAudio = Array.from(audioContainers).some(container =>
+    container.dataset.uploading === 'true' || !container.dataset.uploadPath
+  );
+
+  return hasPendingImages || hasPendingAudio;
+}
+
+/**
  * Send a message through WebSocket
  */
 function sendMessage() {
@@ -195,6 +216,11 @@ function sendMessage() {
   }
   
   if (!msg && !hasUploadedFiles()) return;
+
+  if (hasPendingUploads()) {
+    alert('Please wait for file uploads to finish before sending.');
+    return;
+  }
   
   if (ws.readyState !== WebSocket.OPEN) {
     alert('Connection lost. Please refresh the page.');
@@ -242,9 +268,9 @@ ${content}
   if (imageContainers.length > 0) {
     // Send images to server context (once per message)
     imageContainers.forEach(container => {
-      const url = container.dataset.uploadUrl;
-      if (url) {
-        ws.send(JSON.stringify({ image: url }));
+      const path = container.dataset.uploadPath || container.dataset.uploadUrl;
+      if (path) {
+        ws.send(JSON.stringify({ image: path }));
       }
     });
 
@@ -272,9 +298,9 @@ ${content}
   if (audioContainers.length > 0) {
     // Send audio URLs first
     audioContainers.forEach(container => {
-      const url = container.dataset.uploadUrl;
-      if (url) {
-        ws.send(JSON.stringify({ audio: url }));
+      const path = container.dataset.uploadPath || container.dataset.uploadUrl;
+      if (path) {
+        ws.send(JSON.stringify({ audio: path }));
       }
     });
 

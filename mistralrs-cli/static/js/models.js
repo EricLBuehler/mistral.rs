@@ -67,6 +67,7 @@ function initModelSelection() {
     updateImageVisibility(models[name]);
     clearImagePreviews();
     clearTextFilePreviews();
+    clearAudioPreviews();
     prevModel = name;
     await selectModel(name);
   });

@@ -179,8 +179,9 @@ pub async fn upload_audio(
             return (StatusCode::INTERNAL_SERVER_ERROR, "failed to save audio").into_response();
         }
 
-        let url = filepath.to_string_lossy();
-        (StatusCode::OK, Json(json!({ "url": url }))).into_response()
+        let path = filepath.to_string_lossy().to_string();
+        let url = format!("uploads/{filename}");
+        (StatusCode::OK, Json(json!({ "path": path, "url": url }))).into_response()
     } else {
         (StatusCode::BAD_REQUEST, "missing audio part").into_response()
     }
@@ -230,8 +231,9 @@ pub async fn upload_image(
             return (StatusCode::INTERNAL_SERVER_ERROR, "failed to save image").into_response();
         }
 
-        let url = filepath.to_string_lossy();
-        (StatusCode::OK, Json(json!({ "url": url }))).into_response()
+        let path = filepath.to_string_lossy().to_string();
+        let url = format!("uploads/{filename}");
+        (StatusCode::OK, Json(json!({ "path": path, "url": url }))).into_response()
     } else {
         (StatusCode::BAD_REQUEST, "missing image part").into_response()
     }
@@ -285,8 +287,9 @@ pub async fn upload_text(
                 .into_response();
         }
 
-        let url = filepath.to_string_lossy();
-        (StatusCode::OK, Json(json!({ "url": url }))).into_response()
+        let path = filepath.to_string_lossy().to_string();
+        let url = format!("uploads/{filename}");
+        (StatusCode::OK, Json(json!({ "path": path, "url": url }))).into_response()
     } else {
         (StatusCode::BAD_REQUEST, "missing text part").into_response()
     }
@@ -507,6 +510,6 @@ pub async fn generate_speech(
             .into_response();
     }
 
-    let url = format!("/speech/{filename}");
+    let url = format!("speech/{filename}");
     (StatusCode::OK, Json(json!({ "url": url }))).into_response()
 }

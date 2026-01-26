@@ -1,5 +1,41 @@
 // UI interactions and behaviors
 
+const TEXT_FILE_MIME_TYPES = new Set([
+  'text/plain', 'text/markdown', 'text/csv', 'text/xml', 'text/yaml', 'text/css', 'text/html',
+  'application/json', 'application/javascript', 'application/xml', 'application/yaml',
+  'application/x-python', 'application/x-rust', 'application/x-sh', 'application/octet-stream'
+]);
+
+const TEXT_FILE_EXTENSIONS = new Set([
+  'txt', 'md', 'markdown', 'py', 'js', 'ts', 'jsx', 'tsx', 'rs', 'html', 'htm', 'css', 'scss', 'sass', 'less',
+  'json', 'xml', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf',
+  'c', 'cpp', 'cc', 'cxx', 'h', 'hpp', 'hxx', 'java', 'kt', 'swift', 'go', 'rb', 'php',
+  // GPU and shader languages
+  'cu', 'cuh', 'cl', 'ptx', 'glsl', 'vert', 'frag', 'geom', 'comp', 'tesc', 'tese', 'hlsl', 'metal', 'wgsl',
+  // Shell and scripts
+  'sh', 'bash', 'zsh', 'fish', 'ps1', 'bat', 'cmd', 'sql', 'log', 'csv', 'tsv',
+  'dockerfile', 'makefile', 'gitignore', 'dockerignore', 'editorconfig', 'env', 'htaccess', 'lock',
+  'swift', 'kt', 'scala', 'r', 'clj', 'cljs', 'hs', 'elm', 'ex', 'exs', 'erl', 'fs', 'fsx', 'ml', 'mli',
+  'vue', 'svelte', 'astro', 'lua', 'nim', 'zig', 'd', 'dart', 'jl', 'pl', 'pm', 'tcl',
+  'readme', 'license', 'changelog', 'vagrantfile', 'gemfile', 'rakefile'
+]);
+
+function getFileExtension(filename) {
+  const parts = filename.toLowerCase().split('.');
+  return parts.length > 1 ? parts.pop() : parts[0];
+}
+
+function isAllowedTextFile(file) {
+  const ext = getFileExtension(file.name || '');
+  if (ext && TEXT_FILE_EXTENSIONS.has(ext)) return true;
+  if (file.type && file.type.startsWith('text/')) return true;
+  if (TEXT_FILE_MIME_TYPES.has(file.type)) return true;
+  if (!file.type || file.type === 'application/octet-stream') {
+    return ext && TEXT_FILE_EXTENSIONS.has(ext);
+  }
+  return false;
+}
+
 /**
  * Initialize textarea auto-resize functionality
  */
@@ -34,7 +70,9 @@ async function handleImageUpload(file) {
     return;
   }
   
-  const preview = createImagePreview(URL.createObjectURL(file));
+  const objectUrl = URL.createObjectURL(file);
+  const preview = createImagePreview(objectUrl);
+  preview.dataset.uploading = 'true';
   document.getElementById('image-container').appendChild(preview);
   
   const fd = new FormData(); 
@@ -44,8 +82,16 @@ async function handleImageUpload(file) {
     const r = await fetch(apiUrl('api/upload_image'), { method: 'POST', body: fd });
     if (r.ok) {
       const j = await r.json();
-      // Record the server upload URL for use on send
-      preview.dataset.uploadUrl = j.url;
+      // Record the server upload path + display URL for use on send/render
+      preview.dataset.uploadPath = j.path || j.url || '';
+      preview.dataset.displayUrl = j.url || '';
+      preview.dataset.uploading = 'false';
+
+      const img = preview.querySelector('img');
+      if (img && preview.dataset.displayUrl) {
+        img.onload = () => URL.revokeObjectURL(objectUrl);
+        img.src = preview.dataset.displayUrl;
+      }
     } else {
       const errorText = await r.text();
       alert(`Upload failed: ${errorText}`);
@@ -121,27 +167,7 @@ function formatFileSize(bytes) {
  */
 async function handleTextUpload(file) {
   // ✅ IMPROVEMENT: Validate file type before processing
-  const allowedTypes = [
-    'text/plain', 'text/markdown', 'text/csv', 'text/xml', 'text/yaml', 'text/css', 'text/html',
-    'application/json', 'application/javascript', 'application/xml', 'application/yaml',
-    'application/x-python', 'application/x-rust', 'application/x-sh', 'application/octet-stream'
-  ];
-  
-  const fileExt = file.name.split('.').pop()?.toLowerCase();
-  const allowedExtensions = [
-    'txt', 'md', 'markdown', 'py', 'js', 'ts', 'jsx', 'tsx', 'rs', 'html', 'htm', 'css', 'json',
-    'xml', 'yaml', 'yml', 'toml', 'c', 'cpp', 'cc', 'cxx', 'h', 'hpp', 'hxx', 'java', 'kt', 'swift', 'go',
-    'rb', 'php',
-    // GPU and shader languages
-    'cu', 'cuh', 'cl', 'ptx', 'glsl', 'vert', 'frag', 'geom', 'comp', 'tesc', 'tese', 'hlsl', 'metal', 'wgsl',
-    // Shell and scripts
-    'sh', 'bash', 'sql', 'log', 'csv', 'tsv', 'ini', 'cfg', 'conf', 'dockerfile', 'makefile',
-    'gitignore', 'env', 'lock',
-    'swift', 'kt', 'scala', 'clj', 'hs', 'elm', 'ex', 'erl', 'fs', 'fsx', 'ml', 'mli',
-    'vue', 'svelte', 'lua', 'nim', 'zig', 'd', 'dart', 'jl', 'pl', 'pm', 'tcl'
-  ];
-  
-  if (!allowedTypes.includes(file.type) && !allowedExtensions.includes(fileExt) && file.type !== '') {
+  if (!isAllowedTextFile(file)) {
     alert('Please select a text or code file');
     return;
   }
@@ -153,25 +179,12 @@ async function handleTextUpload(file) {
     return;
   }
   
-  const fd = new FormData(); 
-  fd.append('file', file);
-  
   try {
-    const r = await fetch(apiUrl('api/upload_text'), { method: 'POST', body: fd });
-    
-    if (r.ok) {
-      const response = await r.json();
-      
-      // Create preview element
-      const preview = createTextFilePreview(response.filename, response.content, response.size);
-      document.getElementById('text-files-container').appendChild(preview);
-    } else {
-      // ✅ IMPROVEMENT: Better error handling
-      const errorText = await r.text();
-      alert(`Upload failed: ${errorText}`);
-    }
+    const content = await file.text();
+    const preview = createTextFilePreview(file.name, content, file.size);
+    document.getElementById('text-files-container').appendChild(preview);
   } catch (error) {
-    alert(`Upload failed: ${error.message}`);
+    alert(`Failed to read file: ${error.message}`);
   }
 }
 
@@ -233,25 +246,16 @@ function initDragAndDrop() {
       await handleImageUpload(imageFile);
       return;
     }
+
+    // Handle audio files
+    const audioFile = files.find(f => f.type.startsWith('audio/'));
+    if (audioFile) {
+      await handleAudioUpload(audioFile);
+      return;
+    }
     
     // Handle text files
-    const textFile = files.find(f => {
-      const ext = f.name.split('.').pop()?.toLowerCase();
-      const allowedExtensions = [
-        'txt', 'md', 'markdown', 'py', 'js', 'ts', 'jsx', 'tsx', 'rs', 'html', 'htm', 'css', 'json',
-        'xml', 'yaml', 'yml', 'toml',
-        'c', 'cpp', 'cc', 'cxx', 'h', 'hpp', 'hxx', 'java', 'kt', 'swift', 'go',
-        'rb', 'php',
-        // GPU and shader languages
-        'cu', 'cuh', 'cl', 'ptx', 'glsl', 'vert', 'frag', 'geom', 'comp', 'tesc', 'tese', 'hlsl', 'metal', 'wgsl',
-        // Shell and scripts
-        'sh', 'bash', 'sql', 'log', 'csv', 'tsv', 'ini', 'cfg', 'conf', 'dockerfile', 'makefile',
-        'gitignore', 'env', 'lock',
-        'swift', 'kt', 'scala', 'clj', 'hs', 'elm', 'ex', 'erl', 'fs', 'fsx', 'ml', 'mli',
-        'vue', 'svelte', 'lua', 'nim', 'zig', 'd', 'dart', 'jl', 'pl', 'pm', 'tcl'
-      ];
-      return f.type.startsWith('text/') || allowedExtensions.includes(ext) || f.type === 'application/json';
-    });
+    const textFile = files.find(isAllowedTextFile);
     
     if (textFile) {
       await handleTextUpload(textFile);
@@ -259,7 +263,7 @@ function initDragAndDrop() {
     }
     
     // No supported file type found
-    alert('Please drop an image file or text/code file');
+    alert('Please drop an image, audio, or text/code file');
   });
 }
 
@@ -333,7 +337,9 @@ async function handleAudioUpload(file) {
     return;
   }
 
-  const preview = createAudioPreview(URL.createObjectURL(file));
+  const objectUrl = URL.createObjectURL(file);
+  const preview = createAudioPreview(objectUrl);
+  preview.dataset.uploading = 'true';
   document.getElementById('audio-container').appendChild(preview);
 
   const fd = new FormData();
@@ -343,7 +349,15 @@ async function handleAudioUpload(file) {
     const r = await fetch(apiUrl('api/upload_audio'), { method: 'POST', body: fd });
     if (r.ok) {
       const j = await r.json();
-      preview.dataset.uploadUrl = j.url;
+      preview.dataset.uploadPath = j.path || j.url || '';
+      preview.dataset.displayUrl = j.url || '';
+      preview.dataset.uploading = 'false';
+
+      const audio = preview.querySelector('audio');
+      if (audio && preview.dataset.displayUrl) {
+        audio.onloadeddata = () => URL.revokeObjectURL(objectUrl);
+        audio.src = preview.dataset.displayUrl;
+      }
     } else {
       const errText = await r.text();
       alert(`Upload failed: ${errText}`);

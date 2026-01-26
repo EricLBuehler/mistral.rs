@@ -340,14 +340,15 @@ img.chat-preview {
   color: var(--text-color);
 }
 
-/* ---------- Mobile tweaks ---------- */
-@media (max-width: 600px) {
 /* ---------- Drag and drop highlight ---------- */
 #main.drag-over {
   outline: 4px dashed var(--primary);
   outline-offset: -4px;
   cursor: copy;
 }
+
+/* ---------- Mobile tweaks ---------- */
+@media (max-width: 600px) {
   body { 
     flex-direction: column; 
   }
