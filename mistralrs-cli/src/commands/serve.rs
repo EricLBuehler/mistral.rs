@@ -1,6 +1,6 @@
 //! Server command implementation
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tracing::info;
 
 use mistralrs_core::{
@@ -324,7 +324,10 @@ fn convert_text_model(
         (ModelFormat::Gguf, false, false) => Ok(ModelSelected::GGUF {
             tok_model_id: format_opts.tok_model_id.clone(),
             quantized_model_id: model.model_id.clone(),
-            quantized_filename: format_opts.quantized_file.clone().unwrap_or_default(),
+            quantized_filename: format_opts
+                .quantized_file
+                .clone()
+                .context("GGUF model type requires `--quantized-filename`/`-f` to be specified")?,
             dtype: model.dtype,
             topology: device
                 .topology
@@ -337,7 +340,10 @@ fn convert_text_model(
         (ModelFormat::Gguf, true, false) => Ok(ModelSelected::LoraGGUF {
             tok_model_id: format_opts.tok_model_id.clone(),
             quantized_model_id: model.model_id.clone(),
-            quantized_filename: format_opts.quantized_file.clone().unwrap_or_default(),
+            quantized_filename: format_opts
+                .quantized_file
+                .clone()
+                .context("GGUF model type requires `quantized-filename` to be specified")?,
             adapters_model_id: adapter.lora.clone().unwrap_or_default(),
             order: adapter
                 .xlora_order
@@ -356,7 +362,10 @@ fn convert_text_model(
         (ModelFormat::Gguf, false, true) => Ok(ModelSelected::XLoraGGUF {
             tok_model_id: format_opts.tok_model_id.clone(),
             quantized_model_id: model.model_id.clone(),
-            quantized_filename: format_opts.quantized_file.clone().unwrap_or_default(),
+            quantized_filename: format_opts
+                .quantized_file
+                .clone()
+                .context("GGUF model type requires `quantized-filename` to be specified")?,
             xlora_model_id: adapter.xlora.clone().unwrap_or_default(),
             order: adapter
                 .xlora_order
@@ -384,7 +393,10 @@ fn convert_text_model(
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
             quantized_model_id: model.model_id.clone(),
-            quantized_filename: format_opts.quantized_file.clone().unwrap_or_default(),
+            quantized_filename: format_opts
+                .quantized_file
+                .clone()
+                .context("GGUF model type requires `quantized-filename` to be specified")?,
             gqa: format_opts.gqa,
             dtype: model.dtype,
             topology: device
@@ -407,7 +419,10 @@ fn convert_text_model(
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
             quantized_model_id: model.model_id.clone(),
-            quantized_filename: format_opts.quantized_file.clone().unwrap_or_default(),
+            quantized_filename: format_opts
+                .quantized_file
+                .clone()
+                .context("GGUF model type requires `quantized-filename` to be specified")?,
             adapters_model_id: adapter.lora.clone().unwrap_or_default(),
             order: adapter
                 .xlora_order
@@ -436,7 +451,10 @@ fn convert_text_model(
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
             quantized_model_id: model.model_id.clone(),
-            quantized_filename: format_opts.quantized_file.clone().unwrap_or_default(),
+            quantized_filename: format_opts
+                .quantized_file
+                .clone()
+                .context("GGUF model type requires `quantized-filename` to be specified")?,
             xlora_model_id: adapter.xlora.clone().unwrap_or_default(),
             order: adapter
                 .xlora_order
