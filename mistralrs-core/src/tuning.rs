@@ -76,6 +76,8 @@ pub struct TuneCandidate {
     pub vram_usage_percent: f32,
     /// Maximum context length that fits (model-specific calculation)
     pub max_context_tokens: usize,
+    /// Whether max_context_tokens is the model's native maximum (not VRAM limited)
+    pub context_is_model_max: bool,
     /// Quality tier
     pub quality: QualityTier,
     /// Whether this candidate fits
@@ -401,6 +403,8 @@ fn available_vram(devices: &[Device]) -> u64 {
 
 /// Calculate the maximum context length that fits in remaining VRAM
 /// Uses the model's actual KV cache configuration from ModelConfigLike
+/// Returns (max_context, is_at_model_max) where is_at_model_max is true if
+/// the context is limited by the model's native max, not VRAM
 #[allow(clippy::cast_possible_truncation)]
 fn calculate_max_context(
     loader: &dyn DeviceMappedModelLoader,
@@ -408,12 +412,12 @@ fn calculate_max_context(
     model_size_bytes: u64,
     available_vram_bytes: u64,
     dtype: DType,
-) -> Result<usize> {
+) -> Result<(usize, bool)> {
     let model_cfg = loader.model_config(config)?;
     let native_max_seq_len = model_cfg.max_seq_len();
 
     if model_size_bytes >= available_vram_bytes {
-        return Ok(0);
+        return Ok((0, false));
     }
 
     let remaining_bytes = available_vram_bytes - model_size_bytes;
@@ -428,13 +432,14 @@ fn calculate_max_context(
     let kv_bytes_per_token = kv_elems_per_token * dtype_size * num_layers;
 
     if kv_bytes_per_token == 0 {
-        return Ok(native_max_seq_len);
+        return Ok((native_max_seq_len, true));
     }
 
     let calculated_max = remaining_bytes as usize / kv_bytes_per_token;
 
     // Return the minimum of calculated max and model's native max
-    Ok(calculated_max.min(native_max_seq_len))
+    let is_at_model_max = calculated_max >= native_max_seq_len;
+    Ok((calculated_max.min(native_max_seq_len), is_at_model_max))
 }
 
 fn map_for_candidate(
@@ -587,9 +592,9 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
             1.0
         };
 
-        let context_room =
+        let (context_room, context_is_model_max) =
             calculate_max_context(loader, &config, estimated_size, avail_vram_bytes, dtype)
-                .unwrap_or(0);
+                .unwrap_or((0, false));
 
         let concurrent = if total_vram_bytes > 0 && estimated_size > 0 {
             ((total_vram_bytes as f64) / (estimated_size as f64)).floor() as usize
@@ -603,6 +608,7 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
             estimated_size_bytes: estimated_size,
             vram_usage_percent: vram_usage,
             max_context_tokens: context_room,
+            context_is_model_max,
             quality: quality_tier(isq),
             fit_status,
             concurrent_instances: concurrent.max(1),

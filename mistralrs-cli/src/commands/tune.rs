@@ -90,10 +90,17 @@ pub async fn run_tune(
     for candidate in &result.candidates {
         let size_str = format!("{:.2} GB", candidate.estimated_size_bytes as f64 / 1e9);
         let vram_pct = format!("{:.0}%", candidate.vram_usage_percent * 100.0);
-        let context_str = if candidate.max_context_tokens >= 1000 {
-            format!("{}k tokens", candidate.max_context_tokens / 1000)
-        } else {
-            format!("{} tokens", candidate.max_context_tokens)
+        let context_str = {
+            let base = if candidate.max_context_tokens >= 1000 {
+                format!("{}k", candidate.max_context_tokens / 1000)
+            } else {
+                format!("{}", candidate.max_context_tokens)
+            };
+            if candidate.context_is_model_max {
+                format!("{base} (max)")
+            } else {
+                base
+            }
         };
 
         let quality_str = match candidate.quality {
