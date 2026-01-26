@@ -789,6 +789,8 @@ These options apply to all commands.
 | `--seed <SEED>` | none | Random seed for reproducibility |
 | `-l, --log <PATH>` | none | Log all requests and responses to file |
 | `--token-source <SOURCE>` | `cache` | HuggingFace authentication token source |
+| `-V, --version` | N/A | Print version information and exit |
+| `-h, --help` | N/A | Print help message (use with any subcommand) |
 
 **Token source formats:**
 
