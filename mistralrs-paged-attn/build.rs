@@ -8,7 +8,6 @@ fn main() -> Result<()> {
     use std::fs::OpenOptions;
     use std::io::prelude::*;
     use std::path::PathBuf;
-    use std::process::Command;
 
     const OTHER_CONTENT: &str = r#"
 pub const USE_FP8: bool = false;
@@ -45,38 +44,8 @@ pub use backend::{
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/state.cuh");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/variant_helper.cuh");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/variants.cuh");
-    // Detect CUDA compute capability for FP8 support
-    let compute_cap = {
-        if let Ok(var) = std::env::var("CUDA_COMPUTE_CAP") {
-            var.parse::<usize>().unwrap() * 10
-        } else {
-            let mut cmd = Command::new("nvidia-smi");
-            match cmd
-                .args(["--query-gpu=compute_cap", "--format=csv"])
-                .output()
-            {
-                Ok(out) => {
-                    let output =
-                        String::from_utf8(out.stdout).expect("Output of nvidia-smi was not utf8.");
-                    (output
-                        .split('\n')
-                        .nth(1)
-                        .unwrap()
-                        .trim()
-                        .parse::<f32>()
-                        .unwrap()
-                        * 100.) as usize
-                }
-                Err(_) => {
-                    // If nvidia-smi fails, assume no FP8 support
-                    println!(
-                        "cargo:warning=Could not detect CUDA compute capability, disabling FP8"
-                    );
-                    0
-                }
-            }
-        }
-    };
+    // Detect CUDA compute capability for FP8 support and flashinfer features
+    let compute_cap = get_compute_cap();
 
     let mut builder = bindgen_cuda::Builder::default()
         .arg("-std=c++17")
@@ -91,6 +60,18 @@ pub use backend::{
         .arg("--verbose")
         .arg("--compiler-options")
         .arg("-fPIC");
+
+    if compute_cap > 0 {
+        // flashinfer_mla_decode.cu requires __grid_constant__ which needs compute >= 70
+        if compute_cap < 700 {
+            builder = builder.arg("-DFLASHINFER_MLA_UNSUPPORTED");
+            builder = builder.arg("-DNO_WMMA_KERNEL");
+        }
+        // bf16 WMMA operations and intrinsics require SM 8.0+ (Ampere)
+        if compute_cap < 800 {
+            builder = builder.arg("-DNO_BF16_KERNEL");
+        }
+    }
 
     // Enable FP8 if compute capability >= 8.0 (Ampere and newer)
     let using_fp8 = if compute_cap >= 800 {
@@ -125,6 +106,7 @@ pub use backend::{
         "cargo:rustc-link-search=native={}",
         absolute_kernel_dir.display()
     );
+
     println!("cargo:rustc-link-search={}", build_dir.display());
     println!("cargo:rustc-link-lib=mistralrspagedattention");
     println!("cargo:rustc-link-lib=dylib=cudart");
@@ -297,4 +279,102 @@ fn main() -> Result<(), String> {
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 fn main() -> Result<()> {
     Ok(())
+}
+
+/// Get CUDA compute capability using cudarc driver detection.
+/// Falls back to CUDA_COMPUTE_CAP env var if driver detection fails.
+/// Returns the MINIMUM compute cap to ensure compatibility with all GPUs.
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+fn get_compute_cap() -> usize {
+    #[cfg(feature = "cuda")]
+    {
+        println!("cargo:rerun-if-env-changed=CUDA_COMPUTE_CAP");
+
+        // First try to detect from actual GPU hardware via cudarc
+        if let Ok(caps) = list_compute_caps() {
+            if !caps.is_empty() {
+                // Use minimum compute cap to ensure all kernels work on all GPUs
+                // (for multi-GPU setups with different architectures)
+                // TODO: support multiple compute caps (related to https://github.com/Narsil/bindgen_cuda/pull/16)
+                let min_cap = *caps.iter().min().unwrap();
+                println!(
+                    "cargo:warning=Using detected compute cap: {} (from {:?})",
+                    min_cap, caps
+                );
+                return min_cap as usize;
+            }
+        }
+
+        // Fallback to environment variable
+        if let Ok(compute_cap_str) = std::env::var("CUDA_COMPUTE_CAP") {
+            if let Ok(cap) = compute_cap_str.parse::<usize>() {
+                println!("cargo:warning=Using CUDA_COMPUTE_CAP from env: {}", cap);
+                return cap;
+            }
+        }
+
+        // Default to 0 if nothing worked - bindgen_cuda will try to detect it
+        println!("cargo:warning=Could not detect compute cap, defaulting to 0");
+    }
+    0
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+fn list_compute_caps() -> Result<Vec<usize>, ()> {
+    // Try to initialize the CUDA driver and query devices
+    if candle_core::cuda::cudarc::driver::result::init().is_err() {
+        println!("cargo:warning=CUDA driver init failed; falling back to nvidia-smi or env var");
+        return Err(());
+    }
+
+    let n = candle_core::cuda::cudarc::driver::result::device::get_count()
+        .map(|x| x as usize)
+        .unwrap_or(0);
+
+    let mut seen = std::collections::HashSet::new();
+    let mut devices_cc = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let ctx = match candle_core::cuda::cudarc::driver::CudaContext::new(i) {
+            Ok(c) => c,
+            Err(e) => {
+                println!(
+                    "cargo:warning=Failed to create CUDA context for device {}: {:?}",
+                    i, e
+                );
+                continue;
+            }
+        };
+
+        let cc = match ctx.compute_capability() {
+            // Format: XY0 (e.g., 610 for SM 6.1, 700 for SM 7.0) - matches existing FP8 logic
+            Ok((major, minor)) => (major as usize) * 100 + (minor as usize) * 10,
+            Err(e) => {
+                println!(
+                    "cargo:warning=Failed to get compute cap for device {}: {:?}",
+                    i, e
+                );
+                continue;
+            }
+        };
+
+        println!(
+            "cargo:warning=CUDA device id {} has compute capability {}",
+            i, cc
+        );
+
+        if seen.insert(cc) {
+            devices_cc.push(cc);
+        }
+    }
+
+    if devices_cc.len() > 1 {
+        println!(
+            "cargo:warning=Multiple compute capabilities detected: {:?}",
+            devices_cc
+        );
+    }
+
+    devices_cc.sort_unstable();
+    Ok(devices_cc)
 }

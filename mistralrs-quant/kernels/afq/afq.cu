@@ -12,6 +12,7 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <cstdint>
+#include <stdio.h>
 
 // ============================================================================
 // Dequantization Kernels
@@ -327,21 +328,96 @@ DEFINE_DEQUANT_LAUNCHER(8, 64, __half, f16)
 DEFINE_DEQUANT_LAUNCHER(8, 128, __half, f16)
 
 // BFloat16 versions
-DEFINE_DEQUANT_LAUNCHER(2, 32, __nv_bfloat16, bf16)
-DEFINE_DEQUANT_LAUNCHER(2, 64, __nv_bfloat16, bf16)
-DEFINE_DEQUANT_LAUNCHER(2, 128, __nv_bfloat16, bf16)
-DEFINE_DEQUANT_3BIT_LAUNCHER(32, __nv_bfloat16, bf16)
-DEFINE_DEQUANT_3BIT_LAUNCHER(64, __nv_bfloat16, bf16)
-DEFINE_DEQUANT_3BIT_LAUNCHER(128, __nv_bfloat16, bf16)
-DEFINE_DEQUANT_LAUNCHER(4, 32, __nv_bfloat16, bf16)
-DEFINE_DEQUANT_LAUNCHER(4, 64, __nv_bfloat16, bf16)
-DEFINE_DEQUANT_LAUNCHER(4, 128, __nv_bfloat16, bf16)
-DEFINE_DEQUANT_6BIT_LAUNCHER(32, __nv_bfloat16, bf16)
-DEFINE_DEQUANT_6BIT_LAUNCHER(64, __nv_bfloat16, bf16)
-DEFINE_DEQUANT_6BIT_LAUNCHER(128, __nv_bfloat16, bf16)
-DEFINE_DEQUANT_LAUNCHER(8, 32, __nv_bfloat16, bf16)
-DEFINE_DEQUANT_LAUNCHER(8, 64, __nv_bfloat16, bf16)
-DEFINE_DEQUANT_LAUNCHER(8, 128, __nv_bfloat16, bf16)
+#ifndef NO_BF16_KERNEL
+#define DEFINE_DEQUANT_BF16_LAUNCHER(bits, gs)                                \
+  extern "C" void afq_dequantize_##bits##bit_gs##gs##_bf16(                   \
+      const uint32_t *w_q, const __nv_bfloat16 *scales,                       \
+      const __nv_bfloat16 *biases, __nv_bfloat16 *output, int rows,           \
+      int cols) {                                                             \
+    int total = rows * cols;                                                   \
+    int blocks = cdiv(total, AFQ_BLOCK_SIZE);                                  \
+    afq_dequantize_kernel<__nv_bfloat16, bits, gs>                            \
+        <<<blocks, AFQ_BLOCK_SIZE>>>(w_q, scales, biases, output, rows, cols); \
+  }
+
+#define DEFINE_DEQUANT_3BIT_BF16_LAUNCHER(gs)                                 \
+  extern "C" void afq_dequantize_3bit_gs##gs##_bf16(                          \
+      const uint8_t *w_q, const __nv_bfloat16 *scales,                        \
+      const __nv_bfloat16 *biases, __nv_bfloat16 *output, int rows,           \
+      int cols) {                                                             \
+    int total = rows * cols;                                                   \
+    int blocks = cdiv(total, AFQ_BLOCK_SIZE);                                  \
+    afq_dequantize_3bit_kernel<__nv_bfloat16, gs>                             \
+        <<<blocks, AFQ_BLOCK_SIZE>>>(w_q, scales, biases, output, rows, cols); \
+  }
+
+#define DEFINE_DEQUANT_6BIT_BF16_LAUNCHER(gs)                                 \
+  extern "C" void afq_dequantize_6bit_gs##gs##_bf16(                          \
+      const uint8_t *w_q, const __nv_bfloat16 *scales,                        \
+      const __nv_bfloat16 *biases, __nv_bfloat16 *output, int rows,           \
+      int cols) {                                                             \
+    int total = rows * cols;                                                   \
+    int blocks = cdiv(total, AFQ_BLOCK_SIZE);                                  \
+    afq_dequantize_6bit_kernel<__nv_bfloat16, gs>                             \
+        <<<blocks, AFQ_BLOCK_SIZE>>>(w_q, scales, biases, output, rows, cols); \
+  }
+
+DEFINE_DEQUANT_BF16_LAUNCHER(2, 32)
+DEFINE_DEQUANT_BF16_LAUNCHER(2, 64)
+DEFINE_DEQUANT_BF16_LAUNCHER(2, 128)
+DEFINE_DEQUANT_3BIT_BF16_LAUNCHER(32)
+DEFINE_DEQUANT_3BIT_BF16_LAUNCHER(64)
+DEFINE_DEQUANT_3BIT_BF16_LAUNCHER(128)
+DEFINE_DEQUANT_BF16_LAUNCHER(4, 32)
+DEFINE_DEQUANT_BF16_LAUNCHER(4, 64)
+DEFINE_DEQUANT_BF16_LAUNCHER(4, 128)
+DEFINE_DEQUANT_6BIT_BF16_LAUNCHER(32)
+DEFINE_DEQUANT_6BIT_BF16_LAUNCHER(64)
+DEFINE_DEQUANT_6BIT_BF16_LAUNCHER(128)
+DEFINE_DEQUANT_BF16_LAUNCHER(8, 32)
+DEFINE_DEQUANT_BF16_LAUNCHER(8, 64)
+DEFINE_DEQUANT_BF16_LAUNCHER(8, 128)
+#else
+#define DEFINE_DEQUANT_BF16_STUB(bits, gs)                                    \
+  extern "C" void afq_dequantize_##bits##bit_gs##gs##_bf16(                   \
+      const uint32_t *w_q, const void *scales, const void *biases,            \
+      void *output, int rows, int cols) {                                     \
+    (void)w_q; (void)scales; (void)biases; (void)output; (void)rows; (void)cols; \
+    fprintf(stderr, "ERROR: afq_dequantize_""#bits""bit_gs""#gs""_bf16 requires BF16 support (SM 8.0+)\n"); \
+  }
+
+#define DEFINE_DEQUANT_3BIT_BF16_STUB(gs)                                     \
+  extern "C" void afq_dequantize_3bit_gs##gs##_bf16(                          \
+      const uint8_t *w_q, const void *scales, const void *biases,             \
+      void *output, int rows, int cols) {                                     \
+    (void)w_q; (void)scales; (void)biases; (void)output; (void)rows; (void)cols; \
+    fprintf(stderr, "ERROR: afq_dequantize_3bit_gs""#gs""_bf16 requires BF16 support (SM 8.0+)\n"); \
+  }
+
+#define DEFINE_DEQUANT_6BIT_BF16_STUB(gs)                                     \
+  extern "C" void afq_dequantize_6bit_gs##gs##_bf16(                          \
+      const uint8_t *w_q, const void *scales, const void *biases,             \
+      void *output, int rows, int cols) {                                     \
+    (void)w_q; (void)scales; (void)biases; (void)output; (void)rows; (void)cols; \
+    fprintf(stderr, "ERROR: afq_dequantize_6bit_gs""#gs""_bf16 requires BF16 support (SM 8.0+)\n"); \
+  }
+
+DEFINE_DEQUANT_BF16_STUB(2, 32)
+DEFINE_DEQUANT_BF16_STUB(2, 64)
+DEFINE_DEQUANT_BF16_STUB(2, 128)
+DEFINE_DEQUANT_3BIT_BF16_STUB(32)
+DEFINE_DEQUANT_3BIT_BF16_STUB(64)
+DEFINE_DEQUANT_3BIT_BF16_STUB(128)
+DEFINE_DEQUANT_BF16_STUB(4, 32)
+DEFINE_DEQUANT_BF16_STUB(4, 64)
+DEFINE_DEQUANT_BF16_STUB(4, 128)
+DEFINE_DEQUANT_6BIT_BF16_STUB(32)
+DEFINE_DEQUANT_6BIT_BF16_STUB(64)
+DEFINE_DEQUANT_6BIT_BF16_STUB(128)
+DEFINE_DEQUANT_BF16_STUB(8, 32)
+DEFINE_DEQUANT_BF16_STUB(8, 64)
+DEFINE_DEQUANT_BF16_STUB(8, 128)
+#endif
 
 // ============================================================================
 // Extern "C" Launch Functions - Quantize
@@ -388,6 +464,7 @@ DEFINE_QUANT_LAUNCHER(8, 64, __half, f16)
 DEFINE_QUANT_LAUNCHER(8, 128, __half, f16)
 
 // BFloat16 quantize
+#ifndef NO_BF16_KERNEL
 DEFINE_QUANT_LAUNCHER(2, 32, __nv_bfloat16, bf16)
 DEFINE_QUANT_LAUNCHER(2, 64, __nv_bfloat16, bf16)
 DEFINE_QUANT_LAUNCHER(2, 128, __nv_bfloat16, bf16)
@@ -397,6 +474,25 @@ DEFINE_QUANT_LAUNCHER(4, 128, __nv_bfloat16, bf16)
 DEFINE_QUANT_LAUNCHER(8, 32, __nv_bfloat16, bf16)
 DEFINE_QUANT_LAUNCHER(8, 64, __nv_bfloat16, bf16)
 DEFINE_QUANT_LAUNCHER(8, 128, __nv_bfloat16, bf16)
+#else
+#define DEFINE_QUANT_BF16_STUB(bits, gs)                                      \
+  extern "C" void afq_quantize_##bits##bit_gs##gs##_bf16(                     \
+      const void *w, uint32_t *w_q, void *scales, void *biases, int rows,     \
+      int cols) {                                                             \
+    (void)w; (void)w_q; (void)scales; (void)biases; (void)rows; (void)cols;   \
+    fprintf(stderr, "ERROR: afq_quantize_""#bits""bit_gs""#gs""_bf16 requires BF16 support (SM 8.0+)\n"); \
+  }
+
+DEFINE_QUANT_BF16_STUB(2, 32)
+DEFINE_QUANT_BF16_STUB(2, 64)
+DEFINE_QUANT_BF16_STUB(2, 128)
+DEFINE_QUANT_BF16_STUB(4, 32)
+DEFINE_QUANT_BF16_STUB(4, 64)
+DEFINE_QUANT_BF16_STUB(4, 128)
+DEFINE_QUANT_BF16_STUB(8, 32)
+DEFINE_QUANT_BF16_STUB(8, 64)
+DEFINE_QUANT_BF16_STUB(8, 128)
+#endif
 
 // Note: 3-bit and 6-bit quantization kernels require special byte packing
 // and are more complex. For now, these are handled by the CPU fallback

@@ -43,7 +43,7 @@ fn cuda_version_from_build_system() -> (usize, usize) {
 fn main() -> Result<(), String> {
     #[cfg(feature = "cuda")]
     {
-        use std::{fs::read_to_string, path::PathBuf, process::Command, vec};
+        use std::{fs::read_to_string, path::PathBuf, vec};
         const MARLIN_FFI_PATH: &str = "src/gptq/marlin_ffi.rs";
         const BLOCKWISE_FP8_FFI_PATH: &str = "src/blockwise_fp8/ffi.rs";
         const SCALAR_FP8_FFI_PATH: &str = "src/scalar_fp8/ffi.rs";
@@ -53,34 +53,8 @@ fn main() -> Result<(), String> {
 
         println!("cargo:rerun-if-changed=build.rs");
 
-        // Try CUDA_COMPUTE_CAP then nvidia-smi
-        let compute_cap = {
-            if let Ok(var) = std::env::var("CUDA_COMPUTE_CAP") {
-                var.parse::<usize>().unwrap() * 10
-            } else {
-                let mut cmd = Command::new("nvidia-smi");
-                match cmd
-                    .args(["--query-gpu=compute_cap", "--format=csv"])
-                    .output()
-                {
-                    Ok(out) => {
-                        let output = String::from_utf8(out.stdout)
-                            .expect("Output of nvidia-smi was not utf8.");
-                        (output
-                            .split('\n')
-                            .nth(1)
-                            .unwrap()
-                            .trim()
-                            .parse::<f32>()
-                            .unwrap()
-                            * 100.) as usize
-                    }
-                    Err(_) => {
-                        panic!("`CUDA_COMPUTE_CAP` env var not specified and `nvidia-smi` was not found.");
-                    }
-                }
-            }
-        };
+        // Detect CUDA compute capability
+        let compute_cap = get_compute_cap();
 
         // ======== Handle optional marlin kernel compilation
         let cc_over_800 = compute_cap >= 800;
@@ -252,6 +226,17 @@ fn main() -> Result<(), String> {
             .arg("--verbose")
             .arg("--compiler-options")
             .arg("-fPIC");
+
+        if compute_cap > 0 {
+            // WMMA (Tensor Core) operations require SM 7.0+ (Volta)
+            if compute_cap < 700 {
+                builder = builder.arg("-DNO_WMMA_KERNEL");
+            }
+            // bf16 WMMA operations and intrinsics require SM 8.0+ (Ampere)
+            if compute_cap < 800 {
+                builder = builder.arg("-DNO_BF16_KERNEL");
+            }
+        }
 
         // https://github.com/EricLBuehler/mistral.rs/issues/286
         if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
@@ -455,4 +440,102 @@ fn main() -> Result<(), String> {
 
     #[cfg(not(any(feature = "metal", feature = "cuda")))]
     Ok(())
+}
+
+/// Get CUDA compute capability using cudarc driver detection.
+/// Falls back to CUDA_COMPUTE_CAP env var if driver detection fails.
+/// Returns the MINIMUM compute cap to ensure compatibility with all GPUs.
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+fn get_compute_cap() -> usize {
+    #[cfg(feature = "cuda")]
+    {
+        println!("cargo:rerun-if-env-changed=CUDA_COMPUTE_CAP");
+
+        // First try to detect from actual GPU hardware via cudarc
+        if let Ok(caps) = list_compute_caps() {
+            if !caps.is_empty() {
+                // Use minimum compute cap to ensure all kernels work on all GPUs
+                // (for multi-GPU setups with different architectures)
+                // TODO: support multiple compute caps (related to https://github.com/Narsil/bindgen_cuda/pull/16)
+                let min_cap = *caps.iter().min().unwrap();
+                println!(
+                    "cargo:warning=Using detected compute cap: {} (from {:?})",
+                    min_cap, caps
+                );
+                return min_cap as usize;
+            }
+        }
+
+        // Fallback to environment variable
+        if let Ok(compute_cap_str) = std::env::var("CUDA_COMPUTE_CAP") {
+            if let Ok(cap) = compute_cap_str.parse::<usize>() {
+                println!("cargo:warning=Using CUDA_COMPUTE_CAP from env: {}", cap);
+                return cap;
+            }
+        }
+
+        // Default to 0 if nothing worked - bindgen_cuda will try to detect it
+        println!("cargo:warning=Could not detect compute cap, defaulting to 0");
+    }
+    0
+}
+
+#[cfg(feature = "cuda")]
+fn list_compute_caps() -> Result<Vec<usize>, ()> {
+    // Try to initialize the CUDA driver and query devices
+    if candle_core::cuda::cudarc::driver::result::init().is_err() {
+        println!("cargo:warning=CUDA driver init failed; falling back to nvidia-smi or env var");
+        return Err(());
+    }
+
+    let n = candle_core::cuda::cudarc::driver::result::device::get_count()
+        .map(|x| x as usize)
+        .unwrap_or(0);
+
+    let mut seen = std::collections::HashSet::new();
+    let mut devices_cc = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let ctx = match candle_core::cuda::cudarc::driver::CudaContext::new(i) {
+            Ok(c) => c,
+            Err(e) => {
+                println!(
+                    "cargo:warning=Failed to create CUDA context for device {}: {:?}",
+                    i, e
+                );
+                continue;
+            }
+        };
+
+        let cc = match ctx.compute_capability() {
+            // Format: XY0 (e.g., 610 for SM 6.1, 700 for SM 7.0) - matches existing logic
+            Ok((major, minor)) => (major as usize) * 100 + (minor as usize) * 10,
+            Err(e) => {
+                println!(
+                    "cargo:warning=Failed to get compute cap for device {}: {:?}",
+                    i, e
+                );
+                continue;
+            }
+        };
+
+        println!(
+            "cargo:warning=CUDA device id {} has compute capability {}",
+            i, cc
+        );
+
+        if seen.insert(cc) {
+            devices_cc.push(cc);
+        }
+    }
+
+    if devices_cc.len() > 1 {
+        println!(
+            "cargo:warning=Multiple compute capabilities detected: {:?}",
+            devices_cc
+        );
+    }
+
+    devices_cc.sort_unstable();
+    Ok(devices_cc)
 }

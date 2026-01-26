@@ -5,12 +5,12 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#if __CUDACC_VER_MAJOR__ >= 13
+#if __CUDACC_VER_MAJOR__ >= 12
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
 #endif
 
-#if __CUDACC_VER_MAJOR__ >= 13
+#if __CUDACC_VER_MAJOR__ >= 12
 #define USE_THRUST_INPUT_ITERS 1
 #else
 #define USE_THRUST_INPUT_ITERS 0
@@ -325,7 +325,9 @@ LEFTSHIFT_OP(int64_t, i64)
 // ============================================================================
 
 #include <cuda_fp16.h>
+#ifndef NO_BF16_KERNEL
 #include <cuda_bf16.h>
+#endif
 
 __device__ __forceinline__ float fast_sigmoid(float x) {
     return 1.0f / (1.0f + expf(-x));
@@ -434,6 +436,7 @@ extern "C" void gptoss_swiglu_f16(
     CUDA_CHECK(cudaGetLastError());
 }
 
+#ifndef NO_BF16_KERNEL
 extern "C" void gptoss_swiglu_bf16(
     const __nv_bfloat16 *gate,
     const __nv_bfloat16 *up,
@@ -461,6 +464,20 @@ extern "C" void gptoss_swiglu_bf16(
     }
     CUDA_CHECK(cudaGetLastError());
 }
+#else
+extern "C" void gptoss_swiglu_bf16(
+    const void *gate,
+    const void *up,
+    void *output,
+    uint32_t N,
+    float alpha,
+    float limit,
+    cudaStream_t stream
+) {
+    (void)gate; (void)up; (void)output; (void)N; (void)alpha; (void)limit; (void)stream;
+    fprintf(stderr, "ERROR: gptoss_swiglu_bf16 requires BF16 support (SM 8.0+)\n");
+}
+#endif
 
 extern "C" void gptoss_swiglu_f32(
     const float *gate,
@@ -552,6 +569,7 @@ extern "C" void gptoss_swiglu_interleaved_f16(
     CUDA_CHECK(cudaGetLastError());
 }
 
+#ifndef NO_BF16_KERNEL
 extern "C" void gptoss_swiglu_interleaved_bf16(
     const __nv_bfloat16 *gate_up,
     __nv_bfloat16 *output,
@@ -569,6 +587,20 @@ extern "C" void gptoss_swiglu_interleaved_bf16(
     );
     CUDA_CHECK(cudaGetLastError());
 }
+#else
+extern "C" void gptoss_swiglu_interleaved_bf16(
+    const void *gate_up,
+    void *output,
+    uint32_t N,
+    uint32_t intermediate_size,
+    float alpha,
+    float limit,
+    cudaStream_t stream
+) {
+    (void)gate_up; (void)output; (void)N; (void)intermediate_size; (void)alpha; (void)limit; (void)stream;
+    fprintf(stderr, "ERROR: gptoss_swiglu_interleaved_bf16 requires BF16 support (SM 8.0+)\n");
+}
+#endif
 
 extern "C" void gptoss_swiglu_interleaved_f32(
     const float *gate_up,
@@ -784,6 +816,7 @@ extern "C" void softmax_with_sinks_f16(
 }
 
 // Launch wrapper for bf16
+#ifndef NO_BF16_KERNEL
 extern "C" void softmax_with_sinks_bf16(
     const __nv_bfloat16 *logits,
     const __nv_bfloat16 *sinks,
@@ -810,6 +843,23 @@ extern "C" void softmax_with_sinks_bf16(
     );
     CUDA_CHECK(cudaGetLastError());
 }
+#else
+extern "C" void softmax_with_sinks_bf16(
+    const void *logits,
+    const void *sinks,
+    const void *mask,
+    void *output,
+    int batch_size,
+    int num_heads,
+    int q_len,
+    int k_len,
+    float scale,
+    cudaStream_t stream
+) {
+    (void)logits; (void)sinks; (void)mask; (void)output; (void)batch_size; (void)num_heads; (void)q_len; (void)k_len; (void)scale; (void)stream;
+    fprintf(stderr, "ERROR: softmax_with_sinks_bf16 requires BF16 support (SM 8.0+)\n");
+}
+#endif
 
 // Launch wrapper for f32
 extern "C" void softmax_with_sinks_f32(

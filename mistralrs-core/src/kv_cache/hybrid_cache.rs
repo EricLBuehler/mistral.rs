@@ -291,11 +291,12 @@ impl HybridCache {
     pub fn new(
         config: HybridCacheConfig,
         dtype: candle_core::DType,
-        device: &Device,
+        devices: &[Device],
     ) -> Result<Self> {
         let mut caches = Vec::with_capacity(config.layer_types.len());
 
-        for layer_type in &config.layer_types {
+        for (i, layer_type) in config.layer_types.iter().enumerate() {
+            let device = &devices[i];
             let cache = match layer_type {
                 HybridLayerType::Attention => HybridLayerCache::Attention(KvCache::new_normal(
                     2,
