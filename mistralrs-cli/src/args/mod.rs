@@ -143,7 +143,7 @@ pub enum Command {
         gen_len: usize,
 
         /// Number of benchmark iterations
-        #[arg(short = 'n', long, default_value = "3")]
+        #[arg(long, default_value = "3")]
         iterations: usize,
 
         /// Number of warmup runs (discarded)

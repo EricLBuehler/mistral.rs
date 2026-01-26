@@ -393,7 +393,7 @@ mistralrs bench -m Qwen/Qwen3-4B
 mistralrs bench -m Qwen/Qwen3-4B --prompt-len 1024 --gen-len 256
 
 # More iterations for better statistics
-mistralrs bench -m Qwen/Qwen3-4B -n 10
+mistralrs bench -m Qwen/Qwen3-4B --iterations 10
 
 # With ISQ quantization
 mistralrs bench -m Qwen/Qwen3-4B --isq q4k
@@ -422,7 +422,7 @@ Iterations: 3
 |--------|---------|-------------|
 | `--prompt-len <N>` | `512` | Number of tokens in prompt (prefill test) |
 | `--gen-len <N>` | `128` | Number of tokens to generate (decode test) |
-| `-n, --iterations <N>` | `3` | Number of benchmark iterations |
+| `--iterations <N>` | `3` | Number of benchmark iterations |
 | `--warmup <N>` | `1` | Number of warmup runs (discarded) |
 
 The `bench` command also accepts all model loading options (ISQ, device mapping, etc.).
