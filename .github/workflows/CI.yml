@@ -43,7 +43,6 @@ jobs:
           python-version: 3.x
       - name: Build wheels
         uses: PyO3/maturin-action@v1
-        working-directory: 
         with:
           target: ${{ matrix.platform.target }}
           args: --release -m mistralrs-pyo3/Cargo.toml --out dist --find-interpreter
