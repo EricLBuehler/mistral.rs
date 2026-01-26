@@ -172,9 +172,6 @@ pub enum CacheCommand {
         #[arg(short = 'm', long)]
         model_id: String,
     },
-
-    /// Clean up incomplete downloads and temporary files
-    Prune,
 }
 
 /// Default model options used when no model type subcommand is specified.

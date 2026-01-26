@@ -18,8 +18,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 
 use args::{resolve_model_type, CacheCommand, Cli, Command};
 use commands::{
-    run_bench, run_cache_delete, run_cache_list, run_cache_prune, run_doctor, run_from_config,
-    run_interactive, run_login, run_quantize, run_server, run_tune,
+    run_bench, run_cache_delete, run_cache_list, run_doctor, run_from_config, run_interactive,
+    run_login, run_quantize, run_server, run_tune,
 };
 
 #[tokio::main]
@@ -89,7 +89,6 @@ async fn main() -> Result<()> {
         Command::Cache { cmd } => match cmd {
             CacheCommand::List => run_cache_list()?,
             CacheCommand::Delete { model_id } => run_cache_delete(&model_id)?,
-            CacheCommand::Prune => run_cache_prune()?,
         },
 
         Command::Bench {

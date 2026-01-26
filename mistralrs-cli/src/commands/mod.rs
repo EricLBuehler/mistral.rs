@@ -11,7 +11,7 @@ pub(crate) mod serve;
 mod tune;
 
 pub use bench::run_bench;
-pub use cache::{run_cache_delete, run_cache_list, run_cache_prune};
+pub use cache::{run_cache_delete, run_cache_list};
 pub use config::run_from_config;
 pub use doctor::run_doctor;
 pub use login::run_login;

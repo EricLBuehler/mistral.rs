@@ -319,7 +319,7 @@ If the `HF_HOME` environment variable is set, the token is saved to `$HF_HOME/to
 
 ### cache - Model Management
 
-Manage the HuggingFace model cache. List cached models, delete specific models, or clean up incomplete downloads.
+Manage the HuggingFace model cache. List cached models or delete specific models.
 
 ```bash
 mistralrs cache <SUBCOMMAND>
@@ -370,18 +370,6 @@ mistralrs cache delete -m Qwen/Qwen3-4B
 # Delete a model with organization
 mistralrs cache delete -m meta-llama/Llama-3.2-3B
 ```
-
-#### cache prune
-
-Clean up incomplete downloads and temporary files.
-
-```bash
-mistralrs cache prune
-```
-
-This removes:
-- Files ending with `.incomplete` (interrupted downloads)
-- Files starting with `.tmp` (temporary files)
 
 ---
 
