@@ -292,10 +292,7 @@ pub fn run_doctor() -> DoctorReport {
         .devices
         .iter()
         .any(|d| d.kind == "cuda");
-    let has_metal = system
-        .devices
-        .iter()
-        .any(|d| d.kind == "metal");
+
 
     if system.build.cuda && !has_cuda {
         checks.push(DoctorCheck {
@@ -303,14 +300,6 @@ pub fn run_doctor() -> DoctorReport {
             status: DoctorStatus::Warn,
             message: "CUDA support is enabled but no CUDA devices were found.".to_string(),
             suggestion: Some("Check NVIDIA driver installation.".to_string()),
-        });
-    }
-    if system.build.metal && !has_metal {
-        checks.push(DoctorCheck {
-            name: "metal_devices".to_string(),
-            status: DoctorStatus::Warn,
-            message: "Metal support is enabled but no Metal devices were found.".to_string(),
-            suggestion: Some("Ensure Metal is available on this machine.".to_string()),
         });
     }
 
