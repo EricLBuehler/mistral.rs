@@ -126,7 +126,10 @@ fn nvidia_driver_version() -> Option<String> {
 
 fn xcode_version() -> Option<String> {
     let output = command_stdout("xcodebuild", &["-version"])?;
-    let mut lines = output.lines().map(str::trim).filter(|line| !line.is_empty());
+    let mut lines = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
     let xcode = lines.next()?;
     let build = lines.next();
     let mut version = xcode.to_string();
