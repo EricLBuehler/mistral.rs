@@ -640,14 +640,14 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
                 .isq
                 .map(|i| format!(" --isq {:?}", i).to_lowercase())
                 .unwrap_or_default();
-            let cmd = format!("mistralrs serve auto -m {model_id}{isq_flag}");
+            let cmd = format!("mistralrs serve -m {model_id}{isq_flag}");
             (rec.isq, None, rec.device_layers_cli.clone(), cmd)
         } else {
             (
                 None,
                 None,
                 None,
-                format!("mistralrs serve auto -m {model_id}"),
+                format!("mistralrs serve -m {model_id}"),
             )
         };
 

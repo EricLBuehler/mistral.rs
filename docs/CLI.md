@@ -55,13 +55,13 @@ Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified. This all
 mistralrs run -m Qwen/Qwen3-4B
 
 # Explicit auto type (equivalent to above)
-mistralrs run auto -m Qwen/Qwen3-4B
+mistralrs run -m Qwen/Qwen3-4B
 
 # Run with thinking mode enabled
 mistralrs run -m Qwen/Qwen3-4B --enable-thinking
 
 # Run a vision model
-mistralrs run vision -m google/gemma-3-4b-it
+mistralrs run -m google/gemma-3-4b-it
 ```
 
 **Options:**
@@ -91,7 +91,7 @@ Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified.
 mistralrs serve -m Qwen/Qwen3-4B
 
 # Explicit auto type (equivalent to above)
-mistralrs serve auto -m Qwen/Qwen3-4B
+mistralrs serve -m Qwen/Qwen3-4B
 
 # Start server with web UI
 mistralrs serve -m Qwen/Qwen3-4B --ui
@@ -129,16 +129,16 @@ mistralrs quantize <MODEL_TYPE> -m <MODEL_ID> --isq <LEVEL> -o <OUTPUT>
 
 ```bash
 # Quantize a text model to 4-bit
-mistralrs quantize auto -m Qwen/Qwen3-4B --isq 4 -o qwen3-4b-q4.uqff
+mistralrs quantize -m Qwen/Qwen3-4B --isq 4 -o qwen3-4b-q4.uqff
 
 # Quantize with Q4_K format
-mistralrs quantize auto -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-q4k.uqff
+mistralrs quantize -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-q4k.uqff
 
 # Quantize a vision model
-mistralrs quantize vision -m google/gemma-3-4b-it --isq 4 -o gemma3-4b-q4.uqff
+mistralrs quantize -m google/gemma-3-4b-it --isq 4 -o gemma3-4b-q4.uqff
 
 # Quantize with imatrix for better quality
-mistralrs quantize auto -m Qwen/Qwen3-4B --isq q4k --imatrix imatrix.dat -o qwen3-4b-q4k.uqff
+mistralrs quantize -m Qwen/Qwen3-4B --isq q4k --imatrix imatrix.dat -o qwen3-4b-q4k.uqff
 ```
 
 **Quantize Options:**
@@ -210,7 +210,7 @@ Quantization Options
 
 Recommended Command
 -------------------
-  mistralrs serve auto -m Qwen/Qwen3-4B --isq q8_0
+  mistralrs serve -m Qwen/Qwen3-4B --isq q8_0
 
 [INFO] PagedAttention is available (mode: auto)
 ```
@@ -498,11 +498,11 @@ mistralrs completions fish > ~/.config/fish/completions/mistralrs.fish
 
 ### auto
 
-Auto-detect model type. This is the recommended option for most models.
+Auto-detect model type. This is the recommended option for most models and is on by default simply by leaving out the explicit model type.
 
 ```bash
-mistralrs run auto -m Qwen/Qwen3-4B
-mistralrs serve auto -m Qwen/Qwen3-4B
+mistralrs run -m Qwen/Qwen3-4B
+mistralrs serve -m Qwen/Qwen3-4B
 ```
 
 The `auto` type supports text, vision, and other model types through automatic detection.
@@ -571,22 +571,22 @@ In-situ quantization (ISQ) reduces model memory usage by quantizing weights at l
 
 ```bash
 # Simple bit-width quantization
-mistralrs run auto -m Qwen/Qwen3-4B --isq 4
-mistralrs run auto -m Qwen/Qwen3-4B --isq 8
+mistralrs run -m Qwen/Qwen3-4B --isq 4
+mistralrs run -m Qwen/Qwen3-4B --isq 8
 
 # GGML-style quantization
-mistralrs run auto -m Qwen/Qwen3-4B --isq q4_0
-mistralrs run auto -m Qwen/Qwen3-4B --isq q4_1
-mistralrs run auto -m Qwen/Qwen3-4B --isq q4k
-mistralrs run auto -m Qwen/Qwen3-4B --isq q5k
-mistralrs run auto -m Qwen/Qwen3-4B --isq q6k
+mistralrs run -m Qwen/Qwen3-4B --isq q4_0
+mistralrs run -m Qwen/Qwen3-4B --isq q4_1
+mistralrs run -m Qwen/Qwen3-4B --isq q4k
+mistralrs run -m Qwen/Qwen3-4B --isq q5k
+mistralrs run -m Qwen/Qwen3-4B --isq q6k
 ```
 
 **ISQ Organization:**
 
 ```bash
 # Use MOQE organization for potentially better quality
-mistralrs run auto -m Qwen/Qwen3-4B --isq q4k --isq-organization moqe
+mistralrs run -m Qwen/Qwen3-4B --isq q4k --isq-organization moqe
 ```
 
 ---
@@ -604,13 +604,13 @@ mistralrs quantize auto -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-q4k.uqff
 **Load from UQFF:**
 
 ```bash
-mistralrs run auto -m Qwen/Qwen3-4B --from-uqff qwen3-4b-q4k.uqff
+mistralrs run -m Qwen/Qwen3-4B --from-uqff qwen3-4b-q4k.uqff
 ```
 
 **Multiple UQFF files (semicolon-separated):**
 
 ```bash
-mistralrs run auto -m Qwen/Qwen3-4B --from-uqff "part1.uqff;part2.uqff"
+mistralrs run -m Qwen/Qwen3-4B --from-uqff "part1.uqff;part2.uqff"
 ```
 
 ---
@@ -623,26 +623,26 @@ PagedAttention enables efficient memory management for the KV cache. It is autom
 
 ```bash
 # Auto mode (default): enabled on CUDA, disabled on Metal/CPU
-mistralrs serve auto -m Qwen/Qwen3-4B --paged-attn auto
+mistralrs serve -m Qwen/Qwen3-4B --paged-attn auto
 
 # Force enable
-mistralrs serve auto -m Qwen/Qwen3-4B --paged-attn on
+mistralrs serve -m Qwen/Qwen3-4B --paged-attn on
 
 # Force disable
-mistralrs serve auto -m Qwen/Qwen3-4B --paged-attn off
+mistralrs serve -m Qwen/Qwen3-4B --paged-attn off
 ```
 
 **Memory allocation options (mutually exclusive):**
 
 ```bash
 # Allocate for specific context length (recommended)
-mistralrs serve auto -m Qwen/Qwen3-4B --pa-context-len 8192
+mistralrs serve -m Qwen/Qwen3-4B --pa-context-len 8192
 
 # Allocate specific GPU memory in MB
-mistralrs serve auto -m Qwen/Qwen3-4B --pa-memory-mb 4096
+mistralrs serve -m Qwen/Qwen3-4B --pa-memory-mb 4096
 
 # Allocate fraction of GPU memory (0.0-1.0)
-mistralrs serve auto -m Qwen/Qwen3-4B --pa-memory-fraction 0.8
+mistralrs serve -m Qwen/Qwen3-4B --pa-memory-fraction 0.8
 ```
 
 **Additional options:**
@@ -662,35 +662,35 @@ Control how model layers are distributed across devices.
 
 ```bash
 # Use defaults (automatic)
-mistralrs run auto -m Qwen/Qwen3-4B
+mistralrs run -m Qwen/Qwen3-4B
 ```
 
 **Manual layer assignment:**
 
 ```bash
 # Assign 10 layers to GPU 0, 20 layers to GPU 1
-mistralrs run auto -m Qwen/Qwen3-4B -n "0:10;1:20"
+mistralrs run -m Qwen/Qwen3-4B -n "0:10;1:20"
 
 # Equivalent long form
-mistralrs run auto -m Qwen/Qwen3-4B --device-layers "0:10;1:20"
+mistralrs run -m Qwen/Qwen3-4B --device-layers "0:10;1:20"
 ```
 
 **CPU-only execution:**
 
 ```bash
-mistralrs run auto -m Qwen/Qwen3-4B --cpu
+mistralrs run -m Qwen/Qwen3-4B --cpu
 ```
 
 **Topology file:**
 
 ```bash
-mistralrs run auto -m Qwen/Qwen3-4B --topology topology.yaml
+mistralrs run -m Qwen/Qwen3-4B --topology topology.yaml
 ```
 
 **Custom HuggingFace cache:**
 
 ```bash
-mistralrs run auto -m Qwen/Qwen3-4B --hf-cache /path/to/cache
+mistralrs run -m Qwen/Qwen3-4B --hf-cache /path/to/cache
 ```
 
 **Device mapping options:**
@@ -714,20 +714,20 @@ Apply LoRA or X-LoRA adapters to models.
 
 ```bash
 # Single LoRA adapter
-mistralrs run auto -m Qwen/Qwen3-4B --lora my-lora-adapter
+mistralrs run -m Qwen/Qwen3-4B --lora my-lora-adapter
 
 # Multiple LoRA adapters (semicolon-separated)
-mistralrs run auto -m Qwen/Qwen3-4B --lora "adapter1;adapter2"
+mistralrs run -m Qwen/Qwen3-4B --lora "adapter1;adapter2"
 ```
 
 **X-LoRA:**
 
 ```bash
 # X-LoRA adapter with ordering file
-mistralrs run auto -m Qwen/Qwen3-4B --xlora my-xlora-adapter --xlora-order ordering.json
+mistralrs run -m Qwen/Qwen3-4B --xlora my-xlora-adapter --xlora-order ordering.json
 
 # With target non-granular index
-mistralrs run auto -m Qwen/Qwen3-4B --xlora my-xlora-adapter --xlora-order ordering.json --tgt-non-granular-index 2
+mistralrs run -m Qwen/Qwen3-4B --xlora my-xlora-adapter --xlora-order ordering.json --tgt-non-granular-index 2
 ```
 
 ---
@@ -740,16 +740,16 @@ Override the model's default chat template.
 
 ```bash
 # JSON template file
-mistralrs run auto -m Qwen/Qwen3-4B --chat-template template.json
+mistralrs run -m Qwen/Qwen3-4B --chat-template template.json
 
 # Jinja template file
-mistralrs run auto -m Qwen/Qwen3-4B --chat-template template.jinja
+mistralrs run -m Qwen/Qwen3-4B --chat-template template.jinja
 ```
 
 **Explicit Jinja override:**
 
 ```bash
-mistralrs run auto -m Qwen/Qwen3-4B --jinja-explicit custom.jinja
+mistralrs run -m Qwen/Qwen3-4B --jinja-explicit custom.jinja
 ```
 
 ---
@@ -760,10 +760,10 @@ Enable web search capabilities (requires an embedding model).
 
 ```bash
 # Enable search with default embedding model
-mistralrs run auto -m Qwen/Qwen3-4B --enable-search
+mistralrs run -m Qwen/Qwen3-4B --enable-search
 
 # Specify embedding model
-mistralrs run auto -m Qwen/Qwen3-4B --enable-search --search-embedding-model embedding-gemma
+mistralrs run -m Qwen/Qwen3-4B --enable-search --search-embedding-model embedding-gemma
 ```
 
 ---
@@ -773,7 +773,7 @@ mistralrs run auto -m Qwen/Qwen3-4B --enable-search --search-embedding-model emb
 Enable thinking/reasoning mode for models that support it (like DeepSeek, Qwen3).
 
 ```bash
-mistralrs run auto -m Qwen/Qwen3-4B --enable-thinking
+mistralrs run -m Qwen/Qwen3-4B --enable-thinking
 ```
 
 In interactive mode, thinking content is displayed in gray text before the final response.
@@ -804,13 +804,13 @@ These options apply to all commands.
 
 ```bash
 # Set random seed
-mistralrs run auto -m Qwen/Qwen3-4B --seed 42
+mistralrs run -m Qwen/Qwen3-4B --seed 42
 
 # Enable logging
-mistralrs run auto -m Qwen/Qwen3-4B --log requests.log
+mistralrs run -m Qwen/Qwen3-4B --log requests.log
 
 # Use token from environment variable
-mistralrs run auto -m meta-llama/Llama-3.2-3B-Instruct --token-source env:HF_TOKEN
+mistralrs run -m meta-llama/Llama-3.2-3B-Instruct --token-source env:HF_TOKEN
 ```
 
 ---
@@ -859,10 +859,10 @@ For loading quantized models.
 
 ```bash
 # Load a GGUF model
-mistralrs run auto -m Qwen/Qwen3-4B --format gguf -f model.gguf
+mistralrs run -m Qwen/Qwen3-4B --format gguf -f model.gguf
 
 # Multiple GGUF files
-mistralrs run auto -m Qwen/Qwen3-4B --format gguf -f "model-part1.gguf;model-part2.gguf"
+mistralrs run -m Qwen/Qwen3-4B --format gguf -f "model-part1.gguf;model-part2.gguf"
 ```
 
 ---
