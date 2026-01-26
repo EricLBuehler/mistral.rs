@@ -3,8 +3,8 @@
 //! Unified design replacing the confusing 5-flag system with clear semantics.
 
 use clap::{Args, ValueEnum};
-use serde::Deserialize;
 use mistralrs_core::PagedCacheType;
+use serde::Deserialize;
 
 /// Cache and attention configuration
 #[derive(Args, Clone, Deserialize)]

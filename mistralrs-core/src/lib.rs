@@ -47,8 +47,8 @@ pub use model_selected::ModelSelected;
 pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_selected_model_dtype};
 
 mod amoe;
-mod diagnostics;
 mod attention;
+mod diagnostics;
 mod diffusion_models;
 pub mod distributed;
 mod gguf;

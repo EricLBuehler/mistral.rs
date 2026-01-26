@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Multipart, Extension},
+    extract::{Extension, Multipart},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -278,7 +278,11 @@ pub async fn upload_text(
         let filepath = uploads_dir.join(&filename);
         if let Err(e) = tokio::fs::write(&filepath, &data).await {
             error!("write upload error: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to save text file").into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to save text file",
+            )
+                .into_response();
         }
 
         let url = filepath.to_string_lossy();
@@ -421,9 +425,7 @@ pub async fn append_message(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<AppendMessageRequest>,
 ) -> impl IntoResponse {
-    if let Err(e) =
-        append_chat_message(&app, &req.id, &req.role, &req.content, req.images).await
-    {
+    if let Err(e) = append_chat_message(&app, &req.id, &req.role, &req.content, req.images).await {
         error!("append message error: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "append failed").into_response();
     }

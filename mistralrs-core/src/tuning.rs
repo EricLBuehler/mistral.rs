@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use candle_core::{Device, DType};
+use candle_core::{DType, Device};
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
     Cache, Repo, RepoType,
@@ -117,34 +117,34 @@ fn hf_cache_path_from_model(model: &ModelSelected) -> Option<PathBuf> {
 fn model_id_from_selected(model: &ModelSelected) -> String {
     match model {
         ModelSelected::Plain { model_id, .. }
-        | ModelSelected::Lora { model_id: Some(model_id), .. }
-        | ModelSelected::XLora { model_id: Some(model_id), .. }
+        | ModelSelected::Lora {
+            model_id: Some(model_id),
+            ..
+        }
+        | ModelSelected::XLora {
+            model_id: Some(model_id),
+            ..
+        }
         | ModelSelected::VisionPlain { model_id, .. }
         | ModelSelected::Embedding { model_id, .. }
         | ModelSelected::Run { model_id, .. } => model_id.clone(),
         ModelSelected::GGUF {
-            quantized_model_id,
-            ..
+            quantized_model_id, ..
         }
         | ModelSelected::GGML {
-            quantized_model_id,
-            ..
+            quantized_model_id, ..
         }
         | ModelSelected::LoraGGUF {
-            quantized_model_id,
-            ..
+            quantized_model_id, ..
         }
         | ModelSelected::XLoraGGUF {
-            quantized_model_id,
-            ..
+            quantized_model_id, ..
         }
         | ModelSelected::LoraGGML {
-            quantized_model_id,
-            ..
+            quantized_model_id, ..
         }
         | ModelSelected::XLoraGGML {
-            quantized_model_id,
-            ..
+            quantized_model_id, ..
         } => quantized_model_id.clone(),
         ModelSelected::DiffusionPlain { model_id, .. } => model_id.clone(),
         ModelSelected::Speech { model_id, .. } => model_id.clone(),
@@ -162,16 +162,17 @@ fn load_config_artifacts(
 ) -> Result<(String, bool)> {
     if Path::new(model_id).exists() {
         let config_path = Path::new(model_id).join("config.json");
-        let config = std::fs::read_to_string(&config_path).with_context(|| {
-            format!("Failed to read config.json at {}", config_path.display())
-        })?;
+        let config = std::fs::read_to_string(&config_path)
+            .with_context(|| format!("Failed to read config.json at {}", config_path.display()))?;
         let sentence_transformers = Path::new(model_id)
             .join("config_sentence_transformers.json")
             .exists();
         return Ok((config, sentence_transformers));
     }
 
-    let cache = hf_cache_path.map(Cache::new).unwrap_or_else(Cache::from_env);
+    let cache = hf_cache_path
+        .map(Cache::new)
+        .unwrap_or_else(Cache::from_env);
     GLOBAL_HF_CACHE.get_or_init(|| cache.clone());
 
     let mut api = ApiBuilder::from_cache(cache)
@@ -196,8 +197,8 @@ fn load_config_artifacts(
         )
     })?;
 
-    let sentence_transformers = api_get_file(&api, model_id, "config_sentence_transformers.json")
-        .is_ok();
+    let sentence_transformers =
+        api_get_file(&api, model_id, "config_sentence_transformers.json").is_ok();
 
     Ok((config, sentence_transformers))
 }
@@ -242,12 +243,21 @@ fn infer_kind(config: &str, sentence_transformers: bool) -> Result<TuneKind> {
 fn default_candidates(profile: TuneProfile, backend: TuneBackend) -> Vec<IsqType> {
     match backend {
         TuneBackend::Metal => match profile {
-            TuneProfile::Quality => vec![IsqType::AFQ8, IsqType::AFQ6, IsqType::AFQ4, IsqType::AFQ3],
+            TuneProfile::Quality => {
+                vec![IsqType::AFQ8, IsqType::AFQ6, IsqType::AFQ4, IsqType::AFQ3]
+            }
             TuneProfile::Balanced => vec![IsqType::AFQ6, IsqType::AFQ4, IsqType::AFQ3],
             TuneProfile::Fast => vec![IsqType::AFQ4, IsqType::AFQ3, IsqType::AFQ2],
         },
         _ => match profile {
-            TuneProfile::Quality => vec![IsqType::Q8_0, IsqType::Q6K, IsqType::Q5K, IsqType::Q4K, IsqType::Q3K, IsqType::Q2K],
+            TuneProfile::Quality => vec![
+                IsqType::Q8_0,
+                IsqType::Q6K,
+                IsqType::Q5K,
+                IsqType::Q4K,
+                IsqType::Q3K,
+                IsqType::Q2K,
+            ],
             TuneProfile::Balanced => vec![IsqType::Q6K, IsqType::Q5K, IsqType::Q4K, IsqType::Q3K],
             TuneProfile::Fast => vec![IsqType::Q4K, IsqType::Q3K, IsqType::Q2K],
         },

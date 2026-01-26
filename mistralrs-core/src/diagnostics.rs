@@ -108,7 +108,10 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
             match Device::new_cuda(ord) {
                 Ok(dev) => {
                     let total = MemoryUsage.get_total_memory(&dev).ok().map(|v| v as u64);
-                    let avail = MemoryUsage.get_memory_available(&dev).ok().map(|v| v as u64);
+                    let avail = MemoryUsage
+                        .get_memory_available(&dev)
+                        .ok()
+                        .map(|v| v as u64);
                     devices.push(DeviceInfo {
                         kind: "cuda".to_string(),
                         ordinal: Some(ord),
@@ -129,7 +132,10 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
         for ord in 0..total {
             if let Ok(dev) = Device::new_metal(ord) {
                 let total = MemoryUsage.get_total_memory(&dev).ok().map(|v| v as u64);
-                let avail = MemoryUsage.get_memory_available(&dev).ok().map(|v| v as u64);
+                let avail = MemoryUsage
+                    .get_memory_available(&dev)
+                    .ok()
+                    .map(|v| v as u64);
                 devices.push(DeviceInfo {
                     kind: "metal".to_string(),
                     ordinal: Some(ord),
@@ -288,11 +294,7 @@ pub fn run_doctor() -> DoctorReport {
         });
     }
 
-    let has_cuda = system
-        .devices
-        .iter()
-        .any(|d| d.kind == "cuda");
-
+    let has_cuda = system.devices.iter().any(|d| d.kind == "cuda");
 
     if system.build.cuda && !has_cuda {
         checks.push(DoctorCheck {
@@ -313,11 +315,7 @@ pub fn run_doctor() -> DoctorReport {
                 checks.push(DoctorCheck {
                     name: format!("{}_memory", label),
                     status: DoctorStatus::Warn,
-                    message: format!(
-                        "{} has only {:.1} GB free.",
-                        label,
-                        avail as f64 / 1e9
-                    ),
+                    message: format!("{} has only {:.1} GB free.", label, avail as f64 / 1e9),
                     suggestion: Some(
                         "Use a smaller model or a stronger quantization level.".to_string(),
                     ),

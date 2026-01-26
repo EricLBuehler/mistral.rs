@@ -4,9 +4,7 @@ use anyhow::Result;
 use tracing::info;
 
 use mistralrs_core::{initialize_logging, ModelSelected};
-use mistralrs_server_core::mistralrs_for_server_builder::{
-    defaults, MistralRsForServerBuilder,
-};
+use mistralrs_server_core::mistralrs_for_server_builder::{defaults, MistralRsForServerBuilder};
 
 use crate::args::{GlobalOptions, QuantizeModelType};
 
@@ -52,9 +50,15 @@ fn convert_to_model_selected(
         } => {
             let model_selected = ModelSelected::Run {
                 model_id: model.model_id.clone(),
-                tokenizer_json: model.tokenizer.as_ref().map(|p| p.to_string_lossy().to_string()),
+                tokenizer_json: model
+                    .tokenizer
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
                 dtype: model.dtype,
-                topology: device.topology.as_ref().map(|p| p.to_string_lossy().to_string()),
+                topology: device
+                    .topology
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
                 organization: quantization.isq_organization,
                 write_uqff: Some(output.output_path.clone()),
                 from_uqff: None,
@@ -86,10 +90,16 @@ fn convert_to_model_selected(
         } => {
             let model_selected = ModelSelected::Plain {
                 model_id: model.model_id.clone(),
-                tokenizer_json: model.tokenizer.as_ref().map(|p| p.to_string_lossy().to_string()),
+                tokenizer_json: model
+                    .tokenizer
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
                 arch: arch.clone(),
                 dtype: model.dtype,
-                topology: device.topology.as_ref().map(|p| p.to_string_lossy().to_string()),
+                topology: device
+                    .topology
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
                 organization: quantization.isq_organization,
                 write_uqff: Some(output.output_path.clone()),
                 from_uqff: None,
@@ -118,10 +128,16 @@ fn convert_to_model_selected(
         } => {
             let model_selected = ModelSelected::VisionPlain {
                 model_id: model.model_id.clone(),
-                tokenizer_json: model.tokenizer.as_ref().map(|p| p.to_string_lossy().to_string()),
+                tokenizer_json: model
+                    .tokenizer
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
                 arch: None,
                 dtype: model.dtype,
-                topology: device.topology.as_ref().map(|p| p.to_string_lossy().to_string()),
+                topology: device
+                    .topology
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
                 write_uqff: Some(output.output_path.clone()),
                 from_uqff: None,
                 max_edge: vision.max_edge,
@@ -151,10 +167,16 @@ fn convert_to_model_selected(
         } => {
             let model_selected = ModelSelected::Embedding {
                 model_id: model.model_id.clone(),
-                tokenizer_json: model.tokenizer.as_ref().map(|p| p.to_string_lossy().to_string()),
+                tokenizer_json: model
+                    .tokenizer
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
                 arch: None,
                 dtype: model.dtype,
-                topology: device.topology.as_ref().map(|p| p.to_string_lossy().to_string()),
+                topology: device
+                    .topology
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
                 write_uqff: Some(output.output_path.clone()),
                 from_uqff: None,
                 hf_cache_path: device.hf_cache.clone(),

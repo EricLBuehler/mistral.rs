@@ -9,7 +9,7 @@ use axum::Router;
 use include_dir::{include_dir, Dir};
 use indexmap::IndexMap;
 use mistralrs::{Model, SearchEmbeddingModel};
-use mistralrs_core::{ModelCategory, MistralRs};
+use mistralrs_core::{MistralRs, ModelCategory};
 use tokio::fs;
 use tower_http::services::ServeDir;
 

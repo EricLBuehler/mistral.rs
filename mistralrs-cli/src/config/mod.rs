@@ -124,12 +124,8 @@ pub fn load_cli_config(path: &Path) -> Result<CliConfig> {
         anyhow::bail!("mistralrs-cli config files must be .toml");
     }
 
-    let contents = std::fs::read_to_string(path).with_context(|| {
-        format!(
-            "Failed to read config file {}",
-            path.to_string_lossy()
-        )
-    })?;
+    let contents = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read config file {}", path.to_string_lossy()))?;
 
     let config: CliConfig =
         toml::from_str(&contents).context("Failed to parse TOML config file")?;

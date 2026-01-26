@@ -10,11 +10,11 @@ use tracing::info;
 use mistralrs_core::initialize_logging;
 use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
 
-use crate::args::{GlobalOptions, ModelType, RuntimeOptions};
 use super::serve::{
     convert_to_model_selected, extract_device_settings, extract_isq_setting,
     extract_paged_attn_settings,
 };
+use crate::args::{GlobalOptions, ModelType, RuntimeOptions};
 
 /// Run the model in interactive mode
 pub async fn run_interactive(
@@ -29,8 +29,14 @@ pub async fn run_interactive(
     let model_selected = convert_to_model_selected(&model_type)?;
 
     // Extract settings
-    let (paged_attn, paged_attn_gpu_mem, paged_attn_gpu_mem_usage, paged_ctxt_len, paged_attn_block_size, paged_cache_type) =
-        extract_paged_attn_settings(&model_type);
+    let (
+        paged_attn,
+        paged_attn_gpu_mem,
+        paged_attn_gpu_mem_usage,
+        paged_ctxt_len,
+        paged_attn_block_size,
+        paged_cache_type,
+    ) = extract_paged_attn_settings(&model_type);
     let (cpu, device_layers) = extract_device_settings(&model_type);
     let isq = extract_isq_setting(&model_type);
 
@@ -47,8 +53,18 @@ pub async fn run_interactive(
         .with_enable_search(runtime.enable_search)
         .with_seed_optional(global.seed)
         .with_log_optional(global.log.as_ref().map(|p| p.to_string_lossy().to_string()))
-        .with_chat_template_optional(runtime.chat_template.as_ref().map(|p| p.to_string_lossy().to_string()))
-        .with_jinja_explicit_optional(runtime.jinja_explicit.as_ref().map(|p| p.to_string_lossy().to_string()))
+        .with_chat_template_optional(
+            runtime
+                .chat_template
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+        )
+        .with_jinja_explicit_optional(
+            runtime
+                .jinja_explicit
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+        )
         .with_num_device_layers_optional(device_layers)
         .with_in_situ_quant_optional(isq)
         .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)

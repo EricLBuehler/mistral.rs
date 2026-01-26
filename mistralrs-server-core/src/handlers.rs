@@ -3,8 +3,8 @@
 use anyhow::Result;
 use axum::extract::{Json, State};
 use mistralrs_core::{
-    auto_tune, collect_system_info, parse_isq_value, run_doctor, AutoTuneRequest, AutoTuneResult,
-    AutoDeviceMapParams, ModelDType, ModelSelected, MistralRs, MistralRsError,
+    auto_tune, collect_system_info, parse_isq_value, run_doctor, AutoDeviceMapParams,
+    AutoTuneRequest, AutoTuneResult, MistralRs, MistralRsError, ModelDType, ModelSelected,
     ModelStatus as CoreModelStatus, Request, TokenSource, TuneProfile,
 };
 use serde::{Deserialize, Serialize};
@@ -319,7 +319,9 @@ pub struct TuneModelRequest {
     pub cpu: Option<bool>,
 }
 
-pub async fn tune_model(Json(request): Json<TuneModelRequest>) -> Result<Json<AutoTuneResult>, String> {
+pub async fn tune_model(
+    Json(request): Json<TuneModelRequest>,
+) -> Result<Json<AutoTuneResult>, String> {
     let token_source = match request.token_source {
         Some(value) => value
             .parse()
@@ -362,10 +364,9 @@ pub async fn tune_model(Json(request): Json<TuneModelRequest>) -> Result<Json<Au
     };
 
     let requested_isq = match request.requested_isq {
-        Some(value) => Some(
-            parse_isq_value(&value, None)
-                .map_err(|err| format!("Invalid isq value: {err}"))?,
-        ),
+        Some(value) => {
+            Some(parse_isq_value(&value, None).map_err(|err| format!("Invalid isq value: {err}"))?)
+        }
         None => None,
     };
 

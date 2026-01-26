@@ -86,7 +86,10 @@ async fn stream_and_forward<Msgs>(
 where
     Msgs: mistralrs::RequestLike + Send + 'static,
 {
-    match model.stream_chat_request_with_model(msgs, Some(model_id)).await {
+    match model
+        .stream_chat_request_with_model(msgs, Some(model_id))
+        .await
+    {
         Ok(mut stream) => {
             let mut assistant_reply = String::new();
             while let Some(chunk) = stream.next().await {
@@ -296,20 +299,15 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             } else {
                 vision_msgs = vision_msgs.add_message(TextMessageRole::User, content.clone());
             }
-            let mut builder = apply_gen_params(vision_msgs.clone().into(), &gen_params, &app.default_params);
+            let mut builder =
+                apply_gen_params(vision_msgs.clone().into(), &gen_params, &app.default_params);
             if app.search_enabled {
                 if let Some(opts) = web_search_opts {
                     builder = builder.with_web_search_options(opts);
                 }
             }
 
-            let reply = stream_and_forward(
-                &app.model,
-                builder,
-                &mut socket,
-                &model_id,
-            )
-            .await;
+            let reply = stream_and_forward(&app.model, builder, &mut socket, &model_id).await;
             match reply {
                 Ok(text) => {
                     if !text.is_empty() {
@@ -326,19 +324,14 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             }
         } else {
             text_msgs = text_msgs.add_message(TextMessageRole::User, content.clone());
-            let mut builder = apply_gen_params(text_msgs.clone().into(), &gen_params, &app.default_params);
+            let mut builder =
+                apply_gen_params(text_msgs.clone().into(), &gen_params, &app.default_params);
             if app.search_enabled {
                 if let Some(opts) = web_search_opts {
                     builder = builder.with_web_search_options(opts);
                 }
             }
-            let reply = stream_and_forward(
-                &app.model,
-                builder,
-                &mut socket,
-                &model_id,
-            )
-            .await;
+            let reply = stream_and_forward(&app.model, builder, &mut socket, &model_id).await;
             match reply {
                 Ok(text) => {
                     if !text.is_empty() {

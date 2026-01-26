@@ -11,12 +11,11 @@ use mistralrs_server_core::{
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
 };
 
-use crate::ui::build_ui_router;
 use crate::args::{
-    AdapterOptions, DeviceOptions, FormatOptions, GlobalOptions, ModelFormat,
-    ModelSourceOptions, ModelType, QuantizationOptions, RuntimeOptions,
-    ServerOptions,
+    AdapterOptions, DeviceOptions, FormatOptions, GlobalOptions, ModelFormat, ModelSourceOptions,
+    ModelType, QuantizationOptions, RuntimeOptions, ServerOptions,
 };
+use crate::ui::build_ui_router;
 
 /// Run the HTTP server with the specified model
 pub async fn run_server(
@@ -31,8 +30,14 @@ pub async fn run_server(
     let model_selected = convert_to_model_selected(&model_type)?;
 
     // Extract paged attention settings
-    let (paged_attn, paged_attn_gpu_mem, paged_attn_gpu_mem_usage, paged_ctxt_len, paged_attn_block_size, paged_cache_type) =
-        extract_paged_attn_settings(&model_type);
+    let (
+        paged_attn,
+        paged_attn_gpu_mem,
+        paged_attn_gpu_mem_usage,
+        paged_ctxt_len,
+        paged_attn_block_size,
+        paged_cache_type,
+    ) = extract_paged_attn_settings(&model_type);
 
     // Extract device settings
     let (cpu, device_layers) = extract_device_settings(&model_type);
@@ -53,8 +58,18 @@ pub async fn run_server(
         .with_enable_search(runtime.enable_search)
         .with_seed_optional(global.seed)
         .with_log_optional(global.log.as_ref().map(|p| p.to_string_lossy().to_string()))
-        .with_chat_template_optional(runtime.chat_template.as_ref().map(|p| p.to_string_lossy().to_string()))
-        .with_jinja_explicit_optional(runtime.jinja_explicit.as_ref().map(|p| p.to_string_lossy().to_string()))
+        .with_chat_template_optional(
+            runtime
+                .chat_template
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+        )
+        .with_jinja_explicit_optional(
+            runtime
+                .jinja_explicit
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+        )
         .with_num_device_layers_optional(device_layers)
         .with_in_situ_quant_optional(isq)
         .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)
@@ -86,7 +101,8 @@ pub async fn run_server(
         app = app.nest("/ui", ui_router);
     }
 
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
+    let listener =
+        tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
 
     info!("Server listening on http://{}:{}", server.host, server.port);
 
@@ -110,9 +126,15 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
             // Use Run (auto-loader) for auto mode
             Ok(ModelSelected::Run {
                 model_id: model.model_id.clone(),
-                tokenizer_json: model.tokenizer.as_ref().map(|p| p.to_string_lossy().to_string()),
+                tokenizer_json: model
+                    .tokenizer
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
                 dtype: model.dtype,
-                topology: device.topology.as_ref().map(|p| p.to_string_lossy().to_string()),
+                topology: device
+                    .topology
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
                 organization: quantization.isq_organization,
                 write_uqff: None,
                 from_uqff: quantization.from_uqff.clone(),
@@ -136,9 +158,7 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
             quantization,
             device,
             cache: _,
-        } => {
-            convert_text_model(model, format, adapter, quantization, device)
-        }
+        } => convert_text_model(model, format, adapter, quantization, device),
 
         ModelType::Vision {
             model,
@@ -148,44 +168,44 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
             device,
             cache: _,
             vision,
-        } => {
-            Ok(ModelSelected::VisionPlain {
-                model_id: model.model_id.clone(),
-                tokenizer_json: model.tokenizer.as_ref().map(|p| p.to_string_lossy().to_string()),
-                arch: None,
-                dtype: model.dtype,
-                topology: device.topology.as_ref().map(|p| p.to_string_lossy().to_string()),
-                write_uqff: None,
-                from_uqff: quantization.from_uqff.clone(),
-                max_edge: vision.max_edge,
-                calibration_file: quantization.calibration_file.clone(),
-                imatrix: quantization.imatrix.clone(),
-                max_seq_len: device.max_seq_len,
-                max_batch_size: device.max_batch_size,
-                max_num_images: vision.max_num_images.unwrap_or(1),
-                max_image_length: vision.max_image_length.unwrap_or(1024),
-                hf_cache_path: device.hf_cache.clone(),
-                matformer_config_path: None,
-                matformer_slice_name: None,
-            })
-        }
+        } => Ok(ModelSelected::VisionPlain {
+            model_id: model.model_id.clone(),
+            tokenizer_json: model
+                .tokenizer
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            arch: None,
+            dtype: model.dtype,
+            topology: device
+                .topology
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            write_uqff: None,
+            from_uqff: quantization.from_uqff.clone(),
+            max_edge: vision.max_edge,
+            calibration_file: quantization.calibration_file.clone(),
+            imatrix: quantization.imatrix.clone(),
+            max_seq_len: device.max_seq_len,
+            max_batch_size: device.max_batch_size,
+            max_num_images: vision.max_num_images.unwrap_or(1),
+            max_image_length: vision.max_image_length.unwrap_or(1024),
+            hf_cache_path: device.hf_cache.clone(),
+            matformer_config_path: None,
+            matformer_slice_name: None,
+        }),
 
-        ModelType::Diffusion { model, device: _ } => {
-            Ok(ModelSelected::DiffusionPlain {
-                model_id: model.model_id.clone(),
-                arch: DiffusionLoaderType::Flux,
-                dtype: model.dtype,
-            })
-        }
+        ModelType::Diffusion { model, device: _ } => Ok(ModelSelected::DiffusionPlain {
+            model_id: model.model_id.clone(),
+            arch: DiffusionLoaderType::Flux,
+            dtype: model.dtype,
+        }),
 
-        ModelType::Speech { model, device: _ } => {
-            Ok(ModelSelected::Speech {
-                model_id: model.model_id.clone(),
-                dac_model_id: None,
-                arch: SpeechLoaderType::Dia,
-                dtype: model.dtype,
-            })
-        }
+        ModelType::Speech { model, device: _ } => Ok(ModelSelected::Speech {
+            model_id: model.model_id.clone(),
+            dac_model_id: None,
+            arch: SpeechLoaderType::Dia,
+            dtype: model.dtype,
+        }),
 
         ModelType::Embedding {
             model,
@@ -193,24 +213,26 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
             quantization,
             device,
             cache: _,
-        } => {
-            Ok(ModelSelected::Embedding {
-                model_id: model.model_id.clone(),
-                tokenizer_json: model.tokenizer.as_ref().map(|p| p.to_string_lossy().to_string()),
-                arch: None,
-                dtype: model.dtype,
-                topology: device.topology.as_ref().map(|p| p.to_string_lossy().to_string()),
-                write_uqff: None,
-                from_uqff: quantization.from_uqff.clone(),
-                hf_cache_path: device.hf_cache.clone(),
-            })
-        }
+        } => Ok(ModelSelected::Embedding {
+            model_id: model.model_id.clone(),
+            tokenizer_json: model
+                .tokenizer
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            arch: None,
+            dtype: model.dtype,
+            topology: device
+                .topology
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            write_uqff: None,
+            from_uqff: quantization.from_uqff.clone(),
+            hf_cache_path: device.hf_cache.clone(),
+        }),
 
-        ModelType::Config { config } => {
-            Ok(ModelSelected::Toml {
-                file: config.to_string_lossy().to_string(),
-            })
-        }
+        ModelType::Config { config } => Ok(ModelSelected::Toml {
+            file: config.to_string_lossy().to_string(),
+        }),
     }
 }
 
@@ -230,10 +252,16 @@ fn convert_text_model(
         // Plain format
         (ModelFormat::Plain, false, false) => Ok(ModelSelected::Plain {
             model_id: model.model_id.clone(),
-            tokenizer_json: model.tokenizer.as_ref().map(|p| p.to_string_lossy().to_string()),
+            tokenizer_json: model
+                .tokenizer
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             arch: model.arch.clone(),
             dtype: model.dtype,
-            topology: device.topology.as_ref().map(|p| p.to_string_lossy().to_string()),
+            topology: device
+                .topology
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             organization: quantization.isq_organization,
             write_uqff: None,
             from_uqff: quantization.from_uqff.clone(),
@@ -248,11 +276,17 @@ fn convert_text_model(
 
         (ModelFormat::Plain, true, false) => Ok(ModelSelected::Lora {
             model_id: Some(model.model_id.clone()),
-            tokenizer_json: model.tokenizer.as_ref().map(|p| p.to_string_lossy().to_string()),
+            tokenizer_json: model
+                .tokenizer
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             adapter_model_id: adapter.lora.clone().unwrap_or_default(),
             arch: model.arch.clone(),
             dtype: model.dtype,
-            topology: device.topology.as_ref().map(|p| p.to_string_lossy().to_string()),
+            topology: device
+                .topology
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             write_uqff: None,
             from_uqff: quantization.from_uqff.clone(),
             max_seq_len: device.max_seq_len,
@@ -262,13 +296,23 @@ fn convert_text_model(
 
         (ModelFormat::Plain, false, true) => Ok(ModelSelected::XLora {
             model_id: Some(model.model_id.clone()),
-            tokenizer_json: model.tokenizer.as_ref().map(|p| p.to_string_lossy().to_string()),
+            tokenizer_json: model
+                .tokenizer
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             xlora_model_id: adapter.xlora.clone().unwrap_or_default(),
-            order: adapter.xlora_order.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+            order: adapter
+                .xlora_order
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
             tgt_non_granular_index: adapter.tgt_non_granular_index,
             arch: model.arch.clone(),
             dtype: model.dtype,
-            topology: device.topology.as_ref().map(|p| p.to_string_lossy().to_string()),
+            topology: device
+                .topology
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             write_uqff: None,
             from_uqff: quantization.from_uqff.clone(),
             max_seq_len: device.max_seq_len,
@@ -282,7 +326,10 @@ fn convert_text_model(
             quantized_model_id: model.model_id.clone(),
             quantized_filename: format_opts.quantized_file.clone().unwrap_or_default(),
             dtype: model.dtype,
-            topology: device.topology.as_ref().map(|p| p.to_string_lossy().to_string()),
+            topology: device
+                .topology
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             max_seq_len: device.max_seq_len,
             max_batch_size: device.max_batch_size,
         }),
@@ -292,9 +339,16 @@ fn convert_text_model(
             quantized_model_id: model.model_id.clone(),
             quantized_filename: format_opts.quantized_file.clone().unwrap_or_default(),
             adapters_model_id: adapter.lora.clone().unwrap_or_default(),
-            order: adapter.xlora_order.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+            order: adapter
+                .xlora_order
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
             dtype: model.dtype,
-            topology: device.topology.as_ref().map(|p| p.to_string_lossy().to_string()),
+            topology: device
+                .topology
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             max_seq_len: device.max_seq_len,
             max_batch_size: device.max_batch_size,
         }),
@@ -304,52 +358,98 @@ fn convert_text_model(
             quantized_model_id: model.model_id.clone(),
             quantized_filename: format_opts.quantized_file.clone().unwrap_or_default(),
             xlora_model_id: adapter.xlora.clone().unwrap_or_default(),
-            order: adapter.xlora_order.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+            order: adapter
+                .xlora_order
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
             tgt_non_granular_index: adapter.tgt_non_granular_index,
             dtype: model.dtype,
-            topology: device.topology.as_ref().map(|p| p.to_string_lossy().to_string()),
+            topology: device
+                .topology
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             max_seq_len: device.max_seq_len,
             max_batch_size: device.max_batch_size,
         }),
 
         // GGML format
         (ModelFormat::Ggml, false, false) => Ok(ModelSelected::GGML {
-            tok_model_id: format_opts.tok_model_id.clone().unwrap_or_else(|| model.model_id.clone()),
-            tokenizer_json: model.tokenizer.as_ref().map(|p| p.to_string_lossy().to_string()),
+            tok_model_id: format_opts
+                .tok_model_id
+                .clone()
+                .unwrap_or_else(|| model.model_id.clone()),
+            tokenizer_json: model
+                .tokenizer
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             quantized_model_id: model.model_id.clone(),
             quantized_filename: format_opts.quantized_file.clone().unwrap_or_default(),
             gqa: format_opts.gqa,
             dtype: model.dtype,
-            topology: device.topology.as_ref().map(|p| p.to_string_lossy().to_string()),
+            topology: device
+                .topology
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             max_seq_len: device.max_seq_len,
             max_batch_size: device.max_batch_size,
         }),
 
         (ModelFormat::Ggml, true, false) => Ok(ModelSelected::LoraGGML {
-            tok_model_id: Some(format_opts.tok_model_id.clone().unwrap_or_else(|| model.model_id.clone())),
-            tokenizer_json: model.tokenizer.as_ref().map(|p| p.to_string_lossy().to_string()),
+            tok_model_id: Some(
+                format_opts
+                    .tok_model_id
+                    .clone()
+                    .unwrap_or_else(|| model.model_id.clone()),
+            ),
+            tokenizer_json: model
+                .tokenizer
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             quantized_model_id: model.model_id.clone(),
             quantized_filename: format_opts.quantized_file.clone().unwrap_or_default(),
             adapters_model_id: adapter.lora.clone().unwrap_or_default(),
-            order: adapter.xlora_order.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+            order: adapter
+                .xlora_order
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
             gqa: format_opts.gqa,
             dtype: model.dtype,
-            topology: device.topology.as_ref().map(|p| p.to_string_lossy().to_string()),
+            topology: device
+                .topology
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             max_seq_len: device.max_seq_len,
             max_batch_size: device.max_batch_size,
         }),
 
         (ModelFormat::Ggml, false, true) => Ok(ModelSelected::XLoraGGML {
-            tok_model_id: Some(format_opts.tok_model_id.clone().unwrap_or_else(|| model.model_id.clone())),
-            tokenizer_json: model.tokenizer.as_ref().map(|p| p.to_string_lossy().to_string()),
+            tok_model_id: Some(
+                format_opts
+                    .tok_model_id
+                    .clone()
+                    .unwrap_or_else(|| model.model_id.clone()),
+            ),
+            tokenizer_json: model
+                .tokenizer
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             quantized_model_id: model.model_id.clone(),
             quantized_filename: format_opts.quantized_file.clone().unwrap_or_default(),
             xlora_model_id: adapter.xlora.clone().unwrap_or_default(),
-            order: adapter.xlora_order.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+            order: adapter
+                .xlora_order
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
             tgt_non_granular_index: adapter.tgt_non_granular_index,
             gqa: format_opts.gqa,
             dtype: model.dtype,
-            topology: device.topology.as_ref().map(|p| p.to_string_lossy().to_string()),
+            topology: device
+                .topology
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             max_seq_len: device.max_seq_len,
             max_batch_size: device.max_batch_size,
         }),
@@ -358,7 +458,9 @@ fn convert_text_model(
     }
 }
 
-pub(crate) fn extract_paged_attn_settings(model_type: &ModelType) -> (
+pub(crate) fn extract_paged_attn_settings(
+    model_type: &ModelType,
+) -> (
     Option<bool>,
     Option<usize>,
     Option<f32>,

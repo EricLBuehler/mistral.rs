@@ -5,14 +5,14 @@ use tracing::info;
 
 use mistralrs_core::initialize_logging;
 use mistralrs_server_core::{
-    mistralrs_for_server_builder::{ModelConfig, MistralRsForServerBuilder},
+    mistralrs_for_server_builder::{MistralRsForServerBuilder, ModelConfig},
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
 };
 
 use crate::commands::run::interactive_mode;
 use crate::commands::serve::convert_to_model_selected;
-use crate::ui::build_ui_router;
 use crate::config::{load_cli_config, CliConfig};
+use crate::ui::build_ui_router;
 
 /// Execute the CLI using a TOML configuration file.
 pub async fn run_from_config(path: std::path::PathBuf) -> Result<()> {
@@ -38,8 +38,14 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
 
     let global = global.to_global_options()?;
 
-    let (paged_attn, paged_attn_gpu_mem, paged_attn_gpu_mem_usage, paged_ctxt_len, paged_attn_block_size, paged_cache_type) =
-        paged_attn.into_builder_flags();
+    let (
+        paged_attn,
+        paged_attn_gpu_mem,
+        paged_attn_gpu_mem_usage,
+        paged_ctxt_len,
+        paged_attn_block_size,
+        paged_cache_type,
+    ) = paged_attn.into_builder_flags();
 
     let (model_configs, cpu) = build_model_configs(&models)?;
 
@@ -54,8 +60,18 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         .with_enable_search(runtime.enable_search)
         .with_seed_optional(global.seed)
         .with_log_optional(global.log.as_ref().map(|p| p.to_string_lossy().to_string()))
-        .with_chat_template_optional(runtime.chat_template.as_ref().map(|p| p.to_string_lossy().to_string()))
-        .with_jinja_explicit_optional(runtime.jinja_explicit.as_ref().map(|p| p.to_string_lossy().to_string()))
+        .with_chat_template_optional(
+            runtime
+                .chat_template
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+        )
+        .with_jinja_explicit_optional(
+            runtime
+                .jinja_explicit
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+        )
         .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)
         .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
         .with_paged_ctxt_len_optional(paged_ctxt_len)
@@ -92,7 +108,8 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         app = app.nest("/ui", ui_router);
     }
 
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
+    let listener =
+        tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
 
     info!("Server listening on http://{}:{}", server.host, server.port);
 
@@ -112,8 +129,14 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
 
     let global = global.to_global_options()?;
 
-    let (paged_attn, paged_attn_gpu_mem, paged_attn_gpu_mem_usage, paged_ctxt_len, paged_attn_block_size, paged_cache_type) =
-        paged_attn.into_builder_flags();
+    let (
+        paged_attn,
+        paged_attn_gpu_mem,
+        paged_attn_gpu_mem_usage,
+        paged_ctxt_len,
+        paged_attn_block_size,
+        paged_cache_type,
+    ) = paged_attn.into_builder_flags();
 
     let (model_configs, cpu) = build_model_configs(&models)?;
 
@@ -128,8 +151,18 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         .with_enable_search(runtime.enable_search)
         .with_seed_optional(global.seed)
         .with_log_optional(global.log.as_ref().map(|p| p.to_string_lossy().to_string()))
-        .with_chat_template_optional(runtime.chat_template.as_ref().map(|p| p.to_string_lossy().to_string()))
-        .with_jinja_explicit_optional(runtime.jinja_explicit.as_ref().map(|p| p.to_string_lossy().to_string()))
+        .with_chat_template_optional(
+            runtime
+                .chat_template
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+        )
+        .with_jinja_explicit_optional(
+            runtime
+                .jinja_explicit
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+        )
         .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)
         .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
         .with_paged_ctxt_len_optional(paged_ctxt_len)
