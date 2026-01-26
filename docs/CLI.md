@@ -184,13 +184,13 @@ Quantization Options
 ┌─────────────┬───────────┬────────┬──────────────┬───────────────┬──────────────────┐
 │ Quant       │ Est. Size │ VRAM % │ Context Room │ Quality       │ Status           │
 ├─────────────┼───────────┼────────┼──────────────┼───────────────┼──────────────────┤
-│ None (FP16) │ 8.50 GB   │ 35%    │ ~48k tokens  │ Baseline      │ ✅ Fits          │
-│ Q8_0        │ 4.50 GB   │ 19%    │ ~96k tokens  │ Near-lossless │ 🚀 Recommended   │
-│ Q6K         │ 3.70 GB   │ 15%    │ ~112k tokens │ Good          │ ✅ Fits          │
-│ Q5K         │ 3.20 GB   │ 13%    │ ~120k tokens │ Good          │ ✅ Fits          │
-│ Q4K         │ 2.60 GB   │ 11%    │ ~128k tokens │ Acceptable    │ ✅ Fits          │
-│ Q3K         │ 2.00 GB   │ 8%     │ ~136k tokens │ Degraded      │ ✅ Fits          │
-│ Q2K         │ 1.50 GB   │ 6%     │ ~142k tokens │ Degraded      │ ✅ Fits          │
+│ None (FP16) │ 8.50 GB   │ 35%    │ 48k tokens  │ Baseline      │ ✅ Fits          │
+│ Q8_0        │ 4.50 GB   │ 19%    │ 96k tokens  │ Near-lossless │ 🚀 Recommended   │
+│ Q6K         │ 3.70 GB   │ 15%    │ 112k tokens │ Good          │ ✅ Fits          │
+│ Q5K         │ 3.20 GB   │ 13%    │ 120k tokens │ Good          │ ✅ Fits          │
+│ Q4K         │ 2.60 GB   │ 11%    │ 128k tokens │ Acceptable    │ ✅ Fits          │
+│ Q3K         │ 2.00 GB   │ 8%     │ 136k tokens │ Degraded      │ ✅ Fits          │
+│ Q2K         │ 1.50 GB   │ 6%     │ 142k tokens │ Degraded      │ ✅ Fits          │
 └─────────────┴───────────┴────────┴──────────────┴───────────────┴──────────────────┘
 
 [INFO] At Q8_0 quantization, you can run ~5 concurrent instances
@@ -212,12 +212,12 @@ Quantization Options
 ┌─────────────┬───────────┬────────┬──────────────┬───────────────┬──────────────────┐
 │ Quant       │ Est. Size │ VRAM % │ Context Room │ Quality       │ Status           │
 ├─────────────┼───────────┼────────┼──────────────┼───────────────┼──────────────────┤
-│ None (FP16) │ 8.50 GB   │ 53%    │ ~24k tokens  │ Baseline      │ ✅ Fits          │
-│ AFQ8        │ 4.50 GB   │ 28%    │ ~56k tokens  │ Near-lossless │ 🚀 Recommended   │
-│ AFQ6        │ 3.70 GB   │ 23%    │ ~64k tokens  │ Good          │ ✅ Fits          │
-│ AFQ4        │ 2.60 GB   │ 16%    │ ~76k tokens  │ Acceptable    │ ✅ Fits          │
-│ AFQ3        │ 2.00 GB   │ 13%    │ ~82k tokens  │ Degraded      │ ✅ Fits          │
-│ AFQ2        │ 1.50 GB   │ 9%     │ ~88k tokens  │ Degraded      │ ✅ Fits          │
+│ None (FP16) │ 8.50 GB   │ 53%    │ 24k tokens  │ Baseline      │ ✅ Fits          │
+│ AFQ8        │ 4.50 GB   │ 28%    │ 56k tokens  │ Near-lossless │ 🚀 Recommended   │
+│ AFQ6        │ 3.70 GB   │ 23%    │ 64k tokens  │ Good          │ ✅ Fits          │
+│ AFQ4        │ 2.60 GB   │ 16%    │ 76k tokens  │ Acceptable    │ ✅ Fits          │
+│ AFQ3        │ 2.00 GB   │ 13%    │ 82k tokens  │ Degraded      │ ✅ Fits          │
+│ AFQ2        │ 1.50 GB   │ 9%     │ 88k tokens  │ Degraded      │ ✅ Fits          │
 └─────────────┴───────────┴────────┴──────────────┴───────────────┴──────────────────┘
 ```
 
@@ -255,60 +255,11 @@ mistralrs doctor
 mistralrs doctor --json
 ```
 
-**Example Output:**
-
-```
-Environment Diagnosis
----------------------
-[INFO] OS: Ubuntu 22.04 (Linux 6.5.0-44-generic)
-[INFO] CPU: AMD Ryzen 9 7950X (32 cores, extensions: AVX, AVX2, FMA, AVX-512)
-[INFO] RAM: 64.0 GB total, 58.2 GB available
-
-Accelerator Check
------------------
-[INFO] CUDA[0]: 24.0 GB total, 22.1 GB free - Compute 8.9 (✓ Flash Attn)
-[INFO] CUDA: nvcc 12.2, driver 535.129.03
-
-Mistral.rs Installation
------------------------
-[INFO] Git revision: abc1234
-[INFO] Build features: cuda, cudnn, flash-attn
-
-System Checks
--------------
-[PASS] ✓ CPU extensions: AVX2 and FMA available (optimal for GGML)
-[PASS] ✓ Binary/hardware match: CUDA feature enabled and GPU detected
-[PASS] ✓ Hugging Face: Connected (125ms), token valid for gated models
-[PASS] ✓ HF cache directory: Writable
-[PASS] ✓ Disk space: 245.3 GB available
-
-Summary
--------
-✓ Your system is healthy. Ready to infer! 🚀
-```
-
-**Example with Warnings:**
-
-```
-System Checks
--------------
-[PASS] ✓ CPU extensions: AVX2 and FMA available (optimal for GGML)
-[WARN] ⚠ Binary/hardware mismatch: NVIDIA GPU detected but binary compiled without CUDA
-       hint: Reinstall with: cargo install --features cuda
-[WARN] ⚠ Hugging Face: Connected but token invalid/missing (gated models will fail)
-       hint: Run `huggingface-cli login` to authenticate
-[PASS] ✓ HF cache directory: Writable
-[PASS] ✓ Disk space: 245.3 GB available
-
-Summary
--------
-⚠ 2 warning(s) found. System is functional but may have issues.
-```
-
 **Checks Performed:**
-- **CPU Extensions**: AVX, AVX2, AVX-512, FMA support
+- **CPU Extensions**: AVX, AVX2, AVX-512, FMA support (x86 only; ARM shows NEON)
 - **Binary/Hardware Match**: Validates CUDA/Metal features match detected hardware
-- **GPU Compute Capability**: Reports compute version and Flash Attention compatibility
+- **GPU Compute Capability**: Reports compute version and Flash Attention v2/v3 compatibility
+- **Flash Attention Features**: Warns if hardware supports FA but binary doesn't have it enabled
 - **Hugging Face Connectivity**: Tests connection and token validity using a gated model
 - **HF Cache**: Verifies cache directory is writable
 - **Disk Space**: Checks available storage

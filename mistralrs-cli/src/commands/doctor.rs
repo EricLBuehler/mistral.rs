@@ -77,14 +77,19 @@ pub fn run_doctor(json: bool) -> Result<()> {
                 .map(|v| format!("{:.1} GB", v as f64 / 1e9))
                 .unwrap_or_else(|| "unknown".to_string());
 
-            // Include compute capability if available
+            // Include compute capability and flash attention status if available
             let cc_str = if let Some((major, minor)) = dev.compute_capability {
-                let fa_status = if dev.flash_attn_compatible == Some(true) {
-                    "Compatibile with Flash Attn"
+                let fa_v2 = if dev.flash_attn_compatible == Some(true) {
+                    "✅"
                 } else {
-                    "Incompatible with Flash Attn"
+                    "❌"
                 };
-                format!(" - Compute {major}.{minor} ({fa_status})")
+                let fa_v3 = if dev.flash_attn_v3_compatible == Some(true) {
+                    "✅"
+                } else {
+                    "❌"
+                };
+                format!(" - Compute {major}.{minor} (FA v2: {fa_v2}, v3: {fa_v3})")
             } else {
                 String::new()
             };
@@ -150,14 +155,14 @@ pub fn run_doctor(json: bool) -> Result<()> {
 
     for check in &report.checks {
         let (status_str, emoji) = match check.status {
-            DoctorStatus::Ok => ("PASS", "✓"),
+            DoctorStatus::Ok => ("PASS", "✅"),
             DoctorStatus::Warn => {
                 warn_count += 1;
-                ("WARN", "⚠")
+                ("WARN", "⚠️")
             }
             DoctorStatus::Error => {
                 error_count += 1;
-                ("ERROR", "✗")
+                ("ERROR", "❌")
             }
         };
         println!("[{status_str}] {emoji} {}", check.message);
@@ -172,16 +177,16 @@ pub fn run_doctor(json: bool) -> Result<()> {
     println!("-------");
     if error_count > 0 {
         println!(
-            "✗ {} error(s) found. Please address the issues above.",
+            "❌ {} error(s) found. Please address the issues above.",
             error_count
         );
     } else if warn_count > 0 {
         println!(
-            "⚠ {} warning(s) found. System is functional but may have issues.",
+            "⚠️ {} warning(s) found. System is functional but may have issues.",
             warn_count
         );
     } else {
-        println!("✓ Your system is healthy. Ready to infer! 🚀");
+        println!("✅ Your system is healthy. Ready to infer! 🚀");
     }
     println!();
 

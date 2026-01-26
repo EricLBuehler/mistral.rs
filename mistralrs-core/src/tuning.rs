@@ -74,7 +74,7 @@ pub struct TuneCandidate {
     pub estimated_size_bytes: u64,
     /// VRAM usage as percentage (0.0 - 1.0)
     pub vram_usage_percent: f32,
-    /// Estimated max context length
+    /// Maximum context length that fits (model-specific calculation)
     pub max_context_tokens: usize,
     /// Quality tier
     pub quality: QualityTier,
@@ -399,22 +399,42 @@ fn available_vram(devices: &[Device]) -> u64 {
         .sum::<usize>() as u64
 }
 
-/// Estimate context room based on remaining VRAM after model weights
-/// Returns estimated max tokens (rough calculation)
+/// Calculate the maximum context length that fits in remaining VRAM
+/// Uses the model's actual KV cache configuration from ModelConfigLike
 #[allow(clippy::cast_possible_truncation)]
-fn estimate_context_room(
+fn calculate_max_context(
+    loader: &dyn DeviceMappedModelLoader,
+    config: &str,
     model_size_bytes: u64,
     available_vram_bytes: u64,
-    hidden_size: usize,
-) -> usize {
+    dtype: DType,
+) -> Result<usize> {
+    let model_cfg = loader.model_config(config)?;
+    let native_max_seq_len = model_cfg.max_seq_len();
+
     if model_size_bytes >= available_vram_bytes {
-        return 0;
+        return Ok(0);
     }
-    let remaining = available_vram_bytes - model_size_bytes;
-    // Rough estimate: KV cache per token ~= 2 * hidden_size * num_layers * 2 bytes (for FP16)
-    // We use a simplified estimate: ~4 bytes per hidden dim per token
-    let bytes_per_token = (hidden_size * 4).max(1024); // minimum 1KB per token
-    (remaining as usize) / bytes_per_token
+
+    let remaining_bytes = available_vram_bytes - model_size_bytes;
+
+    // KV cache elements per token (from ModelConfigLike trait)
+    // This accounts for num_kv_heads, k_head_dim, v_head_dim correctly
+    let kv_elems_per_token = model_cfg.kv_cache_elements_per_token();
+    let num_layers = model_cfg.num_layers();
+
+    // Total KV cache bytes per token = elements * dtype_size * num_layers
+    let dtype_size = dtype.size_in_bytes();
+    let kv_bytes_per_token = kv_elems_per_token * dtype_size * num_layers;
+
+    if kv_bytes_per_token == 0 {
+        return Ok(native_max_seq_len);
+    }
+
+    let calculated_max = remaining_bytes as usize / kv_bytes_per_token;
+
+    // Return the minimum of calculated max and model's native max
+    Ok(calculated_max.min(native_max_seq_len))
 }
 
 fn map_for_candidate(
@@ -442,19 +462,6 @@ fn map_for_candidate(
         None,
     )?;
     Ok((map, total))
-}
-
-/// Extract hidden_size from config JSON
-fn get_hidden_size(config: &str) -> usize {
-    #[derive(Deserialize)]
-    struct ConfigHidden {
-        hidden_size: Option<usize>,
-        d_model: Option<usize>,
-    }
-    serde_json::from_str::<ConfigHidden>(config)
-        .ok()
-        .and_then(|c| c.hidden_size.or(c.d_model))
-        .unwrap_or(4096)
 }
 
 #[allow(
@@ -538,7 +545,6 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
     // Get total VRAM for calculations
     let total_vram_bytes = total_vram(&devices);
     let avail_vram_bytes = available_vram(&devices);
-    let hidden_size = get_hidden_size(&config);
 
     // Evaluate ALL candidates
     let all_isq_candidates = all_candidates(backend);
@@ -581,7 +587,9 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
             1.0
         };
 
-        let context_room = estimate_context_room(estimated_size, avail_vram_bytes, hidden_size);
+        let context_room =
+            calculate_max_context(loader, &config, estimated_size, avail_vram_bytes, dtype)
+                .unwrap_or(0);
 
         let concurrent = if total_vram_bytes > 0 && estimated_size > 0 {
             ((total_vram_bytes as f64) / (estimated_size as f64)).floor() as usize

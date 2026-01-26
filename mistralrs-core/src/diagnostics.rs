@@ -37,9 +37,12 @@ pub struct DeviceInfo {
     /// CUDA compute capability (major, minor) - None for non-CUDA devices
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compute_capability: Option<(u32, u32)>,
-    /// Whether this GPU supports Flash Attention (compute capability >= 7.5)
+    /// Whether this GPU supports Flash Attention v2 (compute capability >= 7.5)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flash_attn_compatible: Option<bool>,
+    /// Whether this GPU supports Flash Attention v3 (compute capability == 9.0, Hopper only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flash_attn_v3_compatible: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,6 +132,7 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
         available_memory_bytes: Some(sys.available_memory()),
         compute_capability: None,
         flash_attn_compatible: None,
+        flash_attn_v3_compatible: None,
     });
 
     #[cfg(feature = "cuda")]
@@ -145,9 +149,13 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
 
                     // Get compute capability
                     let compute_cap = get_cuda_compute_capability(ord);
-                    let flash_attn_ok = compute_cap.map(|(major, minor)| {
-                        // Flash Attention requires compute capability >= 7.5 (Turing+)
+                    let flash_attn_v2_ok = compute_cap.map(|(major, minor)| {
+                        // Flash Attention v2 requires compute capability >= 7.5 (Turing+)
                         major > 7 || (major == 7 && minor >= 5)
+                    });
+                    let flash_attn_v3_ok = compute_cap.map(|(major, minor)| {
+                        // Flash Attention v3 requires compute capability == 9.0 (Hopper only)
+                        major == 9 && minor == 0
                     });
 
                     devices.push(DeviceInfo {
@@ -157,7 +165,8 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
                         total_memory_bytes: total,
                         available_memory_bytes: avail,
                         compute_capability: compute_cap,
-                        flash_attn_compatible: flash_attn_ok,
+                        flash_attn_compatible: flash_attn_v2_ok,
+                        flash_attn_v3_compatible: flash_attn_v3_ok,
                     });
                     ord += 1;
                 }
@@ -184,6 +193,7 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
                     available_memory_bytes: avail,
                     compute_capability: None,
                     flash_attn_compatible: Some(true), // Metal always supports flash attention
+                    flash_attn_v3_compatible: None,    // Flash Attn v3 is CUDA Hopper only
                 });
             }
         }
@@ -352,43 +362,56 @@ pub fn run_doctor() -> DoctorReport {
     let system = collect_system_info();
     let mut checks = Vec::new();
 
-    // CPU extensions check
+    // CPU extensions check (ARM-aware)
     {
-        let mut extensions = Vec::new();
-        if system.cpu.avx {
-            extensions.push("AVX");
-        }
-        if system.cpu.avx2 {
-            extensions.push("AVX2");
-        }
-        if system.cpu.fma {
-            extensions.push("FMA");
-        }
-        if system.cpu.avx512 {
-            extensions.push("AVX-512");
-        }
+        let is_arm = cfg!(any(target_arch = "aarch64", target_arch = "arm"));
 
-        let has_avx2 = system.cpu.avx2;
-        let ext_str = if extensions.is_empty() {
-            "none detected".to_string()
+        if is_arm {
+            // ARM CPUs use NEON, not AVX - no warning needed
+            checks.push(DoctorCheck {
+                name: "cpu_extensions".to_string(),
+                status: DoctorStatus::Ok,
+                message: "CPU: ARM architecture (uses NEON)".to_string(),
+                suggestion: None,
+            });
         } else {
-            extensions.join(", ")
-        };
+            // x86/x86_64 - check for AVX extensions
+            let mut extensions = Vec::new();
+            if system.cpu.avx {
+                extensions.push("AVX");
+            }
+            if system.cpu.avx2 {
+                extensions.push("AVX2");
+            }
+            if system.cpu.fma {
+                extensions.push("FMA");
+            }
+            if system.cpu.avx512 {
+                extensions.push("AVX-512");
+            }
 
-        checks.push(DoctorCheck {
-            name: "cpu_extensions".to_string(),
-            status: if has_avx2 {
-                DoctorStatus::Ok
+            let has_avx2 = system.cpu.avx2;
+            let ext_str = if extensions.is_empty() {
+                "none detected".to_string()
             } else {
-                DoctorStatus::Warn
-            },
-            message: format!("CPU extensions: {ext_str}"),
-            suggestion: if !has_avx2 {
-                Some("AVX2 is recommended for optimal performance.".to_string())
-            } else {
-                None
-            },
-        });
+                extensions.join(", ")
+            };
+
+            checks.push(DoctorCheck {
+                name: "cpu_extensions".to_string(),
+                status: if has_avx2 {
+                    DoctorStatus::Ok
+                } else {
+                    DoctorStatus::Warn
+                },
+                message: format!("CPU extensions: {ext_str}"),
+                suggestion: if !has_avx2 {
+                    Some("AVX2 is recommended for optimal GGML performance on x86.".to_string())
+                } else {
+                    None
+                },
+            });
+        }
     }
 
     // Binary vs hardware mismatch check
@@ -424,37 +447,61 @@ pub fn run_doctor() -> DoctorReport {
         }
     }
 
-    // CUDA compute capability + Flash Attention check
+    // CUDA compute capability + Flash Attention v2/v3 check
     #[cfg(feature = "cuda")]
     {
         for dev in system.devices.iter().filter(|d| d.kind == "cuda") {
-            if let (Some(ord), Some((major, minor)), Some(fa_ok)) = (
-                dev.ordinal,
-                dev.compute_capability,
-                dev.flash_attn_compatible,
-            ) {
-                let fa_status = if fa_ok {
-                    "Flash Attention compatible"
+            if let (Some(ord), Some((major, minor))) = (dev.ordinal, dev.compute_capability) {
+                let fa_v2_ok = dev.flash_attn_compatible.unwrap_or(false);
+                let fa_v3_ok = dev.flash_attn_v3_compatible.unwrap_or(false);
+
+                // Build status strings with emojis
+                let fa_v2_str = if fa_v2_ok { "✅" } else { "❌" };
+                let fa_v3_str = if fa_v3_ok {
+                    "✅"
                 } else {
-                    "Flash Attention requires compute >= 7.5"
+                    "❌ (requires Hopper/Compute 9.0)"
                 };
+
                 checks.push(DoctorCheck {
                     name: format!("cuda_{}_compute", ord),
-                    status: if fa_ok || !system.build.flash_attn {
-                        DoctorStatus::Ok
-                    } else {
-                        DoctorStatus::Warn
-                    },
+                    status: DoctorStatus::Ok,
                     message: format!(
-                        "GPU {}: compute capability {}.{} - {fa_status}",
-                        ord, major, minor
+                        "GPU {}: compute {}.{} - Flash Attn v2 {}, v3 {}",
+                        ord, major, minor, fa_v2_str, fa_v3_str
                     ),
-                    suggestion: if !fa_ok && system.build.flash_attn {
-                        Some("Flash Attention will be disabled for this GPU.".to_string())
-                    } else {
-                        None
-                    },
+                    suggestion: None,
                 });
+
+                // Warn if hardware supports flash attn v2 but binary doesn't have it
+                if fa_v2_ok && !system.build.flash_attn {
+                    checks.push(DoctorCheck {
+                        name: format!("cuda_{}_flash_attn_v2_missing", ord),
+                        status: DoctorStatus::Warn,
+                        message: format!(
+                            "GPU {} supports Flash Attention v2 but binary compiled without it.",
+                            ord
+                        ),
+                        suggestion: Some(
+                            "Reinstall with: cargo install --features flash-attn".to_string(),
+                        ),
+                    });
+                }
+
+                // Warn if hardware supports flash attn v3 but binary doesn't have it
+                if fa_v3_ok && !system.build.flash_attn_v3 {
+                    checks.push(DoctorCheck {
+                        name: format!("cuda_{}_flash_attn_v3_missing", ord),
+                        status: DoctorStatus::Warn,
+                        message: format!(
+                            "GPU {} supports Flash Attention v3 but binary compiled without it.",
+                            ord
+                        ),
+                        suggestion: Some(
+                            "Reinstall with: cargo install --features flash-attn-v3".to_string(),
+                        ),
+                    });
+                }
             }
         }
     }
