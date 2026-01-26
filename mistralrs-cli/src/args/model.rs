@@ -8,7 +8,7 @@ use std::path::PathBuf;
 /// Model source options
 #[derive(Args, Clone, Deserialize)]
 pub struct ModelSourceOptions {
-    /// Model ID to load (HuggingFace repo or local path)
+    /// HuggingFace model ID or local path to model directory
     #[arg(short = 'm', long)]
     pub model_id: String,
 
