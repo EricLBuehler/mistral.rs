@@ -903,5 +903,7 @@ For vision models, you can include images in your prompts by specifying file pat
 > Describe the image and transcribe the audio: photo.jpg recording.mp3
 ```
 
+**Note**: The CLI automatically detects paths to supported image and audio files within your prompt. You do not need special syntax; simply paste the absolute or relative path to the file.
+
 Supported image formats: PNG, JPEG, BMP, GIF, WebP
 Supported audio formats: WAV, MP3, FLAC, OGG
