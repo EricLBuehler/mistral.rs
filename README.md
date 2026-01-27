@@ -81,15 +81,27 @@ mistralrs doctor
   <img src="./res/chat.gif" alt="Web Chat UI Demo" />
 </details>
 
-## Features
+## What Makes It Fast
 
-| Category | Highlights |
-|----------|------------|
-| **APIs** | [OpenAI-compatible HTTP](docs/HTTP.md), [Python](mistralrs-pyo3/API.md), [Rust](https://ericlbuehler.github.io/mistral.rs/mistralrs/), [MCP server](docs/MCP/server.md) |
-| **Performance** | CUDA + [FlashAttention](docs/FLASH_ATTENTION.md), Metal, [multi-GPU](docs/DISTRIBUTED/DISTRIBUTED.md), [PagedAttention](docs/PAGED_ATTENTION.md) |
-| **Quantization** | [ISQ](docs/ISQ.md), [GGUF](docs/QUANTS.md), GPTQ, AWQ, HQQ, FP8, [per-layer control](docs/TOPOLOGY.md) |
-| **Adapters** | [LoRA/X-LoRA](docs/ADAPTER_MODELS.md), [AnyMoE](docs/ANYMOE.md), weight merging |
-| **Agentic** | [Tool calling](docs/TOOL_CALLING.md), [web search](docs/WEB_SEARCH.md), [MCP client](docs/MCP/README.md) |
+**Performance**
+- CUDA with [FlashAttention](docs/FLASH_ATTENTION.md) V2/V3, Metal, [multi-GPU tensor parallelism](docs/DISTRIBUTED/DISTRIBUTED.md)
+- [PagedAttention](docs/PAGED_ATTENTION.md) for high throughput, prefix caching (including multimodal)
+
+**Quantization** ([full docs](docs/QUANTS.md))
+- [In-situ quantization (ISQ)](docs/ISQ.md) of any Hugging Face model
+- GGUF (2-8 bit), GPTQ, AWQ, HQQ, FP8, BNB support
+- ⭐ [Per-layer topology](docs/TOPOLOGY.md): Fine-tune quantization per layer for optimal quality/speed
+- ⭐ Auto-select fastest quant method for your hardware
+
+**Flexibility**
+- [LoRA & X-LoRA](docs/ADAPTER_MODELS.md) with weight merging
+- [AnyMoE](docs/ANYMOE.md): Create mixture-of-experts on any base model
+- [Multiple models](docs/multi_model/README.md): Load/unload at runtime
+
+**Agentic Features**
+- Integrated [tool calling](docs/TOOL_CALLING.md) with Python/Rust callbacks
+- ⭐ [Web search integration](docs/WEB_SEARCH.md)
+- ⭐ [MCP client](docs/MCP/README.md): Connect to external tools automatically
 
 [Full feature documentation](docs/README.md)
 
