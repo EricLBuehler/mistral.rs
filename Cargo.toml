@@ -20,7 +20,7 @@ resolver = "2"
 [workspace.package]
 version = "0.7.0"
 edition = "2021"
-description = "Fast and easy LLM serving."
+description = "Blazingly fast LLM inference."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
 repository = "https://github.com/EricLBuehler/mistral.rs"
 keywords = ["machine-learning"]

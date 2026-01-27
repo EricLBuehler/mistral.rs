@@ -41,7 +41,7 @@ print_banner() {
     echo " | |  | | \\__ \\ |_| | | (_| | |_| |  \\__ \\  "
     echo " |_|  |_|_|___/\\__|_|  \\__,_|_(_)_|  |___/  "
     echo ""
-    printf "${NC}${BLUE}Blazing fast LLM inference engine${NC}\n"
+    printf "${NC}${BLUE}Blazingly fast LLM inference.${NC}\n"
     echo ""
 }
 

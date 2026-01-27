@@ -19,7 +19,7 @@ function Show-Banner {
     Write-Host " | |  | | \__ \ |_| | | (_| | |_| |  \__ \  " -ForegroundColor Cyan
     Write-Host " |_|  |_|_|___/\__|_|  \__,_|_(_)_|  |___/  " -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "Blazing fast LLM inference engine" -ForegroundColor Blue
+    Write-Host "Blazingly fast LLM inference." -ForegroundColor Blue
     Write-Host ""
 }
 
