@@ -15,8 +15,6 @@ use pyo3::pyclass;
 use regex::Regex;
 use serde::Deserialize;
 
-use tracing::info;
-
 use super::{ModelPaths, NormalLoadingMetadata};
 use crate::{
     api_dir_list, api_get_file,

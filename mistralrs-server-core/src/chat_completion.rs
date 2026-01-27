@@ -412,36 +412,37 @@ pub async fn parse_request(
 
                         // Apply prefixer to text content if this is a vision model with images/audio
                         // This matches the behavior of interactive mode which auto-inserts media tokens
-                        let text_content =
-                            if !image_urls_iter.is_empty() || !audio_urls_iter.is_empty() {
-                                if let Ok(ModelCategory::Vision { prefixer }) =
-                                    state.get_model_category(None)
-                                {
-                                    let mut prefixed = text_content;
+                        let text_content = if !image_urls_iter.is_empty()
+                            || !audio_urls_iter.is_empty()
+                        {
+                            if let Ok(ModelCategory::Vision { prefixer }) =
+                                state.get_model_category(None)
+                            {
+                                let mut prefixed = text_content;
 
-                                    // Apply image prefixer
-                                    if !image_urls_iter.is_empty() {
-                                        let start_idx = image_urls.len();
-                                        let image_indices: Vec<usize> =
-                                            (start_idx..start_idx + image_urls_iter.len()).collect();
-                                        prefixed = prefixer.prefix_image(image_indices, &prefixed);
-                                    }
-
-                                    // Apply audio prefixer
-                                    if !audio_urls_iter.is_empty() {
-                                        let start_idx = audio_urls.len();
-                                        let audio_indices: Vec<usize> =
-                                            (start_idx..start_idx + audio_urls_iter.len()).collect();
-                                        prefixed = prefixer.prefix_audio(audio_indices, &prefixed);
-                                    }
-
-                                    prefixed
-                                } else {
-                                    text_content
+                                // Apply image prefixer
+                                if !image_urls_iter.is_empty() {
+                                    let start_idx = image_urls.len();
+                                    let image_indices: Vec<usize> =
+                                        (start_idx..start_idx + image_urls_iter.len()).collect();
+                                    prefixed = prefixer.prefix_image(image_indices, &prefixed);
                                 }
+
+                                // Apply audio prefixer
+                                if !audio_urls_iter.is_empty() {
+                                    let start_idx = audio_urls.len();
+                                    let audio_indices: Vec<usize> =
+                                        (start_idx..start_idx + audio_urls_iter.len()).collect();
+                                    prefixed = prefixer.prefix_audio(audio_indices, &prefixed);
+                                }
+
+                                prefixed
                             } else {
                                 text_content
-                            };
+                            }
+                        } else {
+                            text_content
+                        };
 
                         let mut message_map: IndexMap<
                             String,

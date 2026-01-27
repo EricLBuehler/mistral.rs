@@ -1,106 +1,21 @@
 #[doc(hidden)]
 #[macro_export]
 macro_rules! api_dir_list {
-    ($api:expr, $model_id:expr, $should_panic:expr) => {
-        if std::path::Path::new($model_id).exists() {
-            let listing = std::fs::read_dir($model_id);
-            if listing.is_err() {
-                panic!("Cannot list directory {:?}", $model_id)
-            }
-            let listing = listing.unwrap();
-            listing
-                .into_iter()
-                .map(|s| {
-                    s.unwrap()
-                        .path()
-                        .file_name()
-                        .unwrap() // Should never terminate in `..`
-                        .to_str()
-                        .expect("Could not convert to str")
-                        .to_string()
-                })
-                .collect::<Vec<String>>()
-                .into_iter()
-        } else {
-            let sanitized_id = std::path::Path::new($model_id)
-                .display()
-                .to_string()
-                .replace("/", "-");
-
-            let home_folder = if dirs::home_dir().is_some() {
-                let mut path = dirs::home_dir().unwrap();
-                path.push(".cache/huggingface/hub/");
-                if !path.exists() {
-                    let _ = std::fs::create_dir_all(&path);
-                }
-                path
-            } else {
-                "./".into()
-            };
-
-            let cache_dir: std::path::PathBuf = std::env::var("HF_HUB_CACHE")
-                .map(std::path::PathBuf::from)
-                .unwrap_or(home_folder.into());
-            let cache_file = cache_dir.join(format!("{sanitized_id}_repo_list.json"));
-            if std::path::Path::new(&cache_file).exists() {
-                use std::io::Read;
-                // Read from cache
-                let mut file = std::fs::File::open(&cache_file).expect("Could not open cache file");
-                let mut contents = String::new();
-                file.read_to_string(&mut contents)
-                    .expect("Could not read cache file");
-                let cache: $crate::pipeline::FileListCache =
-                    serde_json::from_str(&contents).expect("Could not parse cache JSON");
-                tracing::info!("Read from cache file {:?}", cache_file);
-                cache.files.into_iter()
-            } else {
-                $api.info()
-                    .map(|repo| {
-                        let files: Vec<String> = repo
-                            .siblings
-                            .iter()
-                            .map(|x| x.rfilename.clone())
-                            .collect::<Vec<String>>();
-                        // Save to cache
-                        let cache = $crate::pipeline::FileListCache {
-                            files: files.clone(),
-                        };
-                        let json = serde_json::to_string_pretty(&cache)
-                            .expect("Could not serialize cache");
-                        let ret = std::fs::write(&cache_file, json);
-                        tracing::info!("Write to cache file {:?}, {:?}", cache_file, ret);
-                        files
-                    })
-                    .unwrap_or_else(|e| {
-                        if $should_panic {
-                            panic!("Could not get directory listing from API: {:?}", e)
-                        } else {
-                            tracing::warn!("Could not get directory listing from API: {:?}", e);
-                            Vec::<String>::new()
-                        }
-                    })
-                    .into_iter()
-            }
-        }
-    };
+    ($api:expr, $model_id:expr, $should_panic:expr) => {{
+        let model_path = std::path::Path::new($model_id);
+        let files = $crate::pipeline::hf::list_repo_files(&$api, model_path, $should_panic)
+            .map_err(candle_core::Error::msg)?;
+        files.into_iter()
+    }};
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! api_get_file {
-    ($api:expr, $file:expr, $model_id:expr) => {
-        if std::path::Path::new($model_id).exists() {
-            let path = $model_id.join($file);
-            if !path.exists() {
-                panic!("File \"{}\" not found at model id {:?}", $file, $model_id)
-            }
-            info!("Loading `{}` locally at `{}`", &$file, path.display());
-            path
-        } else {
-            $api.get($file)
-                .unwrap_or_else(|e| panic!("Could not get file {:?} from API: {:?}", $file, e))
-        }
-    };
+    ($api:expr, $file:expr, $model_id:expr) => {{
+        let model_path = std::path::Path::new($model_id);
+        $crate::pipeline::hf::get_file(&$api, model_path, $file).map_err(candle_core::Error::msg)?
+    }};
 }
 
 #[doc(hidden)]

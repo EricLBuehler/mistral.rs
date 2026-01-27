@@ -1,3 +1,4 @@
+use super::hf::{hf_access_error, remote_issue_from_api_error, RemoteAccessIssue};
 use super::{
     DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoaderBuilder, EmbeddingLoaderType,
     EmbeddingSpecificConfig, Loader, ModelKind, ModelPaths, NormalLoaderBuilder, NormalLoaderType,
@@ -10,7 +11,7 @@ use crate::{DeviceMapSetting, IsqType, PagedAttentionConfig, Pipeline, TryIntoDT
 use anyhow::Result;
 use candle_core::Device;
 use hf_hub::{
-    api::sync::{ApiBuilder, ApiRepo},
+    api::sync::{ApiBuilder, ApiError, ApiRepo},
     Cache, Repo, RepoType,
 };
 use serde::Deserialize;
@@ -19,7 +20,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Automatically selects the appropriate loader based on repository/config metadata.
 pub struct AutoLoader {
@@ -180,6 +181,7 @@ struct ConfigArtifacts {
     contents: Option<String>,
     sentence_transformers_present: bool,
     repo_files: Vec<String>,
+    remote_access_issue: Option<RemoteAccessIssue>,
 }
 
 enum Detected {
@@ -191,17 +193,21 @@ enum Detected {
 }
 
 impl AutoLoader {
-    fn try_get_file(api: &ApiRepo, model_id: &Path, file: &str) -> Option<PathBuf> {
+    fn try_get_file(
+        api: &ApiRepo,
+        model_id: &Path,
+        file: &str,
+    ) -> std::result::Result<Option<PathBuf>, ApiError> {
         if model_id.exists() {
             let path = model_id.join(file);
             if path.exists() {
                 info!("Loading `{}` locally at `{}`", file, path.display());
-                Some(path)
+                Ok(Some(path))
             } else {
-                None
+                Ok(None)
             }
         } else {
-            api.get(file).ok()
+            api.get(file).map(Some)
         }
     }
 
@@ -251,6 +257,7 @@ impl AutoLoader {
             contents,
             sentence_transformers_present,
             repo_files,
+            remote_access_issue: None,
         })
     }
 
@@ -279,10 +286,19 @@ impl AutoLoader {
             revision,
         ));
         let model_id = Path::new(&self.model_id);
-        let config_filename = Self::try_get_file(&api, model_id, "config.json");
-        let contents = match config_filename {
-            Some(path) => Some(std::fs::read_to_string(&path)?),
-            None => None,
+        let mut remote_access_issue = None;
+        let contents = match Self::try_get_file(&api, model_id, "config.json") {
+            Ok(Some(path)) => Some(std::fs::read_to_string(&path)?),
+            Ok(None) => None,
+            Err(err) => {
+                let issue = remote_issue_from_api_error(model_id, Some("config.json"), &err);
+                warn!(
+                    "Auto loader could not fetch `config.json` for `{}`: {}",
+                    self.model_id, issue.message
+                );
+                remote_access_issue = Some(issue);
+                None
+            }
         };
         let sentence_transformers_present =
             model_id.join("config_sentence_transformers.json").exists()
@@ -296,6 +312,7 @@ impl AutoLoader {
             contents,
             sentence_transformers_present,
             repo_files,
+            remote_access_issue,
         })
     }
 
@@ -347,6 +364,11 @@ impl AutoLoader {
                     }
                 }
             }
+            if artifacts.contents.is_none() {
+                if let Some(issue) = artifacts.remote_access_issue.as_ref() {
+                    return Err(hf_access_error(Path::new(&self.model_id), issue));
+                }
+            }
             info!(
                 "Detected `config_sentence_transformers.json`; routing via auto embedding loader."
             );
@@ -354,9 +376,13 @@ impl AutoLoader {
         }
 
         let config = artifacts.contents.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Auto loader could not determine model type: missing `config.json` and no diffusion/speech markers found."
-            )
+            if let Some(issue) = artifacts.remote_access_issue.as_ref() {
+                hf_access_error(Path::new(&self.model_id), issue)
+            } else {
+                anyhow::anyhow!(
+                    "Auto loader could not determine model type: missing `config.json` and no diffusion/speech markers found."
+                )
+            }
         })?;
         let cfg: AutoConfig = serde_json::from_str(config)?;
         if cfg.architectures.len() != 1 {

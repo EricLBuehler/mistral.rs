@@ -503,6 +503,7 @@ impl Engine {
                             seq.prompt_tok_per_sec = prompt_tok_per_sec;
                             seq.prompt_timestamp = Some(now);
                             seq.total_prompt_time = Some(prompt_exec_time.as_millis());
+                            seq.step_start_instant = None;
                         }
                         last_completion_ids = vec![];
                     }
@@ -651,6 +652,7 @@ impl Engine {
                                     seq.prompt_tok_per_sec =
                                         seq.len() as f32 / duration.as_secs_f32();
                                     seq.total_prompt_time = Some(duration.as_millis());
+                                    seq.step_start_instant = None;
                                 }
                                 let now = SystemTime::now()
                                     .duration_since(UNIX_EPOCH)

@@ -1054,11 +1054,12 @@ impl Sequence {
             .expect("Time travel has occurred!")
             .as_millis();
 
-        // Calculate prompt time from Instant if available (more accurate)
-        let prompt_time_ms = if let Some(start) = self.step_start_instant {
-            start.elapsed().as_millis()
-        } else if let Some(pt) = self.total_prompt_time {
+        // Prefer the recorded prompt time so it doesn't grow during decode steps.
+        // Fall back to the in-flight Instant timing only while the prompt step is running.
+        let prompt_time_ms = if let Some(pt) = self.total_prompt_time {
             pt
+        } else if let Some(start) = self.step_start_instant {
+            start.elapsed().as_millis()
         } else {
             0
         };

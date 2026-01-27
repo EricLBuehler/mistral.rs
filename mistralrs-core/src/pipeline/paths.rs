@@ -92,7 +92,10 @@ pub fn get_xlora_paths(
             let xlora_classifier = xlora_classifier.first();
 
             let classifier_path = xlora_classifier
-                .map(|xlora_classifier| api_get_file!(api, xlora_classifier, model_id));
+                .map(|xlora_classifier| -> candle_core::Result<_> {
+                    Ok(api_get_file!(api, xlora_classifier, model_id))
+                })
+                .transpose()?;
 
             // Get the path for the xlora config by checking all for valid versions.
             // NOTE(EricLBuehler): Remove this functionality because all configs should be deserializable

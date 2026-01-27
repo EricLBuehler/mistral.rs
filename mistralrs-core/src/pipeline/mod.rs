@@ -5,6 +5,7 @@ mod diffusion;
 mod embedding;
 mod ggml;
 mod gguf;
+pub(crate) mod hf;
 mod inputs_processor;
 mod isq;
 pub(crate) mod llg;

@@ -332,7 +332,9 @@ async fn main() -> Result<()> {
 
     initialize_logging();
 
-    warn!("mistralrs-server is deprecated. Please use `mistralrs serve` from mistralrs-cli instead.");
+    warn!(
+        "mistralrs-server is deprecated. Please use `mistralrs serve` from mistralrs-cli instead."
+    );
 
     // Load MCP configuration if provided
     let mcp_config = load_mcp_config(args.mcp_config.as_deref())?;
