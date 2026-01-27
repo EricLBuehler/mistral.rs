@@ -68,6 +68,9 @@ mistralrs tune -m Qwen/Qwen3-4B --emit-config config.toml
 
 # Run using the generated config
 mistralrs from-config -f config.toml
+
+# Diagnose system issues (CUDA, Metal, HuggingFace connectivity)
+mistralrs doctor
 ```
 
 [Full CLI documentation](docs/CLI.md)
