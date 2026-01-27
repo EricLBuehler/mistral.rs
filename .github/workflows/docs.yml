@@ -59,10 +59,8 @@ jobs:
       # Combine all docs into deployment folder
       - name: Prepare deployment
         run: |
-          # Copy Rust docs to book output at /mistralrs/
+          # Copy Rust docs to book output
           cp -r target/doc/* ./docs/book/
-          # Create redirect for Rust docs index
-          echo '<meta http-equiv="refresh" content="0; url=mistralrs">' > ./docs/book/mistralrs/index.html
 
       - name: Deploy
         uses: JamesIves/github-pages-deploy-action@v4
