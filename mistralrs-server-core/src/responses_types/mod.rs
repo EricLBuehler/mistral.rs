@@ -1,7 +1,7 @@
 //! ## OpenResponses API types module.
 //!
 //! This module contains all the types required for the OpenResponses API specification.
-//! See: https://www.openresponses.org/
+//! See: <https://www.openresponses.org/>
 
 pub mod content;
 pub mod enums;

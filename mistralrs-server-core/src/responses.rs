@@ -1,7 +1,7 @@
 //! ## Responses API functionality and route handlers.
 //!
 //! This module implements the OpenResponses API specification.
-//! See: https://www.openresponses.org/
+//! See: <https://www.openresponses.org/>
 
 use std::{
     collections::HashMap,
