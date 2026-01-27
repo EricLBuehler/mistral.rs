@@ -138,7 +138,7 @@ Define one or more models. Each `[[models]]` entry creates a new model.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `cpu` | `false` | Force CPU-only (must be consistent across all models) |
-| `device_layers` | auto | Layer mapping, e.g., `["0:10", "1:20"]` |
+| `device_layers` | auto | Layer mapping, e.g., `["0:10", "1:20"]` format: `ORD:NUM;...` |
 | `topology` | none | Topology YAML file |
 | `hf_cache` | none | Custom HuggingFace cache directory |
 | `max_seq_len` | `4096` | Max sequence length for auto device mapping |
