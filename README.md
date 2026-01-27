@@ -14,7 +14,7 @@ Blazingly fast LLM inference.
 </h3>
 
 <p align="center">
-  | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust SDK</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/PYTHON_SDK.html"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
+  | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://docs.rs/mistralrs/"><b>Rust SDK</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/PYTHON_SDK.html"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
 </p>
 
 <p align="center">

@@ -482,7 +482,7 @@ fn get_clip_vit_num_elems(cfg: &ClipConfig) -> usize {
 
 /// [`VisionLoader`] for a Phi 3 Vision model.
 ///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
 pub struct Phi3VLoader;
 
 pub struct Phi3VPrefixer;
@@ -764,7 +764,7 @@ impl DeviceMappedModelLoader for Phi3VLoader {
 
 /// [`VisionLoader`] for an Idefics 2 Vision model.
 ///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
 pub struct Idefics2Loader;
 
 pub struct Idefics2Prefixer;
@@ -1115,7 +1115,7 @@ impl DeviceMappedModelLoader for Idefics2Loader {
 
 /// [`VisionLoader`] for an LLaVANext Vision model.
 ///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
 pub struct LLaVANextLoader;
 
 pub struct LLaVANextPrefixer;
@@ -1385,7 +1385,7 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
 
 /// [`VisionLoader`] for an LLaVA Vision model.
 ///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
 pub struct LLaVALoader;
 
 pub struct LLaVAPrefixer;
@@ -1647,7 +1647,7 @@ impl DeviceMappedModelLoader for LLaVALoader {
 
 /// [`VisionLoader`] for an Llama Vision model.
 ///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
 pub struct VLlamaLoader;
 
 pub struct VLlamaPrefixer;
@@ -2033,7 +2033,7 @@ impl DeviceMappedModelLoader for VLlamaLoader {
 
 /// [`VisionLoader`] for an Qwen2-VL model.
 ///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
 pub struct Qwen2VLLoader;
 
 pub struct Qwen2VLPrefixer;
@@ -2334,7 +2334,7 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
 
 /// [`VisionLoader`] for an Idefics 3 Vision model.
 ///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
 pub struct Idefics3Loader;
 
 pub struct Idefics3Prefixer;
@@ -2652,7 +2652,7 @@ impl DeviceMappedModelLoader for Idefics3Loader {
 
 /// [`VisionLoader`] for an MiniCpm-O model.
 ///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
 pub struct MiniCpmOLoader;
 
 pub struct MiniCpmOPrefixer;
@@ -2931,7 +2931,7 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
 
 /// [`VisionLoader`] for a Phi 4MM Vision model.
 ///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
 pub struct Phi4MMLoader;
 
 pub struct Phi4MMPrefixer;
@@ -3277,7 +3277,7 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
 
 /// [`VisionLoader`] for an Qwen2_5VL model.
 ///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
 pub struct Qwen2_5VLLoader;
 
 pub struct Qwen2_5VLPrefixer;
@@ -3573,7 +3573,7 @@ impl DeviceMappedModelLoader for Qwen2_5VLLoader {
 
 /// [`VisionLoader`] for an Gemma 3 model.
 ///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
 pub struct Gemma3Loader;
 
 pub struct Gemma3Prefixer;
@@ -3912,7 +3912,7 @@ impl DeviceMappedModelLoader for Gemma3Loader {
 
 /// [`VisionLoader`] for an Mistral 3 model.
 ///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
 pub struct Mistral3Loader;
 
 pub struct Mistral3Prefixer;
@@ -4237,7 +4237,7 @@ impl DeviceMappedModelLoader for Mistral3Loader {
 
 /// [`VisionLoader`] for an Llama Vision model.
 ///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
 pub struct VLlama4Loader;
 
 pub struct VLlama4Prefixer;
@@ -4641,7 +4641,7 @@ impl DeviceMappedModelLoader for VLlama4Loader {
 
 /// [`VisionLoader`] for an Gemma 3n model.
 ///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
 pub struct Gemma3nLoader;
 
 #[allow(dead_code)]
@@ -5516,7 +5516,7 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
 
 /// [`VisionLoader`] for an Qwen3VL model.
 ///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
 pub struct Qwen3VLLoader;
 
 pub struct Qwen3VLPrefixer;
@@ -5812,7 +5812,7 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
 
 /// [`VisionLoader`] for a Qwen3VLMoE model.
 ///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
 pub struct Qwen3VLMoELoader;
 
 pub struct Qwen3VLMoEPrefixer;

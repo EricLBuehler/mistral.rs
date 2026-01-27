@@ -22,7 +22,7 @@
 
 - [Python SDK](PYTHON_SDK.md) - Python package documentation
 - [Python Installation](PYTHON_INSTALLATION.md) - Python SDK installation guide
-- [Rust SDK](https://ericlbuehler.github.io/mistral.rs/mistralrs/) - Rust crate documentation
+- [Rust SDK](https://docs.rs/mistralrs/) - Rust crate documentation
 - [HTTP Server](HTTP.md) - OpenAI-compatible HTTP API
 - [OpenResponses API](OPENRESPONSES.md) - Stateful conversation API
 

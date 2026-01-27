@@ -373,7 +373,7 @@ impl DeviceMappedModelLoader for AutoEmbeddingLoader {
 
 /// [`EmbeddingModelLoader`] for an Embedding Gemma model.
 ///
-/// [`EmbeddingModelLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.EmbeddingModelLoader.html
+/// [`EmbeddingModelLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.EmbeddingModelLoader.html
 pub struct EmbeddingGemmaLoader;
 
 impl EmbeddingModelLoader for EmbeddingGemmaLoader {
@@ -563,7 +563,7 @@ impl DeviceMappedModelLoader for EmbeddingGemmaLoader {
 
 /// [`EmbeddingModelLoader`] for a Qwen 3 model.
 ///
-/// [`EmbeddingModelLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.EmbeddingModelLoader.html
+/// [`EmbeddingModelLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.EmbeddingModelLoader.html
 pub struct Qwen3EmbeddingLoader;
 
 impl EmbeddingModelLoader for Qwen3EmbeddingLoader {

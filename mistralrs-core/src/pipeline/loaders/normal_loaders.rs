@@ -631,7 +631,7 @@ impl DeviceMappedModelLoader for MistralLoader {
 
 /// [`NormalLoader`] for a Gemma model.
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct GemmaLoader;
 
 impl NormalModelLoader for GemmaLoader {
@@ -832,7 +832,7 @@ impl DeviceMappedModelLoader for GemmaLoader {
 
 /// [`NormalLoader`] for a Llama model.
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct LlamaLoader;
 
 impl NormalModelLoader for LlamaLoader {
@@ -1229,7 +1229,7 @@ impl DeviceMappedModelLoader for MixtralLoader {
 
 /// [`NormalLoader`] for a Phi 2 model.
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct Phi2Loader;
 
 impl NormalModelLoader for Phi2Loader {
@@ -1422,7 +1422,7 @@ impl DeviceMappedModelLoader for Phi2Loader {
 
 /// [`NormalLoader`] for a Phi 3 model.
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct Phi3Loader;
 
 impl NormalModelLoader for Phi3Loader {
@@ -1615,7 +1615,7 @@ impl DeviceMappedModelLoader for Phi3Loader {
 
 /// [`NormalLoader`] for a Qwen 2 model.
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct Qwen2Loader;
 
 impl NormalModelLoader for Qwen2Loader {
@@ -1803,7 +1803,7 @@ impl DeviceMappedModelLoader for Qwen2Loader {
 
 /// [`NormalLoader`] for a Gemma2 model.
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct Gemma2Loader;
 
 impl NormalModelLoader for Gemma2Loader {
@@ -2005,7 +2005,7 @@ impl DeviceMappedModelLoader for Gemma2Loader {
 
 /// [`NormalLoader`] for a Starcoder2 model.
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct Starcoder2Loader;
 
 impl NormalModelLoader for Starcoder2Loader {
@@ -2201,7 +2201,7 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
 
 /// [`NormalLoader`] for a Phi 3.5 MoE model.
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct Phi3_5MoELoader;
 
 impl NormalModelLoader for Phi3_5MoELoader {
@@ -2418,7 +2418,7 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
 
 /// [`NormalLoader`] for a DeepSeekV2 model.
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct DeepSeekV2Loader;
 
 impl NormalModelLoader for DeepSeekV2Loader {
@@ -2747,7 +2747,7 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
 
 /// [`NormalLoader`] for a DeepSeekV3 model.
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct DeepSeekV3Loader;
 
 impl NormalModelLoader for DeepSeekV3Loader {
@@ -3075,7 +3075,7 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
 
 /// [`NormalLoader`] for a Qwen 3 model.
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct Qwen3Loader;
 
 impl NormalModelLoader for Qwen3Loader {
@@ -3263,7 +3263,7 @@ impl DeviceMappedModelLoader for Qwen3Loader {
 
 /// [`NormalLoader`] for a GLM 4 model.
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct GLM4Loader;
 
 impl NormalModelLoader for GLM4Loader {
@@ -3446,7 +3446,7 @@ impl DeviceMappedModelLoader for GLM4Loader {
 
 /// [`NormalLoader`] for a GLM 4 MoE Lite model (GLM-4.7-Flash).
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct GLM4MoeLiteLoader;
 
 impl NormalModelLoader for GLM4MoeLiteLoader {
@@ -3771,7 +3771,7 @@ impl DeviceMappedModelLoader for GLM4MoeLiteLoader {
 
 /// [`NormalLoader`] for a GLM 4 MoE model (GLM-4.5).
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct GLM4MoeLoader;
 
 impl NormalModelLoader for GLM4MoeLoader {
@@ -4093,7 +4093,7 @@ impl DeviceMappedModelLoader for GLM4MoeLoader {
 
 /// [`NormalLoader`] for a Qwen 3 MoE model.
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct Qwen3MoELoader;
 
 impl NormalModelLoader for Qwen3MoELoader {
@@ -4307,7 +4307,7 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
 
 /// [`NormalLoader`] for a SmolLm3 model.
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct SmolLm3Loader;
 
 impl NormalModelLoader for SmolLm3Loader {
@@ -4493,7 +4493,7 @@ impl DeviceMappedModelLoader for SmolLm3Loader {
 
 /// [`NormalLoader`] for a GraniteMoeHybrid model (IBM Granite 4.0).
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct GraniteMoeHybridLoader;
 
 impl NormalModelLoader for GraniteMoeHybridLoader {
@@ -4677,7 +4677,7 @@ impl DeviceMappedModelLoader for GraniteMoeHybridLoader {
 
 /// [`NormalLoader`] for a GPT-OSS model.
 ///
-/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
 pub struct GptOssLoader;
 
 impl NormalModelLoader for GptOssLoader {
