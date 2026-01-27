@@ -10,7 +10,7 @@ build-dir = "book"
 
 [output.html]
 default-theme = "light"
-preferred-dark-theme = "coal"
+preferred-dark-theme = "ayu"
 git-repository-url = "https://github.com/EricLBuehler/mistral.rs"
 edit-url-template = "https://github.com/EricLBuehler/mistral.rs/edit/master/docs/{path}"
 site-url = "/mistral.rs/"
