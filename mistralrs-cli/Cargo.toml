@@ -60,3 +60,4 @@ flash-attn-v3 = ["cuda", "mistralrs-core/flash-attn-v3", "mistralrs-server-core/
 accelerate = ["mistralrs-core/accelerate", "mistralrs-server-core/accelerate"]
 metal = ["mistralrs-core/metal", "mistralrs-server-core/metal"]
 mkl = ["mistralrs-core/mkl", "mistralrs-server-core/mkl"]
+ring = ["mistralrs-core/ring", "mistralrs-server-core/ring"]
