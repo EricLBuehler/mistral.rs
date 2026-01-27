@@ -222,8 +222,9 @@ For complete documentation, see the **[Documentation Index](docs/README.md)**.
 - [HTTP API](docs/HTTP.md) - OpenAI-compatible endpoints
 - [Quantization](docs/QUANTS.md) - ISQ, GGUF, GPTQ, and more
 - [Device Mapping](docs/DEVICE_MAPPING.md) - Multi-GPU and CPU offloading
-- [MCP Integration](docs/MCP/README.md) - External tool connections
+- [MCP Integration](docs/MCP/README.md) - MCP integration documentation
 - [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
+- [Configuration](docs/CONFIGURATION.md) - Environment variables for configuration
 
 ## Contributing
 
