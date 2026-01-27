@@ -18,7 +18,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.7.0-alpha.1"
+version = "0.7.0-alpha.2"
 edition = "2021"
 description = "Blazingly fast LLM inference."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -180,15 +180,15 @@ hound = "3.5.1"
 apodize = "1.0.0"
 statrs = "0.18.0"
 
-mistralrs-core = { path = "mistralrs-core", version = "0.7.0-alpha.1" }
-mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.7.0-alpha.1" }
-mistralrs-quant = { path = "mistralrs-quant", version = "0.7.0-alpha.1" }
-mistralrs-vision = { path = "mistralrs-vision", version = "0.7.0-alpha.1" }
-mistralrs-server-core = { path = "mistralrs-server-core", version = "0.7.0-alpha.1" }
-mistralrs = { path = "mistralrs", version = "0.7.0-alpha.1" }
-mistralrs-audio = { path = "mistralrs-audio", version = "0.7.0-alpha.1" }
-mistralrs-mcp = { path = "mistralrs-mcp", version = "0.7.0-alpha.1" }
-mistralrs-macros = { path = "mistralrs-macros", version = "0.7.0-alpha.1" }
+mistralrs-core = { path = "mistralrs-core", version = "0.7.0-alpha.2" }
+mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.7.0-alpha.2" }
+mistralrs-quant = { path = "mistralrs-quant", version = "0.7.0-alpha.2" }
+mistralrs-vision = { path = "mistralrs-vision", version = "0.7.0-alpha.2" }
+mistralrs-server-core = { path = "mistralrs-server-core", version = "0.7.0-alpha.2" }
+mistralrs = { path = "mistralrs", version = "0.7.0-alpha.2" }
+mistralrs-audio = { path = "mistralrs-audio", version = "0.7.0-alpha.2" }
+mistralrs-mcp = { path = "mistralrs-mcp", version = "0.7.0-alpha.2" }
+mistralrs-macros = { path = "mistralrs-macros", version = "0.7.0-alpha.2" }
 
 [profile.release-with-debug]
 inherits = "release"
