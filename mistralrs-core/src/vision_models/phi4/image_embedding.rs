@@ -59,7 +59,7 @@ fn hole_size(el_count: usize, prod_d: usize, s: &dyn std::fmt::Debug) -> Result<
     if prod_d == 0 {
         candle_core::bail!("cannot reshape tensor of {el_count} elements to {s:?}")
     }
-    if el_count % prod_d != 0 {
+    if !el_count.is_multiple_of(prod_d) {
         candle_core::bail!("cannot reshape tensor with {el_count} elements to {s:?}")
     }
     Ok(el_count / prod_d)
@@ -134,7 +134,7 @@ impl ImageEmbedding {
         let (l, d) = pe_weight.dims2()?;
         let mut m = (l as f64).sqrt() as usize;
         assert_eq!(m.pow(2), l);
-        let img_processor_padding = if m % 2 != 0 {
+        let img_processor_padding = if !m.is_multiple_of(2) {
             m += 1;
             Some(ReflectionPad2d::new((0, 1, 0, 1)))
         } else {

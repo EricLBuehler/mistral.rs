@@ -710,7 +710,7 @@ impl DecoderLayer {
         )?;
         // Layer 0 uses dense MLP (first_k_dense_replace=1 by default), other layers use MoE
         let moe_or_mlp =
-            if layer_idx >= cfg.first_k_dense_replace && layer_idx % cfg.moe_layer_freq == 0 {
+            if layer_idx >= cfg.first_k_dense_replace && layer_idx.is_multiple_of(cfg.moe_layer_freq) {
                 MoeOrMlp::Moe(Box::new(Moe::new(
                     cfg,
                     vb.pp("mlp"),

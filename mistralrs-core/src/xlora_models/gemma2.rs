@@ -208,7 +208,7 @@ impl Attention {
             ord,
             preload_adapters,
         )?;
-        let sliding_window = if layer_idx % 2 == 0 {
+        let sliding_window = if layer_idx.is_multiple_of(2) {
             // ^ Order is SWA, global, SWA
             Some(cfg.sliding_window)
         } else {
@@ -223,7 +223,7 @@ impl Attention {
             num_kv_heads,
             head_dim,
             rotary_emb,
-            use_sliding_window: layer_idx % 2 == 0, // Order is SWA, global, SWA
+            use_sliding_window: layer_idx.is_multiple_of(2), // Order is SWA, global, SWA
             sliding_window,
             sdpa_params: SdpaParams {
                 n_kv_groups: num_heads / num_kv_heads,

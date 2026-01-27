@@ -132,7 +132,7 @@ impl Attention {
             comm,
             vb.pp("o_proj"),
         )?;
-        let sliding_window = if layer_idx % 2 == 0 {
+        let sliding_window = if layer_idx.is_multiple_of(2) {
             // ^ Order is SWA, global, SWA
             Some(cfg.sliding_window)
         } else {
@@ -147,7 +147,7 @@ impl Attention {
             num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
             head_dim,
             rotary_emb,
-            use_sliding_window: layer_idx % 2 == 0, // Order is SWA, global, SWA
+            use_sliding_window: layer_idx.is_multiple_of(2), // Order is SWA, global, SWA
             paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(
