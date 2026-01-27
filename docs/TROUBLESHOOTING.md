@@ -59,6 +59,13 @@ This checks your system configuration and reports any issues.
    sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
    ```
 
+**error: cannot execute tool 'metal' due to missing Metal toolchain**
+
+1. Install Metal Toolchain:
+   ```bash
+   xcodebuild -downloadComponent MetalToolchain
+   ```
+
 **Disabling Metal kernel precompilation:**
 - By default, Metal kernels are precompiled during build time for better performance
 - To skip precompilation (useful for CI or when Metal is not needed):

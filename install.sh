@@ -145,6 +145,43 @@ is_intel_cpu() {
     return 1
 }
 
+# Check/install Xcode Command Line Tools (macOS)
+check_xcode_cli_tools() {
+    if ! xcrun --version >/dev/null 2>&1; then
+        warn "Xcode Command Line Tools are not installed"
+        echo ""
+        printf "Would you like to install them now? [Y/n] "
+        read_input
+        case "$REPLY" in
+            [Nn]*)
+                error "Xcode Command Line Tools are required for Metal support"
+                ;;
+        esac
+        info "Installing Xcode Command Line Tools..."
+        xcode-select --install
+        echo "Please complete the installation in the dialog, then press Enter to continue..."
+        read_input
+        sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+    fi
+}
+
+# Check/install Metal Toolchain (macOS)
+check_metal_toolchain() {
+    if ! xcrun metal --version >/dev/null 2>&1; then
+        warn "Metal Toolchain is not installed"
+        echo ""
+        printf "Would you like to install it now? [Y/n] "
+        read_input
+        case "$REPLY" in
+            [Nn]*)
+                error "Metal Toolchain is required for Metal support"
+                ;;
+        esac
+        info "Installing Metal Toolchain..."
+        xcodebuild -downloadComponent MetalToolchain
+    fi
+}
+
 # Check if cuDNN is installed
 detect_cudnn() {
     # Check common cuDNN library paths
@@ -162,6 +199,8 @@ build_features() {
     features=""
 
     if [ "$os" = "macos" ]; then
+        check_xcode_cli_tools
+        check_metal_toolchain
         features="metal"
         info "macOS detected - enabling metal"
     else
