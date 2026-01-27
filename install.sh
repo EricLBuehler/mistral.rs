@@ -255,7 +255,7 @@ main() {
     echo ""
     echo "  mistralrs run -m Qwen/Qwen3-4B"
     echo ""
-    echo "  mistralrs serve --ui -m Qwen/Qwen3-4B"
+    echo "  mistralrs serve --ui -m google/gemma-3-4b-it"
     echo ""
     echo "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
     echo ""
