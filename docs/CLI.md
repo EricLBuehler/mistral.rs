@@ -7,7 +7,7 @@ This is the comprehensive CLI reference for `mistralrs`. The CLI provides comman
 - [Commands](#commands)
   - [run](#run---interactive-mode): run model in interactive mode
   - [serve](#serve---http-server): start HTTP/MCP server and (optionally) the UI
-  - [from-config](#from-config---toml-configuration): run from a TOML configuration file
+  - [from-config](#from-config---toml-configuration): run from a [TOML configuration file](CLI_CONFIG.md)
   - [quantize](#quantize---uqff-generation): generate UQFF quantized model file
   - [tune](#tune---recommendations): recommend quantization + device mapping for a model
   - [doctor](#doctor---system-diagnostics): run system diagnostics and environment checks
@@ -436,6 +436,8 @@ The `bench` command also accepts all model loading options (ISQ, device mapping,
 
 Run the CLI from a TOML configuration file. This is the recommended way to run multiple models simultaneously, including models of different types (e.g., text + vision + embedding).
 
+See [CLI_CONFIG.md](CLI_CONFIG.md) for full TOML configuration format details.
+
 ```bash
 mistralrs from-config --file <PATH>
 ```
@@ -467,8 +469,6 @@ model_id = "google/gemma-3-4b-it"
 kind = "embedding"
 model_id = "google/embeddinggemma-300m"
 ```
-
-See [CLI_CONFIG.md](CLI_CONFIG.md) for full TOML configuration format details.
 
 ---
 
