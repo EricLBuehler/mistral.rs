@@ -1,4 +1,0 @@
-[model]
-xlora_model_id = "lamm-mit/x-lora"
-order = "ordering-file.json"
-arch = "mistral"
