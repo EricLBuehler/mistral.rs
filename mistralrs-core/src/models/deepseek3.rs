@@ -992,7 +992,8 @@ impl DeepSeekV3 {
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        extract_logits(&self.lm_head.forward_autocast(&xs)?, context_lens)
+        let xs = extract_logits(&xs, context_lens)?;
+        self.lm_head.forward_autocast(&xs)
     }
 }
 

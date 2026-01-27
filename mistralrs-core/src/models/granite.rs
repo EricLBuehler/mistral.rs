@@ -1987,7 +1987,8 @@ impl GraniteMoeHybrid {
         }
 
         let x = x.to_device(&self.device)?;
-        let mut x = self.ln_f.forward(&x)?;
+        let x = self.ln_f.forward(&x)?;
+        let mut x = extract_logits(&x, context_lens)?;
 
         if let Some(t) = self.lm_head.quantized_act_type() {
             x = x.to_dtype(t)?;
@@ -1997,7 +1998,7 @@ impl GraniteMoeHybrid {
         // Scale logits
         logits = scale_tensor(logits, self.logits_scaling)?;
 
-        extract_logits(&logits, context_lens)
+        Ok(logits)
     }
 
     pub fn residual_tensors_m(&self, uvb_m: UnVarBuilder) -> Vec<(String, Tensor)> {

@@ -859,67 +859,49 @@ impl ModelWeights {
             )?;
 
             if no_kv_cache {
-                extract_logits(
-                    &self.output.lora_forward(
-                        &self
-                            .inner_forward(
-                                input_ids_full,
-                                seqlen_offsets_full,
-                                Some(scalings),
-                                true,
-                                no_kv_cache,
-                                None,
-                                flash_params_full,
-                            )?
-                            .contiguous()?,
+                let hidden = self
+                    .inner_forward(
+                        input_ids_full,
+                        seqlen_offsets_full,
+                        Some(scalings),
+                        true,
+                        no_kv_cache,
                         None,
-                        1.0,
-                        None,
-                    )?,
-                    context_lens,
-                )
+                        flash_params_full,
+                    )?
+                    .contiguous()?;
+                let hidden = extract_logits(&hidden, context_lens)?;
+                self.output.lora_forward(&hidden, None, 1.0, None)
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
-                extract_logits(
-                    &self.output.lora_forward(
-                        &self
-                            .inner_forward(
-                                input_ids,
-                                seqlen_offsets,
-                                Some(scalings),
-                                true,
-                                no_kv_cache,
-                                None,
-                                flash_params,
-                            )?
-                            .contiguous()?,
+                let hidden = self
+                    .inner_forward(
+                        input_ids,
+                        seqlen_offsets,
+                        Some(scalings),
+                        true,
+                        no_kv_cache,
                         None,
-                        1.0,
-                        None,
-                    )?,
-                    context_lens,
-                )
+                        flash_params,
+                    )?
+                    .contiguous()?;
+                let hidden = extract_logits(&hidden, context_lens)?;
+                self.output.lora_forward(&hidden, None, 1.0, None)
             }
         } else {
-            extract_logits(
-                &self.output.lora_forward(
-                    &self
-                        .inner_forward(
-                            input_ids,
-                            seqlen_offsets,
-                            None,
-                            false,
-                            no_kv_cache,
-                            None,
-                            flash_params,
-                        )?
-                        .contiguous()?,
+            let hidden = self
+                .inner_forward(
+                    input_ids,
+                    seqlen_offsets,
                     None,
-                    1.0,
+                    false,
+                    no_kv_cache,
                     None,
-                )?,
-                context_lens,
-            )
+                    flash_params,
+                )?
+                .contiguous()?;
+            let hidden = extract_logits(&hidden, context_lens)?;
+            self.output.lora_forward(&hidden, None, 1.0, None)
         }
     }
 }
