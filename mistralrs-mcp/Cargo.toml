@@ -9,7 +9,7 @@ homepage.workspace = true
 keywords = ["mcp", "model-context-protocol", "tools", "ai", "llm"]
 categories = ["api-bindings", "development-tools"]
 repository.workspace = true
-readme = "README.md"
+readme = "../README.md"
 
 [dependencies]
 anyhow.workspace = true

@@ -1,5 +1,7 @@
 [package]
 name = "mistralrs-cli"
+readme = "../README.md"
+authors = ["Eric Buehler"]
 version.workspace = true
 edition.workspace = true
 description = "Command-line interface for mistral.rs LLM inference"
