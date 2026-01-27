@@ -31,13 +31,13 @@ These parameters do not translate to hard limits during runtime, they only contr
     - Text models [text_auto_device_map/main.rs](../mistralrs/examples/text_auto_device_map/main.rs)
     - Vision models [vision_auto_device_map/main.rs](../mistralrs/examples/vision_auto_device_map/main.rs)
 - Server
-    - Text models: 
-    ```
-    ./mistralrs-server -i --isq 4 plain -m meta-llama/Llama-3.3-70B-Instruct --max-seq-len 4096 --max-batch-size 2
+    - Text models:
+    ```bash
+    mistralrs run --isq 4 -m meta-llama/Llama-3.3-70B-Instruct --max-seq-len 4096 --max-batch-size 2
     ```
     - Vision models:
-    ```
-    ./mistralrs-server -i --isq 4 vision-plain -m meta-llama/Llama-3.2-11B-Vision-Instruct --max-seq-len 4096 --max-batch-size 2 --max-num-images 2 --max-image-length 1024
+    ```bash
+    mistralrs run --isq 4 -m meta-llama/Llama-3.2-11B-Vision-Instruct --max-seq-len 4096 --max-batch-size 2 --max-num-images 2 --max-image-length 1024
     ```
 
 ---

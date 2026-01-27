@@ -106,8 +106,10 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     - 🔗 [**MCP Client**](examples/MCP_QUICK_START.md) - Connect to external tools automatically
 
 4) Try the **web chat app** for local in-browser conversation (text, vision, and speech support):
-    - Quickstart [here](mistralrs-web-chat/README.md)
-    - Run the server and visit [http://localhost:8080](http://localhost:8080) by default.
+    ```bash
+    mistralrs serve --ui -m Qwen/Qwen3-4B
+    ```
+    Then visit [http://localhost:8080/ui](http://localhost:8080/ui) in your browser.
 
 <br>
 
@@ -141,7 +143,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
     ```bash
     # HTTP API (OpenAI-compatible)
-    ./mistralrs-server --port 1234 run -m google/embeddinggemma-300m
+    mistralrs serve -p 1234 -m google/embeddinggemma-300m
 
     # Python API example
     python examples/python/embedding_gemma.py
@@ -150,7 +152,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     cargo run --package mistralrs --example embedding_gemma
 
     # Qwen3 Embedding server
-    ./mistralrs-server --port 1234 run -m Qwen/Qwen3-Embedding-0.6B
+    mistralrs serve -p 1234 -m Qwen/Qwen3-Embedding-0.6B
 
     # Qwen3 Embedding Python example
     python examples/python/qwen3_embedding.py
@@ -166,12 +168,12 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
     **Normal use, run the full model (E4B or E2B):**
     ```bash
-    ./mistralrs-server -i --isq 8 run -m google/gemma-3n-E4B-it
+    mistralrs run --isq 8 -m google/gemma-3n-E4B-it
     ```
 
     **Use [MatFormer](docs/GEMMA3N.md#using-matformer-with-gemma-3n) to get a balanced smaller model:**
     ```bash
-    ./mistralrs-server -i --isq 8 run -m google/gemma-3n-E4B-it \
+    mistralrs run --isq 8 -m google/gemma-3n-E4B-it \
       --matformer-config-path matformer_configs/gemma3n.csv \
       --matformer-slice-name "Config for E2.49B (block-level)"
     ```
@@ -182,7 +184,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     <summary>Show command</summary>
 
     ```bash
-    ./mistralrs-server -i --isq 8 run -m Qwen/Qwen3-VL-4B-Thinking
+    mistralrs run --isq 8 -m Qwen/Qwen3-VL-4B-Thinking
     ```
   </details>
   
@@ -193,12 +195,12 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
     **Default, easiest:**
     ```bash
-    ./mistralrs-server -i --isq 8 run -m HuggingFaceTB/SmolLM3-3B
+    mistralrs run --isq 8 -m HuggingFaceTB/SmolLM3-3B
     ```
 
     **UQFF prequantized:**
     ```bash
-    ./mistralrs-server -i run -m EricB/SmolLM3-3B-UQFF -f smollm33b-q4k-0.uqff
+    mistralrs run -m EricB/SmolLM3-3B-UQFF --from-uqff smollm33b-q4k-0.uqff
     ```
   </details>
 
@@ -207,7 +209,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     <summary>Show command</summary>
 
     ```bash
-    ./mistralrs-server -i speech -m nari-labs/Dia-1.6B -a dia
+    mistralrs run -m nari-labs/Dia-1.6B
     ```
   </details>
 
@@ -218,19 +220,19 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     **Llama 4:**
 
     ```bash
-    ./mistralrs-server -i --isq 4 run -m meta-llama/Llama-4-Scout-17B-16E-Instruct
+    mistralrs run --isq 4 -m meta-llama/Llama-4-Scout-17B-16E-Instruct
     ```
 
     **Llama 3.1/3.2/3.3:**
 
-    ```
-    ./mistralrs-server -i --isq 8 run -m meta-llama/Llama-3.2-3B-Instruct
+    ```bash
+    mistralrs run --isq 8 -m meta-llama/Llama-3.2-3B-Instruct
     ```
 
     **Llama 3.2 vision:**
 
-    ```
-    ./mistralrs-server -i --isq 8 run -m meta-llama/Llama-3.2-11B-Vision-Instruct
+    ```bash
+    mistralrs run --isq 8 -m meta-llama/Llama-3.2-11B-Vision-Instruct
     ```
 
   </details>
@@ -240,7 +242,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     <summary>Show command</summary>
 
     ```bash
-    ./mistralrs-server -i --isq 8 run -m google/gemma-3-4b-it
+    mistralrs run --isq 8 -m google/gemma-3-4b-it
     ```
   </details>
 
@@ -249,7 +251,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     <summary>Show command</summary>
 
     ```bash
-    ./mistralrs-server -i diffusion -m black-forest-labs/FLUX.1-schnell -a flux
+    mistralrs run -m black-forest-labs/FLUX.1-schnell
     ```
   </details>
 
@@ -258,7 +260,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     <summary>Show command</summary>
 
     ```bash
-    ./mistralrs-server -i --isq 8 run -m Qwen/Qwen3-8B
+    mistralrs run --isq 8 -m Qwen/Qwen3-8B
     ```
   </details>
 
@@ -283,7 +285,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
     **2. Start server with tools:**
     ```bash
-    ./mistralrs-server --mcp-config mcp-config.json --port 1234 run -m Qwen/Qwen3-4B
+    mistralrs serve --mcp-config mcp-config.json -p 1234 -m Qwen/Qwen3-4B
     ```
 
     **3. Tools work automatically:**
@@ -327,7 +329,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     **Optimize memory usage with mixed quantization (fits large models in limited VRAM):**
     ```bash
     # Use aggressive quantization on less important layers, preserve quality on critical ones
-    ./mistralrs-server -i --topology topologies/isq.yml run -m meta-llama/Llama-3.2-8B-Instruct
+    mistralrs run --topology topologies/isq.yml -m meta-llama/Llama-3.2-8B-Instruct
     ```
 
     **Example topology file (`topologies/isq.yml`):**
@@ -455,7 +457,7 @@ OpenAI API compatible API server
 Serve the same models over the open [MCP](docs/MCP/server.md) (Model Context Protocol) in parallel to the HTTP API:
 
 ```bash
-./mistralrs-server --mcp-port 4321 plain -m Qwen/Qwen3-4B
+mistralrs serve --mcp-port 4321 -m Qwen/Qwen3-4B
 ```
 
 See the [docs](docs/MCP/server.md) for feature flags, examples and limitations.
@@ -487,58 +489,85 @@ cargo build --release --features "cuda flash-attn cudnn"
 
 ## Installation and Build
 
+### Quick Install (Recommended)
+
+The install script automatically detects your hardware (CUDA, Metal, MKL) and builds with optimal features.
+
+**Linux/macOS:**
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
+```
+
+### Manual Installation
+
+<details>
+<summary>Click to expand manual installation steps</summary>
+
+#### Prerequisites
+
+1. Install required packages:
+   - OpenSSL: `sudo apt install libssl-dev` (Ubuntu)
+   - pkg-config (Linux only): `sudo apt install pkg-config`
+
+2. Install Rust from https://rustup.rs/
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   source $HOME/.cargo/env
+   ```
+
+3. (Optional) Set up HuggingFace authentication:
+   ```bash
+   mistralrs login
+   ```
+   Or use `huggingface-cli login` as documented [here](https://huggingface.co/docs/huggingface_hub/en/installation).
+
+#### Feature Detection
+
+Determine which features to enable based on your hardware:
+
+| Hardware | Features |
+|----------|----------|
+| NVIDIA GPU (Ampere+, compute >=80) | `cuda cudnn flash-attn` |
+| NVIDIA GPU (Hopper, compute 90) | `cuda cudnn flash-attn flash-attn-v3` |
+| NVIDIA GPU (older) | `cuda cudnn` |
+| Apple Silicon (macOS) | `metal accelerate` |
+| Intel CPU with MKL | `mkl` |
+| CPU only | (no features needed) |
+
+#### Install from crates.io
+
+```bash
+cargo install mistralrs-cli --features "<your-features>"
+```
+
+#### Build from Source
+
+```bash
+git clone https://github.com/EricLBuehler/mistral.rs.git
+cd mistral.rs
+cargo install --path mistralrs-cli --features "<your-features>"
+```
+
+</details>
+
+### Docker
+
 > Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
 > Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
+
+### Python Package
 
 - Install the [Python package here](mistralrs-pyo3/_README.md).
 - The Python package has [wheels on PyPi](mistralrs-pyo3/_README.md#installation-from-pypi)!
 
-1) Install required packages:
-    - `OpenSSL` (*Example on Ubuntu:* `sudo apt install libssl-dev`)
-    - <b>*Linux only:*</b> `pkg-config` (*Example on Ubuntu:* `sudo apt install pkg-config`)
+### After Installation
 
-2) Install Rust: https://rustup.rs/
-
-    *Example on Ubuntu:*
-    ```bash
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-    source $HOME/.cargo/env
-    ```
-
-3) <b>*Optional:*</b> Set HF token correctly (skip if already set or your model is not gated, or if you want to use the `token_source` parameters in Python or the command line.)
-    - Note: you can install `huggingface-cli` as documented [here](https://huggingface.co/docs/huggingface_hub/en/installation). 
-    ```bash
-    huggingface-cli login
-    ```
-
-4) Download the code:
-    ```bash
-    git clone https://github.com/EricLBuehler/mistral.rs.git
-    cd mistral.rs
-    ```
-
-5) Build or install `mistralrs-server`:
-    - Build the `mistralrs-server` binary, which can be found at `target/release/mistralrs-server`.
-        ```bash
-        cargo build --release --features <specify feature(s) here>
-        ```
-    - Install with `cargo install` for easy command line usage
-
-        Pass the same values to `--features` as you would for `cargo build`
-        ```bash
-        cargo install --path mistralrs-server --features <specify feature(s) here>
-        ```
-
-6) (*If you used `cargo build`*) The build process will output a binary `mistralrs-server` at `./target/release/mistralrs-server`. We can switch to that directory so that the binary can be accessed as `./mistralrs-server` with the following command:
-
-    *Example on Ubuntu:*
-    ```
-    cd target/release
-    ```
-
-7) Use our APIs and integrations: 
-    
-    [APIs and integrations list](#apis-and-integrations)
+Use our APIs and integrations: [APIs and integrations list](#apis-and-integrations)
 
 ## Getting models
 <details>
@@ -547,133 +576,144 @@ cargo build --release --features "cuda flash-attn cudnn"
 ### Getting models from Hugging Face Hub
 - **Default:** Downloads from Hugging Face Hub.
 - For gated models, you can optionally set token source:
-    - CLI: `./mistralrs-server --token-source env:HF_TOKEN ...`
+    - CLI: `mistralrs run --token-source env:HF_TOKEN -m <model>`
     - Python: See [examples/python/token_source.py](examples/python/token_source.py)
     - If no token is found, tries `~/.cache/huggingface/token` or runs with no token.
 
 ### Loading models from local files
 - Pass a path to a downloaded model from Hugging Face hub:
-    - Example:  
-      ```
-      ./mistralrs-server -i run -m path/to/model
+    - Example:
+      ```bash
+      mistralrs run -m path/to/model
       ```
 
 ### Running GGUF models
 - Minimal example:
-  ```
-  ./mistralrs-server gguf -m author/model-repo -f model-quant.gguf
+  ```bash
+  mistralrs run --format gguf -m author/model-repo -f model-quant.gguf
   ```
 - Specify tokenizer (if needed):
-  ```
-  ./mistralrs-server gguf -m author/model-repo -f file.gguf -t author/official-tokenizer
+  ```bash
+  mistralrs run --format gguf -m author/model-repo -f file.gguf -t author/official-tokenizer
   ```
   (Or use the built-in GGUF tokenizer.)
 
 ### Adapters, X-LoRA, LoRA, Chat Templates
-- Use the correct subcommand (`x-lora-*`, `lora-*`), pass model, adapter, or quant file as needed.
+- Use the `--lora` or `--xlora` flags to load adapters.
 - See [docs/ADAPTER_MODELS.md](docs/ADAPTER_MODELS.md) for details.
-- For chat templates: usually auto-detected, override with `--chat-template <file>`.  
+- For chat templates: usually auto-detected, override with `--chat-template <file>`.
   See [docs/CHAT_TOK.md](docs/CHAT_TOK.md).
 
 ### More model CLI examples
-- See [Run with the CLI](#run-with-the-cli) below or [full documentation](docs/README.md).
+- See [Using the CLI](#using-the-cli) below or [full CLI documentation](docs/CLI.md).
 
 </details>
 
 ## Using the CLI
 
-Mistral.rs uses subcommands to control the model type. Please run `./mistralrs-server --help` to see the subcommands which categorize the models by kind.
+The `mistralrs` CLI provides commands for interactive mode, HTTP server, benchmarking, and more. Run `mistralrs --help` to see all available commands.
 
-> **ℹ️ Auto-detection:** The `run` subcommand now auto-detects and runs **text**, **vision**, **embedding**, **diffusion**, and **speech** models.
-> For diffusion and speech, auto-detection uses the default architectures (Flux and Dia). Use the explicit subcommands if you need non-default variants (e.g., `flux-offloaded`) or custom DAC models:
-> ```bash
-> mistralrs-server -i diffusion -m <model-id> [options]
-> mistralrs-server -i speech -m <model-id> [options]
-> ```
+> **ℹ️ Auto-detection:** The CLI auto-detects model types (**text**, **vision**, **embedding**, **diffusion**, **speech**) so you don't need to specify them explicitly.
 
-### Global CLI options
+For complete CLI documentation, see [docs/CLI.md](docs/CLI.md).
 
-These options apply across all subcommands:
+### Commands Overview
+
+| Command | Description |
+|---------|-------------|
+| `mistralrs run` | Interactive chat mode |
+| `mistralrs serve` | HTTP server with OpenAI-compatible API |
+| `mistralrs bench` | Performance benchmarking |
+| `mistralrs tune` | Get quantization recommendations |
+| `mistralrs quantize` | Generate UQFF quantized files |
+| `mistralrs doctor` | System diagnostics |
+| `mistralrs login` | HuggingFace authentication |
+| `mistralrs cache` | Manage HF model cache |
+| `mistralrs from-config` | Run from TOML config file |
+
+### Common Options
 
 | Option | Description |
 |--------|-------------|
-| `-i, --interactive-mode` | Run in interactive terminal mode |
-| `--port <PORT>` | Run HTTP server on specified port |
+| `-m, --model-id <MODEL>` | HuggingFace model ID or local path |
+| `--isq <TYPE>` | Apply ISQ quantization (e.g., `q4k`, `q8_0`) |
 | `-c, --chat-template <FILE>` | Override chat template with JINJA file |
-| `-j, --jinja-explicit <FILE>` | Explicit JINJA template (overrides all auto-detection) |
 | `--token-source <SOURCE>` | HF token source: `cache`, `literal:<TOKEN>`, `env:<VAR>`, `path:<FILE>`, `none` |
-| `--isq <TYPE>` | Apply ISQ quantization (e.g., `Q4K`, `Q8_0`) |
-| `--num-device-layers <SPEC>` | Device layer mapping (e.g., `0:16;1:16` for multi-GPU) |
+| `-n, --device-layers <SPEC>` | Device layer mapping (e.g., `0:16;1:16` for multi-GPU) |
 | `--enable-search` | Enable web search integration |
-| `--search-embedding-model <MODEL>` | Built-in search embedding model (e.g., `embedding_gemma`) |
 | `--mcp-config <FILE>` | Path to MCP client configuration JSON file |
 | `--enable-thinking` | Enable thinking mode for supported models (Qwen3, SmolLM3) |
-| `-s, --seed <SEED>` | Set random seed for reproducibility |
+| `--seed <SEED>` | Set random seed for reproducibility |
 | `-l, --log <FILE>` | Log requests/responses to file |
 
-### PagedAttention options
+### PagedAttention Options
 
 | Option | Description |
 |--------|-------------|
-| `--pa-gpu-mem <MB>` | GPU memory for KV cache in megabytes |
-| `--pa-gpu-mem-usage <RATIO>` | Fraction of free GPU memory (0.0-1.0) |
-| `--pa-ctxt-len <LENGTH>` | Total context length for KV cache |
-| `--pa-blk-size <SIZE>` | Block size for PagedAttention |
+| `--paged-attn <MODE>` | PagedAttention mode: `auto`, `on`, or `off` |
+| `--pa-context-len <LENGTH>` | Allocate KV cache for this context length |
+| `--pa-memory-mb <MB>` | GPU memory for KV cache in megabytes |
+| `--pa-memory-fraction <RATIO>` | Fraction of GPU memory (0.0-1.0) |
+| `--pa-block-size <SIZE>` | Block size for PagedAttention |
 | `--pa-cache-type <TYPE>` | KV cache type: `auto` or `f8e4m3` |
-| `--paged-attn` | Enable PagedAttention (for Metal) |
-| `--no-paged-attn` | Disable PagedAttention (for CUDA) |
 
-### Interactive mode
+### Interactive Mode
 
 **Llama 3.2 3B running on an M3 Max with 8-bit ISQ:**
 
 <img src="./res/demo.gif" alt="Interactive demo" />
 
-You can launch interactive mode, a simple chat application running in the terminal, by passing `-i`:
+Launch interactive mode with `mistralrs run`:
 
 ```bash
-./mistralrs-server -i plain -m meta-llama/Llama-3.2-3B-Instruct
+mistralrs run -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
-Vision models work seamlessly:
+Vision models work seamlessly (auto-detected):
 
 ```bash
-./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
+mistralrs run -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
 ```
 
-Diffusion models can be run too (quantization and adapters are not yet supported):
+Diffusion models (auto-detected):
 
 ```bash
-./mistralrs-server -i diffusion -m black-forest-labs/FLUX.1-schnell -a flux
+mistralrs run -m black-forest-labs/FLUX.1-schnell
 ```
 
-And you can run speech generation in your terminal!
+Speech generation in your terminal (auto-detected):
 
 ```bash
-./mistralrs-server -i speech -m nari-labs/Dia-1.6B -a dia
+mistralrs run -m nari-labs/Dia-1.6B
 ```
 
-### OpenAI HTTP server
+### OpenAI HTTP Server
 
-You can launch an HTTP server by replacing `-i` with `--port <port>`. For instance:
+Launch an HTTP server with `mistralrs serve`:
 
 ```bash
-./mistralrs-server --port 1234 run -m microsoft/Phi-3.5-MoE-instruct
+mistralrs serve -p 1234 -m microsoft/Phi-3.5-MoE-instruct
+```
+
+Or with the built-in web UI:
+
+```bash
+mistralrs serve --ui -m microsoft/Phi-3.5-MoE-instruct
 ```
 
 You can find documentation about the server itself [here](docs/HTTP.md).
 
-### Multi-model support
+### Multi-model Support
 
-Serve multiple models simultaneously from a single server instance. This is useful for comparing models, A/B testing, or serving different models for different use cases.
+Serve multiple models simultaneously from a single server instance using a TOML config file. This is useful for comparing models, A/B testing, or serving different models for different use cases.
 
 ```bash
-./mistralrs-server --port 1234 multi-model --config example-multi-model-config.json --default-model-id meta-llama/Llama-3.2-3B-Instruct
+mistralrs from-config --file multi-model-config.toml
 ```
 
 Select models in your requests using the `model` parameter:
 ```bash
-curl http://localhost:1234/v1/chat/completions \
+curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "meta-llama/Llama-3.2-3B-Instruct", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
@@ -682,13 +722,13 @@ curl http://localhost:1234/v1/chat/completions \
 
 📖 **[Complete multi-model documentation →](docs/multi_model/README.md)**
 
-### Structured selection with a `.toml` file
+### Structured Selection with a TOML File
 
-We provide a method to select models with a `.toml` file. The keys are the same as the command line, with `no_kv_cache` and `tokenizer_json` being "global" keys.
+Use a TOML configuration file for complex setups. See [docs/CLI_CONFIG.md](docs/CLI_CONFIG.md) for the full format.
 
 Example:
 ```bash
-./mistralrs-server --port 1234 toml -f toml-selectors/gguf.toml
+mistralrs from-config --file config.toml
 ```
 
 ### Architecture for plain models
@@ -919,11 +959,11 @@ Please submit more benchmarks via raising an issue!
 |GPT-OSS| |
 </details>
 
-### Using derivative and adapter models
+### Using Derivative and Adapter Models
 
-To use a derivative or adapter model (e.g., quantized, LoRA, X-LoRA, vision, etc.), select the correct architecture subcommand and pass the required arguments—typically model id, and for quantized/adapters, also the quantization filename, tokenizer, or adapter ordering if needed.
+Model type is auto-detected. Use flags for quantized models and adapters:
 
-- **See all options:** Run `./mistralrs-server <subcommand> --help`  
+- **See all options:** Run `mistralrs run --help` or `mistralrs serve --help`
 - **Docs:** [Adapter models](docs/ADAPTER_MODELS.md), [Chat templates](docs/CHAT_TOK.md)
 
 <details>
@@ -931,13 +971,12 @@ To use a derivative or adapter model (e.g., quantized, LoRA, X-LoRA, vision, etc
 
 | Model Type          | Required Arguments                                                     |
 |---------------------|-----------------------------------------------------------------------|
-| Plain               | model id                                                              |
-| Quantized           | model id, quantized filename, tokenizer id                            |
-| X-LoRA              | model id, X-LoRA ordering (if not default)                            |
-| X-LoRA quantized    | model id, quantized filename, tokenizer id, X-LoRA ordering           |
-| LoRA                | model id, LoRA ordering (if not default)                              |
-| LoRA quantized      | model id, quantized filename, tokenizer id, LoRA ordering             |
-| Vision Plain        | model id                                                              |
+| Plain               | `-m <model-id>`                                                       |
+| GGUF Quantized      | `-m <model-id> --format gguf -f <file>`                               |
+| ISQ Quantized       | `-m <model-id> --isq <level>`                                         |
+| UQFF Quantized      | `-m <model-id> --from-uqff <file>`                                    |
+| LoRA                | `-m <model-id> --lora <adapter>`                                      |
+| X-LoRA              | `-m <model-id> --xlora <adapter> --xlora-order <file>`                |
 
 </details>
 
@@ -945,14 +984,14 @@ To use a derivative or adapter model (e.g., quantized, LoRA, X-LoRA, vision, etc
 <summary>Example: Zephyr GGUF model</summary>
 
 ```bash
-./mistralrs-server --port 1234 --log output.txt gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf
+mistralrs serve -p 1234 --log output.txt --format gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf
 ```
 </details>
 
-Chat template and tokenizer are usually auto-detected.  
+Chat template and tokenizer are usually auto-detected.
 If you need to override, see the [chat templates doc](docs/CHAT_TOK.md).
 
-An adapter model is a model with X-LoRA or LoRA. X-LoRA support is provided by selecting the `x-lora-*` architecture, and LoRA support by selecting the `lora-*` architecture. Please find docs for adapter models [here](docs/ADAPTER_MODELS.md). Examples may be found [here](docs/LORA_XLORA.md).
+Please find docs for adapter models [here](docs/ADAPTER_MODELS.md). Examples may be found [here](docs/LORA_XLORA.md).
 
 ### Chat Templates and Tokenizer
 Mistral.rs will attempt to automatically load a chat template and tokenizer. This enables high flexibility across models and ensures accurate and flexible chat templating. However, this behavior can be customized. Please find detailed documentation [here](docs/CHAT_TOK.md).

@@ -239,7 +239,7 @@ McpServerConfigPy(
 
 | Variable | Description |
 |----------|-------------|
-| `MCP_CONFIG_PATH` | Path to MCP configuration file (for mistralrs-server) |
+| `MCP_CONFIG_PATH` | Path to MCP configuration file |
 | `MCP_LOG_LEVEL` | Logging level for MCP operations |
 | `MCP_POOL_SIZE` | Connection pool size for HTTP/WebSocket |
 

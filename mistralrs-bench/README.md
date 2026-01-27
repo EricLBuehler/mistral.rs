@@ -1,5 +1,16 @@
 # `mistralrs-bench`
 
+> **Deprecated:** The standalone `mistralrs-bench` package is deprecated. Use `mistralrs bench` instead for the same functionality.
+>
+> **Migration:**
+> ```bash
+> # Old
+> cargo run --release --features cuda --package mistralrs-bench -- plain -m model-id
+>
+> # New
+> mistralrs bench -m model-id
+> ```
+
 This is our official benchmarking application, which allows you to collect structured information about the speed of `mistral.rs`.
 
 > [!NOTE]

@@ -1,5 +1,18 @@
 # Mistral.rs Web Chat App
 
+> **Deprecated:** The standalone `mistralrs-web-chat` binary is deprecated. Use `mistralrs serve --ui` instead for the same functionality.
+>
+> **Migration:**
+> ```bash
+> # Old
+> cargo run --release --features cuda --bin mistralrs-web-chat -- --text-model Qwen/Qwen3-4B
+>
+> # New
+> mistralrs serve --ui -m Qwen/Qwen3-4B
+> ```
+>
+> The new built-in UI provides the same features and is accessible at `/ui` when running the server.
+
 A minimal, fast, and modern web chat interface for [mistral.rs](https://github.com/EricBuehler/mistral.rs), supporting text, vision, and speech models with drag-and-drop image and file upload, markdown rendering, and multi-model selection.
 
 <img src="../res/chat.gif" alt="Demonstration" />

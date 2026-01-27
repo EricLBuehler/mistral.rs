@@ -81,18 +81,18 @@ target_modules = ["gate_proj"]
 
 ## Examples
 
-## `mistralrs-server`
+## CLI
 
 CLI usage is via the [TOML selector](TOML_SELECTOR.md#anymoe) where you can also find docs on the required fields.
 
 For example, to use the demo fine-tuned expert:
-```
-./mistralrs-server -i toml -f toml-selectors/anymoe.toml
+```bash
+mistralrs from-config --file toml-selectors/anymoe.toml
 ```
 
 To use the demo LoRA expert:
-```
-./mistralrs-server -i toml -f toml-selectors/anymoe_lora.toml
+```bash
+mistralrs from-config --file toml-selectors/anymoe_lora.toml
 ```
 
 ## Python example

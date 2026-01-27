@@ -29,7 +29,7 @@ EmbeddingGemma can generate optimized embeddings for various use cases—such as
 Launch the server in embedding mode to expose an OpenAI-compatible `/v1/embeddings` endpoint:
 
 ```bash
-./mistralrs-server --port 1234 run -m google/embeddinggemma-300m
+mistralrs serve -p 1234 -m google/embeddinggemma-300m
 ```
 
 Once running, call the endpoint with an OpenAI client or raw `curl`:

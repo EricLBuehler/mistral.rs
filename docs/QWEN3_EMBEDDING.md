@@ -9,7 +9,7 @@ For a catalog of all embedding backends, see [EMBEDDINGS.md](EMBEDDINGS.md).
 Serve the model with the OpenAI-compatible endpoint enabled:
 
 ```bash
-./mistralrs-server --port 1234 run -m Qwen/Qwen3-Embedding-0.6B
+mistralrs serve -p 1234 -m Qwen/Qwen3-Embedding-0.6B
 ```
 
 Call the endpoint via `curl` or the OpenAI SDK:

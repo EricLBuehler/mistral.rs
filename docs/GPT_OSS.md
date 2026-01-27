@@ -8,7 +8,7 @@ GPT-OSS is a Mixture of Experts (MoE) language model with specialized attention 
 - Hybrid cache supporting both full and sliding window attention
 
 ```bash
-./mistralrs-server -i plain -m openai/gpt-oss-20b -a gpt_oss
+mistralrs run -m openai/gpt-oss-20b
 ```
 
 > Note: GPT-OSS MoE experts are pre-quantized in MXFP4 format. ISQ can be applied to attention layers only.
@@ -19,7 +19,7 @@ GPT-OSS is a Mixture of Experts (MoE) language model with specialized attention 
 You can find a more detailed example [here](../examples/server/gpt_oss.py).
 
 ```bash
-./mistralrs-server --port 1234 plain -m openai/gpt-oss-20b -a gpt_oss
+mistralrs serve -p 1234 -m openai/gpt-oss-20b
 ```
 
 ```py

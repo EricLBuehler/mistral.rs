@@ -240,12 +240,10 @@ print(res.choices[0].message.content)
 
 2. Start server with MCP:
 ```bash
-mistralrs-server \
-  --port 1234 \
+mistralrs serve \
+  -p 1234 \
   --mcp-config mcp-config.json \
-  plain \
-  -m Qwen/Qwen3-4B \
-  -a qwen3
+  -m Qwen/Qwen3-4B
 ```
 
 3. Use the API:

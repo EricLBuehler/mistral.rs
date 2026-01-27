@@ -257,6 +257,6 @@ We provide UQFF files ([EricB/Llama-3.2-11B-Vision-Instruct-UQFF](https://huggin
 You can use these UQFF files to easily use quantized versions of Llama 3.2 Vision.
 
 For example:
-```
-./mistralrs-server -i vision-plain -m meta-llama/Llama-3.2-11B-Vision-Instruct --from-uqff EricB/Llama-3.2-11B-Vision-Instruct-UQFF/llama-3.2-11b-vision-q4k.uqff
+```bash
+mistralrs run -m meta-llama/Llama-3.2-11B-Vision-Instruct --from-uqff EricB/Llama-3.2-11B-Vision-Instruct-UQFF/llama-3.2-11b-vision-q4k.uqff
 ```

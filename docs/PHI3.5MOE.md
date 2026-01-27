@@ -14,21 +14,21 @@ The Phi 3.5 MoE model is a 16x3.8B parameter decoder-only text-to-text mixture o
     - If multiple experts are selected for the token, then this becomes a weighted sum
     - The design is flexible: 2 or 1 experts can be selected, enabling dense or sparse gating
 
-```
-./mistralrs-server --isq 4 -i plain -m microsoft/Phi-3.5-MoE-instruct
+```bash
+mistralrs run --isq 4 -m microsoft/Phi-3.5-MoE-instruct
 ```
 
 > [!NOTE]
 > This models supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
 
-```
-./mistralrs-server --isq 4 -i plain -m microsoft/Phi-3.5-MoE-instruct --organization moqe
+```bash
+mistralrs run --isq 4 -m microsoft/Phi-3.5-MoE-instruct --isq-organization moqe
 ```
 
 ## HTTP API
 
-```
-./mistralrs-server --isq 4 --port 1234 plain -m microsoft/Phi-3.5-MoE-instruct
+```bash
+mistralrs serve --isq 4 -p 1234 -m microsoft/Phi-3.5-MoE-instruct
 ```
 
 ```py

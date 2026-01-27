@@ -2,7 +2,7 @@
 Example of using GPT-OSS model via the HTTP API.
 
 Start the server first:
-    ./mistralrs-server --port 1234 plain -m openai/gpt-oss-20b -a gpt_oss
+    mistralrs serve -p 1234 -m openai/gpt-oss-20b
 
 GPT-OSS is a Mixture of Experts model with MXFP4 quantized experts
 and custom attention with per-head sinks.

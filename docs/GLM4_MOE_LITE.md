@@ -5,8 +5,8 @@ GLM-4.7-Flash is a mixture of experts (MoE) model from the GLM family with MLA (
 ## HTTP API
 
 Start the server:
-```
-./mistralrs-server --isq 4 --port 1234 plain -m zai-org/GLM-4.7-Flash -a glm4moelite
+```bash
+mistralrs serve --isq 4 -p 1234 -m zai-org/GLM-4.7-Flash
 ```
 
 Send requests using an OpenAI-compatible client:

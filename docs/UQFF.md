@@ -81,8 +81,8 @@ command to get started.
 
 ### Running with the CLI
 
-```
-./mistralrs-server -i plain -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-f8e4m3.uqff
+```bash
+mistralrs run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-f8e4m3.uqff
 ```
 
 ### Using with the Rust API
@@ -106,7 +106,7 @@ When loading a UQFF model, the quantization is already baked in, so ISQ settings
 
 **CLI example:**
 ```bash
-./mistralrs-server -i plain -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-q4k.uqff --topology device_map.yml
+mistralrs run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-q4k.uqff --topology device_map.yml
 ```
 
 **Topology file for device mapping only (`device_map.yml`):**
@@ -169,8 +169,8 @@ After creating the UQFF file, you can upload the model to Hugging Face. To do th
 
 **⭐ Check out [uqff_maker](https://github.com/EricLBuehler/uqff_maker) to make UQFF models with an easy CLI!**
 
-```
-./mistralrs-server --isq 4 -i plain -m microsoft/Phi-3.5-mini-instruct --write-uqff phi3.5-mini-instruct-q4k.uqff
+```bash
+mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq 4 -o phi3.5-mini-instruct-q4k.uqff
 ```
 
 ### Upload with Git
