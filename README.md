@@ -4,7 +4,7 @@
 </h1>
 
 <h3 align="center">
-Blazingly fast LLM inference.
+Run any model from HuggingFace. Text, vision, audio, speech, images—one CLI.
 </h3>
 
 <p align="center">
@@ -17,12 +17,13 @@ Blazingly fast LLM inference.
   </a>
 </p>
 
-**Mistral.rs is a cross-platform, highly-multimodal inference engine that brings you:**
-- All-in-one multimodal workflow: text↔text, text+vision↔text, text+vision+audio↔text, text→speech, text→image, text→embeddings
-- APIs: Rust, Python, OpenAI HTTP server (with Chat Completions, [Responses API compatible with OpenResponses](docs/OPENRESPONSES.md)), MCP server
-- MCP Client: Connect to external tools and services automatically (file systems, web search, databases, APIs)
-- Performance: ISQ, PagedAttention, FlashAttention.
-- Support for embedding, speech generation, and image generation models
+## Why mistral.rs?
+
+- **Any HuggingFace model, zero config** — Just `mistralrs run -m user/model`. Auto-detects architecture, quantization, chat template.
+- **True multimodality** — Vision, audio, speech generation, image generation, embeddings.
+- **Not another model registry** — Use HuggingFace directly. No converting, no uploading to a separate service.
+- **Built-in web UI** — `mistralrs serve --ui` gives you a web interface instantly.
+- **Hardware-aware** — `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
 
 ## Quick Start
 
@@ -62,14 +63,11 @@ The CLI is designed to be **zero-config**: just point it at a model and go.
 - **Format-agnostic**: Works with Hugging Face models, GGUF files, and [UQFF quantizations](docs/UQFF.md) seamlessly
 
 ```bash
-# Auto-tune for your hardware (writes to ~/.mistralrs/config.json)
-mistralrs tune -m Qwen/Qwen3-4B
+# Auto-tune for your hardware and emit a config file
+mistralrs tune -m Qwen/Qwen3-4B --emit-config config.toml
 
-# Run with a GGUF file
-mistralrs run -m bartowski/Qwen3-4B-GGUF -f Qwen3-4B-Q4_K_M.gguf
-
-# Benchmark throughput
-mistralrs bench -m Qwen/Qwen3-4B
+# Run using the generated config
+mistralrs from-config -f config.toml
 ```
 
 [Full CLI documentation](docs/CLI.md)
@@ -80,49 +78,17 @@ mistralrs bench -m Qwen/Qwen3-4B
   <img src="./res/chat.gif" alt="Web Chat UI Demo" />
 </details>
 
-## Capabilities
+## Features
 
-[mistral.rs](https://github.com/EricLBuehler/mistral.rs) is a blazing-fast, cross-platform LLM inference engine with support for text, vision, image generation, and speech.
+| Category | Highlights |
+|----------|------------|
+| **APIs** | [OpenAI-compatible HTTP](docs/HTTP.md), [Python](mistralrs-pyo3/API.md), [Rust](https://ericlbuehler.github.io/mistral.rs/mistralrs/), [MCP server](docs/MCP/server.md) |
+| **Performance** | CUDA + [FlashAttention](docs/FLASH_ATTENTION.md), Metal, [multi-GPU](docs/DISTRIBUTED/DISTRIBUTED.md), [PagedAttention](docs/PAGED_ATTENTION.md) |
+| **Quantization** | [ISQ](docs/ISQ.md), [GGUF](docs/QUANTS.md), GPTQ, AWQ, HQQ, FP8, [per-layer control](docs/TOPOLOGY.md) |
+| **Adapters** | [LoRA/X-LoRA](docs/ADAPTER_MODELS.md), [AnyMoE](docs/ANYMOE.md), weight merging |
+| **Agentic** | [Tool calling](docs/TOOL_CALLING.md), [web search](docs/WEB_SEARCH.md), [MCP client](docs/MCP/README.md) |
 
-**Key Benefits:**
-
-1. **Ease of Use**
-   - [OpenAI-compatible HTTP server](docs/HTTP.md)
-   - [Rust API](https://ericlbuehler.github.io/mistral.rs/mistralrs/) & [Python API](mistralrs-pyo3/API.md)
-   - [Automatic device mapping](docs/DEVICE_MAPPING.md) (multi-GPU, CPU)
-   - [Chat templates](docs/CHAT_TOK.md) & tokenizer auto-detection
-   - [MCP server](docs/MCP/server.md) for structured, realtime tool calls
-   - ⭐ [MCP client](examples/MCP_QUICK_START.md) to connect to external tools and services automatically
-
-2. **Performance**
-   - CPU acceleration (MKL, AVX, NEON, Accelerate)
-   - GPU acceleration (CUDA with [FlashAttention](docs/FLASH_ATTENTION.md) & cuDNN, Metal)
-   - Automatic [tensor parallelism](docs/DISTRIBUTED/DISTRIBUTED.md) for splitting models across multiple devices
-     - CUDA-specialized [NCCL](docs/DISTRIBUTED/NCCL.md)
-     - Heterogeneous, flexible [Ring backend](docs/DISTRIBUTED/RING.md)
-
-3. **Quantization & Optimization**
-   - ⭐ [**Per-layer topology**](docs/TOPOLOGY.md): Fine-tune quantization per layer for optimal quality/speed balance
-   - [In-place quantization (ISQ)](docs/ISQ.md) of Hugging Face models
-   - [GGML & GGUF support](docs/QUANTS.md): 2–8 bit
-   - [GPTQ](docs/QUANTS.md), [AWQ](scripts/convert_awq_marlin.py), [AFQ](docs/QUANTS.md), [HQQ](docs/QUANTS.md), [FP8](docs/QUANTS.md), [BNB](https://github.com/TimDettmers/bitsandbytes) (int8/fp4/nf4)
-   - ⭐ Auto-select the fastest quant method
-   - [KV cache quantization](docs/PAGED_ATTENTION.md#kv-cache-quantization)
-
-4. **Flexibility**
-   - [LoRA](docs/ADAPTER_MODELS.md) & [X-LoRA](docs/ADAPTER_MODELS.md) adapters with weight merging
-   - [AnyMoE](docs/ANYMOE.md): create MoE models on any base model
-   - [Sampling & penalty options](docs/SAMPLING.md)
-   - Prompt chunking for large inputs
-   - Integrated [tool calling](docs/TOOL_CALLING.md) with customizable Python/Rust native tool and search callbacks
-   - Load [multiple models](docs/multi_model/README.md) and unload/reload at runtime.
-
-5. **Advanced Features**
-   - High-throughput with [PagedAttention](docs/PAGED_ATTENTION.md) & FlashAttention V2/V3
-   - Prefix caching (including multimodal)
-   - [UQFF format](docs/UQFF.md) for custom quantization
-   - Speculative decoding across models
-   - ⭐ Agentic [web search integration](docs/WEB_SEARCH.md)
+[Full feature documentation](docs/README.md)
 
 ## Supported Models
 
