@@ -1,4 +1,4 @@
-pub const USE_FP8: bool = true;
+pub const USE_FP8: bool = cfg!(has_fp8);
 
 mod backend;
 mod ffi;

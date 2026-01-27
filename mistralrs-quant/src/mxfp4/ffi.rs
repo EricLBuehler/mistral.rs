@@ -1,6 +1,6 @@
 use half::{bf16, f16};
 
-pub(crate) const HAVE_MXFP4_GEMM_KERNELS: bool = true;
+pub(crate) const HAVE_MXFP4_GEMM_KERNELS: bool = cfg!(has_mxfp4_kernels);
 
 extern "C" {
     pub(crate) fn launch_mxfp4_matmul_f16(

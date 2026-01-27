@@ -1,8 +1,8 @@
 use float8::F8E4M3;
 use half::{bf16, f16};
 
-pub(crate) const HAVE_VECTOR_DEQUANT_KERNELS: bool = true;
-pub(crate) const HAVE_VECTOR_QUANT_KERNELS: bool = true;
+pub(crate) const HAVE_VECTOR_DEQUANT_KERNELS: bool = cfg!(has_vector_fp8_kernels);
+pub(crate) const HAVE_VECTOR_QUANT_KERNELS: bool = cfg!(has_vector_fp8_kernels);
 
 extern "C" {
     pub(crate) fn launch_dequant_fp8_vector_kernel_f32(

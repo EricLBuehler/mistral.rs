@@ -5,22 +5,8 @@ const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 fn main() -> Result<()> {
-    use std::fs::OpenOptions;
-    use std::io::prelude::*;
     use std::path::PathBuf;
     use std::process::Command;
-
-    const OTHER_CONTENT: &str = r#"
-pub const USE_FP8: bool = false;
-
-mod backend;
-mod ffi;
-
-pub use backend::{
-    concat_and_cache_mla, copy_blocks, flashinfer_mla_decode, gather_mla_cache, kv_scale_update,
-    paged_attention, reshape_and_cache, swap_blocks,
-};
-    "#;
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/cuda/pagedattention.cuh");
@@ -118,34 +104,12 @@ pub use backend::{
     };
     builder.build_lib(out_file);
 
-    let kernel_dir = PathBuf::from("../mistralrs-paged-attn");
-    let absolute_kernel_dir = std::fs::canonicalize(kernel_dir).unwrap();
-
-    println!(
-        "cargo:rustc-link-search=native={}",
-        absolute_kernel_dir.display()
-    );
     println!("cargo:rustc-link-search={}", build_dir.display());
     println!("cargo:rustc-link-lib=mistralrspagedattention");
     println!("cargo:rustc-link-lib=dylib=cudart");
 
-    let mut file = OpenOptions::new()
-        .write(true)
-        .open("src/cuda/mod.rs")
-        .unwrap();
-
-    // Build the new content
-    let new_ct = if using_fp8 {
-        &OTHER_CONTENT
-            .trim()
-            .replace("USE_FP8: bool = false", "USE_FP8: bool = true")
-    } else {
-        OTHER_CONTENT.trim()
-    };
-
-    // Add the other stuff back
-    if let Err(e) = writeln!(file, "{new_ct}") {
-        anyhow::bail!("Error while building dependencies: {:?}\n", e)
+    if using_fp8 {
+        println!("cargo:rustc-cfg=has_fp8");
     }
     Ok(())
 }

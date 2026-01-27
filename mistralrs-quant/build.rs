@@ -43,12 +43,7 @@ fn cuda_version_from_build_system() -> (usize, usize) {
 fn main() -> Result<(), String> {
     #[cfg(feature = "cuda")]
     {
-        use std::{fs::read_to_string, path::PathBuf, process::Command, vec};
-        const MARLIN_FFI_PATH: &str = "src/gptq/marlin_ffi.rs";
-        const BLOCKWISE_FP8_FFI_PATH: &str = "src/blockwise_fp8/ffi.rs";
-        const SCALAR_FP8_FFI_PATH: &str = "src/scalar_fp8/ffi.rs";
-        const VECTOR_FP8_FFI_PATH: &str = "src/vector_fp8/ffi.rs";
-        const MXFP4_FFI_PATH: &str = "src/mxfp4/ffi.rs";
+        use std::{path::PathBuf, process::Command, vec};
         const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
         println!("cargo:rerun-if-changed=build.rs");
@@ -82,125 +77,17 @@ fn main() -> Result<(), String> {
             }
         };
 
-        // ======== Handle optional marlin kernel compilation
+        // ======== Handle optional kernel compilation via rustc-cfg flags
         let cc_over_800 = compute_cap >= 800;
-        let cc_is_over_800 = match cc_over_800 {
-            true => "true",
-            false => "false",
-        };
 
-        let mut marlin_ffi_ct = read_to_string(MARLIN_FFI_PATH).unwrap();
-        if marlin_ffi_ct.contains("pub(crate) const HAVE_MARLIN_KERNELS: bool = true;") {
-            marlin_ffi_ct = marlin_ffi_ct.replace(
-                "pub(crate) const HAVE_MARLIN_KERNELS: bool = true;",
-                &format!("pub(crate) const HAVE_MARLIN_KERNELS: bool = {cc_is_over_800};"),
-            );
-        } else {
-            marlin_ffi_ct = marlin_ffi_ct.replace(
-                "pub(crate) const HAVE_MARLIN_KERNELS: bool = false;",
-                &format!("pub(crate) const HAVE_MARLIN_KERNELS: bool = {cc_is_over_800};"),
-            );
+        if cc_over_800 {
+            println!("cargo:rustc-cfg=has_marlin_kernels");
+            println!("cargo:rustc-cfg=has_blockwise_fp8_kernels");
+            println!("cargo:rustc-cfg=has_scalar_fp8_kernels");
+            println!("cargo:rustc-cfg=has_vector_fp8_kernels");
         }
-        std::fs::write(MARLIN_FFI_PATH, marlin_ffi_ct).unwrap();
-
-        let mut blockwise_fp8_ffi_ct = read_to_string(BLOCKWISE_FP8_FFI_PATH).unwrap();
-        if blockwise_fp8_ffi_ct
-            .contains("pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = true;")
-        {
-            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = true;",
-                &format!(
-                    "pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = {cc_is_over_800};"
-                ),
-            );
-        } else {
-            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = false;",
-                &format!(
-                    "pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = {cc_is_over_800};"
-                ),
-            );
-        }
-
-        if blockwise_fp8_ffi_ct
-            .contains("pub(crate) const HAVE_BLOCKWISE_QUANT_KERNELS: bool = true;")
-        {
-            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_BLOCKWISE_QUANT_KERNELS: bool = true;",
-                &format!("pub(crate) const HAVE_BLOCKWISE_QUANT_KERNELS: bool = {cc_is_over_800};"),
-            );
-        } else {
-            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_BLOCKWISE_QUANT_KERNELS: bool = false;",
-                &format!("pub(crate) const HAVE_BLOCKWISE_QUANT_KERNELS: bool = {cc_is_over_800};"),
-            );
-        }
-
-        if blockwise_fp8_ffi_ct
-            .contains("pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = true;")
-        {
-            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = true;",
-                &format!("pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = {cc_is_over_800};"),
-            );
-        } else {
-            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = false;",
-                &format!("pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = {cc_is_over_800};"),
-            );
-        }
-
-        std::fs::write(BLOCKWISE_FP8_FFI_PATH, blockwise_fp8_ffi_ct).unwrap();
-
-        let mut scalar_fp8_ffi_ct = read_to_string(SCALAR_FP8_FFI_PATH).unwrap();
-        if scalar_fp8_ffi_ct.contains("pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = true;") {
-            scalar_fp8_ffi_ct = scalar_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = true;",
-                &format!("pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = {cc_is_over_800};"),
-            );
-        } else {
-            scalar_fp8_ffi_ct = scalar_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = false;",
-                &format!("pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = {cc_is_over_800};"),
-            );
-        }
-        std::fs::write(SCALAR_FP8_FFI_PATH, scalar_fp8_ffi_ct).unwrap();
-
-        let mut vector_fp8_ffi_ct = read_to_string(VECTOR_FP8_FFI_PATH).unwrap();
-        if vector_fp8_ffi_ct.contains("pub(crate) const HAVE_VECTOR_DEQUANT_KERNELS: bool = true;")
-        {
-            vector_fp8_ffi_ct = vector_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_VECTOR_DEQUANT_KERNELS: bool = true;",
-                &format!("pub(crate) const HAVE_VECTOR_DEQUANT_KERNELS: bool = {cc_is_over_800};"),
-            );
-        } else {
-            vector_fp8_ffi_ct = vector_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_VECTOR_DEQUANT_KERNELS: bool = false;",
-                &format!("pub(crate) const HAVE_VECTOR_DEQUANT_KERNELS: bool = {cc_is_over_800};"),
-            );
-        }
-
-        if vector_fp8_ffi_ct.contains("pub(crate) const HAVE_VECTOR_QUANT_KERNELS: bool = true;") {
-            vector_fp8_ffi_ct = vector_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_VECTOR_QUANT_KERNELS: bool = true;",
-                &format!("pub(crate) const HAVE_VECTOR_QUANT_KERNELS: bool = {cc_is_over_800};"),
-            );
-        } else {
-            vector_fp8_ffi_ct = vector_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_VECTOR_QUANT_KERNELS: bool = false;",
-                &format!("pub(crate) const HAVE_VECTOR_QUANT_KERNELS: bool = {cc_is_over_800};"),
-            );
-        }
-        std::fs::write(VECTOR_FP8_FFI_PATH, vector_fp8_ffi_ct).unwrap();
-
-        // Handle MXFP4 kernel (doesn't require cc >= 800, uses LUT-based dequantization)
-        // MXFP4 is always enabled when CUDA is available since it uses software dequant
-        let mxfp4_ffi_ct = read_to_string(MXFP4_FFI_PATH).unwrap();
-        let mxfp4_ffi_ct = mxfp4_ffi_ct.replace(
-            "pub(crate) const HAVE_MXFP4_GEMM_KERNELS: bool = false;",
-            "pub(crate) const HAVE_MXFP4_GEMM_KERNELS: bool = true;",
-        );
-        std::fs::write(MXFP4_FFI_PATH, mxfp4_ffi_ct).unwrap();
+        // MXFP4 is always enabled with CUDA (uses LUT-based dequantization)
+        println!("cargo:rustc-cfg=has_mxfp4_kernels");
         // ========
 
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
