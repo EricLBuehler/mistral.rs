@@ -14,10 +14,6 @@ The Rust API takes an image from the [image](https://docs.rs/image/latest/image/
 > Note: when sending multiple images, they will be resized to the minimum dimension by which all will fit without cropping.
 > Aspect ratio is not preserved in that case.
 
-> [!NOTE]
-> The Phi 3 vision model does not automatically add the image tokens!
-> They should be added to messages manually, and are of the format `<|image_{N}|>` where N starts from 1.
-
 ## HTTP server
 You can find this example [here](../examples/server/phi3v.py).
 
@@ -33,7 +29,7 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 **Prompt:**
 ```
-<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.
+What is shown in this image? Write a detailed response analyzing the scene.
 ```
 
 **Output:**
@@ -75,7 +71,7 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.",
+                    "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                 },
             ],
         },
@@ -171,7 +167,7 @@ res = runner.send_chat_completion_request(
                     },
                     {
                         "type": "text",
-                        "text": "<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.",
+                        "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                     },
                 ],
             }

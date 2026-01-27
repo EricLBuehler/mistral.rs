@@ -17,12 +17,6 @@ The Python and HTTP APIs support sending images as:
 
 The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
-## Interactive mode
-
-> [!NOTE]
-> In interactive mode, the LLaVA vision models do not automatically add the image token!
-> It should be added to messages manually, and is of the format `<image>`.
-
 ## HTTP server
 You can find this example [here](../examples/server/llava_next.py).
 
@@ -38,7 +32,7 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 **Prompt:**
 ```
-<image>What is shown in this image? 
+What is shown in this image?
 ```
 
 **Output:**
@@ -81,7 +75,7 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "<image>What is shown in this image?",
+                    "text": "What is shown in this image?",
                 },
             ],
         },
@@ -177,7 +171,7 @@ res = runner.send_chat_completion_request(
                     },
                     {
                         "type": "text",
-                        "text": "<image>What is shown in this image?",
+                        "text": "What is shown in this image?",
                     },
                 ],
             },

@@ -29,9 +29,9 @@ response = runner.send_chat_completion_request(
                         "type": "image_url",
                         "image_url": {"url": IMAGE_URL},
                     },
-                    {  # Text prompt referencing above media
+                    {
                         "type": "text",
-                        "text": "<|audio_1|><|image_1|> Describe in detail what is happening, referencing both what you hear and what you see.",
+                        "text": "Describe in detail what is happening, referencing both what you hear and what you see.",
                     },
                 ],
             }
