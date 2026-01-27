@@ -21,7 +21,7 @@ To use this, simply specify the calibration data file in the various APIs as det
 mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct --calibration-file calibration_data/calibration_datav3_small.txt
 ```
 
-## With the Rust API
+## With the Rust SDK
 You can find this example [here](../mistralrs/examples/imatrix/).
 
 ```rust
@@ -34,7 +34,7 @@ let model = TextModelBuilder::new("meta-llama/Llama-3.2-3B-Instruct")
     .await?;
 ```
 
-## With the Python API
+## With the Python SDK
 You can find this example [here](../examples/python/imatrix.py).
 
 ```python

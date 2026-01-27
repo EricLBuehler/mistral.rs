@@ -1,10 +1,12 @@
-# `mistralrs` API
+# mistralrs Python SDK
 
-These are API docs for the `mistralrs` package.
+Documentation for the `mistralrs` Python package.
+
+> **Installation:** See [INSTALLATION.md](INSTALLATION.md) for installation instructions.
 
 **Table of contents**
-- Full API docs: [here](https://ericlbuehler.github.io/mistral.rs/pyo3/mistralrs.html)
-- Docs for the `Which` enum: [here](#which)
+- Full API reference: [here](https://ericlbuehler.github.io/mistral.rs/pyo3/mistralrs.html)
+- Model configuration (`Which` enum): [here](#which)
 - Multi-model support: [here](#multi-model-support)
 - MCP Client Configuration: [here](#mcp-client)
 - Example: [here](#example)
@@ -233,7 +235,7 @@ class Which(Enum):
 
 ## Multi-model Support
 
-The `mistralrs` Python API supports running multiple models using the `Runner` class with the `model_id` parameter. All request methods accept an optional `model_id` to target a specific model. When `model_id` is `None` or omitted, the default model is used. If aliases are configured (for example via the server config or Rust `MultiModelBuilder`), `list_models()` will return those aliases and you can pass them in requests; canonical pipeline names remain accepted.
+The `mistralrs` Python SDK supports running multiple models using the `Runner` class with the `model_id` parameter. All request methods accept an optional `model_id` to target a specific model. When `model_id` is `None` or omitted, the default model is used. If aliases are configured (for example via the server config or Rust `MultiModelBuilder`), `list_models()` will return those aliases and you can pass them in requests; canonical pipeline names remain accepted.
 
 ### Basic Usage with model_id
 
@@ -358,7 +360,7 @@ For server-based multi-model deployment, see the [multi-model documentation](../
 
 ## MCP Client
 
-The `mistralrs` Python API now supports Model Context Protocol (MCP) clients, enabling AI assistants to connect to and interact with external tools and resources through standardized server interfaces.
+The `mistralrs` Python SDK now supports Model Context Protocol (MCP) clients, enabling AI assistants to connect to and interact with external tools and resources through standardized server interfaces.
 
 ### MCP Server Configuration
 

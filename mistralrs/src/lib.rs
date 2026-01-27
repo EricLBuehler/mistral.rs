@@ -1,4 +1,4 @@
-//! This crate provides an asynchronous API to `mistral.rs`.
+//! This crate is the Rust SDK for `mistral.rs`, providing an asynchronous interface for LLM inference.
 //!
 //! To get started loading a model, check out the following builders:
 //! - [`TextModelBuilder`]

@@ -2,7 +2,7 @@
 
 In situ quantization works by quantizing models inplace, with the chief benefit being reduced memory footprint when running the model. This enables larger model to be run on devices which would not fit the full weights, and may increase model inference performance.
 
-An API is exposed on the Python and Rust APIs which provide the ability to dynamically re-ISQ models at runtime.
+An API is exposed on the Python and Rust SDKs which provides the ability to dynamically re-ISQ models at runtime.
 
 To set the ISQ type for individual layers, use a model [`topology`](TOPOLOGY.md).
 

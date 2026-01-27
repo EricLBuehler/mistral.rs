@@ -95,9 +95,9 @@ docker run --gpus all -p 1234:1234 ghcr.io/ericlbuehler/mistral.rs:latest \
 
 Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
 
-## Python Package
+## Python SDK
 
-Install the Python package for Python API access:
+Install the Python package:
 
 ```bash
 pip install mistralrs-cuda    # For NVIDIA GPUs
@@ -106,8 +106,8 @@ pip install mistralrs-mkl     # For Intel CPUs
 pip install mistralrs         # CPU-only
 ```
 
-- [Full installation instructions](../mistralrs-pyo3/_README.md)
-- [PyPI wheels available](../mistralrs-pyo3/_README.md#installation-from-pypi)
+- [Full installation instructions](../mistralrs-pyo3/INSTALLATION.md)
+- [SDK documentation](../mistralrs-pyo3/SDK.md)
 
 ## Verify Installation
 
@@ -163,5 +163,5 @@ mistralrs run --format gguf -m author/model-repo -f file.gguf -t author/official
 
 - [CLI Reference](CLI.md) - All commands and options
 - [HTTP API](HTTP.md) - Run as an OpenAI-compatible server
-- [Python API](../mistralrs-pyo3/API.md) - Python bindings
+- [Python SDK](../mistralrs-pyo3/SDK.md) - Python package documentation
 - [Troubleshooting](TROUBLESHOOTING.md) - Common issues and solutions

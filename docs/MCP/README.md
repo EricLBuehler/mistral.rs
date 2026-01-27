@@ -6,7 +6,7 @@ mistral.rs includes a built-in MCP client that allows models to connect to exter
 
 Examples below show HTTP (Hugging Face), Process (filesystem), and WebSocket transports. Replace `hf_xxx` with your actual Hugging Face token for HTTP examples.
 
-### Rust API
+### Rust SDK
 
 ```rust
 use mistralrs::{
@@ -88,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-### Python API
+### Python SDK
 
 ```python
 import mistralrs

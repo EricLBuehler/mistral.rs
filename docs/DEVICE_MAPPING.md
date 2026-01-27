@@ -1,7 +1,7 @@
 # Device mapping
 
 In mistral.rs, device mapping is **automatically managed** to be as performant and easy as possible. Automatic device mapping is enabled
-by default in the CLI/server and Python API and does not make any changes when the model fits entirely on the GPU.
+by default in the CLI/server and Python SDK and does not make any changes when the model fits entirely on the GPU.
 
 > [!NOTE]
 > If your system has more than one CUDA device, mistral.rs will automatically use [tensor parallelism](DISTRIBUTED/DISTRIBUTED.md). If the model does not
@@ -62,7 +62,7 @@ The format for the ordinals and number of layers is `ORD:NUM;...` where ORD is t
 cargo run --release --features cuda -- -n "0:16;1:16" -i plain -m gradientai/Llama-3-8B-Instruct-262k
 ```
 
-> Note: In the Python API, the "0:16;1:16" string is passed as the list `["0:16", "1:16"]`.
+> Note: In the Python SDK, the "0:16;1:16" string is passed as the list `["0:16", "1:16"]`.
 
 ## Example of specifying the number of GPU layers
 ```

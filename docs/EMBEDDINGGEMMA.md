@@ -59,7 +59,7 @@ models, run in multi-model mode and assign an identifier in the selector configu
 
 See [docs/HTTP.md](HTTP.md#post-v1embeddings) for the full request schema and response layout.
 
-## Python API
+## Python SDK
 
 Instantiate `Runner` with the `Which.Embedding` selector and request EmbeddingGemma explicitly. The helper method
 `send_embedding_request` returns batched embeddings as Python lists.
@@ -85,7 +85,7 @@ print(len(embeddings), len(embeddings[0]))
 
 Refer to [this example](../examples/python/embedding_gemma.py) for a complete runnable script.
 
-## Rust API
+## Rust SDK
 
 Use the `EmbeddingModelBuilder` helper from the `mistralrs` crate to create the model and submit an
 `EmbeddingRequest`:

@@ -56,7 +56,7 @@ while True:
     messages.append({"role": "assistant", "content": resp})
 ```
 
-## Python API
+## Python SDK
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 
@@ -83,7 +83,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-## Rust API
+## Rust SDK
 You can find this example [here](../mistralrs/examples/deepseekr1/main.rs).
 
 ```rust

@@ -39,7 +39,7 @@ To expose the model alongside chat models, register it in your selector configur
 
 See [docs/HTTP.md](HTTP.md#post-v1embeddings) for the full request schema.
 
-## Python API
+## Python SDK
 
 Instantiate `Runner` with the embedding selector and request Qwen3 explicitly. The output mirrors the
 OpenAI embeddings array shape:
@@ -65,7 +65,7 @@ print(len(embeddings), len(embeddings[0]))
 
 A ready-to-run version can be found at [`examples/python/qwen3_embedding.py`](../examples/python/qwen3_embedding.py).
 
-## Rust API
+## Rust SDK
 
 Use the `EmbeddingModelBuilder` helper just like with EmbeddingGemma. The example below mirrors the
 repository sample:

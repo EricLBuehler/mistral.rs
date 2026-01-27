@@ -48,7 +48,7 @@ while True:
     messages.append({"role": "assistant", "content": resp})
 ```
 
-## Python API
+## Python SDK
 You can find a more detailed example [here](../examples/python/gpt_oss.py).
 
 ```py
@@ -77,7 +77,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-## Rust API
+## Rust SDK
 You can find a more detailed example [here](../mistralrs/examples/gpt_oss/main.rs).
 
 ```rust

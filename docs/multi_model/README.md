@@ -302,7 +302,7 @@ Response:
 }
 ```
 
-## Rust API Usage
+## Rust SDK Usage
 
 The `mistralrs` crate provides `MultiModelBuilder` for loading multiple models and `Model` methods for multi-model management.
 
@@ -388,7 +388,7 @@ All request methods have `_with_model` variants that accept an optional model ID
 
 When `model_id` is `None`, the default model is used. If aliases are configured, you can pass either the alias or the canonical pipeline name.
 
-## Python API Usage
+## Python SDK Usage
 
 The Python `Runner` class supports multi-model operations directly.
 

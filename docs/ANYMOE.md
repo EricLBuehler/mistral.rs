@@ -140,7 +140,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-## Rust API
+## Rust SDK
 You can find this example [here](../mistralrs/examples/anymoe/main.rs).
 
 ```rust

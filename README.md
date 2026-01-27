@@ -14,7 +14,7 @@ Blazingly fast LLM inference.
 </h3>
 
 <p align="center">
-| <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Docs</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Docs</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
+| <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust SDK</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/SDK.md"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
 </p>
 
 <p align="center">
@@ -180,7 +180,7 @@ mistralrs doctor
 
 [Request a new model](https://github.com/EricLBuehler/mistral.rs/issues/156) | [Full compatibility tables](docs/SUPPORTED_MODELS.md)
 
-## Python
+## Python SDK
 
 ```bash
 pip install mistralrs-cuda  # or mistralrs-metal, mistralrs-mkl, mistralrs
@@ -204,7 +204,7 @@ res = runner.send_chat_completion_request(
 print(res.choices[0].message.content)
 ```
 
-[Full Python documentation](mistralrs-pyo3/API.md) | [Examples](examples/python) | [Cookbook](examples/python/cookbook.ipynb)
+[Python SDK](mistralrs-pyo3/SDK.md) | [Installation](mistralrs-pyo3/INSTALLATION.md) | [Examples](examples/python) | [Cookbook](examples/python/cookbook.ipynb)
 
 ## Docker
 

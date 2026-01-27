@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-mistral.rs is a blazing-fast LLM inference engine written in Rust. It supports text, vision, image generation, and speech models with multiple APIs (Rust, Python, OpenAI HTTP, MCP).
+mistral.rs is a blazing-fast LLM inference engine written in Rust. It supports text, vision, image generation, and speech models with Rust and Python SDKs, plus OpenAI HTTP and MCP APIs.
 
 ## Essential Commands
 
@@ -68,8 +68,8 @@ You should also look for a model.safetensors.index.json file for the model at ha
 - `mistralrs-core/` - Core inference engine, model implementations, pipelines
 - `mistralrs-cli/` - Unified CLI binary (commands: run, serve, bench, from-config)
 - `mistralrs-server-core/` - HTTP server routing, OpenAI API implementation
-- `mistralrs-pyo3/` - Python bindings (PyO3)
-- `mistralrs/` - High-level Rust API
+- `mistralrs-pyo3/` - Python SDK (PyO3 bindings)
+- `mistralrs/` - Rust SDK (high-level crate)
 - `mistralrs-vision/` - Vision model support
 - `mistralrs-quant/` - Quantization implementations (ISQ, GGUF, GPTQ, etc.)
 - `mistralrs-paged-attn/` - PagedAttention implementation
@@ -106,8 +106,8 @@ When adding new quantization methods:
 - `mistralrs-core/src/engine/mod.rs` - Main engine orchestration
 - `mistralrs-core/src/pipeline/mod.rs` - Pipeline trait and common logic
 - `mistralrs-server-core/src/routes.rs` - HTTP API endpoints
-- `mistralrs-pyo3/src/lib.rs` - Python API entry point
-- `mistralrs/examples/` - Usage examples for Rust API
+- `mistralrs-pyo3/src/lib.rs` - Python SDK entry point
+- `mistralrs/examples/` - Usage examples for Rust SDK
 
 ### Testing Approach
 

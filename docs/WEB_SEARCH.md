@@ -99,7 +99,7 @@ if completion.choices[0].message.tool_calls is not None:
 ```
 
 
-## Python API
+## Python SDK
 ```py
 from mistralrs import (
     Runner,
@@ -152,7 +152,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-## Rust API
+## Rust SDK
 ```rust
 use anyhow::Result;
 use mistralrs::{

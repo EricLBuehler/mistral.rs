@@ -16,8 +16,8 @@ The uniquely powerful quantized file format.
   - [Support](#support)
   - [Loading a UQFF model](#loading-a-uqff-model)
     - [Running with the CLI](#running-with-the-cli)
-    - [Using with the Rust API](#using-with-the-rust-api)
-    - [Using the Python API](#using-the-python-api)
+    - [Using with the Rust SDK](#using-with-the-rust-api)
+    - [Using the Python SDK](#using-the-python-api)
   - [Creating a UQFF model](#creating-a-uqff-model)
     - [Upload with Git](#upload-with-git)
   - [List of models](#list-of-models)
@@ -85,13 +85,13 @@ command to get started.
 mistralrs run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-f8e4m3.uqff
 ```
 
-### Using with the Rust API
+### Using with the Rust SDK
 
 Check out the following examples:
 - Normal: [uqff/main.rs](../mistralrs/examples/uqff/main.rs)
 - Vision: [uqff_vision/main.rs](../mistralrs/examples/uqff_vision/main.rs)
 
-### Using the Python API
+### Using the Python SDK
 Modify the `Which` instantiation as follows:
 ```diff
 Which.Plain(
@@ -117,7 +117,7 @@ mistralrs run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instru
   device: cuda[1]
 ```
 
-**Rust API example:**
+**Rust SDK example:**
 ```rust
 use mistralrs::{UqffTextModelBuilder, Topology, LayerTopology, Device};
 
@@ -135,7 +135,7 @@ let model = UqffTextModelBuilder::new(
 .await?;
 ```
 
-**Python API example:**
+**Python SDK example:**
 ```python
 runner = Runner(
     which=Which.Plain(

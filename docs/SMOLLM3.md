@@ -52,7 +52,7 @@ while True:
     messages.append({"role": "assistant", "content": resp})
 ```
 
-## Python API
+## Python SDK
 You can find a more detailed example demonstrating enabling/disabling thinking [here](../examples/python/smollm3.py).
 
 ```py
@@ -82,7 +82,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-## Rust API
+## Rust SDK
 You can find a more detailed example demonstrating enabling/disabling thinking [here](../mistralrs/examples/smollm3/main.rs).
 
 ```rust

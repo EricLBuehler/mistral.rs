@@ -42,7 +42,7 @@ cargo run --release --features cuda -- \
   --matformer-slice-name "Config for E2.49B (block-level)"
 ```
 
-### Python API Example
+### Python SDK Example
 
 ```python
 from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
@@ -85,7 +85,7 @@ res = runner.send_chat_completion_request(
 print(res.choices[0].message.content)
 ```
 
-### Rust API Example
+### Rust SDK Example
 
 ```rust
 use anyhow::Result;
@@ -343,7 +343,7 @@ Audio is delivered with the `audio_url` content-type that mirrors OpenAIʼs offi
 }
 ```
 
-### Rust API
+### Rust SDK
 
 ```rust
 use anyhow::Result;

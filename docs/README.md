@@ -20,12 +20,12 @@
 - [CLI TOML Configuration](CLI_CONFIG.md) - Configure via TOML files
 - [Troubleshooting](TROUBLESHOOTING.md) - Common issues and solutions
 
-## APIs
+## SDKs & APIs
 
-- [HTTP Server](HTTP.md) - OpenAI-compatible HTTP endpoints
+- [Python SDK](../mistralrs-pyo3/SDK.md) - Python package documentation
+- [Rust SDK](https://ericlbuehler.github.io/mistral.rs/mistralrs/) - Rust crate documentation
+- [HTTP Server](HTTP.md) - OpenAI-compatible HTTP API
 - [OpenResponses API](OPENRESPONSES.md) - Stateful conversation API
-- [Python API](../mistralrs-pyo3/API.md) - Python bindings documentation
-- [Rust API](https://ericlbuehler.github.io/mistral.rs/mistralrs/) - Rust crate documentation
 
 ## Models
 
