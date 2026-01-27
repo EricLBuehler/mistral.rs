@@ -5,6 +5,7 @@
 # Getting Started
 
 - [Installation](INSTALLATION.md)
+- [Cargo Features](CARGO_FEATURES.md)
 - [CLI Reference](CLI.md)
 - [CLI TOML Configuration](CLI_CONFIG.md)
 - [Troubleshooting](TROUBLESHOOTING.md)

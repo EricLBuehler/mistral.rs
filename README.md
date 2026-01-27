@@ -6,7 +6,7 @@
 -->
 
 <div align="center">
-  <img src="res/banner.png" alt="mistral.rs" width="100%" style="max-width: 800px;">
+  <img src="https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/res/banner.png" alt="mistral.rs" width="100%" style="max-width: 800px;">
 </div>
 
 <h3 align="center">
@@ -85,7 +85,7 @@ mistralrs doctor
 <details open>
   <summary><b>Web Chat Demo</b></summary>
   <br>
-  <img src="./res/chat.gif" alt="Web Chat UI Demo" />
+  <img src="https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/res/chat.gif" alt="Web Chat UI Demo" />
 </details>
 
 ## What Makes It Fast
