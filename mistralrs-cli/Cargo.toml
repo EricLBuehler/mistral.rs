@@ -16,6 +16,7 @@ default-run = "mistralrs"
 [[bin]]
 name = "mistralrs"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 mistralrs-core = { workspace = true }
