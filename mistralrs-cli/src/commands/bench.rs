@@ -119,7 +119,7 @@ pub async fn run_bench(
         // Use external timing since internal Usage timing may not capture prompt time accurately
         if prompt_len > 0 {
             let start = Instant::now();
-            let _ = run_single_bench(&mistralrs, prompt_len, 1).await?;
+            run_single_bench(&mistralrs, prompt_len, 1).await?;
             let elapsed = start.elapsed();
             // Record both tok/s and TTFT (latency in ms)
             let tok_per_sec = prompt_len as f32 / elapsed.as_secs_f32();
@@ -130,7 +130,7 @@ pub async fn run_bench(
         // Decode benchmark (token generation)
         if gen_len > 0 {
             let start = Instant::now();
-            let _ = run_single_bench(&mistralrs, 4, gen_len).await?;
+            run_single_bench(&mistralrs, 4, gen_len).await?;
             let elapsed = start.elapsed();
             // Record both tok/s and ms/tok
             let tok_per_sec = gen_len as f32 / elapsed.as_secs_f32();
