@@ -1,4 +1,4 @@
-# Documentation
+![mistral.rs](banner.png)
 
 ## Quick Links
 
@@ -10,8 +10,6 @@
 | Fix an error | [Troubleshooting](TROUBLESHOOTING.md) |
 | Configure environment | [Configuration](CONFIGURATION.md) |
 | Check model support | [Supported Models](SUPPORTED_MODELS.md) |
-
----
 
 ## Getting Started
 

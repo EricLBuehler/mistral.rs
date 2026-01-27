@@ -9,7 +9,7 @@ src = "."
 build-dir = "book"
 
 [output.html]
-default-theme = "rust"
+default-theme = "light"
 preferred-dark-theme = "coal"
 git-repository-url = "https://github.com/EricLBuehler/mistral.rs"
 edit-url-template = "https://github.com/EricLBuehler/mistral.rs/edit/master/docs/{path}"
