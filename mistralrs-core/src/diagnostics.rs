@@ -37,7 +37,7 @@ pub struct DeviceInfo {
     /// CUDA compute capability (major, minor) - None for non-CUDA devices
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compute_capability: Option<(u32, u32)>,
-    /// Whether this GPU supports Flash Attention v2 (compute capability >= 7.5)
+    /// Whether this GPU supports Flash Attention v2 (compute capability >= 8.0)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flash_attn_compatible: Option<bool>,
     /// Whether this GPU supports Flash Attention v3 (compute capability == 9.0, Hopper only)
@@ -149,9 +149,9 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
 
                     // Get compute capability
                     let compute_cap = get_cuda_compute_capability(ord);
-                    let flash_attn_v2_ok = compute_cap.map(|(major, minor)| {
-                        // Flash Attention v2 requires compute capability >= 7.5 (Turing+)
-                        major > 7 || (major == 7 && minor >= 5)
+                    let flash_attn_v2_ok = compute_cap.map(|(major, _minor)| {
+                        // Flash Attention v2 requires compute capability >= 8.0 (Ampere+)
+                        major >= 8
                     });
                     let flash_attn_v3_ok = compute_cap.map(|(major, minor)| {
                         // Flash Attention v3 requires compute capability == 9.0 (Hopper only)
