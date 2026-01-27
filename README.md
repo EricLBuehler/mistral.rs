@@ -14,7 +14,7 @@ Blazingly fast LLM inference.
 </h3>
 
 <p align="center">
-| <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust SDK</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/SDK.md"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
+  | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust SDK</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/SDK.md"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
 </p>
 
 <p align="center">
@@ -222,7 +222,7 @@ docker run --gpus all -p 1234:1234 ghcr.io/ericlbuehler/mistral.rs:latest \
 
 ## Documentation
 
-For complete documentation, see the **[Documentation Index](docs/README.md)**.
+For complete documentation, see the **[Documentation](https://ericlbuehler.github.io/mistral.rs/)**.
 
 **Quick Links:**
 - [CLI Reference](docs/CLI.md) - All commands and options
