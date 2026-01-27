@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 set -e
 
 # mistral.rs Installation Script
@@ -13,21 +13,21 @@ BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 # Print functions
-info() { echo -e "${BLUE}info:${NC} $1"; }
-success() { echo -e "${GREEN}success:${NC} $1"; }
-warn() { echo -e "${YELLOW}warning:${NC} $1"; }
-error() { echo -e "${RED}error:${NC} $1"; exit 1; }
+info() { printf "${BLUE}info:${NC} %s\n" "$1"; }
+success() { printf "${GREEN}success:${NC} %s\n" "$1"; }
+warn() { printf "${YELLOW}warning:${NC} %s\n" "$1"; }
+error() { printf "${RED}error:${NC} %s\n" "$1"; exit 1; }
 
 # Banner
 print_banner() {
-    echo -e "${BOLD}"
+    printf "${BOLD}"
     echo "  __  __ _     _             _              "
-    echo " |  \/  (_)___| |_ _ __ __ _| |  _ __ ___   "
-    echo " | |\/| | / __| __| '__/ _\` | | | '__/ __|  "
-    echo " | |  | | \__ \ |_| | | (_| | |_| |  \__ \  "
-    echo " |_|  |_|_|___/\__|_|  \__,_|_(_)_|  |___/  "
+    echo " |  \\/  (_)___| |_ _ __ __ _| |  _ __ ___   "
+    echo " | |\\/| | / __| __| '__/ _\` | | | '__/ __|  "
+    echo " | |  | | \\__ \\ |_| | | (_| | |_| |  \\__ \\  "
+    echo " |_|  |_|_|___/\\__|_|  \\__,_|_(_)_|  |___/  "
     echo ""
-    echo -e "${NC}${BLUE}Blazing fast LLM inference engine${NC}"
+    printf "${NC}${BLUE}Blazing fast LLM inference engine${NC}\n"
     echo ""
 }
 
@@ -48,32 +48,28 @@ detect_os() {
 
 # Check if Rust is installed
 check_rust() {
-    if command -v cargo &> /dev/null; then
-        return 0
-    fi
-    return 1
+    command -v cargo >/dev/null 2>&1
 }
 
 # Install Rust via rustup
 install_rust() {
     info "Installing Rust via rustup..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    source "$HOME/.cargo/env"
+    . "$HOME/.cargo/env"
     success "Rust installed successfully"
 }
 
 # Detect CUDA compute capability
 detect_cuda_compute_cap() {
-    if ! command -v nvidia-smi &> /dev/null; then
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
         echo ""
         return
     fi
 
     # Try direct query
-    local cc
     cc=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '.')
 
-    if [[ -n "$cc" ]]; then
+    if [ -n "$cc" ]; then
         echo "$cc"
     fi
 }
@@ -81,19 +77,13 @@ detect_cuda_compute_cap() {
 # Check if MKL is installed
 detect_mkl() {
     # Check MKLROOT environment variable
-    if [[ -n "$MKLROOT" ]] && [[ -d "$MKLROOT" ]]; then
+    if [ -n "$MKLROOT" ] && [ -d "$MKLROOT" ]; then
         return 0
     fi
 
     # Check common installation paths
-    local mkl_paths=(
-        "/opt/intel/oneapi/mkl/latest"
-        "/opt/intel/mkl"
-        "/opt/intel/oneapi/mkl"
-    )
-
-    for path in "${mkl_paths[@]}"; do
-        if [[ -d "$path" ]]; then
+    for path in /opt/intel/oneapi/mkl/latest /opt/intel/mkl /opt/intel/oneapi/mkl; do
+        if [ -d "$path" ]; then
             return 0
         fi
     done
@@ -103,9 +93,9 @@ detect_mkl() {
 
 # Check if CPU is Intel
 is_intel_cpu() {
-    if [[ -f /proc/cpuinfo ]]; then
+    if [ -f /proc/cpuinfo ]; then
         grep -qi "intel" /proc/cpuinfo && return 0
-    elif command -v sysctl &> /dev/null; then
+    elif command -v sysctl >/dev/null 2>&1; then
         sysctl -n machdep.cpu.brand_string 2>/dev/null | grep -qi "intel" && return 0
     fi
     return 1
@@ -113,24 +103,26 @@ is_intel_cpu() {
 
 # Build feature string based on detected hardware
 build_features() {
-    local os="$1"
-    local features=""
+    os="$1"
+    features=""
 
-    if [[ "$os" == "macos" ]]; then
+    if [ "$os" = "macos" ]; then
         features="metal accelerate"
         info "macOS detected - enabling metal, accelerate"
     else
         # Check for CUDA
-        local cuda_cc
         cuda_cc=$(detect_cuda_compute_cap)
-        if [[ -n "$cuda_cc" ]]; then
+        if [ -n "$cuda_cc" ]; then
             features="cuda cudnn nccl"
-            info "CUDA detected (compute capability: ${cuda_cc:0:1}.${cuda_cc:1})"
+            # Extract major.minor from compute cap (e.g., 89 -> 8.9)
+            cc_major=$(echo "$cuda_cc" | cut -c1)
+            cc_minor=$(echo "$cuda_cc" | cut -c2-)
+            info "CUDA detected (compute capability: ${cc_major}.${cc_minor})"
 
-            if [[ "$cuda_cc" == "90" ]]; then
+            if [ "$cuda_cc" = "90" ]; then
                 features="$features flash-attn-v3"
                 info "Hopper GPU detected - enabling flash-attn-v3"
-            elif [[ "$cuda_cc" -ge 80 ]]; then
+            elif [ "$cuda_cc" -ge 80 ] 2>/dev/null; then
                 features="$features flash-attn"
                 info "Ampere+ GPU detected - enabling flash-attn"
             fi
@@ -151,9 +143,9 @@ build_features() {
 
 # Install mistralrs-cli
 install_mistralrs() {
-    local features="$1"
+    features="$1"
 
-    if [[ -n "$features" ]]; then
+    if [ -n "$features" ]; then
         info "Installing mistralrs-cli with features: $features"
         cargo install mistralrs-cli --features "$features"
     else
@@ -167,23 +159,23 @@ main() {
     print_banner
 
     # Detect OS
-    local os
     os=$(detect_os)
     info "Detected OS: $os"
 
     # Check for Rust
     if check_rust; then
-        local rust_version
         rust_version=$(rustc --version 2>/dev/null || echo "unknown")
         info "Rust is installed: $rust_version"
     else
         warn "Rust is not installed"
         echo ""
-        read -p "Would you like to install Rust now? [Y/n] " -n 1 -r
-        echo ""
-        if [[ $REPLY =~ ^[Nn]$ ]]; then
-            error "Rust is required to install mistral.rs"
-        fi
+        printf "Would you like to install Rust now? [Y/n] "
+        read -r REPLY
+        case "$REPLY" in
+            [Nn]*)
+                error "Rust is required to install mistral.rs"
+                ;;
+        esac
         install_rust
     fi
 
@@ -191,26 +183,27 @@ main() {
     info "Detecting hardware capabilities..."
 
     # Build features
-    local features
     features=$(build_features "$os")
 
     echo ""
-    echo -e "${BOLD}Installation Summary${NC}"
+    printf "${BOLD}Installation Summary${NC}\n"
     echo "===================="
-    if [[ -n "$features" ]]; then
-        echo -e "Features: ${GREEN}$features${NC}"
+    if [ -n "$features" ]; then
+        printf "Features: ${GREEN}%s${NC}\n" "$features"
     else
-        echo -e "Features: ${YELLOW}(none - CPU only)${NC}"
+        printf "Features: ${YELLOW}(none - CPU only)${NC}\n"
     fi
     echo ""
 
     # Confirm installation
-    read -p "Proceed with installation? [Y/n] " -n 1 -r
-    echo ""
-    if [[ $REPLY =~ ^[Nn]$ ]]; then
-        info "Installation cancelled"
-        exit 0
-    fi
+    printf "Proceed with installation? [Y/n] "
+    read -r REPLY
+    case "$REPLY" in
+        [Nn]*)
+            info "Installation cancelled"
+            exit 0
+            ;;
+    esac
 
     echo ""
     install_mistralrs "$features"
@@ -218,7 +211,7 @@ main() {
     echo ""
     success "mistral.rs installed successfully!"
     echo ""
-    echo -e "${BOLD}Quick Start${NC}"
+    printf "${BOLD}Quick Start${NC}\n"
     echo "==========="
     echo "  # Run a model interactively"
     echo "  mistralrs run --isq 4 -m google/gemma-3-4b-it"
