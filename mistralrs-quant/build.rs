@@ -41,6 +41,13 @@ fn cuda_version_from_build_system() -> (usize, usize) {
 }
 
 fn main() -> Result<(), String> {
+    // Declare expected cfg values for check-cfg lint
+    println!("cargo::rustc-check-cfg=cfg(has_marlin_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_blockwise_fp8_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_scalar_fp8_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_vector_fp8_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_mxfp4_kernels)");
+
     #[cfg(feature = "cuda")]
     {
         use std::{path::PathBuf, process::Command, vec};

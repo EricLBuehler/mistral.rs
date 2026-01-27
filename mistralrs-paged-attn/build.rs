@@ -8,6 +8,9 @@ fn main() -> Result<()> {
     use std::path::PathBuf;
     use std::process::Command;
 
+    // Declare expected cfg values for check-cfg lint
+    println!("cargo::rustc-check-cfg=cfg(has_fp8)");
+
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/cuda/pagedattention.cuh");
     println!("cargo:rerun-if-changed=src/cuda/copy_blocks_kernel.cu");
@@ -119,6 +122,9 @@ fn main() -> Result<(), String> {
     use std::path::PathBuf;
     use std::process::Command;
     use std::{env, str};
+
+    // Declare expected cfg values for check-cfg lint
+    println!("cargo::rustc-check-cfg=cfg(has_fp8)");
 
     const METAL_SOURCES: [&str; 4] = [
         "copy_blocks",
@@ -260,5 +266,7 @@ fn main() -> Result<(), String> {
 
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 fn main() -> Result<()> {
+    // Declare expected cfg values for check-cfg lint
+    println!("cargo::rustc-check-cfg=cfg(has_fp8)");
     Ok(())
 }
