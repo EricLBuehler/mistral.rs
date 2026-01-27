@@ -241,6 +241,8 @@ Contributions welcome! Please [open an issue](https://github.com/EricLBuehler/mi
 
 This project would not be possible without the excellent work at [Candle](https://github.com/huggingface/candle). Thank you to all [contributors](https://github.com/EricLBuehler/mistral.rs/graphs/contributors)!
 
+mistral.rs is not affiliated with Mistral AI.
+
 <p align="right">
   <a href="#top">Back to Top</a>
 </p>
