@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["chatcompletions","create_streamer","handle_error","match_responses","parse_request","process_non_streaming_response"],"type":["ChatCompletionOnChunkCallback","ChatCompletionOnDoneCallback","ChatCompletionResponder","ChatCompletionStreamer"]};

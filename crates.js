@@ -1,2 +1,0 @@
-window.ALL_CRATES = ["mistralrs","mistralrs_audio","mistralrs_bench","mistralrs_core","mistralrs_macros","mistralrs_mcp","mistralrs_paged_attn","mistralrs_quant","mistralrs_server","mistralrs_server_core","mistralrs_vision","mistralrs_web_chat"];
-//{"start":21,"fragment_lengths":[11,18,18,17,19,16,23,18,19,24,19,21]}

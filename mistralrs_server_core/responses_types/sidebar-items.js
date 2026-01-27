@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["content","enums","events","items","resource"]};

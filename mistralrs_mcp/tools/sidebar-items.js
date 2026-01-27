@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ToolType"],"struct":["CalledFunction","Function","Tool","ToolCallbackWithTool"],"type":["ToolCallback","ToolCallbacks","ToolCallbacksWithTools"]};

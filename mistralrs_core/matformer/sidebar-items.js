@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["MatformerConfig","MatformerSliceConfig","Slice"]};

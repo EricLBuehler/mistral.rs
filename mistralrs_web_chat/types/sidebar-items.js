@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["AppState","ChatFile","ChatMessage","Cli","DeleteChatRequest","GenerationParams","LoadChatRequest","NewChatRequest","RenameChatRequest","SelectRequest"]};

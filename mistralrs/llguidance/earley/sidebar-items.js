@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ParamCond","ParamExpr","ParserError","ValidationResult"],"mod":["lexerspec","perf","regexvec"],"struct":["CGrammar","CSymIdx","Grammar","ParamRef","ParamValue","Parser","ParserMetrics","ParserRecognizer","ParserStats","SlicedBiasComputer","SymIdx","SymbolProps","XorShift"],"trait":["BiasComputer"],"type":["BitIdx"]};

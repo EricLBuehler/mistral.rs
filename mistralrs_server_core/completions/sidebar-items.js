@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["completions","create_streamer","handle_error","match_responses","parse_request","process_non_streaming_response"],"type":["CompletionOnChunkCallback","CompletionOnDoneCallback","CompletionResponder","CompletionStreamer"]};

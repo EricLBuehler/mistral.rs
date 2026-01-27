@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["get_response_cache"],"static":["RESPONSE_CACHE"],"struct":["InMemoryResponseCache"],"trait":["ResponseCache"]};

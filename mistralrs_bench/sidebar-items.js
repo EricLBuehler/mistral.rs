@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["TestName"],"fn":["get_ms_tok","get_tok_s","main","parse_cache_type","print_usage","run_bench","warmup_run"],"struct":["Args","BenchResult","UncertainTokSec"]};

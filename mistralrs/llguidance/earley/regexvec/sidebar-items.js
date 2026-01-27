@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["MatchingLexemes","NextByte"],"struct":["AlphabetInfo","ExprRef","LexemeSet","LexerStats","RegexVec","StateDesc","StateID"]};

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["append_message","delete_chat","generate_speech","get_settings","list_chats","list_models","load_chat","new_chat","rename_chat","select_model","upload_audio","upload_image","upload_text","validate_audio_upload","validate_image_upload","validate_text_upload"],"struct":["AppendMessageRequest","GenerateSpeechRequest"]};

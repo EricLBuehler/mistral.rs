@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ResponseTool","ResponseToolChoice","SimpleToolChoice"],"struct":["FunctionDefinition","IncompleteDetails","InputTokensDetails","OutputTokensDetails","ResponseError","ResponseResource","ResponseUsage","SpecificFunctionChoice","SpecificToolChoice"]};

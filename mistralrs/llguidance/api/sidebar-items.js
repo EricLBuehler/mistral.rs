@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["DEFAULT_CONTEXTUAL"],"enum":["GrammarId","GrammarInit","StopReason","ValidationResult"],"struct":["GenGrammarOptions","GenOptions","GrammarWithLexer","LLGuidanceOptions","NodeProps","ParserLimits","RegexExt","TopLevelGrammar"]};

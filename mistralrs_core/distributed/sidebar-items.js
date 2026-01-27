@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["is_daemon","nccl_daemon_replicator","ring_daemon_replicator","use_nccl"]};

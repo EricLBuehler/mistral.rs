@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["background_tasks","cached_responses","chat_completion","completions","embeddings","handler_core","image_generation","mistralrs_for_server_builder","mistralrs_server_router_builder","openai","openapi_doc","responses","responses_types","speech_generation","streaming","types","util"]};

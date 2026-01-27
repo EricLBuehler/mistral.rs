@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["maybe_init_cublas_lt_wrapper"],"static":["CUBLASLT_CONTROLLER"],"struct":["CublasLtController","CublasLtWrapper"]};

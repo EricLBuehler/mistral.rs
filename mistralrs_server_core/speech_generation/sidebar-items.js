@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["SpeechGenerationResponder"],"fn":["handle_error","match_responses","parse_request","process_non_streaming_response","speech_generation"]};

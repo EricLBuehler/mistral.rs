@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["MAX_GEMV_BATCH_SIZE"],"fn":["gemv","should_use_gemv"],"static":["GEMV_CONTROLLER"],"struct":["GemvController"]};

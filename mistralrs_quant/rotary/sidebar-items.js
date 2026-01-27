@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["apply_rotary_inplace"]};

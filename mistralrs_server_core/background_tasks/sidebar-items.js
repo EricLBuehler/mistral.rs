@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["BackgroundTaskState"],"fn":["get_background_task_manager"],"struct":["BackgroundTask","BackgroundTaskManager"]};

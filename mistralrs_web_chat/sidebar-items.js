@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["main","static_handler"],"mod":["chat","handlers","models","types","utils"],"static":["STATIC_DIR"]};

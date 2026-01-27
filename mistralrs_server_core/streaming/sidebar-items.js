@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["DEFAULT_KEEP_ALIVE_INTERVAL_MS"],"enum":["DoneState"],"fn":["get_keep_alive_interval"],"struct":["BaseStreamer"]};

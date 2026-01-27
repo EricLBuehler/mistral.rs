@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["CLEAR_CMD"],"fn":["apply_gen_params","handle_restore_message","handle_socket","handle_text_model","handle_vision_model","stream_and_forward","validate_audio_path","validate_image_path","ws_handler"],"struct":["HandlerParams","MessageGenerationParams","VisionContext"]};

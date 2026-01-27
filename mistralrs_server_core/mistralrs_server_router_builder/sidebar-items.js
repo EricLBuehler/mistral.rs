@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["DEFAULT_MAX_BODY_LIMIT"],"struct":["MistralRsServerRouterBuilder"]};

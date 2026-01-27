@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["DEFAULT_CHANNEL_BUFFER_SIZE"],"fn":["create_response_channel","send_request","send_request_with_model"]};

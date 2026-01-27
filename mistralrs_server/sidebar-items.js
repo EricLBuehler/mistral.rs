@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["load_mcp_config","load_multi_model_config","main","parse_cache_type","parse_token_source","validate_mcp_config"],"mod":["interactive_mode","mcp_server"],"struct":["Args","ModelConfigParsed"]};

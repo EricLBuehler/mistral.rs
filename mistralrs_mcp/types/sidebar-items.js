@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["McpContent"],"struct":["McpFunctionSchema","McpInitResult","McpResourceReference","McpServerCapabilities","McpServerInfo","McpToolResult","McpToolSchema"]};

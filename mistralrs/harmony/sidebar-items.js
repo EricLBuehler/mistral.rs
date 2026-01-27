@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["HarmonyChannel"],"fn":["is_harmony_encoding_ready","is_harmony_template","prewarm_harmony_encoding"],"struct":["HarmonyAccumulated","HarmonyContext","HarmonyDelta","HarmonyToolCall"]};

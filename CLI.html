@@ -1,0 +1,993 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>CLI Reference - mistral.rs Documentation</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Blazingly fast LLM inference engine">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "ayu";
+            window.path_to_searchindex_js = "searchindex-971f90c6.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-165a76c6.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">mistral.rs Documentation</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/EricLBuehler/mistral.rs" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/EricLBuehler/mistral.rs/edit/master/docs/./CLI.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="mistralrs-cli-reference"><a class="header" href="#mistralrs-cli-reference">mistralrs CLI Reference</a></h1>
+<p>This is the comprehensive CLI reference for <code>mistralrs</code>. The CLI provides commands for interactive mode, HTTP server, builtin UI, quantization, and system diagnostics.</p>
+<h2 id="table-of-contents"><a class="header" href="#table-of-contents">Table of Contents</a></h2>
+<ul>
+<li><a href="#commands">Commands</a>
+<ul>
+<li><a href="#run---interactive-mode">run</a>: run model in interactive mode</li>
+<li><a href="#serve---http-server">serve</a>: start HTTP/MCP server and (optionally) the UI</li>
+<li><a href="#from-config---toml-configuration">from-config</a>: run from a <a href="CLI_CONFIG.html">TOML configuration file</a></li>
+<li><a href="#quantize---uqff-generation">quantize</a>: generate UQFF quantized model file</li>
+<li><a href="#tune---recommendations">tune</a>: recommend quantization + device mapping for a model</li>
+<li><a href="#doctor---system-diagnostics">doctor</a>: run system diagnostics and environment checks</li>
+<li><a href="#login---huggingface-authentication">login</a>: authenticate with HuggingFace Hub</li>
+<li><a href="#cache---model-management">cache</a>: manage the HuggingFace model cache</li>
+<li><a href="#bench---performance-benchmarking">bench</a>: run performance benchmarks</li>
+<li><a href="#completions---shell-completions">completions</a>: generate shell completions</li>
+</ul>
+</li>
+<li><a href="#model-types">Model Types</a>
+<ul>
+<li><a href="#auto">auto</a></li>
+<li><a href="#text">text</a></li>
+<li><a href="#vision">vision</a></li>
+<li><a href="#diffusion">diffusion</a></li>
+<li><a href="#speech">speech</a></li>
+<li><a href="#embedding">embedding</a></li>
+</ul>
+</li>
+<li><a href="#features">Features</a>
+<ul>
+<li><a href="#isq-quantization">ISQ Quantization</a></li>
+<li><a href="#uqff-files">UQFF Files</a></li>
+<li><a href="#pagedattention">PagedAttention</a></li>
+<li><a href="#device-mapping">Device Mapping</a></li>
+<li><a href="#lora-and-x-lora">LoRA and X-LoRA</a></li>
+<li><a href="#chat-templates">Chat Templates</a></li>
+<li><a href="#web-search">Web Search</a></li>
+<li><a href="#thinking-mode">Thinking Mode</a></li>
+</ul>
+</li>
+<li><a href="#global-options">Global Options</a></li>
+<li><a href="#interactive-commands">Interactive Commands</a></li>
+</ul>
+<hr>
+<h2 id="commands"><a class="header" href="#commands">Commands</a></h2>
+<h3 id="run---interactive-mode"><a class="header" href="#run---interactive-mode">run - Interactive Mode</a></h3>
+<p>Start a model in interactive mode for conversational use.</p>
+<pre><code class="language-bash">mistralrs run [MODEL_TYPE] -m &lt;MODEL_ID&gt; [OPTIONS]
+</code></pre>
+<p>Note: <code>MODEL_TYPE</code> is optional and defaults to <code>auto</code> if not specified. This allows a shorter syntax.</p>
+<p><strong>Examples:</strong></p>
+<pre><code class="language-bash"># Run a text model interactively (shorthand - auto type is implied)
+mistralrs run -m Qwen/Qwen3-4B
+
+# Explicit auto type (equivalent to above)
+mistralrs run -m Qwen/Qwen3-4B
+
+# Run with thinking mode enabled
+mistralrs run -m Qwen/Qwen3-4B --enable-thinking
+
+# Run a vision model
+mistralrs run -m google/gemma-3-4b-it
+</code></pre>
+<p><strong>Options:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--enable-thinking</code></td><td>Enable thinking mode for models that support it</td></tr>
+</tbody>
+</table>
+</div>
+<p>The <code>run</code> command also accepts all <a href="#runtime-options">runtime options</a>.</p>
+<hr>
+<h3 id="serve---http-server"><a class="header" href="#serve---http-server">serve - HTTP Server</a></h3>
+<p>Start an HTTP server with OpenAI-compatible API endpoints.</p>
+<pre><code class="language-bash">mistralrs serve [MODEL_TYPE] -m &lt;MODEL_ID&gt; [OPTIONS]
+</code></pre>
+<p>Note: <code>MODEL_TYPE</code> is optional and defaults to <code>auto</code> if not specified.</p>
+<p><strong>Examples:</strong></p>
+<pre><code class="language-bash"># Start server on default port 1234 (shorthand)
+mistralrs serve -m Qwen/Qwen3-4B
+
+# Explicit auto type (equivalent to above)
+mistralrs serve -m Qwen/Qwen3-4B
+
+# Start server with web UI
+mistralrs serve -m Qwen/Qwen3-4B --ui
+
+# Start server on custom port
+mistralrs serve -m Qwen/Qwen3-4B -p 3000
+
+# Start server with MCP support
+mistralrs serve -m Qwen/Qwen3-4B --mcp-port 8081
+</code></pre>
+<p><strong>Server Options:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>-p, --port &lt;PORT&gt;</code></td><td><code>1234</code></td><td>HTTP server port</td></tr>
+<tr><td><code>--host &lt;HOST&gt;</code></td><td><code>0.0.0.0</code></td><td>Bind address</td></tr>
+<tr><td><code>--ui</code></td><td>disabled</td><td>Serve built-in web UI at <code>/ui</code></td></tr>
+<tr><td><code>--mcp-port &lt;PORT&gt;</code></td><td>none</td><td>MCP protocol server port</td></tr>
+<tr><td><code>--mcp-config &lt;PATH&gt;</code></td><td>none</td><td>MCP client configuration file</td></tr>
+</tbody>
+</table>
+</div>
+<p>The <code>serve</code> command also accepts all <a href="#runtime-options">runtime options</a>.</p>
+<hr>
+<h3 id="quantize---uqff-generation"><a class="header" href="#quantize---uqff-generation">quantize - UQFF Generation</a></h3>
+<p>Generate a UQFF (Unified Quantized File Format) file from a model.</p>
+<pre><code class="language-bash">mistralrs quantize &lt;MODEL_TYPE&gt; -m &lt;MODEL_ID&gt; --isq &lt;LEVEL&gt; -o &lt;OUTPUT&gt;
+</code></pre>
+<p><strong>Examples:</strong></p>
+<pre><code class="language-bash"># Quantize a text model to 4-bit
+mistralrs quantize -m Qwen/Qwen3-4B --isq 4 -o qwen3-4b-q4.uqff
+
+# Quantize with Q4_K format
+mistralrs quantize -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-q4k.uqff
+
+# Quantize a vision model
+mistralrs quantize -m google/gemma-3-4b-it --isq 4 -o gemma3-4b-q4.uqff
+
+# Quantize with imatrix for better quality
+mistralrs quantize -m Qwen/Qwen3-4B --isq q4k --imatrix imatrix.dat -o qwen3-4b-q4k.uqff
+</code></pre>
+<p><strong>Quantize Options:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Required</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>-m, --model-id &lt;ID&gt;</code></td><td>Yes</td><td>Model ID or local path</td></tr>
+<tr><td><code>--isq &lt;LEVEL&gt;</code></td><td>Yes</td><td>Quantization level (see <a href="#isq-quantization">ISQ Quantization</a>)</td></tr>
+<tr><td><code>-o, --output &lt;PATH&gt;</code></td><td>Yes</td><td>Output UQFF file path</td></tr>
+<tr><td><code>--isq-organization &lt;TYPE&gt;</code></td><td>No</td><td>ISQ organization strategy: <code>default</code> or <code>moqe</code></td></tr>
+<tr><td><code>--imatrix &lt;PATH&gt;</code></td><td>No</td><td>imatrix file for enhanced quantization</td></tr>
+<tr><td><code>--calibration-file &lt;PATH&gt;</code></td><td>No</td><td>Calibration file for imatrix generation</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h3 id="tune---recommendations"><a class="header" href="#tune---recommendations">tune - Recommendations</a></h3>
+<p>Get quantization and device mapping recommendations for a model. The tune command analyzes your hardware and shows all quantization options with their estimated memory usage, context room, and quality trade-offs.</p>
+<pre><code class="language-bash">mistralrs tune [MODEL_TYPE] -m &lt;MODEL_ID&gt; [OPTIONS]
+</code></pre>
+<p>Note: <code>MODEL_TYPE</code> is optional and defaults to <code>auto</code> if not specified, which supports all model types. See <a href="#auto">details</a>.</p>
+<p><strong>Examples:</strong></p>
+<pre><code class="language-bash"># Get balanced recommendations (shorthand)
+mistralrs tune -m Qwen/Qwen3-4B
+
+# Get quality-focused recommendations
+mistralrs tune -m Qwen/Qwen3-4B --profile quality
+
+# Get fast inference recommendations
+mistralrs tune -m Qwen/Qwen3-4B --profile fast
+
+# Output as JSON
+mistralrs tune -m Qwen/Qwen3-4B --json
+
+# Generate a TOML config file with recommendations
+mistralrs tune -m Qwen/Qwen3-4B --emit-config config.toml
+</code></pre>
+<p><strong>Example Output (CUDA):</strong></p>
+<pre><code>Tuning Analysis
+===============
+
+Model: Qwen/Qwen3-4B
+Profile: Balanced
+Backend: cuda
+Total VRAM: 24.0 GB
+
+Quantization Options
+--------------------
+┌─────────────┬───────────┬────────┬──────────────┬───────────────┬──────────────────┐
+│ Quant       │ Est. Size │ VRAM % │ Context Room │ Quality       │ Status           │
+├─────────────┼───────────┼────────┼──────────────┼───────────────┼──────────────────┤
+│ None (FP16) │ 8.50 GB   │ 35%    │ 48k          │ Baseline      │ ✅ Fits          │
+│ Q8_0        │ 4.50 GB   │ 19%    │ 96k          │ Near-lossless │ 🚀 Recommended   │
+│ Q6K         │ 3.70 GB   │ 15%    │ 128k (max)   │ Good          │ ✅ Fits          │
+│ Q5K         │ 3.20 GB   │ 13%    │ 128k (max)   │ Good          │ ✅ Fits          │
+│ Q4K         │ 2.60 GB   │ 11%    │ 128k (max)   │ Acceptable    │ ✅ Fits          │
+│ Q3K         │ 2.00 GB   │ 8%     │ 128k (max)   │ Degraded      │ ✅ Fits          │
+│ Q2K         │ 1.50 GB   │ 6%     │ 128k (max)   │ Degraded      │ ✅ Fits          │
+└─────────────┴───────────┴────────┴──────────────┴───────────────┴──────────────────┘
+
+Recommended Command
+-------------------
+  mistralrs serve -m Qwen/Qwen3-4B --isq q8_0
+
+[INFO] PagedAttention is available (mode: auto)
+</code></pre>
+<p><strong>Example Output (Metal):</strong></p>
+<p>On macOS with Metal, the command recommends Apple Format Quantization (AFQ) types:</p>
+<pre><code>Quantization Options
+--------------------
+┌─────────────┬───────────┬────────┬──────────────┬───────────────┬──────────────────┐
+│ Quant       │ Est. Size │ VRAM % │ Context Room │ Quality       │ Status           │
+├─────────────┼───────────┼────────┼──────────────┼───────────────┼──────────────────┤
+│ None (FP16) │ 8.50 GB   │ 53%    │ 24k          │ Baseline      │ ✅ Fits          │
+│ AFQ8        │ 4.50 GB   │ 28%    │ 56k          │ Near-lossless │ 🚀 Recommended   │
+│ AFQ6        │ 3.70 GB   │ 23%    │ 64k          │ Good          │ ✅ Fits          │
+│ AFQ4        │ 2.60 GB   │ 16%    │ 128k (max)   │ Acceptable    │ ✅ Fits          │
+│ AFQ3        │ 2.00 GB   │ 13%    │ 128k (max)   │ Degraded      │ ✅ Fits          │
+│ AFQ2        │ 1.50 GB   │ 9%     │ 128k (max)   │ Degraded      │ ✅ Fits          │
+└─────────────┴───────────┴────────┴──────────────┴───────────────┴──────────────────┘
+</code></pre>
+<p><strong>Status Legend:</strong></p>
+<ul>
+<li>🚀 <strong>Recommended</strong>: Best option for your profile and hardware</li>
+<li>✅ <strong>Fits</strong>: Model fits entirely in GPU memory</li>
+<li>⚠️ <strong>Hybrid</strong>: Model requires CPU offloading (slower due to PCIe bottleneck)</li>
+<li>❌ <strong>Too Large</strong>: Model doesn’t fit even with CPU offload</li>
+</ul>
+<p><strong>Tune Options:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--profile &lt;PROFILE&gt;</code></td><td><code>balanced</code></td><td>Tuning profile: <code>quality</code>, <code>balanced</code>, or <code>fast</code></td></tr>
+<tr><td><code>--json</code></td><td>disabled</td><td>Output JSON instead of human-readable text</td></tr>
+<tr><td><code>--emit-config &lt;PATH&gt;</code></td><td>none</td><td>Emit a TOML config file with recommended settings</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h3 id="doctor---system-diagnostics"><a class="header" href="#doctor---system-diagnostics">doctor - System Diagnostics</a></h3>
+<p>Run comprehensive system diagnostics and environment checks. The doctor command helps identify configuration issues and validates your system is ready for inference.</p>
+<pre><code class="language-bash">mistralrs doctor [OPTIONS]
+</code></pre>
+<p><strong>Examples:</strong></p>
+<pre><code class="language-bash"># Run diagnostics
+mistralrs doctor
+
+# Output as JSON
+mistralrs doctor --json
+</code></pre>
+<p><strong>Checks Performed:</strong></p>
+<ul>
+<li><strong>CPU Extensions</strong>: AVX, AVX2, AVX-512, FMA support (x86 only; ARM shows NEON)</li>
+<li><strong>Binary/Hardware Match</strong>: Validates CUDA/Metal features match detected hardware</li>
+<li><strong>GPU Compute Capability</strong>: Reports compute version and Flash Attention v2/v3 compatibility</li>
+<li><strong>Flash Attention Features</strong>: Warns if hardware supports FA but binary doesn’t have it enabled</li>
+<li><strong>Hugging Face Connectivity</strong>: Tests connection and token validity using a gated model</li>
+<li><strong>HF Cache</strong>: Verifies cache directory is writable</li>
+<li><strong>Disk Space</strong>: Checks available storage</li>
+</ul>
+<p><strong>Options:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--json</code></td><td>Output JSON instead of human-readable text</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h3 id="login---huggingface-authentication"><a class="header" href="#login---huggingface-authentication">login - HuggingFace Authentication</a></h3>
+<p>Authenticate with HuggingFace Hub by saving your token to the local cache.</p>
+<pre><code class="language-bash">mistralrs login [OPTIONS]
+</code></pre>
+<p><strong>Examples:</strong></p>
+<pre><code class="language-bash"># Interactive login (prompts for token)
+mistralrs login
+
+# Provide token directly
+mistralrs login --token hf_xxxxxxxxxxxxx
+</code></pre>
+<p>The token is saved to the standard HuggingFace cache location:</p>
+<ul>
+<li>Linux/macOS: <code>~/.cache/huggingface/token</code></li>
+<li>Windows: <code>C:\Users\&lt;user&gt;\.cache\huggingface\token</code></li>
+</ul>
+<p>If the <code>HF_HOME</code> environment variable is set, the token is saved to <code>$HF_HOME/token</code>.</p>
+<p><strong>Options:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--token &lt;TOKEN&gt;</code></td><td>Provide token directly (non-interactive)</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h3 id="cache---model-management"><a class="header" href="#cache---model-management">cache - Model Management</a></h3>
+<p>Manage the HuggingFace model cache. List cached models or delete specific models.</p>
+<pre><code class="language-bash">mistralrs cache &lt;SUBCOMMAND&gt;
+</code></pre>
+<p><strong>Subcommands:</strong></p>
+<h4 id="cache-list"><a class="header" href="#cache-list">cache list</a></h4>
+<p>List all cached models with their sizes and last used times.</p>
+<pre><code class="language-bash">mistralrs cache list
+</code></pre>
+<p><strong>Example output:</strong></p>
+<pre><code>HuggingFace Model Cache
+-----------------------
+
+┌──────────────────────────┬──────────┬─────────────┐
+│ Model                    │ Size     │ Last Used   │
+├──────────────────────────┼──────────┼─────────────┤
+│ Qwen/Qwen3-4B            │ 8.5 GB   │ today       │
+│ google/gemma-3-4b-it     │ 6.2 GB   │ 2 days ago  │
+│ meta-llama/Llama-3.2-3B  │ 5.8 GB   │ 1 week ago  │
+└──────────────────────────┴──────────┴─────────────┘
+
+Total: 3 models, 20.5 GB
+Cache directory: /home/user/.cache/huggingface/hub
+</code></pre>
+<h4 id="cache-delete"><a class="header" href="#cache-delete">cache delete</a></h4>
+<p>Delete a specific model from the cache.</p>
+<pre><code class="language-bash">mistralrs cache delete -m &lt;MODEL_ID&gt;
+</code></pre>
+<p><strong>Examples:</strong></p>
+<pre><code class="language-bash"># Delete a specific model
+mistralrs cache delete -m Qwen/Qwen3-4B
+
+# Delete a model with organization
+mistralrs cache delete -m meta-llama/Llama-3.2-3B
+</code></pre>
+<hr>
+<h3 id="bench---performance-benchmarking"><a class="header" href="#bench---performance-benchmarking">bench - Performance Benchmarking</a></h3>
+<p>Run performance benchmarks to measure prefill and decode speeds.</p>
+<pre><code class="language-bash">mistralrs bench [MODEL_TYPE] -m &lt;MODEL_ID&gt; [OPTIONS]
+</code></pre>
+<p>Note: <code>MODEL_TYPE</code> is optional and defaults to <code>auto</code> if not specified.</p>
+<p><strong>Examples:</strong></p>
+<pre><code class="language-bash"># Run default benchmark (512 prompt tokens, 128 generated tokens, 3 iterations)
+mistralrs bench -m Qwen/Qwen3-4B
+
+# Custom prompt and generation lengths
+mistralrs bench -m Qwen/Qwen3-4B --prompt-len 1024 --gen-len 256
+
+# More iterations for better statistics
+mistralrs bench -m Qwen/Qwen3-4B --iterations 10
+
+# With ISQ quantization
+mistralrs bench -m Qwen/Qwen3-4B --isq q4k
+</code></pre>
+<p><strong>Example output:</strong></p>
+<pre><code>Benchmark Results
+=================
+
+Model: Qwen/Qwen3-4B
+Iterations: 3
+
+┌────────────────────────┬─────────────────┬─────────────────┐
+│ Test                   │ T/s             │ Latency         │
+├────────────────────────┼─────────────────┼─────────────────┤
+│ Prefill (512 tokens)   │ 2847.3 ± 45.2   │ 179.82 ms (TTFT)│
+│ Decode (128 tokens)    │ 87.4 ± 2.1      │ 11.44 ms/T      │
+└────────────────────────┴─────────────────┴─────────────────┘
+</code></pre>
+<ul>
+<li><strong>T/s</strong>: Tokens per second (throughput)</li>
+<li><strong>Latency</strong>: For prefill, shows TTFT (Time To First Token) in milliseconds. For decode, shows ms per token.</li>
+</ul>
+<p><strong>Options:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--prompt-len &lt;N&gt;</code></td><td><code>512</code></td><td>Number of tokens in prompt (prefill test)</td></tr>
+<tr><td><code>--gen-len &lt;N&gt;</code></td><td><code>128</code></td><td>Number of tokens to generate (decode test)</td></tr>
+<tr><td><code>--iterations &lt;N&gt;</code></td><td><code>3</code></td><td>Number of benchmark iterations</td></tr>
+<tr><td><code>--warmup &lt;N&gt;</code></td><td><code>1</code></td><td>Number of warmup runs (discarded)</td></tr>
+</tbody>
+</table>
+</div>
+<p>The <code>bench</code> command also accepts all model loading options (ISQ, device mapping, etc.).</p>
+<hr>
+<h3 id="from-config---toml-configuration"><a class="header" href="#from-config---toml-configuration">from-config - TOML Configuration</a></h3>
+<p>Run the CLI from a TOML configuration file. This is the recommended way to run multiple models simultaneously, including models of different types (e.g., text + vision + embedding).</p>
+<p>See <a href="CLI_CONFIG.html">CLI_CONFIG.md</a> for full TOML configuration format details.</p>
+<pre><code class="language-bash">mistralrs from-config --file &lt;PATH&gt;
+</code></pre>
+<p><strong>Example:</strong></p>
+<pre><code class="language-bash">mistralrs from-config --file config.toml
+</code></pre>
+<p><strong>Multi-model example</strong> (config.toml):</p>
+<pre><code class="language-toml">command = "serve"
+
+[server]
+port = 1234
+ui = true
+
+[[models]]
+kind = "auto"
+model_id = "Qwen/Qwen3-4B"
+
+[[models]]
+kind = "vision"
+model_id = "google/gemma-3-4b-it"
+
+[[models]]
+kind = "embedding"
+model_id = "google/embeddinggemma-300m"
+</code></pre>
+<hr>
+<h3 id="completions---shell-completions"><a class="header" href="#completions---shell-completions">completions - Shell Completions</a></h3>
+<p>Generate shell completions for your shell.</p>
+<pre><code class="language-bash">mistralrs completions &lt;SHELL&gt;
+</code></pre>
+<p><strong>Examples:</strong></p>
+<pre><code class="language-bash"># Generate bash completions
+mistralrs completions bash &gt; ~/.local/share/bash-completion/completions/mistralrs
+
+# Generate zsh completions
+mistralrs completions zsh &gt; ~/.zfunc/_mistralrs
+
+# Generate fish completions
+mistralrs completions fish &gt; ~/.config/fish/completions/mistralrs.fish
+</code></pre>
+<p><strong>Supported Shells:</strong> <code>bash</code>, <code>zsh</code>, <code>fish</code>, <code>elvish</code>, <code>powershell</code></p>
+<hr>
+<h2 id="model-types"><a class="header" href="#model-types">Model Types</a></h2>
+<h3 id="auto"><a class="header" href="#auto">auto</a></h3>
+<p>Auto-detect model type. This is the recommended option for most models and is on by default simply by leaving out the explicit model type.</p>
+<pre><code class="language-bash">mistralrs run -m Qwen/Qwen3-4B
+mistralrs serve -m Qwen/Qwen3-4B
+</code></pre>
+<p>The <code>auto</code> type supports text, vision, and other model types through automatic detection.</p>
+<h3 id="text"><a class="header" href="#text">text</a></h3>
+<p>Explicit text generation model configuration.</p>
+<pre><code class="language-bash">mistralrs run text -m Qwen/Qwen3-4B
+mistralrs serve text -m Qwen/Qwen3-4B
+</code></pre>
+<h3 id="vision"><a class="header" href="#vision">vision</a></h3>
+<p>Vision-language models that can process images and text.</p>
+<pre><code class="language-bash">mistralrs run vision -m google/gemma-3-4b-it
+mistralrs serve vision -m google/gemma-3-4b-it
+</code></pre>
+<p><strong>Vision Options:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--max-edge &lt;SIZE&gt;</code></td><td>Maximum edge length for image resizing (aspect ratio preserved)</td></tr>
+<tr><td><code>--max-num-images &lt;N&gt;</code></td><td>Maximum number of images per request</td></tr>
+<tr><td><code>--max-image-length &lt;SIZE&gt;</code></td><td>Maximum image dimension for device mapping</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="diffusion"><a class="header" href="#diffusion">diffusion</a></h3>
+<p>Image generation models using diffusion.</p>
+<pre><code class="language-bash">mistralrs run diffusion -m black-forest-labs/FLUX.1-schnell
+mistralrs serve diffusion -m black-forest-labs/FLUX.1-schnell
+</code></pre>
+<h3 id="speech"><a class="header" href="#speech">speech</a></h3>
+<p>Speech synthesis models.</p>
+<pre><code class="language-bash">mistralrs run speech -m nari-labs/Dia-1.6B
+mistralrs serve speech -m nari-labs/Dia-1.6B
+</code></pre>
+<h3 id="embedding"><a class="header" href="#embedding">embedding</a></h3>
+<p>Text embedding models. These do not support interactive mode but can be used with the HTTP server.</p>
+<pre><code class="language-bash">mistralrs serve embedding -m google/embeddinggemma-300m
+</code></pre>
+<hr>
+<h2 id="features"><a class="header" href="#features">Features</a></h2>
+<h3 id="isq-quantization"><a class="header" href="#isq-quantization">ISQ Quantization</a></h3>
+<p>In-situ quantization (ISQ) reduces model memory usage by quantizing weights at load time. See <a href="ISQ.html">details about ISQ here</a>.</p>
+<p><strong>Usage:</strong></p>
+<pre><code class="language-bash"># Simple bit-width quantization
+mistralrs run -m Qwen/Qwen3-4B --isq 4
+mistralrs run -m Qwen/Qwen3-4B --isq 8
+
+# GGML-style quantization
+mistralrs run -m Qwen/Qwen3-4B --isq q4_0
+mistralrs run -m Qwen/Qwen3-4B --isq q4_1
+mistralrs run -m Qwen/Qwen3-4B --isq q4k
+mistralrs run -m Qwen/Qwen3-4B --isq q5k
+mistralrs run -m Qwen/Qwen3-4B --isq q6k
+</code></pre>
+<p><strong>ISQ Organization:</strong></p>
+<pre><code class="language-bash"># Use MOQE organization for potentially better quality
+mistralrs run -m Qwen/Qwen3-4B --isq q4k --isq-organization moqe
+</code></pre>
+<hr>
+<h3 id="uqff-files"><a class="header" href="#uqff-files">UQFF Files</a></h3>
+<p>UQFF (Unified Quantized File Format) provides pre-quantized model files for faster loading.</p>
+<p><strong>Generate a UQFF file:</strong></p>
+<pre><code class="language-bash">mistralrs quantize auto -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-q4k.uqff
+</code></pre>
+<p><strong>Load from UQFF:</strong></p>
+<pre><code class="language-bash">mistralrs run -m Qwen/Qwen3-4B --from-uqff qwen3-4b-q4k.uqff
+</code></pre>
+<p><strong>Multiple UQFF files (semicolon-separated):</strong></p>
+<pre><code class="language-bash">mistralrs run -m Qwen/Qwen3-4B --from-uqff "part1.uqff;part2.uqff"
+</code></pre>
+<hr>
+<h3 id="pagedattention"><a class="header" href="#pagedattention">PagedAttention</a></h3>
+<p>PagedAttention enables efficient memory management for the KV cache. It is automatically enabled on CUDA and disabled on Metal/CPU by default.</p>
+<p><strong>Control PagedAttention:</strong></p>
+<pre><code class="language-bash"># Auto mode (default): enabled on CUDA, disabled on Metal/CPU
+mistralrs serve -m Qwen/Qwen3-4B --paged-attn auto
+
+# Force enable
+mistralrs serve -m Qwen/Qwen3-4B --paged-attn on
+
+# Force disable
+mistralrs serve -m Qwen/Qwen3-4B --paged-attn off
+</code></pre>
+<p><strong>Memory allocation options (mutually exclusive):</strong></p>
+<pre><code class="language-bash"># Allocate for specific context length (recommended)
+mistralrs serve -m Qwen/Qwen3-4B --pa-context-len 8192
+
+# Allocate specific GPU memory in MB
+mistralrs serve -m Qwen/Qwen3-4B --pa-memory-mb 4096
+
+# Allocate fraction of GPU memory (0.0-1.0)
+mistralrs serve -m Qwen/Qwen3-4B --pa-memory-fraction 0.8
+</code></pre>
+<p><strong>Additional options:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--pa-block-size &lt;SIZE&gt;</code></td><td>Tokens per block (default: 32 on CUDA)</td></tr>
+<tr><td><code>--pa-cache-type &lt;TYPE&gt;</code></td><td>KV cache quantization type (default: auto)</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h3 id="device-mapping"><a class="header" href="#device-mapping">Device Mapping</a></h3>
+<p>Control how model layers are distributed across devices.</p>
+<p><strong>Automatic mapping:</strong></p>
+<pre><code class="language-bash"># Use defaults (automatic)
+mistralrs run -m Qwen/Qwen3-4B
+</code></pre>
+<p><strong>Manual layer assignment:</strong></p>
+<pre><code class="language-bash"># Assign 10 layers to GPU 0, 20 layers to GPU 1
+mistralrs run -m Qwen/Qwen3-4B -n "0:10;1:20"
+
+# Equivalent long form
+mistralrs run -m Qwen/Qwen3-4B --device-layers "0:10;1:20"
+</code></pre>
+<p><strong>CPU-only execution:</strong></p>
+<pre><code class="language-bash">mistralrs run -m Qwen/Qwen3-4B --cpu
+</code></pre>
+<p><strong>Topology file:</strong></p>
+<pre><code class="language-bash">mistralrs run -m Qwen/Qwen3-4B --topology topology.yaml
+</code></pre>
+<p><strong>Custom HuggingFace cache:</strong></p>
+<pre><code class="language-bash">mistralrs run -m Qwen/Qwen3-4B --hf-cache /path/to/cache
+</code></pre>
+<p><strong>Device mapping options:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>-n, --device-layers &lt;MAPPING&gt;</code></td><td>auto</td><td>Device layer mapping (format: <code>ORD:NUM;...</code>)</td></tr>
+<tr><td><code>--topology &lt;PATH&gt;</code></td><td>none</td><td>Topology YAML file for device mapping</td></tr>
+<tr><td><code>--hf-cache &lt;PATH&gt;</code></td><td>none</td><td>Custom HuggingFace cache directory</td></tr>
+<tr><td><code>--cpu</code></td><td>disabled</td><td>Force CPU-only execution</td></tr>
+<tr><td><code>--max-seq-len &lt;LEN&gt;</code></td><td><code>4096</code></td><td>Max sequence length for automatic device mapping</td></tr>
+<tr><td><code>--max-batch-size &lt;SIZE&gt;</code></td><td><code>1</code></td><td>Max batch size for automatic device mapping</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h3 id="lora-and-x-lora"><a class="header" href="#lora-and-x-lora">LoRA and X-LoRA</a></h3>
+<p>Apply LoRA or X-LoRA adapters to models.</p>
+<p><strong>LoRA:</strong></p>
+<pre><code class="language-bash"># Single LoRA adapter
+mistralrs run -m Qwen/Qwen3-4B --lora my-lora-adapter
+
+# Multiple LoRA adapters (semicolon-separated)
+mistralrs run -m Qwen/Qwen3-4B --lora "adapter1;adapter2"
+</code></pre>
+<p><strong>X-LoRA:</strong></p>
+<pre><code class="language-bash"># X-LoRA adapter with ordering file
+mistralrs run -m Qwen/Qwen3-4B --xlora my-xlora-adapter --xlora-order ordering.json
+
+# With target non-granular index
+mistralrs run -m Qwen/Qwen3-4B --xlora my-xlora-adapter --xlora-order ordering.json --tgt-non-granular-index 2
+</code></pre>
+<hr>
+<h3 id="chat-templates"><a class="header" href="#chat-templates">Chat Templates</a></h3>
+<p>Override the model’s default chat template.</p>
+<p><strong>Use a template file:</strong></p>
+<pre><code class="language-bash"># JSON template file
+mistralrs run -m Qwen/Qwen3-4B --chat-template template.json
+
+# Jinja template file
+mistralrs run -m Qwen/Qwen3-4B --chat-template template.jinja
+</code></pre>
+<p><strong>Explicit Jinja override:</strong></p>
+<pre><code class="language-bash">mistralrs run -m Qwen/Qwen3-4B --jinja-explicit custom.jinja
+</code></pre>
+<hr>
+<h3 id="web-search"><a class="header" href="#web-search">Web Search</a></h3>
+<p>Enable web search capabilities (requires an embedding model).</p>
+<pre><code class="language-bash"># Enable search with default embedding model
+mistralrs run -m Qwen/Qwen3-4B --enable-search
+
+# Specify embedding model
+mistralrs run -m Qwen/Qwen3-4B --enable-search --search-embedding-model embedding-gemma
+</code></pre>
+<hr>
+<h3 id="thinking-mode"><a class="header" href="#thinking-mode">Thinking Mode</a></h3>
+<p>Enable thinking/reasoning mode for models that support it (like DeepSeek, Qwen3).</p>
+<pre><code class="language-bash">mistralrs run -m Qwen/Qwen3-4B --enable-thinking
+</code></pre>
+<p>In interactive mode, thinking content is displayed in gray text before the final response.</p>
+<hr>
+<h2 id="global-options"><a class="header" href="#global-options">Global Options</a></h2>
+<p>These options apply to all commands.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--seed &lt;SEED&gt;</code></td><td>none</td><td>Random seed for reproducibility</td></tr>
+<tr><td><code>-l, --log &lt;PATH&gt;</code></td><td>none</td><td>Log all requests and responses to file</td></tr>
+<tr><td><code>--token-source &lt;SOURCE&gt;</code></td><td><code>cache</code></td><td>HuggingFace authentication token source</td></tr>
+<tr><td><code>-V, --version</code></td><td>N/A</td><td>Print version information and exit</td></tr>
+<tr><td><code>-h, --help</code></td><td>N/A</td><td>Print help message (use with any subcommand)</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Token source formats:</strong></p>
+<ul>
+<li><code>cache</code> - Use cached HuggingFace token (default)</li>
+<li><code>literal:&lt;token&gt;</code> - Use literal token value</li>
+<li><code>env:&lt;var&gt;</code> - Read token from environment variable</li>
+<li><code>path:&lt;file&gt;</code> - Read token from file</li>
+<li><code>none</code> - No authentication</li>
+</ul>
+<p><strong>Examples:</strong></p>
+<pre><code class="language-bash"># Set random seed
+mistralrs run -m Qwen/Qwen3-4B --seed 42
+
+# Enable logging
+mistralrs run -m Qwen/Qwen3-4B --log requests.log
+
+# Use token from environment variable
+mistralrs run -m meta-llama/Llama-3.2-3B-Instruct --token-source env:HF_TOKEN
+</code></pre>
+<hr>
+<h2 id="runtime-options"><a class="header" href="#runtime-options">Runtime Options</a></h2>
+<p>These options are available for both <code>run</code> and <code>serve</code> commands.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--max-seqs &lt;N&gt;</code></td><td><code>32</code></td><td>Maximum concurrent sequences</td></tr>
+<tr><td><code>--no-kv-cache</code></td><td>disabled</td><td>Disable KV cache entirely</td></tr>
+<tr><td><code>--prefix-cache-n &lt;N&gt;</code></td><td><code>16</code></td><td>Number of prefix caches to hold (0 to disable)</td></tr>
+<tr><td><code>-c, --chat-template &lt;PATH&gt;</code></td><td>none</td><td>Custom chat template file (.json or .jinja)</td></tr>
+<tr><td><code>-j, --jinja-explicit &lt;PATH&gt;</code></td><td>none</td><td>Explicit JINJA template override</td></tr>
+<tr><td><code>--enable-search</code></td><td>disabled</td><td>Enable web search</td></tr>
+<tr><td><code>--search-embedding-model &lt;MODEL&gt;</code></td><td>none</td><td>Embedding model for search</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="model-source-options"><a class="header" href="#model-source-options">Model Source Options</a></h2>
+<p>These options are common across model types.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>-m, --model-id &lt;ID&gt;</code></td><td>HuggingFace model ID or local path (required)</td></tr>
+<tr><td><code>-t, --tokenizer &lt;PATH&gt;</code></td><td>Path to local tokenizer.json file</td></tr>
+<tr><td><code>-a, --arch &lt;ARCH&gt;</code></td><td>Model architecture (auto-detected if not specified)</td></tr>
+<tr><td><code>--dtype &lt;TYPE&gt;</code></td><td>Model data type (default: <code>auto</code>)</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="format-options"><a class="header" href="#format-options">Format Options</a></h2>
+<p>For loading quantized models.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Option</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--format &lt;FORMAT&gt;</code></td><td>Model format: <code>plain</code>, <code>gguf</code>, or <code>ggml</code> (auto-detected)</td></tr>
+<tr><td><code>-f, --quantized-file &lt;FILE&gt;</code></td><td>Quantized model filename(s) for GGUF/GGML (semicolon-separated)</td></tr>
+<tr><td><code>--tok-model-id &lt;ID&gt;</code></td><td>Model ID for tokenizer when using quantized format</td></tr>
+<tr><td><code>--gqa &lt;VALUE&gt;</code></td><td>GQA value for GGML models (default: 1)</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Examples:</strong></p>
+<pre><code class="language-bash"># Load a GGUF model
+mistralrs run -m Qwen/Qwen3-4B --format gguf -f model.gguf
+
+# Multiple GGUF files
+mistralrs run -m Qwen/Qwen3-4B --format gguf -f "model-part1.gguf;model-part2.gguf"
+</code></pre>
+<hr>
+<h2 id="interactive-commands"><a class="header" href="#interactive-commands">Interactive Commands</a></h2>
+<p>When running in interactive mode (<code>mistralrs run</code>), the following commands are available:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Command</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>\help</code></td><td>Display help message</td></tr>
+<tr><td><code>\exit</code></td><td>Quit interactive mode</td></tr>
+<tr><td><code>\system &lt;message&gt;</code></td><td>Add a system message without running the model</td></tr>
+<tr><td><code>\clear</code></td><td>Clear the chat history</td></tr>
+<tr><td><code>\temperature &lt;float&gt;</code></td><td>Set sampling temperature (0.0 to 2.0)</td></tr>
+<tr><td><code>\topk &lt;int&gt;</code></td><td>Set top-k sampling value (&gt;0)</td></tr>
+<tr><td><code>\topp &lt;float&gt;</code></td><td>Set top-p sampling value (0.0 to 1.0)</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Examples:</strong></p>
+<pre><code>&gt; \system Always respond as a pirate.
+&gt; \temperature 0.7
+&gt; \topk 50
+&gt; Hello!
+Ahoy there, matey! What brings ye to these waters?
+&gt; \clear
+&gt; \exit
+</code></pre>
+<p><strong>Vision Model Interactive Mode:</strong></p>
+<p>For vision models, you can include images in your prompts by specifying file paths or URLs:</p>
+<pre><code>&gt; Describe this image: /path/to/image.jpg
+&gt; Compare these images: image1.png image2.png
+&gt; Describe the image and transcribe the audio: photo.jpg recording.mp3
+</code></pre>
+<p><strong>Note</strong>: The CLI automatically detects paths to supported image and audio files within your prompt. You do not need special syntax; simply paste the absolute or relative path to the file.</p>
+<p>Supported image formats: PNG, JPEG, BMP, GIF, WebP
+Supported audio formats: WAV, MP3, FLAC, OGG</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="CARGO_FEATURES.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="CLI_CONFIG.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="CARGO_FEATURES.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="CLI_CONFIG.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

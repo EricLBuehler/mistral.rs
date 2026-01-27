@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["InputItem","MessageContentParam","OutputItem","ResponsesInput","TaggedInputItem"],"struct":["MessageItemParam"]};

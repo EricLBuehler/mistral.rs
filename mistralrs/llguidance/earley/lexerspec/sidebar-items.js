@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["token_ranges_to_string"],"struct":["Lexeme","LexemeClass","LexemeIdx","LexemeSpec","LexerSpec"]};

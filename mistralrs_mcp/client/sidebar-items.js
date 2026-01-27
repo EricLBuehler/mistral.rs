@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["HttpMcpConnection","McpClient","ProcessMcpConnection","WebSocketMcpConnection"],"trait":["McpServerConnection"]};
