@@ -7,7 +7,7 @@ For a catalog of available embedding models and general usage tips, see [EMBEDDI
 
 ## Prompt instructions
 
-EmbeddingGemma can generate optimized embeddings for various use cases—such as document retrieval, question answering, and fact verification—or for specific input types—either a query or a document—using prompts that are prepended to the input strings. 
+EmbeddingGemma can generate optimized embeddings for various use cases-such as document retrieval, question answering, and fact verification-or for specific input types, either, a query or a document-using prompts that are prepended to the input strings. 
 
 - Query prompts follow the form `task: {task description} | query: ` where the task description varies by the use case, with the default task description being search result. 
 - Document-style prompts follow the form `title: {title | "none"} | text: ` where the title is either none (the default) or the actual title of the document. Note that providing a title, if available, will improve model performance for document prompts but may require manual formatting.
