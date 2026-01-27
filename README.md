@@ -3,8 +3,12 @@
   mistral.rs
 </h1>
 
+<div align="center">
+  <img src="res/banner.png" alt="mistral.rs" width="100%" style="max-width: 800px;">
+</div>
+
 <h3 align="center">
-Run any model from HuggingFace. Text, vision, audio, speech, images—one CLI.
+Blazingly fast LLM inference.
 </h3>
 
 <p align="center">
