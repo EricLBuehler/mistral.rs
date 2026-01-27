@@ -9,6 +9,7 @@ keywords.workspace = true
 categories.workspace = true
 license.workspace = true
 rust-version.workspace = true
+default-run = "mistralrs"
 
 [[bin]]
 name = "mistralrs"

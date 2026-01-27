@@ -12,7 +12,6 @@ keywords.workspace = true
 categories.workspace = true
 license.workspace = true
 homepage.workspace = true
-default-run = "mistralrs-server"
 
 [dependencies]
 anyhow.workspace = true
