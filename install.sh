@@ -132,8 +132,8 @@ build_features() {
     features=""
 
     if [ "$os" = "macos" ]; then
-        features="metal accelerate"
-        info "macOS detected - enabling metal, accelerate"
+        features="metal"
+        info "macOS detected - enabling metal"
     else
         # Check for CUDA
         cuda_cc=$(detect_cuda_compute_cap)
@@ -181,10 +181,10 @@ install_mistralrs() {
 
     if [ -n "$features" ]; then
         info "Installing mistralrs-cli with features: $features"
-        cargo install mistralrs-cli@0.7.0-alpha.3 --features "$features"
+        cargo install mistralrs-cli@0.7.0-alpha.4 --features "$features"
     else
         info "Installing mistralrs-cli with default features"
-        cargo install mistralrs-cli@0.7.0-alpha.3
+        cargo install mistralrs-cli@0.7.0-alpha.4
     fi
 }
 

@@ -159,10 +159,10 @@ function Install-MistralRS {
 
     if ($Features) {
         Write-Info "Installing mistralrs-cli with features: $Features"
-        & cargo install mistralrs-cli@0.7.0-alpha.3 --features "$Features"
+        & cargo install mistralrs-cli@0.7.0-alpha.4 --features "$Features"
     } else {
         Write-Info "Installing mistralrs-cli with default features"
-        & cargo install mistralrs-cli@0.7.0-alpha.3
+        & cargo install mistralrs-cli@0.7.0-alpha.4
     }
 
     if ($LASTEXITCODE -ne 0) {
