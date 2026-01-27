@@ -11,6 +11,8 @@
 
 # SDKs & APIs
 
+- [Python SDK](PYTHON_SDK.md)
+- [Python Installation](PYTHON_INSTALLATION.md)
 - [HTTP Server](HTTP.md)
 - [OpenResponses API](OPENRESPONSES.md)
 

@@ -59,8 +59,9 @@ jobs:
       # Combine all docs into deployment folder
       - name: Prepare deployment
         run: |
-          # Copy Rust docs to book output
-          cp -r target/doc/* ./docs/book/
+          # Copy Rust docs to book output under /mistralrs/ subdirectory
+          mkdir -p ./docs/book/mistralrs
+          cp -r target/doc/* ./docs/book/mistralrs/
 
       - name: Deploy
         uses: JamesIves/github-pages-deploy-action@v4

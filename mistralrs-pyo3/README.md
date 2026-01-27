@@ -35,15 +35,15 @@ pip install mistralrs-metal  # Apple Silicon
 pip install mistralrs        # CPU only
 ```
 
-See [INSTALLATION.md](INSTALLATION.md) for all options and building from source.
+See the [Python Installation Guide](https://ericlbuehler.github.io/mistral.rs/PYTHON_INSTALLATION.html) for all options and building from source.
 
 ## Documentation
 
-- [SDK Documentation](SDK.md) - Full SDK reference
+- [SDK Documentation](https://ericlbuehler.github.io/mistral.rs/PYTHON_SDK.html) - Full SDK reference
 - [Type Stubs](mistralrs.pyi) - Type hints for IDE support
 - [Examples](https://github.com/EricLBuehler/mistral.rs/tree/master/examples/python)
 - [Cookbook](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/cookbook.ipynb)
 
 ## Multi-model Support
 
-For serving multiple models and dynamic model management (loading/unloading), see the [SDK documentation](SDK.md#multi-model-support).
+For serving multiple models and dynamic model management (loading/unloading), see the [SDK documentation](https://ericlbuehler.github.io/mistral.rs/PYTHON_SDK.html#multi-model-support).

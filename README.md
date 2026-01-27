@@ -14,7 +14,7 @@ Blazingly fast LLM inference.
 </h3>
 
 <p align="center">
-  | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust SDK</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/SDK.md"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
+  | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust SDK</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/PYTHON_SDK.html"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
 </p>
 
 <p align="center">
@@ -204,7 +204,7 @@ res = runner.send_chat_completion_request(
 print(res.choices[0].message.content)
 ```
 
-[Python SDK](mistralrs-pyo3/SDK.md) | [Installation](mistralrs-pyo3/INSTALLATION.md) | [Examples](examples/python) | [Cookbook](examples/python/cookbook.ipynb)
+[Python SDK](https://ericlbuehler.github.io/mistral.rs/PYTHON_SDK.html) | [Installation](https://ericlbuehler.github.io/mistral.rs/PYTHON_INSTALLATION.html) | [Examples](examples/python) | [Cookbook](examples/python/cookbook.ipynb)
 
 ## Docker
 
