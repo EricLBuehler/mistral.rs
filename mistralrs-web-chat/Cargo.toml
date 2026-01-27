@@ -1,5 +1,6 @@
 [package]
 name = "mistralrs-web-chat"
+publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

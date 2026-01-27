@@ -52,6 +52,8 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    eprintln!("⚠️  mistralrs-web-chat is deprecated. Please use `mistralrs serve --ui` from mistralrs-cli instead.");
+
     let cli = Cli::parse();
     if cli.text_models.is_empty() && cli.vision_models.is_empty() && cli.speech_models.is_empty() {
         eprintln!("At least one --text-model, --vision-model, or --speech-model is required");

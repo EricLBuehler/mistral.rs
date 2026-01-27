@@ -7,7 +7,7 @@ use mistralrs_core::{
 use rust_mcp_sdk::schema::LATEST_PROTOCOL_VERSION;
 use std::collections::HashMap;
 use tokio::join;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use mistralrs_server_core::{
     mistralrs_for_server_builder::{
@@ -331,6 +331,8 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     initialize_logging();
+
+    warn!("mistralrs-server is deprecated. Please use `mistralrs serve` from mistralrs-cli instead.");
 
     // Load MCP configuration if provided
     let mcp_config = load_mcp_config(args.mcp_config.as_deref())?;
