@@ -89,11 +89,12 @@ enum SequenceCustomMetadata {
 macro_rules! blocks_to_add_new_tok {
     ($logical_token_blocks:expr) => {{
         let last = $logical_token_blocks.last();
-        if !last.is_some_and(|last| last.is_full() || last.is_empty()) {
-            // If we have space
-            0
-        } else {
-            1
+        match last {
+            // If the last block is not full (including the common "empty sentinel"
+            // case after an exact block-size prompt), we can reuse it.
+            Some(last) if !last.is_full() => 0,
+            // Otherwise we need to allocate a new physical block.
+            _ => 1,
         }
     }};
 }

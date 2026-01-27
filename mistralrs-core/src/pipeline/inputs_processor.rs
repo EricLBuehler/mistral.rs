@@ -224,6 +224,10 @@ pub mod text_models_inputs_processor {
                     .iter()
                     .map(|block| block.block_id())
                     .collect::<Vec<_>>();
+                // Only store one block table per sequence. The previous per-token
+                // duplication scaled as O(prompt_len * num_blocks) and could
+                // become very large at high context lengths.
+                let table_for_seq = table.clone();
 
                 let start_idx = if let Some(sliding_window) = paged_attn_metadata.sliding_window {
                     prompt_len.saturating_sub(sliding_window)
@@ -260,10 +264,10 @@ pub mod text_models_inputs_processor {
                         slot.try_into()
                             .expect("Slot value too large for target integer type"),
                     );
-                    block_tables.push(table.clone());
                 }
                 slot_mappings.push(slot_mapping);
                 paged_attn_context_lens.push(ctxt_len);
+                block_tables.push(table_for_seq);
             }
         }
 
