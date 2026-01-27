@@ -1,6 +1,6 @@
 # Sampling and penalty techniques in mistral.rs
 
-mistral.rs supports a comprehensive set of sampling and penalty techniques to control text generation. These can be configured via the HTTP API, Python API, or Rust API.
+mistral.rs supports a comprehensive set of sampling and penalty techniques to control text generation. These can be configured via the HTTP API, Python SDK, or Rust SDK.
 
 ## Temperature
 
@@ -105,7 +105,7 @@ All sampling parameters can be set in API requests:
 }
 ```
 
-### Python API
+### Python SDK
 ```python
 response = runner.send_chat_completion_request(
     ChatCompletionRequest(

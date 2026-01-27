@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-mistral.rs is a blazing-fast LLM inference engine written in Rust. It supports text, vision, image generation, and speech models with multiple APIs (Rust, Python, OpenAI HTTP, MCP).
+mistral.rs is a blazing-fast LLM inference engine written in Rust. It supports text, vision, image generation, and speech models with Rust and Python SDKs, plus OpenAI HTTP and MCP APIs.
 
 ## Essential Commands
 
@@ -19,8 +19,8 @@ cargo build --release --features "cuda flash-attn cudnn"
 # With Metal support (macOS)
 cargo build --release --features metal
 
-# Install server binary
-cargo install --path mistralrs-server --features <features>
+# Install CLI binary
+cargo install --path mistralrs-cli --features <features>
 ```
 
 ### Testing & Quality
@@ -40,14 +40,20 @@ cargo clippy --workspace --tests --examples -- -D warnings
 
 ### Running Models
 ```bash
-# Run interactive mode with plain model
-cargo run --release --features <features> -- -i plain -m <model_id> -a <arch>
+# Run interactive mode (model type auto-detected)
+mistralrs run -m <model_id>
 
 # Run with GGUF quantized model
-cargo run --release --features <features> -- -i gguf -f <file> -t <tokenizer>
+mistralrs run --format gguf -m <repo> -f <file>
 
 # Run server
-cargo run --release --features <features> -- --port 1234 <model_args>
+mistralrs serve -p 1234 -m <model_id>
+
+# Run server with web UI
+mistralrs serve --ui -m <model_id>
+
+# Run benchmarks
+mistralrs bench -m <model_id>
 ```
 
 ## Models
@@ -60,16 +66,16 @@ You should also look for a model.safetensors.index.json file for the model at ha
 
 ### Workspace Structure
 - `mistralrs-core/` - Core inference engine, model implementations, pipelines
-- `mistralrs-server/` - CLI binary entry point
+- `mistralrs-cli/` - Unified CLI binary (commands: run, serve, bench, from-config)
 - `mistralrs-server-core/` - HTTP server routing, OpenAI API implementation
-- `mistralrs-pyo3/` - Python bindings (PyO3)
-- `mistralrs/` - High-level Rust API
+- `mistralrs-pyo3/` - Python SDK (PyO3 bindings)
+- `mistralrs/` - Rust SDK (high-level crate)
 - `mistralrs-vision/` - Vision model support
 - `mistralrs-quant/` - Quantization implementations (ISQ, GGUF, GPTQ, etc.)
 - `mistralrs-paged-attn/` - PagedAttention implementation
 - `mistralrs-audio/` - Audio processing
 - `mistralrs-mcp/` - Model Context Protocol client
-- `mistralrs-bench/` - Benchmarking tools
+- `mistralrs-bench/` - (Deprecated) Use `mistralrs bench` instead
 
 ### Key Design Patterns
 
@@ -88,7 +94,7 @@ When adding new model architectures:
 2. Add pipeline support in `mistralrs-core/src/pipeline/`
 3. Update model detection in `mistralrs-core/src/pipeline/normal.rs`
 4. Add architecture enum variant in `mistralrs-core/src/lib.rs`
-5. Update CLI args in `mistralrs-server/src/main.rs`
+5. Update CLI args in `mistralrs-cli/src/main.rs`
 
 When adding new quantization methods:
 1. Implement in `mistralrs-quant/src/`
@@ -100,8 +106,8 @@ When adding new quantization methods:
 - `mistralrs-core/src/engine/mod.rs` - Main engine orchestration
 - `mistralrs-core/src/pipeline/mod.rs` - Pipeline trait and common logic
 - `mistralrs-server-core/src/routes.rs` - HTTP API endpoints
-- `mistralrs-pyo3/src/lib.rs` - Python API entry point
-- `mistralrs/examples/` - Usage examples for Rust API
+- `mistralrs-pyo3/src/lib.rs` - Python SDK entry point
+- `mistralrs/examples/` - Usage examples for Rust SDK
 
 ### Testing Approach
 

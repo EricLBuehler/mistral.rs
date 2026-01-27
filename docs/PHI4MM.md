@@ -7,16 +7,12 @@ The Python and HTTP APIs support sending images as:
 - Path to a local image
 - [Base64](https://en.wikipedia.org/wiki/Base64) encoded string
 
-The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
+The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
 > Note: The Phi 4 Multimodal model works best with one image although it is supported to send multiple images.
 
 > Note: when sending multiple images, they will be resized to the minimum dimension by which all will fit without cropping.
 > Aspect ratio is not preserved in that case.
-
-> [!NOTE]
-> The Phi 4 Multimodal model does not automatically add the image tokens!
-> They should be added to messages manually, and are of the format `<|image_{N}|>` where N starts from 1.
 
 [**Phi 4 multimodal supports audio inputs!**](#audio-input).
 
@@ -35,7 +31,7 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 **Prompt:**
 ```
-<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.
+What is shown in this image? Write a detailed response analyzing the scene.
 ```
 
 **Output:**
@@ -75,7 +71,7 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.",
+                    "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                 },
             ],
         },
@@ -172,7 +168,7 @@ res = runner.send_chat_completion_request(
                     },
                     {
                         "type": "text",
-                        "text": "<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.",
+                        "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                     },
                 ],
             }
@@ -211,13 +207,13 @@ Audio is delivered with the `audio_url` content-type that mirrors OpenAIʼs offi
     },
     {
       "type": "text",
-      "text": "<|audio_1|><|image_1|>\nDescribe what is happening in this clip in as much detail as possible."
+      "text": "Describe what is happening in this clip in as much detail as possible."
     }
   ]
 }
 ```
 
-### Rust API
+### Rust SDK
 
 ```rust
 use anyhow::Result;

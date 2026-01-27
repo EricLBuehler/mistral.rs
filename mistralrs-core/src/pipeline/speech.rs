@@ -32,7 +32,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::info;
 
 #[derive(Clone, Debug)]
 pub struct SpeechModelPaths {

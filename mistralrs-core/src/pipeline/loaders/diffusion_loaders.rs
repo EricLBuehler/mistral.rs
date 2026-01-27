@@ -15,8 +15,6 @@ use pyo3::pyclass;
 use regex::Regex;
 use serde::Deserialize;
 
-use tracing::info;
-
 use super::{ModelPaths, NormalLoadingMetadata};
 use crate::{
     api_dir_list, api_get_file,
@@ -155,7 +153,7 @@ impl ModelPaths for DiffusionModelPaths {
 
 /// [`DiffusionLoader`] for a Flux Diffusion model.
 ///
-/// [`DiffusionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.DiffusionLoader.html
+/// [`DiffusionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.DiffusionLoader.html
 pub struct FluxLoader {
     pub(crate) offload: bool,
 }

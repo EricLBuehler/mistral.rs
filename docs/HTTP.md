@@ -4,7 +4,7 @@ Mistral.rs provides a lightweight OpenAI API compatible HTTP server based on [ax
 
 The API consists of the following endpoints. They can be viewed in your browser interactively by going to `http://localhost:<port>/docs`.
 
-> ℹ️  Besides the HTTP endpoints described below `mistralrs-server` can also expose the same functionality via the **MCP protocol**.  
+> ℹ️  Besides the HTTP endpoints described below, `mistralrs serve` can also expose the same functionality via the **MCP protocol**.
 > Enable it with `--mcp-port <port>` and see [MCP/server.md](MCP/server.md) for details.
 
 ## Additional object keys
@@ -74,7 +74,7 @@ To send a request with the Python `openai` library:
 import openai
 
 client = openai.OpenAI(
-    base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
+    base_url="http://localhost:1234/v1", # "http://<Your api-server IP>:port"
     api_key = "EMPTY"
 )
 
@@ -91,7 +91,7 @@ print(completion.choices[0].message)
 
 Or with `curl`:
 ```bash
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost:1234/v1/chat/completions \
 -H "Content-Type: application/json" \
 -H "Authorization: Bearer EMPTY" \
 -d '{
@@ -153,7 +153,7 @@ To send a request with the Python `openai` library:
 import openai
 
 client = openai.OpenAI(
-    base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
+    base_url="http://localhost:1234/v1", # "http://<Your api-server IP>:port"
     api_key = "EMPTY"
 )
 
@@ -171,7 +171,7 @@ print(completion.choices[0].message)
 
 Or with `curl`:
 ```bash
-curl http://localhost:8080/v1/completions \
+curl http://localhost:1234/v1/completions \
 -H "Content-Type: application/json" \
 -H "Authorization: Bearer EMPTY" \
 -d '{
@@ -186,7 +186,7 @@ curl http://localhost:8080/v1/completions \
 Serve an embedding model (for example, EmbeddingGemma) to enable this endpoint:
 
 ```bash
-./mistralrs-server run -m google/embeddinggemma-300m
+mistralrs serve -m google/embeddinggemma-300m
 ```
 
 In multi-model mode, include an `Embedding` entry in your selector config to expose it alongside chat models.
@@ -206,7 +206,7 @@ Example (Python `openai` client):
 import openai
 
 client = openai.OpenAI(
-    base_url="http://localhost:8080/v1",
+    base_url="http://localhost:1234/v1",
     api_key="EMPTY",
 )
 
@@ -226,7 +226,7 @@ for item in result.data:
 Example with `curl`:
 
 ```bash
-curl http://localhost:8080/v1/embeddings \
+curl http://localhost:1234/v1/embeddings \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer EMPTY" \
   -d '{
@@ -243,7 +243,7 @@ Responses follow the OpenAI schema: `object: "list"`, `data[*].embedding` contai
 Generate images using diffusion models (like FLUX). First, serve a diffusion model:
 
 ```bash
-./mistralrs-server diffusion -m black-forest-labs/FLUX.1-schnell -a flux
+mistralrs serve -m black-forest-labs/FLUX.1-schnell
 ```
 
 Supported request fields:
@@ -261,7 +261,7 @@ import openai
 import base64
 
 client = openai.OpenAI(
-    base_url="http://localhost:8080/v1",
+    base_url="http://localhost:1234/v1",
     api_key="EMPTY",
 )
 
@@ -282,7 +282,7 @@ with open("output.png", "wb") as f:
 Example with `curl`:
 
 ```bash
-curl http://localhost:8080/v1/images/generations \
+curl http://localhost:1234/v1/images/generations \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer EMPTY" \
   -d '{
@@ -299,7 +299,7 @@ curl http://localhost:8080/v1/images/generations \
 Generate speech from text using speech models (like Dia). First, serve a speech model:
 
 ```bash
-./mistralrs-server speech -m nari-labs/Dia-1.6B -a dia
+mistralrs serve -m nari-labs/Dia-1.6B
 ```
 
 Supported request fields:
@@ -315,7 +315,7 @@ Example with Python:
 import requests
 
 response = requests.post(
-    "http://localhost:8080/v1/audio/speech",
+    "http://localhost:1234/v1/audio/speech",
     headers={
         "Content-Type": "application/json",
         "Authorization": "Bearer EMPTY",
@@ -335,7 +335,7 @@ with open("output.wav", "wb") as f:
 Example with `curl`:
 
 ```bash
-curl http://localhost:8080/v1/audio/speech \
+curl http://localhost:1234/v1/audio/speech \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer EMPTY" \
   -d '{
@@ -357,7 +357,7 @@ To send a request with the Python `openai` library:
 import openai
 
 client = openai.OpenAI(
-    base_url="http://localhost:8080/v1",
+    base_url="http://localhost:1234/v1",
     api_key = "EMPTY"
 )
 
@@ -379,7 +379,7 @@ print(resp2.output_text)
 
 Or with `curl`:
 ```bash
-curl http://localhost:8080/v1/responses \
+curl http://localhost:1234/v1/responses \
 -H "Content-Type: application/json" \
 -H "Authorization: Bearer EMPTY" \
 -d '{
@@ -388,7 +388,7 @@ curl http://localhost:8080/v1/responses \
 }'
 
 # Follow-up using previous_response_id
-curl http://localhost:8080/v1/responses \
+curl http://localhost:1234/v1/responses \
 -H "Content-Type: application/json" \
 -H "Authorization: Bearer EMPTY" \
 -d '{
@@ -407,7 +407,7 @@ Retrieve a previously created response by its ID.
 
 Example with `curl`:
 ```bash
-curl http://localhost:8080/v1/responses/resp_12345-uuid-here \
+curl http://localhost:1234/v1/responses/resp_12345-uuid-here \
 -H "Authorization: Bearer EMPTY"
 ```
 
@@ -416,7 +416,7 @@ Delete a stored response and its associated conversation history.
 
 Example with `curl`:
 ```bash
-curl -X DELETE http://localhost:8080/v1/responses/resp_12345-uuid-here \
+curl -X DELETE http://localhost:1234/v1/responses/resp_12345-uuid-here \
 -H "Authorization: Bearer EMPTY"
 ```
 

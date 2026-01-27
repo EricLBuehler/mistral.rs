@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mistral.rs Chat</title>
+  <base href="/ui/">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="sidebar">
+    <h2>Control Panel</h2>
+    <select id="modelSelect"></select>
+    <button id="newChatBtn">New Chat</button>
+    <button id="clearBtn">Clear</button>
+    <button id="renameBtn">Rename</button>
+    <button id="deleteBtn">Delete</button>
+    <hr />
+
+    <!-- Generation Settings -->
+    <div class="sidebar-card">
+      <div class="sidebar-card-header" id="settingsBtn">
+        <h3>Generation Settings</h3>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div class="sidebar-card-content" id="settingsPanel">
+        <div class="setting-group">
+          <label for="settingTemperature">Temperature: <span id="temperatureValue">0.70</span></label>
+          <input type="range" id="settingTemperature" min="0" max="2" step="0.05" value="0.7" />
+        </div>
+        <div class="setting-group">
+          <label for="settingTopP">Top P: <span id="topPValue">0.90</span></label>
+          <input type="range" id="settingTopP" min="0" max="1" step="0.05" value="0.9" />
+        </div>
+        <div class="setting-group">
+          <label for="settingTopK">Top K:</label>
+          <input type="number" id="settingTopK" min="1" max="200" value="40" />
+        </div>
+        <div class="setting-group">
+          <label for="settingMaxTokens">Max Tokens:</label>
+          <input type="number" id="settingMaxTokens" min="1" max="32768" value="2048" />
+        </div>
+        <div class="setting-group">
+          <label for="settingRepetitionPenalty">Repetition Penalty: <span id="repetitionPenaltyValue">1.10</span></label>
+          <input type="range" id="settingRepetitionPenalty" min="1" max="2" step="0.05" value="1.1" />
+        </div>
+        <div class="setting-group">
+          <label for="settingSystemPrompt">System Prompt:</label>
+          <textarea id="settingSystemPrompt" rows="3" placeholder="Optional system instructions..."></textarea>
+        </div>
+        <button id="resetSettingsBtn" class="btn-secondary">Reset to Defaults</button>
+      </div>
+    </div>
+
+    <!-- Web Search -->
+    <div class="sidebar-card" id="webSearchCard">
+      <h3>Web Search</h3>
+      <div class="sidebar-card-content">
+        <label class="toggle-label"><input type="checkbox" id="enableSearch" /> Enable web search</label>
+        <div id="webSearchOptions" hidden>
+          <label for="searchContextSize">Context size:</label>
+          <select id="searchContextSize">
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <ul id="chatList"></ul>
+  </div>
+
+  <div id="main">
+    <h1 style="margin-top:0;">Mistral.rs Chat</h1>
+
+    <div id="log"></div>
+
+    <form id="form">
+      <textarea
+        id="input"
+        placeholder="Type your message… (Press Ctrl+Enter to send)"
+      ></textarea>
+
+      <!-- hidden file inputs -->
+      <input type="file" id="imageInput" accept="image/*" hidden />
+      <input type="file" id="textInput" accept=".txt,.md,.markdown,.py,.js,.ts,.rs,.html,.css,.json,.xml,.yaml,.yml,.toml,.c,.cpp,.java,.go,.rb,.php,.sh,.sql,.log,.csv" hidden />
+
+      <!-- audio input (wav/mp3/ogg/… ) -->
+      <input type="file" id="audioInput" accept="audio/*" hidden />
+
+      <!-- file upload buttons and send button share the same class -->
+      <label for="imageInput" class="btn" id="imageLabel">📎 Image</label>
+      <label for="audioInput" class="btn" id="audioLabel">🎤 Audio</label>
+      <label for="textInput" class="btn" id="textLabel">📄 File</label>
+      <button type="submit" class="btn">Send</button>
+      <button type="button" class="btn" id="stopBtn">⏹️ Stop</button>
+      <div id="spinner" class="spinner hidden" aria-hidden="true"></div>
+    </form>
+
+    <div id="image-container"></div>
+    <div id="audio-container"></div>
+    <div id="text-files-container"></div>
+
+    <!-- External dependencies -->
+    <script src="marked.min.js"></script>
+
+    <!-- Application scripts -->
+    <script src="js/utils.js"></script>
+    <script src="js/settings.js"></script>
+    <script src="js/chat.js"></script>
+    <script src="js/models.js"></script>
+    <script src="js/websocket.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/app.js"></script>
+  </div><!-- /#main -->
+</body>
+</html>

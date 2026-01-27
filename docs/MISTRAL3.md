@@ -9,7 +9,7 @@ The Python and HTTP APIs support sending images as:
 - Path to a local image
 - [Base64](https://en.wikipedia.org/wiki/Base64) encoded string
 
-The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
+The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
 ## Tool calling with Mistral Small 3.1
 
@@ -17,7 +17,7 @@ The Mistral Small 3.1 model itself does not come with the correct JINJA chat tem
 tool calling with Mistral Small 3.1, and you can use it by specifying the `jinja_explicit` parameter in the various APIs. For example:
 
 ```bash
-./mistralrs-server --port 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503  
+mistralrs serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
 ```
 
 

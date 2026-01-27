@@ -1,6 +1,15 @@
 # Quantization in mistral.rs
 
 Mistral.rs supports the following quantization:
+- ⭐ ISQ ([read more detail](ISQ.md))
+    - Supported in all plain/vision and adapter models
+    - Works on all supported devices
+    - Automatic selection to use the fastest and most accurate method
+    - Supports:
+      - Q, K type GGUF quants
+      - AFQ
+      - HQQ
+      - FP8
 - GGUF/GGML
     - Q, K type
     - Supported in GGUF/GGML and GGUF/GGML adapter models
@@ -33,15 +42,6 @@ Mistral.rs supports the following quantization:
     - 2, 3, 4, 6, 8 bit
     - 🔥 Designed to be fast on **Metal**!
     - Only supported on Metal.
-- ISQ
-    - Supported in all plain/vision and adapter models
-    - Works on all supported devices
-    - Automatic selection to use the fastest and most accurate method
-    - Supports:
-      - Q, K type GGUF quants
-      - AFQ
-      - HQQ
-      - FP8
 - MLX prequantized
     - Supported in all plain/vision and adapter models
 

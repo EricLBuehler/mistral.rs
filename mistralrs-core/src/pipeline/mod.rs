@@ -5,6 +5,7 @@ mod diffusion;
 mod embedding;
 mod ggml;
 mod gguf;
+pub(crate) mod hf;
 mod inputs_processor;
 mod isq;
 pub(crate) mod llg;
@@ -24,6 +25,7 @@ use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTr
 use crate::device_map::DeviceMapper;
 use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
 use crate::prefix_cacher::PrefixCacheManagerV2;
+use crate::PagedAttentionConfig;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 pub use auto::{AutoLoader, AutoLoaderBuilder};
 use chat_template::ChatTemplate;
@@ -52,6 +54,32 @@ pub use loaders::{
     SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader, VisionLoaderType,
     VisionModel, VisionModelLoader,
 };
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn get_device_layers_for_loader(
+    loader: &dyn loaders::DeviceMappedModelLoader,
+    config: &str,
+    num_layers: usize,
+    layer_sizes_in_bytes: Vec<usize>,
+    non_mapped_size_in_bytes: usize,
+    total_model_size_in_bytes: usize,
+    devices: &[Device],
+    dtype: DType,
+    params: &loaders::AutoDeviceMapParams,
+    paged_attn_config: Option<&PagedAttentionConfig>,
+) -> Result<crate::device_map::DeviceMapMetadata> {
+    loaders::auto_device_map::get_device_layers(
+        loader,
+        config,
+        num_layers,
+        layer_sizes_in_bytes,
+        non_mapped_size_in_bytes,
+        total_model_size_in_bytes,
+        devices,
+        dtype,
+        params,
+        paged_attn_config,
+    )
+}
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths};

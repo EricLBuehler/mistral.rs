@@ -9,13 +9,7 @@ The Python and HTTP APIs support sending images as:
 - Path to a local image
 - [Base64](https://en.wikipedia.org/wiki/Base64) encoded string
 
-The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
-
-## Interactive mode
-
-> [!NOTE]
-> In interactive mode, the Idefics 2 vision model does not automatically add the image token!
-> It should be added to messages manually, and is of the format `<image>`.
+The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
 ## HTTP server
 You can find this example [here](../examples/server/idefics2.py).

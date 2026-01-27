@@ -7,7 +7,7 @@ For a catalog of available embedding models and general usage tips, see [EMBEDDI
 
 ## Prompt instructions
 
-EmbeddingGemma can generate optimized embeddings for various use cases—such as document retrieval, question answering, and fact verification—or for specific input types—either a query or a document—using prompts that are prepended to the input strings. 
+EmbeddingGemma can generate optimized embeddings for various use cases-such as document retrieval, question answering, and fact verification-or for specific input types, either, a query or a document-using prompts that are prepended to the input strings. 
 
 - Query prompts follow the form `task: {task description} | query: ` where the task description varies by the use case, with the default task description being search result. 
 - Document-style prompts follow the form `title: {title | "none"} | text: ` where the title is either none (the default) or the actual title of the document. Note that providing a title, if available, will improve model performance for document prompts but may require manual formatting.
@@ -29,7 +29,7 @@ EmbeddingGemma can generate optimized embeddings for various use cases—such as
 Launch the server in embedding mode to expose an OpenAI-compatible `/v1/embeddings` endpoint:
 
 ```bash
-./mistralrs-server --port 1234 run -m google/embeddinggemma-300m
+mistralrs serve -p 1234 -m google/embeddinggemma-300m
 ```
 
 Once running, call the endpoint with an OpenAI client or raw `curl`:
@@ -59,7 +59,7 @@ models, run in multi-model mode and assign an identifier in the selector configu
 
 See [docs/HTTP.md](HTTP.md#post-v1embeddings) for the full request schema and response layout.
 
-## Python API
+## Python SDK
 
 Instantiate `Runner` with the `Which.Embedding` selector and request EmbeddingGemma explicitly. The helper method
 `send_embedding_request` returns batched embeddings as Python lists.
@@ -85,7 +85,7 @@ print(len(embeddings), len(embeddings[0]))
 
 Refer to [this example](../examples/python/embedding_gemma.py) for a complete runnable script.
 
-## Rust API
+## Rust SDK
 
 Use the `EmbeddingModelBuilder` helper from the `mistralrs` crate to create the model and submit an
 `EmbeddingRequest`:

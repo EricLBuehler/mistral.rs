@@ -12,7 +12,7 @@ The Python and HTTP APIs support sending images as:
 - Path to a local image
 - [Base64](https://en.wikipedia.org/wiki/Base64) encoded string
 
-The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
+The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
 ## ToC
 - [MiniCPM-O 2.6 Model: `openbmb/MiniCPM-o-2_6`](#minicpm-o-26-model-openbmbminicpm-o-2_6)
@@ -118,7 +118,7 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "(<image>./</image>) What is shown in this image? Write a detailed response analyzing the scene.",
+                    "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                 },
             ],
         },
@@ -218,7 +218,7 @@ res = runner.send_chat_completion_request(
                     },
                     {
                         "type": "text",
-                        "text": "(<image>./</image>) What is shown in this image? Write a detailed response analyzing the scene.",
+                        "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                     },
                 ],
             }

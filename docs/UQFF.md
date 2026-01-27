@@ -16,8 +16,8 @@ The uniquely powerful quantized file format.
   - [Support](#support)
   - [Loading a UQFF model](#loading-a-uqff-model)
     - [Running with the CLI](#running-with-the-cli)
-    - [Using with the Rust API](#using-with-the-rust-api)
-    - [Using the Python API](#using-the-python-api)
+    - [Using with the Rust SDK](#using-with-the-rust-api)
+    - [Using the Python SDK](#using-the-python-api)
   - [Creating a UQFF model](#creating-a-uqff-model)
     - [Upload with Git](#upload-with-git)
   - [List of models](#list-of-models)
@@ -81,17 +81,17 @@ command to get started.
 
 ### Running with the CLI
 
-```
-./mistralrs-server -i plain -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-f8e4m3.uqff
+```bash
+mistralrs run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-f8e4m3.uqff
 ```
 
-### Using with the Rust API
+### Using with the Rust SDK
 
 Check out the following examples:
 - Normal: [uqff/main.rs](../mistralrs/examples/uqff/main.rs)
 - Vision: [uqff_vision/main.rs](../mistralrs/examples/uqff_vision/main.rs)
 
-### Using the Python API
+### Using the Python SDK
 Modify the `Which` instantiation as follows:
 ```diff
 Which.Plain(
@@ -106,7 +106,7 @@ When loading a UQFF model, the quantization is already baked in, so ISQ settings
 
 **CLI example:**
 ```bash
-./mistralrs-server -i plain -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-q4k.uqff --topology device_map.yml
+mistralrs run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-q4k.uqff --topology device_map.yml
 ```
 
 **Topology file for device mapping only (`device_map.yml`):**
@@ -117,7 +117,7 @@ When loading a UQFF model, the quantization is already baked in, so ISQ settings
   device: cuda[1]
 ```
 
-**Rust API example:**
+**Rust SDK example:**
 ```rust
 use mistralrs::{UqffTextModelBuilder, Topology, LayerTopology, Device};
 
@@ -135,7 +135,7 @@ let model = UqffTextModelBuilder::new(
 .await?;
 ```
 
-**Python API example:**
+**Python SDK example:**
 ```python
 runner = Runner(
     which=Which.Plain(
@@ -169,8 +169,8 @@ After creating the UQFF file, you can upload the model to Hugging Face. To do th
 
 **⭐ Check out [uqff_maker](https://github.com/EricLBuehler/uqff_maker) to make UQFF models with an easy CLI!**
 
-```
-./mistralrs-server --isq 4 -i plain -m microsoft/Phi-3.5-mini-instruct --write-uqff phi3.5-mini-instruct-q4k.uqff
+```bash
+mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq 4 -o phi3.5-mini-instruct-q4k.uqff
 ```
 
 ### Upload with Git

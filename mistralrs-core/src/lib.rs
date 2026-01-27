@@ -28,6 +28,11 @@ use tokio::sync::mpsc::{channel, Sender};
 use tracing::info;
 use tracing::warn;
 
+pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISION") {
+    Some(value) => value,
+    None => "unknown",
+};
+
 mod cuda;
 mod device_map;
 mod engine;
@@ -48,6 +53,7 @@ pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_sele
 
 mod amoe;
 mod attention;
+mod diagnostics;
 mod diffusion_models;
 pub mod distributed;
 mod gguf;
@@ -75,6 +81,15 @@ mod utils;
 mod vision_models;
 mod xlora_models;
 
+pub use diagnostics::{
+    check_hf_gated_access, collect_system_info, run_doctor, BuildInfo, CpuInfo, DeviceInfo,
+    DoctorCheck, DoctorReport, DoctorStatus, HfConnectivityInfo, MemoryInfo, SystemInfo,
+};
+mod tuning;
+pub use tuning::{
+    auto_tune, AutoTuneRequest, AutoTuneResult, FitStatus, QualityTier, TuneCandidate, TuneProfile,
+};
+
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, LayerDeviceMapper,
@@ -89,6 +104,7 @@ pub use mistralrs_mcp::{
 };
 pub use mistralrs_quant::{IsqType, MULTI_LORA_DELIMITER};
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
+pub use pipeline::hf::{hf_home_dir, hf_hub_cache_dir, hf_token_path};
 pub use pipeline::{
     chat_template::ChatTemplate, parse_isq_value, AdapterPaths, AnyMoeLoader, AnyMoePipeline,
     AutoDeviceMapParams, AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams, DiffusionLoader,
@@ -597,6 +613,7 @@ impl MistralRs {
     }
 
     async fn new(config: MistralRsBuilder) -> Arc<Self> {
+        info!("git revision: {MISTRALRS_GIT_REVISION}");
         let MistralRsBuilder {
             pipeline,
             method,

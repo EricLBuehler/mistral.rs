@@ -367,6 +367,9 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 prefix_cacher.evict_caches()?;
             }
 
+            // Ensure timing info is synced to group before sending response
+            seq.update_time_info();
+
             let group = seq.get_mut_group();
             if group.is_chat {
                 group

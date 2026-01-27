@@ -1417,6 +1417,7 @@ impl TextModel {
         xs = stacked_f32.mean(0)?.to_dtype(stacked.dtype())?;
 
         xs = xs.apply(&self.norm)?;
+        let mut xs = extract_logits(&xs, context_lens)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
@@ -1431,7 +1432,7 @@ impl TextModel {
             xs = (tanh_capped * final_logit_softcapping)?.to_dtype(xs.dtype())?;
         }
 
-        extract_logits(&xs, context_lens)
+        Ok(xs)
     }
 }
 

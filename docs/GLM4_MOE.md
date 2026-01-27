@@ -5,8 +5,8 @@ GLM-4.7 is a mixture of experts (MoE) model from the GLM family with standard GQ
 ## HTTP API
 
 Start the server:
-```
-./mistralrs-server --isq 4 --port 1234 plain -m zai-org/GLM-4.7 -a glm4moe
+```bash
+mistralrs serve --isq 4 -p 1234 -m zai-org/GLM-4.7
 ```
 
 Send requests using an OpenAI-compatible client:
@@ -37,7 +37,7 @@ while True:
     messages.append({"role": "assistant", "content": resp})
 ```
 
-## Python API
+## Python SDK
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 
@@ -64,7 +64,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-## Rust API
+## Rust SDK
 You can find this example [here](../mistralrs/examples/glm4_moe/main.rs).
 
 ```rust

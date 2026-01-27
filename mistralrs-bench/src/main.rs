@@ -11,7 +11,7 @@ use mistralrs_core::{
 use std::fmt::Display;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
-use tracing::info;
+use tracing::{info, warn};
 
 enum TestName {
     Prompt(usize),
@@ -346,6 +346,10 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let mut args = Args::parse();
     initialize_logging();
+
+    warn!(
+        "mistralrs-bench is deprecated. Please use `mistralrs bench` from mistralrs-cli instead."
+    );
 
     args.concurrency = Some(args.concurrency.unwrap_or(vec![1]));
 

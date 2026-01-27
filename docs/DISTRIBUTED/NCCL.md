@@ -24,8 +24,8 @@ See the following environment variables:
 
 Set the number of ranks using `MISTRALRS_MN_LOCAL_WORLD_SIZE`, e.g.,
 
-```
-MISTRALRS_MN_LOCAL_WORLD_SIZE=2 ./mistralrs-server --port 8000 run -m Qwen/Qwen3-30B-A3B-Instruct-2507
+```bash
+MISTRALRS_MN_LOCAL_WORLD_SIZE=2 mistralrs serve -p 8000 -m Qwen/Qwen3-30B-A3B-Instruct-2507
 ```
 
 where, if no `MISTRALRS_MN_LOCAL_WORLD_SIZE` env given, mistral.rs will split the model across all available devices.

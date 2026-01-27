@@ -21,7 +21,7 @@ use std::{
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
     sync::{Arc, RwLock},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{
     mpsc::{error::SendError, Sender},
@@ -89,11 +89,12 @@ enum SequenceCustomMetadata {
 macro_rules! blocks_to_add_new_tok {
     ($logical_token_blocks:expr) => {{
         let last = $logical_token_blocks.last();
-        if !last.is_some_and(|last| last.is_full() || last.is_empty()) {
-            // If we have space
-            0
-        } else {
-            1
+        match last {
+            // If the last block is not full (including the common "empty sentinel"
+            // case after an exact block-size prompt), we can reuse it.
+            Some(last) if !last.is_full() => 0,
+            // Otherwise we need to allocate a new physical block.
+            _ => 1,
         }
     }};
 }
@@ -448,6 +449,7 @@ pub struct Sequence {
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
     pub total_prompt_time: Option<u128>,
+    pub step_start_instant: Option<Instant>,
     group: Arc<Mutex<SequenceGroup>>,
     state: RwLock<SequenceState>,
 
@@ -628,6 +630,7 @@ impl Sequence {
             token_offset: 0,
             eos_tokens,
             total_prompt_time: None,
+            step_start_instant: None,
             waitlisted_count: 0,
             harmony_context: None,
             think_tag_context: None,
@@ -1040,15 +1043,31 @@ impl Sequence {
         self.prompt_timestamp
     }
 
-    fn update_time_info(&self) {
+    /// Set the step start instant for accurate prompt timing measurement.
+    /// Call this right before step() is called.
+    pub fn set_step_start_instant(&mut self) {
+        self.step_start_instant = Some(Instant::now());
+    }
+
+    pub(crate) fn update_time_info(&self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!")
             .as_millis();
 
+        // Prefer the recorded prompt time so it doesn't grow during decode steps.
+        // Fall back to the in-flight Instant timing only while the prompt step is running.
+        let prompt_time_ms = if let Some(pt) = self.total_prompt_time {
+            pt
+        } else if let Some(start) = self.step_start_instant {
+            start.elapsed().as_millis()
+        } else {
+            0
+        };
+
         if let Some(ts) = self.prompt_timestamp {
             get_mut_group!(self).total_completion_time = now - ts;
-            get_mut_group!(self).total_prompt_time = self.total_prompt_time.unwrap();
+            get_mut_group!(self).total_prompt_time = prompt_time_ms;
         }
 
         get_mut_group!(self).total_time = now - self.timestamp;
@@ -1411,12 +1430,23 @@ impl SequenceGroup {
             completion_tokens: self.total_toks.saturating_sub(self.total_prompt_toks),
             prompt_tokens: self.total_prompt_toks,
             total_tokens: self.total_toks,
-            avg_tok_per_sec: (self.total_toks as f32 / self.total_time as f32) * 1000.,
-            avg_prompt_tok_per_sec: (self.total_prompt_toks as f32 / self.total_prompt_time as f32)
-                * 1000.,
-            avg_compl_tok_per_sec: (self.total_toks.saturating_sub(self.total_prompt_toks) as f32
-                / self.total_completion_time as f32)
-                * 1000.,
+            avg_tok_per_sec: if self.total_time > 0 {
+                (self.total_toks as f32 / self.total_time as f32) * 1000.
+            } else {
+                0.0
+            },
+            avg_prompt_tok_per_sec: if self.total_prompt_time > 0 {
+                (self.total_prompt_toks as f32 / self.total_prompt_time as f32) * 1000.
+            } else {
+                0.0
+            },
+            avg_compl_tok_per_sec: if self.total_completion_time > 0 {
+                (self.total_toks.saturating_sub(self.total_prompt_toks) as f32
+                    / self.total_completion_time as f32)
+                    * 1000.
+            } else {
+                0.0
+            },
             total_time_sec: self.total_time as f32 / 1000.,
             total_completion_time_sec: self.total_completion_time as f32 / 1000.,
             total_prompt_time_sec: self.total_prompt_time as f32 / 1000.,

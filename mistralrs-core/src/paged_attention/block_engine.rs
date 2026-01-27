@@ -450,12 +450,33 @@ impl BlockEngine {
         sequence: &impl BlockEngineSequence,
     ) -> Option<(usize, usize)> {
         let seq_id = sequence.get_id();
-        let blocks_to_add = sequence.blocks_to_add_new_tok();
+        let logical_len = sequence.logical_token_blocks().len();
+        let table_len = match self.block_tables.get(&seq_id) {
+            Some(table) => table.len(),
+            None => return None,
+        };
 
-        // Check if table exists
-        if !self.block_tables.contains_key(&seq_id) {
-            return None;
+        // Keep the physical table aligned with the logical block structure to avoid
+        // over-allocation (and metadata underflow) when prompts land exactly on
+        // block boundaries.
+        if table_len > logical_len {
+            self.block_tables
+                .get_mut(&seq_id)
+                .expect("table existence checked above")
+                .truncate(logical_len);
+        } else if logical_len > table_len {
+            let missing = logical_len - table_len;
+            let mut new_blocks = Vec::with_capacity(missing);
+            for _ in 0..missing {
+                new_blocks.push(self.allocate_block_with_eviction());
+            }
+            self.block_tables
+                .get_mut(&seq_id)
+                .expect("table existence checked above")
+                .extend(new_blocks);
         }
+
+        let blocks_to_add = sequence.blocks_to_add_new_tok();
 
         match blocks_to_add {
             1 => {

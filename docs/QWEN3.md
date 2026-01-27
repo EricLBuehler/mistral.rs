@@ -2,9 +2,9 @@
 
 The Qwen 3 family is a collection of hybrid reasoning MoE and non-MoE models ranging from 0.6b to 235b parameters.
 
-```
-./mistralrs-server --isq 4 -i plain -m Qwen/Qwen3-8B
-./mistralrs-server --isq 4 -i plain -m Qwen/Qwen3-30B-A3B
+```bash
+mistralrs run --isq 4 -m Qwen/Qwen3-8B
+mistralrs run --isq 4 -m Qwen/Qwen3-30B-A3B
 ```
 
 > Note: mistral.rs can load all [FP8 pre-quantized versions](https://huggingface.co/Qwen/Qwen3-14B-FP8) natively! Simply replace the model ID.
@@ -17,8 +17,8 @@ The Qwen 3 models are hybrid reasoning models which can be controlled at inferen
 ## HTTP API
 You can find a more detailed example demonstrating enabling/disabling thinking [here](../examples/server/qwen3.py).
 
-```
-./mistralrs-server --isq 4 --port 1234 plain -m Qwen/Qwen3-8B
+```bash
+mistralrs serve --isq 4 -p 1234 -m Qwen/Qwen3-8B
 ```
 
 ```py
@@ -47,7 +47,7 @@ while True:
     messages.append({"role": "assistant", "content": resp})
 ```
 
-## Python API
+## Python SDK
 You can find a more detailed example demonstrating enabling/disabling thinking [here](../examples/python/qwen3.py).
 
 ```py
@@ -77,7 +77,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-## Rust API
+## Rust SDK
 You can find a more detailed example demonstrating enabling/disabling thinking [here](../mistralrs/examples/qwen3/main.rs).
 
 ```rust

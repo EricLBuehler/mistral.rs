@@ -31,7 +31,7 @@ while True:
     messages.append({"role": "assistant", "content": resp})
 ```
 
-## Python API
+## Python SDK
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 

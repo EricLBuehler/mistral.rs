@@ -550,9 +550,7 @@ impl ModelWeights {
             layer_in = x;
         }
         let x = self.norm.forward(&layer_in)?;
-        extract_logits(
-            &MatMul.qmethod_matmul(&x.contiguous()?, &*self.output)?,
-            context_lens,
-        )
+        let x = extract_logits(&x, context_lens)?;
+        MatMul.qmethod_matmul(&x.contiguous()?, &*self.output)
     }
 }

@@ -9,7 +9,7 @@ The Python and HTTP APIs support sending images as:
 - Path to a local image
 - [Base64](https://en.wikipedia.org/wiki/Base64) encoded string
 
-The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
+The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
 > Note: When using device mapping or model topology, only the text model and its layers will be managed. This is because it contains most of the model parameters. *The text model has 28 layers*.
 

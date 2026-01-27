@@ -7,7 +7,7 @@ LLMs use tool calling to interact with the outside world. Mistral.rs has OpenAI 
 Note that some models, such as Mistral Small/Nemo models, require a chat template to be specified. For example:
 
 ```bash
-./mistralrs-server --port 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503  
+mistralrs serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
 ```
 
 OpenAI docs: https://cookbook.openai.com/examples/how_to_call_functions_with_chat_models

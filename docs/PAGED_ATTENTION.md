@@ -22,7 +22,7 @@ When using FP8 quantization, the memory usage for KV cache is approximately halv
 
 > Note: Paged Attention is not enabled on Windows platforms, only Unix-based platforms.
 
-> Note: In the CLI and Python API, Paged Attention is disabled by default for Metal. It can be enabled with the `--paged-attn`/`paged_attn` flags.
+> Note: In the CLI and Python SDK, Paged Attention is disabled by default for Metal. It can be enabled with the `--paged-attn`/`paged_attn` flags.
 
 **There are more features being added to this:**
 - GGML model support
@@ -60,8 +60,8 @@ Prefix caching is a technique to reuse computed KV cache blocks across requests 
 Prefix caching is **enabled by default** when using PagedAttention and controlled by the same `prefix_cache_n` setting that controls the sequence-level prefix cacher:
 
 - **CLI**: `--prefix-cache-n <N>` (default 16). Set to 0 to disable prefix caching.
-- **Python API**: `prefix_cache_n=<N>` (default 16). Set to `None` or `0` to disable.
-- **Rust API**: `.with_prefix_cache_n(Some(N))` (default 16). Pass `None` to disable.
+- **Python SDK**: `prefix_cache_n=<N>` (default 16). Set to `None` or `0` to disable.
+- **Rust SDK**: `.with_prefix_cache_n(Some(N))` (default 16). Pass `None` to disable.
 
 **Important:** The two prefix caching systems are mutually exclusive:
 - **PagedAttention** uses block-level prefix caching (handled by `PrefixCacher` in `BlockEngine`)
@@ -96,8 +96,8 @@ The prefix cache operates at the block level (not token level) for efficiency:
 
 > Note: Prefix caching is supported when using PagedAttention. Configure the number of sequences to cache on the device with:
 > - CLI: `--prefix-cache-n <N>` (default 16)
-> - Python API: `prefix_cache_n=<N>` (default 16)
-> - Rust API: `.with_prefix_cache_n(Some(N))` (default 16)
+> - Python SDK: `prefix_cache_n=<N>` (default 16)
+> - Rust SDK: `.with_prefix_cache_n(Some(N))` (default 16)
 
 ## FlashAttention V2/V3 + PagedAttention in mistral.rs
 
@@ -123,7 +123,7 @@ Example with FP8 KV cache quantization:
 cargo run --release --features metal -- -i --pa-gpu-mem 4096 --pa-blk-size 32 --pa-cache-type f8e4m3 plain -m microsoft/Phi-3-mini-128k-instruct
 ```
 
-## Using the Rust API
+## Using the Rust SDK
 You can find this example [here](../mistralrs/examples/paged_attn/main.rs).
 
 ```rust
@@ -196,7 +196,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-## Using the Python API
+## Using the Python SDK
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 

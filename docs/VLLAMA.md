@@ -9,7 +9,7 @@ The Python and HTTP APIs support sending images as:
 - Path to a local image
 - [Base64](https://en.wikipedia.org/wiki/Base64) encoded string
 
-The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
+The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
 > Note: Some examples use the [Cephalo Llama 3.2 model](lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k), a member of the [Cephalo](https://huggingface.co/collections/lamm-mit/cephalo-664f3342267c4890d2f46b33) model collection. This model is finetune of Llama 3.2 with enhanced capabilities in scientific images. To use the base Llama 3.2 Vision model, simply use the [associated model ID](https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct).
 
@@ -131,7 +131,7 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "<|image|>What is shown in this image? Write a detailed response analyzing the scene.",
+                    "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                 },
             ],
         },
@@ -231,7 +231,7 @@ res = runner.send_chat_completion_request(
                     },
                     {
                         "type": "text",
-                        "text": "<|image|>What is shown in this image? Write a detailed response analyzing the scene.",
+                        "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                     },
                 ],
             }
@@ -257,6 +257,6 @@ We provide UQFF files ([EricB/Llama-3.2-11B-Vision-Instruct-UQFF](https://huggin
 You can use these UQFF files to easily use quantized versions of Llama 3.2 Vision.
 
 For example:
-```
-./mistralrs-server -i vision-plain -m meta-llama/Llama-3.2-11B-Vision-Instruct --from-uqff EricB/Llama-3.2-11B-Vision-Instruct-UQFF/llama-3.2-11b-vision-q4k.uqff
+```bash
+mistralrs run -m meta-llama/Llama-3.2-11B-Vision-Instruct --from-uqff EricB/Llama-3.2-11B-Vision-Instruct-UQFF/llama-3.2-11b-vision-q4k.uqff
 ```

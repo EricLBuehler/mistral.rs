@@ -1,6 +1,6 @@
-# Multi-Model Support in mistralrs-server
+# Multi-Model Support
 
-The mistralrs-server supports loading and serving multiple models simultaneously, allowing you to switch between different models in the same server instance.
+The `mistralrs` CLI supports loading and serving multiple models simultaneously, allowing you to switch between different models in the same server instance.
 
 - Each model runs in its own engine thread
 - Models can have different configurations (quantization, device layers, etc.)
@@ -14,13 +14,13 @@ The mistralrs-server supports loading and serving multiple models simultaneously
 ### Single-Model Mode (Default)
 ```bash
 # Traditional usage - loads one model
-mistralrs-server --port 1234 plain -m meta-llama/Llama-3.2-3B-Instruct
+mistralrs serve -p 1234 -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
 ### Multi-Model Mode
 ```bash
 # Load multiple models from configuration file
-mistralrs-server --port 1234 multi-model --config config.json --default-model-id llama3-3b
+mistralrs from-config --file config.toml
 ```
 
 ## Configuration File Format
@@ -144,7 +144,7 @@ Use the `multi-model` subcommand with these options:
 
 **New syntax:**
 ```bash
-mistralrs-server [GLOBAL_OPTIONS] multi-model --config <CONFIG> [--default-model-id <ID>]
+mistralrs from-config --file <CONFIG>
 ```
 
 ## Examples
@@ -302,7 +302,7 @@ Response:
 }
 ```
 
-## Rust API Usage
+## Rust SDK Usage
 
 The `mistralrs` crate provides `MultiModelBuilder` for loading multiple models and `Model` methods for multi-model management.
 
@@ -388,7 +388,7 @@ All request methods have `_with_model` variants that accept an optional model ID
 
 When `model_id` is `None`, the default model is used. If aliases are configured, you can pass either the alias or the canonical pipeline name.
 
-## Python API Usage
+## Python SDK Usage
 
 The Python `Runner` class supports multi-model operations directly.
 

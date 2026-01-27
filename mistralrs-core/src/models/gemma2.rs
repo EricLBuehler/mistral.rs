@@ -562,7 +562,8 @@ impl Model {
             )?;
         }
         let xs = xs.to_device(&self.device)?;
-        let mut xs = xs.apply(&self.norm)?;
+        let xs = xs.apply(&self.norm)?;
+        let mut xs = extract_logits(&xs, context_lens)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
@@ -575,7 +576,7 @@ impl Model {
             xs = (xs * final_logit_softcapping)?;
         }
 
-        extract_logits(&xs, context_lens)
+        Ok(xs)
     }
 }
 

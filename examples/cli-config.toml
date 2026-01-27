@@ -1,0 +1,31 @@
+command = "serve"
+
+[server]
+host = "0.0.0.0"
+port = 1234
+
+[runtime]
+max_seqs = 32
+enable_search = true
+search_embedding_model = "embedding-gemma"
+
+[paged_attn]
+mode = "auto"
+
+[[models]]
+kind = "auto"
+model_id = "meta-llama/Llama-3.2-3B-Instruct"
+
+[models.quantization]
+in_situ_quant = "4"
+
+[[models]]
+kind = "vision"
+model_id = "Qwen/Qwen2-VL-2B-Instruct"
+
+[models.vision]
+max_num_images = 4
+
+[[models]]
+kind = "embedding"
+model_id = "google/embeddinggemma-300m"

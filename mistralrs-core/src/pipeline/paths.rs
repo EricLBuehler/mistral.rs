@@ -67,8 +67,8 @@ pub fn get_xlora_paths(
                 let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(true)
                     .with_token(get_token(token_source)?);
-                if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                    api = api.with_cache_dir(x.into());
+                if let Some(cache_dir) = crate::hf_hub_cache_dir() {
+                    api = api.with_cache_dir(cache_dir);
                 }
                 api.build().map_err(candle_core::Error::msg)?
             };
@@ -92,7 +92,10 @@ pub fn get_xlora_paths(
             let xlora_classifier = xlora_classifier.first();
 
             let classifier_path = xlora_classifier
-                .map(|xlora_classifier| api_get_file!(api, xlora_classifier, model_id));
+                .map(|xlora_classifier| -> candle_core::Result<_> {
+                    Ok(api_get_file!(api, xlora_classifier, model_id))
+                })
+                .transpose()?;
 
             // Get the path for the xlora config by checking all for valid versions.
             // NOTE(EricLBuehler): Remove this functionality because all configs should be deserializable
@@ -277,8 +280,8 @@ pub fn get_xlora_paths(
                     let mut api = ApiBuilder::from_cache(cache)
                         .with_progress(true)
                         .with_token(get_token(token_source)?);
-                    if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                        api = api.with_cache_dir(x.into());
+                    if let Some(cache_dir) = crate::hf_hub_cache_dir() {
+                        api = api.with_cache_dir(cache_dir);
                     }
                     api.build().map_err(candle_core::Error::msg)?
                 };
@@ -328,8 +331,8 @@ pub fn get_model_paths(
                     let mut api = ApiBuilder::from_cache(cache)
                         .with_progress(true)
                         .with_token(get_token(token_source)?);
-                    if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                        api = api.with_cache_dir(x.into());
+                    if let Some(cache_dir) = crate::hf_hub_cache_dir() {
+                        api = api.with_cache_dir(cache_dir);
                     }
                     api.build().map_err(candle_core::Error::msg)?
                 };

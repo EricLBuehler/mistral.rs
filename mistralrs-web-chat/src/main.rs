@@ -52,6 +52,8 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    eprintln!("⚠️  mistralrs-web-chat is deprecated. Please use `mistralrs serve --ui` from mistralrs-cli instead.");
+
     let cli = Cli::parse();
     if cli.text_models.is_empty() && cli.vision_models.is_empty() && cli.speech_models.is_empty() {
         eprintln!("At least one --text-model, --vision-model, or --speech-model is required");
@@ -203,7 +205,7 @@ async fn main() -> Result<()> {
         .with_state(app_state.clone());
 
     let host = cli.host.as_deref().unwrap_or("0.0.0.0");
-    let port = cli.port.unwrap_or(8080);
+    let port = cli.port.unwrap_or(1234);
     let bind_addr = format!("{}:{}", host, port);
     let listener = TcpListener::bind(&bind_addr).await?;
     println!("🔌 Listening on http://{}", bind_addr);

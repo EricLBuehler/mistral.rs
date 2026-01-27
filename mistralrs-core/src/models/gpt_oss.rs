@@ -911,12 +911,12 @@ impl Model {
 
         xs = xs.to_device(&self.device)?;
         xs = self.norm.forward(&xs)?;
+        let mut xs = extract_logits(&xs, context_lens)?;
 
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        xs = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
-        extract_logits(&xs, context_lens)
+        MatMul.qmethod_matmul(&xs, &*self.lm_head)
     }
 }
 

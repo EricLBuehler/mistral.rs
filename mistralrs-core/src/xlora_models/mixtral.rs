@@ -802,7 +802,7 @@ impl XLoraModel {
             )?;
 
             if no_kv_cache {
-                let mut res = self
+                let res = self
                     .inner_forward(
                         input_ids_full,
                         seqlen_offsets_full,
@@ -813,16 +813,14 @@ impl XLoraModel {
                         flash_params_full,
                     )?
                     .contiguous()?;
+                let mut res = extract_logits(&res, context_lens)?;
                 if let Some(t) = self.lm_head.quantized_act_type() {
                     res = res.to_dtype(t)?;
                 }
-                extract_logits(
-                    &self.lm_head.lora_forward(&res, None, 1.0, None)?,
-                    context_lens,
-                )
+                self.lm_head.lora_forward(&res, None, 1.0, None)
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
-                let mut res = self
+                let res = self
                     .inner_forward(
                         input_ids,
                         seqlen_offsets,
@@ -833,16 +831,14 @@ impl XLoraModel {
                         flash_params,
                     )?
                     .contiguous()?;
+                let mut res = extract_logits(&res, context_lens)?;
                 if let Some(t) = self.lm_head.quantized_act_type() {
                     res = res.to_dtype(t)?;
                 }
-                extract_logits(
-                    &self.lm_head.lora_forward(&res, None, 1.0, None)?,
-                    context_lens,
-                )
+                self.lm_head.lora_forward(&res, None, 1.0, None)
             }
         } else {
-            let mut res = self
+            let res = self
                 .inner_forward(
                     input_ids,
                     seqlen_offsets,
@@ -853,13 +849,11 @@ impl XLoraModel {
                     flash_params,
                 )?
                 .contiguous()?;
+            let mut res = extract_logits(&res, context_lens)?;
             if let Some(t) = self.lm_head.quantized_act_type() {
                 res = res.to_dtype(t)?;
             }
-            extract_logits(
-                &self.lm_head.lora_forward(&res, None, 1.0, None)?,
-                context_lens,
-            )
+            self.lm_head.lora_forward(&res, None, 1.0, None)
         }
     }
 }
