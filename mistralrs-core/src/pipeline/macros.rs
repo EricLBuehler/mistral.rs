@@ -37,8 +37,8 @@ macro_rules! get_paths {
             let mut api = ApiBuilder::from_cache(cache)
                 .with_progress(!$silent)
                 .with_token(get_token($token_source)?);
-            if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                api = api.with_cache_dir(x.into());
+            if let Some(cache_dir) = $crate::hf_hub_cache_dir() {
+                api = api.with_cache_dir(cache_dir);
             }
             api.build()?
         };
@@ -160,8 +160,8 @@ macro_rules! get_embedding_paths {
             let mut api = ApiBuilder::from_cache(cache)
                 .with_progress(!$silent)
                 .with_token(get_token($token_source)?);
-            if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                api = api.with_cache_dir(x.into());
+            if let Some(cache_dir) = $crate::hf_hub_cache_dir() {
+                api = api.with_cache_dir(cache_dir);
             }
             api.build()?
         };
@@ -278,8 +278,8 @@ macro_rules! get_uqff_paths {
                         .clone()
                         .unwrap_or(TokenSource::None),
                 )?);
-            if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                api = api.with_cache_dir(x.into());
+            if let Some(cache_dir) = $crate::hf_hub_cache_dir() {
+                api = api.with_cache_dir(cache_dir);
             }
             api.build()?
         };
@@ -323,8 +323,8 @@ macro_rules! get_paths_gguf {
             let mut api = ApiBuilder::from_cache(cache)
                 .with_progress(!$silent)
                 .with_token(get_token($token_source)?);
-            if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                api = api.with_cache_dir(x.into());
+            if let Some(cache_dir) = $crate::hf_hub_cache_dir() {
+                api = api.with_cache_dir(cache_dir);
             }
             api.build()?
         };

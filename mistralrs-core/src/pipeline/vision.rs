@@ -1063,8 +1063,8 @@ impl AnyMoePipelineMixin for VisionPipeline {
                 let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
                     .with_token(get_token(token).map_err(candle_core::Error::msg)?);
-                if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                    api = api.with_cache_dir(x.into());
+                if let Some(cache_dir) = crate::hf_hub_cache_dir() {
+                    api = api.with_cache_dir(cache_dir);
                 }
                 api.build().map_err(candle_core::Error::msg)?
             };
@@ -1121,8 +1121,8 @@ impl AnyMoePipelineMixin for VisionPipeline {
                 let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
                     .with_token(get_token(token).map_err(candle_core::Error::msg)?);
-                if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                    api = api.with_cache_dir(x.into());
+                if let Some(cache_dir) = crate::hf_hub_cache_dir() {
+                    api = api.with_cache_dir(cache_dir);
                 }
                 api.build().map_err(candle_core::Error::msg)?
             };

@@ -275,8 +275,8 @@ impl AutoLoader {
         let mut api = ApiBuilder::from_cache(cache)
             .with_progress(!silent)
             .with_token(get_token(token_source)?);
-        if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-            api = api.with_cache_dir(x.into());
+        if let Some(cache_dir) = crate::hf_hub_cache_dir() {
+            api = api.with_cache_dir(cache_dir);
         }
         let api = api.build()?;
         let revision = revision.unwrap_or_else(|| "main".to_string());

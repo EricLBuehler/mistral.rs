@@ -1,5 +1,5 @@
 use std::{
-    fs,
+    env, fs,
     io::Read,
     path::{Path, PathBuf},
 };
@@ -16,20 +16,60 @@ pub(crate) struct RemoteAccessIssue {
     pub message: String,
 }
 
+/// Resolve the Hugging Face home directory.
+///
+/// Precedence:
+/// 1. HF_HOME
+/// 2. ~/.cache/huggingface
+pub fn hf_home_dir() -> Option<PathBuf> {
+    let dir = env::var("HF_HOME")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".cache").join("huggingface")));
+
+    if let Some(ref dir) = dir {
+        if let Err(err) = fs::create_dir_all(dir) {
+            warn!(
+                "Could not create Hugging Face home directory `{}`: {err}",
+                dir.display()
+            );
+        }
+    }
+
+    dir
+}
+
+/// Resolve the Hugging Face Hub cache directory.
+///
+/// Precedence:
+/// 1. HF_HUB_CACHE
+/// 2. HF_HOME/hub
+/// 3. ~/.cache/huggingface/hub
+pub fn hf_hub_cache_dir() -> Option<PathBuf> {
+    let dir = env::var("HF_HUB_CACHE")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| hf_home_dir().map(|home| home.join("hub")));
+
+    if let Some(ref dir) = dir {
+        if let Err(err) = fs::create_dir_all(dir) {
+            warn!(
+                "Could not create Hugging Face hub cache directory `{}`: {err}",
+                dir.display()
+            );
+        }
+    }
+
+    dir
+}
+
+/// Resolve the Hugging Face token file path.
+pub fn hf_token_path() -> Option<PathBuf> {
+    hf_home_dir().map(|home| home.join("token"))
+}
+
 fn cache_dir() -> PathBuf {
-    if let Ok(path) = std::env::var("HF_HUB_CACHE") {
-        let cache_dir = PathBuf::from(path);
-        let _ = fs::create_dir_all(&cache_dir);
-        return cache_dir;
-    }
-
-    if let Some(mut home) = dirs::home_dir() {
-        home.push(".cache/huggingface/hub/");
-        let _ = fs::create_dir_all(&home);
-        return home;
-    }
-
-    PathBuf::from("./")
+    hf_hub_cache_dir().unwrap_or_else(|| PathBuf::from("./"))
 }
 
 fn cache_file_for_model(model_id: &Path) -> PathBuf {

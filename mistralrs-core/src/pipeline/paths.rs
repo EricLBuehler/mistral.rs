@@ -67,8 +67,8 @@ pub fn get_xlora_paths(
                 let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(true)
                     .with_token(get_token(token_source)?);
-                if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                    api = api.with_cache_dir(x.into());
+                if let Some(cache_dir) = crate::hf_hub_cache_dir() {
+                    api = api.with_cache_dir(cache_dir);
                 }
                 api.build().map_err(candle_core::Error::msg)?
             };
@@ -280,8 +280,8 @@ pub fn get_xlora_paths(
                     let mut api = ApiBuilder::from_cache(cache)
                         .with_progress(true)
                         .with_token(get_token(token_source)?);
-                    if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                        api = api.with_cache_dir(x.into());
+                    if let Some(cache_dir) = crate::hf_hub_cache_dir() {
+                        api = api.with_cache_dir(cache_dir);
                     }
                     api.build().map_err(candle_core::Error::msg)?
                 };
@@ -331,8 +331,8 @@ pub fn get_model_paths(
                     let mut api = ApiBuilder::from_cache(cache)
                         .with_progress(true)
                         .with_token(get_token(token_source)?);
-                    if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                        api = api.with_cache_dir(x.into());
+                    if let Some(cache_dir) = crate::hf_hub_cache_dir() {
+                        api = api.with_cache_dir(cache_dir);
                     }
                     api.build().map_err(candle_core::Error::msg)?
                 };

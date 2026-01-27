@@ -4,22 +4,10 @@ use anyhow::Result;
 use comfy_table::{presets::UTF8_FULL, Cell, ContentArrangement, Table};
 use std::path::{Path, PathBuf};
 
-/// Get the HuggingFace cache directory (cross-platform)
-fn hf_cache_dir() -> Result<PathBuf> {
-    // Check HF_HOME env var first (HuggingFace standard)
-    if let Ok(hf_home) = std::env::var("HF_HOME") {
-        return Ok(PathBuf::from(hf_home));
-    }
-
-    // Fall back to ~/.cache/huggingface
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    Ok(home.join(".cache").join("huggingface"))
-}
-
 /// Get the HuggingFace hub directory
 fn hf_hub_dir() -> Result<PathBuf> {
-    Ok(hf_cache_dir()?.join("hub"))
+    mistralrs_core::hf_hub_cache_dir()
+        .ok_or_else(|| anyhow::anyhow!("Cannot determine Hugging Face hub cache directory"))
 }
 
 /// List all cached models
