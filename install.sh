@@ -181,10 +181,10 @@ install_mistralrs() {
 
     if [ -n "$features" ]; then
         info "Installing mistralrs-cli with features: $features"
-        cargo install mistralrs-cli --features "$features"
+        cargo install mistralrs-cli@0.7.0-alpha.3 --features "$features"
     else
         info "Installing mistralrs-cli with default features"
-        cargo install mistralrs-cli
+        cargo install mistralrs-cli@0.7.0-alpha.3
     fi
 }
 
