@@ -52,6 +52,28 @@ mistralrs serve --ui -m google/gemma-3-4b-it
 
 Then visit [http://localhost:1234/ui](http://localhost:1234/ui) for the web chat interface.
 
+### The `mistralrs` CLI
+
+The CLI is designed to be **zero-config**: just point it at a model and go.
+
+- **Auto-detection**: Automatically detects model architecture, quantization format, and chat template
+- **All-in-one**: Single binary for chat, server, benchmarks, and web UI (`run`, `serve`, `bench`)
+- **Hardware tuning**: Run `mistralrs tune` to automatically benchmark and configure optimal settings for your hardware
+- **Format-agnostic**: Works with Hugging Face models, GGUF files, and [UQFF quantizations](docs/UQFF.md) seamlessly
+
+```bash
+# Auto-tune for your hardware (writes to ~/.mistralrs/config.json)
+mistralrs tune -m Qwen/Qwen3-4B
+
+# Run with a GGUF file
+mistralrs run -m bartowski/Qwen3-4B-GGUF -f Qwen3-4B-Q4_K_M.gguf
+
+# Benchmark throughput
+mistralrs bench -m Qwen/Qwen3-4B
+```
+
+[Full CLI documentation](docs/CLI.md)
+
 <details open>
   <summary><b>Web Chat Demo</b></summary>
   <br>
@@ -132,7 +154,7 @@ Then visit [http://localhost:1234/ui](http://localhost:1234/ui) for the web chat
 <details>
 <summary><b>Vision Models</b></summary>
 
-- Qwen 3-VL**
+- Qwen 3-VL
 - Gemma 3n
 - Llama 4
 - Gemma 3
