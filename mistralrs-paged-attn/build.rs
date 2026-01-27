@@ -169,6 +169,15 @@ fn main() -> Result<(), String> {
                 Platform::Ios => "iphoneos",
             }
         }
+
+        fn metal_std(&self) -> &str {
+            // Use Metal 3.0 unified standard for both platforms
+            // This fixes Xcode 26+ where the default Metal standard may be too low
+            // https://github.com/EricLBuehler/mistral.rs/issues/1844
+            match self {
+                Platform::MacOS | Platform::Ios => "metal3.0",
+            }
+        }
     }
 
     fn compile(platform: Platform) -> Result<(), String> {
@@ -183,6 +192,7 @@ fn main() -> Result<(), String> {
             .arg("--sdk")
             .arg(platform.sdk())
             .arg("metal")
+            .arg(format!("-std={}", platform.metal_std()))
             .arg(format!("-working-directory={working_directory}"))
             .arg("-Wall")
             .arg("-Wextra")
