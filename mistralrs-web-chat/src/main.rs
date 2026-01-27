@@ -203,7 +203,7 @@ async fn main() -> Result<()> {
         .with_state(app_state.clone());
 
     let host = cli.host.as_deref().unwrap_or("0.0.0.0");
-    let port = cli.port.unwrap_or(8080);
+    let port = cli.port.unwrap_or(1234);
     let bind_addr = format!("{}:{}", host, port);
     let listener = TcpListener::bind(&bind_addr).await?;
     println!("🔌 Listening on http://{}", bind_addr);

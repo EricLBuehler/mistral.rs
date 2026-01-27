@@ -50,7 +50,7 @@ mistralrs run -m Qwen/Qwen3-4B
 mistralrs serve --ui -m google/gemma-3-4b-it
 ```
 
-Then visit [http://localhost:8080/ui](http://localhost:8080/ui) for the web chat interface.
+Then visit [http://localhost:1234/ui](http://localhost:1234/ui) for the web chat interface.
 
 <details open>
   <summary><b>Web Chat Demo</b></summary>
@@ -202,7 +202,7 @@ For quick containerized deployment:
 
 ```bash
 docker pull ghcr.io/ericlbuehler/mistral.rs:latest
-docker run --gpus all -p 8080:8080 ghcr.io/ericlbuehler/mistral.rs:latest \
+docker run --gpus all -p 1234:1234 ghcr.io/ericlbuehler/mistral.rs:latest \
   serve -m Qwen/Qwen3-4B
 ```
 

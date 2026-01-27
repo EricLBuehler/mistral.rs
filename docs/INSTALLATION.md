@@ -87,7 +87,7 @@ Docker images are available for quick deployment:
 
 ```bash
 docker pull ghcr.io/ericlbuehler/mistral.rs:latest
-docker run --gpus all -p 8080:8080 ghcr.io/ericlbuehler/mistral.rs:latest \
+docker run --gpus all -p 1234:1234 ghcr.io/ericlbuehler/mistral.rs:latest \
   serve -m Qwen/Qwen3-4B
 ```
 

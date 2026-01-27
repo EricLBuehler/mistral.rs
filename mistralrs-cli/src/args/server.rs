@@ -8,7 +8,7 @@ use std::path::PathBuf;
 #[derive(Args, Clone, Deserialize)]
 pub struct ServerOptions {
     /// HTTP server port
-    #[arg(short = 'p', long, default_value_t = 8080)]
+    #[arg(short = 'p', long, default_value_t = 1234)]
     #[serde(default = "default_port")]
     pub port: u16,
 
@@ -36,7 +36,7 @@ pub struct ServerOptions {
 impl Default for ServerOptions {
     fn default() -> Self {
         Self {
-            port: 8080,
+            port: 1234,
             host: "0.0.0.0".to_string(),
             mcp_port: None,
             mcp_config: None,
@@ -46,7 +46,7 @@ impl Default for ServerOptions {
 }
 
 fn default_port() -> u16 {
-    8080
+    1234
 }
 
 fn default_host() -> String {

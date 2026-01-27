@@ -87,7 +87,7 @@ Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified.
 **Examples:**
 
 ```bash
-# Start server on default port 8080 (shorthand)
+# Start server on default port 1234 (shorthand)
 mistralrs serve -m Qwen/Qwen3-4B
 
 # Explicit auto type (equivalent to above)
@@ -107,7 +107,7 @@ mistralrs serve -m Qwen/Qwen3-4B --mcp-port 8081
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `-p, --port <PORT>` | `8080` | HTTP server port |
+| `-p, --port <PORT>` | `1234` | HTTP server port |
 | `--host <HOST>` | `0.0.0.0` | Bind address |
 | `--ui` | disabled | Serve built-in web UI at `/ui` |
 | `--mcp-port <PORT>` | none | MCP protocol server port |
@@ -454,7 +454,7 @@ mistralrs from-config --file config.toml
 command = "serve"
 
 [server]
-port = 8080
+port = 1234
 ui = true
 
 [[models]]

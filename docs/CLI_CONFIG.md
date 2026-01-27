@@ -14,7 +14,7 @@ mistralrs from-config --file path/to/config.toml
 command = "serve"
 
 [server]
-port = 8080
+port = 1234
 ui = true
 
 [runtime]
@@ -54,7 +54,7 @@ HTTP server configuration.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `port` | `8080` | HTTP server port |
+| `port` | `1234` | HTTP server port |
 | `host` | `"0.0.0.0"` | Bind address |
 | `ui` | `false` | Serve built-in web UI at `/ui` |
 | `mcp_port` | none | MCP protocol server port (enables MCP if set) |
@@ -164,7 +164,7 @@ seed = 42
 
 [server]
 host = "0.0.0.0"
-port = 8080
+port = 1234
 ui = true
 
 [runtime]
@@ -215,7 +215,7 @@ model_id = "Qwen/Qwen3-4B"
 command = "serve"
 
 [server]
-port = 8080
+port = 1234
 
 [[models]]
 kind = "text"
