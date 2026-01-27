@@ -1,7 +1,9 @@
 <a name="top"></a>
+<!--
 <h1 align="center">
   mistral.rs
 </h1>
+-->
 
 <div align="center">
   <img src="res/banner.png" alt="mistral.rs" width="100%" style="max-width: 800px;">
@@ -12,7 +14,7 @@ Blazingly fast LLM inference.
 </h3>
 
 <p align="center">
-| <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Docs</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Docs</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> | <a href="https://matrix.to/#/#mistral.rs:matrix.org"><b>Matrix</b></a> |
+| <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Docs</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Docs</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
 </p>
 
 <p align="center">
@@ -28,6 +30,7 @@ Blazingly fast LLM inference.
 - **Not another model registry**: Use HuggingFace directly. No converting, no uploading to a separate service.
 - **Built-in web UI**: `mistralrs serve --ui` gives you a web interface instantly.
 - **Hardware-aware**: `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
+- **Flexible SDKs**: Python package and Rust crate to build your projects.
 
 ## Quick Start
 
