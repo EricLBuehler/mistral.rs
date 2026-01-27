@@ -259,7 +259,8 @@ main() {
     echo ""
     echo "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
     echo ""
-    printf "${YELLOW}Note:${NC} Restart your terminal to use the 'mistralrs' command.\n"
+    printf "${YELLOW}Note:${NC} To use 'mistralrs' now, run: ${BOLD}. \"\$HOME/.cargo/env\"${NC}\n"
+    printf "      Or restart your terminal.\n"
 }
 
 main "$@"
