@@ -94,6 +94,23 @@ function Test-IntelCpu {
     }
 }
 
+# Check if cuDNN is installed
+function Test-CuDNN {
+    # Check common cuDNN library paths on Windows
+    $cudnnPaths = @(
+        "$env:CUDA_PATH\bin\cudnn*.dll",
+        "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*\bin\cudnn*.dll",
+        "C:\Program Files\NVIDIA\CUDNN\*\bin\cudnn*.dll"
+    )
+
+    foreach ($pattern in $cudnnPaths) {
+        if (Get-Item $pattern -ErrorAction SilentlyContinue) {
+            return $true
+        }
+    }
+    return $false
+}
+
 # Build feature string based on detected hardware
 function Get-Features {
     $features = @()
@@ -102,13 +119,20 @@ function Get-Features {
     $cudaCC = Get-CudaComputeCap
     if ($cudaCC) {
         $features += "cuda"
-        $features += "cudnn"
-        $features += "nccl"
 
         $ccMajor = $cudaCC.Substring(0, 1)
         $ccMinor = if ($cudaCC.Length -gt 1) { $cudaCC.Substring(1) } else { "0" }
         Write-Info "CUDA detected (compute capability: $ccMajor.$ccMinor)"
 
+        # Check for cuDNN
+        if (Test-CuDNN) {
+            $features += "cudnn"
+            Write-Info "cuDNN detected - enabling cudnn"
+        } else {
+            Write-Info "cuDNN not found - skipping cudnn feature"
+        }
+
+        # Add flash attention based on compute capability
         if ($cudaCC -eq "90") {
             $features += "flash-attn-v3"
             Write-Info "Hopper GPU detected - enabling flash-attn-v3"
@@ -203,13 +227,15 @@ function Main {
     Write-Host ""
     Write-Host "Quick Start" -ForegroundColor White
     Write-Host "===========" -ForegroundColor White
-    Write-Host "  # Run a model interactively"
-    Write-Host "  mistralrs -i plain -m meta-llama/Llama-3.2-3B-Instruct -a llama"
     Write-Host ""
-    Write-Host "  # Start the OpenAI-compatible server"
-    Write-Host "  mistralrs --port 1234 plain -m meta-llama/Llama-3.2-3B-Instruct -a llama"
+    Write-Host "  mistralrs run -m Qwen/Qwen3-4B"
+    Write-Host ""
+    Write-Host "  mistralrs serve --ui -m Qwen/Qwen3-4B"
     Write-Host ""
     Write-Host "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
+    Write-Host ""
+    Write-Host "Note: " -ForegroundColor Yellow -NoNewline
+    Write-Host "Restart your terminal to use the 'mistralrs' command."
 }
 
 # Run main

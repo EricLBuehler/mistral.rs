@@ -26,11 +26,11 @@ BLUE='\033[0;34m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
-# Print functions
-info() { printf "${BLUE}info:${NC} %s\n" "$1"; }
-success() { printf "${GREEN}success:${NC} %s\n" "$1"; }
-warn() { printf "${YELLOW}warning:${NC} %s\n" "$1"; }
-error() { printf "${RED}error:${NC} %s\n" "$1"; exit 1; }
+# Print functions (output to stderr so they don't get captured in command substitution)
+info() { printf "${BLUE}info:${NC} %s\n" "$1" >&2; }
+success() { printf "${GREEN}success:${NC} %s\n" "$1" >&2; }
+warn() { printf "${YELLOW}warning:${NC} %s\n" "$1" >&2; }
+error() { printf "${RED}error:${NC} %s\n" "$1" >&2; exit 1; }
 
 # Banner
 print_banner() {
@@ -115,6 +115,17 @@ is_intel_cpu() {
     return 1
 }
 
+# Check if cuDNN is installed
+detect_cudnn() {
+    # Check common cuDNN library paths
+    for path in /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu /usr/local/cuda/lib64 /usr/lib64; do
+        if [ -f "$path/libcudnn.so" ] || ls "$path"/libcudnn.so.* >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Build feature string based on detected hardware
 build_features() {
     os="$1"
@@ -127,12 +138,21 @@ build_features() {
         # Check for CUDA
         cuda_cc=$(detect_cuda_compute_cap)
         if [ -n "$cuda_cc" ]; then
-            features="cuda cudnn nccl"
+            features="cuda"
             # Extract major.minor from compute cap (e.g., 89 -> 8.9)
             cc_major=$(echo "$cuda_cc" | cut -c1)
             cc_minor=$(echo "$cuda_cc" | cut -c2-)
             info "CUDA detected (compute capability: ${cc_major}.${cc_minor})"
 
+            # Check for cuDNN
+            if detect_cudnn; then
+                features="$features cudnn"
+                info "cuDNN detected - enabling cudnn"
+            else
+                info "cuDNN not found - skipping cudnn feature"
+            fi
+
+            # Add flash attention based on compute capability
             if [ "$cuda_cc" = "90" ]; then
                 features="$features flash-attn-v3"
                 info "Hopper GPU detected - enabling flash-attn-v3"
@@ -222,18 +242,24 @@ main() {
     echo ""
     install_mistralrs "$features"
 
+    # Ensure cargo bin is in PATH for this session
+    if [ -f "$HOME/.cargo/env" ]; then
+        . "$HOME/.cargo/env"
+    fi
+
     echo ""
     success "mistral.rs installed successfully!"
     echo ""
     printf "${BOLD}Quick Start${NC}\n"
     echo "==========="
-    echo "  # Run a model interactively"
-    echo "  mistralrs run --isq 4 -m google/gemma-3-4b-it"
     echo ""
-    echo "  # Start the OpenAI-compatible server with the builtin UI"
+    echo "  mistralrs run -m Qwen/Qwen3-4B"
+    echo ""
     echo "  mistralrs serve --ui -m Qwen/Qwen3-4B"
     echo ""
     echo "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
+    echo ""
+    printf "${YELLOW}Note:${NC} Restart your terminal to use the 'mistralrs' command.\n"
 }
 
 main "$@"
