@@ -50,6 +50,7 @@ walkdir = { workspace = true }
 [features]
 default = []
 cuda = ["mistralrs-core/cuda", "mistralrs-server-core/cuda"]
+nccl = ["mistralrs-core/nccl", "mistralrs-server-core/nccl"]
 cudnn = ["mistralrs-core/cudnn", "mistralrs-server-core/cudnn"]
 flash-attn = ["cuda", "mistralrs-core/flash-attn", "mistralrs-server-core/flash-attn"]
 flash-attn-v3 = ["cuda", "mistralrs-core/flash-attn-v3", "mistralrs-server-core/flash-attn-v3"]
