@@ -4,6 +4,20 @@ set -e
 # mistral.rs Installation Script
 # Cross-platform installer for Linux and macOS with automatic hardware detection
 
+# Check if we can prompt the user (stdin is a tty or we have /dev/tty)
+can_prompt() {
+    [ -t 0 ] || [ -e /dev/tty ]
+}
+
+# Read user input, using /dev/tty if stdin is not a terminal (e.g., piped from curl)
+read_input() {
+    if [ -t 0 ]; then
+        read -r REPLY
+    else
+        read -r REPLY </dev/tty
+    fi
+}
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -170,7 +184,7 @@ main() {
         warn "Rust is not installed"
         echo ""
         printf "Would you like to install Rust now? [Y/n] "
-        read -r REPLY
+        read_input
         case "$REPLY" in
             [Nn]*)
                 error "Rust is required to install mistral.rs"
@@ -197,7 +211,7 @@ main() {
 
     # Confirm installation
     printf "Proceed with installation? [Y/n] "
-    read -r REPLY
+    read_input
     case "$REPLY" in
         [Nn]*)
             info "Installation cancelled"
