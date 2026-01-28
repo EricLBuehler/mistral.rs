@@ -124,7 +124,7 @@ mistralrs run --paged-attn on --pa-memory-mb 4096 --pa-block-size 32 --pa-cache-
 ```
 
 ## Using the Rust SDK
-You can find this example [here](../mistralrs/examples/paged_attn/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/paged_attn/main.rs).
 
 ```rust
 use anyhow::Result;

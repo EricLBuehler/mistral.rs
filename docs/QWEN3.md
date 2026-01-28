@@ -15,7 +15,7 @@ mistralrs run --isq 4 -m Qwen/Qwen3-30B-A3B
 The Qwen 3 models are hybrid reasoning models which can be controlled at inference-time. **By default, reasoning is enabled for these models.** To dynamically control this, it is recommended to either add `/no_think` or `/think` to your prompt. Alternatively, you can specify the `enable_thinking` flag as detailed by the API-specific examples.
 
 ## HTTP API
-You can find a more detailed example demonstrating enabling/disabling thinking [here](../examples/server/qwen3.py).
+You can find a more detailed example demonstrating enabling/disabling thinking [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3.py).
 
 ```bash
 mistralrs serve --isq 4 -p 1234 -m Qwen/Qwen3-8B
@@ -48,7 +48,7 @@ while True:
 ```
 
 ## Python SDK
-You can find a more detailed example demonstrating enabling/disabling thinking [here](../examples/python/qwen3.py).
+You can find a more detailed example demonstrating enabling/disabling thinking [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3.py).
 
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
@@ -78,7 +78,7 @@ print(res.usage)
 ```
 
 ## Rust SDK
-You can find a more detailed example demonstrating enabling/disabling thinking [here](../mistralrs/examples/qwen3/main.rs).
+You can find a more detailed example demonstrating enabling/disabling thinking [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/qwen3/main.rs).
 
 ```rust
 use anyhow::Result;

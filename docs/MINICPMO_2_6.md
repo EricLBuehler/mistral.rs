@@ -49,7 +49,7 @@ The image shows a close-up view of a rose flower with dew drops on its petals. T
 
 
 ## HTTP server
-You can find this example [here](../examples/server/minicpmo_2_6.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/minicpmo_2_6.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -127,13 +127,13 @@ print(resp)
 
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
 
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/minicpmo_2_6/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/minicpmo_2_6/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -179,7 +179,7 @@ async fn main() -> Result<()> {
 ---
 
 ## Python
-You can find this example [here](../examples/python/minicpmo_2_6.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/minicpmo_2_6.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -227,5 +227,5 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).

@@ -1,6 +1,6 @@
 # Structured model loading with .toml files
 
-Mistral.rs supports loading models from a .toml file, and the fields are the same as for the CLI. Please find some example toml selectors [here](../toml-selectors/).
+Mistral.rs supports loading models from a .toml file, and the fields are the same as for the CLI. Please find some example toml selectors [here](https://github.com/EricLBuehler/mistral.rs/tree/master/toml-selectors/).
 
 There are a few cases which add functionality that cannot be found in the CLI.
 

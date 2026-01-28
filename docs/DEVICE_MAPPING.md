@@ -25,11 +25,11 @@ These parameters do not translate to hard limits during runtime, they only contr
 
 ## Examples
 - Python
-    - Text models [text_auto_device_map.py](../examples/python/text_auto_device_map.py)
-    - Vision models [vision_auto_device_map.py](../examples/python/vision_auto_device_map.py)
+    - Text models [text_auto_device_map.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/text_auto_device_map.py)
+    - Vision models [vision_auto_device_map.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/vision_auto_device_map.py)
 - Rust
-    - Text models [text_auto_device_map/main.rs](../mistralrs/examples/text_auto_device_map/main.rs)
-    - Vision models [vision_auto_device_map/main.rs](../mistralrs/examples/vision_auto_device_map/main.rs)
+    - Text models [text_auto_device_map/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/text_auto_device_map/main.rs)
+    - Vision models [vision_auto_device_map/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/vision_auto_device_map/main.rs)
 - Server
     - Text models:
     ```bash

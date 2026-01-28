@@ -16,7 +16,7 @@ mistralrs run -m openai/gpt-oss-20b
 > Note: PagedAttention is not supported for GPT-OSS due to custom attention with sinks.
 
 ## HTTP API
-You can find a more detailed example [here](../examples/server/gpt_oss.py).
+You can find a more detailed example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/gpt_oss.py).
 
 ```bash
 mistralrs serve -p 1234 -m openai/gpt-oss-20b
@@ -49,7 +49,7 @@ while True:
 ```
 
 ## Python SDK
-You can find a more detailed example [here](../examples/python/gpt_oss.py).
+You can find a more detailed example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gpt_oss.py).
 
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
@@ -78,7 +78,7 @@ print(res.usage)
 ```
 
 ## Rust SDK
-You can find a more detailed example [here](../mistralrs/examples/gpt_oss/main.rs).
+You can find a more detailed example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/gpt_oss/main.rs).
 
 ```rust
 use anyhow::Result;

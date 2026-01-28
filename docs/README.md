@@ -114,4 +114,4 @@
 
 ## Contributing
 
-See the main [README](../README.md#contributing) for contribution guidelines.
+See the main [README](https://github.com/EricLBuehler/mistral.rs/blob/master/README.md#contributing) for contribution guidelines.

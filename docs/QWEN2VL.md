@@ -55,7 +55,7 @@ camellias are also known for their resilience and ability to thrive in a variety
 ```
 
 ## HTTP server
-You can find this example [here](../examples/server/qwen2vl.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen2vl.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -125,13 +125,13 @@ print(resp)
 
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
 
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/qwen2vl/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/qwen2vl/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -178,7 +178,7 @@ async fn main() -> Result<()> {
 ---
 
 ## Python
-You can find this example [here](../examples/python/qwen2vl.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen2vl.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -226,5 +226,5 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).

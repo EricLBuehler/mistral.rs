@@ -77,7 +77,7 @@ Config for E2.49B (block-level),35,2.49,54.50%,"[8192, 8192, ..., 16384, 16384, 
 Currently supported:
 - **Gemma 3n** (`google/gemma-3n-E4B-it`) - Multimodal model with vision and audio
 
-See [`matformer_configs/`](../matformer_configs/) for available configurations.
+See [`matformer_configs/`](https://github.com/EricLBuehler/mistral.rs/tree/master/matformer_configs/) for available configurations.
 
 ## Performance Guide
 
@@ -235,4 +235,4 @@ This shows:
 ## References
 
 - [Matryoshka Transformer Paper](https://arxiv.org/abs/2410.23265)
-- [Example Configurations](../matformer_configs/)
+- [Example Configurations](https://github.com/EricLBuehler/mistral.rs/tree/master/matformer_configs/)

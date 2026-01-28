@@ -13,4 +13,4 @@ Please see docs for the following model types:
 - Phi 4 Multimodal: [PHI4MM.md](PHI4MM.md)
 
 > Note for the Python and HTTP APIs:
-> We follow the OpenAI specification for structuring the image messages and allow both base64 encoded images as well as a URL/path to the image. There are many examples of this, see [this Python example](../examples/python/phi3v.py).
+> We follow the OpenAI specification for structuring the image messages and allow both base64 encoded images as well as a URL/path to the image. There are many examples of this, see [this Python example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py).
