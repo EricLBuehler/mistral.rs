@@ -6,13 +6,41 @@ Pre-built wheels are available for common platforms. Choose the package that mat
 
 | Hardware | Install Command |
 |----------|----------------|
+| **Recommended (auto-optimized)** | `pip install mistralrs` |
 | NVIDIA GPUs (CUDA) | `pip install mistralrs-cuda` |
 | Apple Silicon (Metal) | `pip install mistralrs-metal` |
 | Apple Accelerate | `pip install mistralrs-accelerate` |
 | Intel CPUs (MKL) | `pip install mistralrs-mkl` |
-| CPU only | `pip install mistralrs` |
 
-All packages install the `mistralrs` Python module. The package suffix only controls which accelerator features are enabled.
+### Platform-Specific Optimizations
+
+The `mistralrs` base package includes platform-specific optimizations:
+- **macOS Apple Silicon**: Metal GPU support built-in
+- **Linux/Windows x86_64**: Intel MKL optimizations built-in
+- **Linux aarch64**: CPU-only (use `mistralrs-cuda` for GPU support)
+
+All packages install the `mistralrs` Python module. The package suffix controls which accelerator features are enabled.
+
+### Supported Platforms
+
+| Package | Linux x86_64 | Linux aarch64 | Windows x86_64 | macOS aarch64 |
+|---------|:------------:|:-------------:|:--------------:|:-------------:|
+| mistralrs | MKL | CPU | MKL | Metal |
+| mistralrs-cuda | CUDA | CUDA | CUDA | - |
+| mistralrs-metal | - | - | - | Metal |
+| mistralrs-accelerate | - | - | - | Accelerate |
+| mistralrs-mkl | MKL | - | MKL | - |
+
+**Python version**: 3.10+ (wheels use abi3 for forward compatibility)
+
+### Windows Requirements
+
+**It is recommended to use WSL2 on Windows machines.**
+
+On Windows, additional runtime dependencies may be required:
+
+- **CUDA packages**: Install the [NVIDIA CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) and ensure the `bin` directory is in your PATH
+- **MKL packages**: Install the [Intel oneAPI Math Kernel Library](https://www.intel.com/content/www/us/en/developer/tools/oneapi/onemkl.html) runtime
 
 ```bash
 # Example: Install with CUDA support

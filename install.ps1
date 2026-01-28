@@ -19,7 +19,7 @@ function Show-Banner {
     Write-Host " | |  | | \__ \ |_| | | (_| | |_| |  \__ \  " -ForegroundColor Cyan
     Write-Host " |_|  |_|_|___/\__|_|  \__,_|_(_)_|  |___/  " -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "Blazingly fast LLM inference." -ForegroundColor Blue
+    Write-Host "Fast, flexible LLM inference." -ForegroundColor Blue
     Write-Host ""
 }
 
@@ -204,10 +204,10 @@ function Install-MistralRS {
 
     if ($Features) {
         Write-Info "Installing mistralrs-cli with features: $Features"
-        & cargo install mistralrs-cli@0.7.0-alpha.4 --features "$Features"
+        & cargo install mistralrs-cli@0.7.0 --features "$Features"
     } else {
         Write-Info "Installing mistralrs-cli with default features"
-        & cargo install mistralrs-cli@0.7.0-alpha.4
+        & cargo install mistralrs-cli@0.7.0
     }
 
     if ($LASTEXITCODE -ne 0) {

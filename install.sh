@@ -41,7 +41,7 @@ print_banner() {
     echo " | |  | | \\__ \\ |_| | | (_| | |_| |  \\__ \\  "
     echo " |_|  |_|_|___/\\__|_|  \\__,_|_(_)_|  |___/  "
     echo ""
-    printf "${NC}${BLUE}Blazingly fast LLM inference.${NC}\n"
+    printf "${NC}${BLUE}Fast, flexible LLM inference.${NC}\n"
     echo ""
 }
 
@@ -250,10 +250,10 @@ install_mistralrs() {
 
     if [ -n "$features" ]; then
         info "Installing mistralrs-cli with features: $features"
-        cargo install mistralrs-cli@0.7.0-alpha.4 --features "$features"
+        cargo install mistralrs-cli@0.7.0 --features "$features"
     else
         info "Installing mistralrs-cli with default features"
-        cargo install mistralrs-cli@0.7.0-alpha.4
+        cargo install mistralrs-cli@0.7.0
     fi
 }
 
