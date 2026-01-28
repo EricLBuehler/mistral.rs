@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-70d711be.js";
+            window.path_to_searchindex_js = "searchindex-e43323bc.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-165a76c6.js"></script>
+        <script src="toc-cf64f8f3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -199,7 +199,7 @@
 </div>
 <h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
 <p>The OpenAI HTTP server provides a compatible way to easily use this implementation. As per the specification, output images can be returned as local paths to images or be encoded to base64.</p>
-<pre><code>cargo run --features cuda --release -- --port 1234 diffusion -m black-forest-labs/FLUX.1-schnell -a flux
+<pre><code>mistralrs serve diffusion -p 1234 -m black-forest-labs/FLUX.1-schnell -a flux
 </code></pre>
 <p>After this, you can send requests via the HTTP server:</p>
 <pre><code class="language-py">from openai import OpenAI

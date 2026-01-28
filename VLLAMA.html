@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-70d711be.js";
+            window.path_to_searchindex_js = "searchindex-e43323bc.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-165a76c6.js"></script>
+        <script src="toc-cf64f8f3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -215,11 +215,7 @@
 <ol>
 <li>Start up interactive mode with the Llama 3.2 model</li>
 </ol>
-<blockquote class="blockquote-tag blockquote-tag-note">
-<p class="blockquote-tag-title"><svg viewbox="0 0 16 16" width="18" height="18"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"></path></svg>Note</p>
-<p>You should replace <code>--features ...</code> with one of the features specified <a href="../README.html#supported-accelerators">here</a>, or remove it for pure CPU inference.</p>
-</blockquote>
-<pre><code>cargo run --features ... --release -- -i --isq 4 vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
+<pre><code>mistralrs run vision --isq 4 -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
 </code></pre>
 <ol start="2">
 <li>Say hello!</li>
@@ -246,7 +242,7 @@ The image shows a close-up view of a rose flower with dew drops on its petals. T
 The image appears to be of Mount Washington, which is the highest peak in the Northeastern United States. It is located in the White Mountains of New Hampshire and is known for its extreme weather conditions, including high winds and low temperatures. The mountain's summit reaches an elevation of approximately 6,288 feet (1,917 meters) above sea level.
 </code></pre>
 <h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
-<p>You can find this example <a href="../examples/server/llama_vision.py">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/llama_vision.py">here</a>.</p>
 <p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
@@ -278,11 +274,7 @@ Overall, the image showcases the diverse geological and ecological features of M
 <ol>
 <li>Start the server</li>
 </ol>
-<blockquote class="blockquote-tag blockquote-tag-note">
-<p class="blockquote-tag-title"><svg viewbox="0 0 16 16" width="18" height="18"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"></path></svg>Note</p>
-<p>You should replace <code>--features ...</code> with one of the features specified <a href="../README.html#supported-accelerators">here</a>, or remove it for pure CPU inference.</p>
-</blockquote>
-<pre><code>cargo run --release --features ... -- --port 1234 --isq 4 vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
+<pre><code>mistralrs serve vision -p 1234 --isq 4 -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -320,12 +312,12 @@ print(resp)
 
 </code></pre>
 <ul>
-<li>You can find an example of encoding the <a href="../examples/server/phi3v_base64.py">image via base64 here</a>.</li>
-<li>You can find an example of loading an <a href="../examples/server/phi3v_local_img.py">image locally here</a>.</li>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
 <hr>
 <h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
-<p>You can find this example <a href="../mistralrs/examples/llama_vision/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/llama_vision/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
@@ -366,7 +358,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 }</code></pre>
 <hr>
 <h2 id="python"><a class="header" href="#python">Python</a></h2>
-<p>You can find this example <a href="../examples/python/llama_vision.py">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/llama_vision.py">here</a>.</p>
 <p>This example demonstrates loading and sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
@@ -412,8 +404,8 @@ print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
 <ul>
-<li>You can find an example of encoding the <a href="../examples/python/phi3v_base64.py">image via base64 here</a>.</li>
-<li>You can find an example of loading an <a href="../examples/python/phi3v_local_img.py">image locally here</a>.</li>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
 <h2 id="uqff-models"><a class="header" href="#uqff-models">UQFF models</a></h2>
 <p><a href="UQFF.html">UQFF</a> is a quantized file format similar to GGUF based on ISQ. It removes the memory and compute requirements that come with ISQ by providing ready-made quantizations! The key advantage over GGUF is the flexibility to store multiple quantizations in one file.</p>

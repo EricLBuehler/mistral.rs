@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-70d711be.js";
+            window.path_to_searchindex_js = "searchindex-e43323bc.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-165a76c6.js"></script>
+        <script src="toc-cf64f8f3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -207,14 +207,14 @@ components on the GPU.</p>
 <ul>
 <li>Python
 <ul>
-<li>Text models <a href="../examples/python/text_auto_device_map.py">text_auto_device_map.py</a></li>
-<li>Vision models <a href="../examples/python/vision_auto_device_map.py">vision_auto_device_map.py</a></li>
+<li>Text models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/text_auto_device_map.py">text_auto_device_map.py</a></li>
+<li>Vision models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/vision_auto_device_map.py">vision_auto_device_map.py</a></li>
 </ul>
 </li>
 <li>Rust
 <ul>
-<li>Text models <a href="../mistralrs/examples/text_auto_device_map/main.rs">text_auto_device_map/main.rs</a></li>
-<li>Vision models <a href="../mistralrs/examples/vision_auto_device_map/main.rs">vision_auto_device_map/main.rs</a></li>
+<li>Text models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/text_auto_device_map/main.rs">text_auto_device_map/main.rs</a></li>
+<li>Vision models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/vision_auto_device_map/main.rs">vision_auto_device_map/main.rs</a></li>
 </ul>
 </li>
 <li>Server
@@ -247,13 +247,13 @@ components on the GPU.</p>
 <p>Note: We refer to GPU layers as “device layers” throughout mistral.rs.</p>
 </blockquote>
 <h2 id="example-of-specifying-ordinals"><a class="header" href="#example-of-specifying-ordinals">Example of specifying ordinals</a></h2>
-<pre><code>cargo run --release --features cuda -- -n "0:16;1:16" -i plain -m gradientai/Llama-3-8B-Instruct-262k
+<pre><code>mistralrs run -n "0:16;1:16" -m gradientai/Llama-3-8B-Instruct-262k
 </code></pre>
 <blockquote>
 <p>Note: In the Python SDK, the “0:16;1:16” string is passed as the list <code>["0:16", "1:16"]</code>.</p>
 </blockquote>
 <h2 id="example-of-specifying-the-number-of-gpu-layers"><a class="header" href="#example-of-specifying-the-number-of-gpu-layers">Example of specifying the number of GPU layers</a></h2>
-<pre><code>cargo run --release --features cuda -- -n 16 -i plain -m gradientai/Llama-3-8B-Instruct-262k
+<pre><code>mistralrs run -n 16 -m gradientai/Llama-3-8B-Instruct-262k
 </code></pre>
 
                     </main>

@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-70d711be.js";
+            window.path_to_searchindex_js = "searchindex-e43323bc.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-165a76c6.js"></script>
+        <script src="toc-cf64f8f3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -193,7 +193,7 @@
   -H "Content-Type: application/json" \
   -d '{"model": "default", "input": ["Graphene conductivity", "Explain superconductors in simple terms."]}'
 </code></pre>
-<p>An example with the OpenAI client can be found <a href="../examples/server/embedding.py">here</a>.</p>
+<p>An example with the OpenAI client can be found <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/embedding.py">here</a>.</p>
 <p>To expose the model alongside chat models, register it in your selector configuration using the
 <code>qwen3embedding</code> architecture tag:</p>
 <pre><code class="language-json">{
@@ -226,7 +226,7 @@ request = EmbeddingRequest(
 embeddings = runner.send_embedding_request(request)
 print(len(embeddings), len(embeddings[0]))
 </code></pre>
-<p>A ready-to-run version can be found at <a href="../examples/python/qwen3_embedding.py"><code>examples/python/qwen3_embedding.py</code></a>.</p>
+<p>A ready-to-run version can be found at <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_embedding.py"><code>examples/python/qwen3_embedding.py</code></a>.</p>
 <h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
 <p>Use the <code>EmbeddingModelBuilder</code> helper just like with EmbeddingGemma. The example below mirrors the
 repository sample:</p>
@@ -251,7 +251,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     println!("Returned {} vectors", embeddings.len());
     Ok(())
 }</code></pre>
-<p>You can find the full example at <a href="../mistralrs/examples/qwen3_embedding/main.rs"><code>mistralrs/examples/qwen3_embedding/main.rs</code></a>.</p>
+<p>You can find the full example at <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/qwen3_embedding/main.rs"><code>mistralrs/examples/qwen3_embedding/main.rs</code></a>.</p>
 
                     </main>
 

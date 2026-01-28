@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-70d711be.js";
+            window.path_to_searchindex_js = "searchindex-e43323bc.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-165a76c6.js"></script>
+        <script src="toc-cf64f8f3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -194,7 +194,7 @@ mistralrs run --isq 4 -m Qwen/Qwen3-30B-A3B
 <h2 id="enabling-thinking"><a class="header" href="#enabling-thinking">Enabling thinking</a></h2>
 <p>The Qwen 3 models are hybrid reasoning models which can be controlled at inference-time. <strong>By default, reasoning is enabled for these models.</strong> To dynamically control this, it is recommended to either add <code>/no_think</code> or <code>/think</code> to your prompt. Alternatively, you can specify the <code>enable_thinking</code> flag as detailed by the API-specific examples.</p>
 <h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
-<p>You can find a more detailed example demonstrating enabling/disabling thinking <a href="../examples/server/qwen3.py">here</a>.</p>
+<p>You can find a more detailed example demonstrating enabling/disabling thinking <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3.py">here</a>.</p>
 <pre><code class="language-bash">mistralrs serve --isq 4 -p 1234 -m Qwen/Qwen3-8B
 </code></pre>
 <pre><code class="language-py">import openai
@@ -222,7 +222,7 @@ while True:
     messages.append({"role": "assistant", "content": resp})
 </code></pre>
 <h2 id="python-sdk"><a class="header" href="#python-sdk">Python SDK</a></h2>
-<p>You can find a more detailed example demonstrating enabling/disabling thinking <a href="../examples/python/qwen3.py">here</a>.</p>
+<p>You can find a more detailed example demonstrating enabling/disabling thinking <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3.py">here</a>.</p>
 <pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
@@ -249,7 +249,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
 <h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
-<p>You can find a more detailed example demonstrating enabling/disabling thinking <a href="../mistralrs/examples/qwen3/main.rs">here</a>.</p>
+<p>You can find a more detailed example demonstrating enabling/disabling thinking <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/qwen3/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{
     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,

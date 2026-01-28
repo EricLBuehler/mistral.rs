@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-70d711be.js";
+            window.path_to_searchindex_js = "searchindex-e43323bc.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-165a76c6.js"></script>
+        <script src="toc-cf64f8f3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -197,7 +197,7 @@
 <p>Note: PagedAttention is not supported for GPT-OSS due to custom attention with sinks.</p>
 </blockquote>
 <h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
-<p>You can find a more detailed example <a href="../examples/server/gpt_oss.py">here</a>.</p>
+<p>You can find a more detailed example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/gpt_oss.py">here</a>.</p>
 <pre><code class="language-bash">mistralrs serve -p 1234 -m openai/gpt-oss-20b
 </code></pre>
 <pre><code class="language-py">import openai
@@ -225,7 +225,7 @@ while True:
     messages.append({"role": "assistant", "content": resp})
 </code></pre>
 <h2 id="python-sdk"><a class="header" href="#python-sdk">Python SDK</a></h2>
-<p>You can find a more detailed example <a href="../examples/python/gpt_oss.py">here</a>.</p>
+<p>You can find a more detailed example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gpt_oss.py">here</a>.</p>
 <pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
@@ -251,7 +251,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
 <h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
-<p>You can find a more detailed example <a href="../mistralrs/examples/gpt_oss/main.rs">here</a>.</p>
+<p>You can find a more detailed example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/gpt_oss/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{TextMessageRole, TextMessages, TextModelBuilder};
 

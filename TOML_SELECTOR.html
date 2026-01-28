@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-70d711be.js";
+            window.path_to_searchindex_js = "searchindex-e43323bc.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-165a76c6.js"></script>
+        <script src="toc-cf64f8f3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,7 +181,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="structured-model-loading-with-toml-files"><a class="header" href="#structured-model-loading-with-toml-files">Structured model loading with .toml files</a></h1>
-<p>Mistral.rs supports loading models from a .toml file, and the fields are the same as for the CLI. Please find some example toml selectors <a href="../toml-selectors/">here</a>.</p>
+<p>Mistral.rs supports loading models from a .toml file, and the fields are the same as for the CLI. Please find some example toml selectors <a href="https://github.com/EricLBuehler/mistral.rs/tree/master/toml-selectors/">here</a>.</p>
 <p>There are a few cases which add functionality that cannot be found in the CLI.</p>
 <h2 id="speculative-decoding"><a class="header" href="#speculative-decoding">Speculative decoding</a></h2>
 <h3 id="what-to-specify"><a class="header" href="#what-to-specify">What to specify</a></h3>
@@ -205,7 +205,7 @@ tok_model_id = "mistralai/Mistral-7B-Instruct-v0.1"
 quantized_model_id = "TheBloke/Mistral-7B-Instruct-v0.1-GGUF"
 quantized_filename = "mistral-7b-instruct-v0.1.Q2_K.gguf"
 </code></pre>
-<pre><code>cargo run --release --features cuda -- -i toml -f toml_selectors/speculative_gguf.toml
+<pre><code class="language-bash">mistralrs from-config -f toml-selectors/speculative-gguf.toml
 </code></pre>
 <h2 id="anymoe"><a class="header" href="#anymoe">AnyMoE</a></h2>
 <h3 id="what-to-specify-1"><a class="header" href="#what-to-specify-1">What to specify</a></h3>
@@ -231,7 +231,7 @@ quantized_filename = "mistral-7b-instruct-v0.1.Q2_K.gguf"
 <li>Alpha</li>
 <li>Target modules</li>
 </ul>
-<pre><code>cargo run --release --features cuda -- -i toml -f toml_selectors/anymoe.toml
+<pre><code class="language-bash">mistralrs from-config -f toml-selectors/anymoe.toml
 </code></pre>
 <h3 id="with-fine-tuned-experts"><a class="header" href="#with-fine-tuned-experts">With fine-tuned experts</a></h3>
 <pre><code class="language-toml">[model]
@@ -278,7 +278,7 @@ target_modules = ["gate_proj"]
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="multi_model/index.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="multi_model/overview.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -292,7 +292,7 @@ target_modules = ["gate_proj"]
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="multi_model/index.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="multi_model/overview.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

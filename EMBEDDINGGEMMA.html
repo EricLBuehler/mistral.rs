@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-70d711be.js";
+            window.path_to_searchindex_js = "searchindex-e43323bc.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-165a76c6.js"></script>
+        <script src="toc-cf64f8f3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -217,7 +217,7 @@ model via the OpenAI-compatible HTTP server, running it from Python, and embeddi
   -H "Content-Type: application/json" \
   -d '{"model": "default", "input": ["task: search result | query: What is graphene?", "task: search result | query: What is an apple?"]}'
 </code></pre>
-<p>An example with the OpenAI client can be found <a href="../examples/server/embedding.py">here</a>.</p>
+<p>An example with the OpenAI client can be found <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/embedding.py">here</a>.</p>
 <p>By default the server registers the model as <code>default</code>. To expose it under a custom name or alongside chat
 models, run in multi-model mode and assign an identifier in the selector configuration:</p>
 <pre><code class="language-json">{
@@ -250,7 +250,7 @@ request = EmbeddingRequest(
 embeddings = runner.send_embedding_request(request)
 print(len(embeddings), len(embeddings[0]))
 </code></pre>
-<p>Refer to <a href="../examples/python/embedding_gemma.py">this example</a> for a complete runnable script.</p>
+<p>Refer to <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/embedding_gemma.py">this example</a> for a complete runnable script.</p>
 <h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
 <p>Use the <code>EmbeddingModelBuilder</code> helper from the <code>mistralrs</code> crate to create the model and submit an
 <code>EmbeddingRequest</code>:</p>
@@ -274,7 +274,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     println!("Returned {} vectors", embeddings.len());
     Ok(())
 }</code></pre>
-<p>This example lives <a href="../mistralrs/examples/embedding_gemma/main.rs">here</a>, and can be run with:</p>
+<p>This example lives <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/embedding_gemma/main.rs">here</a>, and can be run with:</p>
 <pre><code class="language-bash">cargo run --package mistralrs --example embedding_gemma
 </code></pre>
 

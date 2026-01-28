@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-70d711be.js";
+            window.path_to_searchindex_js = "searchindex-e43323bc.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-165a76c6.js"></script>
+        <script src="toc-cf64f8f3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -183,13 +183,13 @@
                         <h1 id="chat-templates-and-tokenizer-customization"><a class="header" href="#chat-templates-and-tokenizer-customization">Chat templates and tokenizer customization</a></h1>
 <h2 id="jinja-chat-templates-recommended-method"><a class="header" href="#jinja-chat-templates-recommended-method">JINJA chat templates (recommended method)</a></h2>
 <p>Some models do not come with support for tool calling or other features, and as such it might be necessary to specify your own chat template.</p>
-<p>We provide some chat templates <a href="../chat_templates/">here</a>, and it is easy to modify or create others to customize chat template behavior.</p>
+<p>We provide some chat templates <a href="https://github.com/EricLBuehler/mistral.rs/tree/master/chat_templates/">here</a>, and it is easy to modify or create others to customize chat template behavior.</p>
 <p>To use this, add the <code>jinja-explicit</code> parameter to the various APIs</p>
 <pre><code class="language-bash">mistralrs serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
 </code></pre>
 <h2 id="chat-template-overrides"><a class="header" href="#chat-template-overrides">Chat template overrides</a></h2>
 <p>Mistral.rs attempts to automatically load a chat template from the <code>tokenizer_config.json</code> file. This enables high flexibility across instruction-tuned models and ensures accurate chat templating. However, if the <code>chat_template</code> field is missing, then a JINJA chat template should be provided. The JINJA chat template may use <code>messages</code>, <code>add_generation_prompt</code>, <code>bos_token</code>, <code>eos_token</code>, and <code>unk_token</code> as inputs.</p>
-<p>We provide some chat templates <a href="../chat_templates/">here</a>, and it is easy to modify or create others to customize chat template behavior.</p>
+<p>We provide some chat templates <a href="https://github.com/EricLBuehler/mistral.rs/tree/master/chat_templates/">here</a>, and it is easy to modify or create others to customize chat template behavior.</p>
 <p>For example, to use the <code>chatml</code> template, <code>--chat-template</code> is specified <em>before</em> the model architecture. For example:</p>
 <pre><code class="language-bash">mistralrs serve -p 1234 --log output.log --chat-template ./chat_templates/chatml.json -m meta-llama/Llama-3.2-3B-Instruct
 </code></pre>
@@ -197,7 +197,7 @@
 <p>Note: For GGUF models, the chat template may be loaded directly from the GGUF file by omitting any other chat template sources.</p>
 </blockquote>
 <h2 id="tokenizer"><a class="header" href="#tokenizer">Tokenizer</a></h2>
-<p>Some models do not provide a <code>tokenizer.json</code> file although mistral.rs expects one. To solve this, please run <a href="../scripts/get_tokenizers_json.py">this</a> script. It will output the <code>tokenizer.json</code> file for your specific model. This may be used by passing the <code>--tokenizer-json</code> flag <em>after</em> the model architecture. For example:</p>
+<p>Some models do not provide a <code>tokenizer.json</code> file although mistral.rs expects one. To solve this, please run <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/get_tokenizers_json.py">this</a> script. It will output the <code>tokenizer.json</code> file for your specific model. This may be used by passing the <code>--tokenizer-json</code> flag <em>after</em> the model architecture. For example:</p>
 <pre><code class="language-bash">$ python3 scripts/get_tokenizers_json.py
 Enter model ID: microsoft/Orca-2-13b
 $ mistralrs serve -p 1234 --log output.log -m microsoft/Orca-2-13b --tokenizer-json tokenizer.json

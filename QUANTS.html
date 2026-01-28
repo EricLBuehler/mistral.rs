@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-70d711be.js";
+            window.path_to_searchindex_js = "searchindex-e43323bc.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-165a76c6.js"></script>
+        <script src="toc-cf64f8f3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -209,7 +209,7 @@
 <li>2, 3, 4, 5, 6, 8 bit</li>
 </ul>
 </li>
-<li>GPTQ (convert with <a href="../scripts/convert_to_gptq.py">this script</a>)
+<li>GPTQ (convert with <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/convert_to_gptq.py">this script</a>)
 <ul>
 <li>Supported in all plain/vision and adapter models</li>
 <li>CUDA only</li>
@@ -217,7 +217,7 @@
 <li><a href="https://github.com/IST-DASLab/marlin">Marlin</a> kernel support in 4-bit and 8-bit.</li>
 </ul>
 </li>
-<li>AWQ (convert with <a href="../scripts/convert_awq_marlin.py">this script</a>)
+<li>AWQ (convert with <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/convert_awq_marlin.py">this script</a>)
 <ul>
 <li>Supported in all plain/vision and adapter models</li>
 <li>CUDA only</li>
@@ -262,11 +262,11 @@
 <li>Use the <code>gguf</code> (cli) / <code>GGUF</code> (Python) model selector</li>
 <li>Provide the GGUF file</li>
 </ul>
-<pre><code>cargo run --features cuda -- -i gguf -f my-gguf-file.gguf
+<pre><code>mistralrs run --format gguf -f my-gguf-file.gguf
 </code></pre>
 <h2 id="using-isq"><a class="header" href="#using-isq">Using ISQ</a></h2>
 <p>See the <a href="ISQ.html">docs</a></p>
-<pre><code>cargo run --features cuda -- -i --isq 4 plain -m microsoft/Phi-3-mini-4k-instruct
+<pre><code>mistralrs run --isq 4 -m microsoft/Phi-3-mini-4k-instruct
 </code></pre>
 <h2 id="using-a-gptq-quantized-model"><a class="header" href="#using-a-gptq-quantized-model">Using a GPTQ quantized model</a></h2>
 <ul>
@@ -274,7 +274,7 @@
 <li>Mistral.rs will automatically detect and use GPTQ quantization for plain and vision models!</li>
 <li>The <a href="https://github.com/IST-DASLab/marlin">Marlin</a> kernel will automatically be used for 4-bit and 8-bit.</li>
 </ul>
-<pre><code>cargo run --features cuda --release -- -i plain -m kaitchup/Phi-3-mini-4k-instruct-gptq-4bit
+<pre><code>mistralrs run -m kaitchup/Phi-3-mini-4k-instruct-gptq-4bit
 </code></pre>
 <p>You can create your own GPTQ model using [<code>scripts/convert_to_gptq.py</code>][../scripts/convert_to_gptq.py]:</p>
 <pre><code>pip install gptqmodel transformers datasets
@@ -287,7 +287,7 @@ python3 scripts/convert_to_gptq.py --src path/to/model --dst output/model/path -
 <li>Mistral.rs will automatically detect and use quantization for plain and vision models!</li>
 <li>Specialized kernels will be used to accelerate inference!</li>
 </ul>
-<pre><code>cargo run --features ... --release -- -i plain -m mlx-community/Llama-3.8-1B-8bit
+<pre><code>mistralrs run -m mlx-community/Llama-3.8-1B-8bit
 </code></pre>
 
                     </main>

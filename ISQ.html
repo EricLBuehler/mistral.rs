@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-70d711be.js";
+            window.path_to_searchindex_js = "searchindex-e43323bc.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-165a76c6.js"></script>
+        <script src="toc-cf64f8f3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,16 +182,18 @@
                     <main>
                         <h1 id="in-situ-quantization"><a class="header" href="#in-situ-quantization">In situ quantization</a></h1>
 <p>In situ quantization works by quantizing models inplace, with the chief benefit being reduced memory footprint when running the model. This enables larger model to be run on devices which would not fit the full weights, and may increase model inference performance.</p>
+<p><strong>Quick start</strong>: Just use <code>--isq 4</code> (or 2, 3, 5, 6, 8) and mistral.rs will pick the best quantization for your hardware:</p>
+<pre><code>mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
+</code></pre>
 <p>An API is exposed on the Python and Rust SDKs which provides the ability to dynamically re-ISQ models at runtime.</p>
 <p>To set the ISQ type for individual layers, use a model <a href="TOPOLOGY.html"><code>topology</code></a>.</p>
 <blockquote>
 <p>Note: 🔥 AFQ (affine) quantization is designed to be fast on <strong>Metal</strong> but is only supported on Metal.</p>
 </blockquote>
-<h2 id="automatic-isq"><a class="header" href="#automatic-isq">Automatic ISQ</a></h2>
-<p>Automatic ISQ is an opt-in feature that selects the most accurate and fastest quantization method for the platform.</p>
-<p>If the provided ISQ value is a valid integer (one of 2, 3, 4, 5, 6, or 8), the best quantization type for the platform will be chosen.
-Note that the fallback is always a Q/K quantization. On Metal, for 2, 3, 4, 6, or 8 bits, fast AFQ is used.</p>
-<pre><code>cargo run --release --features ... -- -i --isq 4 plain -m meta-llama/Llama-3.2-3B-Instruct
+<h2 id="automatic-isq-just-use-a-number"><a class="header" href="#automatic-isq-just-use-a-number">Automatic ISQ (just use a number!)</a></h2>
+<p>Instead of specifying a quantization type like <code>Q4K</code>, you can just pass an integer (2, 3, 4, 5, 6, or 8) and mistral.rs will automatically select the best quantization method for your platform.</p>
+<p>On Metal, this uses fast AFQ quantization (for 2, 3, 4, 6, or 8 bits). On other platforms, it falls back to Q/K quantization.</p>
+<pre><code>mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 </code></pre>
 <h2 id="isq-quantization-types"><a class="header" href="#isq-quantization-types">ISQ quantization types</a></h2>
 <ul>
@@ -216,7 +218,7 @@ Note that the fallback is always a Q/K quantization. On Metal, for 2, 3, 4, 6, o
 <li>HQQ8</li>
 <li>FP8</li>
 </ul>
-<pre><code>cargo run --release --features ... -- -i --isq 4 plain -m meta-llama/Llama-3.2-3B-Instruct
+<pre><code>mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 </code></pre>
 <p>When using ISQ, it will automatically load ISQ-able weights into CPU memory before applying ISQ. The ISQ application process moves the weights to device memory. This process is implemented to avoid memory spikes from loading the model in full precision.</p>
 <p>For Mixture of Expert models, a method called <a href="https://arxiv.org/abs/2310.02410">MoQE</a> can be applied to only quantize MoE layers. This is configured via the ISQ “organization” parameter in all APIs. The following models support MoQE:</p>
@@ -227,7 +229,7 @@ Note that the fallback is always a Q/K quantization. On Metal, for 2, 3, 4, 6, o
 </ul>
 <h2 id="accuracy"><a class="header" href="#accuracy">Accuracy</a></h2>
 <p>Accuracy of ISQ can be measured by the performance degradation versus the unquantized model.
-This is commonly measured with perplexity. Please see the <a href="../mistralrs/examples/perplexity/README.html">perplexity</a> example.</p>
+This is commonly measured with perplexity. Please see the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/perplexity/README.md">perplexity</a> example.</p>
 <p>To improve the accuracy of a model with ISQ, use an imatrix file. These can be found online (for example, on Hugging Face), and should be passed with the <code>--imatrix</code> flag for <code>plain</code> models. This will increase the accuracy of the quantization significantly and bring the ISQ quantization up to par with the GGUF counterpart.</p>
 <p>Check out the <a href="IMATRIX.html">imatrix docs</a>.</p>
 <h2 id="python-example"><a class="header" href="#python-example">Python Example</a></h2>
@@ -239,7 +241,7 @@ This is commonly measured with perplexity. Please see the <a href="../mistralrs/
 )
 </code></pre>
 <h2 id="rust-example"><a class="header" href="#rust-example">Rust Example</a></h2>
-<p>You can find this example <a href="../mistralrs/examples/isq/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/isq/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
@@ -250,7 +252,10 @@ This is commonly measured with perplexity. Please see the <a href="../mistralrs/
     .await?;
 <span class="boring">}</span></code></pre>
 <h2 id="server-example"><a class="header" href="#server-example">Server example</a></h2>
-<pre><code>cargo run --release --features "cuda flash-attn" -- --port 1234 --log output.txt --isq Q2K plain -m mistralai/Mistral-7B-Instruct-v0.1
+<pre><code>mistralrs serve --port 1234 --isq 4 -m mistralai/Mistral-7B-Instruct-v0.1
+</code></pre>
+<p>Or with a specific quantization type:</p>
+<pre><code>mistralrs serve --port 1234 --isq Q4K -m mistralai/Mistral-7B-Instruct-v0.1
 </code></pre>
 
                     </main>

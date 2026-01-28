@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-70d711be.js";
+            window.path_to_searchindex_js = "searchindex-e43323bc.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-165a76c6.js"></script>
+        <script src="toc-cf64f8f3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -200,14 +200,14 @@
 </ul>
 <p>All models that support tool calling will respond according to the OpenAI tool calling API.</p>
 <h2 id="openai-compatible-http-example"><a class="header" href="#openai-compatible-http-example">OpenAI compatible HTTP example</a></h2>
-<p>Please see <a href="../examples/server/tool_calling.py">our example here</a>.</p>
+<p>Please see <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/tool_calling.py">our example here</a>.</p>
 <blockquote>
 <p>OpenAI docs: https://platform.openai.com/docs/api-reference/chat/create?lang=curl</p>
 </blockquote>
 <h2 id="rust-example"><a class="header" href="#rust-example">Rust example</a></h2>
-<p>Please see <a href="../mistralrs/examples/tools/main.rs">our example here</a>.</p>
+<p>Please see <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/tools/main.rs">our example here</a>.</p>
 <h2 id="python-example"><a class="header" href="#python-example">Python example</a></h2>
-<p>Please see <a href="../examples/python/tool_calling.ipynb">our notebook here</a>.</p>
+<p>Please see <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/tool_calling.ipynb">our notebook here</a>.</p>
 <h2 id="tool-callbacks"><a class="header" href="#tool-callbacks">Tool callbacks</a></h2>
 <p>You can override tool execution using a <strong>tool callback</strong>. The callback receives
 the tool name and a dictionary of arguments and must return the tool output as a
@@ -223,9 +223,9 @@ runner = Runner(
     tool_callback=tool_cb,
 )
 </code></pre>
-<p>See <a href="../examples/python/local_tool_search.py">local_tool_search.py</a> for a full
+<p>See <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_search.py">custom_search.py</a> for a full
 example. In Rust pass <code>.with_tool_callback(...)</code> to the builder as demonstrated
-in <a href="../mistralrs/examples/local_search/main.rs">local_search/main.rs</a>.</p>
+in <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/custom_search/main.rs">custom_search/main.rs</a>.</p>
 <h2 id="search-callbacks"><a class="header" href="#search-callbacks">Search callbacks</a></h2>
 <p>Web search uses a DuckDuckGo-based callback by default. Provide your own search
 function with <code>search_callback</code> in Python or <code>.with_search_callback(...)</code> in

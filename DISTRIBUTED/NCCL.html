@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "../searchindex-70d711be.js";
+            window.path_to_searchindex_js = "../searchindex-e43323bc.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-165a76c6.js"></script>
+        <script src="../toc-cf64f8f3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -210,12 +210,12 @@
 <p>where, if no <code>MISTRALRS_MN_LOCAL_WORLD_SIZE</code> env given, mistral.rs will split the model across all available devices.</p>
 <h2 id="multi-node-support"><a class="header" href="#multi-node-support">Multi-node support</a></h2>
 <pre><code># Head node:
-MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_HEAD_NUM_WORKERS=1 MISTRALRS_MN_HEAD_PORT=&lt;PORT&gt; cargo run --release --features cuda -- -i plain -m ...
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_HEAD_NUM_WORKERS=1 MISTRALRS_MN_HEAD_PORT=&lt;PORT&gt; mistralrs run -m ...
 
 # For the worker nodes:
-MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=0 MISTRALRS_WORKER_SERVER_ADDR=&lt;HEAD ADDR&gt;:&lt;PORT&gt; cargo run --release --features cuda -- -i plain -m ...
-MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=1 MISTRALRS_WORKER_SERVER_ADDR=&lt;HEAD ADDR&gt;:&lt;PORT&gt; cargo run --release --features cuda -- -i plain -m ...
-MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=2 MISTRALRS_WORKER_SERVER_ADDR=&lt;HEAD ADDR&gt;:&lt;PORT&gt; cargo run --release --features cuda -- -i plain -m ...
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=0 MISTRALRS_WORKER_SERVER_ADDR=&lt;HEAD ADDR&gt;:&lt;PORT&gt; mistralrs run -m ...
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=1 MISTRALRS_WORKER_SERVER_ADDR=&lt;HEAD ADDR&gt;:&lt;PORT&gt; mistralrs run -m ...
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=2 MISTRALRS_WORKER_SERVER_ADDR=&lt;HEAD ADDR&gt;:&lt;PORT&gt; mistralrs run -m ...
 </code></pre>
 <p>Multi-node support in mistral.rs divides the nodes into two groups: a “head” node, and multiple “worker” nodes. Head node choice is arbitrary.
 For example, if a system has 8 nodes, there will be 1 “head” node, and 7 “worker” nodes.</p>

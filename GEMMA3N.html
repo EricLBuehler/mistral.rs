@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-70d711be.js";
+            window.path_to_searchindex_js = "searchindex-e43323bc.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-165a76c6.js"></script>
+        <script src="toc-cf64f8f3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -191,7 +191,7 @@
 <p><strong>🪆 mistral.rs supports dynamically resizing the Gemma 3n model with that MatFormer architecture!</strong></p>
 <p>Gemma 3n implements the MatFormer architecture, which allows one model to be resized dynamically and tune performance on resource-constrained systems.</p>
 <p>Mistral.rs supports this feature!</p>
-<p>You can access it using the <code>matformer_config_path</code> (<a href="../matformer_configs/gemma3n.csv">example config</a>) and <code>matformer_slice_name</code> arguments throughout the APIs.</p>
+<p>You can access it using the <code>matformer_config_path</code> (<a href="https://github.com/EricLBuehler/mistral.rs/blob/master/matformer_configs/gemma3n.csv">example config</a>) and <code>matformer_slice_name</code> arguments throughout the APIs.</p>
 </li>
 <li>
 <p><strong>Prequantized UQFF models:</strong></p>
@@ -205,7 +205,7 @@
 <p>MatFormer allows you to dynamically adjust the model size based on your resource constraints. The Gemma 3n model comes with several pre-configured slices that offer different performance/resource trade-offs.</p>
 <p>You can read more about MatFormer in mistral.rs <a href="MATFORMER.html">here</a>.</p>
 <h3 id="available-slices"><a class="header" href="#available-slices">Available Slices</a></h3>
-<p>The default configuration file (<a href="../matformer_configs/gemma3n.csv"><code>matformer_configs/gemma3n.csv</code></a>) includes:</p>
+<p>The default configuration file (<a href="https://github.com/EricLBuehler/mistral.rs/blob/master/matformer_configs/gemma3n.csv"><code>matformer_configs/gemma3n.csv</code></a>) includes:</p>
 <ul>
 <li><strong>Main model</strong> (3.98B params, 35 layers) - Full model with best performance</li>
 <li><strong>Config for official E2B Model</strong> (1.91B params, 30 layers) - Balanced performance/efficiency</li>
@@ -213,9 +213,7 @@
 </ul>
 <h3 id="command-line-example"><a class="header" href="#command-line-example">Command Line Example</a></h3>
 <pre><code class="language-bash"># Run with the E2.49B slice for balanced performance/efficiency
-cargo run --release --features cuda -- \
-  --port 1234 \
-  run -m google/gemma-3n-E4B-it \
+mistralrs run vision -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 </code></pre>
@@ -310,7 +308,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 <li>Maintain acceptable quality for many use cases with smaller slices</li>
 </ul>
 <h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
-<p>You can find this example <a href="../examples/server/gemma3n.py">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/gemma3n.py">here</a>.</p>
 <p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
@@ -338,14 +336,10 @@ The overall impression is one of grandeur, tranquility, and the raw beauty of a 
 <ol>
 <li>Start the server</li>
 </ol>
-<blockquote class="blockquote-tag blockquote-tag-note">
-<p class="blockquote-tag-title"><svg viewbox="0 0 16 16" width="18" height="18"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"></path></svg>Note</p>
-<p>You should replace <code>--features ...</code> with one of the features specified <a href="../README.html#supported-accelerators">here</a>, or remove it for pure CPU inference.</p>
-</blockquote>
-<pre><code>cargo run --release --features ... -- --port 1234 run -m google/gemma-3n-E4B-it
+<pre><code>mistralrs serve vision -p 1234 -m google/gemma-3n-E4B-it
 
 # Or with MatFormer for balanced performance:
-cargo run --release --features ... -- --port 1234 run -m google/gemma-3n-E4B-it \
+mistralrs serve vision -p 1234 -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 </code></pre>
@@ -385,12 +379,12 @@ print(resp)
 
 </code></pre>
 <ul>
-<li>You can find an example of encoding the <a href="../examples/server/phi3v_base64.py">image via base64 here</a>.</li>
-<li>You can find an example of loading an <a href="../examples/server/phi3v_local_img.py">image locally here</a>.</li>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
 <hr>
 <h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
-<p>You can find this example <a href="../mistralrs/examples/gemma3n/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/gemma3n/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Gemma 3n model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
@@ -430,7 +424,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     Ok(())
 }</code></pre>
 <h2 id="python"><a class="header" href="#python">Python</a></h2>
-<p>You can find this example <a href="../examples/python/gemma3n.py">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gemma3n.py">here</a>.</p>
 <p>This example demonstrates loading and sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
@@ -535,8 +529,8 @@ async fn main() -&gt; Result&lt;()&gt; {
 }</code></pre>
 <p>With this, you now have a single-call pipeline that fuses <em>sound</em>, <em>vision</em>, and <em>text</em> – all running locally through <code>mistral.rs</code>! 🔥</p>
 <ul>
-<li>You can find an example of encoding the <a href="../examples/python/phi3v_base64.py">image via base64 here</a>.</li>
-<li>You can find an example of loading an <a href="../examples/python/phi3v_local_img.py">image locally here</a>.</li>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
 
                     </main>

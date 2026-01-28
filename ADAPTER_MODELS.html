@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-70d711be.js";
+            window.path_to_searchindex_js = "searchindex-e43323bc.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-165a76c6.js"></script>
+        <script src="toc-cf64f8f3.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -205,7 +205,7 @@
 </ul>
 <h2 id="adapter-ordering-file"><a class="header" href="#adapter-ordering-file">Adapter ordering file</a></h2>
 <p><strong>Preparing the X-LoRA/LoRA Ordering File</strong>
-The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X-LoRA model. However, it is easy with a provided <a href="../scripts/create_ordering.py"><code>script</code></a>!</p>
+The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X-LoRA model. However, it is easy with a provided <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/create_ordering.py"><code>script</code></a>!</p>
 <h3 id="x-lora-case"><a class="header" href="#x-lora-case">X-LoRA case</a></h3>
 <p>An ordering JSON file for X-LoRA contains 2 major parts.</p>
 <ol>
@@ -228,7 +228,7 @@ The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X
 }
 </code></pre>
 <p>The specified order would be <code>["math", "reasoning", "biology"]</code>.</p>
-<p>We provide an <a href="../orderings/xlora-paper-ordering.json">ordering file</a> which contains the ordering for the X-LoRA model associated with <a href="https://arxiv.org/abs/2402.07148">the paper</a> and the Huggingface repository: https://huggingface.co/lamm-mit/x-lora.</p>
+<p>We provide an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/orderings/xlora-paper-ordering.json">ordering file</a> which contains the ordering for the X-LoRA model associated with <a href="https://arxiv.org/abs/2402.07148">the paper</a> and the Huggingface repository: https://huggingface.co/lamm-mit/x-lora.</p>
 <h3 id="lora-case"><a class="header" href="#lora-case">LoRA case</a></h3>
 <p>An ordering JSON file for LoRA contains 2 major parts:</p>
 <ol>
@@ -251,11 +251,11 @@ The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X
 <ol>
 <li>
 <p>From scratch: No ordering file for the architecture and target modules</p>
-<p>A script <a href="../scripts/create_ordering.py"><code>create_ordering.py</code></a> is provided which prompts the user for the model ID, target modules, and adapter names. The user is prompted for an output file location, relative to the working directory.</p>
+<p>A script <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/create_ordering.py"><code>create_ordering.py</code></a> is provided which prompts the user for the model ID, target modules, and adapter names. The user is prompted for an output file location, relative to the working directory.</p>
 </li>
 <li>
 <p>Create a new ordering file from an existing ordering file for an architecture and target modules</p>
-<p>A script <a href="../scripts/set_names.py"><code>set_names.py</code></a> is provided which prompts the user for the adapter names and the old ordering file. The user is prompted for an output file location, relative to the working directory.</p>
+<p>A script <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/set_names.py"><code>set_names.py</code></a> is provided which prompts the user for the adapter names and the old ordering file. The user is prompted for an output file location, relative to the working directory.</p>
 </li>
 </ol>
 <h3 id="quantized-x-lora-or-lora-models"><a class="header" href="#quantized-x-lora-or-lora-models">Quantized X-LoRA or LoRA models</a></h3>
@@ -267,9 +267,9 @@ The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X
 <h2 id="adapter-model-dynamic-adapter-activation"><a class="header" href="#adapter-model-dynamic-adapter-activation">Adapter model dynamic adapter activation</a></h2>
 <p>We support dynamic adapter activation for LoRA models, allowing you to activate a set of adapters at runtime. There is a Python, Rust and HTTP API:</p>
 <ul>
-<li>Rust: <a href="../mistralrs/examples/lora/main.rs">example</a></li>
-<li>Python: <a href="../examples/python/lora_zephyr.py">example</a></li>
-<li>HTTP: <a href="../examples/server/adapter_chat.py">example</a></li>
+<li>Rust: <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/lora/main.rs">example</a></li>
+<li>Python: <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/lora_zephyr.py">example</a></li>
+<li>HTTP: <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/adapter_chat.py">example</a></li>
 </ul>
 <p>To use this feature, you should add a <code>preload_adapters</code> key to your ordering file:</p>
 <pre><code class="language-diff">{
@@ -280,7 +280,6 @@ The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X
 }
 </code></pre>
 <p>This allows mistral.rs to preload the adapter and enable runtime activation.</p>
-<p>We also provide a script to add this key to your existing order file: <a href="../scripts/lora_add_preload_adapters.py"><code>load_add_preload_adapters.py</code></a>.</p>
 
                     </main>
 
