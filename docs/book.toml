@@ -1,6 +1,6 @@
 [book]
 title = "mistral.rs Documentation"
-description = "Fast, flexible LLM inference. engine"
+description = "Fast, flexible LLM inference."
 authors = ["Eric Buehler"]
 language = "en"
 src = "."
