@@ -38,6 +38,8 @@ use crate::vision_models::gemma3::config::Gemma3Config;
 use crate::vision_models::gemma3::{Gemma3Model, Gemma3Processor};
 use crate::vision_models::gemma3n::config::{Gemma3nConfig, IntermediateSize};
 use crate::vision_models::gemma3n::{Gemma3nModel, Gemma3nProcessor};
+use crate::vision_models::kimi_k25::config::Config as KimiK25Config;
+use crate::vision_models::kimi_k25::{KimiK25Model, KimiK25Processor};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::idefics3::{Idefics3Config, Idefics3Model, Idefics3Processor};
@@ -180,6 +182,8 @@ pub enum VisionLoaderType {
     Qwen3VL,
     #[serde(rename = "qwen3vlmoe")]
     Qwen3VLMoE,
+    #[serde(rename = "kimi_k25")]
+    KimiK25,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -202,6 +206,7 @@ impl VisionLoaderType {
             "Gemma3nForConditionalGeneration" => Ok(Self::Gemma3n),
             "Qwen3VLForConditionalGeneration" => Ok(Self::Qwen3VL),
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
+            "KimiK25ForConditionalGeneration" => Ok(Self::KimiK25),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
@@ -229,7 +234,8 @@ impl FromStr for VisionLoaderType {
             "gemma3n" => Ok(Self::Gemma3n),
             "qwen3vl" => Ok(Self::Qwen3VL),
             "qwen3vlmoe" => Ok(Self::Qwen3VLMoE),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `qwen3vl`, `qwen3vlmoe`.")),
+            "kimi_k25" => Ok(Self::KimiK25),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `qwen3vl`, `qwen3vlmoe`, `kimi_k25`.")),
         }
     }
 }
@@ -253,6 +259,7 @@ impl std::fmt::Display for VisionLoaderType {
             VisionLoaderType::Gemma3n => "gemma3n",
             VisionLoaderType::Qwen3VL => "qwen3vl",
             VisionLoaderType::Qwen3VLMoE => "qwen3vlmoe",
+            VisionLoaderType::KimiK25 => "kimi_k25",
         };
         write!(f, "{name}")
     }
@@ -296,6 +303,7 @@ impl AutoVisionLoader {
             VisionLoaderType::Gemma3n => Box::new(Gemma3nLoader),
             VisionLoaderType::Qwen3VL => Box::new(Qwen3VLLoader),
             VisionLoaderType::Qwen3VLMoE => Box::new(Qwen3VLMoELoader),
+            VisionLoaderType::KimiK25 => Box::new(KimiK25Loader),
         })
     }
 }
@@ -6131,6 +6139,295 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
             sliding_window: cfg.sliding_window,
             k_head_dim: cfg.head_dim,
             v_head_dim: cfg.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+
+        Ok(Box::new(cfg))
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Kimi-K2.5
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+pub struct KimiK25Loader;
+
+pub struct KimiK25Prefixer;
+
+impl MultimodalPromptPrefixer for KimiK25Prefixer {
+    // No-op: With MessagesAction::Keep, the chat template handles image tokens.
+}
+
+impl VisionModelLoader for KimiK25Loader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        let cfg: KimiK25Config = serde_json::from_str(config)?;
+        Ok(Box::new(KimiK25Model::new(
+            &cfg,
+            vb,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self, _config: &str) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: KimiK25Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
+    }
+    fn get_processor(
+        &self,
+        _model_config: &str,
+        _processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(KimiK25Processor::new())
+    }
+    fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
+        Arc::new(KimiK25Prefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
+    }
+}
+
+impl IsqModelLoader for KimiK25Loader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // MLA attention projections
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_a_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_b_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.kv_a_proj_with_mqa\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.kv_b_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // Dense MLP (layer 0)
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            // MoE shared experts
+            Regex::new(r"layers\.(\d+)\.mlp\.shared_experts\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.shared_experts\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.shared_experts\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+impl DeviceMappedModelLoader for KimiK25Loader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Vision {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: KimiK25Config = serde_json::from_str(config)?;
+        let tcfg = &cfg.text_config;
+
+        let patch_size = cfg.vision_config.patch_size;
+        let merge_size = cfg.vision_config.merge_kernel_size[0];
+        let factor = patch_size * merge_size;
+        let img_seq_len = {
+            let grid_h = max_image_shape.0 / factor;
+            let grid_w = max_image_shape.1 / factor;
+            grid_h * grid_w * max_num_images
+        };
+
+        let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
+        Ok(max_batch_size * tcfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Vision {
+            max_seq_len: _,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: KimiK25Config = serde_json::from_str(config)?;
+        let vcfg = &cfg.vision_config;
+
+        let img_seq_len = {
+            let grid_h = max_image_shape.0 / vcfg.patch_size;
+            let grid_w = max_image_shape.1 / vcfg.patch_size;
+            grid_h * grid_w
+        };
+
+        Ok((max_batch_size * max_num_images) * vcfg.vt_num_attention_heads * img_seq_len * img_seq_len)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: KimiK25Config = serde_json::from_str(config)?;
+        let tie = cfg.tie_word_embeddings;
+
+        let text_elems = {
+            let tcfg = &cfg.text_config;
+            let embed_tokens = tcfg.hidden_size * tcfg.vocab_size / weight_pack_factor;
+            let lm_head = if !tie || weight_pack_factor != 1 {
+                tcfg.hidden_size * tcfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = tcfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+
+        let vision_elems = {
+            let vcfg = &cfg.vision_config;
+            let patch_embed = 3 * vcfg.vt_hidden_size * vcfg.patch_size * vcfg.patch_size;
+            let pos_embed = vcfg.init_pos_emb_height * vcfg.init_pos_emb_width * vcfg.vt_hidden_size;
+            let encoder_layer = {
+                let norm = 2 * vcfg.vt_hidden_size;
+                let qkv = vcfg.vt_hidden_size * vcfg.vt_hidden_size * 3 + vcfg.vt_hidden_size * 3;
+                let out = vcfg.vt_hidden_size * vcfg.vt_hidden_size + vcfg.vt_hidden_size;
+                let fc0 = vcfg.vt_hidden_size * vcfg.vt_intermediate_size + vcfg.vt_intermediate_size;
+                let fc1 = vcfg.vt_intermediate_size * vcfg.vt_hidden_size + vcfg.vt_hidden_size;
+                norm + qkv + out + fc0 + fc1
+            };
+            let final_norm = vcfg.vt_hidden_size;
+            patch_embed + pos_embed + encoder_layer * vcfg.vt_num_hidden_layers + final_norm
+        };
+
+        let projector_elems = {
+            let vcfg = &cfg.vision_config;
+            let merge_area = vcfg.merge_kernel_size[0] * vcfg.merge_kernel_size[1];
+            let merged_hidden = vcfg.mm_hidden_size * merge_area;
+            let pre_norm = vcfg.mm_hidden_size;
+            let proj_0 = merged_hidden * merged_hidden + merged_hidden;
+            let proj_2 = merged_hidden * vcfg.text_hidden_size + vcfg.text_hidden_size;
+            pre_norm + proj_0 + proj_2
+        };
+
+        let elems = text_elems + vision_elems + projector_elems;
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: KimiK25Config = serde_json::from_str(config)?;
+        let tcfg = &cfg.text_config;
+
+        let mut layer_sizes = Vec::with_capacity(tcfg.num_hidden_layers);
+
+        for layer_idx in 0..tcfg.num_hidden_layers {
+            let norms = 2 * tcfg.hidden_size;
+
+            // MLA attention
+            let attn_elems = if let Some(q_lora_rank) = tcfg.q_lora_rank {
+                let q_a = tcfg.hidden_size * q_lora_rank / weight_pack_factor;
+                let q_norm = q_lora_rank;
+                let q_b = q_lora_rank * tcfg.num_attention_heads * tcfg.q_head_dim() / weight_pack_factor;
+                let kv_a = tcfg.hidden_size * (tcfg.kv_lora_rank + tcfg.qk_rope_head_dim) / weight_pack_factor;
+                let kv_norm = tcfg.kv_lora_rank;
+                let kv_b = tcfg.kv_lora_rank * tcfg.num_attention_heads * (tcfg.q_head_dim() + tcfg.v_head_dim) / weight_pack_factor;
+                let o = tcfg.num_attention_heads * tcfg.v_head_dim * tcfg.hidden_size / weight_pack_factor;
+                q_a + q_norm + q_b + kv_a + kv_norm + kv_b + o
+            } else {
+                let q = tcfg.hidden_size * tcfg.num_attention_heads * tcfg.q_head_dim() / weight_pack_factor;
+                let kv_a = tcfg.hidden_size * (tcfg.kv_lora_rank + tcfg.qk_rope_head_dim) / weight_pack_factor;
+                let kv_norm = tcfg.kv_lora_rank;
+                let kv_b = tcfg.kv_lora_rank * tcfg.num_attention_heads * (tcfg.q_head_dim() + tcfg.v_head_dim) / weight_pack_factor;
+                let o = tcfg.num_attention_heads * tcfg.v_head_dim * tcfg.hidden_size / weight_pack_factor;
+                q + kv_a + kv_norm + kv_b + o
+            };
+
+            let is_moe = layer_idx >= tcfg.first_k_dense_replace
+                && tcfg.n_routed_experts.unwrap_or(0) > 0
+                && (layer_idx - tcfg.first_k_dense_replace) % tcfg.moe_layer_freq == 0;
+
+            let mlp_elems = if is_moe {
+                let n_routed = tcfg.n_routed_experts.unwrap_or(0);
+                let n_shared = tcfg.n_shared_experts.unwrap_or(0);
+                let gate = tcfg.hidden_size * n_routed;
+                let per_routed = {
+                    let h = tcfg.hidden_size;
+                    let i = tcfg.moe_intermediate_size;
+                    (h * i + h * i + i * h) / weight_pack_factor
+                };
+                let per_shared = {
+                    let h = tcfg.hidden_size;
+                    let i = tcfg.moe_intermediate_size * n_shared;
+                    (h * i + h * i + i * h) / weight_pack_factor
+                };
+                gate + per_routed * n_routed + per_shared
+            } else {
+                let h = tcfg.hidden_size;
+                let i = tcfg.intermediate_size;
+                (h * i + h * i + i * h) / weight_pack_factor
+            };
+
+            layer_sizes.push((norms + attn_elems + mlp_elems) * dtype.size_in_bytes());
+        }
+
+        Ok(layer_sizes)
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: KimiK25Config = serde_json::from_str(config)?;
+        Ok(cfg.text_config.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: KimiK25Config = serde_json::from_str(config)?;
+        let tcfg = &cfg.text_config;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: tcfg.max_position_embeddings,
+            num_layers: tcfg.num_hidden_layers,
+            hidden_size: tcfg.hidden_size,
+            num_kv_heads: tcfg.num_attention_heads,
+            num_attn_heads: tcfg.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: tcfg.q_head_dim(),
+            v_head_dim: tcfg.v_head_dim,
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 

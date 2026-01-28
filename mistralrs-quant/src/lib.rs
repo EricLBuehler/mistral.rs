@@ -18,6 +18,7 @@ mod metal_kernels;
 mod afq;
 mod bitsandbytes;
 mod blockwise_fp8;
+mod compressed_tensors;
 pub mod cublaslt;
 pub mod distributed;
 mod dummy;
@@ -37,6 +38,7 @@ mod unquantized;
 mod utils;
 mod vector_fp8;
 
+use compressed_tensors::compressed_tensors_linear;
 use gptq::gptq_linear;
 use lora::merge_lora_weights;
 use regex::Regex;
@@ -198,6 +200,27 @@ pub enum QuantizedConfig {
         group_size: usize,
     },
     MXFP4 {},
+    CompressedTensors {
+        bits: usize,
+        group_size: usize,
+    },
+}
+
+// Nested structure for compressed-tensors config_groups
+#[derive(Deserialize)]
+struct CompressedTensorsWeightConfig {
+    num_bits: Option<usize>,
+    group_size: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct CompressedTensorsGroupConfig {
+    weights: Option<CompressedTensorsWeightConfig>,
+}
+
+#[derive(Deserialize)]
+struct CompressedTensorsConfigGroups {
+    group_0: Option<CompressedTensorsGroupConfig>,
 }
 
 // Common fields for all variants
@@ -209,6 +232,8 @@ struct RawConfig {
     checkpoint_format: Option<String>,
     weight_block_size: Option<Vec<usize>>,
     bnb_4bit_quant_type: Option<String>,
+    // For compressed-tensors format
+    config_groups: Option<CompressedTensorsConfigGroups>,
 }
 
 // Custom deserializer implementation
@@ -255,6 +280,40 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
             Some(m) if m == "mxfp4" => {
                 Ok(QuantizedConfig::MXFP4 {  })
             }
+            Some(m) if m == "compressed-tensors" => {
+                // Extract bits and group_size from nested config_groups structure
+                let (bits, group_size) = if let Some(ref cg) = raw.config_groups {
+                    let g0 = cg
+                        .group_0
+                        .as_ref()
+                        .ok_or_else(|| serde::de::Error::custom(
+                            "compressed-tensors config missing config_groups.group_0"
+                        ))?;
+                    let weights = g0
+                        .weights
+                        .as_ref()
+                        .ok_or_else(|| serde::de::Error::custom(
+                            "compressed-tensors config missing config_groups.group_0.weights"
+                        ))?;
+                    let bits = weights.num_bits.ok_or_else(|| {
+                        serde::de::Error::missing_field("config_groups.group_0.weights.num_bits")
+                    })?;
+                    let group_size = weights.group_size.ok_or_else(|| {
+                        serde::de::Error::missing_field("config_groups.group_0.weights.group_size")
+                    })?;
+                    (bits, group_size)
+                } else {
+                    // Fall back to top-level bits/group_size if config_groups not present
+                    let bits = raw
+                        .bits
+                        .ok_or_else(|| serde::de::Error::missing_field("bits"))?;
+                    let group_size = raw
+                        .group_size
+                        .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
+                    (bits, group_size)
+                };
+                Ok(QuantizedConfig::CompressedTensors { bits, group_size })
+            }
             None => {
                 let bits = raw
                     .bits
@@ -266,7 +325,7 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
             }
             Some(unknown_method) => {
                 Err(serde::de::Error::custom(format!(
-                    "Unknown quantization method: {unknown_method}. Expected one of: gptq, fp8, bitsandbytes, afq, or not specified"
+                    "Unknown quantization method: {unknown_method}. Expected one of: gptq, fp8, bitsandbytes, afq, compressed-tensors, or not specified"
                 )))
             },
         }
@@ -281,6 +340,7 @@ impl QuantizedConfig {
             Self::Bitsandbytes { .. } => "bitsandbytes",
             Self::Afq { .. } => "afq",
             Self::MXFP4 { .. } => "mxfp4",
+            Self::CompressedTensors { .. } => "compressed-tensors",
         }
     }
 
@@ -296,6 +356,7 @@ impl QuantizedConfig {
             } => "8 bits".to_string(),
             Self::Afq { bits, .. } => format!("{bits} bits"),
             Self::MXFP4 {} => format!("{} bits", mxfp4::N_BITS),
+            Self::CompressedTensors { bits, .. } => format!("{bits} bits"),
         }
     }
 
@@ -310,6 +371,15 @@ impl QuantizedConfig {
                 8 => IsqType::Q8_0.pack_factor(dtype),
                 40 => 4, // mxfp4: 2 FP4 values per byte = factor of 4
                 other => panic!("Unexpected bits in `pack_factor` {other}"),
+            },
+            Self::CompressedTensors { bits, .. } => match bits {
+                2 => IsqType::Q2K.pack_factor(dtype),
+                3 => IsqType::Q3K.pack_factor(dtype),
+                4 => IsqType::Q4K.pack_factor(dtype),
+                5 => IsqType::Q5K.pack_factor(dtype),
+                6 => IsqType::Q6K.pack_factor(dtype),
+                8 => IsqType::Q8_0.pack_factor(dtype),
+                other => panic!("Unexpected bits in `pack_factor` for compressed-tensors: {other}"),
             },
             Self::Fp8 { .. } => IsqType::Q8_0.pack_factor(dtype),
             Self::Bitsandbytes {
@@ -891,6 +961,9 @@ pub fn linear_no_bias(
             QuantizedConfig::MXFP4 {} => {
                 MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, false, vb)?
             }
+            QuantizedConfig::CompressedTensors { .. } => {
+                compressed_tensors_linear(in_dim, out_dim, quant_conf, vb)?
+            }
         }
     } else {
         // Handle the case where the layer is dummy (no tensors)
@@ -955,6 +1028,9 @@ pub fn linear(
             }
             QuantizedConfig::MXFP4 {} => {
                 MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, true, vb)?
+            }
+            QuantizedConfig::CompressedTensors { .. } => {
+                compressed_tensors_linear(in_dim, out_dim, quant_conf, vb)?
             }
         }
     } else {

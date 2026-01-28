@@ -5,6 +5,7 @@ use candle_nn::Linear;
 
 use crate::{
     blockwise_fp8::{blockwise_fp8_linear_b, blockwise_fp8_moe},
+    compressed_tensors::compressed_tensors_linear,
     distributed,
     gptq::gptq_linear,
     lora::merge_lora_weights,
@@ -63,10 +64,11 @@ impl RowParallelLayer {
                 QuantizedConfig::GptqAwq { .. }
                     | QuantizedConfig::Bitsandbytes { .. }
                     | QuantizedConfig::Afq { .. }
+                    | QuantizedConfig::CompressedTensors { .. }
             ) && comm.world_size() != 1
             {
                 candle_core::bail!(
-                    "GPTQ and BNB and AFQ quantization types to not support tensor parallelism, but got a world size of {}",
+                    "GPTQ and BNB and AFQ and CompressedTensors quantization types do not support tensor parallelism, but got a world size of {}",
                     comm.world_size()
                 );
             }
@@ -105,6 +107,9 @@ impl RowParallelLayer {
                 }
                 QuantizedConfig::MXFP4 {} => {
                     MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
+                QuantizedConfig::CompressedTensors { .. } => {
+                    compressed_tensors_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
             }
         } else {
@@ -358,10 +363,11 @@ impl ColumnParallelLayer {
                 QuantizedConfig::GptqAwq { .. }
                     | QuantizedConfig::Bitsandbytes { .. }
                     | QuantizedConfig::Afq { .. }
+                    | QuantizedConfig::CompressedTensors { .. }
             ) && comm.world_size() != 1
             {
                 candle_core::bail!(
-                    "GPTQ/AWQ and BNB and AFQ quantization types to not support tensor parallelism, but got a world size of {}",
+                    "GPTQ/AWQ and BNB and AFQ and CompressedTensors quantization types do not support tensor parallelism, but got a world size of {}",
                     comm.world_size()
                 );
             }
@@ -400,6 +406,9 @@ impl ColumnParallelLayer {
                 }
                 QuantizedConfig::MXFP4 {} => {
                     MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
+                QuantizedConfig::CompressedTensors { .. } => {
+                    compressed_tensors_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
             }
         } else {
@@ -709,6 +718,9 @@ impl ReplicatedLayer {
                 QuantizedConfig::MXFP4 {} => {
                     MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
                 }
+                QuantizedConfig::CompressedTensors { .. } => {
+                    compressed_tensors_linear(in_dim, out_dim, quant_conf, vb.clone())?
+                }
             }
         } else {
             // Handle the case where the layer is dummy (no tensors)
@@ -791,6 +803,9 @@ impl ReplicatedLayer {
                 }
                 QuantizedConfig::MXFP4 {} => {
                     MXFP4Layer::linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
+                QuantizedConfig::CompressedTensors { .. } => {
+                    compressed_tensors_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
             }
         } else {
