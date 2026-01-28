@@ -3,7 +3,7 @@
 ## JINJA chat templates (recommended method)
 Some models do not come with support for tool calling or other features, and as such it might be necessary to specify your own chat template.
 
-We provide some chat templates [here](../chat_templates/), and it is easy to modify or create others to customize chat template behavior.
+We provide some chat templates [here](https://github.com/EricLBuehler/mistral.rs/tree/master/chat_templates/), and it is easy to modify or create others to customize chat template behavior.
 
 To use this, add the `jinja-explicit` parameter to the various APIs
 
@@ -14,7 +14,7 @@ mistralrs serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_to
 ## Chat template overrides
 Mistral.rs attempts to automatically load a chat template from the `tokenizer_config.json` file. This enables high flexibility across instruction-tuned models and ensures accurate chat templating. However, if the `chat_template` field is missing, then a JINJA chat template should be provided. The JINJA chat template may use `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
 
-We provide some chat templates [here](../chat_templates/), and it is easy to modify or create others to customize chat template behavior.
+We provide some chat templates [here](https://github.com/EricLBuehler/mistral.rs/tree/master/chat_templates/), and it is easy to modify or create others to customize chat template behavior.
 
 For example, to use the `chatml` template, `--chat-template` is specified *before* the model architecture. For example:
 
@@ -26,7 +26,7 @@ mistralrs serve -p 1234 --log output.log --chat-template ./chat_templates/chatml
 
 ## Tokenizer
 
-Some models do not provide a `tokenizer.json` file although mistral.rs expects one. To solve this, please run [this](../scripts/get_tokenizers_json.py) script. It will output the `tokenizer.json` file for your specific model. This may be used by passing the `--tokenizer-json` flag *after* the model architecture. For example:
+Some models do not provide a `tokenizer.json` file although mistral.rs expects one. To solve this, please run [this](https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/get_tokenizers_json.py) script. It will output the `tokenizer.json` file for your specific model. This may be used by passing the `--tokenizer-json` flag *after* the model architecture. For example:
 
 ```bash
 $ python3 scripts/get_tokenizers_json.py

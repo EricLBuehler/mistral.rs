@@ -111,20 +111,20 @@ Add the `--pa-gpu-mem`/`--pa-gpu-mem-usage` and `--pa-blk-size` parameters befor
 To enable KV cache quantization, use the `--pa-cache-type` parameter with either `auto` (default) or `f8e4m3`.
 
 ```
-cargo run --release --features cuda -- -i --pa-gpu-mem 8192 --pa-blk-size 32 --isq 4 plain -m microsoft/Phi-3-mini-128k-instruct
+mistralrs run --pa-memory-mb 8192 --pa-block-size 32 --isq 4 -m microsoft/Phi-3-mini-128k-instruct
 ```
 
 ```
-cargo run --release --features cuda -- -i --pa-gpu-mem-usage .95 --pa-blk-size 32 gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
+mistralrs run --pa-memory-fraction 0.95 --pa-block-size 32 --format gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
 ```
 
 Example with FP8 KV cache quantization:
 ```
-cargo run --release --features metal -- -i --pa-gpu-mem 4096 --pa-blk-size 32 --pa-cache-type f8e4m3 plain -m microsoft/Phi-3-mini-128k-instruct
+mistralrs run --paged-attn on --pa-memory-mb 4096 --pa-block-size 32 --pa-cache-type f8e4m3 -m microsoft/Phi-3-mini-128k-instruct
 ```
 
 ## Using the Rust SDK
-You can find this example [here](../mistralrs/examples/paged_attn/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/paged_attn/main.rs).
 
 ```rust
 use anyhow::Result;

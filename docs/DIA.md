@@ -15,7 +15,7 @@ The OpenAI HTTP server provides a drop-in compatible way to easily use Dia local
 > Note: we only support `pcm` and `wav` outputs.
 
 ```
-cargo run --features ... --release -- -i speech -m nari-labs/Dia-1.6B -a dia
+mistralrs run speech -m nari-labs/Dia-1.6B -a dia
 ```
 
 After this, you can send requests via the HTTP server:

@@ -20,7 +20,7 @@ The FLUX model itself is 12 billion parameters (~24GB), and the T5 XXL encoder m
 The OpenAI HTTP server provides a compatible way to easily use this implementation. As per the specification, output images can be returned as local paths to images or be encoded to base64.
 
 ```
-cargo run --features cuda --release -- --port 1234 diffusion -m black-forest-labs/FLUX.1-schnell -a flux
+mistralrs serve diffusion -p 1234 -m black-forest-labs/FLUX.1-schnell -a flux
 ```
 
 After this, you can send requests via the HTTP server:

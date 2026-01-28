@@ -21,7 +21,7 @@ curl http://localhost:1234/v1/embeddings \
   -d '{"model": "default", "input": ["Graphene conductivity", "Explain superconductors in simple terms."]}'
 ```
 
-An example with the OpenAI client can be found [here](../examples/server/embedding.py).
+An example with the OpenAI client can be found [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/embedding.py).
 
 To expose the model alongside chat models, register it in your selector configuration using the
 `qwen3embedding` architecture tag:
@@ -63,7 +63,7 @@ embeddings = runner.send_embedding_request(request)
 print(len(embeddings), len(embeddings[0]))
 ```
 
-A ready-to-run version can be found at [`examples/python/qwen3_embedding.py`](../examples/python/qwen3_embedding.py).
+A ready-to-run version can be found at [`examples/python/qwen3_embedding.py`](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_embedding.py).
 
 ## Rust SDK
 
@@ -94,4 +94,4 @@ async fn main() -> Result<()> {
 }
 ```
 
-You can find the full example at [`mistralrs/examples/qwen3_embedding/main.rs`](../mistralrs/examples/qwen3_embedding/main.rs).
+You can find the full example at [`mistralrs/examples/qwen3_embedding/main.rs`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/qwen3_embedding/main.rs).

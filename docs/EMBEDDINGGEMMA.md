@@ -41,7 +41,7 @@ curl http://localhost:1234/v1/embeddings \
   -d '{"model": "default", "input": ["task: search result | query: What is graphene?", "task: search result | query: What is an apple?"]}'
 ```
 
-An example with the OpenAI client can be found [here](../examples/server/embedding.py).
+An example with the OpenAI client can be found [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/embedding.py).
 
 By default the server registers the model as `default`. To expose it under a custom name or alongside chat
 models, run in multi-model mode and assign an identifier in the selector configuration:
@@ -83,7 +83,7 @@ embeddings = runner.send_embedding_request(request)
 print(len(embeddings), len(embeddings[0]))
 ```
 
-Refer to [this example](../examples/python/embedding_gemma.py) for a complete runnable script.
+Refer to [this example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/embedding_gemma.py) for a complete runnable script.
 
 ## Rust SDK
 
@@ -113,7 +113,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-This example lives [here](../mistralrs/examples/embedding_gemma/main.rs), and can be run with:
+This example lives [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/embedding_gemma/main.rs), and can be run with:
 
 ```bash
 cargo run --package mistralrs --example embedding_gemma

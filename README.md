@@ -14,7 +14,7 @@ Fast, flexible LLM inference.
 </h3>
 
 <p align="center">
-  | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://docs.rs/mistralrs/"><b>Rust SDK</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/PYTHON_SDK.html"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
+  | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://crates.io/crates/mistralrs"><b>Rust SDK</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/PYTHON_SDK.html"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
 </p>
 
 <p align="center">
@@ -59,7 +59,7 @@ mistralrs run -m Qwen/Qwen3-4B
 mistralrs serve --ui -m google/gemma-3-4b-it
 ```
 
-Then visit [http://localhost:1234/ui](http://localhost:1234/ui) for the web chat interface.
+Then visit `http://localhost:1234/ui` for the web chat interface.
 
 ### The `mistralrs` CLI
 
@@ -184,7 +184,7 @@ mistralrs doctor
 ## Python SDK
 
 ```bash
-pip install mistralrs-cuda  # or mistralrs-metal, mistralrs-mkl, mistralrs
+pip install mistralrs  # or mistralrs-cuda, mistralrs-metal, mistralrs-mkl, mistralrs-accelerate
 ```
 
 ```python
@@ -192,7 +192,7 @@ from mistralrs import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),
-    in_situ_quant="Q4K",
+    in_situ_quant="4",
 )
 
 res = runner.send_chat_completion_request(
@@ -206,6 +206,39 @@ print(res.choices[0].message.content)
 ```
 
 [Python SDK](https://ericlbuehler.github.io/mistral.rs/PYTHON_SDK.html) | [Installation](https://ericlbuehler.github.io/mistral.rs/PYTHON_INSTALLATION.html) | [Examples](examples/python) | [Cookbook](examples/python/cookbook.ipynb)
+
+## Rust SDK
+
+```bash
+cargo add mistralrs
+```
+
+```rust
+use anyhow::Result;
+use mistralrs::{IsqType, TextMessageRole, TextMessages, VisionModelBuilder};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model = VisionModelBuilder::new("google/gemma-3-4b-it")
+        .with_isq(IsqType::Q4K)
+        .with_logging()
+        .build()
+        .await?;
+
+    let messages = TextMessages::new().add_message(
+        TextMessageRole::User,
+        "Hello!",
+    );
+
+    let response = model.send_chat_request(messages).await?;
+
+    println!("{:?}", response.choices[0].message.content);
+
+    Ok(())
+}
+```
+
+[Rust SDK](https://crates.io/crates/mistralrs) | [Examples](mistralrs/examples)
 
 ## Docker
 

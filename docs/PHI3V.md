@@ -15,7 +15,7 @@ The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/
 > Aspect ratio is not preserved in that case.
 
 ## HTTP server
-You can find this example [here](../examples/server/phi3v.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -43,11 +43,8 @@ The perspective from which this photo is taken offers an expansive view of the m
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 vision-plain -m microsoft/Phi-3.5-vision-instruct
+mistralrs serve vision -p 1234 -m microsoft/Phi-3.5-vision-instruct
 ```
 
 2) Send a request
@@ -86,13 +83,13 @@ print(resp)
 
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
 
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/phi3v/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/phi3v/main.rs).
 
 This is a minimal example of running the Phi 3 Vision model with a dummy image.
 
@@ -136,7 +133,7 @@ async fn main() -> Result<()> {
 ```
 
 ## Python
-You can find this example [here](../examples/python/phi3v.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -182,5 +179,5 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).

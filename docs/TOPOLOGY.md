@@ -5,7 +5,7 @@
 > [!NOTE]
 > Manual device mapping flags are deprecated in favor of automatic placement because it is easy to misconfigure them. Topology files remain the preferred way to express per-layer quantization, and you can still provide `device` overrides here when you truly need to. Those overrides win over the automatic mapper, so apply them sparingly. See the [device mapping documentation](DEVICE_MAPPING.md) for guidance.
 
-Use a simple model topology to configure ISQ and device mapping for *per-layer* with a single [YAML file](../topologies/isq_and_device.yml) (examples [here](../topologies))!
+Use a simple model topology to configure ISQ and device mapping for *per-layer* with a single [YAML file](https://github.com/EricLBuehler/mistral.rs/blob/master/topologies/isq_and_device.yml) (examples [here](https://github.com/EricLBuehler/mistral.rs/tree/master/topologies))!
 
 To support per-layer mix of ISQ, Mistral.rs supports loading a model topology YAML file. This YAML file is formatted as follows:
 
@@ -77,24 +77,18 @@ Model topologies may be applied to all model types.
 
 ## CLI example
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --features ... -- -i plain -m microsoft/Phi-3-mini-128k-instruct --topology topologies/isq.yml   
+mistralrs run -m microsoft/Phi-3-mini-128k-instruct --topology topologies/isq.yml
 ```
 
 ## HTTP server example
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --features ... -- --port 1234 plain -m microsoft/Phi-3-mini-128k-instruct --topology topologies/isq.yml   
+mistralrs serve -p 1234 -m microsoft/Phi-3-mini-128k-instruct --topology topologies/isq.yml
 ```
 
 ## Rust example
-Example [here](../mistralrs/examples/topology/main.rs).
+Example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/topology/main.rs).
 
 ## Python example
-Example [here](../examples/python/topology.py).
+Example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/topology.py).

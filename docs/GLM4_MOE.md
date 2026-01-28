@@ -65,7 +65,6 @@ print(res.usage)
 ```
 
 ## Rust SDK
-You can find this example [here](../mistralrs/examples/glm4_moe/main.rs).
 
 ```rust
 use anyhow::Result;

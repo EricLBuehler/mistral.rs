@@ -40,6 +40,6 @@ For multi-model setups, each model gets its own engine thread, allowing true par
 
 ## See Also
 
-- [Multi-Model Support](multi_model/README.md) - Load and manage multiple models
+- [Multi-Model Support](multi_model/overview.md) - Load and manage multiple models
 - [Configuration](CONFIGURATION.md) - Environment variables affecting engine behavior
 - [PagedAttention](PAGED_ATTENTION.md) - Memory management for high throughput

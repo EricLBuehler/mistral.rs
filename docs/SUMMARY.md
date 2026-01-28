@@ -81,6 +81,7 @@
 
 - [Device Mapping](DEVICE_MAPPING.md)
 - [PagedAttention](PAGED_ATTENTION.md)
+- [Speculative Decoding](SPECULATIVE_DECODING.md)
 - [Flash Attention](FLASH_ATTENTION.md)
 - [MLA (Multi-head Latent Attention)](MLA.md)
 - [Distributed Inference](DISTRIBUTED/DISTRIBUTED.md)
@@ -94,11 +95,11 @@
 - [Chat Templates](CHAT_TOK.md)
 - [Sampling Options](SAMPLING.md)
 - [TOML Selector](TOML_SELECTOR.md)
-- [Multi-Model Support](multi_model/README.md)
+- [Multi-Model Support](multi_model/overview.md)
 
 # MCP (Model Context Protocol)
 
-- [MCP Client](MCP/README.md)
+- [MCP Client](MCP/client.md)
 - [MCP Server](MCP/server.md)
 - [MCP Configuration](MCP/configuration.md)
 - [MCP Transports](MCP/transports.md)

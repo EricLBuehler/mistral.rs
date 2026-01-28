@@ -106,8 +106,8 @@ pip install mistralrs-mkl     # For Intel CPUs
 pip install mistralrs         # CPU-only
 ```
 
-- [Full installation instructions](../mistralrs-pyo3/INSTALLATION.md)
-- [SDK documentation](../mistralrs-pyo3/SDK.md)
+- [Full installation instructions](PYTHON_INSTALLATION.md)
+- [SDK documentation](PYTHON_SDK.md)
 
 ## Verify Installation
 
@@ -163,5 +163,5 @@ mistralrs run --format gguf -m author/model-repo -f file.gguf -t author/official
 
 - [CLI Reference](CLI.md) - All commands and options
 - [HTTP API](HTTP.md) - Run as an OpenAI-compatible server
-- [Python SDK](../mistralrs-pyo3/SDK.md) - Python package documentation
+- [Python SDK](PYTHON_SDK.md) - Python package documentation
 - [Troubleshooting](TROUBLESHOOTING.md) - Common issues and solutions

@@ -25,11 +25,11 @@ These parameters do not translate to hard limits during runtime, they only contr
 
 ## Examples
 - Python
-    - Text models [text_auto_device_map.py](../examples/python/text_auto_device_map.py)
-    - Vision models [vision_auto_device_map.py](../examples/python/vision_auto_device_map.py)
+    - Text models [text_auto_device_map.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/text_auto_device_map.py)
+    - Vision models [vision_auto_device_map.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/vision_auto_device_map.py)
 - Rust
-    - Text models [text_auto_device_map/main.rs](../mistralrs/examples/text_auto_device_map/main.rs)
-    - Vision models [vision_auto_device_map/main.rs](../mistralrs/examples/vision_auto_device_map/main.rs)
+    - Text models [text_auto_device_map/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/text_auto_device_map/main.rs)
+    - Vision models [vision_auto_device_map/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/vision_auto_device_map/main.rs)
 - Server
     - Text models:
     ```bash
@@ -59,12 +59,12 @@ The format for the ordinals and number of layers is `ORD:NUM;...` where ORD is t
 
 ## Example of specifying ordinals
 ```
-cargo run --release --features cuda -- -n "0:16;1:16" -i plain -m gradientai/Llama-3-8B-Instruct-262k
+mistralrs run -n "0:16;1:16" -m gradientai/Llama-3-8B-Instruct-262k
 ```
 
 > Note: In the Python SDK, the "0:16;1:16" string is passed as the list `["0:16", "1:16"]`.
 
 ## Example of specifying the number of GPU layers
 ```
-cargo run --release --features cuda -- -n 16 -i plain -m gradientai/Llama-3-8B-Instruct-262k
+mistralrs run -n 16 -m gradientai/Llama-3-8B-Instruct-262k
 ```

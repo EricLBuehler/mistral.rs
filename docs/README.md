@@ -80,6 +80,7 @@
 
 - [Device Mapping](DEVICE_MAPPING.md) - Multi-GPU and CPU offloading
 - [PagedAttention](PAGED_ATTENTION.md) - Efficient KV cache management
+- [Speculative Decoding](SPECULATIVE_DECODING.md) - Accelerate generation with draft models
 - [Flash Attention](FLASH_ATTENTION.md) - Accelerated attention
 - [MLA](MLA.md) - Multi-head Latent Attention
 - [Distributed Inference](DISTRIBUTED/DISTRIBUTED.md)
@@ -93,11 +94,11 @@
 - [Chat Templates](CHAT_TOK.md) - Template customization
 - [Sampling Options](SAMPLING.md) - Generation parameters
 - [TOML Selector](TOML_SELECTOR.md) - Model selection syntax
-- [Multi-Model Support](multi_model/README.md) - Load multiple models
+- [Multi-Model Support](multi_model/overview.md) - Load multiple models
 
 ## MCP (Model Context Protocol)
 
-- [MCP Client](MCP/README.md) - Connect to external tools
+- [MCP Client](MCP/client.md) - Connect to external tools
 - [MCP Server](MCP/server.md) - Serve models over MCP
 - [MCP Configuration](MCP/configuration.md)
 - [MCP Transports](MCP/transports.md)
@@ -113,4 +114,4 @@
 
 ## Contributing
 
-See the main [README](../README.md#contributing) for contribution guidelines.
+See the main [README](https://github.com/EricLBuehler/mistral.rs/blob/master/README.md#contributing) for contribution guidelines.

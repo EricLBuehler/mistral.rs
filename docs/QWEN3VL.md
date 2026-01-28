@@ -31,15 +31,12 @@ Mistral.rs supports interactive mode for vision models! It is an easy way to int
 
 Start up interactive mode with the Qwen3 VL model:
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --features ... --release -- -i vision-plain -m Qwen/Qwen3-VL-4B-Instruct
+mistralrs run vision -m Qwen/Qwen3-VL-4B-Instruct
 ```
 
 ## HTTP server
-You can find this example [here](../examples/server/qwen3_vl.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_vl.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -47,11 +44,8 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 -m Qwen/Qwen3-VL-4B-Instruct
+mistralrs serve vision -p 1234 -m Qwen/Qwen3-VL-4B-Instruct
 ```
 
 2) Send a request
@@ -90,13 +84,13 @@ print(resp)
 
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
 
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/qwen3_vl/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/qwen3_vl/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -140,7 +134,7 @@ async fn main() -> Result<()> {
 ---
 
 ## Python
-You can find this example [here](../examples/python/qwen3_vl.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_vl.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -188,5 +182,5 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).
