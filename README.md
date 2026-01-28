@@ -14,7 +14,7 @@ Fast, flexible LLM inference.
 </h3>
 
 <p align="center">
-  | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://docs.rs/mistralrs/"><b>Rust SDK</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/PYTHON_SDK.html"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
+  | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://crates.io/crates/mistralrs"><b>Rust SDK</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/PYTHON_SDK.html"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
 </p>
 
 <p align="center">
@@ -59,7 +59,7 @@ mistralrs run -m Qwen/Qwen3-4B
 mistralrs serve --ui -m google/gemma-3-4b-it
 ```
 
-Then visit [http://localhost:1234/ui](http://localhost:1234/ui) for the web chat interface.
+Then visit `http://localhost:1234/ui` for the web chat interface.
 
 ### The `mistralrs` CLI
 
@@ -184,7 +184,7 @@ mistralrs doctor
 ## Python SDK
 
 ```bash
-pip install mistralrs-cuda  # or mistralrs-metal, mistralrs-mkl, mistralrs
+pip install mistralrs  # or mistralrs-cuda, mistralrs-metal, mistralrs-mkl, mistralrs-accelerate
 ```
 
 ```python
@@ -192,7 +192,7 @@ from mistralrs import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),
-    in_situ_quant="Q4K",
+    in_situ_quant="4",
 )
 
 res = runner.send_chat_completion_request(

@@ -2,17 +2,21 @@
 
 In situ quantization works by quantizing models inplace, with the chief benefit being reduced memory footprint when running the model. This enables larger model to be run on devices which would not fit the full weights, and may increase model inference performance.
 
+**Quick start**: Just use `--isq 4` (or 2, 3, 5, 6, 8) and mistral.rs will pick the best quantization for your hardware:
+```
+mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
+```
+
 An API is exposed on the Python and Rust SDKs which provides the ability to dynamically re-ISQ models at runtime.
 
 To set the ISQ type for individual layers, use a model [`topology`](TOPOLOGY.md).
 
 > Note: 🔥 AFQ (affine) quantization is designed to be fast on **Metal** but is only supported on Metal.
 
-## Automatic ISQ
-Automatic ISQ is an opt-in feature that selects the most accurate and fastest quantization method for the platform.
+## Automatic ISQ (just use a number!)
+Instead of specifying a quantization type like `Q4K`, you can just pass an integer (2, 3, 4, 5, 6, or 8) and mistral.rs will automatically select the best quantization method for your platform.
 
-If the provided ISQ value is a valid integer (one of 2, 3, 4, 5, 6, or 8), the best quantization type for the platform will be chosen.
-Note that the fallback is always a Q/K quantization. On Metal, for 2, 3, 4, 6, or 8 bits, fast AFQ is used.
+On Metal, this uses fast AFQ quantization (for 2, 3, 4, 6, or 8 bits). On other platforms, it falls back to Q/K quantization.
 
 ```
 cargo run --release --features ... -- -i --isq 4 plain -m meta-llama/Llama-3.2-3B-Instruct
@@ -84,5 +88,10 @@ let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
 
 ## Server example
 ```
-cargo run --release --features "cuda flash-attn" -- --port 1234 --log output.txt --isq Q2K plain -m mistralai/Mistral-7B-Instruct-v0.1
+mistralrs serve --port 1234 --isq 4 -m mistralai/Mistral-7B-Instruct-v0.1
+```
+
+Or with a specific quantization type:
+```
+mistralrs serve --port 1234 --isq Q4K -m mistralai/Mistral-7B-Instruct-v0.1
 ```
