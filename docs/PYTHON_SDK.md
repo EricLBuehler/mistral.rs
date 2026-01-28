@@ -356,7 +356,7 @@ text = runner.detokenize_text(tokens, skip_special_tokens=True, model_id="model-
 When `model_id` is `None` or omitted, the default model is used.
 
 ### Server Configuration
-For server-based multi-model deployment, see the [multi-model documentation](multi_model/README.md).
+For server-based multi-model deployment, see the [multi-model documentation](multi_model/overview.md).
 
 ## MCP Client
 

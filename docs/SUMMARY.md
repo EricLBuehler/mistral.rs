@@ -94,11 +94,11 @@
 - [Chat Templates](CHAT_TOK.md)
 - [Sampling Options](SAMPLING.md)
 - [TOML Selector](TOML_SELECTOR.md)
-- [Multi-Model Support](multi_model/README.md)
+- [Multi-Model Support](multi_model/overview.md)
 
 # MCP (Model Context Protocol)
 
-- [MCP Client](MCP/README.md)
+- [MCP Client](MCP/client.md)
 - [MCP Server](MCP/server.md)
 - [MCP Configuration](MCP/configuration.md)
 - [MCP Transports](MCP/transports.md)
