@@ -346,6 +346,12 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
     print(f"  Maturin args: {' '.join(maturin_args)}")
     subprocess.run(docker_cmd, check=True)
 
+    # Fix ownership of target/ directory (Docker creates files as root)
+    import getpass
+    user = getpass.getuser()
+    print(f"  Fixing ownership of target/ directory...")
+    subprocess.run(["sudo", "chown", "-R", f"{user}:{user}", "target/"], cwd=REPO_ROOT, check=False)
+
     # Move wheels from repo wheels/ to output_dir
     docker_wheels_dir = REPO_ROOT / "wheels" / output_dir.name
     if docker_wheels_dir.exists() and docker_wheels_dir != output_dir:
