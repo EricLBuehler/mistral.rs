@@ -282,6 +282,7 @@ def _build_with_maturin(features: list[str], output_dir: Path, plat: Platform) -
         "maturin",
         "build",
         "--release",
+        "--strip",
         "-o",
         str(output_dir),
         "-m",
@@ -292,6 +293,12 @@ def _build_with_maturin(features: list[str], output_dir: Path, plat: Platform) -
 
     if features:
         cmd.extend(["--features", ",".join(features)])
+
+    # Skip auditwheel for CUDA builds - don't bundle CUDA shared libraries
+    # Users are expected to have CUDA installed on their system
+    # Note: MKL is statically linked (mkl-static-lp64-iomp) so doesn't need this
+    if "cuda" in features:
+        cmd.extend(["--auditwheel", "skip"])
 
     env = os.environ.copy()
 
@@ -318,6 +325,7 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
     maturin_args = [
         "build",
         "--release",
+        "--strip",
         "-o",
         f"/io/wheels/{output_dir.name}",
         "-m",
