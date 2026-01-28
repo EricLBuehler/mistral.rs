@@ -80,6 +80,7 @@
 
 - [Device Mapping](DEVICE_MAPPING.md) - Multi-GPU and CPU offloading
 - [PagedAttention](PAGED_ATTENTION.md) - Efficient KV cache management
+- [Speculative Decoding](SPECULATIVE_DECODING.md) - Accelerate generation with draft models
 - [Flash Attention](FLASH_ATTENTION.md) - Accelerated attention
 - [MLA](MLA.md) - Multi-head Latent Attention
 - [Distributed Inference](DISTRIBUTED/DISTRIBUTED.md)

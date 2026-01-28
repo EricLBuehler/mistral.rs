@@ -1,6 +1,8 @@
 # Structured model loading with .toml files
 
-Mistral.rs supports loading models from a .toml file, and the fields are the same as for the CLI.
+Mistral.rs supports loading models from a .toml file, and the fields are the same as for the CLI. Please find some example toml selectors [here](../toml-selectors/).
+
+There are a few cases which add functionality that cannot be found in the CLI.
 
 ## Speculative decoding
 
@@ -25,10 +27,8 @@ quantized_model_id = "TheBloke/Mistral-7B-Instruct-v0.1-GGUF"
 quantized_filename = "mistral-7b-instruct-v0.1.Q2_K.gguf"
 ```
 
-You can find an example speculative decoding config at [`speculative.toml`](https://github.com/EricLBuehler/mistral.rs/blob/master/speculative.toml).
-
 ```bash
-mistralrs from-config -f speculative.toml
+mistralrs from-config -f toml-selectors/speculative-gguf.toml
 ```
 
 ## AnyMoE
@@ -50,6 +50,9 @@ mistralrs from-config -f speculative.toml
 - Alpha
 - Target modules
 
+```bash
+mistralrs from-config -f toml-selectors/anymoe.toml
+```
 
 ### With fine-tuned experts
 ```toml
