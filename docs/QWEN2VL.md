@@ -27,11 +27,8 @@ Mistral.rs supports interactive mode for vision models! It is an easy way to int
 
 1) Start up interactive mode with the Qwen2-VL model
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --features ... --release -- -i vision-plain -m Qwen/Qwen2-VL-2B-Instruct
+mistralrs run vision -m Qwen/Qwen2-VL-2B-Instruct
 ```
 
 2) Say hello!
@@ -88,11 +85,8 @@ In conclusion, camellias are beautiful flowers that add color and interest to ga
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 -m Qwen/Qwen2-VL-2B-Instruct
+mistralrs serve vision -p 1234 -m Qwen/Qwen2-VL-2B-Instruct
 ```
 
 2) Send a request

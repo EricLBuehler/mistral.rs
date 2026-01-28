@@ -50,14 +50,14 @@ Mistral.rs supports the following quantization:
 - Provide the GGUF file
 
 ```
-cargo run --features cuda -- -i gguf -f my-gguf-file.gguf
+mistralrs run --format gguf -f my-gguf-file.gguf
 ```
 
 ## Using ISQ
 See the [docs](ISQ.md)
 
 ```
-cargo run --features cuda -- -i --isq 4 plain -m microsoft/Phi-3-mini-4k-instruct
+mistralrs run --isq 4 -m microsoft/Phi-3-mini-4k-instruct
 ```
 
 ## Using a GPTQ quantized model
@@ -66,7 +66,7 @@ cargo run --features cuda -- -i --isq 4 plain -m microsoft/Phi-3-mini-4k-instruc
 - The [Marlin](https://github.com/IST-DASLab/marlin) kernel will automatically be used for 4-bit and 8-bit.
 
 ```
-cargo run --features cuda --release -- -i plain -m kaitchup/Phi-3-mini-4k-instruct-gptq-4bit
+mistralrs run -m kaitchup/Phi-3-mini-4k-instruct-gptq-4bit
 ```
 
 You can create your own GPTQ model using [`scripts/convert_to_gptq.py`][../scripts/convert_to_gptq.py]:
@@ -82,5 +82,5 @@ python3 scripts/convert_to_gptq.py --src path/to/model --dst output/model/path -
 - Specialized kernels will be used to accelerate inference!
 
 ```
-cargo run --features ... --release -- -i plain -m mlx-community/Llama-3.8-1B-8bit
+mistralrs run -m mlx-community/Llama-3.8-1B-8bit
 ```

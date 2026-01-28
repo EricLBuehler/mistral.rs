@@ -33,11 +33,8 @@ Mistral.rs supports interactive mode for vision models! It is an easy way to int
 
 1) Start up interactive mode with the Idefics 3 model
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --features ... --release -- -i --isq 4 vision-plain -m HuggingFaceM4/Idefics3-8B-Llama3
+mistralrs run vision --isq 4 -m HuggingFaceM4/Idefics3-8B-Llama3
 ```
 
 2) Ask a question
@@ -105,11 +102,8 @@ On closer inspection near one side of this grandeur scene stands tall trees with
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 --isq 4 vision-plain -m HuggingFaceM4/Idefics3-8B-Llama3
+mistralrs serve vision -p 1234 --isq 4 -m HuggingFaceM4/Idefics3-8B-Llama3
 ```
 
 2) Send a request

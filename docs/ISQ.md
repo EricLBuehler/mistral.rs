@@ -19,7 +19,7 @@ Instead of specifying a quantization type like `Q4K`, you can just pass an integ
 On Metal, this uses fast AFQ quantization (for 2, 3, 4, 6, or 8 bits). On other platforms, it falls back to Q/K quantization.
 
 ```
-cargo run --release --features ... -- -i --isq 4 plain -m meta-llama/Llama-3.2-3B-Instruct
+mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
 ## ISQ quantization types
@@ -45,7 +45,7 @@ cargo run --release --features ... -- -i --isq 4 plain -m meta-llama/Llama-3.2-3
 - FP8
 
 ```
-cargo run --release --features ... -- -i --isq 4 plain -m meta-llama/Llama-3.2-3B-Instruct
+mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
 When using ISQ, it will automatically load ISQ-able weights into CPU memory before applying ISQ. The ISQ application process moves the weights to device memory. This process is implemented to avoid memory spikes from loading the model in full precision.

@@ -43,11 +43,8 @@ The winding path visible on the mountain slopes appears to be part of the Mount 
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 vision-plain -m google/gemma-3-12b-it
+mistralrs serve vision -p 1234 -m google/gemma-3-12b-it
 ```
 
 2) Send a request

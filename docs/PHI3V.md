@@ -43,11 +43,8 @@ The perspective from which this photo is taken offers an expansive view of the m
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 vision-plain -m microsoft/Phi-3.5-vision-instruct
+mistralrs serve vision -p 1234 -m microsoft/Phi-3.5-vision-instruct
 ```
 
 2) Send a request

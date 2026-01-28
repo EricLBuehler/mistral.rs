@@ -28,7 +28,7 @@ quantized_filename = "mistral-7b-instruct-v0.1.Q2_K.gguf"
 ```
 
 ```
-cargo run --release --features cuda -- -i toml -f toml_selectors/speculative_gguf.toml
+mistralrs from-config -f toml_selectors/speculative_gguf.toml
 ```
 
 ## AnyMoE
@@ -51,7 +51,7 @@ cargo run --release --features cuda -- -i toml -f toml_selectors/speculative_ggu
 - Target modules
 
 ```
-cargo run --release --features cuda -- -i toml -f toml_selectors/anymoe.toml
+mistralrs from-config -f toml_selectors/anymoe.toml
 ```
 
 ### With fine-tuned experts

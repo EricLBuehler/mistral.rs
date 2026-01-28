@@ -32,11 +32,8 @@ https://github.com/user-attachments/assets/4d11c35c-9ea2-42b8-8cab-5f7e8e2ee9ff
 
 1) Start up interactive mode with the Llama 3.2 model
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --features ... --release -- -i --isq 4 vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
+mistralrs run vision --isq 4 -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
 ```
 
 2) Say hello!
@@ -103,11 +100,8 @@ Overall, the image showcases the diverse geological and ecological features of M
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 --isq 4 vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
+mistralrs serve vision -p 1234 --isq 4 -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
 ```
 
 2) Send a request

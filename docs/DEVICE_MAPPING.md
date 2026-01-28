@@ -59,12 +59,12 @@ The format for the ordinals and number of layers is `ORD:NUM;...` where ORD is t
 
 ## Example of specifying ordinals
 ```
-cargo run --release --features cuda -- -n "0:16;1:16" -i plain -m gradientai/Llama-3-8B-Instruct-262k
+mistralrs run -n "0:16;1:16" -m gradientai/Llama-3-8B-Instruct-262k
 ```
 
 > Note: In the Python SDK, the "0:16;1:16" string is passed as the list `["0:16", "1:16"]`.
 
 ## Example of specifying the number of GPU layers
 ```
-cargo run --release --features cuda -- -n 16 -i plain -m gradientai/Llama-3-8B-Instruct-262k
+mistralrs run -n 16 -m gradientai/Llama-3-8B-Instruct-262k
 ```

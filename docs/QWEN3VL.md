@@ -31,11 +31,8 @@ Mistral.rs supports interactive mode for vision models! It is an easy way to int
 
 Start up interactive mode with the Qwen3 VL model:
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --features ... --release -- -i vision-plain -m Qwen/Qwen3-VL-4B-Instruct
+mistralrs run vision -m Qwen/Qwen3-VL-4B-Instruct
 ```
 
 ## HTTP server
@@ -47,11 +44,8 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 -m Qwen/Qwen3-VL-4B-Instruct
+mistralrs serve vision -p 1234 -m Qwen/Qwen3-VL-4B-Instruct
 ```
 
 2) Send a request

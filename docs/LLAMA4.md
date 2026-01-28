@@ -62,11 +62,8 @@ The image exudes a sense of serenity and majesty, capturing the beauty of nature
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 --isq 4 vision-plain -m meta-llama/Llama-4-Scout-17B-16E-Instruct
+mistralrs serve vision -p 1234 --isq 4 -m meta-llama/Llama-4-Scout-17B-16E-Instruct
 ```
 
 2) Send a request

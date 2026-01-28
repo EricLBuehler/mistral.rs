@@ -28,11 +28,8 @@ Mistral.rs supports interactive mode for vision models! It is an easy way to int
 
 1) Start up interactive mode with the MiniCPM-O 2.6 Model model
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --features ... --release -- -i --isq 4 vision-plain -m openbmb/MiniCPM-o-2_6
+mistralrs run vision --isq 4 -m openbmb/MiniCPM-o-2_6
 ```
 
 2) Say hello!
@@ -90,11 +87,8 @@ Overall, the image showcases the diverse geological and ecological features of M
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 --isq 4 vision-plain -m openbmb/MiniCPM-o-2_6
+mistralrs serve vision -p 1234 --isq 4 -m openbmb/MiniCPM-o-2_6
 ```
 
 2) Send a request

@@ -35,9 +35,7 @@ The default configuration file ([`matformer_configs/gemma3n.csv`](../matformer_c
 
 ```bash
 # Run with the E2.49B slice for balanced performance/efficiency
-cargo run --release --features cuda -- \
-  --port 1234 \
-  run -m google/gemma-3n-E4B-it \
+mistralrs run vision -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 ```
@@ -173,14 +171,11 @@ The overall impression is one of grandeur, tranquility, and the raw beauty of a 
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 run -m google/gemma-3n-E4B-it
+mistralrs serve vision -p 1234 -m google/gemma-3n-E4B-it
 
 # Or with MatFormer for balanced performance:
-cargo run --release --features ... -- --port 1234 run -m google/gemma-3n-E4B-it \
+mistralrs serve vision -p 1234 -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 ```

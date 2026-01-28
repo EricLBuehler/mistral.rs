@@ -53,11 +53,8 @@ If there's anything specific about this flower or its care that interests you fu
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
+mistralrs serve vision -p 1234 -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
 ```
 
 2) Send a request
