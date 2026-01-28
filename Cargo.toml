@@ -57,7 +57,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 futures = "0.3"
 clap = { version = "4.5.54", features = ["derive", "wrap_help"] }
-pyo3 = { version = "0.25.1", features = ["full", "extension-module", "either"] }
+pyo3 = { version = "0.25.1", features = ["full", "extension-module", "either", "abi3-py310"] }
 tokio = { version = "1.49.0", features = ["full", "rt-multi-thread"] }
 # All features but avif, avif increases the msrv dramatically
 image = { version = "0.25.9", default-features = false, features = [
