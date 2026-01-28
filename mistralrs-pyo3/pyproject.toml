@@ -3,7 +3,7 @@ requires = ["maturin==1.7"]
 build-backend = "maturin"
 
 [project]
-name = "mistralrs-cuda"
+name = "mistralrs"
 version = "0.7.0"
 requires-python = ">=3.10"
 classifiers = [
