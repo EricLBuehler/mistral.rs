@@ -207,6 +207,39 @@ print(res.choices[0].message.content)
 
 [Python SDK](https://ericlbuehler.github.io/mistral.rs/PYTHON_SDK.html) | [Installation](https://ericlbuehler.github.io/mistral.rs/PYTHON_INSTALLATION.html) | [Examples](examples/python) | [Cookbook](examples/python/cookbook.ipynb)
 
+## Rust SDK
+
+```bash
+cargo add mistralrs
+```
+
+```rust
+use anyhow::Result;
+use mistralrs::{IsqType, TextMessageRole, TextMessages, VisionModelBuilder};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model = VisionModelBuilder::new("google/gemma-3-4b-it")
+        .with_isq(IsqType::Q4K)
+        .with_logging()
+        .build()
+        .await?;
+
+    let messages = TextMessages::new().add_message(
+        TextMessageRole::User,
+        "Hello!",
+    );
+
+    let response = model.send_chat_request(messages).await?;
+
+    println!("{:?}", response.choices[0].message.content);
+
+    Ok(())
+}
+```
+
+[Rust SDK](https://crates.io/crates/mistralrs) | [Examples](mistralrs/examples)
+
 ## Docker
 
 For quick containerized deployment:
