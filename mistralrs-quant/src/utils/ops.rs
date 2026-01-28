@@ -1607,8 +1607,8 @@ pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -
     let n_elements = gate.elem_count();
     let dtype = gate.dtype();
 
-    let gate_storage = gate.storage_and_layout().0;
-    let up_storage = up.storage_and_layout().0;
+    let (gate_storage, gate_layout) = gate.storage_and_layout();
+    let (up_storage, up_layout) = up.storage_and_layout();
 
     let gate_cuda = match &*gate_storage {
         candle_core::Storage::Cuda(s) => s,
@@ -1627,8 +1627,8 @@ pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -
             let gate_slice = gate_cuda.as_cuda_slice::<f16>()?;
             let up_slice = up_cuda.as_cuda_slice::<f16>()?;
 
-            let (gate_ptr, _g_guard) = slice_ptr(gate_slice, 0);
-            let (up_ptr, _u_guard) = slice_ptr(up_slice, 0);
+            let (gate_ptr, _g_guard) = slice_ptr(gate_slice, gate_layout.start_offset());
+            let (up_ptr, _u_guard) = slice_ptr(up_slice, up_layout.start_offset());
             let (out_ptr, _o_guard) = slice_ptr(&output, 0);
 
             unsafe {
@@ -1655,8 +1655,8 @@ pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -
             let gate_slice = gate_cuda.as_cuda_slice::<bf16>()?;
             let up_slice = up_cuda.as_cuda_slice::<bf16>()?;
 
-            let (gate_ptr, _g_guard) = slice_ptr(gate_slice, 0);
-            let (up_ptr, _u_guard) = slice_ptr(up_slice, 0);
+            let (gate_ptr, _g_guard) = slice_ptr(gate_slice, gate_layout.start_offset());
+            let (up_ptr, _u_guard) = slice_ptr(up_slice, up_layout.start_offset());
             let (out_ptr, _o_guard) = slice_ptr(&output, 0);
 
             unsafe {
@@ -1683,8 +1683,8 @@ pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -
             let gate_slice = gate_cuda.as_cuda_slice::<f32>()?;
             let up_slice = up_cuda.as_cuda_slice::<f32>()?;
 
-            let (gate_ptr, _g_guard) = slice_ptr(gate_slice, 0);
-            let (up_ptr, _u_guard) = slice_ptr(up_slice, 0);
+            let (gate_ptr, _g_guard) = slice_ptr(gate_slice, gate_layout.start_offset());
+            let (up_ptr, _u_guard) = slice_ptr(up_slice, up_layout.start_offset());
             let (out_ptr, _o_guard) = slice_ptr(&output, 0);
 
             unsafe {
@@ -1750,7 +1750,7 @@ pub fn gptoss_swiglu_interleaved(
     let dtype = gate_up.dtype();
     let n_output_elements = n * intermediate_size;
 
-    let gate_up_storage = gate_up.storage_and_layout().0;
+    let (gate_up_storage, gate_up_layout) = gate_up.storage_and_layout();
     let gate_up_cuda = match &*gate_up_storage {
         candle_core::Storage::Cuda(s) => s,
         _ => candle_core::bail!("Expected CUDA storage for gate_up"),
@@ -1763,7 +1763,7 @@ pub fn gptoss_swiglu_interleaved(
             let output = device.alloc_zeros::<f16>(n_output_elements)?;
             let gate_up_slice = gate_up_cuda.as_cuda_slice::<f16>()?;
 
-            let (gate_up_ptr, _gu_guard) = slice_ptr(gate_up_slice, 0);
+            let (gate_up_ptr, _gu_guard) = slice_ptr(gate_up_slice, gate_up_layout.start_offset());
             let (out_ptr, _o_guard) = slice_ptr(&output, 0);
 
             unsafe {
@@ -1789,7 +1789,7 @@ pub fn gptoss_swiglu_interleaved(
             let output = device.alloc_zeros::<bf16>(n_output_elements)?;
             let gate_up_slice = gate_up_cuda.as_cuda_slice::<bf16>()?;
 
-            let (gate_up_ptr, _gu_guard) = slice_ptr(gate_up_slice, 0);
+            let (gate_up_ptr, _gu_guard) = slice_ptr(gate_up_slice, gate_up_layout.start_offset());
             let (out_ptr, _o_guard) = slice_ptr(&output, 0);
 
             unsafe {
@@ -1815,7 +1815,7 @@ pub fn gptoss_swiglu_interleaved(
             let output = device.alloc_zeros::<f32>(n_output_elements)?;
             let gate_up_slice = gate_up_cuda.as_cuda_slice::<f32>()?;
 
-            let (gate_up_ptr, _gu_guard) = slice_ptr(gate_up_slice, 0);
+            let (gate_up_ptr, _gu_guard) = slice_ptr(gate_up_slice, gate_up_layout.start_offset());
             let (out_ptr, _o_guard) = slice_ptr(&output, 0);
 
             unsafe {
@@ -1893,8 +1893,8 @@ pub fn softmax_with_sinks(
     let dtype = logits.dtype();
     let n_elements = logits.elem_count();
 
-    let logits_storage = logits.storage_and_layout().0;
-    let sinks_storage = sinks.storage_and_layout().0;
+    let (logits_storage, logits_layout) = logits.storage_and_layout();
+    let (sinks_storage, sinks_layout) = sinks.storage_and_layout();
 
     let logits_cuda = match &*logits_storage {
         candle_core::Storage::Cuda(s) => s,
@@ -1921,18 +1921,18 @@ pub fn softmax_with_sinks(
             let logits_slice = logits_cuda.as_cuda_slice::<f16>()?;
             let sinks_slice = sinks_cuda.as_cuda_slice::<f16>()?;
 
-            let (logits_ptr, _l_guard) = slice_ptr(logits_slice, 0);
-            let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, 0);
+            let (logits_ptr, _l_guard) = slice_ptr(logits_slice, logits_layout.start_offset());
+            let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, sinks_layout.start_offset());
             let (out_ptr, _o_guard) = slice_ptr(&output, 0);
 
             let mask_ptr = if let Some(ref m) = mask {
-                let m_storage = m.storage_and_layout().0;
+                let (m_storage, m_layout) = m.storage_and_layout();
                 let m_cuda = match &*m_storage {
                     candle_core::Storage::Cuda(s) => s,
                     _ => candle_core::bail!("Expected CUDA storage for mask"),
                 };
                 let m_slice = m_cuda.as_cuda_slice::<f16>()?;
-                let (ptr, _guard) = slice_ptr(m_slice, 0);
+                let (ptr, _guard) = slice_ptr(m_slice, m_layout.start_offset());
                 ptr as *const c_void
             } else {
                 std::ptr::null()
@@ -1966,18 +1966,18 @@ pub fn softmax_with_sinks(
             let logits_slice = logits_cuda.as_cuda_slice::<bf16>()?;
             let sinks_slice = sinks_cuda.as_cuda_slice::<bf16>()?;
 
-            let (logits_ptr, _l_guard) = slice_ptr(logits_slice, 0);
-            let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, 0);
+            let (logits_ptr, _l_guard) = slice_ptr(logits_slice, logits_layout.start_offset());
+            let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, sinks_layout.start_offset());
             let (out_ptr, _o_guard) = slice_ptr(&output, 0);
 
             let mask_ptr = if let Some(ref m) = mask {
-                let m_storage = m.storage_and_layout().0;
+                let (m_storage, m_layout) = m.storage_and_layout();
                 let m_cuda = match &*m_storage {
                     candle_core::Storage::Cuda(s) => s,
                     _ => candle_core::bail!("Expected CUDA storage for mask"),
                 };
                 let m_slice = m_cuda.as_cuda_slice::<bf16>()?;
-                let (ptr, _guard) = slice_ptr(m_slice, 0);
+                let (ptr, _guard) = slice_ptr(m_slice, m_layout.start_offset());
                 ptr as *const c_void
             } else {
                 std::ptr::null()
@@ -2011,18 +2011,18 @@ pub fn softmax_with_sinks(
             let logits_slice = logits_cuda.as_cuda_slice::<f32>()?;
             let sinks_slice = sinks_cuda.as_cuda_slice::<f32>()?;
 
-            let (logits_ptr, _l_guard) = slice_ptr(logits_slice, 0);
-            let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, 0);
+            let (logits_ptr, _l_guard) = slice_ptr(logits_slice, logits_layout.start_offset());
+            let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, sinks_layout.start_offset());
             let (out_ptr, _o_guard) = slice_ptr(&output, 0);
 
             let mask_ptr = if let Some(ref m) = mask {
-                let m_storage = m.storage_and_layout().0;
+                let (m_storage, m_layout) = m.storage_and_layout();
                 let m_cuda = match &*m_storage {
                     candle_core::Storage::Cuda(s) => s,
                     _ => candle_core::bail!("Expected CUDA storage for mask"),
                 };
                 let m_slice = m_cuda.as_cuda_slice::<f32>()?;
-                let (ptr, _guard) = slice_ptr(m_slice, 0);
+                let (ptr, _guard) = slice_ptr(m_slice, m_layout.start_offset());
                 ptr as *const c_void
             } else {
                 std::ptr::null()
@@ -2186,8 +2186,8 @@ fn fused_glu_cuda(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resu
     let n_elements = a.elem_count();
     let dtype = a.dtype();
 
-    let a_storage = a.storage_and_layout().0;
-    let b_storage = b.storage_and_layout().0;
+    let (a_storage, a_layout) = a.storage_and_layout();
+    let (b_storage, b_layout) = b.storage_and_layout();
 
     let a_cuda = match &*a_storage {
         candle_core::Storage::Cuda(s) => s,
@@ -2206,8 +2206,8 @@ fn fused_glu_cuda(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resu
             let a_slice = a_cuda.as_cuda_slice::<f16>()?;
             let b_slice = b_cuda.as_cuda_slice::<f16>()?;
 
-            let (a_ptr, _a_guard) = slice_ptr(a_slice, 0);
-            let (b_ptr, _b_guard) = slice_ptr(b_slice, 0);
+            let (a_ptr, _a_guard) = slice_ptr(a_slice, a_layout.start_offset());
+            let (b_ptr, _b_guard) = slice_ptr(b_slice, b_layout.start_offset());
             let (out_ptr, _o_guard) = slice_ptr(&output, 0);
 
             unsafe {
@@ -2233,8 +2233,8 @@ fn fused_glu_cuda(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resu
             let a_slice = a_cuda.as_cuda_slice::<bf16>()?;
             let b_slice = b_cuda.as_cuda_slice::<bf16>()?;
 
-            let (a_ptr, _a_guard) = slice_ptr(a_slice, 0);
-            let (b_ptr, _b_guard) = slice_ptr(b_slice, 0);
+            let (a_ptr, _a_guard) = slice_ptr(a_slice, a_layout.start_offset());
+            let (b_ptr, _b_guard) = slice_ptr(b_slice, b_layout.start_offset());
             let (out_ptr, _o_guard) = slice_ptr(&output, 0);
 
             unsafe {
@@ -2260,8 +2260,8 @@ fn fused_glu_cuda(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resu
             let a_slice = a_cuda.as_cuda_slice::<f32>()?;
             let b_slice = b_cuda.as_cuda_slice::<f32>()?;
 
-            let (a_ptr, _a_guard) = slice_ptr(a_slice, 0);
-            let (b_ptr, _b_guard) = slice_ptr(b_slice, 0);
+            let (a_ptr, _a_guard) = slice_ptr(a_slice, a_layout.start_offset());
+            let (b_ptr, _b_guard) = slice_ptr(b_slice, b_layout.start_offset());
             let (out_ptr, _o_guard) = slice_ptr(&output, 0);
 
             unsafe {
@@ -2538,6 +2538,43 @@ mod tests {
             Tensor::from_vec(vec![-1i64, 2, 3, -1, 1, -1, -1, 4, 0, 7], (5, 2), &device).unwrap();
         let c = a.bitwise_and(&b).unwrap().to_vec2::<i64>().unwrap();
         assert_eq!(c, [[1, 2], [3, -1], [1, -1], [-1, 4], [0, 7]]);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_glu_with_offsets_cuda() {
+        use crate::utils::ops::{fused_glu, GluActivationType};
+        use candle_core::{DType, Device, Tensor};
+        let device = Device::new_cuda(0).unwrap();
+
+        // Create larger tensors and take slices to test offsets
+        let a_full = Tensor::arange(0.0f32, 20.0, &device)
+            .unwrap()
+            .to_dtype(DType::F16)
+            .unwrap();
+        let b_full = Tensor::arange(0.0f32, 20.0, &device)
+            .unwrap()
+            .to_dtype(DType::F16)
+            .unwrap();
+
+        // Slice starting from index 10, length 4
+        let a = a_full.narrow(0, 10, 4).unwrap();
+        let b = b_full.narrow(0, 10, 4).unwrap();
+
+        // fused_glu(a, b) = activation(a) * b
+        // Here we use Silu (default)
+        let res = fused_glu(&a, &b, GluActivationType::Silu)
+            .unwrap()
+            .to_vec1::<half::f16>()
+            .unwrap();
+
+        // Expected values: silu(x) * x for x in [10, 11, 12, 13]
+        for (i, &val) in res.iter().enumerate() {
+            let x = (10 + i) as f32;
+            let silu_x = x / (1.0 + (-x).exp());
+            let expected = silu_x * x;
+            assert!((val.to_f32() - expected).abs() < 1e-1);
+        }
     }
 
     #[test]

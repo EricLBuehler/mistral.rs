@@ -69,28 +69,28 @@ pub fn copy_blocks(
 
         let (key_ptr, value_ptr) = match (&key_storage.slice, &value_storage.slice) {
             (CudaStorageSlice::BF16(slice_key), CudaStorageSlice::BF16(slice_value)) => {
-                let (ptr_key, _key_guard) = slice_ptr(slice_key, 0);
-                let (ptr_value, _value_guard) = slice_ptr(slice_value, 0);
+                let (ptr_key, _key_guard) = slice_ptr(slice_key, key_offset as usize);
+                let (ptr_value, _value_guard) = slice_ptr(slice_value, value_offset as usize);
                 dtype = DType::BF16;
                 (ptr_key, ptr_value)
             }
             (CudaStorageSlice::F16(slice_key), CudaStorageSlice::F16(slice_value)) => {
-                let (ptr_key, _key_guard) = slice_ptr(slice_key, 0);
-                let (ptr_value, _value_guard) = slice_ptr(slice_value, 0);
+                let (ptr_key, _key_guard) = slice_ptr(slice_key, key_offset as usize);
+                let (ptr_value, _value_guard) = slice_ptr(slice_value, value_offset as usize);
                 dtype = DType::F16;
                 (ptr_key, ptr_value)
             }
             (CudaStorageSlice::F32(slice_key), CudaStorageSlice::F32(slice_value)) => {
-                let (ptr_key, _key_guard) = slice_ptr(slice_key, 0);
-                let (ptr_value, _value_guard) = slice_ptr(slice_value, 0);
+                let (ptr_key, _key_guard) = slice_ptr(slice_key, key_offset as usize);
+                let (ptr_value, _value_guard) = slice_ptr(slice_value, value_offset as usize);
                 (ptr_key, ptr_value)
             }
             _ => {
                 candle_core::bail!("only f32, f16 and bf16 input data type supported!",);
             }
         };
-        key_cache_ptrs.push(key_ptr + key_offset);
-        value_cache_ptrs.push(value_ptr + value_offset);
+        key_cache_ptrs.push(key_ptr);
+        value_cache_ptrs.push(value_ptr);
     }
 
     let mut block_mapping_vec: Vec<i64> = Vec::new();
