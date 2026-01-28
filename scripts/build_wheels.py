@@ -263,7 +263,9 @@ def build_wheel(
     modify_pyproject_name(package_config.name)
 
     try:
-        if plat.os == OS.LINUX:
+        # Use Docker manylinux ONLY for CPU-only builds on Linux (no features)
+        # CUDA, MKL, and other accelerator builds use native maturin
+        if plat.os == OS.LINUX and not features:
             _build_with_docker(features, package_output, plat)
         else:
             _build_with_maturin(features, package_output, plat)
