@@ -101,5 +101,3 @@ To use this feature, you should add a `preload_adapters` key to your ordering fi
 ```
 
 This allows mistral.rs to preload the adapter and enable runtime activation.
-
-We also provide a script to add this key to your existing order file: [`load_add_preload_adapters.py`](../scripts/lora_add_preload_adapters.py).
