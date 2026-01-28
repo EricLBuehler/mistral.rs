@@ -10,7 +10,7 @@
 </div>
 
 <h3 align="center">
-Blazingly fast LLM inference.
+Fast, flexible LLM inference.
 </h3>
 
 <p align="center">
