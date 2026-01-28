@@ -8,7 +8,7 @@
 
         <!-- Custom HTML head -->
 
-        <meta name="description" content="Blazingly fast LLM inference engine">
+        <meta name="description" content="Fast, flexible LLM inference.">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-12cbfe5c.js";
+            window.path_to_searchindex_js = "searchindex-70d711be.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-165a76c6.js"></script>
@@ -189,15 +189,45 @@
 <tr><th>Hardware</th><th>Install Command</th></tr>
 </thead>
 <tbody>
+<tr><td><strong>Recommended (auto-optimized)</strong></td><td><code>pip install mistralrs</code></td></tr>
 <tr><td>NVIDIA GPUs (CUDA)</td><td><code>pip install mistralrs-cuda</code></td></tr>
 <tr><td>Apple Silicon (Metal)</td><td><code>pip install mistralrs-metal</code></td></tr>
 <tr><td>Apple Accelerate</td><td><code>pip install mistralrs-accelerate</code></td></tr>
 <tr><td>Intel CPUs (MKL)</td><td><code>pip install mistralrs-mkl</code></td></tr>
-<tr><td>CPU only</td><td><code>pip install mistralrs</code></td></tr>
 </tbody>
 </table>
 </div>
-<p>All packages install the <code>mistralrs</code> Python module. The package suffix only controls which accelerator features are enabled.</p>
+<h3 id="platform-specific-optimizations"><a class="header" href="#platform-specific-optimizations">Platform-Specific Optimizations</a></h3>
+<p>The <code>mistralrs</code> base package includes platform-specific optimizations:</p>
+<ul>
+<li><strong>macOS Apple Silicon</strong>: Metal GPU support built-in</li>
+<li><strong>Linux/Windows x86_64</strong>: Intel MKL optimizations built-in</li>
+<li><strong>Linux aarch64</strong>: CPU-only (use <code>mistralrs-cuda</code> for GPU support)</li>
+</ul>
+<p>All packages install the <code>mistralrs</code> Python module. The package suffix controls which accelerator features are enabled.</p>
+<h3 id="supported-platforms"><a class="header" href="#supported-platforms">Supported Platforms</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Package</th><th style="text-align: center">Linux x86_64</th><th style="text-align: center">Linux aarch64</th><th style="text-align: center">Windows x86_64</th><th style="text-align: center">macOS aarch64</th></tr>
+</thead>
+<tbody>
+<tr><td>mistralrs</td><td style="text-align: center">MKL</td><td style="text-align: center">CPU</td><td style="text-align: center">MKL</td><td style="text-align: center">Metal</td></tr>
+<tr><td>mistralrs-cuda</td><td style="text-align: center">CUDA</td><td style="text-align: center">CUDA</td><td style="text-align: center">CUDA</td><td style="text-align: center">-</td></tr>
+<tr><td>mistralrs-metal</td><td style="text-align: center">-</td><td style="text-align: center">-</td><td style="text-align: center">-</td><td style="text-align: center">Metal</td></tr>
+<tr><td>mistralrs-accelerate</td><td style="text-align: center">-</td><td style="text-align: center">-</td><td style="text-align: center">-</td><td style="text-align: center">Accelerate</td></tr>
+<tr><td>mistralrs-mkl</td><td style="text-align: center">MKL</td><td style="text-align: center">-</td><td style="text-align: center">MKL</td><td style="text-align: center">-</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Python version</strong>: 3.10+ (wheels use abi3 for forward compatibility)</p>
+<h3 id="windows-requirements"><a class="header" href="#windows-requirements">Windows Requirements</a></h3>
+<p><strong>It is recommended to use WSL2 on Windows machines.</strong></p>
+<p>On Windows, additional runtime dependencies may be required:</p>
+<ul>
+<li><strong>CUDA packages</strong>: Install the <a href="https://developer.nvidia.com/cuda-downloads">NVIDIA CUDA Toolkit</a> and ensure the <code>bin</code> directory is in your PATH</li>
+<li><strong>MKL packages</strong>: Install the <a href="https://www.intel.com/content/www/us/en/developer/tools/oneapi/onemkl.html">Intel oneAPI Math Kernel Library</a> runtime</li>
+</ul>
 <pre><code class="language-bash"># Example: Install with CUDA support
 pip install mistralrs-cuda -v
 </code></pre>
