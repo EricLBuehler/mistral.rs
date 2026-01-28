@@ -33,6 +33,15 @@ All packages install the `mistralrs` Python module. The package suffix controls 
 
 **Python version**: 3.10+ (wheels use abi3 for forward compatibility)
 
+### Windows Requirements
+
+It is recommended to use WSL2 on Windows machines.
+
+On Windows, additional runtime dependencies may be required:
+
+- **CUDA packages**: Install the [NVIDIA CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) and ensure the `bin` directory is in your PATH
+- **MKL packages**: Install the [Intel oneAPI Math Kernel Library](https://www.intel.com/content/www/us/en/developer/tools/oneapi/onemkl.html) runtime
+
 ```bash
 # Example: Install with CUDA support
 pip install mistralrs-cuda -v
