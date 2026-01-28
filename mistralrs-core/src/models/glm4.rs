@@ -186,10 +186,10 @@ impl Attention {
         )?;
 
         assert!(cfg.num_attention_heads >= comm.world_size());
-        assert!(cfg.num_attention_heads % comm.world_size() == 0);
+        assert!(cfg.num_attention_heads.is_multiple_of(comm.world_size()));
 
         assert!(cfg.num_key_value_heads >= comm.world_size());
-        assert!(cfg.num_key_value_heads % comm.world_size() == 0);
+        assert!(cfg.num_key_value_heads.is_multiple_of(comm.world_size()));
 
         Ok(Self {
             q_proj,

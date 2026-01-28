@@ -709,29 +709,30 @@ impl DecoderLayer {
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
         // Layer 0 uses dense MLP (first_k_dense_replace=1 by default), other layers use MoE
-        let moe_or_mlp =
-            if layer_idx >= cfg.first_k_dense_replace && layer_idx % cfg.moe_layer_freq == 0 {
-                MoeOrMlp::Moe(Box::new(Moe::new(
-                    cfg,
-                    vb.pp("mlp"),
-                    mapper,
-                    layer_idx,
-                    loading_isq,
-                    cfg.n_shared_experts,
-                    cfg.n_routed_experts,
-                    comm,
-                    real_device,
-                )?))
-            } else {
-                MoeOrMlp::Mlp(Mlp::new(
-                    mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
-                    cfg.hidden_size,
-                    cfg.intermediate_size,
-                    &cfg.quantization_config,
-                    cfg.hidden_act,
-                    comm,
-                )?)
-            };
+        let moe_or_mlp = if layer_idx >= cfg.first_k_dense_replace
+            && layer_idx.is_multiple_of(cfg.moe_layer_freq)
+        {
+            MoeOrMlp::Moe(Box::new(Moe::new(
+                cfg,
+                vb.pp("mlp"),
+                mapper,
+                layer_idx,
+                loading_isq,
+                cfg.n_shared_experts,
+                cfg.n_routed_experts,
+                comm,
+                real_device,
+            )?))
+        } else {
+            MoeOrMlp::Mlp(Mlp::new(
+                mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+                cfg.hidden_size,
+                cfg.intermediate_size,
+                &cfg.quantization_config,
+                cfg.hidden_act,
+                comm,
+            )?)
+        };
 
         Ok(Self {
             input_layernorm,

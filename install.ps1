@@ -23,6 +23,9 @@ function Show-Banner {
     Write-Host ""
 }
 
+# Minimum required Rust version (from Cargo.toml rust-version)
+$RequiredRustVersion = "1.88"
+
 # Check if Rust is installed
 function Test-Rust {
     try {
@@ -31,6 +34,37 @@ function Test-Rust {
     } catch {
         return $false
     }
+}
+
+# Get installed Rust version (major.minor)
+function Get-RustVersion {
+    try {
+        $output = & rustc --version 2>$null
+        if ($output -match 'rustc (\d+\.\d+)') {
+            return $matches[1]
+        }
+    } catch {}
+    return $null
+}
+
+# Compare two version strings (returns $true if $v1 >= $v2)
+function Test-VersionGte {
+    param([string]$v1, [string]$v2)
+
+    $v1Parts = $v1 -split '\.'
+    $v2Parts = $v2 -split '\.'
+
+    $v1Major = [int]$v1Parts[0]
+    $v1Minor = [int]$v1Parts[1]
+    $v2Major = [int]$v2Parts[0]
+    $v2Minor = [int]$v2Parts[1]
+
+    if ($v1Major -gt $v2Major) {
+        return $true
+    } elseif ($v1Major -eq $v2Major -and $v1Minor -ge $v2Minor) {
+        return $true
+    }
+    return $false
 }
 
 # Install Rust via rustup
@@ -48,6 +82,17 @@ function Install-Rust {
         Write-Success "Rust installed successfully"
     } catch {
         Write-Err "Failed to install Rust: $_"
+    }
+}
+
+# Update Rust to latest version
+function Update-Rust {
+    Write-Info "Updating Rust to latest version..."
+    try {
+        & rustup update stable
+        Write-Success "Rust updated successfully"
+    } catch {
+        Write-Err "Failed to update Rust: $_"
     }
 }
 
@@ -178,11 +223,24 @@ function Main {
 
     # Check for Rust
     if (Test-Rust) {
-        try {
-            $rustVersion = & rustc --version 2>$null
-            Write-Info "Rust is installed: $rustVersion"
-        } catch {
-            Write-Info "Rust is installed"
+        $rustVersionFull = & rustc --version 2>$null
+        $rustVersion = Get-RustVersion
+        Write-Info "Rust is installed: $rustVersionFull"
+
+        # Check if version meets minimum requirement
+        if ($rustVersion -and -not (Test-VersionGte $rustVersion $RequiredRustVersion)) {
+            Write-Warn "Rust $rustVersion is below the required version $RequiredRustVersion"
+            Write-Host ""
+            $response = Read-Host "Would you like to update Rust now? [Y/n]"
+            if ($response -match "^[Nn]") {
+                Write-Err "Rust $RequiredRustVersion or newer is required to install mistral.rs"
+            }
+            Update-Rust
+            # Re-check version after update
+            $rustVersion = Get-RustVersion
+            if (-not (Test-VersionGte $rustVersion $RequiredRustVersion)) {
+                Write-Err "Failed to update Rust to required version $RequiredRustVersion"
+            }
         }
     } else {
         Write-Warn "Rust is not installed"

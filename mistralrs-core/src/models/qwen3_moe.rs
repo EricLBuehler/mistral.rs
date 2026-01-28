@@ -491,7 +491,7 @@ impl DecoderLayer {
         )?;
 
         let mlp = if !cfg.mlp_only_layers.contains(&layer_idx)
-            && (cfg.num_experts > 0 && (layer_idx + 1) % cfg.decoder_sparse_step == 0)
+            && (cfg.num_experts > 0 && (layer_idx + 1).is_multiple_of(cfg.decoder_sparse_step))
         {
             let vb = mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq);
             let layer_device = mapper

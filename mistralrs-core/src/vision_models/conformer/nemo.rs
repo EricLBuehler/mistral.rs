@@ -18,7 +18,7 @@ pub struct NemoConvSubsampling {
 
 impl NemoConvSubsampling {
     pub fn new(cfg: &NemoConvConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        if cfg.subsampling_factor % 2 != 0 {
+        if !cfg.subsampling_factor.is_multiple_of(2) {
             candle_core::bail!("Sampling factor should be a multiple of 2!");
         }
 

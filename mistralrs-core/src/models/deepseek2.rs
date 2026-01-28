@@ -676,7 +676,7 @@ impl DecoderLayer {
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
         let moe_or_mlp = if let Some(n_routed_experts) = cfg.n_routed_experts.filter(|_| {
-            layer_idx >= cfg.first_k_dense_replace && layer_idx % cfg.moe_layer_freq == 0
+            layer_idx >= cfg.first_k_dense_replace && layer_idx.is_multiple_of(cfg.moe_layer_freq)
         }) {
             MoeOrMlp::Moe(Box::new(Moe::new(
                 cfg,

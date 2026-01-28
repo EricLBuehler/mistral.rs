@@ -219,14 +219,14 @@ pub fn vector_fp8_linear_b(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     // Check that dimensions are divisible by VECTOR_SIZE
-    if in_dim % VECTOR_SIZE != 0 {
+    if !in_dim.is_multiple_of(VECTOR_SIZE) {
         candle_core::bail!(
             "Input dimension {} must be divisible by {} for vector FP8 quantization",
             in_dim,
             VECTOR_SIZE
         );
     }
-    if out_dim % VECTOR_SIZE != 0 {
+    if !out_dim.is_multiple_of(VECTOR_SIZE) {
         candle_core::bail!(
             "Output dimension {} must be divisible by {} for vector FP8 quantization",
             out_dim,

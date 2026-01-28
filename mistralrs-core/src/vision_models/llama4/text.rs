@@ -100,7 +100,7 @@ impl CausalSelfAttention {
             comm,
             mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
         )?;
-        let use_rope = (layer_idx + 1) % 4 != 0;
+        let use_rope = !(layer_idx + 1).is_multiple_of(4);
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let norm = if cfg.use_qk_norm && use_rope {
             let vb = mapper.set_device(layer_idx, vb, false);
@@ -417,7 +417,7 @@ impl Block {
         comm: &Arc<mistralrs_quant::Comm>,
         real_device: Device,
     ) -> Result<Self> {
-        let use_chunked_attention = (layer_idx + 1) % 4 != 0;
+        let use_chunked_attention = !(layer_idx + 1).is_multiple_of(4);
         let attn = CausalSelfAttention::new(
             vb.pp("self_attn"),
             cfg,

@@ -341,7 +341,7 @@ impl Llama4ImageProcessor {
 
         let sqrt = (dividend as f64).sqrt() as u32;
         for i in 1..=sqrt {
-            if dividend % i == 0 {
+            if dividend.is_multiple_of(i) {
                 factors_set.insert(i);
                 factors_set.insert(dividend / i);
             }

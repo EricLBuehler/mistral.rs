@@ -323,7 +323,7 @@ fn cpu_fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
 pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
     // Check that tensor size is divisible by 128
     let num_elements = input.shape().elem_count();
-    if num_elements % VECTOR_SIZE != 0 {
+    if !num_elements.is_multiple_of(VECTOR_SIZE) {
         candle_core::bail!(
             "Tensor size {} must be divisible by {} for vector FP8 quantization",
             num_elements,
