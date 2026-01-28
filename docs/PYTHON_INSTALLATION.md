@@ -35,7 +35,7 @@ All packages install the `mistralrs` Python module. The package suffix controls 
 
 ### Windows Requirements
 
-It is recommended to use WSL2 on Windows machines.
+**It is recommended to use WSL2 on Windows machines.**
 
 On Windows, additional runtime dependencies may be required:
 
