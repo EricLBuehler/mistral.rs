@@ -4259,7 +4259,8 @@ impl VisionModelLoader for VLlama4Loader {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        let cfg: crate::vision_models::llama4::Llama4Config = serde_json::from_str(config)?;
+        let mut cfg: crate::vision_models::llama4::Llama4Config = serde_json::from_str(config)?;
+        cfg.propagate_quantization_config();
         Ok(Box::new(Llama4Model::new(
             &cfg,
             vb,
@@ -4272,7 +4273,8 @@ impl VisionModelLoader for VLlama4Loader {
         false
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
-        let cfg: crate::vision_models::llama4::Llama4Config = serde_json::from_str(config)?;
+        let mut cfg: crate::vision_models::llama4::Llama4Config = serde_json::from_str(config)?;
+        cfg.propagate_quantization_config();
         Ok(Box::new(cfg))
     }
     fn get_processor(
