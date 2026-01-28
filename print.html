@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-971f90c6.js";
+            window.path_to_searchindex_js = "searchindex-12cbfe5c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-165a76c6.js"></script>
@@ -1863,6 +1863,13 @@ in_situ_quant = "q4k"
 <li>
 <p>Set the active developer directory:</p>
 <pre><code class="language-bash">sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+</code></pre>
+</li>
+</ol>
+<p><strong>error: cannot execute tool ‘metal’ due to missing Metal toolchain</strong></p>
+<ol>
+<li>Install Metal Toolchain:
+<pre><code class="language-bash">xcodebuild -downloadComponent MetalToolchain
 </code></pre>
 </li>
 </ol>
