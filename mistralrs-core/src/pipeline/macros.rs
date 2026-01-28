@@ -49,9 +49,20 @@ macro_rules! get_paths {
             revision.clone(),
         ));
         let model_id = std::path::Path::new(&$this.model_id);
+        let dir_list = $crate::api_dir_list!(api, model_id, false).collect::<Vec<_>>();
         let tokenizer_filename = if let Some(ref p) = $this.tokenizer_json {
             info!("Using tokenizer.json at `{p}`");
             PathBuf::from_str(p)?
+        } else if dir_list.contains(&"tokenizer.json".to_string()) {
+            info!("Loading `tokenizer.json` at `{}`", $this.model_id);
+            $crate::api_get_file!(api, "tokenizer.json", model_id)
+        } else if dir_list.contains(&"tiktoken.model".to_string()) {
+            info!("Loading `tiktoken.model` (tiktoken) at `{}`", $this.model_id);
+            // Also download tokenizer_config.json for special tokens if available
+            if dir_list.contains(&"tokenizer_config.json".to_string()) {
+                let _ = $crate::api_get_file!(api, "tokenizer_config.json", model_id);
+            }
+            $crate::api_get_file!(api, "tiktoken.model", model_id)
         } else {
             info!("Loading `tokenizer.json` at `{}`", $this.model_id);
             $crate::api_get_file!(api, "tokenizer.json", model_id)
@@ -75,7 +86,6 @@ macro_rules! get_paths {
             revision.clone(),
             $this.xlora_order.as_ref(),
         )?;
-        let dir_list = $crate::api_dir_list!(api, model_id, false).collect::<Vec<_>>();
 
         let gen_conf = if dir_list.contains(&"generation_config.json".to_string()) {
             info!("Loading `generation_config.json` at `{}`", $this.model_id);

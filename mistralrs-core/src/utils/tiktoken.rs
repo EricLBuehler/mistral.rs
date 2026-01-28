@@ -16,7 +16,6 @@ use tokenizers::{
     tokenizer::{normalizer::SplitDelimiterBehavior, Tokenizer},
 };
 
-#[allow(dead_code)]
 pub fn convert_tiktoken_to_tokenizers<P: AsRef<Path>>(
     tokenizer_model_path: P,
 ) -> Result<Tokenizer> {
