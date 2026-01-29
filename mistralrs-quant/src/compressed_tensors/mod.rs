@@ -7,7 +7,7 @@ use crate::{
 };
 
 #[cfg(feature = "cuda")]
-use candle_core::{DType, Tensor};
+use candle_core::{DType, Device, Tensor};
 #[cfg(feature = "cuda")]
 use crate::GptqLayer;
 
@@ -103,10 +103,22 @@ pub fn compressed_tensors_linear(
         // Within each INT32, both formats pack consecutive input feature values
         // for a single output feature, so a simple transpose preserves the
         // internal bit layout.
-        let qweight = weight_packed.t()?.contiguous()?;
+        //
+        // We do the transpose on CPU to avoid potential CUDA kernel issues with
+        // I32 tensors, then move back to CUDA.
+        let target_device = weight_packed.device().clone();
+        let qweight = weight_packed
+            .to_device(&Device::Cpu)?
+            .t()?
+            .contiguous()?
+            .to_device(&target_device)?;
 
         // scales: transpose from (out, in/group_size) to (in/group_size, out)
-        let scales = weight_scale.t()?.contiguous()?;
+        let scales = weight_scale
+            .to_device(&Device::Cpu)?
+            .t()?
+            .contiguous()?
+            .to_device(&target_device)?;
 
         // Create constant qzeros for symmetric quantization.
         // For unsigned 4-bit with symmetric quantization, zero_point = 8.
@@ -122,16 +134,20 @@ pub fn compressed_tensors_linear(
         };
         let qzeros_numel = n_groups * (out_dim / pack_factor);
         let qzeros_data: Vec<i32> = vec![packed_zp_value; qzeros_numel];
+        // Create on CPU first, then move to CUDA to avoid kernel issues
         let qzeros = Tensor::from_vec(
             qzeros_data,
             (n_groups, out_dim / pack_factor),
-            qweight.device(),
-        )?;
+            &Device::Cpu,
+        )?
+        .to_device(&target_device)?;
 
         // Create sequential g_idx: g_idx[i] = i / group_size
         // This represents simple contiguous grouping (no reordering).
         let g_idx_data: Vec<i32> = (0..in_dim).map(|i| (i / group_size) as i32).collect();
-        let g_idx = Tensor::from_vec(g_idx_data, (in_dim,), qweight.device())?;
+        // Create on CPU first, then move to CUDA to avoid kernel issues
+        let g_idx = Tensor::from_vec(g_idx_data, (in_dim,), &Device::Cpu)?
+            .to_device(&target_device)?;
 
         let config = QuantMethodConfig::GptqAwq {
             bits: bits as i32,
