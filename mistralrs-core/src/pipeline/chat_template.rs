@@ -190,8 +190,17 @@ pub fn calculate_eos_tokens(
         }
     }
 
-    eos_tok_ids = eos_tok_ids.into_iter().dedup().collect::<Vec<_>>();
-    bos_tok_ids = bos_tok_ids.into_iter().dedup().collect::<Vec<_>>();
+    // Filter out empty strings and dedupe
+    eos_tok_ids = eos_tok_ids
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .dedup()
+        .collect::<Vec<_>>();
+    bos_tok_ids = bos_tok_ids
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .dedup()
+        .collect::<Vec<_>>();
 
     let bos_render = bos_tok_ids
         .iter()
