@@ -276,11 +276,17 @@ impl Sdpa {
                     }
                     attention_scores = candle_nn::ops::softmax_last_dim(&attention_scores)?;
 
+                    // Only reuse q_flat as output buffer if head dimensions match
+                    // For MLA (Multi-head Latent Attention), v_head_dim may differ from head_dim
+                    let output_buffer = if head_dim == v_head_dim {
+                        Some(&q_flat)
+                    } else {
+                        None
+                    };
                     let context_layer = cublaslt.batch_matmul(
                         &v_flat.t()?.contiguous()?,
                         &attention_scores,
-                        // We save one allocation
-                        Some(&q_flat),
+                        output_buffer,
                         None,
                         None,
                         None,
