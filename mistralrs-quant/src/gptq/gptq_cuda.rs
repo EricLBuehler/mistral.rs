@@ -164,6 +164,11 @@ impl GptqLayer {
         let c_ptr = c_ptr as *mut f16;
 
         let len = (self.q_weight.dims()[0] * 32 / self.bits as usize) * self.q_weight.dims()[1];
+        // Lazily allocate buffer if not present
+        if get_tmp_dq_buffer(len).is_none() {
+            let buffer = unsafe { dev.alloc::<f16>(len)? };
+            insert_tmp_dq_buffer(len, buffer);
+        }
         let temp_dq_ptr =
             get_tmp_dq_buffer(len).expect("Temporary dequantization buffer not found");
 
