@@ -1292,8 +1292,49 @@ impl PackedExperts {
 
                     (vec![gate_proj], vec![up_proj], vec![down_proj])
                 }
+                QuantizedConfig::CompressedTensors { .. } => {
+                    // CompressedTensors (INT4 packed) quantization for PackedExperts
+                    // Each expert's weights are independently quantized and repacked to GPTQ format
+                    if comm.world_size() != 1 {
+                        candle_core::bail!(
+                            "PackedExperts with CompressedTensors does not support distributed (world size {}). Use ISQ.",
+                            comm.world_size()
+                        );
+                    }
+
+                    let mut gs = Vec::new();
+                    let mut us = Vec::new();
+                    let mut ds = Vec::new();
+
+                    for i in 0..num_local_experts {
+                        let expert_vb = vb.pp(i);
+
+                        // Load each projection using compressed_tensors_linear
+                        // which repacks INT4 packed weights to GPTQ format
+                        gs.push(compressed_tensors_linear(
+                            hidden_size,
+                            intermediate_size,
+                            quant_conf,
+                            expert_vb.pp("gate_proj"),
+                        )?);
+                        us.push(compressed_tensors_linear(
+                            hidden_size,
+                            intermediate_size,
+                            quant_conf,
+                            expert_vb.pp("up_proj"),
+                        )?);
+                        ds.push(compressed_tensors_linear(
+                            intermediate_size,
+                            hidden_size,
+                            quant_conf,
+                            expert_vb.pp("down_proj"),
+                        )?);
+                    }
+
+                    (gs, us, ds)
+                }
                 _ => candle_core::bail!(
-                    "PackedExperts with quantization config only allows AFQ, FP8, or MXFP4 quantization"
+                    "PackedExperts with quantization config only allows AFQ, FP8, MXFP4, or CompressedTensors"
                 ),
             }
         } else if !vb.contains_tensor("gate_up_proj") {

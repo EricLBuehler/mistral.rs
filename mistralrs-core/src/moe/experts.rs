@@ -42,10 +42,17 @@ impl MoEExpertsBackend {
         loading_isq: bool,
         quantization_config: &Option<QuantizedConfig>,
     ) -> Self {
+        // CompressedTensors produces per-expert GPTQ layers that don't support
+        // gather-based operations, so always use the Slow (loop) path.
+        let is_compressed_tensors = matches!(
+            quantization_config,
+            Some(QuantizedConfig::CompressedTensors { .. })
+        );
+
         let use_fast = device.is_metal()
             || (device.is_cuda() && (loading_isq || quantization_config.is_some()));
 
-        if use_fast {
+        if use_fast && !is_compressed_tensors {
             Self::Fast
         } else if quantization_config.is_none() && !loading_isq && device.is_cuda() {
             Self::Fused
