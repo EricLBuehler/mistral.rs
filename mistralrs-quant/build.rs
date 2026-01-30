@@ -86,16 +86,9 @@ fn main() -> Result<(), String> {
         println!("cargo:rustc-cfg=has_mxfp4_kernels");
 
         let excluded_files = if cc_over_80 {
-            vec![
-                "dummy_*.cu",
-                "*_dummy.cu",
-            ]
+            vec!["dummy_*.cu", "*_dummy.cu"]
         } else {
-            vec![
-                "marlin_*.cu",
-                "*_fp8.cu",
-                "*_fp8_gemm.cu",
-            ]
+            vec!["marlin_*.cu", "*_fp8.cu", "*_fp8_gemm.cu"]
         };
         builder = builder.exclude(&excluded_files);
 
