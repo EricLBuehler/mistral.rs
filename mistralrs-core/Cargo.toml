@@ -116,7 +116,7 @@ pyo3_macros = ["pyo3", "mistralrs-mcp/pyo3_macros"]
 cuda = [
     "candle-core/cuda",
     "candle-nn/cuda",
-    "dep:bindgen_cuda",
+    "dep:cudaforge",
     "mistralrs-quant/cuda",
     "dep:mistralrs-paged-attn",
     "mistralrs-paged-attn/cuda",
@@ -142,4 +142,4 @@ utoipa = ["dep:utoipa"]
 ring = ["mistralrs-quant/ring"]
 
 [build-dependencies]
-bindgen_cuda = { workspace = true, optional = true }
+cudaforge = { workspace = true, optional = true }

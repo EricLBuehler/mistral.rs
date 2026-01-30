@@ -50,89 +50,14 @@ fn main() -> Result<(), String> {
 
     #[cfg(feature = "cuda")]
     {
-        use std::{path::PathBuf, process::Command, vec};
+        use std::{path::PathBuf, vec};
         const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
         println!("cargo:rerun-if-changed=build.rs");
-
-        // Try CUDA_COMPUTE_CAP then nvidia-smi
-        let compute_cap = {
-            if let Ok(var) = std::env::var("CUDA_COMPUTE_CAP") {
-                var.parse::<usize>().unwrap() * 10
-            } else {
-                let mut cmd = Command::new("nvidia-smi");
-                match cmd
-                    .args(["--query-gpu=compute_cap", "--format=csv"])
-                    .output()
-                {
-                    Ok(out) => {
-                        let output = String::from_utf8(out.stdout)
-                            .expect("Output of nvidia-smi was not utf8.");
-                        (output
-                            .split('\n')
-                            .nth(1)
-                            .unwrap()
-                            .trim()
-                            .parse::<f32>()
-                            .unwrap()
-                            * 100.) as usize
-                    }
-                    Err(_) => {
-                        panic!("`CUDA_COMPUTE_CAP` env var not specified and `nvidia-smi` was not found.");
-                    }
-                }
-            }
-        };
-
-        // ======== Handle optional kernel compilation via rustc-cfg flags
-        let cc_over_800 = compute_cap >= 800;
-
-        if cc_over_800 {
-            println!("cargo:rustc-cfg=has_marlin_kernels");
-            println!("cargo:rustc-cfg=has_blockwise_fp8_kernels");
-            println!("cargo:rustc-cfg=has_scalar_fp8_kernels");
-            println!("cargo:rustc-cfg=has_vector_fp8_kernels");
-        }
-        // MXFP4 is always enabled with CUDA (uses LUT-based dequantization)
-        println!("cargo:rustc-cfg=has_mxfp4_kernels");
-        // ========
-
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-        let mut lib_files = vec![
-            "kernels/gptq/q_gemm.cu",
-            "kernels/hqq/hqq.cu",
-            "kernels/hqq/hqq_bitpack.cu",
-            "kernels/ops/ops.cu",
-            "kernels/bitsandbytes/dequant.cu",
-            "kernels/rotary/rotary.cu",
-            "kernels/afq/afq.cu",
-            "kernels/afq/afq_gemm.cu",
-            "kernels/mxfp4/mxfp4_gemm.cu", // MXFP4 works on all compute caps
-            "kernels/gemv/gemv.cu",        // Custom GEMV for decode-phase inference
-            "kernels/indexed_moe/indexed_moe.cu", // Indexed MoE forward for GGUF quantized weights
-        ];
-        if cc_over_800 {
-            lib_files.push("kernels/marlin/marlin_matmul_f16.cu");
-            lib_files.push("kernels/marlin/marlin_matmul_bf16.cu");
-            lib_files.push("kernels/marlin/marlin_matmul_awq_f16.cu");
-            lib_files.push("kernels/marlin/marlin_matmul_awq_bf16.cu");
-            lib_files.push("kernels/marlin/marlin_repack.cu");
-            lib_files.push("kernels/blockwise_fp8/blockwise_fp8.cu");
-            lib_files.push("kernels/blockwise_fp8/blockwise_fp8_gemm.cu");
-            lib_files.push("kernels/scalar_fp8/scalar_fp8.cu");
-            lib_files.push("kernels/vector_fp8/vector_fp8.cu");
-        } else {
-            lib_files.push("kernels/marlin/dummy_marlin_kernel.cu");
-            lib_files.push("kernels/blockwise_fp8/blockwise_fp8_dummy.cu");
-            lib_files.push("kernels/blockwise_fp8/blockwise_fp8_gemm_dummy.cu");
-            lib_files.push("kernels/scalar_fp8/scalar_fp8_dummy.cu");
-            lib_files.push("kernels/vector_fp8/vector_fp8_dummy.cu");
-        }
-        for lib_file in lib_files.iter() {
-            println!("cargo:rerun-if-changed={lib_file}");
-        }
-        let mut builder = bindgen_cuda::Builder::default()
-            .kernel_paths(lib_files)
+
+        let mut builder = cudaforge::KernelBuilder::new()
+            .source_glob("kernels/*/*.cu")
             .out_dir(build_dir.clone())
             .arg("-std=c++17")
             .arg("-O3")
@@ -146,6 +71,42 @@ fn main() -> Result<(), String> {
             .arg("--verbose")
             .arg("--compiler-options")
             .arg("-fPIC");
+
+        let compute_cap = builder.get_compute_cap().unwrap_or(80);
+        // ======== Handle optional kernel compilation via rustc-cfg flags
+        let cc_over_800 = compute_cap >= 800;
+
+        if cc_over_800 {
+            println!("cargo:rustc-cfg=has_marlin_kernels");
+            println!("cargo:rustc-cfg=has_blockwise_fp8_kernels");
+            println!("cargo:rustc-cfg=has_scalar_fp8_kernels");
+            println!("cargo:rustc-cfg=has_vector_fp8_kernels");
+        }
+        // MXFP4 is always enabled with CUDA (uses LUT-based dequantization)
+        println!("cargo:rustc-cfg=has_mxfp4_kernels");
+
+        let excluded_files = if cc_over_800 {
+            vec![
+                "kernels/marlin/dummy_marlin_kernel.cu",
+                "kernels/blockwise_fp8/blockwise_fp8_dummy.cu",
+                "kernels/blockwise_fp8/blockwise_fp8_gemm_dummy.cu",
+                "kernels/scalar_fp8/scalar_fp8_dummy.cu",
+                "kernels/vector_fp8/vector_fp8_dummy.cu",
+            ]
+        } else {
+            vec![
+                "kernels/marlin/marlin_matmul_f16.cu",
+                "kernels/marlin/marlin_matmul_bf16.cu",
+                "kernels/marlin/marlin_matmul_awq_f16.cu",
+                "kernels/marlin/marlin_matmul_awq_bf16.cu",
+                "kernels/marlin/marlin_repack.cu",
+                "kernels/blockwise_fp8/blockwise_fp8.cu",
+                "kernels/blockwise_fp8/blockwise_fp8_gemm.cu",
+                "kernels/scalar_fp8/scalar_fp8.cu",
+                "kernels/vector_fp8/vector_fp8.cu",
+            ]
+        };
+        builder = builder.exclude(&excluded_files);
 
         // https://github.com/EricLBuehler/mistral.rs/issues/286
         if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
@@ -162,7 +123,9 @@ fn main() -> Result<(), String> {
         } else {
             build_dir.join("libmistralrsquant.a")
         };
-        builder.build_lib(out_file);
+        builder
+            .build_lib(out_file)
+            .expect("Build mistral quant lib failed!");
         println!("cargo:rustc-link-search={}", build_dir.display());
         println!("cargo:rustc-link-lib=mistralrsquant");
         println!("cargo:rustc-link-lib=dylib=cudart");
