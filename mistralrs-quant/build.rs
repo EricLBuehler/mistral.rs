@@ -74,9 +74,9 @@ fn main() -> Result<(), String> {
 
         let compute_cap = builder.get_compute_cap().unwrap_or(80);
         // ======== Handle optional kernel compilation via rustc-cfg flags
-        let cc_over_800 = compute_cap >= 800;
+        let cc_over_80 = compute_cap >= 80;
 
-        if cc_over_800 {
+        if cc_over_80 {
             println!("cargo:rustc-cfg=has_marlin_kernels");
             println!("cargo:rustc-cfg=has_blockwise_fp8_kernels");
             println!("cargo:rustc-cfg=has_scalar_fp8_kernels");
@@ -85,7 +85,7 @@ fn main() -> Result<(), String> {
         // MXFP4 is always enabled with CUDA (uses LUT-based dequantization)
         println!("cargo:rustc-cfg=has_mxfp4_kernels");
 
-        let excluded_files = if cc_over_800 {
+        let excluded_files = if cc_over_80 {
             vec![
                 "kernels/marlin/dummy_marlin_kernel.cu",
                 "kernels/blockwise_fp8/blockwise_fp8_dummy.cu",
