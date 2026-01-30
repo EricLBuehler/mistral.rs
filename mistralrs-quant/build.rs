@@ -87,23 +87,14 @@ fn main() -> Result<(), String> {
 
         let excluded_files = if cc_over_80 {
             vec![
-                "kernels/marlin/dummy_marlin_kernel.cu",
-                "kernels/blockwise_fp8/blockwise_fp8_dummy.cu",
-                "kernels/blockwise_fp8/blockwise_fp8_gemm_dummy.cu",
-                "kernels/scalar_fp8/scalar_fp8_dummy.cu",
-                "kernels/vector_fp8/vector_fp8_dummy.cu",
+                "dummy_*.cu",
+                "*_dummy.cu",
             ]
         } else {
             vec![
-                "kernels/marlin/marlin_matmul_f16.cu",
-                "kernels/marlin/marlin_matmul_bf16.cu",
-                "kernels/marlin/marlin_matmul_awq_f16.cu",
-                "kernels/marlin/marlin_matmul_awq_bf16.cu",
-                "kernels/marlin/marlin_repack.cu",
-                "kernels/blockwise_fp8/blockwise_fp8.cu",
-                "kernels/blockwise_fp8/blockwise_fp8_gemm.cu",
-                "kernels/scalar_fp8/scalar_fp8.cu",
-                "kernels/vector_fp8/vector_fp8.cu",
+                "marlin_*.cu",
+                "*_fp8.cu",
+                "*_fp8_gemm.cu",
             ]
         };
         builder = builder.exclude(&excluded_files);
