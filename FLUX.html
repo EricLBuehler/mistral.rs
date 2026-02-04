@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-e43323bc.js";
+            window.path_to_searchindex_js = "searchindex-43f90895.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cf64f8f3.js"></script>
@@ -215,9 +215,8 @@ print(result.data[0].url)
 </code></pre>
 <h2 id="rust-example"><a class="header" href="#rust-example">Rust example</a></h2>
 <pre class="playground"><code class="language-rust">use std::time::Instant;
-
 use anyhow::Result;
-use mistralrs::{DiffusionLoaderType, DiffusionModelBuilder, ImageGenerationResponseFormat};
+use mistralrs::{DiffusionGenerationParams, DiffusionLoaderType, DiffusionModelBuilder, ImageGenerationResponseFormat};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
@@ -235,6 +234,7 @@ async fn main() -&gt; Result&lt;()&gt; {
         .generate_image(
             "A vibrant sunset in the mountains, 4k, high quality.".to_string(),
             ImageGenerationResponseFormat::Url,
+            DiffusionGenerationParams::default(),
         )
         .await?;
 
