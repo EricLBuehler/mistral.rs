@@ -252,11 +252,11 @@ fn main() -> Result<(), String> {
             }
 
             fn metal_std(&self) -> &str {
-                // Use Metal 3.0 unified standard for both platforms
+                // Use Metal 3.1 unified standard for both platforms
                 // This fixes Xcode 26+ where the default Metal standard may be too low
                 // https://github.com/EricLBuehler/mistral.rs/issues/1844
                 match self {
-                    Platform::MacOS | Platform::Ios => "metal3.0",
+                    Platform::MacOS | Platform::Ios => "metal3.1",
                 }
             }
         }
