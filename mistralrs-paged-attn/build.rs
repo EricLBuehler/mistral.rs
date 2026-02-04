@@ -6,7 +6,6 @@ const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 fn main() -> Result<()> {
     use std::path::PathBuf;
-    use std::process::Command;
 
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_fp8)");
@@ -34,40 +33,9 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/state.cuh");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/variant_helper.cuh");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/variants.cuh");
-    // Detect CUDA compute capability for FP8 support
-    let compute_cap = {
-        if let Ok(var) = std::env::var("CUDA_COMPUTE_CAP") {
-            var.parse::<usize>().unwrap() * 10
-        } else {
-            let mut cmd = Command::new("nvidia-smi");
-            match cmd
-                .args(["--query-gpu=compute_cap", "--format=csv"])
-                .output()
-            {
-                Ok(out) => {
-                    let output =
-                        String::from_utf8(out.stdout).expect("Output of nvidia-smi was not utf8.");
-                    (output
-                        .split('\n')
-                        .nth(1)
-                        .unwrap()
-                        .trim()
-                        .parse::<f32>()
-                        .unwrap()
-                        * 100.) as usize
-                }
-                Err(_) => {
-                    // If nvidia-smi fails, assume no FP8 support
-                    println!(
-                        "cargo:warning=Could not detect CUDA compute capability, disabling FP8"
-                    );
-                    0
-                }
-            }
-        }
-    };
 
-    let mut builder = bindgen_cuda::Builder::default()
+    let mut builder = cudaforge::KernelBuilder::new()
+        .source_glob("src/cuda/*.cu")
         .arg("-std=c++17")
         .arg("-O3")
         .arg("-U__CUDA_NO_HALF_OPERATORS__")
@@ -81,8 +49,9 @@ fn main() -> Result<()> {
         .arg("--compiler-options")
         .arg("-fPIC");
 
+    let compute_cap = builder.get_compute_cap().unwrap_or(80);
     // Enable FP8 if compute capability >= 8.0 (Ampere and newer)
-    let using_fp8 = if compute_cap >= 800 {
+    let using_fp8 = if compute_cap >= 80 {
         builder = builder.arg("-DENABLE_FP8");
         true
     } else {
@@ -105,7 +74,9 @@ fn main() -> Result<()> {
     } else {
         build_dir.join("libmistralrspagedattention.a")
     };
-    builder.build_lib(out_file);
+    builder
+        .build_lib(out_file)
+        .expect("Build paged attention lib failed!");
 
     println!("cargo:rustc-link-search={}", build_dir.display());
     println!("cargo:rustc-link-lib=mistralrspagedattention");

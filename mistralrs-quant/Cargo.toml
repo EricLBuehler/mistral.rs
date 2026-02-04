@@ -39,7 +39,7 @@ tokio.workspace = true
 cuda = [
     "candle-core/cuda",
     "candle-nn/cuda",
-    "dep:bindgen_cuda"
+    "dep:cudaforge"
 ]
 nccl = ["cuda", "candle-core/nccl"]
 metal = [
@@ -69,4 +69,4 @@ cuda-12090 = []
 cuda-13000 = []
 
 [build-dependencies]
-bindgen_cuda = { workspace = true, optional = true }
+cudaforge = { workspace = true, optional = true }
