@@ -1,10 +1,11 @@
 /**
- * @brief Optimized CUDA kernel for MoE GEMV (General Matrix-Vector Multiplication)
- * for the decode phase.
+ * @brief Optimized CUDA kernel for MoE GEMV (General Matrix-Vector
+ * Multiplication) for the decode phase.
  *
- * This kernel is optimized for small batch sizes (M <= 8, typically M = 1 for decode).
- * Based on llama.cpp's approach, it uses warp-level reductions instead of tensor cores,
- * which provides better performance for small batches due to lower overhead.
+ * This kernel is optimized for small batch sizes (M <= 8, typically M = 1 for
+ * decode). Based on llama.cpp's approach, it uses warp-level reductions instead
+ * of tensor cores, which provides better performance for small batches due to
+ * lower overhead.
  *
  * @details
  * - Each CUDA block computes ONE output element for ONE token
@@ -53,8 +54,8 @@ __device__ __forceinline__ float warp_reduce_sum(float x) {
  * @param weights           [num_experts, N, K] - Expert weight matrices
  * @param sorted_token_ids  [M] - Indices of tokens sorted by expert assignment
  * @param expert_ids        [M] - Expert ID for each token
- * @param topk_weights      [M] (optional) - Per-token gating weights (nullptr if
- * not used)
+ * @param topk_weights      [M] (optional) - Per-token gating weights (nullptr
+ * if not used)
  * @param output            [M, N] - Output activations for all tokens
  * @param num_experts       Total number of experts
  * @param topk              Number of experts selected per token
@@ -103,9 +104,8 @@ __global__ void moe_gemv_kernel(
   const float4 *w_vec = reinterpret_cast<const float4 *>(weight_row);
 
   // Use the appropriate vector type for the data type
-  using Vec2T =
-      typename std::conditional<std::is_same<T, half>::value, half2,
-                                nv_bfloat162>::type;
+  using Vec2T = typename std::conditional<std::is_same<T, half>::value, half2,
+                                          nv_bfloat162>::type;
 
   float sum = 0.0f;
 

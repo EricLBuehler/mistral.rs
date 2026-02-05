@@ -486,7 +486,9 @@ class Runner:
             model_id: Optional model ID to send the request to. If None, uses the default model.
         """
 
-    def generate_audio(self, prompt: str, model_id: str | None = None) -> SpeechGenerationResponse:
+    def generate_audio(
+        self, prompt: str, model_id: str | None = None
+    ) -> SpeechGenerationResponse:
         """
         Generate audio given a (model specific) prompt. PCM and sampling rate as well as the number of channels is returned.
 

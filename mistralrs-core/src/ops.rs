@@ -756,11 +756,12 @@ pub fn mul_and_act(a: &Tensor, b: &Tensor, act: Activation) -> Result<Tensor> {
         // Map Activation to GluActivationType
         let glu_act = match act {
             Activation::Silu | Activation::Swish => Some(mistralrs_quant::GluActivationType::Silu),
-            Activation::Gelu | Activation::NewGelu | Activation::GeluPytorchTanh => {
+            Activation::NewGelu | Activation::GeluPytorchTanh => {
                 Some(mistralrs_quant::GluActivationType::Gelu)
             }
+            Activation::Gelu => Some(mistralrs_quant::GluActivationType::GeluErf),
             Activation::Relu => Some(mistralrs_quant::GluActivationType::Relu),
-            _ => None, // Unsupported activation, fall back to default
+            _ => None,
         };
 
         if let Some(activation_type) = glu_act {
@@ -768,7 +769,6 @@ pub fn mul_and_act(a: &Tensor, b: &Tensor, act: Activation) -> Result<Tensor> {
         }
     }
 
-    // Fallback for unsupported dtypes or unsupported activations
     a.apply(&act)? * b
 }
 

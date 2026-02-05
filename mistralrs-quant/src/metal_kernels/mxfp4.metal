@@ -13,7 +13,8 @@ constexpr constant int kThreadsPerThreadgroup = kBlockN * kWarpSize;
 
 // Process 32 lanes * 32 elems = 1024 elems per K-iteration.
 constexpr constant int kKTile = kWarpSize * kElemsPerLane;
-constexpr constant int kKTilePadded = kKTile + (kKTile / kWarpSize); // +1 per 32
+constexpr constant int kKTilePadded =
+    kKTile + (kKTile / kWarpSize); // +1 per 32
 
 // Mapping for FP4 E2M1 values scaled by 2:
 // [0, 0.5, 1, 1.5, 2, 3, 4, 6] * 2 => [0, 1, 2, 3, 4, 6, 8, 12]
@@ -42,8 +43,7 @@ METAL_FUNC void mxfp4_dot_k1024_tiles(const device uchar *w_row,
                                       const device uchar *s_row,
                                       const threadgroup float *x_tile_padded,
                                       thread float &acc0, thread float &acc1,
-                                      int K, int k_base,
-                                      ushort lane_id) {
+                                      int K, int k_base, ushort lane_id) {
   const int k_lane = k_base + int(lane_id) * kElemsPerLane;
   if (k_lane >= K) {
     return;
@@ -62,11 +62,11 @@ METAL_FUNC void mxfp4_dot_k1024_tiles(const device uchar *w_row,
 
   int in_idx = 0;
 
-  // 16 bytes -> 32 values. Interleave two accumulators to hide FMA latency.
-  #pragma unroll
+// 16 bytes -> 32 values. Interleave two accumulators to hide FMA latency.
+#pragma unroll
   for (int u = 0; u < 4; ++u) {
     uint vv = packed[u];
-    #pragma unroll
+#pragma unroll
     for (int j = 0; j < 4; ++j) {
       const uchar b = uchar(vv & 0xff);
       vv >>= 8;
@@ -82,11 +82,11 @@ METAL_FUNC void mxfp4_dot_k1024_tiles(const device uchar *w_row,
 }
 
 template <typename T>
-METAL_FUNC void mxfp4_matmul_impl(
-    const device T *x, const device uchar *w, const device uchar *scales,
-    const device T *bias, device T *y, int M, int N, int K, int has_bias,
-    threadgroup float *x_tile, uint tid, ushort simd_gid, ushort lane_id,
-    uint3 gid) {
+METAL_FUNC void
+mxfp4_matmul_impl(const device T *x, const device uchar *w,
+                  const device uchar *scales, const device T *bias, device T *y,
+                  int M, int N, int K, int has_bias, threadgroup float *x_tile,
+                  uint tid, ushort simd_gid, ushort lane_id, uint3 gid) {
   (void)tid;
 
   const int row = int(gid.y);
@@ -109,7 +109,7 @@ METAL_FUNC void mxfp4_matmul_impl(
     // Load input tile into threadgroup memory with +1 pad per 32 elements.
     // 256 threads * 4 values each = 1024 values.
     const int local_base = int(tid) * 4;
-    #pragma unroll
+#pragma unroll
     for (int i = 0; i < 4; ++i) {
       const int k_local = local_base + i;
       const int k = k_base + k_local;
@@ -119,7 +119,8 @@ METAL_FUNC void mxfp4_matmul_impl(
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    mxfp4_dot_k1024_tiles<T>(w_row, s_row, x_tile, acc0, acc1, K, k_base, lane_id);
+    mxfp4_dot_k1024_tiles<T>(w_row, s_row, x_tile, acc0, acc1, K, k_base,
+                             lane_id);
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
   }
@@ -138,10 +139,10 @@ METAL_FUNC void mxfp4_matmul_impl(
 template <typename T>
 METAL_FUNC void mxfp4_moe_gemm_split_impl(
     const device T *x, const device uchar *w, const device uchar *scales,
-    const device T *biases, const device uint *indices, device T *y, int num_tokens,
-    int topk, int num_experts, int N, int K, int has_bias, int input_has_topk_dim,
-    threadgroup float *x_tile, uint tid, ushort simd_gid, ushort lane_id,
-    uint3 gid) {
+    const device T *biases, const device uint *indices, device T *y,
+    int num_tokens, int topk, int num_experts, int N, int K, int has_bias,
+    int input_has_topk_dim, threadgroup float *x_tile, uint tid,
+    ushort simd_gid, ushort lane_id, uint3 gid) {
   (void)tid;
 
   const int n_base = int(gid.x) * kBlockN;
@@ -161,10 +162,9 @@ METAL_FUNC void mxfp4_moe_gemm_split_impl(
     return;
   }
 
-  const device T *x_row =
-      input_has_topk_dim != 0
-          ? (x + (token_idx * topk + expert_slot) * K)
-          : (x + token_idx * K);
+  const device T *x_row = input_has_topk_dim != 0
+                              ? (x + (token_idx * topk + expert_slot) * K)
+                              : (x + token_idx * K);
 
   const int weight_row_stride = K / 2;
   const int scale_stride = K / 32;
@@ -179,7 +179,7 @@ METAL_FUNC void mxfp4_moe_gemm_split_impl(
 
   for (int k_base = 0; k_base < K; k_base += kKTile) {
     const int local_base = int(tid) * 4;
-    #pragma unroll
+#pragma unroll
     for (int i = 0; i < 4; ++i) {
       const int k_local = local_base + i;
       const int k = k_base + k_local;
@@ -189,7 +189,8 @@ METAL_FUNC void mxfp4_moe_gemm_split_impl(
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    mxfp4_dot_k1024_tiles<T>(w_row, s_row, x_tile, acc0, acc1, K, k_base, lane_id);
+    mxfp4_dot_k1024_tiles<T>(w_row, s_row, x_tile, acc0, acc1, K, k_base,
+                             lane_id);
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
   }
@@ -208,9 +209,10 @@ METAL_FUNC void mxfp4_moe_gemm_split_impl(
 template <typename T, int MAX_TOPK>
 METAL_FUNC void mxfp4_moe_gemm_reuse_impl(
     const device T *x, const device uchar *w, const device uchar *scales,
-    const device T *biases, const device uint *indices, device T *y, int num_tokens,
-    int topk, int num_experts, int N, int K, int has_bias, uint tid, ushort simd_gid,
-    threadgroup float *x_tile, ushort lane_id, uint3 gid) {
+    const device T *biases, const device uint *indices, device T *y,
+    int num_tokens, int topk, int num_experts, int N, int K, int has_bias,
+    uint tid, ushort simd_gid, threadgroup float *x_tile, ushort lane_id,
+    uint3 gid) {
   (void)tid;
 
   const int n_base = int(gid.x) * kBlockN;
@@ -225,7 +227,7 @@ METAL_FUNC void mxfp4_moe_gemm_reuse_impl(
   }
 
   thread uint expert_idx[MAX_TOPK];
-  #pragma unroll
+#pragma unroll
   for (int s = 0; s < MAX_TOPK; ++s) {
     expert_idx[s] = (s < topk) ? indices[token_idx * topk + s] : 0u;
   }
@@ -237,7 +239,7 @@ METAL_FUNC void mxfp4_moe_gemm_reuse_impl(
 
   float acc0[MAX_TOPK];
   float acc1[MAX_TOPK];
-  #pragma unroll
+#pragma unroll
   for (int s = 0; s < MAX_TOPK; ++s) {
     acc0[s] = 0.0f;
     acc1[s] = 0.0f;
@@ -245,7 +247,7 @@ METAL_FUNC void mxfp4_moe_gemm_reuse_impl(
 
   for (int k_base = 0; k_base < K; k_base += kKTile) {
     const int local_base = int(tid) * 4;
-    #pragma unroll
+#pragma unroll
     for (int i = 0; i < 4; ++i) {
       const int k_local = local_base + i;
       const int k = k_base + k_local;
@@ -255,7 +257,7 @@ METAL_FUNC void mxfp4_moe_gemm_reuse_impl(
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    #pragma unroll
+#pragma unroll
     for (int s = 0; s < MAX_TOPK; ++s) {
       if (s >= topk) {
         continue;
@@ -268,14 +270,14 @@ METAL_FUNC void mxfp4_moe_gemm_reuse_impl(
           w + (size_t(e) * N + size_t(n)) * weight_row_stride;
       const device uchar *s_row =
           scales + (size_t(e) * N + size_t(n)) * scale_stride;
-      mxfp4_dot_k1024_tiles<T>(w_row, s_row, x_tile, acc0[s], acc1[s], K, k_base,
-                               lane_id);
+      mxfp4_dot_k1024_tiles<T>(w_row, s_row, x_tile, acc0[s], acc1[s], K,
+                               k_base, lane_id);
     }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
   }
 
-  #pragma unroll
+#pragma unroll
   for (int s = 0; s < MAX_TOPK; ++s) {
     if (s >= topk) {
       continue;
@@ -300,41 +302,49 @@ METAL_FUNC void mxfp4_moe_gemm_reuse_impl(
 
 [[kernel]] void mxfp4_matmul_f16(
     const device half *x [[buffer(0)]], const device uchar *w [[buffer(1)]],
-    const device uchar *scales [[buffer(2)]], const device half *bias [[buffer(3)]],
-    device half *y [[buffer(4)]], const constant int &M [[buffer(5)]],
-    const constant int &N [[buffer(6)]], const constant int &K [[buffer(7)]],
+    const device uchar *scales [[buffer(2)]],
+    const device half *bias [[buffer(3)]], device half *y [[buffer(4)]],
+    const constant int &M [[buffer(5)]], const constant int &N [[buffer(6)]],
+    const constant int &K [[buffer(7)]],
     const constant int &has_bias [[buffer(8)]],
     uint tid [[thread_index_in_threadgroup]],
     ushort simd_gid [[simdgroup_index_in_threadgroup]],
     ushort lane_id [[thread_index_in_simdgroup]],
     uint3 gid [[threadgroup_position_in_grid]]) {
   threadgroup float x_tile[mxfp4::kKTilePadded];
-  mxfp4::mxfp4_matmul_impl<half>(x, w, scales, bias, y, M, N, K, has_bias, x_tile,
-                                tid, simd_gid, lane_id, gid);
+  mxfp4::mxfp4_matmul_impl<half>(x, w, scales, bias, y, M, N, K, has_bias,
+                                 x_tile, tid, simd_gid, lane_id, gid);
 }
 
-[[kernel]] void mxfp4_matmul_bf16(
-    const device bfloat16_t *x [[buffer(0)]], const device uchar *w [[buffer(1)]],
-    const device uchar *scales [[buffer(2)]],
-    const device bfloat16_t *bias [[buffer(3)]], device bfloat16_t *y [[buffer(4)]],
-    const constant int &M [[buffer(5)]], const constant int &N [[buffer(6)]],
-    const constant int &K [[buffer(7)]], const constant int &has_bias [[buffer(8)]],
-    uint tid [[thread_index_in_threadgroup]],
-    ushort simd_gid [[simdgroup_index_in_threadgroup]],
-    ushort lane_id [[thread_index_in_simdgroup]],
-    uint3 gid [[threadgroup_position_in_grid]]) {
+[[kernel]] void mxfp4_matmul_bf16(const device bfloat16_t *x [[buffer(0)]],
+                                  const device uchar *w [[buffer(1)]],
+                                  const device uchar *scales [[buffer(2)]],
+                                  const device bfloat16_t *bias [[buffer(3)]],
+                                  device bfloat16_t *y [[buffer(4)]],
+                                  const constant int &M [[buffer(5)]],
+                                  const constant int &N [[buffer(6)]],
+                                  const constant int &K [[buffer(7)]],
+                                  const constant int &has_bias [[buffer(8)]],
+                                  uint tid [[thread_index_in_threadgroup]],
+                                  ushort simd_gid
+                                  [[simdgroup_index_in_threadgroup]],
+                                  ushort lane_id [[thread_index_in_simdgroup]],
+                                  uint3 gid [[threadgroup_position_in_grid]]) {
   threadgroup float x_tile[mxfp4::kKTilePadded];
   mxfp4::mxfp4_matmul_impl<bfloat16_t>(x, w, scales, bias, y, M, N, K, has_bias,
-                                      x_tile, tid, simd_gid, lane_id, gid);
+                                       x_tile, tid, simd_gid, lane_id, gid);
 }
 
 [[kernel]] void mxfp4_moe_gemm_split_f16(
     const device half *x [[buffer(0)]], const device uchar *w [[buffer(1)]],
-    const device uchar *scales [[buffer(2)]], const device half *biases [[buffer(3)]],
+    const device uchar *scales [[buffer(2)]],
+    const device half *biases [[buffer(3)]],
     const device uint *indices [[buffer(4)]], device half *y [[buffer(5)]],
-    const constant int &num_tokens [[buffer(6)]], const constant int &topk [[buffer(7)]],
-    const constant int &num_experts [[buffer(8)]], const constant int &N [[buffer(9)]],
-    const constant int &K [[buffer(10)]], const constant int &has_bias [[buffer(11)]],
+    const constant int &num_tokens [[buffer(6)]],
+    const constant int &topk [[buffer(7)]],
+    const constant int &num_experts [[buffer(8)]],
+    const constant int &N [[buffer(9)]], const constant int &K [[buffer(10)]],
+    const constant int &has_bias [[buffer(11)]],
     const constant int &input_has_topk_dim [[buffer(12)]],
     uint tid [[thread_index_in_threadgroup]],
     ushort simd_gid [[simdgroup_index_in_threadgroup]],
@@ -346,19 +356,24 @@ METAL_FUNC void mxfp4_moe_gemm_reuse_impl(
       has_bias, input_has_topk_dim, x_tile, tid, simd_gid, lane_id, gid);
 }
 
-[[kernel]] void mxfp4_moe_gemm_split_bf16(
-    const device bfloat16_t *x [[buffer(0)]], const device uchar *w [[buffer(1)]],
-    const device uchar *scales [[buffer(2)]],
-    const device bfloat16_t *biases [[buffer(3)]], const device uint *indices [[buffer(4)]],
-    device bfloat16_t *y [[buffer(5)]], const constant int &num_tokens [[buffer(6)]],
-    const constant int &topk [[buffer(7)]], const constant int &num_experts [[buffer(8)]],
-    const constant int &N [[buffer(9)]], const constant int &K [[buffer(10)]],
-    const constant int &has_bias [[buffer(11)]],
-    const constant int &input_has_topk_dim [[buffer(12)]],
-    uint tid [[thread_index_in_threadgroup]],
-    ushort simd_gid [[simdgroup_index_in_threadgroup]],
-    ushort lane_id [[thread_index_in_simdgroup]],
-    uint3 gid [[threadgroup_position_in_grid]]) {
+[[kernel]] void
+mxfp4_moe_gemm_split_bf16(const device bfloat16_t *x [[buffer(0)]],
+                          const device uchar *w [[buffer(1)]],
+                          const device uchar *scales [[buffer(2)]],
+                          const device bfloat16_t *biases [[buffer(3)]],
+                          const device uint *indices [[buffer(4)]],
+                          device bfloat16_t *y [[buffer(5)]],
+                          const constant int &num_tokens [[buffer(6)]],
+                          const constant int &topk [[buffer(7)]],
+                          const constant int &num_experts [[buffer(8)]],
+                          const constant int &N [[buffer(9)]],
+                          const constant int &K [[buffer(10)]],
+                          const constant int &has_bias [[buffer(11)]],
+                          const constant int &input_has_topk_dim [[buffer(12)]],
+                          uint tid [[thread_index_in_threadgroup]],
+                          ushort simd_gid [[simdgroup_index_in_threadgroup]],
+                          ushort lane_id [[thread_index_in_simdgroup]],
+                          uint3 gid [[threadgroup_position_in_grid]]) {
   threadgroup float x_tile[mxfp4::kKTilePadded];
   mxfp4::mxfp4_moe_gemm_split_impl<bfloat16_t>(
       x, w, scales, biases, indices, y, num_tokens, topk, num_experts, N, K,
@@ -367,11 +382,14 @@ METAL_FUNC void mxfp4_moe_gemm_reuse_impl(
 
 [[kernel]] void mxfp4_moe_gemm_reuse_f16(
     const device half *x [[buffer(0)]], const device uchar *w [[buffer(1)]],
-    const device uchar *scales [[buffer(2)]], const device half *biases [[buffer(3)]],
+    const device uchar *scales [[buffer(2)]],
+    const device half *biases [[buffer(3)]],
     const device uint *indices [[buffer(4)]], device half *y [[buffer(5)]],
-    const constant int &num_tokens [[buffer(6)]], const constant int &topk [[buffer(7)]],
-    const constant int &num_experts [[buffer(8)]], const constant int &N [[buffer(9)]],
-    const constant int &K [[buffer(10)]], const constant int &has_bias [[buffer(11)]],
+    const constant int &num_tokens [[buffer(6)]],
+    const constant int &topk [[buffer(7)]],
+    const constant int &num_experts [[buffer(8)]],
+    const constant int &N [[buffer(9)]], const constant int &K [[buffer(10)]],
+    const constant int &has_bias [[buffer(11)]],
     uint tid [[thread_index_in_threadgroup]],
     ushort simd_gid [[simdgroup_index_in_threadgroup]],
     ushort lane_id [[thread_index_in_simdgroup]],
@@ -382,18 +400,23 @@ METAL_FUNC void mxfp4_moe_gemm_reuse_impl(
       has_bias, tid, simd_gid, x_tile, lane_id, gid);
 }
 
-[[kernel]] void mxfp4_moe_gemm_reuse_bf16(
-    const device bfloat16_t *x [[buffer(0)]], const device uchar *w [[buffer(1)]],
-    const device uchar *scales [[buffer(2)]],
-    const device bfloat16_t *biases [[buffer(3)]], const device uint *indices [[buffer(4)]],
-    device bfloat16_t *y [[buffer(5)]], const constant int &num_tokens [[buffer(6)]],
-    const constant int &topk [[buffer(7)]], const constant int &num_experts [[buffer(8)]],
-    const constant int &N [[buffer(9)]], const constant int &K [[buffer(10)]],
-    const constant int &has_bias [[buffer(11)]],
-    uint tid [[thread_index_in_threadgroup]],
-    ushort simd_gid [[simdgroup_index_in_threadgroup]],
-    ushort lane_id [[thread_index_in_simdgroup]],
-    uint3 gid [[threadgroup_position_in_grid]]) {
+[[kernel]] void
+mxfp4_moe_gemm_reuse_bf16(const device bfloat16_t *x [[buffer(0)]],
+                          const device uchar *w [[buffer(1)]],
+                          const device uchar *scales [[buffer(2)]],
+                          const device bfloat16_t *biases [[buffer(3)]],
+                          const device uint *indices [[buffer(4)]],
+                          device bfloat16_t *y [[buffer(5)]],
+                          const constant int &num_tokens [[buffer(6)]],
+                          const constant int &topk [[buffer(7)]],
+                          const constant int &num_experts [[buffer(8)]],
+                          const constant int &N [[buffer(9)]],
+                          const constant int &K [[buffer(10)]],
+                          const constant int &has_bias [[buffer(11)]],
+                          uint tid [[thread_index_in_threadgroup]],
+                          ushort simd_gid [[simdgroup_index_in_threadgroup]],
+                          ushort lane_id [[thread_index_in_simdgroup]],
+                          uint3 gid [[threadgroup_position_in_grid]]) {
   threadgroup float x_tile[mxfp4::kKTilePadded];
   mxfp4::mxfp4_moe_gemm_reuse_impl<bfloat16_t, 8>(
       x, w, scales, biases, indices, y, num_tokens, topk, num_experts, N, K,

@@ -1,16 +1,17 @@
 /*
  * AFQ (Affine Fast Quantization) Fused GEMM CUDA Kernels
  *
- * Implements fused dequantization + matrix multiplication for optimal performance.
- * These kernels dequantize on-the-fly during the matmul to save memory bandwidth.
+ * Implements fused dequantization + matrix multiplication for optimal
+ * performance. These kernels dequantize on-the-fly during the matmul to save
+ * memory bandwidth.
  */
 
 #include "afq_utils.cuh"
+#include <cstdint>
 #include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
-#include <cstdint>
 
 // ============================================================================
 // Configuration
@@ -34,11 +35,10 @@
 
 // QMV kernel for power-of-2 bit widths
 template <typename T, int bits, int group_size>
-__global__ void afq_qmv_kernel(const T *__restrict__ x,
-                                const uint32_t *__restrict__ w_q,
-                                const T *__restrict__ scales,
-                                const T *__restrict__ biases,
-                                T *__restrict__ y, int M, int N, int K) {
+__global__ void
+afq_qmv_kernel(const T *__restrict__ x, const uint32_t *__restrict__ w_q,
+               const T *__restrict__ scales, const T *__restrict__ biases,
+               T *__restrict__ y, int M, int N, int K) {
   constexpr int values_per_u32 = 32 / bits;
   const int packed_K = K * bits / 32;
   const int groups_per_row = K / group_size;
@@ -125,11 +125,10 @@ __global__ void afq_qmv_kernel(const T *__restrict__ x,
 
 // QMV kernel for 3-bit (non-power-of-2)
 template <typename T, int group_size>
-__global__ void afq_qmv_3bit_kernel(const T *__restrict__ x,
-                                     const uint8_t *__restrict__ w_q,
-                                     const T *__restrict__ scales,
-                                     const T *__restrict__ biases,
-                                     T *__restrict__ y, int M, int N, int K) {
+__global__ void
+afq_qmv_3bit_kernel(const T *__restrict__ x, const uint8_t *__restrict__ w_q,
+                    const T *__restrict__ scales, const T *__restrict__ biases,
+                    T *__restrict__ y, int M, int N, int K) {
   const int packed_K = (K * 3 + 7) / 8;
   const int groups_per_row = K / group_size;
 
@@ -204,11 +203,10 @@ __global__ void afq_qmv_3bit_kernel(const T *__restrict__ x,
 
 // QMV kernel for 6-bit (non-power-of-2)
 template <typename T, int group_size>
-__global__ void afq_qmv_6bit_kernel(const T *__restrict__ x,
-                                     const uint8_t *__restrict__ w_q,
-                                     const T *__restrict__ scales,
-                                     const T *__restrict__ biases,
-                                     T *__restrict__ y, int M, int N, int K) {
+__global__ void
+afq_qmv_6bit_kernel(const T *__restrict__ x, const uint8_t *__restrict__ w_q,
+                    const T *__restrict__ scales, const T *__restrict__ biases,
+                    T *__restrict__ y, int M, int N, int K) {
   const int packed_K = (K * 6 + 7) / 8;
   const int groups_per_row = K / group_size;
 
@@ -289,12 +287,12 @@ __global__ void afq_qmv_6bit_kernel(const T *__restrict__ x,
 // ============================================================================
 
 // Tiled QMM kernel using shared memory
-template <typename T, int bits, int group_size, int TILE_M = 32, int TILE_N = 32, int TILE_K = 32>
-__global__ void afq_qmm_kernel(const T *__restrict__ x,
-                                const uint32_t *__restrict__ w_q,
-                                const T *__restrict__ scales,
-                                const T *__restrict__ biases,
-                                T *__restrict__ y, int M, int N, int K) {
+template <typename T, int bits, int group_size, int TILE_M = 32,
+          int TILE_N = 32, int TILE_K = 32>
+__global__ void
+afq_qmm_kernel(const T *__restrict__ x, const uint32_t *__restrict__ w_q,
+               const T *__restrict__ scales, const T *__restrict__ biases,
+               T *__restrict__ y, int M, int N, int K) {
   constexpr int values_per_u32 = 32 / bits;
   const int packed_K = K * bits / 32;
   const int groups_per_row = K / group_size;
@@ -393,7 +391,7 @@ __global__ void afq_qmm_kernel(const T *__restrict__ x,
 // ============================================================================
 
 #define DEFINE_QMV_LAUNCHER(bits, gs, dtype, dtype_name)                       \
-  extern "C" void afq_qmv_##bits##bit_gs##gs##_##dtype_name(                    \
+  extern "C" void afq_qmv_##bits##bit_gs##gs##_##dtype_name(                   \
       const dtype *x, const uint32_t *w_q, const dtype *scales,                \
       const dtype *biases, dtype *y, int M, int N, int K) {                    \
     int total_outputs = M * N;                                                 \
@@ -405,7 +403,7 @@ __global__ void afq_qmm_kernel(const T *__restrict__ x,
   }
 
 #define DEFINE_QMV_3BIT_LAUNCHER(gs, dtype, dtype_name)                        \
-  extern "C" void afq_qmv_3bit_gs##gs##_##dtype_name(                           \
+  extern "C" void afq_qmv_3bit_gs##gs##_##dtype_name(                          \
       const dtype *x, const uint8_t *w_q, const dtype *scales,                 \
       const dtype *biases, dtype *y, int M, int N, int K) {                    \
     int total_outputs = M * N;                                                 \
@@ -417,7 +415,7 @@ __global__ void afq_qmm_kernel(const T *__restrict__ x,
   }
 
 #define DEFINE_QMV_6BIT_LAUNCHER(gs, dtype, dtype_name)                        \
-  extern "C" void afq_qmv_6bit_gs##gs##_##dtype_name(                           \
+  extern "C" void afq_qmv_6bit_gs##gs##_##dtype_name(                          \
       const dtype *x, const uint8_t *w_q, const dtype *scales,                 \
       const dtype *biases, dtype *y, int M, int N, int K) {                    \
     int total_outputs = M * N;                                                 \
@@ -490,7 +488,7 @@ DEFINE_QMV_LAUNCHER(8, 128, __nv_bfloat16, bf16)
 // ============================================================================
 
 #define DEFINE_QMM_LAUNCHER(bits, gs, dtype, dtype_name)                       \
-  extern "C" void afq_qmm_##bits##bit_gs##gs##_##dtype_name(                    \
+  extern "C" void afq_qmm_##bits##bit_gs##gs##_##dtype_name(                   \
       const dtype *x, const uint32_t *w_q, const dtype *scales,                \
       const dtype *biases, dtype *y, int M, int N, int K) {                    \
     constexpr int TILE_M = 32;                                                 \

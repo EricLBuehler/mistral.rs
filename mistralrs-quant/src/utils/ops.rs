@@ -2062,6 +2062,7 @@ pub enum GluActivationType {
     Silu = 0,
     Gelu = 1,
     Relu = 2,
+    GeluErf = 3,
 }
 
 // CPU activation functions for fused GLU
@@ -2082,255 +2083,232 @@ fn cpu_relu(x: f32) -> f32 {
     x.max(0.0)
 }
 
+fn cpu_gelu_erf(x: f32) -> f32 {
+    // gelu_erf: x * (1 + erf(x / sqrt(2))) / 2
+    x * (1.0 + candle_core::cpu::erf::erf_f32(x * std::f32::consts::FRAC_1_SQRT_2)) / 2.0
+}
+
 fn apply_cpu_activation(x: f32, activation: GluActivationType) -> f32 {
     match activation {
         GluActivationType::Silu => cpu_silu(x),
         GluActivationType::Gelu => cpu_gelu(x),
         GluActivationType::Relu => cpu_relu(x),
+        GluActivationType::GeluErf => cpu_gelu_erf(x),
     }
 }
 
-/// CPU implementation of fused GLU using rayon parallelism
-fn fused_glu_cpu_impl(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Result<Tensor> {
-    use candle_core::cpu_backend::CpuStorage;
-    use half::{bf16, f16};
-    use rayon::prelude::*;
+struct FusedGlu(GluActivationType);
 
-    let shape = a.shape().clone();
-    let dtype = a.dtype();
-
-    let (a_storage, a_layout) = a.storage_and_layout();
-    let (b_storage, b_layout) = b.storage_and_layout();
-
-    let a_cpu = match &*a_storage {
-        candle_core::Storage::Cpu(s) => s,
-        _ => candle_core::bail!("fused_glu_cpu: expected CPU storage"),
-    };
-    let b_cpu = match &*b_storage {
-        candle_core::Storage::Cpu(s) => s,
-        _ => candle_core::bail!("fused_glu_cpu: expected CPU storage"),
-    };
-
-    let result_storage = match dtype {
-        DType::F32 => {
-            let a_slice = a_cpu.as_slice::<f32>()?;
-            let b_slice = b_cpu.as_slice::<f32>()?;
-            let a_offset = a_layout.start_offset();
-            let b_offset = b_layout.start_offset();
-            let len = a.elem_count();
-
-            let result: Vec<f32> = (0..len)
-                .into_par_iter()
-                .map(|i| {
-                    let a_val = a_slice[a_offset + i];
-                    let b_val = b_slice[b_offset + i];
-                    apply_cpu_activation(a_val, activation) * b_val
-                })
-                .collect();
-            CpuStorage::F32(result)
-        }
-        DType::F16 => {
-            let a_slice = a_cpu.as_slice::<f16>()?;
-            let b_slice = b_cpu.as_slice::<f16>()?;
-            let a_offset = a_layout.start_offset();
-            let b_offset = b_layout.start_offset();
-            let len = a.elem_count();
-
-            let result: Vec<f16> = (0..len)
-                .into_par_iter()
-                .map(|i| {
-                    let a_val = a_slice[a_offset + i].to_f32();
-                    let b_val = b_slice[b_offset + i].to_f32();
-                    f16::from_f32(apply_cpu_activation(a_val, activation) * b_val)
-                })
-                .collect();
-            CpuStorage::F16(result)
-        }
-        DType::BF16 => {
-            let a_slice = a_cpu.as_slice::<bf16>()?;
-            let b_slice = b_cpu.as_slice::<bf16>()?;
-            let a_offset = a_layout.start_offset();
-            let b_offset = b_layout.start_offset();
-            let len = a.elem_count();
-
-            let result: Vec<bf16> = (0..len)
-                .into_par_iter()
-                .map(|i| {
-                    let a_val = a_slice[a_offset + i].to_f32();
-                    let b_val = b_slice[b_offset + i].to_f32();
-                    bf16::from_f32(apply_cpu_activation(a_val, activation) * b_val)
-                })
-                .collect();
-            CpuStorage::BF16(result)
-        }
-        _ => candle_core::bail!("fused_glu_cpu: unsupported dtype {:?}", dtype),
-    };
-
-    Ok(Tensor::from((
-        candle_core::Storage::Cpu(result_storage),
-        shape,
-    )))
-}
-
-/// CUDA implementation of fused GLU
-#[cfg(feature = "cuda")]
-fn fused_glu_cuda(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Result<Tensor> {
-    use half::{bf16, f16};
-    use std::ffi::c_void;
-
-    let device = match a.device() {
-        candle_core::Device::Cuda(dev) => dev,
-        _ => candle_core::bail!("fused_glu_cuda requires CUDA device"),
-    };
-
-    let n_elements = a.elem_count();
-    let dtype = a.dtype();
-
-    let a_storage = a.storage_and_layout().0;
-    let b_storage = b.storage_and_layout().0;
-
-    let a_cuda = match &*a_storage {
-        candle_core::Storage::Cuda(s) => s,
-        _ => candle_core::bail!("Expected CUDA storage for a"),
-    };
-    let b_cuda = match &*b_storage {
-        candle_core::Storage::Cuda(s) => s,
-        _ => candle_core::bail!("Expected CUDA storage for b"),
-    };
-
-    let stream = device.cuda_stream().cu_stream();
-
-    match dtype {
-        DType::F16 => {
-            let output = device.alloc_zeros::<f16>(n_elements)?;
-            let a_slice = a_cuda.as_cuda_slice::<f16>()?;
-            let b_slice = b_cuda.as_cuda_slice::<f16>()?;
-
-            let (a_ptr, _a_guard) = slice_ptr(a_slice, 0);
-            let (b_ptr, _b_guard) = slice_ptr(b_slice, 0);
-            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
-
-            unsafe {
-                ffi::fused_glu_f16(
-                    a_ptr as *const c_void,
-                    b_ptr as *const c_void,
-                    out_ptr as *mut c_void,
-                    n_elements as u32,
-                    activation as i32,
-                    stream,
-                );
-            }
-
-            drop(_o_guard);
-            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
-            Ok(Tensor::from((
-                candle_core::Storage::Cuda(out_storage),
-                a.shape().clone(),
-            )))
-        }
-        DType::BF16 => {
-            let output = device.alloc_zeros::<bf16>(n_elements)?;
-            let a_slice = a_cuda.as_cuda_slice::<bf16>()?;
-            let b_slice = b_cuda.as_cuda_slice::<bf16>()?;
-
-            let (a_ptr, _a_guard) = slice_ptr(a_slice, 0);
-            let (b_ptr, _b_guard) = slice_ptr(b_slice, 0);
-            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
-
-            unsafe {
-                ffi::fused_glu_bf16(
-                    a_ptr as *const c_void,
-                    b_ptr as *const c_void,
-                    out_ptr as *mut c_void,
-                    n_elements as u32,
-                    activation as i32,
-                    stream,
-                );
-            }
-
-            drop(_o_guard);
-            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
-            Ok(Tensor::from((
-                candle_core::Storage::Cuda(out_storage),
-                a.shape().clone(),
-            )))
-        }
-        DType::F32 => {
-            let output = device.alloc_zeros::<f32>(n_elements)?;
-            let a_slice = a_cuda.as_cuda_slice::<f32>()?;
-            let b_slice = b_cuda.as_cuda_slice::<f32>()?;
-
-            let (a_ptr, _a_guard) = slice_ptr(a_slice, 0);
-            let (b_ptr, _b_guard) = slice_ptr(b_slice, 0);
-            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
-
-            unsafe {
-                ffi::fused_glu_f32(
-                    a_ptr as *const c_void,
-                    b_ptr as *const c_void,
-                    out_ptr as *mut c_void,
-                    n_elements as u32,
-                    activation as i32,
-                    stream,
-                );
-            }
-
-            drop(_o_guard);
-            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
-            Ok(Tensor::from((
-                candle_core::Storage::Cuda(out_storage),
-                a.shape().clone(),
-            )))
-        }
-        _ => candle_core::bail!("fused_glu_cuda: unsupported dtype {:?}", dtype),
+impl CustomOp2 for FusedGlu {
+    fn name(&self) -> &'static str {
+        "fused-glu"
     }
-}
 
-/// Metal implementation of fused GLU
-#[cfg(feature = "metal")]
-fn fused_glu_metal(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Result<Tensor> {
-    let n_elements = a.elem_count();
-    let dtype = a.dtype();
-    let shape = a.shape().clone();
+    fn cpu_fwd(
+        &self,
+        s1: &CpuStorage,
+        l1: &Layout,
+        s2: &CpuStorage,
+        l2: &Layout,
+    ) -> Result<(CpuStorage, Shape)> {
+        use half::{bf16, f16};
 
-    let (a_storage, a_layout) = a.storage_and_layout();
-    let (b_storage, b_layout) = b.storage_and_layout();
+        let activation = self.0;
+        let out_shape = l1.shape().clone();
+        let len = out_shape.elem_count();
 
-    let a_metal = match &*a_storage {
-        candle_core::Storage::Metal(s) => s,
-        _ => candle_core::bail!("fused_glu_metal: expected Metal storage"),
-    };
-    let b_metal = match &*b_storage {
-        candle_core::Storage::Metal(s) => s,
-        _ => candle_core::bail!("fused_glu_metal: expected Metal storage"),
-    };
+        let result_storage = match s1.dtype() {
+            DType::F32 => {
+                let a_slice = s1.as_slice::<f32>()?;
+                let b_slice = s2.as_slice::<f32>()?;
+                let a_offset = l1.start_offset();
+                let b_offset = l2.start_offset();
 
-    let device = a_metal.device();
-    let encoder = device.command_encoder()?;
-    encoder.set_label("fused-glu");
+                let result: Vec<f32> = (0..len)
+                    .into_par_iter()
+                    .map(|i| {
+                        let a_val = a_slice[a_offset + i];
+                        let b_val = b_slice[b_offset + i];
+                        apply_cpu_activation(a_val, activation) * b_val
+                    })
+                    .collect();
+                CpuStorage::F32(result)
+            }
+            DType::F16 => {
+                let a_slice = s1.as_slice::<f16>()?;
+                let b_slice = s2.as_slice::<f16>()?;
+                let a_offset = l1.start_offset();
+                let b_offset = l2.start_offset();
 
-    let output = device.new_buffer(n_elements, dtype, "fused-glu-output")?;
+                let result: Vec<f16> = (0..len)
+                    .into_par_iter()
+                    .map(|i| {
+                        let a_val = a_slice[a_offset + i].to_f32();
+                        // Cast activation back to f16 before multiplying, matching candle's
+                        // two-step behavior: unary op in f32 -> cast to f16 -> binary mul
+                        let activated = f16::from_f32(apply_cpu_activation(a_val, activation));
+                        f16::from_f32(activated.to_f32() * b_slice[b_offset + i].to_f32())
+                    })
+                    .collect();
+                CpuStorage::F16(result)
+            }
+            DType::BF16 => {
+                let a_slice = s1.as_slice::<bf16>()?;
+                let b_slice = s2.as_slice::<bf16>()?;
+                let a_offset = l1.start_offset();
+                let b_offset = l2.start_offset();
 
-    crate::metal_kernels::call_fused_glu(
-        device.device(),
-        &encoder,
-        &crate::metal_kernels::Kernels::new(),
-        dtype,
-        a_metal.buffer(),
-        b_metal.buffer(),
-        a_layout.start_offset() * dtype.size_in_bytes(),
-        b_layout.start_offset() * dtype.size_in_bytes(),
-        n_elements,
-        activation as i32,
-        &output,
-    )
-    .map_err(candle_core::Error::wrap)?;
+                let result: Vec<bf16> = (0..len)
+                    .into_par_iter()
+                    .map(|i| {
+                        let a_val = a_slice[a_offset + i].to_f32();
+                        // Cast activation back to bf16 before multiplying, matching candle's
+                        // two-step behavior: unary op in f32 -> cast to bf16 -> binary mul
+                        let activated = bf16::from_f32(apply_cpu_activation(a_val, activation));
+                        bf16::from_f32(activated.to_f32() * b_slice[b_offset + i].to_f32())
+                    })
+                    .collect();
+                CpuStorage::BF16(result)
+            }
+            other => candle_core::bail!("fused_glu: unsupported dtype {:?}", other),
+        };
 
-    let newstorage = candle_core::MetalStorage::new(output, device.clone(), n_elements, dtype);
-    Ok(Tensor::from((
-        candle_core::Storage::Metal(newstorage),
-        shape,
-    )))
+        Ok((result_storage, out_shape))
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        s1: &CudaStorage,
+        l1: &Layout,
+        s2: &CudaStorage,
+        l2: &Layout,
+    ) -> Result<(CudaStorage, Shape)> {
+        use half::{bf16, f16};
+
+        let activation = self.0;
+        let device = s1.device();
+        let n_elements = l1.shape().elem_count();
+        let dtype = s1.dtype();
+        let out_shape = l1.shape().clone();
+        let stream = device.cuda_stream().cu_stream();
+        let a_offset = l1.start_offset();
+        let b_offset = l2.start_offset();
+
+        match dtype {
+            DType::F16 => {
+                let output = device.alloc_zeros::<f16>(n_elements)?;
+                let a_slice = s1.as_cuda_slice::<f16>()?;
+                let b_slice = s2.as_cuda_slice::<f16>()?;
+
+                let (a_ptr, _a_guard) = slice_ptr(a_slice, a_offset);
+                let (b_ptr, _b_guard) = slice_ptr(b_slice, b_offset);
+                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+                unsafe {
+                    ffi::fused_glu_f16(
+                        a_ptr as *const c_void,
+                        b_ptr as *const c_void,
+                        out_ptr as *mut c_void,
+                        n_elements as u32,
+                        activation as i32,
+                        stream,
+                    );
+                }
+
+                drop(_o_guard);
+                let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+                Ok((out_storage, out_shape))
+            }
+            DType::BF16 => {
+                let output = device.alloc_zeros::<bf16>(n_elements)?;
+                let a_slice = s1.as_cuda_slice::<bf16>()?;
+                let b_slice = s2.as_cuda_slice::<bf16>()?;
+
+                let (a_ptr, _a_guard) = slice_ptr(a_slice, a_offset);
+                let (b_ptr, _b_guard) = slice_ptr(b_slice, b_offset);
+                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+                unsafe {
+                    ffi::fused_glu_bf16(
+                        a_ptr as *const c_void,
+                        b_ptr as *const c_void,
+                        out_ptr as *mut c_void,
+                        n_elements as u32,
+                        activation as i32,
+                        stream,
+                    );
+                }
+
+                drop(_o_guard);
+                let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+                Ok((out_storage, out_shape))
+            }
+            DType::F32 => {
+                let output = device.alloc_zeros::<f32>(n_elements)?;
+                let a_slice = s1.as_cuda_slice::<f32>()?;
+                let b_slice = s2.as_cuda_slice::<f32>()?;
+
+                let (a_ptr, _a_guard) = slice_ptr(a_slice, a_offset);
+                let (b_ptr, _b_guard) = slice_ptr(b_slice, b_offset);
+                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+                unsafe {
+                    ffi::fused_glu_f32(
+                        a_ptr as *const c_void,
+                        b_ptr as *const c_void,
+                        out_ptr as *mut c_void,
+                        n_elements as u32,
+                        activation as i32,
+                        stream,
+                    );
+                }
+
+                drop(_o_guard);
+                let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+                Ok((out_storage, out_shape))
+            }
+            _ => candle_core::bail!("fused_glu: unsupported dtype {:?}", dtype),
+        }
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        s1: &candle_core::MetalStorage,
+        l1: &Layout,
+        s2: &candle_core::MetalStorage,
+        l2: &Layout,
+    ) -> Result<(candle_core::MetalStorage, Shape)> {
+        let activation = self.0;
+        let n_elements = l1.shape().elem_count();
+        let dtype = s1.dtype();
+        let out_shape = l1.shape().clone();
+
+        let device = s1.device();
+        let encoder = device.command_encoder()?;
+        encoder.set_label("fused-glu");
+
+        let output = device.new_buffer(n_elements, dtype, "fused-glu-output")?;
+
+        crate::metal_kernels::call_fused_glu(
+            device.device(),
+            &encoder,
+            &crate::metal_kernels::Kernels::new(),
+            dtype,
+            s1.buffer(),
+            s2.buffer(),
+            l1.start_offset() * dtype.size_in_bytes(),
+            l2.start_offset() * dtype.size_in_bytes(),
+            n_elements,
+            activation as i32,
+            &output,
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        let newstorage = candle_core::MetalStorage::new(output, device.clone(), n_elements, dtype);
+        Ok((newstorage, out_shape))
+    }
 }
 
 /// Fused GLU activation: output = activation(a) * b
@@ -2338,15 +2316,6 @@ fn fused_glu_metal(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Res
 /// This fuses the activation function application and element-wise multiplication
 /// into a single pass, reducing memory bandwidth and eliminating
 /// intermediate tensor allocation.
-///
-/// Supported on CUDA (optimized kernel), Metal (optimized kernel), and CPU (rayon parallelism).
-///
-/// Args:
-///   a: Input tensor to apply activation to
-///   b: Tensor to multiply with activated values
-///   activation: The activation function to apply (SiLU, GELU, or ReLU)
-///
-/// Returns: Tensor with same shape as inputs
 pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Result<Tensor> {
     let a = a.contiguous()?;
     let b = b.contiguous()?;
@@ -2359,18 +2328,7 @@ pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resul
         );
     }
 
-    match a.device() {
-        #[cfg(feature = "cuda")]
-        candle_core::Device::Cuda(_) => fused_glu_cuda(&a, &b, activation),
-
-        #[cfg(feature = "metal")]
-        candle_core::Device::Metal(_) => fused_glu_metal(&a, &b, activation),
-
-        candle_core::Device::Cpu => fused_glu_cpu_impl(&a, &b, activation),
-
-        #[allow(unreachable_patterns)]
-        _ => candle_core::bail!("fused_glu: unsupported device"),
-    }
+    a.apply_op2_no_bwd(&b, &FusedGlu(activation))
 }
 
 mod tests {
@@ -2827,5 +2785,409 @@ mod tests {
         for (i, &v) in idx.iter().enumerate() {
             assert_eq!(v as usize, N - 1 - i);
         }
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_fused_glu_metal_silu_f32() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::Tensor;
+
+        let cpu = candle_core::Device::Cpu;
+        let metal = candle_core::Device::new_metal(0).unwrap();
+
+        let a_data: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 64.0).collect();
+        let b_data: Vec<f32> = (0..256).map(|i| (i as f32 * 0.7 - 90.0) / 50.0).collect();
+
+        let a_cpu = Tensor::from_vec(a_data.clone(), &[4, 64], &cpu).unwrap();
+        let b_cpu = Tensor::from_vec(b_data.clone(), &[4, 64], &cpu).unwrap();
+        let a_metal = Tensor::from_vec(a_data, &[4, 64], &metal).unwrap();
+        let b_metal = Tensor::from_vec(b_data, &[4, 64], &metal).unwrap();
+
+        let cpu_result = fused_glu(&a_cpu, &b_cpu, GluActivationType::Silu)
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap();
+        let metal_result = fused_glu(&a_metal, &b_metal, GluActivationType::Silu)
+            .unwrap()
+            .to_device(&cpu)
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap();
+
+        for (row_cpu, row_metal) in cpu_result.iter().zip(metal_result.iter()) {
+            for (c, m) in row_cpu.iter().zip(row_metal.iter()) {
+                let diff = (c - m).abs();
+                assert!(
+                    diff < 1e-4,
+                    "SiLU F32 mismatch: cpu={c}, metal={m}, diff={diff}"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_fused_glu_metal_silu_f16() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::{DType, Tensor};
+
+        let cpu = candle_core::Device::Cpu;
+        let metal = candle_core::Device::new_metal(0).unwrap();
+
+        let a_data: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 64.0).collect();
+        let b_data: Vec<f32> = (0..256).map(|i| (i as f32 * 0.7 - 90.0) / 50.0).collect();
+
+        let a_cpu = Tensor::from_vec(a_data.clone(), &[256], &cpu)
+            .unwrap()
+            .to_dtype(DType::F16)
+            .unwrap();
+        let b_cpu = Tensor::from_vec(b_data.clone(), &[256], &cpu)
+            .unwrap()
+            .to_dtype(DType::F16)
+            .unwrap();
+        let a_metal = Tensor::from_vec(a_data, &[256], &metal)
+            .unwrap()
+            .to_dtype(DType::F16)
+            .unwrap();
+        let b_metal = Tensor::from_vec(b_data, &[256], &metal)
+            .unwrap()
+            .to_dtype(DType::F16)
+            .unwrap();
+
+        let cpu_result = fused_glu(&a_cpu, &b_cpu, GluActivationType::Silu)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let metal_result = fused_glu(&a_metal, &b_metal, GluActivationType::Silu)
+            .unwrap()
+            .to_device(&cpu)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+
+        for (i, (c, m)) in cpu_result.iter().zip(metal_result.iter()).enumerate() {
+            let diff = (c - m).abs();
+            assert!(
+                diff < 1e-2,
+                "SiLU F16 mismatch at {i}: cpu={c}, metal={m}, diff={diff}"
+            );
+        }
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_fused_glu_metal_all_activations() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::Tensor;
+
+        let cpu = candle_core::Device::Cpu;
+        let metal = candle_core::Device::new_metal(0).unwrap();
+
+        let a_data: Vec<f32> = (0..128).map(|i| (i as f32 - 64.0) / 32.0).collect();
+        let b_data: Vec<f32> = (0..128).map(|i| (i as f32 * 0.5 - 32.0) / 20.0).collect();
+
+        for act in [
+            GluActivationType::Silu,
+            GluActivationType::Gelu,
+            GluActivationType::Relu,
+            GluActivationType::GeluErf,
+        ] {
+            let a_cpu = Tensor::from_vec(a_data.clone(), &[128], &cpu).unwrap();
+            let b_cpu = Tensor::from_vec(b_data.clone(), &[128], &cpu).unwrap();
+            let a_metal = Tensor::from_vec(a_data.clone(), &[128], &metal).unwrap();
+            let b_metal = Tensor::from_vec(b_data.clone(), &[128], &metal).unwrap();
+
+            let cpu_result = fused_glu(&a_cpu, &b_cpu, act)
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap();
+            let metal_result = fused_glu(&a_metal, &b_metal, act)
+                .unwrap()
+                .to_device(&cpu)
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap();
+
+            for (i, (c, m)) in cpu_result.iter().zip(metal_result.iter()).enumerate() {
+                let diff = (c - m).abs();
+                assert!(
+                    diff < 1e-4,
+                    "{act:?} F32 mismatch at {i}: cpu={c}, metal={m}, diff={diff}"
+                );
+            }
+        }
+    }
+
+    /// Test that fused_glu matches candle's fallback path (a.gelu() * b) for BF16.
+    /// This was the exact scenario that caused model failure (Gemma 3 4B, BF16, GeluPytorchTanh).
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_fused_glu_matches_candle_fallback_bf16() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::{DType, Tensor};
+
+        let metal = candle_core::Device::new_metal(0).unwrap();
+
+        // Use realistic-sized data matching model dimensions
+        let n = 10240;
+        let a_data: Vec<f32> = (0..n).map(|i| (i as f32 - 5120.0) / 2560.0).collect();
+        let b_data: Vec<f32> = (0..n).map(|i| (i as f32 * 0.3 - 1500.0) / 1000.0).collect();
+
+        let a_metal = Tensor::from_vec(a_data.clone(), &[1, 2, n / 2], &metal)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap();
+        let b_metal = Tensor::from_vec(b_data.clone(), &[1, 2, n / 2], &metal)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap();
+
+        // Fused path
+        let fused = fused_glu(&a_metal, &b_metal, GluActivationType::Gelu).unwrap();
+
+        // Candle's fallback: a.gelu() * b (the tanh-approx GELU)
+        let fallback = (a_metal.gelu().unwrap() * &b_metal).unwrap();
+
+        let fused_f32 = fused
+            .to_dtype(DType::F32)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let fallback_f32 = fallback
+            .to_dtype(DType::F32)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+
+        let mut max_diff: f32 = 0.0;
+        let mut num_mismatches = 0;
+        for (_i, (f, fb)) in fused_f32.iter().zip(fallback_f32.iter()).enumerate() {
+            let diff = (f - fb).abs();
+            if diff > max_diff {
+                max_diff = diff;
+            }
+            if diff > 0.0 {
+                num_mismatches += 1;
+            }
+        }
+        eprintln!(
+            "BF16 Gelu fused vs fallback: max_diff={max_diff}, mismatches={num_mismatches}/{}",
+            fused_f32.len()
+        );
+        // Allow up to 1 BF16 ULP difference (0.015625 at values around 1-2)
+        // This is acceptable since Metal compiler may keep intermediate precision
+        assert!(
+            max_diff <= 0.015625,
+            "BF16 Gelu fused vs candle fallback max_diff {max_diff} exceeds 1 BF16 ULP"
+        );
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_glu_cuda_silu_f32() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::Tensor;
+
+        let cpu = candle_core::Device::Cpu;
+        let cuda = candle_core::Device::new_cuda(0).unwrap();
+
+        let a_data: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 64.0).collect();
+        let b_data: Vec<f32> = (0..256).map(|i| (i as f32 * 0.7 - 90.0) / 50.0).collect();
+
+        let a_cpu = Tensor::from_vec(a_data.clone(), &[4, 64], &cpu).unwrap();
+        let b_cpu = Tensor::from_vec(b_data.clone(), &[4, 64], &cpu).unwrap();
+        let a_cuda = Tensor::from_vec(a_data, &[4, 64], &cuda).unwrap();
+        let b_cuda = Tensor::from_vec(b_data, &[4, 64], &cuda).unwrap();
+
+        let cpu_result = fused_glu(&a_cpu, &b_cpu, GluActivationType::Silu)
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap();
+        let cuda_result = fused_glu(&a_cuda, &b_cuda, GluActivationType::Silu)
+            .unwrap()
+            .to_device(&cpu)
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap();
+
+        for (row_cpu, row_cuda) in cpu_result.iter().zip(cuda_result.iter()) {
+            for (c, g) in row_cpu.iter().zip(row_cuda.iter()) {
+                let diff = (c - g).abs();
+                assert!(
+                    diff < 1e-4,
+                    "SiLU F32 mismatch: cpu={c}, cuda={g}, diff={diff}"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_glu_cuda_silu_f16() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::{DType, Tensor};
+
+        let cpu = candle_core::Device::Cpu;
+        let cuda = candle_core::Device::new_cuda(0).unwrap();
+
+        let a_data: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 64.0).collect();
+        let b_data: Vec<f32> = (0..256).map(|i| (i as f32 * 0.7 - 90.0) / 50.0).collect();
+
+        let a_cpu = Tensor::from_vec(a_data.clone(), &[256], &cpu)
+            .unwrap()
+            .to_dtype(DType::F16)
+            .unwrap();
+        let b_cpu = Tensor::from_vec(b_data.clone(), &[256], &cpu)
+            .unwrap()
+            .to_dtype(DType::F16)
+            .unwrap();
+        let a_cuda = Tensor::from_vec(a_data, &[256], &cuda)
+            .unwrap()
+            .to_dtype(DType::F16)
+            .unwrap();
+        let b_cuda = Tensor::from_vec(b_data, &[256], &cuda)
+            .unwrap()
+            .to_dtype(DType::F16)
+            .unwrap();
+
+        let cpu_result = fused_glu(&a_cpu, &b_cpu, GluActivationType::Silu)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let cuda_result = fused_glu(&a_cuda, &b_cuda, GluActivationType::Silu)
+            .unwrap()
+            .to_device(&cpu)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+
+        for (i, (c, g)) in cpu_result.iter().zip(cuda_result.iter()).enumerate() {
+            let diff = (c - g).abs();
+            assert!(
+                diff < 1e-2,
+                "SiLU F16 mismatch at {i}: cpu={c}, cuda={g}, diff={diff}"
+            );
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_glu_cuda_all_activations() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::Tensor;
+
+        let cpu = candle_core::Device::Cpu;
+        let cuda = candle_core::Device::new_cuda(0).unwrap();
+
+        let a_data: Vec<f32> = (0..128).map(|i| (i as f32 - 64.0) / 32.0).collect();
+        let b_data: Vec<f32> = (0..128).map(|i| (i as f32 * 0.5 - 32.0) / 20.0).collect();
+
+        for act in [
+            GluActivationType::Silu,
+            GluActivationType::Gelu,
+            GluActivationType::Relu,
+            GluActivationType::GeluErf,
+        ] {
+            let a_cpu = Tensor::from_vec(a_data.clone(), &[128], &cpu).unwrap();
+            let b_cpu = Tensor::from_vec(b_data.clone(), &[128], &cpu).unwrap();
+            let a_cuda = Tensor::from_vec(a_data.clone(), &[128], &cuda).unwrap();
+            let b_cuda = Tensor::from_vec(b_data.clone(), &[128], &cuda).unwrap();
+
+            let cpu_result = fused_glu(&a_cpu, &b_cpu, act)
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap();
+            let cuda_result = fused_glu(&a_cuda, &b_cuda, act)
+                .unwrap()
+                .to_device(&cpu)
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap();
+
+            for (i, (c, g)) in cpu_result.iter().zip(cuda_result.iter()).enumerate() {
+                let diff = (c - g).abs();
+                assert!(
+                    diff < 1e-4,
+                    "{act:?} F32 mismatch at {i}: cpu={c}, cuda={g}, diff={diff}"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_glu_matches_candle_fallback_bf16_cuda() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::{DType, Tensor};
+
+        let cuda = candle_core::Device::new_cuda(0).unwrap();
+
+        let n = 10240;
+        let a_data: Vec<f32> = (0..n).map(|i| (i as f32 - 5120.0) / 2560.0).collect();
+        let b_data: Vec<f32> = (0..n).map(|i| (i as f32 * 0.3 - 1500.0) / 1000.0).collect();
+
+        let a_cuda = Tensor::from_vec(a_data.clone(), &[1, 2, n / 2], &cuda)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap();
+        let b_cuda = Tensor::from_vec(b_data.clone(), &[1, 2, n / 2], &cuda)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap();
+
+        // Fused path
+        let fused = fused_glu(&a_cuda, &b_cuda, GluActivationType::Gelu).unwrap();
+
+        // Candle's fallback: a.gelu() * b (the tanh-approx GELU)
+        let fallback = (a_cuda.gelu().unwrap() * &b_cuda).unwrap();
+
+        let fused_f32 = fused
+            .to_dtype(DType::F32)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let fallback_f32 = fallback
+            .to_dtype(DType::F32)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+
+        let mut max_diff: f32 = 0.0;
+        let mut num_mismatches = 0;
+        for (_i, (f, fb)) in fused_f32.iter().zip(fallback_f32.iter()).enumerate() {
+            let diff = (f - fb).abs();
+            if diff > max_diff {
+                max_diff = diff;
+            }
+            if diff > 0.0 {
+                num_mismatches += 1;
+            }
+        }
+        eprintln!(
+            "CUDA BF16 Gelu fused vs fallback: max_diff={max_diff}, mismatches={num_mismatches}/{}",
+            fused_f32.len()
+        );
+        // Allow up to 1 BF16 ULP difference (0.015625 at values around 1-2)
+        assert!(
+            max_diff <= 0.015625,
+            "CUDA BF16 Gelu fused vs candle fallback max_diff {max_diff} exceeds 1 BF16 ULP"
+        );
     }
 }

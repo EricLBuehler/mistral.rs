@@ -28,8 +28,10 @@ template <typename T>
     key_cache[dst_offset] = key_cache[src_offset];
   }
 
-  const int64_t src_block_offset_value = src_block_number * numel_per_block_value;
-  const int64_t dst_block_offset_value = dst_block_number * numel_per_block_value;
+  const int64_t src_block_offset_value =
+      src_block_number * numel_per_block_value;
+  const int64_t dst_block_offset_value =
+      dst_block_number * numel_per_block_value;
 
   // Copy value cache blocks
   for (int i = tid; i < numel_per_block_value; i += threads_per_threadgroup) {

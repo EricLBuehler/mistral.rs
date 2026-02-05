@@ -190,7 +190,9 @@ def get_features_for_base_package(plat: Platform) -> list[str]:
         return []  # aarch64 Linux: CPU-only
 
 
-def get_buildable_packages(configs: dict[str, PackageConfig], plat: Platform) -> list[str]:
+def get_buildable_packages(
+    configs: dict[str, PackageConfig], plat: Platform
+) -> list[str]:
     """Get list of packages that can be built on the current platform."""
     buildable = []
 
@@ -316,7 +318,15 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
     # Build docker image if needed
     print("  Building Docker image...")
     subprocess.run(
-        ["docker", "build", "-t", "mistralrs-wheelmaker:latest", "-f", "Dockerfile.manylinux", "."],
+        [
+            "docker",
+            "build",
+            "-t",
+            "mistralrs-wheelmaker:latest",
+            "-f",
+            "Dockerfile.manylinux",
+            ".",
+        ],
         cwd=REPO_ROOT,
         check=True,
     )
@@ -356,9 +366,12 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
 
     # Fix ownership of target/ directory (Docker creates files as root)
     import getpass
+
     user = getpass.getuser()
     print(f"  Fixing ownership of target/ directory...")
-    subprocess.run(["sudo", "chown", "-R", f"{user}:{user}", "target/"], cwd=REPO_ROOT, check=False)
+    subprocess.run(
+        ["sudo", "chown", "-R", f"{user}:{user}", "target/"], cwd=REPO_ROOT, check=False
+    )
 
     # Move wheels from repo wheels/ to output_dir
     docker_wheels_dir = REPO_ROOT / "wheels" / output_dir.name
@@ -439,7 +452,11 @@ Examples:
         print("\nPackages buildable on this platform:")
         for name in buildable:
             cfg = configs[name]
-            features = cfg.features if cfg.name != "mistralrs" else get_features_for_base_package(plat)
+            features = (
+                cfg.features
+                if cfg.name != "mistralrs"
+                else get_features_for_base_package(plat)
+            )
             print(f"  - {name} (features: {features or 'none'})")
         return 0
 
@@ -449,7 +466,9 @@ Examples:
     elif args.all:
         to_build = buildable
     else:
-        parser.error("Specify --packages or --all, or use --list to see available packages")
+        parser.error(
+            "Specify --packages or --all, or use --list to see available packages"
+        )
         return 1
 
     # Validate packages
