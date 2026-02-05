@@ -76,9 +76,9 @@ functions = {
 
 def do_streaming_request(messages, tools, round_num):
     """Make a streaming request and handle the response."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Round {round_num}: Making streaming request...")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     stream = client.chat.completions.create(
         model="default",
@@ -101,7 +101,7 @@ def do_streaming_request(messages, tools, round_num):
 
         # Print reasoning content in gray (if present)
         # The field may be 'reasoning_content' or accessible via getattr
-        reasoning = getattr(delta, 'reasoning_content', None)
+        reasoning = getattr(delta, "reasoning_content", None)
         if reasoning:
             # Print reasoning in gray/dim
             print(f"\033[90m{reasoning}\033[0m", end="", flush=True)
@@ -118,7 +118,11 @@ def do_streaming_request(messages, tools, round_num):
                 # Find or create the tool call entry
                 while len(collected_tool_calls) <= tool_call.index:
                     collected_tool_calls.append(
-                        {"id": None, "type": "function", "function": {"name": "", "arguments": ""}}
+                        {
+                            "id": None,
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        }
                     )
 
                 tc = collected_tool_calls[tool_call.index]
@@ -176,10 +180,14 @@ def main():
         }
     ]
 
-    print("User: Please write and run a python script to do a matmul of 2 random integer matrices. Then tell me JUST the result of the matmul.")
+    print(
+        "User: Please write and run a python script to do a matmul of 2 random integer matrices. Then tell me JUST the result of the matmul."
+    )
 
     for round_num in range(1, MAX_TOOL_ROUNDS + 1):
-        content, tool_calls, finish_reason, reasoning = do_streaming_request(messages, tools, round_num)
+        content, tool_calls, finish_reason, reasoning = do_streaming_request(
+            messages, tools, round_num
+        )
 
         if finish_reason == "tool_calls" and tool_calls:
             print(f"\nTool calls detected ({len(tool_calls)}):")

@@ -43,7 +43,8 @@ inline uchar float_to_fp8_e4m3(float f) {
   int exp = int((bits >> 23) & 0xFF) - 127 + 7; // adjust bias
   uint man = bits & 0x7FFFFF;
 
-  // Handle infinity or overflow -> clamp to max value (448 = exp=15, mantissa=6)
+  // Handle infinity or overflow -> clamp to max value (448 = exp=15,
+  // mantissa=6)
   if (isinf(f) || exp > 0xE) {
     // E4M3 max value: exp=15, mantissa=6 (value = 1.75 * 2^8 = 448)
     // mantissa=7 is reserved for NaN

@@ -2306,8 +2306,7 @@ impl CustomOp2 for FusedGlu {
         )
         .map_err(candle_core::Error::wrap)?;
 
-        let newstorage =
-            candle_core::MetalStorage::new(output, device.clone(), n_elements, dtype);
+        let newstorage = candle_core::MetalStorage::new(output, device.clone(), n_elements, dtype);
         Ok((newstorage, out_shape))
     }
 }
@@ -2989,6 +2988,206 @@ mod tests {
         assert!(
             max_diff <= 0.015625,
             "BF16 Gelu fused vs candle fallback max_diff {max_diff} exceeds 1 BF16 ULP"
+        );
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_glu_cuda_silu_f32() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::Tensor;
+
+        let cpu = candle_core::Device::Cpu;
+        let cuda = candle_core::Device::new_cuda(0).unwrap();
+
+        let a_data: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 64.0).collect();
+        let b_data: Vec<f32> = (0..256).map(|i| (i as f32 * 0.7 - 90.0) / 50.0).collect();
+
+        let a_cpu = Tensor::from_vec(a_data.clone(), &[4, 64], &cpu).unwrap();
+        let b_cpu = Tensor::from_vec(b_data.clone(), &[4, 64], &cpu).unwrap();
+        let a_cuda = Tensor::from_vec(a_data, &[4, 64], &cuda).unwrap();
+        let b_cuda = Tensor::from_vec(b_data, &[4, 64], &cuda).unwrap();
+
+        let cpu_result = fused_glu(&a_cpu, &b_cpu, GluActivationType::Silu)
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap();
+        let cuda_result = fused_glu(&a_cuda, &b_cuda, GluActivationType::Silu)
+            .unwrap()
+            .to_device(&cpu)
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap();
+
+        for (row_cpu, row_cuda) in cpu_result.iter().zip(cuda_result.iter()) {
+            for (c, g) in row_cpu.iter().zip(row_cuda.iter()) {
+                let diff = (c - g).abs();
+                assert!(
+                    diff < 1e-4,
+                    "SiLU F32 mismatch: cpu={c}, cuda={g}, diff={diff}"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_glu_cuda_silu_f16() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::{DType, Tensor};
+
+        let cpu = candle_core::Device::Cpu;
+        let cuda = candle_core::Device::new_cuda(0).unwrap();
+
+        let a_data: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 64.0).collect();
+        let b_data: Vec<f32> = (0..256).map(|i| (i as f32 * 0.7 - 90.0) / 50.0).collect();
+
+        let a_cpu = Tensor::from_vec(a_data.clone(), &[256], &cpu)
+            .unwrap()
+            .to_dtype(DType::F16)
+            .unwrap();
+        let b_cpu = Tensor::from_vec(b_data.clone(), &[256], &cpu)
+            .unwrap()
+            .to_dtype(DType::F16)
+            .unwrap();
+        let a_cuda = Tensor::from_vec(a_data, &[256], &cuda)
+            .unwrap()
+            .to_dtype(DType::F16)
+            .unwrap();
+        let b_cuda = Tensor::from_vec(b_data, &[256], &cuda)
+            .unwrap()
+            .to_dtype(DType::F16)
+            .unwrap();
+
+        let cpu_result = fused_glu(&a_cpu, &b_cpu, GluActivationType::Silu)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let cuda_result = fused_glu(&a_cuda, &b_cuda, GluActivationType::Silu)
+            .unwrap()
+            .to_device(&cpu)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+
+        for (i, (c, g)) in cpu_result.iter().zip(cuda_result.iter()).enumerate() {
+            let diff = (c - g).abs();
+            assert!(
+                diff < 1e-2,
+                "SiLU F16 mismatch at {i}: cpu={c}, cuda={g}, diff={diff}"
+            );
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_glu_cuda_all_activations() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::Tensor;
+
+        let cpu = candle_core::Device::Cpu;
+        let cuda = candle_core::Device::new_cuda(0).unwrap();
+
+        let a_data: Vec<f32> = (0..128).map(|i| (i as f32 - 64.0) / 32.0).collect();
+        let b_data: Vec<f32> = (0..128).map(|i| (i as f32 * 0.5 - 32.0) / 20.0).collect();
+
+        for act in [
+            GluActivationType::Silu,
+            GluActivationType::Gelu,
+            GluActivationType::Relu,
+            GluActivationType::GeluErf,
+        ] {
+            let a_cpu = Tensor::from_vec(a_data.clone(), &[128], &cpu).unwrap();
+            let b_cpu = Tensor::from_vec(b_data.clone(), &[128], &cpu).unwrap();
+            let a_cuda = Tensor::from_vec(a_data.clone(), &[128], &cuda).unwrap();
+            let b_cuda = Tensor::from_vec(b_data.clone(), &[128], &cuda).unwrap();
+
+            let cpu_result = fused_glu(&a_cpu, &b_cpu, act)
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap();
+            let cuda_result = fused_glu(&a_cuda, &b_cuda, act)
+                .unwrap()
+                .to_device(&cpu)
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap();
+
+            for (i, (c, g)) in cpu_result.iter().zip(cuda_result.iter()).enumerate() {
+                let diff = (c - g).abs();
+                assert!(
+                    diff < 1e-4,
+                    "{act:?} F32 mismatch at {i}: cpu={c}, cuda={g}, diff={diff}"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_glu_matches_candle_fallback_bf16_cuda() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::{DType, Tensor};
+
+        let cuda = candle_core::Device::new_cuda(0).unwrap();
+
+        let n = 10240;
+        let a_data: Vec<f32> = (0..n).map(|i| (i as f32 - 5120.0) / 2560.0).collect();
+        let b_data: Vec<f32> = (0..n).map(|i| (i as f32 * 0.3 - 1500.0) / 1000.0).collect();
+
+        let a_cuda = Tensor::from_vec(a_data.clone(), &[1, 2, n / 2], &cuda)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap();
+        let b_cuda = Tensor::from_vec(b_data.clone(), &[1, 2, n / 2], &cuda)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap();
+
+        // Fused path
+        let fused = fused_glu(&a_cuda, &b_cuda, GluActivationType::Gelu).unwrap();
+
+        // Candle's fallback: a.gelu() * b (the tanh-approx GELU)
+        let fallback = (a_cuda.gelu().unwrap() * &b_cuda).unwrap();
+
+        let fused_f32 = fused
+            .to_dtype(DType::F32)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let fallback_f32 = fallback
+            .to_dtype(DType::F32)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+
+        let mut max_diff: f32 = 0.0;
+        let mut num_mismatches = 0;
+        for (_i, (f, fb)) in fused_f32.iter().zip(fallback_f32.iter()).enumerate() {
+            let diff = (f - fb).abs();
+            if diff > max_diff {
+                max_diff = diff;
+            }
+            if diff > 0.0 {
+                num_mismatches += 1;
+            }
+        }
+        eprintln!(
+            "CUDA BF16 Gelu fused vs fallback: max_diff={max_diff}, mismatches={num_mismatches}/{}",
+            fused_f32.len()
+        );
+        // Allow up to 1 BF16 ULP difference (0.015625 at values around 1-2)
+        assert!(
+            max_diff <= 0.015625,
+            "CUDA BF16 Gelu fused vs candle fallback max_diff {max_diff} exceeds 1 BF16 ULP"
         );
     }
 }

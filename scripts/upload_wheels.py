@@ -151,7 +151,9 @@ def upload_wheels(
         print(f"Wheels to upload ({len(wheel_paths)}):")
         for w in package_wheels:
             print(f"  - {w.path.name}")
-            print(f"    Version: {w.version}, Platform: {w.platform_tag}, ABI: {w.abi_tag}")
+            print(
+                f"    Version: {w.version}, Platform: {w.platform_tag}, ABI: {w.abi_tag}"
+            )
 
         if dry_run:
             print("  [DRY RUN - skipping actual upload]")

@@ -7,11 +7,11 @@
 
 #include "afq_utils.cuh"
 #include <cfloat>
+#include <cstdint>
 #include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
-#include <cstdint>
 
 // ============================================================================
 // Dequantization Kernels
@@ -22,10 +22,10 @@
 // Output layout: [rows, cols]
 template <typename T, int bits, int group_size>
 __global__ void afq_dequantize_kernel(const uint32_t *__restrict__ w_q,
-                                       const T *__restrict__ scales,
-                                       const T *__restrict__ biases,
-                                       T *__restrict__ output, int rows,
-                                       int cols) {
+                                      const T *__restrict__ scales,
+                                      const T *__restrict__ biases,
+                                      T *__restrict__ output, int rows,
+                                      int cols) {
   constexpr int values_per_u32 = 32 / bits;
   const int packed_cols = cols * bits / 32;
   const int groups_per_row = cols / group_size;
@@ -62,10 +62,10 @@ __global__ void afq_dequantize_kernel(const uint32_t *__restrict__ w_q,
 // 8 values packed into 3 bytes (24 bits)
 template <typename T, int group_size>
 __global__ void afq_dequantize_3bit_kernel(const uint8_t *__restrict__ w_q,
-                                            const T *__restrict__ scales,
-                                            const T *__restrict__ biases,
-                                            T *__restrict__ output, int rows,
-                                            int cols) {
+                                           const T *__restrict__ scales,
+                                           const T *__restrict__ biases,
+                                           T *__restrict__ output, int rows,
+                                           int cols) {
   const int groups_per_row = cols / group_size;
   // 8 values per 3 bytes
   const int packed_cols = (cols * 3 + 7) / 8;
@@ -95,10 +95,10 @@ __global__ void afq_dequantize_3bit_kernel(const uint8_t *__restrict__ w_q,
 // 4 values packed into 3 bytes (24 bits)
 template <typename T, int group_size>
 __global__ void afq_dequantize_6bit_kernel(const uint8_t *__restrict__ w_q,
-                                            const T *__restrict__ scales,
-                                            const T *__restrict__ biases,
-                                            T *__restrict__ output, int rows,
-                                            int cols) {
+                                           const T *__restrict__ scales,
+                                           const T *__restrict__ biases,
+                                           T *__restrict__ output, int rows,
+                                           int cols) {
   const int groups_per_row = cols / group_size;
   // 4 values per 3 bytes
   const int packed_cols = (cols * 6 + 7) / 8;
@@ -131,8 +131,8 @@ __global__ void afq_dequantize_6bit_kernel(const uint8_t *__restrict__ w_q,
 // Compute scale and bias for a group using warp reduction
 template <typename T>
 __device__ void compute_scale_bias_warp(const T *w, int group_start, int cols,
-                                         int group_size, float &scale,
-                                         float &bias) {
+                                        int group_size, float &scale,
+                                        float &bias) {
   int lane = threadIdx.x % AFQ_WARP_SIZE;
 
   float local_min = FLT_MAX;
@@ -358,7 +358,7 @@ DEFINE_DEQUANT_LAUNCHER(8, 128, __nv_bfloat16, bf16)
     int blocks = cdiv(threads, AFQ_BLOCK_SIZE);                                \
     /* Zero out w_q first */                                                   \
     int packed_cols = cols * bits / 32;                                        \
-    cudaMemset(w_q, 0, rows *packed_cols * sizeof(uint32_t));                  \
+    cudaMemset(w_q, 0, rows * packed_cols * sizeof(uint32_t));                 \
     afq_quantize_kernel<dtype, bits, gs>                                       \
         <<<blocks, AFQ_BLOCK_SIZE>>>(w, w_q, scales, biases, rows, cols);      \
   }
