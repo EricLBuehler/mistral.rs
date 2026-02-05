@@ -92,9 +92,9 @@ mistralrs doctor
 ## What Makes It Fast
 
 **Performance**
-- Continous batching support by default on all devices.
+- Continuous batching support by default on all devices.
 - CUDA with [FlashAttention](docs/FLASH_ATTENTION.md) V2/V3, Metal, [multi-GPU tensor parallelism](docs/DISTRIBUTED/DISTRIBUTED.md)
-- [PagedAttention](docs/PAGED_ATTENTION.md) for high throughput continous batching on CUDA or Apple Silicon, prefix caching (including multimodal)
+- [PagedAttention](docs/PAGED_ATTENTION.md) for high throughput continuous batching on CUDA or Apple Silicon, prefix caching (including multimodal)
 
 **Quantization** ([full docs](docs/QUANTS.md))
 - [In-situ quantization (ISQ)](docs/ISQ.md) of any Hugging Face model
