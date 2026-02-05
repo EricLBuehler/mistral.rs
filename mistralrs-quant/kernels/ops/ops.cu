@@ -851,7 +851,8 @@ extern "C" void softmax_with_sinks_f32(
 enum GluActivation {
     GLU_SILU = 0,
     GLU_GELU = 1,
-    GLU_RELU = 2
+    GLU_RELU = 2,
+    GLU_GELU_ERF = 3
 };
 
 // SiLU activation: x * sigmoid(x)
@@ -873,11 +874,17 @@ __device__ __forceinline__ float glu_relu(float x) {
     return fmaxf(x, 0.0f);
 }
 
+// GELU (exact ERF version): x * normcdf(x), matching candle's CUDA impl
+__device__ __forceinline__ float glu_gelu_erf(float x) {
+    return x * normcdff(x);
+}
+
 __device__ __forceinline__ float apply_glu_activation(float x, int act) {
     switch (act) {
         case GLU_SILU: return glu_silu(x);
         case GLU_GELU: return glu_gelu(x);
         case GLU_RELU: return glu_relu(x);
+        case GLU_GELU_ERF: return glu_gelu_erf(x);
         default: return glu_silu(x);
     }
 }
@@ -895,9 +902,10 @@ __global__ void fused_glu_kernel(
     if (idx >= N) return;
 
     float a_val = (float)a[idx];
-    float b_val = (float)b[idx];
-    float result = apply_glu_activation(a_val, activation) * b_val;
-    output[idx] = (T)result;
+    // Cast activation back to T before multiplying, matching candle's
+    // two-step behavior: unary op in float32 -> cast to T -> binary mul in T
+    T activated = (T)apply_glu_activation(a_val, activation);
+    output[idx] = activated * b[idx];
 }
 
 // Vectorized version for 4 elements at a time
@@ -921,15 +929,17 @@ __global__ void fused_glu_kernel_vec4(
     float a2 = (float)((T*)&a4)[2];
     float a3 = (float)((T*)&a4)[3];
 
-    float b0 = (float)((T*)&b4)[0];
-    float b1 = (float)((T*)&b4)[1];
-    float b2 = (float)((T*)&b4)[2];
-    float b3 = (float)((T*)&b4)[3];
+    // Cast activation back to T before multiplying, matching candle's
+    // two-step behavior: unary op in float32 -> cast to T -> binary mul in T
+    T act0 = (T)apply_glu_activation(a0, activation);
+    T act1 = (T)apply_glu_activation(a1, activation);
+    T act2 = (T)apply_glu_activation(a2, activation);
+    T act3 = (T)apply_glu_activation(a3, activation);
 
-    ((T*)&out4)[0] = (T)(apply_glu_activation(a0, activation) * b0);
-    ((T*)&out4)[1] = (T)(apply_glu_activation(a1, activation) * b1);
-    ((T*)&out4)[2] = (T)(apply_glu_activation(a2, activation) * b2);
-    ((T*)&out4)[3] = (T)(apply_glu_activation(a3, activation) * b3);
+    ((T*)&out4)[0] = act0 * ((T*)&b4)[0];
+    ((T*)&out4)[1] = act1 * ((T*)&b4)[1];
+    ((T*)&out4)[2] = act2 * ((T*)&b4)[2];
+    ((T*)&out4)[3] = act3 * ((T*)&b4)[3];
 
     output[idx] = out4;
 }
