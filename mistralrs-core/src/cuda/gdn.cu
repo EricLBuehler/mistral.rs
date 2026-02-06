@@ -5,17 +5,26 @@
 #include <cuda_runtime.h>
 
 // ============================================================================
-// Kernel 1: gated_delta_rule_recurrence
+// Kernel 1: gated_delta_rule_recurrence (optimized)
 //
-// Fuses the entire sequential recurrence loop into a single kernel.
-// One block per (batch, head) pair, V_DIM threads per block.
-// Each thread owns one column of the state matrix.
+// V-tiled recurrence with compile-time K dimension for register residency.
+// Grid: (ceil(V/BV), B*H), Block: (BV,). Each thread owns BK registers of
+// state. Shared memory holds k_buf and q_buf (2*BK floats).
+//
+// Optimizations over naive version:
+//   - Template BK → float s[BK] lives in true registers (1 cycle vs ~30)
+//   - #pragma unroll on all k-loops → full ILP
+//   - Fused decay+kv_mem pass and fused state_update+output pass
+//   - __fmaf_rn intrinsics for guaranteed fused multiply-add
+//   - BV=64 threads → 2 warps, 6 blocks/SM on Ampere
 //
 // q,k: [BH, S, K]  v: [BH, S, V]  g,beta: [BH, S]
 // state: [BH, K, V] (in/out)  output: [BH, S, V]
 // ============================================================================
 
-__global__ void gated_delta_rule_recurrence_kernel(
+// Optimized kernel: BK known at compile time → registers + full unrolling
+template <int BK, int BV>
+__global__ void gated_delta_rule_recurrence_kernel_tiled(
     const float *__restrict__ q,     // [BH, S, K]
     const float *__restrict__ k,     // [BH, S, K]
     const float *__restrict__ v,     // [BH, S, V]
@@ -23,15 +32,109 @@ __global__ void gated_delta_rule_recurrence_kernel(
     const float *__restrict__ beta,  // [BH, S]
     float *__restrict__ state,       // [BH, K, V]
     float *__restrict__ output,      // [BH, S, V]
-    int seq_len, int k_dim, int v_dim) {
+    int seq_len, int v_dim) {
 
-  const int bh = blockIdx.x; // batch*head index
-  const int tid = threadIdx.x; // v_dim index
+  const int v_tile = blockIdx.x;  // which V-tile
+  const int bh = blockIdx.y;      // batch*head index
+  const int tid = threadIdx.x;    // thread within tile [0, BV)
+  const int v_idx = v_tile * BV + tid;  // global V index
 
-  if (tid >= v_dim)
+  if (v_idx >= v_dim)
     return;
 
   // Pointers for this (batch, head)
+  const float *q_bh = q + bh * seq_len * BK;
+  const float *k_bh = k + bh * seq_len * BK;
+  const float *v_bh = v + bh * seq_len * v_dim;
+  const float *g_bh = g + bh * seq_len;
+  const float *beta_bh = beta + bh * seq_len;
+  float *state_bh = state + bh * BK * v_dim;
+  float *out_bh = output + bh * seq_len * v_dim;
+
+  // Shared memory: k_buf[BK] + q_buf[BK]
+  __shared__ float k_buf[BK];
+  __shared__ float q_buf[BK];
+
+  // Load state column into registers — BK is compile-time, so this is
+  // a true register array (not spilled to local memory)
+  float s[BK];
+  #pragma unroll
+  for (int j = 0; j < BK; j++) {
+    s[j] = state_bh[j * v_dim + v_idx];
+  }
+
+  for (int t = 0; t < seq_len; t++) {
+    // Collaboratively load k_t into shared memory
+    // BK / BV loads per thread (e.g. 128/64 = 2)
+    #pragma unroll
+    for (int j = tid; j < BK; j += BV) {
+      k_buf[j] = k_bh[t * BK + j];
+    }
+    __syncthreads();
+
+    // Load scalars for this timestep
+    float decay = expf(g_bh[t]);
+    float beta_t = beta_bh[t];
+    float v_t = v_bh[t * v_dim + v_idx];
+
+    // Fused pass 1: decay state + compute kv_mem
+    float kv_mem = 0.0f;
+    #pragma unroll
+    for (int j = 0; j < BK; j++) {
+      s[j] *= decay;
+      kv_mem = __fmaf_rn(s[j], k_buf[j], kv_mem);
+    }
+
+    // Delta rule
+    float delta = (v_t - kv_mem) * beta_t;
+
+    // Collaboratively load q_t into shared memory
+    #pragma unroll
+    for (int j = tid; j < BK; j += BV) {
+      q_buf[j] = q_bh[t * BK + j];
+    }
+    __syncthreads();
+
+    // Fused pass 2: update state + compute output
+    float y_t = 0.0f;
+    #pragma unroll
+    for (int j = 0; j < BK; j++) {
+      s[j] = __fmaf_rn(k_buf[j], delta, s[j]);
+      y_t = __fmaf_rn(s[j], q_buf[j], y_t);
+    }
+
+    out_bh[t * v_dim + v_idx] = y_t;
+
+    __syncthreads();
+  }
+
+  // Write state back
+  #pragma unroll
+  for (int j = 0; j < BK; j++) {
+    state_bh[j * v_dim + v_idx] = s[j];
+  }
+}
+
+// Fallback kernel: runtime k_dim, still V-tiled for occupancy
+template <int BV, int MAX_K>
+__global__ void gated_delta_rule_recurrence_kernel_fallback(
+    const float *__restrict__ q,
+    const float *__restrict__ k,
+    const float *__restrict__ v,
+    const float *__restrict__ g,
+    const float *__restrict__ beta,
+    float *__restrict__ state,
+    float *__restrict__ output,
+    int seq_len, int k_dim, int v_dim) {
+
+  const int v_tile = blockIdx.x;
+  const int bh = blockIdx.y;
+  const int tid = threadIdx.x;
+  const int v_idx = v_tile * BV + tid;
+
+  if (v_idx >= v_dim)
+    return;
+
   const float *q_bh = q + bh * seq_len * k_dim;
   const float *k_bh = k + bh * seq_len * k_dim;
   const float *v_bh = v + bh * seq_len * v_dim;
@@ -40,75 +143,51 @@ __global__ void gated_delta_rule_recurrence_kernel(
   float *state_bh = state + bh * k_dim * v_dim;
   float *out_bh = output + bh * seq_len * v_dim;
 
-  // Shared memory for k_buf and q_buf (loaded collaboratively)
   extern __shared__ float shared[];
-  float *k_buf = shared;            // [k_dim]
-  float *q_buf = shared + k_dim;    // [k_dim]
+  float *k_buf = shared;
+  float *q_buf = shared + k_dim;
 
-  // Load state column into registers
-  // Each thread handles state[j][tid] for all j in [0, k_dim)
-  // We use register array -- k_dim is typically 128, fits in registers
-  // For very large k_dim, we'd need a different approach, but 128 is fine
-  float s[128]; // max supported k_dim
+  float s[MAX_K];
   for (int j = 0; j < k_dim; j++) {
-    s[j] = state_bh[j * v_dim + tid];
+    s[j] = state_bh[j * v_dim + v_idx];
   }
 
   for (int t = 0; t < seq_len; t++) {
-    // Load g_t and compute decay
-    float g_t = g_bh[t];
-    float decay = expf(g_t);
-
-    // Apply decay to state column
-    for (int j = 0; j < k_dim; j++) {
-      s[j] *= decay;
-    }
-
-    // Collaboratively load k_t into shared memory
-    for (int j = tid; j < k_dim; j += v_dim) {
+    for (int j = tid; j < k_dim; j += BV) {
       k_buf[j] = k_bh[t * k_dim + j];
     }
     __syncthreads();
 
-    // Load beta_t and v_t for this thread
+    float decay = expf(g_bh[t]);
     float beta_t = beta_bh[t];
-    float v_t = v_bh[t * v_dim + tid];
+    float v_t = v_bh[t * v_dim + v_idx];
 
-    // Compute kv_mem = sum_j(state[j][tid] * k_buf[j])
     float kv_mem = 0.0f;
     for (int j = 0; j < k_dim; j++) {
-      kv_mem += s[j] * k_buf[j];
+      s[j] *= decay;
+      kv_mem = __fmaf_rn(s[j], k_buf[j], kv_mem);
     }
 
-    // Compute delta = (v_t - kv_mem) * beta_t
     float delta = (v_t - kv_mem) * beta_t;
 
-    // Update state: state[j][tid] += k_buf[j] * delta
-    for (int j = 0; j < k_dim; j++) {
-      s[j] += k_buf[j] * delta;
-    }
-
-    // Collaboratively load q_t into shared memory (with scale already applied)
-    for (int j = tid; j < k_dim; j += v_dim) {
+    for (int j = tid; j < k_dim; j += BV) {
       q_buf[j] = q_bh[t * k_dim + j];
     }
     __syncthreads();
 
-    // Compute y_t = sum_j(state[j][tid] * q_buf[j])
     float y_t = 0.0f;
     for (int j = 0; j < k_dim; j++) {
-      y_t += s[j] * q_buf[j];
+      s[j] = __fmaf_rn(k_buf[j], delta, s[j]);
+      y_t = __fmaf_rn(s[j], q_buf[j], y_t);
     }
 
-    // Write output
-    out_bh[t * v_dim + tid] = y_t;
+    out_bh[t * v_dim + v_idx] = y_t;
 
-    __syncthreads(); // Ensure shared memory is free for next iteration
+    __syncthreads();
   }
 
-  // Write state back
   for (int j = 0; j < k_dim; j++) {
-    state_bh[j * v_dim + tid] = s[j];
+    state_bh[j * v_dim + v_idx] = s[j];
   }
 }
 
@@ -118,14 +197,33 @@ extern "C" void gated_delta_rule_recurrence(
     int k_dim, int v_dim, int64_t stream) {
 
   const cudaStream_t custream = (cudaStream_t)stream;
-  // One block per (batch, head), v_dim threads per block
-  dim3 grid(bh);
-  dim3 block(v_dim);
-  // Shared memory: k_buf[k_dim] + q_buf[k_dim]
-  size_t smem = 2 * k_dim * sizeof(float);
 
-  gated_delta_rule_recurrence_kernel<<<grid, block, smem, custream>>>(
-      q, k, v, g, beta, state, output, seq_len, k_dim, v_dim);
+  if (k_dim == 128) {
+    // Fast path for Qwen3-Next (k_dim=128)
+    constexpr int BK = 128;
+    constexpr int BV = 64;
+    dim3 grid((v_dim + BV - 1) / BV, bh);
+    dim3 block(BV);
+    gated_delta_rule_recurrence_kernel_tiled<BK, BV><<<grid, block, 0, custream>>>(
+        q, k, v, g, beta, state, output, seq_len, v_dim);
+  } else if (k_dim == 64) {
+    // Fast path for models with k_dim=64
+    constexpr int BK = 64;
+    constexpr int BV = 64;
+    dim3 grid((v_dim + BV - 1) / BV, bh);
+    dim3 block(BV);
+    gated_delta_rule_recurrence_kernel_tiled<BK, BV><<<grid, block, 0, custream>>>(
+        q, k, v, g, beta, state, output, seq_len, v_dim);
+  } else {
+    // Fallback for other k_dim values (runtime loop, still V-tiled)
+    constexpr int BV = 64;
+    constexpr int MAX_K = 256;
+    dim3 grid((v_dim + BV - 1) / BV, bh);
+    dim3 block(BV);
+    size_t smem = 2 * k_dim * sizeof(float);
+    gated_delta_rule_recurrence_kernel_fallback<BV, MAX_K><<<grid, block, smem, custream>>>(
+        q, k, v, g, beta, state, output, seq_len, k_dim, v_dim);
+  }
 }
 
 // ============================================================================
