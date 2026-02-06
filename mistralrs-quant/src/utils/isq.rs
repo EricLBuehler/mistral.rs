@@ -20,8 +20,7 @@ pub fn apply_immediate_isq(
         return Ok(layer);
     };
     let prefix = format!("{}.weight", vb.prefix());
-    if let Some(ImmediateIsqMatch { ty, device }) = crate::resolve_immediate_isq(&params, &prefix)
-    {
+    if let Some(ImmediateIsqMatch { ty, device }) = crate::resolve_immediate_isq(&params, &prefix) {
         let device = device.unwrap_or_else(|| vb.device().clone());
 
         if let Some(pool) = &params.pool {
@@ -29,13 +28,10 @@ pub fn apply_immediate_isq(
             let guard = params.guard.clone();
             let (tx, rx) = pending_layer::pending_isq_channel();
             pool.spawn(move || {
-                let result = layer.clone().apply_isq(
-                    Some(ty),
-                    device,
-                    &AtomicUsize::new(0),
-                    None,
-                    guard,
-                );
+                let result =
+                    layer
+                        .clone()
+                        .apply_isq(Some(ty), device, &AtomicUsize::new(0), None, guard);
                 let _ = tx.send(result);
             });
             Ok(Arc::new(PendingIsqLayer::new(rx)))

@@ -70,13 +70,13 @@ pub use lora::{
     LoraAdapter, LoraConfig, StaticLoraConfig, MULTI_LORA_DELIMITER,
 };
 pub use mxfp4::MXFP4Layer;
+pub use pending_layer::PendingIsqLayer;
 pub use pertensor_fp8::PerTensorFP8Linear;
 pub use unquantized::UnquantLinear;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_interleaved;
-pub use pending_layer::PendingIsqLayer;
 pub use utils::isq::apply_immediate_isq;
 #[cfg(feature = "cuda")]
 pub use utils::softmax_with_sinks;
@@ -157,7 +157,9 @@ pub fn set_immediate_isq_with_pool(
 /// Thread count is based on the quantization type:
 /// - GGML types (Q2K-Q8K) and F8E4M3: multi-threaded (CPU quantization)
 /// - HQQ/AFQ: single-threaded (GPU quantization)
-pub fn create_isq_thread_pool(ty: Option<IsqType>) -> rayon::ThreadPool {
+/// Create a rayon thread pool for parallel immediate ISQ.
+/// Returns `(pool, num_threads)` so callers can log the thread count.
+pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize) {
     let num_threads = if std::env::var("MISTRALRS_ISQ_SINGLETHREAD").is_ok() {
         1
     } else if let Some(ty) = ty {
@@ -168,10 +170,11 @@ pub fn create_isq_thread_pool(ty: Option<IsqType>) -> rayon::ThreadPool {
         rayon::current_num_threads()
     };
 
-    rayon::ThreadPoolBuilder::new()
+    let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
         .build()
-        .expect("Failed to create ISQ thread pool")
+        .expect("Failed to create ISQ thread pool");
+    (pool, num_threads)
 }
 
 pub fn get_immediate_isq() -> Option<ImmediateIsqParams> {

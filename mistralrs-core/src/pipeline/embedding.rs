@@ -439,7 +439,8 @@ impl Loader for EmbeddingLoader {
         let use_immediate = allow_immediate_cli || has_override_isq;
         if use_immediate {
             if !crate::utils::normal::is_integrated_gpu(&device) {
-                let pool = mistralrs_quant::create_isq_thread_pool(immediate_ty);
+                let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
+                info!("Applying immediate ISQ in parallel on {num_threads} threads.");
                 mistralrs_quant::set_immediate_isq_with_pool(
                     immediate_ty,
                     immediate_predicates.clone(),
@@ -447,6 +448,7 @@ impl Loader for EmbeddingLoader {
                     pool,
                 );
             } else {
+                info!("Applying immediate ISQ synchronously (unified memory).");
                 mistralrs_quant::set_immediate_isq_with_overrides(
                     immediate_ty,
                     immediate_predicates.clone(),

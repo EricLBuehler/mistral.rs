@@ -48,12 +48,6 @@ mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
-ISQ supports two quantization strategies, selected automatically:
-
-- **Immediate ISQ** (default): Weights are quantized per-layer during model construction. This is memory-efficient because only one layer's unquantized weights need to be in memory at a time. On discrete GPUs, weights are loaded to CPU, quantized in parallel via a thread pool, and moved to the device. On integrated/unified memory systems (e.g. Apple Silicon, NVIDIA Grace Blackwell), weights are loaded directly to the device. Set `MISTRALRS_ISQ_SINGLETHREAD=1` to force single-threaded quantization.
-
-- **Deferred ISQ**: The full model is loaded to CPU memory first, then all layers are quantized in a post-processing pass via `get_layers` and loaded to the correct device. This path is used when an imatrix file (`--imatrix`) or calibration file (`--calibration-file`) is provided, since these require either the full model or a forward pass before quantization can begin.
-
 For Mixture of Expert models, a method called [MoQE](https://arxiv.org/abs/2310.02410) can be applied to only quantize MoE layers. This is configured via the ISQ "organization" parameter in all APIs. The following models support MoQE:
 - [Phi 3.5 MoE](PHI3.5MOE.md)
 - [DeepSeek V2](DEEPSEEKV2.md)
@@ -62,6 +56,22 @@ For Mixture of Expert models, a method called [MoQE](https://arxiv.org/abs/2310.
 - [GLM4-MoE-Lite](GLM4_MOE_LITE.md)
 - [Qwen 3 (MoE variants)](QWEN3.md)
 - [Qwen3-VL-MoE (MoE variants)](QWEN3VL.md)
+
+## Quantization strategies
+
+ISQ supports two quantization strategies, selected automatically based on your configuration:
+
+### Immediate ISQ (default)
+
+Immediate ISQ quantizes each weight as it is loaded during model construction rather than loading all weights first, then quantizing. This means only a small number of unquantized weight tensors need to be in CPU memory at any given time, enabling ISQ for models that would not otherwise fit in memory.
+
+On CPU and discrete GPUs (e.g. NVIDIA), quantization is parallelized across a thread pool so multiple weights are quantized concurrently during loading. On discrete GPUs, each weight is loaded to CPU, quantized, and then moved to the GPU. On unified memory systems (e.g. Apple Silicon, NVIDIA Grace Blackwell), weights are loaded directly to the device and quantized synchronously since CPU and GPU share the same memory.
+
+Set `MISTRALRS_ISQ_SINGLETHREAD=1` to force single-threaded quantization.
+
+### Deferred ISQ
+
+Deferred ISQ loads the full unquantized model into CPU memory first, then quantizes all weights in parallel in a post-processing pass. This path is used when an imatrix file (`--imatrix`) or calibration file (`--calibration-file`) is provided, since these require access to the full model or a forward pass before quantization can begin. Peak CPU memory usage is higher than immediate ISQ because the entire unquantized model must fit in memory during the quantization pass.
 
 ## Accuracy
 

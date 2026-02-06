@@ -10,7 +10,9 @@ use std::{
 
 use candle_core::{DType, Device, Result, Tensor};
 
-use crate::{DistributedKind, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde};
+use crate::{
+    DistributedKind, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde,
+};
 
 enum PendingState {
     Pending(Receiver<Result<Arc<dyn QuantMethod>>>),
@@ -181,6 +183,9 @@ impl QuantMethod for PendingIsqLayer {
 
 /// Create a channel pair for use with `PendingIsqLayer`. The sender should be
 /// given to a thread pool task; the receiver is passed to `PendingIsqLayer::new`.
-pub fn pending_isq_channel() -> (mpsc::SyncSender<Result<Arc<dyn QuantMethod>>>, Receiver<Result<Arc<dyn QuantMethod>>>) {
+pub fn pending_isq_channel() -> (
+    mpsc::SyncSender<Result<Arc<dyn QuantMethod>>>,
+    Receiver<Result<Arc<dyn QuantMethod>>>,
+) {
     mpsc::sync_channel(1)
 }
