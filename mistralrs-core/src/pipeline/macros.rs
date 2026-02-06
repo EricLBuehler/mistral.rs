@@ -559,12 +559,17 @@ macro_rules! vision_normal_model_loader {
         $loading_uqff:expr,
         $real_device:expr,
         $attention_mechanism:expr,
+        $is_moqe:expr,
         $multi_progress:expr,
         $matformer_config:expr,
     ) => {{
         let regexes = if $loading_isq && $loading_uqff {
             // Dummy weights for the layers which will be overwritten...
-            Some(std::sync::Arc::new($loader.isq_layer_regexes(&$config)?))
+            Some(std::sync::Arc::new(if $is_moqe {
+                $loader.isq_layer_regexes_moqe(&$config)?
+            } else {
+                $loader.isq_layer_regexes(&$config)?
+            }))
         } else {
             None
         };

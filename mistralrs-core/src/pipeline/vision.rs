@@ -581,7 +581,7 @@ impl Loader for VisionLoader {
                 &config,
                 loading_isq,
                 self.config.from_uqff.is_some(),
-                IsqOrganization::Default,
+                self.config.organization,
                 &*self.inner,
                 paths.as_ref(),
             )?;
@@ -616,6 +616,7 @@ impl Loader for VisionLoader {
                     self.config.from_uqff.is_some(),
                     device.clone(),
                     attention_mechanism,
+                    matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress,
                     matformer_slicing_config.clone(),
                 ),
