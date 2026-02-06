@@ -187,6 +187,7 @@ pub fn is_integrated_gpu(device: &Device) -> bool {
         Device::Cuda(dev) => {
             use candle_core::cuda::cudarc::driver::{result, sys};
             let ordinal = dev.cuda_stream().context().ordinal();
+            #[allow(clippy::cast_possible_truncation)]
             let cu_device = match result::device::get(ordinal as i32) {
                 Ok(d) => d,
                 Err(_) => return false,
