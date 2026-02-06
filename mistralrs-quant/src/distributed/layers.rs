@@ -1597,20 +1597,33 @@ impl FusedExperts {
                 let up_proj = up_proj.transpose(1, 2)?.contiguous()?;
                 let down_proj = down_proj_packed.transpose(1, 2)?.contiguous()?;
 
+                // When immediate ISQ is active, the weight must be on CPU for GGML quantization.
+                // Move it there first, then quantize, which will place the result on `target_device`.
+                let target_device = gate_proj.device().clone();
+                let (gate_proj, up_proj, down_proj) =
+                    if crate::get_immediate_isq().is_some() && !target_device.is_cpu() {
+                        (
+                            gate_proj.to_device(&Device::Cpu)?,
+                            up_proj.to_device(&Device::Cpu)?,
+                            down_proj.to_device(&Device::Cpu)?,
+                        )
+                    } else {
+                        (gate_proj, up_proj, down_proj)
+                    };
+
                 let mut fused_gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                    QuantMethodConfig::Unquantized(Linear::new(gate_proj.clone(), None)),
+                    QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
                 )?);
                 let mut fused_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                    QuantMethodConfig::Unquantized(Linear::new(up_proj.clone(), None)),
+                    QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
                 )?);
                 let mut fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                    QuantMethodConfig::Unquantized(Linear::new(down_proj.clone(), None)),
+                    QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
                 )?);
                 // Use apply_immediate_isq_always to ensure ISQ is applied to expert weights
-                let device = gate_proj.device();
-                fused_gate_proj = apply_immediate_isq_always(fused_gate_proj, device)?;
-                fused_up_proj = apply_immediate_isq_always(fused_up_proj, device)?;
-                fused_down_proj = apply_immediate_isq_always(fused_down_proj, device)?;
+                fused_gate_proj = apply_immediate_isq_always(fused_gate_proj, &target_device)?;
+                fused_up_proj = apply_immediate_isq_always(fused_up_proj, &target_device)?;
+                fused_down_proj = apply_immediate_isq_always(fused_down_proj, &target_device)?;
 
                 (fused_gate_proj, fused_up_proj, fused_down_proj)
             }
@@ -1682,20 +1695,33 @@ impl FusedExperts {
             // down_proj: [num_experts, intermediate_size, hidden_size] -> [num_experts, hidden_size, intermediate_size]
             let down_proj = down_proj_packed.transpose(1, 2)?.contiguous()?;
 
+            // When immediate ISQ is active, the weight must be on CPU for GGML quantization.
+            // Move it there first, then quantize, which will place the result on `target_device`.
+            let target_device = gate_proj.device().clone();
+            let (gate_proj, up_proj, down_proj) =
+                if crate::get_immediate_isq().is_some() && !target_device.is_cpu() {
+                    (
+                        gate_proj.to_device(&Device::Cpu)?,
+                        up_proj.to_device(&Device::Cpu)?,
+                        down_proj.to_device(&Device::Cpu)?,
+                    )
+                } else {
+                    (gate_proj, up_proj, down_proj)
+                };
+
             let mut fused_gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(Linear::new(gate_proj.clone(), None)),
+                QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
             )?);
             let mut fused_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(Linear::new(up_proj.clone(), None)),
+                QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
             )?);
             let mut fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(Linear::new(down_proj.clone(), None)),
+                QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
             )?);
             // Use apply_immediate_isq_always to ensure ISQ is applied to expert weights
-            let device = gate_proj.device();
-            fused_gate_proj = apply_immediate_isq_always(fused_gate_proj, device)?;
-            fused_up_proj = apply_immediate_isq_always(fused_up_proj, device)?;
-            fused_down_proj = apply_immediate_isq_always(fused_down_proj, device)?;
+            fused_gate_proj = apply_immediate_isq_always(fused_gate_proj, &target_device)?;
+            fused_up_proj = apply_immediate_isq_always(fused_up_proj, &target_device)?;
+            fused_down_proj = apply_immediate_isq_always(fused_down_proj, &target_device)?;
 
             (fused_gate_proj, fused_up_proj, fused_down_proj)
         } else if matches!(&quantization_config, Some(QuantizedConfig::Fp8 { .. })) {
@@ -1803,11 +1829,18 @@ impl FusedExperts {
             (fused_gate_proj, fused_up_proj, fused_down_proj)
         } else {
             // Per-expert format: load each expert individually and stack
+            // When immediate ISQ is active, load on CPU for GGML quantization.
+            let load_experts_vb =
+                if crate::get_immediate_isq().is_some() && !experts_vb.device().is_cpu() {
+                    experts_vb.clone().set_device(Device::Cpu)
+                } else {
+                    experts_vb.clone()
+                };
             let mut gate_proj_vec = Vec::new();
             let mut up_proj_vec = Vec::new();
             let mut down_proj_vec = Vec::new();
             for i in 0..num_experts {
-                let expert_vb = experts_vb.pp(i);
+                let expert_vb = load_experts_vb.pp(i);
                 let gate_proj =
                     expert_vb.get((moe_intermediate_size, hidden_size), "gate_proj.weight")?;
                 let up_proj =
