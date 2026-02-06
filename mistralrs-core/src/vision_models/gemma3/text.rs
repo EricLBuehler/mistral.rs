@@ -557,6 +557,7 @@ impl TextModel {
         self.embed_tokens.forward(input_ids)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn forward_embeds(
         &self,
         input_ids: &Tensor,
@@ -573,6 +574,7 @@ impl TextModel {
         // Flash attention doesn't support per-token mixed causal/bidirectional masking,
         // so we construct real masks and bypass flash attention during image prefill
         // by passing flash_params=None to layers.
+        // See: https://github.com/vllm-project/vllm/blob/5819ca8944af4f7dcbac3c6b73179f760e05910d/vllm/config/model.py#L1116-L1125
         let has_bidirectional =
             has_images && self.image_token_index.is_some() && input_ids.dim(1)? > 1;
 
