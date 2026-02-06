@@ -37,6 +37,22 @@ pub mod paged_attention {
         ) -> Result<Tensor> {
             candle_core::bail!("Paged attention requires the CUDA or Metal feature flags.");
         }
+
+        #[allow(clippy::too_many_arguments)]
+        #[allow(unused_variables)]
+        pub fn forward_noflash(
+            &self,
+            _query: &Tensor,
+            _key: &Tensor,
+            _value: &Tensor,
+            _attention_mask: Option<&Tensor>,
+            _key_cache: Option<Tensor>,
+            _value_cache: Option<Tensor>,
+            _input_metadata: &PagedAttentionInputMetadata,
+            _sdpa_params: &SdpaParams,
+        ) -> Result<Tensor> {
+            candle_core::bail!("Paged attention requires the CUDA or Metal feature flags.");
+        }
     }
 }
 

@@ -49,11 +49,69 @@ impl PagedAttention {
         key: &Tensor,
         value: &Tensor,
         attention_mask: Option<&Tensor>,
+        key_cache: Option<Tensor>,
+        value_cache: Option<Tensor>,
+        input_metadata: &PagedAttentionInputMetadata,
+        sdpa_params: &SdpaParams,
+        flash_params: Option<&FlashParams>,
+    ) -> Result<Tensor> {
+        self.forward_inner(
+            query,
+            key,
+            value,
+            attention_mask,
+            key_cache,
+            value_cache,
+            input_metadata,
+            sdpa_params,
+            flash_params,
+            false,
+        )
+    }
+
+    /// Like `forward`, but forces non-flash attention for the prefill computation.
+    /// Use when a custom attention mask (e.g., bidirectional for image tokens) must be respected.
+    #[allow(clippy::too_many_arguments)]
+    #[allow(unused_variables)]
+    pub fn forward_noflash(
+        &self,
+        query: &Tensor,
+        key: &Tensor,
+        value: &Tensor,
+        attention_mask: Option<&Tensor>,
+        key_cache: Option<Tensor>,
+        value_cache: Option<Tensor>,
+        input_metadata: &PagedAttentionInputMetadata,
+        sdpa_params: &SdpaParams,
+    ) -> Result<Tensor> {
+        self.forward_inner(
+            query,
+            key,
+            value,
+            attention_mask,
+            key_cache,
+            value_cache,
+            input_metadata,
+            sdpa_params,
+            None,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[allow(unused_variables)]
+    fn forward_inner(
+        &self,
+        query: &Tensor,
+        key: &Tensor,
+        value: &Tensor,
+        attention_mask: Option<&Tensor>,
         mut key_cache: Option<Tensor>,
         mut value_cache: Option<Tensor>,
         input_metadata: &PagedAttentionInputMetadata,
         sdpa_params: &SdpaParams,
         flash_params: Option<&FlashParams>,
+        force_no_flash: bool,
     ) -> Result<Tensor> {
         if let (Some(k_scale), Some(v_scale), Some(key_cache)) =
             (&self.k_scale, &self.v_scale, &key_cache)
@@ -103,14 +161,20 @@ impl PagedAttention {
         #[allow(clippy::cast_possible_truncation)]
         let att = match attention_mask {
             None => None,
-            Some(mask) => Some(Sdpa.run_attention(
-                query,
-                key,
-                value,
-                Some(mask),
-                flash_params,
-                sdpa_params,
-            )?),
+            Some(mask) => {
+                if force_no_flash {
+                    Some(Sdpa.run_attention_noflash(query, key, value, Some(mask), sdpa_params)?)
+                } else {
+                    Some(Sdpa.run_attention(
+                        query,
+                        key,
+                        value,
+                        Some(mask),
+                        flash_params,
+                        sdpa_params,
+                    )?)
+                }
+            }
         };
 
         // paged-attn expects [batch_size, num_tokens, num_heads, head_size]
