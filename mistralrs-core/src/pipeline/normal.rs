@@ -553,11 +553,23 @@ impl Loader for NormalLoader {
 
         let use_immediate = allow_immediate_cli || has_override_isq;
         if use_immediate {
-            mistralrs_quant::set_immediate_isq_with_overrides(
-                immediate_ty,
-                immediate_predicates.clone(),
-                topology_overrides.clone(),
-            );
+            if !crate::utils::normal::is_integrated_gpu(&device) {
+                // Discrete GPU: use a thread pool for parallel immediate ISQ
+                let pool = mistralrs_quant::create_isq_thread_pool(immediate_ty);
+                mistralrs_quant::set_immediate_isq_with_pool(
+                    immediate_ty,
+                    immediate_predicates.clone(),
+                    topology_overrides.clone(),
+                    pool,
+                );
+            } else {
+                // Integrated/unified memory GPU: synchronous immediate ISQ
+                mistralrs_quant::set_immediate_isq_with_overrides(
+                    immediate_ty,
+                    immediate_predicates.clone(),
+                    topology_overrides.clone(),
+                );
+            }
         }
 
         // Logic for ISQ here: if no calibration (i.e imatrix), then allow immediate ISQ. Otherwise, back to normal.

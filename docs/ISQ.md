@@ -50,7 +50,7 @@ mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 
 ISQ supports two quantization strategies, selected automatically:
 
-- **Immediate ISQ** (default): Weights are quantized per-layer during model construction. This is memory-efficient because only one layer's unquantized weights need to be in memory at a time. On discrete GPUs, weights are loaded to CPU, quantized, and moved to the device. On integrated/unified memory systems (e.g. Apple Silicon, NVIDIA Grace Blackwell), weights are loaded directly to the device.
+- **Immediate ISQ** (default): Weights are quantized per-layer during model construction. This is memory-efficient because only one layer's unquantized weights need to be in memory at a time. On discrete GPUs, weights are loaded to CPU, quantized in parallel via a thread pool, and moved to the device. On integrated/unified memory systems (e.g. Apple Silicon, NVIDIA Grace Blackwell), weights are loaded directly to the device. Set `MISTRALRS_ISQ_SINGLETHREAD=1` to force single-threaded quantization.
 
 - **Deferred ISQ**: The full model is loaded to CPU memory first, then all layers are quantized in a post-processing pass via `get_layers` and loaded to the correct device. This path is used when an imatrix file (`--imatrix`) or calibration file (`--calibration-file`) is provided, since these require either the full model or a forward pass before quantization can begin.
 
