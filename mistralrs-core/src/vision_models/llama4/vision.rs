@@ -206,7 +206,14 @@ impl Llama4VisionAttention {
         };
 
         let mut attn_output = Sdpa
-            .run_attention(&q, &k, &v, attention_mask, Some(&flash_params), &self.sdpa_params)?
+            .run_attention(
+                &q,
+                &k,
+                &v,
+                attention_mask,
+                Some(&flash_params),
+                &self.sdpa_params,
+            )?
             .transpose(1, 2)?
             .contiguous()?
             .reshape((bs, q_sq, ()))?

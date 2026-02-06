@@ -16,8 +16,7 @@ pub(crate) fn flash_attn(
 
     // If flash_params provides cumulative_seqlens for this device, use the varlen path.
     if let Some(params) = flash_params {
-        if let Some(cumulative_seqlens_q) =
-            params.cumulative_seqlens_q.get(&q.device().location())
+        if let Some(cumulative_seqlens_q) = params.cumulative_seqlens_q.get(&q.device().location())
         {
             let cumulative_seqlens_k = &params.cumulative_seqlens_k[&q.device().location()];
             let window_size_right = if params.causal { Some(0) } else { None };
@@ -99,8 +98,7 @@ pub(crate) fn flash_attn(
 
     // If flash_params provides cumulative_seqlens for this device, use the varlen path.
     if let Some(params) = flash_params {
-        if let Some(cumulative_seqlens_q) =
-            params.cumulative_seqlens_q.get(&q.device().location())
+        if let Some(cumulative_seqlens_q) = params.cumulative_seqlens_q.get(&q.device().location())
         {
             let cumulative_seqlens_k = &params.cumulative_seqlens_k[&q.device().location()];
             let qshape = q.shape();
