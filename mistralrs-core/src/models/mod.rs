@@ -8,6 +8,7 @@ pub(crate) mod glm4_moe_lite;
 pub(crate) mod gpt_oss;
 pub(crate) mod granite;
 pub(crate) mod llama;
+pub(crate) mod mamba2;
 pub(crate) mod mistral;
 pub(crate) mod mixtral;
 pub(crate) mod phi2;
