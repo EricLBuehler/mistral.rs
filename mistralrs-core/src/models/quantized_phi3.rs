@@ -129,6 +129,7 @@ impl LayerWeights {
                     input_metadata,
                     &self.sdpa_params,
                     None,
+                    None, // sinks
                 )?
             }
             None => {

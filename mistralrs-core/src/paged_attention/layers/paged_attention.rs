@@ -54,6 +54,7 @@ impl PagedAttention {
         input_metadata: &PagedAttentionInputMetadata,
         sdpa_params: &SdpaParams,
         flash_params: Option<&FlashParams>,
+        sinks: Option<&Tensor>,
     ) -> Result<Tensor> {
         if let (Some(k_scale), Some(v_scale), Some(key_cache)) =
             (&self.k_scale, &self.v_scale, &key_cache)
@@ -78,18 +79,43 @@ impl PagedAttention {
             slot_mapping
         };
 
-        let block_tables = input_metadata
-            .block_tables
-            .as_ref()
-            .unwrap()
-            .get(&query.device().location())
-            .unwrap();
-        let context_lens = input_metadata
-            .context_lens
-            .as_ref()
-            .unwrap()
-            .get(&query.device().location())
-            .unwrap();
+        // For models with per-layer sliding windows (GPT-OSS, Gemma2):
+        // - Full-attention layers (sliding_window == None) use the full block tables.
+        // - Sliding-window layers (sliding_window == Some) use the windowed block tables.
+        // If full_block_tables is not populated, fall back to the regular block_tables.
+        let use_full =
+            sdpa_params.sliding_window.is_none() && input_metadata.full_block_tables.is_some();
+
+        let block_tables = if use_full {
+            input_metadata
+                .full_block_tables
+                .as_ref()
+                .unwrap()
+                .get(&query.device().location())
+                .unwrap()
+        } else {
+            input_metadata
+                .block_tables
+                .as_ref()
+                .unwrap()
+                .get(&query.device().location())
+                .unwrap()
+        };
+        let context_lens = if use_full {
+            input_metadata
+                .full_context_lens
+                .as_ref()
+                .unwrap()
+                .get(&query.device().location())
+                .unwrap()
+        } else {
+            input_metadata
+                .context_lens
+                .as_ref()
+                .unwrap()
+                .get(&query.device().location())
+                .unwrap()
+        };
 
         let alibi_slopes = if let Some(alibi_slopes) = self.alibi_slopes.as_ref() {
             Some(alibi_slopes.to_device(query.device())?)
@@ -103,19 +129,35 @@ impl PagedAttention {
         #[allow(clippy::cast_possible_truncation)]
         let att = match attention_mask {
             None => None,
-            Some(mask) => match flash_params {
-                Some(_) => Some(Sdpa.run_attention(
-                    query,
-                    key,
-                    value,
-                    Some(mask),
-                    flash_params,
-                    sdpa_params,
-                )?),
-                None => {
-                    Some(Sdpa.run_attention_noflash(query, key, value, Some(mask), sdpa_params)?)
+            Some(mask) => {
+                if let Some(sinks) = sinks {
+                    // Sinks-aware prefill: compute Q@K^T, softmax_with_sinks, @V.
+                    // Can't use flash attention because sinks modify the softmax denominator.
+                    let logits =
+                        (query.matmul(&key.transpose(2, 3)?)? * sdpa_params.softmax_scale as f64)?;
+                    let logits = logits.broadcast_add(mask)?;
+                    let attn_weights = mistralrs_quant::softmax_with_sinks(&logits, sinks, None)?;
+                    Some(attn_weights.matmul(value)?)
+                } else {
+                    match flash_params {
+                        Some(_) => Some(Sdpa.run_attention(
+                            query,
+                            key,
+                            value,
+                            Some(mask),
+                            flash_params,
+                            sdpa_params,
+                        )?),
+                        None => Some(Sdpa.run_attention_noflash(
+                            query,
+                            key,
+                            value,
+                            Some(mask),
+                            sdpa_params,
+                        )?),
+                    }
                 }
-            },
+            }
         };
 
         // paged-attn expects [batch_size, num_tokens, num_heads, head_size]
@@ -184,9 +226,14 @@ impl PagedAttention {
             block_tables,
             context_lens,
             alibi_slopes.as_ref(),
-            input_metadata.max_context_len.unwrap(),
+            if use_full {
+                input_metadata.full_max_context_len.unwrap()
+            } else {
+                input_metadata.max_context_len.unwrap()
+            },
             sdpa_params.softmax_scale,
             sdpa_params.softcap.unwrap_or(1.0f32),
+            sinks,
         )?;
 
         Ok(res)

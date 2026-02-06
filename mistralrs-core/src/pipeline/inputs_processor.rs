@@ -89,10 +89,19 @@ pub mod text_models_inputs_processor {
     #[derive(Clone, Debug)]
     #[allow(dead_code)]
     pub struct PagedAttentionInputMetadata {
+        /// Block tables, windowed when a global sliding_window is set.
         pub block_tables: Option<HashMap<DeviceLocation, Tensor>>,
+        /// Context lens, capped by sliding_window when set.
         pub context_lens: Option<HashMap<DeviceLocation, Tensor>>,
         pub slot_mappings: HashMap<DeviceLocation, Tensor>,
         pub max_context_len: Option<usize>,
+        /// Full (unwindowed) block tables, always covering the entire context.
+        /// For models with per-layer sliding windows (GPT-OSS, Gemma2), layers
+        /// without a sliding window should use these instead of `block_tables`.
+        pub full_block_tables: Option<HashMap<DeviceLocation, Tensor>>,
+        /// Full context lens (not capped by sliding_window).
+        pub full_context_lens: Option<HashMap<DeviceLocation, Tensor>>,
+        pub full_max_context_len: Option<usize>,
         pub is_first_prompt_chunk: bool,
         pub paged_kv_indptr: Option<HashMap<DeviceLocation, Tensor>>,
         pub paged_kv_indices: Option<HashMap<DeviceLocation, Tensor>>,
@@ -111,6 +120,9 @@ pub mod text_models_inputs_processor {
                 block_tables: None,
                 context_lens: None,
                 max_context_len: None,
+                full_block_tables: None,
+                full_context_lens: None,
+                full_max_context_len: None,
                 slot_mappings: HashMap::from([(dev.location(), Tensor::new(&[0f32], dev)?)]),
                 is_first_prompt_chunk: true,
                 paged_kv_indptr: None,
@@ -370,6 +382,9 @@ pub mod text_models_inputs_processor {
                 block_tables: Some(block_tables_map),
                 context_lens: Some(context_lens_map),
                 max_context_len: Some(max_context_len),
+                full_block_tables: None,
+                full_context_lens: None,
+                full_max_context_len: None,
                 is_first_prompt_chunk: chunk_offset_toks == 0,
                 paged_kv_indptr: None,
                 paged_kv_indices: None,
@@ -416,6 +431,8 @@ pub mod text_models_inputs_processor {
         let mut slot_mappings = Vec::new();
         let mut block_tables = Vec::new();
         let mut paged_attn_context_lens = Vec::new();
+        let mut full_block_tables = Vec::new();
+        let mut full_paged_attn_context_lens = Vec::new();
         let mut seqlens_q = if flash_attn { vec![0] } else { Vec::new() };
         let mut seqlens_k = if flash_attn { vec![0] } else { Vec::new() };
         for (seq, ctxt) in input_seqs.iter().zip(toks) {
@@ -460,8 +477,13 @@ pub mod text_models_inputs_processor {
                     .expect("Slot value too large for target integer type");
                 slot_mappings.push(vec![slot]);
 
+                // Always collect the full (unwindowed) block tables.
+                full_block_tables.push(table.clone());
+                full_paged_attn_context_lens.push(seq.len());
+
                 if let Some(sliding_window) = paged_attn_metadata.sliding_window {
-                    let sliding_window_blocks = sliding_window / paged_attn_metadata.block_size;
+                    let sliding_window_blocks =
+                        sliding_window.div_ceil(paged_attn_metadata.block_size);
                     let slide_idx = if table.len() > sliding_window_blocks {
                         table.len() - sliding_window_blocks
                     } else {
@@ -592,11 +614,44 @@ pub mod text_models_inputs_processor {
             let o_indptr = Tensor::from_vec(o_indptr, (batch_size + 1,), &Device::Cpu)?;
             let kv_chunk_size = Tensor::from_vec(kv_chunk_size, (1,), &Device::Cpu)?;
 
+            // Build full (unwindowed) block tables and context lens.
+            let full_max_block_table_len =
+                full_block_tables.iter().map(|x| x.len()).max().unwrap_or(0);
+
+            let full_block_tables_tensor = _make_tensor_with_pad(
+                full_block_tables
+                    .iter()
+                    .map(|x| x.iter().map(|x| *x as u32).collect::<Vec<_>>())
+                    .collect::<Vec<_>>(),
+                full_max_block_table_len.max(1),
+                0,
+                &Device::Cpu,
+            )?;
+            let full_block_tables_tensor =
+                full_block_tables_tensor.reshape(((), full_max_block_table_len.max(1)))?;
+
+            let full_max_context_len = full_paged_attn_context_lens
+                .iter()
+                .max()
+                .copied()
+                .unwrap_or(0);
+
+            let full_context_lens_tensor = Tensor::from_vec(
+                full_paged_attn_context_lens
+                    .iter()
+                    .map(|x| *x as u32)
+                    .collect::<Vec<_>>(),
+                (full_paged_attn_context_lens.len(),),
+                &Device::Cpu,
+            )?;
+
             // For device mapping, make a copy of each tensor for each device
             let devices = mapper.unwrap().get_unique_devices();
             let mut slot_mappings_map = HashMap::new();
             let mut block_tables_map = HashMap::new();
             let mut context_lens_map = HashMap::new();
+            let mut full_block_tables_map = HashMap::new();
+            let mut full_context_lens_map = HashMap::new();
             let mut paged_kv_indptr_map = HashMap::new();
             let mut paged_kv_indices_map = HashMap::new();
             let mut paged_kv_last_page_len_map = HashMap::new();
@@ -612,6 +667,14 @@ pub mod text_models_inputs_processor {
                     .insert(device.location(), block_tables.clone().to_device(&device)?);
                 context_lens_map
                     .insert(device.location(), context_lens.clone().to_device(&device)?);
+                full_block_tables_map.insert(
+                    device.location(),
+                    full_block_tables_tensor.clone().to_device(&device)?,
+                );
+                full_context_lens_map.insert(
+                    device.location(),
+                    full_context_lens_tensor.clone().to_device(&device)?,
+                );
                 paged_kv_indptr_map.insert(
                     device.location(),
                     paged_kv_indptr.clone().to_device(&device)?,
@@ -643,6 +706,9 @@ pub mod text_models_inputs_processor {
                 block_tables: Some(block_tables_map),
                 context_lens: Some(context_lens_map),
                 max_context_len: Some(*max_context_len),
+                full_block_tables: Some(full_block_tables_map),
+                full_context_lens: Some(full_context_lens_map),
+                full_max_context_len: Some(full_max_context_len),
                 is_first_prompt_chunk: false,
                 paged_kv_indptr: Some(paged_kv_indptr_map),
                 paged_kv_indices: Some(paged_kv_indices_map),
