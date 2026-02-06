@@ -30,6 +30,8 @@ extend-ignore-re = [
     "thr_reduce",
     "thw",
     "iy",
+    "alog",
+    "ba",
 ]
 
 [type.rust.extend-identifiers]
