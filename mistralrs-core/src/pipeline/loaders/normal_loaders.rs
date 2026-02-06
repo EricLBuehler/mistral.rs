@@ -4948,8 +4948,12 @@ impl IsqModelLoader for Qwen3NextLoader {
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.linear_attn\.out_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.shared_expert\.(gate_proj|up_proj|down_proj)\.(weight|bias)$")?,
+            Regex::new(
+                r"layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"layers\.(\d+)\.mlp\.shared_expert\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
+            )?,
         ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
@@ -5031,10 +5035,9 @@ impl DeviceMappedModelLoader for Qwen3NextLoader {
             let o_proj = (cfg.head_dim * cfg.num_attention_heads) * size_in / weight_pack_factor;
 
             let moe_gate = cfg.hidden_size * cfg.num_experts;
-            let shared_expert = 3 * cfg.hidden_size * cfg.shared_expert_intermediate_size
-                / weight_pack_factor;
-            let routed_experts = cfg.num_experts * 3 * cfg.hidden_size
-                * cfg.moe_intermediate_size
+            let shared_expert =
+                3 * cfg.hidden_size * cfg.shared_expert_intermediate_size / weight_pack_factor;
+            let routed_experts = cfg.num_experts * 3 * cfg.hidden_size * cfg.moe_intermediate_size
                 / weight_pack_factor;
 
             input_layernorm

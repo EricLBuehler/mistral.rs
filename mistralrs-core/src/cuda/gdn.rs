@@ -21,8 +21,8 @@ pub fn gated_delta_rule_recurrence_cuda(
     beta: &Tensor,
     state: &mut Tensor,
 ) -> Result<Tensor> {
-    use candle_core as candle;
     use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core as candle;
 
     let (bh, seq_len, k_dim) = q.dims3()?;
     let v_dim = v.dim(2)?;
@@ -127,8 +127,8 @@ pub fn causal_conv1d_cuda(
     kernel_size: usize,
     is_update: bool,
 ) -> Result<(Tensor, Tensor)> {
-    use candle_core as candle;
     use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core as candle;
     use core::ffi::c_void;
     fn cuda_fwd<
         T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
@@ -186,8 +186,7 @@ pub fn causal_conv1d_cuda(
                 }
             }
 
-            let output_storage =
-                candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
+            let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
             let output = Tensor::from((
                 candle::Storage::Cuda(output_storage),
                 (batch_size, conv_dim, 1usize),
@@ -214,15 +213,13 @@ pub fn causal_conv1d_cuda(
                 );
             }
 
-            let output_storage =
-                candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
+            let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
             let output = Tensor::from((
                 candle::Storage::Cuda(output_storage),
                 (batch_size, conv_dim, seq_len),
             ));
 
-            let cs_storage =
-                candle::CudaStorage::wrap_cuda_slice(cs_buf, dev.clone());
+            let cs_storage = candle::CudaStorage::wrap_cuda_slice(cs_buf, dev.clone());
             let new_conv_state = Tensor::from((
                 candle::Storage::Cuda(cs_storage),
                 (batch_size, conv_dim, kernel_size),
@@ -266,8 +263,8 @@ pub fn fused_gdn_gating_cuda(
     a_log: &Tensor,
     dt_bias: &Tensor,
 ) -> Result<(Tensor, Tensor)> {
-    use candle_core as candle;
     use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core as candle;
     use core::ffi::c_void;
 
     fn cuda_fwd<
@@ -328,12 +325,10 @@ pub fn fused_gdn_gating_cuda(
             );
         }
 
-        let beta_storage =
-            candle::CudaStorage::wrap_cuda_slice(beta_buf, dev.clone());
+        let beta_storage = candle::CudaStorage::wrap_cuda_slice(beta_buf, dev.clone());
         let beta = Tensor::from((candle::Storage::Cuda(beta_storage), shape.clone()));
 
-        let g_storage =
-            candle::CudaStorage::wrap_cuda_slice(g_buf, dev.clone());
+        let g_storage = candle::CudaStorage::wrap_cuda_slice(g_buf, dev.clone());
         let g = Tensor::from((candle::Storage::Cuda(g_storage), shape));
 
         Ok((beta, g))
@@ -342,7 +337,10 @@ pub fn fused_gdn_gating_cuda(
     match b.dtype() {
         DType::F16 => cuda_fwd::<half::f16>(b, a, a_log, dt_bias, 0),
         DType::BF16 => cuda_fwd::<half::bf16>(b, a, a_log, dt_bias, 1),
-        other => candle_core::bail!("fused_gdn_gating_cuda only supports f16/bf16, got {:?}", other),
+        other => candle_core::bail!(
+            "fused_gdn_gating_cuda only supports f16/bf16, got {:?}",
+            other
+        ),
     }
 }
 

@@ -414,7 +414,8 @@ impl GatedDeltaNet {
         //   [head_k_dim, head_k_dim, v_per_group*head_v_dim, v_per_group*head_v_dim]
         let v_per_group = self.num_v_heads / self.num_k_heads;
         let group_size_qkvz = 2 * self.head_k_dim + 2 * v_per_group * self.head_v_dim;
-        let mixed_qkvz = mixed_qkvz.reshape((batch_size, seq_len, self.num_k_heads, group_size_qkvz))?;
+        let mixed_qkvz =
+            mixed_qkvz.reshape((batch_size, seq_len, self.num_k_heads, group_size_qkvz))?;
 
         let group_size_ba = 2 * v_per_group;
         let mixed_ba = mixed_ba.reshape((batch_size, seq_len, self.num_k_heads, group_size_ba))?;
@@ -485,10 +486,16 @@ impl GatedDeltaNet {
                 } else {
                     let beta = candle_nn::ops::sigmoid(&b)?;
                     let a_f = a.to_dtype(DType::F32)?;
-                    let dt_bias_expanded = self.dt_bias.to_dtype(DType::F32)?
+                    let dt_bias_expanded = self
+                        .dt_bias
+                        .to_dtype(DType::F32)?
                         .unsqueeze(0)?
                         .unsqueeze(0)?;
-                    let g = self.a_log.to_dtype(DType::F32)?.exp()?.neg()?
+                    let g = self
+                        .a_log
+                        .to_dtype(DType::F32)?
+                        .exp()?
+                        .neg()?
                         .unsqueeze(0)?
                         .unsqueeze(0)?
                         .broadcast_mul(&softplus(&a_f.broadcast_add(&dt_bias_expanded)?)?)?
@@ -500,10 +507,16 @@ impl GatedDeltaNet {
             {
                 let beta = candle_nn::ops::sigmoid(&b)?;
                 let a_f = a.to_dtype(DType::F32)?;
-                let dt_bias_expanded = self.dt_bias.to_dtype(DType::F32)?
+                let dt_bias_expanded = self
+                    .dt_bias
+                    .to_dtype(DType::F32)?
                     .unsqueeze(0)?
                     .unsqueeze(0)?;
-                let g = self.a_log.to_dtype(DType::F32)?.exp()?.neg()?
+                let g = self
+                    .a_log
+                    .to_dtype(DType::F32)?
+                    .exp()?
+                    .neg()?
                     .unsqueeze(0)?
                     .unsqueeze(0)?
                     .broadcast_mul(&softplus(&a_f.broadcast_add(&dt_bias_expanded)?)?)?
@@ -515,9 +528,13 @@ impl GatedDeltaNet {
         // 7. If num_v_heads > num_k_heads, repeat_interleave q and k
         let (q, k) = if v_per_group > 1 {
             // repeat_interleave along head dim
-            let q = q.unsqueeze(3)?.repeat((1, 1, 1, v_per_group, 1))?
+            let q = q
+                .unsqueeze(3)?
+                .repeat((1, 1, 1, v_per_group, 1))?
                 .reshape((batch_size, seq_len, self.num_v_heads, self.head_k_dim))?;
-            let k = k.unsqueeze(3)?.repeat((1, 1, 1, v_per_group, 1))?
+            let k = k
+                .unsqueeze(3)?
+                .repeat((1, 1, 1, v_per_group, 1))?
                 .reshape((batch_size, seq_len, self.num_v_heads, self.head_k_dim))?;
             (q, k)
         } else {
@@ -542,28 +559,44 @@ impl GatedDeltaNet {
                     let q_bh = (q.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)? * scale)?
                         .reshape((batch_size * num_heads, seq_len, k_head))?
                         .contiguous()?;
-                    let k_bh = k.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)?
+                    let k_bh = k
+                        .transpose(1, 2)?
+                        .contiguous()?
+                        .to_dtype(DType::F32)?
                         .reshape((batch_size * num_heads, seq_len, k_head))?
                         .contiguous()?;
-                    let v_bh = v.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)?
+                    let v_bh = v
+                        .transpose(1, 2)?
+                        .contiguous()?
+                        .to_dtype(DType::F32)?
                         .reshape((batch_size * num_heads, seq_len, v_head))?
                         .contiguous()?;
-                    let g_bh = g.to_dtype(DType::F32)?
-                        .transpose(1, 2)?.contiguous()?
+                    let g_bh = g
+                        .to_dtype(DType::F32)?
+                        .transpose(1, 2)?
+                        .contiguous()?
                         .reshape((batch_size * num_heads, seq_len))?
                         .contiguous()?;
-                    let beta_bh = beta.to_dtype(DType::F32)?
-                        .transpose(1, 2)?.contiguous()?
+                    let beta_bh = beta
+                        .to_dtype(DType::F32)?
+                        .transpose(1, 2)?
+                        .contiguous()?
                         .reshape((batch_size * num_heads, seq_len))?
                         .contiguous()?;
 
                     // State: (B, H, K, V) -> (B*H, K, V) for kernel
-                    let mut state_flat = cache.recurrent_state.to_dtype(DType::F32)?
+                    let mut state_flat = cache
+                        .recurrent_state
+                        .to_dtype(DType::F32)?
                         .reshape((batch_size * num_heads, k_head, v_head))?
                         .contiguous()?;
 
                     let out_bh = crate::cuda::gdn::gated_delta_rule_recurrence_cuda(
-                        &q_bh, &k_bh, &v_bh, &g_bh, &beta_bh,
+                        &q_bh,
+                        &k_bh,
+                        &v_bh,
+                        &g_bh,
+                        &beta_bh,
                         &mut state_flat,
                     )?;
 
@@ -579,18 +612,12 @@ impl GatedDeltaNet {
                         .contiguous()?
                         .to_dtype(dtype)?
                 } else {
-                    gated_delta_rule_recurrence(
-                        &q, &k, &v, &g, &beta,
-                        &mut cache.recurrent_state,
-                    )?
+                    gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?
                 }
             }
             #[cfg(not(feature = "cuda"))]
             {
-                gated_delta_rule_recurrence(
-                    &q, &k, &v, &g, &beta,
-                    &mut cache.recurrent_state,
-                )?
+                gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?
             }
         };
 
@@ -629,7 +656,11 @@ impl GatedDeltaNet {
 
         #[cfg(feature = "cuda")]
         if x_t.device().is_cuda() {
-            let weight = self.conv1d_weight.squeeze(1)?.to_dtype(x_t.dtype())?.contiguous()?;
+            let weight = self
+                .conv1d_weight
+                .squeeze(1)?
+                .to_dtype(x_t.dtype())?
+                .contiguous()?;
             let conv_state = cache.conv_state.contiguous()?;
             let (output, new_conv_state) = crate::cuda::gdn::causal_conv1d_cuda(
                 &x_t,
@@ -648,11 +679,15 @@ impl GatedDeltaNet {
         let new_len = hidden_new.dim(2)?;
         cache.conv_state = hidden_new.narrow(2, new_len - state_len, state_len)?;
 
-        let weight = self.conv1d_weight.squeeze(1)?.to_dtype(hidden_new.dtype())?;
+        let weight = self
+            .conv1d_weight
+            .squeeze(1)?
+            .to_dtype(hidden_new.dtype())?;
         let mut conv_outputs = Vec::with_capacity(seq_len);
         let total_len = hidden_new.dim(2)?;
         for i in (total_len - seq_len)..total_len {
-            let window = hidden_new.narrow(2, i + 1 - self.conv_kernel_size, self.conv_kernel_size)?;
+            let window =
+                hidden_new.narrow(2, i + 1 - self.conv_kernel_size, self.conv_kernel_size)?;
             let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
             conv_outputs.push(out);
         }
@@ -665,17 +700,17 @@ impl GatedDeltaNet {
     /// Reference: F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
     /// with conv state saved as: F.pad(mixed_qkv, (kernel-1 - seq_len, 0)) or last kernel-1 elements
     /// Input x: (batch, seq, conv_dim), output: (batch, seq, conv_dim)
-    fn causal_conv1d_full(
-        &self,
-        x: &Tensor,
-        cache: &mut GdnLayerCache,
-    ) -> Result<Tensor> {
+    fn causal_conv1d_full(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (batch_size, seq_len, conv_dim) = x.dims3()?;
         let x_t = x.transpose(1, 2)?.contiguous()?; // (batch, conv_dim, seq_len)
 
         #[cfg(feature = "cuda")]
         if x_t.device().is_cuda() {
-            let weight = self.conv1d_weight.squeeze(1)?.to_dtype(x_t.dtype())?.contiguous()?;
+            let weight = self
+                .conv1d_weight
+                .squeeze(1)?
+                .to_dtype(x_t.dtype())?
+                .contiguous()?;
             let (output, new_conv_state) = crate::cuda::gdn::causal_conv1d_cuda(
                 &x_t,
                 &weight,
@@ -690,11 +725,8 @@ impl GatedDeltaNet {
         // CPU/Metal fallback
         let pad_width = self.conv_kernel_size.saturating_sub(seq_len);
         cache.conv_state = if pad_width > 0 {
-            let zeros = Tensor::zeros(
-                (batch_size, conv_dim, pad_width),
-                x_t.dtype(),
-                x_t.device(),
-            )?;
+            let zeros =
+                Tensor::zeros((batch_size, conv_dim, pad_width), x_t.dtype(), x_t.device())?;
             Tensor::cat(&[zeros, x_t.clone()], 2)?
         } else {
             x_t.narrow(2, seq_len - self.conv_kernel_size, self.conv_kernel_size)?
@@ -821,11 +853,7 @@ impl FullAttention {
             rot_dim,
             paged_attn,
             sdpa_params: SdpaParams {
-                n_kv_groups: mistralrs_quant::compute_n_kv_groups(
-                    num_kv_heads,
-                    num_heads,
-                    comm,
-                ),
+                n_kv_groups: mistralrs_quant::compute_n_kv_groups(num_kv_heads, num_heads, comm),
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window,
@@ -956,9 +984,7 @@ impl FullAttention {
         };
 
         // Apply output gate: y = y * sigmoid(gate)
-        let gate = candle_nn::ops::sigmoid(
-            &gate.to_dtype(y.dtype())?,
-        )?;
+        let gate = candle_nn::ops::sigmoid(&gate.to_dtype(y.dtype())?)?;
         y = y.broadcast_mul(&gate)?;
 
         let mut res = MatMul.qmethod_matmul(&y, &*self.o_proj)?;
@@ -1103,7 +1129,9 @@ impl SparseMoeBlock {
         )?;
 
         // Shared expert gate: (1, hidden_size) -> sigmoid
-        let mut seg_w = vb.pp("shared_expert_gate").get((1, cfg.hidden_size), "weight")?;
+        let mut seg_w = vb
+            .pp("shared_expert_gate")
+            .get((1, cfg.hidden_size), "weight")?;
         if loading_isq {
             seg_w = seg_w.to_device(&layer_device)?;
         }
@@ -1146,9 +1174,11 @@ impl SparseMoeBlock {
 
         // 3. Shared expert with sigmoid gating
         let shared_out = self.shared_expert.forward(xs)?;
-        let shared_gate = candle_nn::ops::sigmoid(&self.shared_expert_gate.forward(
-            &xs.reshape(((), hidden_dim))?,
-        )?)?;
+        let shared_gate = candle_nn::ops::sigmoid(
+            &self
+                .shared_expert_gate
+                .forward(&xs.reshape(((), hidden_dim))?)?,
+        )?;
         let shared_gate = shared_gate.reshape((b_size, seq_len, 1))?;
         let shared_out = shared_out.broadcast_mul(&shared_gate)?;
 
@@ -1194,7 +1224,14 @@ impl DecoderLayer {
         };
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
-        let attn_out = attn.forward(&x, attention_mask, seqlen_offsets, kv_cache, metadata, flash_params)?;
+        let attn_out = attn.forward(
+            &x,
+            attention_mask,
+            seqlen_offsets,
+            kv_cache,
+            metadata,
+            flash_params,
+        )?;
         let x = (attn_out + residual)?;
         let residual = &x;
         let normed = self.post_attention_layernorm.forward(&x)?;
@@ -1202,11 +1239,7 @@ impl DecoderLayer {
         ffn_out + residual
     }
 
-    fn forward_linear(
-        &self,
-        x: &Tensor,
-        cache: &mut GdnLayerCache,
-    ) -> Result<Tensor> {
+    fn forward_linear(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let gdn = match &self.layer_impl {
             LayerImpl::LinearAttention(gdn) => gdn,
             _ => candle_core::bail!("Expected linear attention layer"),
@@ -1246,9 +1279,9 @@ impl LocalHybridCache {
                     )));
                 }
                 LayerType::LinearAttention => {
-                    caches.push(LocalLayerCache::LinearAttention(
-                        GdnLayerCache::new(cfg, dtype, device)?,
-                    ));
+                    caches.push(LocalLayerCache::LinearAttention(GdnLayerCache::new(
+                        cfg, dtype, device,
+                    )?));
                 }
             }
         }
@@ -1367,8 +1400,14 @@ impl Model {
         }
 
         // Log layer config
-        let num_full = layer_types.iter().filter(|t| matches!(t, LayerType::FullAttention)).count();
-        let num_linear = layer_types.iter().filter(|t| matches!(t, LayerType::LinearAttention)).count();
+        let num_full = layer_types
+            .iter()
+            .filter(|t| matches!(t, LayerType::FullAttention))
+            .count();
+        let num_linear = layer_types
+            .iter()
+            .filter(|t| matches!(t, LayerType::LinearAttention))
+            .count();
         tracing::info!(
             "Qwen3Next: {} full attention layers, {} linear attention (GDN) layers",
             num_full,
@@ -1411,16 +1450,14 @@ impl Model {
                         &comm,
                     )?)
                 }
-                LayerType::LinearAttention => {
-                    LayerImpl::LinearAttention(GatedDeltaNet::load(
-                        vb_layer.clone(),
-                        cfg,
-                        &*mapper,
-                        i,
-                        normal_loading_metadata.loading_isq,
-                        &comm,
-                    )?)
-                }
+                LayerType::LinearAttention => LayerImpl::LinearAttention(GatedDeltaNet::load(
+                    vb_layer.clone(),
+                    cfg,
+                    &*mapper,
+                    i,
+                    normal_loading_metadata.loading_isq,
+                    &comm,
+                )?),
             };
 
             // (1+weight) RMSNorm for layer norms
@@ -1487,7 +1524,9 @@ impl Model {
                 vb_m.dtype(),
                 &normal_loading_metadata.real_device,
             )
-            .map_err(|e| candle_core::Error::Msg(format!("Failed to create hybrid cache: {}", e)))?,
+            .map_err(|e| {
+                candle_core::Error::Msg(format!("Failed to create hybrid cache: {}", e))
+            })?,
         ));
 
         let num_attention_heads = cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size();
@@ -1552,8 +1591,7 @@ impl Model {
 
             match &layer.layer_impl {
                 LayerImpl::FullAttention(_) => {
-                    if let LocalLayerCache::Attention(kv_cache) =
-                        &mut local_cache.caches[layer_idx]
+                    if let LocalLayerCache::Attention(kv_cache) = &mut local_cache.caches[layer_idx]
                     {
                         x = layer.forward_attention(
                             &x,
@@ -1625,7 +1663,9 @@ impl IsqModel for Model {
         let uvb = UnVarBuilder::new();
         let uvb_m = uvb.pp("model");
         uvb_m.pp("embed_tokens").add(&self.embed_tokens);
-        uvb_m.pp("norm").add_tensor("weight", self.norm.weight().clone());
+        uvb_m
+            .pp("norm")
+            .add_tensor("weight", self.norm.weight().clone());
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let uvb_l = uvb_m.pp("layers").pp(layer_idx);
