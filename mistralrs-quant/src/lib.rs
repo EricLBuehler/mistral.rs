@@ -117,23 +117,8 @@ thread_local! {
 }
 
 pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>) {
-    set_immediate_isq_with_overrides(isq, predicates, Vec::new());
-}
-
-pub fn set_immediate_isq_with_overrides(
-    isq: Option<IsqType>,
-    predicates: Vec<Regex>,
-    overrides: Vec<ImmediateIsqOverride>,
-) {
-    ENGINE_IMMEDIATE_ISQ.with(|cell| {
-        *cell.borrow_mut() = Some(ImmediateIsqParams {
-            guard: QuantizeOntoGuard::new(),
-            ty: isq,
-            predicates,
-            overrides,
-            pool: None,
-        });
-    });
+    let (pool, _) = create_isq_thread_pool(isq);
+    set_immediate_isq_with_pool(isq, predicates, Vec::new(), pool);
 }
 
 pub fn set_immediate_isq_with_pool(
@@ -154,11 +139,11 @@ pub fn set_immediate_isq_with_pool(
 }
 
 /// Create a rayon thread pool for parallel immediate ISQ.
-/// Thread count is based on the quantization type:
-/// - GGML types (Q2K-Q8K) and F8E4M3: multi-threaded (CPU quantization)
-/// - HQQ/AFQ: single-threaded (GPU quantization)
-/// Create a rayon thread pool for parallel immediate ISQ.
 /// Returns `(pool, num_threads)` so callers can log the thread count.
+///
+/// Thread count is based on the quantization type:
+/// - GGML types (Q2K-Q8K) and F8E4M3: `rayon::current_num_threads()` (CPU quantization)
+/// - HQQ/AFQ: 1 thread (GPU quantization, serialized by `QuantizeOntoGuard`)
 pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize) {
     let num_threads = if std::env::var("MISTRALRS_ISQ_SINGLETHREAD").is_ok() {
         1
