@@ -207,6 +207,68 @@ impl CausalMasker {
         Ok(Some(causal_mask))
     }
 
+    /// Like `make_causal_mask_matrix` but always constructs a real mask (never returns
+    /// the flash-attn dummy tensor). Use when flash attention is being bypassed.
+    pub fn make_causal_mask_as_attn_bias(
+        &self,
+        input_ids: &Tensor,
+        cache: &dyn PastKvLenCache,
+        dtype: DType,
+    ) -> Result<Option<Tensor>> {
+        let past_kv_len = cache.get_past_kv_len()?;
+        let (_b_sz, tgt_len) = input_ids.dims2()?;
+        if tgt_len == 1 {
+            return Ok(None);
+        }
+
+        let mut causal_mask = self
+            .make_mask(tgt_len, past_kv_len, input_ids.device())?
+            .to_dtype(DType::U8)?;
+
+        let zero = Tensor::new(0.0f32, input_ids.device())?;
+        causal_mask = {
+            let mask = causal_mask.broadcast_as((causal_mask.dims()[0], causal_mask.dims()[1]))?;
+            masked_fill(
+                &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
+                &mask,
+                f32::NEG_INFINITY,
+            )?
+        };
+
+        Ok(Some(causal_mask))
+    }
+
+    /// Like `make_sliding_window_causal_mask_matrix` but always constructs a real mask
+    /// (never returns the flash-attn dummy tensor). Use when flash attention is being bypassed.
+    pub fn make_sliding_window_causal_mask_as_attn_bias(
+        &self,
+        input_ids: &Tensor,
+        cache: &dyn PastKvLenCache,
+        sliding_window: Option<usize>,
+        dtype: DType,
+    ) -> Result<Option<Tensor>> {
+        if sliding_window.is_none() {
+            return self.make_causal_mask_as_attn_bias(input_ids, cache, dtype);
+        }
+        let (_b_sz, tgt_len) = input_ids.dims2()?;
+        let sliding_window = sliding_window.unwrap();
+
+        let past_kv_len = cache
+            .get_past_kv_len()?
+            .min(sliding_window.saturating_sub(tgt_len));
+        if tgt_len == 1 {
+            return Ok(None);
+        }
+
+        Ok(Some(self.make_swa_mask(
+            tgt_len,
+            past_kv_len,
+            sliding_window,
+            input_ids.device(),
+            dtype,
+        )?))
+    }
+
     pub fn make_chunked_mask_matrix(
         &self,
         input_ids: &Tensor,

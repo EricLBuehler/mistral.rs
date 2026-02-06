@@ -157,7 +157,7 @@ impl Attention {
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        flash_params: Option<&FlashParams>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -207,50 +207,59 @@ impl Attention {
             attention_mask
         };
 
+        // With flash (Some): pass attention_mask (global causal; flash kernel handles sliding window)
+        // Without flash (None): pass mask (per-layer mask with sliding window baked in)
+        let paged_mask = if flash_params.is_some() {
+            attention_mask
+        } else {
+            mask
+        };
+
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
                     &q,
                     &k,
                     &v,
-                    attention_mask,
+                    paged_mask,
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
                     &self.sdpa_params,
-                    Some(flash_params),
+                    flash_params,
                 )?,
                 None => {
-                    // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
-                    // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
                     let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                    // Sanity check.
-                    assert!(attention_mask.is_some());
+                    assert!(paged_mask.is_some());
                     paged_attn.forward(
                         &q,
                         &k,
                         &v,
-                        attention_mask,
+                        paged_mask,
                         None,
                         None,
                         &input_metadata,
                         &self.sdpa_params,
-                        Some(flash_params),
+                        flash_params,
                     )?
                 }
             },
             None => {
-                // self.sliding_window is None if !self.use_sliding_window
                 let (k, v) = kv_cache.append(&k, &v)?;
-
-                Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?
+                match flash_params {
+                    Some(fp) => {
+                        Sdpa.run_attention(&q, &k, &v, mask, Some(fp), &self.sdpa_params)?
+                    }
+                    None => Sdpa.run_attention_noflash(&q, &k, &v, mask, &self.sdpa_params)?,
+                }
             }
         };
 
         if let Some(t) = self.q_proj.quantized_act_type() {
             attn_output = attn_output.to_dtype(t)?;
         }
-        attn_output = if attention_mask.is_some() {
+        // Transpose needed whenever SDPA was used (i.e., any mask was present)
+        attn_output = if paged_mask.is_some() || mask.is_some() {
             attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
@@ -342,7 +351,7 @@ impl DecoderLayer {
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        flash_params: Option<&FlashParams>,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -380,6 +389,7 @@ pub struct TextModel {
     sliding_window: usize,
     final_logit_softcapping: Option<f64>,
     cfg: ModelConfigMetadata,
+    image_token_index: Option<usize>,
 }
 
 impl TextModel {
@@ -389,6 +399,7 @@ impl TextModel {
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
+        image_token_index: Option<usize>,
     ) -> Result<Self> {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
@@ -538,6 +549,7 @@ impl TextModel {
                 kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
+            image_token_index,
         })
     }
 
@@ -545,6 +557,7 @@ impl TextModel {
         self.embed_tokens.forward(input_ids)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn forward_embeds(
         &self,
         input_ids: &Tensor,
@@ -553,42 +566,93 @@ impl TextModel {
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
+        has_images: bool,
     ) -> Result<Tensor> {
         let cache = &mut self.cache.normal().0;
-        let attention_mask = CausalMasker.make_causal_mask_matrix(
-            input_ids,
-            &*cache,
-            xs.dtype(),
-            self.cfg.num_attn_heads,
-        )?;
-        // Move mask to CPU to avoid CUDA context issues when copying between GPUs
-        // during device-mapped forward passes. Each GPU has its own CUDA context,
-        // and candle/cudarc doesn't properly switch contexts for cross-GPU transfers.
-        let attention_mask = attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
-        // PagedAttention prompt chunking
-        let attention_mask = attention_mask.filter(|_| {
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-        });
-        let sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
-            input_ids,
-            &*cache,
-            Some(self.sliding_window),
-            xs.dtype(),
-            self.cfg.num_attn_heads,
-        )?;
-        // Move mask to CPU (see comment above)
-        let sliding_attention_mask =
-            sliding_attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
-        // PagedAttention prompt chunking
-        let sliding_attention_mask = sliding_attention_mask.filter(|_| {
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-        });
+
+        // When images are present, we need bidirectional attention for image tokens.
+        // Flash attention doesn't support per-token mixed causal/bidirectional masking,
+        // so we construct real masks and bypass flash attention during image prefill
+        // by passing flash_params=None to layers.
+        // See: https://github.com/vllm-project/vllm/blob/5819ca8944af4f7dcbac3c6b73179f760e05910d/vllm/config/model.py#L1116-L1125
+        let has_bidirectional =
+            has_images && self.image_token_index.is_some() && input_ids.dim(1)? > 1;
+
+        let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
+            // Build real masks (not flash-attn dummies) with bidirectional regions for image tokens
+            let image_token_index = self.image_token_index.unwrap();
+            let causal_mask =
+                CausalMasker.make_causal_mask_as_attn_bias(input_ids, &*cache, xs.dtype())?;
+            let sliding_mask = CausalMasker.make_sliding_window_causal_mask_as_attn_bias(
+                input_ids,
+                &*cache,
+                Some(self.sliding_window),
+                xs.dtype(),
+            )?;
+
+            // Apply bidirectional override for image tokens
+            let attention_mask = causal_mask
+                .map(|m| Self::apply_image_bidirectional_mask(&m, input_ids, image_token_index))
+                .transpose()?;
+            let sliding_attention_mask = sliding_mask
+                .map(|m| Self::apply_image_bidirectional_mask(&m, input_ids, image_token_index))
+                .transpose()?;
+
+            // Move to CPU (same optimization as normal path)
+            let attention_mask = attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
+            let sliding_attention_mask =
+                sliding_attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
+
+            // PagedAttention prompt chunking filter
+            let attention_mask = attention_mask.filter(|_| {
+                metadata
+                    .as_ref()
+                    .map(|(_, meta)| meta.is_first_prompt_chunk)
+                    .unwrap_or(true)
+            });
+            let sliding_attention_mask = sliding_attention_mask.filter(|_| {
+                metadata
+                    .as_ref()
+                    .map(|(_, meta)| meta.is_first_prompt_chunk)
+                    .unwrap_or(true)
+            });
+
+            // None = bypass flash, use the mask directly
+            (attention_mask, sliding_attention_mask, None)
+        } else {
+            // Standard path: use CausalMasker (returns dummy (1,1) when flash-attn on CUDA)
+            let attention_mask = CausalMasker.make_causal_mask_matrix(
+                input_ids,
+                &*cache,
+                xs.dtype(),
+                self.cfg.num_attn_heads,
+            )?;
+            let attention_mask = attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
+            let attention_mask = attention_mask.filter(|_| {
+                metadata
+                    .as_ref()
+                    .map(|(_, meta)| meta.is_first_prompt_chunk)
+                    .unwrap_or(true)
+            });
+            let sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+                input_ids,
+                &*cache,
+                Some(self.sliding_window),
+                xs.dtype(),
+                self.cfg.num_attn_heads,
+            )?;
+            let sliding_attention_mask =
+                sliding_attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
+            let sliding_attention_mask = sliding_attention_mask.filter(|_| {
+                metadata
+                    .as_ref()
+                    .map(|(_, meta)| meta.is_first_prompt_chunk)
+                    .unwrap_or(true)
+            });
+
+            (attention_mask, sliding_attention_mask, Some(flash_params))
+        };
+
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
@@ -606,7 +670,7 @@ impl TextModel {
                 metadata
                     .as_ref()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
-                flash_params,
+                layer_flash_params,
             )?;
         }
         let xs = xs.to_device(&self.device)?;
@@ -625,6 +689,73 @@ impl TextModel {
         }
 
         Ok(xs)
+    }
+
+    /// Apply bidirectional attention override for image tokens within the same image group.
+    /// Where both query and key positions are image tokens in the same contiguous group,
+    /// the mask value is set to 0.0 (attend) instead of -inf (mask).
+    fn apply_image_bidirectional_mask(
+        causal_mask: &Tensor,
+        input_ids: &Tensor,
+        image_token_index: usize,
+    ) -> Result<Tensor> {
+        // input_ids: (1, seq_len), causal_mask: (seq_len, total_len) where total_len = seq_len + past_kv_len
+        let (_, seq_len) = input_ids.dims2()?;
+        let total_len = causal_mask.dim(1)?;
+        let past_kv_len = total_len - seq_len;
+
+        // Flatten input_ids to 1D: (seq_len,)
+        let input_ids_1d = input_ids.squeeze(0)?;
+
+        // is_image: (seq_len,) boolean - true where token is an image token
+        let is_image = input_ids_1d
+            .eq(image_token_index as f64)?
+            .to_dtype(candle_core::DType::U32)?;
+
+        // Compute image group IDs via contiguous block detection
+        // is_prev_image: shift right by 1, pad left with 0
+        let is_image_vec: Vec<u32> = is_image.to_vec1()?;
+        let mut group_ids = vec![-1i64; seq_len];
+        let mut current_group: i64 = -1;
+        for i in 0..seq_len {
+            if is_image_vec[i] == 1 {
+                // Start new group if previous token is not an image token
+                if i == 0 || is_image_vec[i - 1] == 0 {
+                    current_group += 1;
+                }
+                group_ids[i] = current_group;
+            }
+        }
+
+        // Build the bidirectional override mask on CPU as f32
+        // For efficiency, we compute this as a Vec and create the tensor once
+        let device = causal_mask.device();
+        let dtype = causal_mask.dtype();
+
+        // The mask covers (seq_len, total_len). Positions 0..past_kv_len are past KV cache
+        // tokens (no image tokens there during image prefill since past_kv_len=0 typically).
+        // Positions past_kv_len..total_len correspond to current input_ids.
+        let mut override_vals = vec![0f32; seq_len * total_len];
+        for qi in 0..seq_len {
+            if group_ids[qi] < 0 {
+                continue; // Not an image token query
+            }
+            for ki in 0..seq_len {
+                if group_ids[ki] >= 0 && group_ids[qi] == group_ids[ki] {
+                    // Both are image tokens in the same group: mark for bidirectional override
+                    let col = ki + past_kv_len;
+                    override_vals[qi * total_len + col] = 1.0;
+                }
+            }
+        }
+
+        let override_mask = Tensor::from_vec(override_vals, (seq_len, total_len), device)?;
+
+        // Where override is 1, set mask to 0.0 (attend); otherwise keep original causal mask.
+        // We use where_cond instead of multiplication to avoid NaN from -inf * 0.
+        let zero = Tensor::zeros((seq_len, total_len), dtype, device)?;
+        let override_bool = override_mask.to_dtype(candle_core::DType::U8)?;
+        override_bool.where_cond(&zero, causal_mask)
     }
 }
 

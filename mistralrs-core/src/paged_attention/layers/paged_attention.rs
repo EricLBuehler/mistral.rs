@@ -103,14 +103,19 @@ impl PagedAttention {
         #[allow(clippy::cast_possible_truncation)]
         let att = match attention_mask {
             None => None,
-            Some(mask) => Some(Sdpa.run_attention(
-                query,
-                key,
-                value,
-                Some(mask),
-                flash_params,
-                sdpa_params,
-            )?),
+            Some(mask) => match flash_params {
+                Some(_) => Some(Sdpa.run_attention(
+                    query,
+                    key,
+                    value,
+                    Some(mask),
+                    flash_params,
+                    sdpa_params,
+                )?),
+                None => {
+                    Some(Sdpa.run_attention_noflash(query, key, value, Some(mask), sdpa_params)?)
+                }
+            },
         };
 
         // paged-attn expects [batch_size, num_tokens, num_heads, head_size]

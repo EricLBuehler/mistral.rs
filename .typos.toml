@@ -4,7 +4,8 @@ extend-exclude = [
     "calibration_data/",
     "examples/server/phi3_duckduckgo_mistral.rs.ipynb",
     "mistralrs-web-chat/static/",
-    "mistralrs-cli/static/"
+    "mistralrs-cli/static/",
+    "CLAUDE.md",
 ]
 ignore-hidden = false
 

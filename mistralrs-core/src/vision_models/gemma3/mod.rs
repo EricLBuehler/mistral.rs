@@ -51,6 +51,7 @@ impl Gemma3Model {
                     is_gptx,
                     normal_loading_metadata,
                     attention_mechanism,
+                    None,
                 )?,
                 multi_modal_projector: None,
                 vision_tower: None,
@@ -81,6 +82,7 @@ impl Gemma3Model {
                         is_gptx,
                         normal_loading_metadata,
                         attention_mechanism,
+                        Some(*image_token_index),
                     )?,
                     cfg: cfg.clone(),
                 })
@@ -98,6 +100,7 @@ impl Gemma3Model {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut input_embeds = self.language_model.embed_tokens(input_ids)?;
+        let has_images = pixel_values.is_some();
         if let Some(pixel_values) = pixel_values {
             let Gemma3Config::WithVision {
                 image_token_index, ..
@@ -141,6 +144,7 @@ impl Gemma3Model {
             context_lens,
             metadata,
             flash_params,
+            has_images,
         )?;
         Ok(res)
     }
