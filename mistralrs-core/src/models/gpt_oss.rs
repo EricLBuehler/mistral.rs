@@ -686,6 +686,9 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        if !matches!(attention_mechanism, AttentionImplementation::Eager) {
+            candle_core::bail!("gpt-oss currently only supports eager attention");
+        }
         let vb_m = vb.pp("model");
         let mapper = normal_loading_metadata.mapper;
 
