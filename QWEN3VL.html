@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-43f90895.js";
+            window.path_to_searchindex_js = "searchindex-74b13b1f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cf64f8f3.js"></script>
@@ -182,10 +182,7 @@
                     <main>
                         <h1 id="qwen-3-vision-model-qwen3-vl-collection"><a class="header" href="#qwen-3-vision-model-qwen3-vl-collection">Qwen 3 Vision Model: <a href="https://huggingface.co/collections/Qwen/qwen3-vl"><code>Qwen3 VL Collection</code></a></a></h1>
 <p>The Qwen 3 VL models are the successors to the Qwen 2.5 VL models, featuring a diverse lineup of increased performance, flexible sizes, and reasoning-capable models.</p>
-<blockquote>
-<p>Note: Support for the MoE variants is not yet implemented. This is coming very soon!</p>
-</blockquote>
-<p>Mistral.rs supports the Qwen 3 VL vision model family, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.</p>
+<p>Mistral.rs supports the Qwen 3 VL vision model family (including MoE variants), with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements. MoE variants also support <a href="ISQ.html">MoQE</a> via the <code>--organization moqe</code> flag.</p>
 <p>UQFF quantizations are also available.</p>
 <p>The Python and HTTP APIs support sending images as:</p>
 <ul>
