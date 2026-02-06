@@ -181,11 +181,11 @@ impl QuantMethod for PendingIsqLayer {
     }
 }
 
+pub type IsqSender = mpsc::SyncSender<Result<Arc<dyn QuantMethod>>>;
+pub type IsqReceiver = Receiver<Result<Arc<dyn QuantMethod>>>;
+
 /// Create a channel pair for use with `PendingIsqLayer`. The sender should be
 /// given to a thread pool task; the receiver is passed to `PendingIsqLayer::new`.
-pub fn pending_isq_channel() -> (
-    mpsc::SyncSender<Result<Arc<dyn QuantMethod>>>,
-    Receiver<Result<Arc<dyn QuantMethod>>>,
-) {
+pub fn pending_isq_channel() -> (IsqSender, IsqReceiver) {
     mpsc::sync_channel(1)
 }
