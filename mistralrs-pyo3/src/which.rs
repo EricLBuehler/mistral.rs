@@ -482,6 +482,7 @@ pub enum Which {
         hf_cache_path = None,
         matformer_config_path = None,
         matformer_slice_name = None,
+        organization = None,
     ))]
     VisionPlain {
         model_id: String,
@@ -498,6 +499,7 @@ pub enum Which {
         hf_cache_path: Option<PathBuf>,
         matformer_config_path: Option<PathBuf>,
         matformer_slice_name: Option<String>,
+        organization: Option<IsqOrganization>,
     },
 
     #[pyo3(constructor = (

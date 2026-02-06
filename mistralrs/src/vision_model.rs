@@ -35,6 +35,7 @@ pub struct VisionModelBuilder {
     pub(crate) device: Option<Device>,
     pub(crate) matformer_config_path: Option<PathBuf>,
     pub(crate) matformer_slice_name: Option<String>,
+    pub(crate) organization: IsqOrganization,
 
     // Model running
     pub(crate) topology: Option<Topology>,
@@ -90,6 +91,7 @@ impl VisionModelBuilder {
             device: None,
             matformer_config_path: None,
             matformer_slice_name: None,
+            organization: IsqOrganization::Default,
             prefix_cache_n: None,
         }
     }
@@ -205,6 +207,12 @@ impl VisionModelBuilder {
     /// Use ISQ of a certain type. If there is an overlap, the topology type is used over the ISQ type.
     pub fn with_isq(mut self, isq: IsqType) -> Self {
         self.isq = Some(isq);
+        self
+    }
+
+    /// Organize ISQ to enable MoQE (Mixture of Quantized Experts, <https://arxiv.org/abs/2310.02410>)
+    pub fn with_mixture_qexperts_isq(mut self) -> Self {
+        self.organization = IsqOrganization::MoeExpertsOnly;
         self
     }
 

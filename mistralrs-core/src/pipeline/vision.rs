@@ -74,6 +74,7 @@ pub struct VisionPipeline {
     silent: bool,
     prefixer: Arc<dyn MultimodalPromptPrefixer>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    organization: IsqOrganization,
 
     // For full UQFF serialization
     template_filename: Option<PathBuf>,
@@ -127,6 +128,7 @@ pub struct VisionSpecificConfig {
     pub hf_cache_path: Option<PathBuf>,
     pub matformer_config_path: Option<PathBuf>,
     pub matformer_slice_name: Option<String>,
+    pub organization: IsqOrganization,
 }
 
 impl VisionLoaderBuilder {
@@ -508,7 +510,12 @@ impl Loader for VisionLoader {
         let mut immediate_predicates = Vec::new();
         if allow_immediate_cli {
             immediate_ty = in_situ_quant;
-            immediate_predicates = self.inner.immediate_isq_predicates(&config)?;
+            immediate_predicates =
+                if matches!(self.config.organization, IsqOrganization::MoeExpertsOnly) {
+                    self.inner.immediate_isq_predicates_moqe(&config)?
+                } else {
+                    self.inner.immediate_isq_predicates(&config)?
+                };
             info!("Applying ISQ to {in_situ_quant:?}");
             if immediate_predicates.is_empty() {
                 warn!("No predicates for this model and ISQ setting detected. ISQ will not be applied to any weights!");
@@ -764,7 +771,7 @@ impl Loader for VisionLoader {
                 self.config.topology.as_ref(),
                 silent,
                 imatrix_source,
-                IsqOrganization::Default,
+                self.config.organization,
                 should_quantize_pass,
                 self.config.write_uqff.as_ref(),
                 UqffFullSer {
@@ -846,6 +853,7 @@ impl Loader for VisionLoader {
             preprocessor_config: Arc::new(preprocessor_config),
             topology: self.config.topology.clone(),
             silent,
+            organization: self.config.organization,
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
             config,
@@ -887,7 +895,7 @@ impl IsqPipelineMixin for VisionPipeline {
                 self.topology.as_ref(),
                 self.silent,
                 self.imatrix.as_ref().map(ImatrixDataSource::File),
-                IsqOrganization::Default,
+                self.organization,
                 true,
                 None,
                 UqffFullSer {

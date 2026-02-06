@@ -58,6 +58,10 @@ For Mixture of Expert models, a method called [MoQE](https://arxiv.org/abs/2310.
 - [Phi 3.5 MoE](PHI3.5MOE.md)
 - [DeepSeek V2](DEEPSEEKV2.md)
 - [DeepSeek V3 / DeepSeek R1](DEEPSEEKV3.md)
+- [GLM4-MoE](GLM4_MOE.md)
+- [GLM4-MoE-Lite](GLM4_MOE_LITE.md)
+- [Qwen 3 (MoE variants)](QWEN3.md)
+- [Qwen3-VL-MoE (MoE variants)](QWEN3VL.md)
 
 ## Accuracy
 
