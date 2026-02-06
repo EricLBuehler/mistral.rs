@@ -684,7 +684,12 @@ impl Loader for VisionLoader {
 
             // NOTE: We ONLY calibrate the text bits of these models!!
             // So only those should be tracked!
-            model.begin_track_stats()?;
+            match self.config.organization {
+                IsqOrganization::Default => model.begin_track_stats()?,
+                IsqOrganization::MoeExpertsOnly => {
+                    model.begin_track_stats_moe_experts_only()?
+                }
+            }
 
             const CHUNK_SIZE: usize = 1024;
             let n_chunks: usize = tokens.len().div_ceil(CHUNK_SIZE);
