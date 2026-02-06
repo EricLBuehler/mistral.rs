@@ -423,7 +423,7 @@ impl Loader for EmbeddingLoader {
             .as_ref()
             .is_some_and(|topology| topology.requires_post_quantization());
 
-        let allow_immediate_cli = !device.is_cuda() && in_situ_quant.is_some();
+        let allow_immediate_cli = in_situ_quant.is_some();
 
         let mut immediate_ty = None;
         let mut immediate_predicates = Vec::new();
@@ -453,10 +453,18 @@ impl Loader for EmbeddingLoader {
         };
         loading_isq |= topology_requires_post_quant;
 
-        // Load onto the regular device if not using isq
+        // Load onto the regular device if not using isq.
+        // For immediate ISQ on discrete GPUs, load to CPU: the mapper will set the correct target
+        // device per-layer, and linear constructors will override to CPU for ISQ-targeted weights.
+        // On integrated/unified memory systems (e.g. Grace Blackwell), CPU and GPU share memory,
+        // so we load directly to the device.
         let load_device = if !loading_isq {
             loading_isq = false;
-            device.clone()
+            if use_immediate && !crate::utils::normal::is_integrated_gpu(&device) {
+                Device::Cpu
+            } else {
+                device.clone()
+            }
         } else {
             Device::Cpu
         };

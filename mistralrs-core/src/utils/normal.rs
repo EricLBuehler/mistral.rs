@@ -172,3 +172,34 @@ impl TryIntoDType for ModelDType {
         dtype
     }
 }
+
+/// Returns `true` if the given device has integrated/unified memory where CPU and GPU
+/// share the same physical memory. This includes:
+/// - Metal (Apple Silicon)
+/// - CUDA integrated GPUs (e.g. NVIDIA Grace Hopper, Grace Blackwell)
+///
+/// On such systems, loading tensors to CPU first provides no memory benefit.
+pub fn is_integrated_gpu(device: &Device) -> bool {
+    match device {
+        #[cfg(feature = "metal")]
+        Device::Metal(_) => true,
+        #[cfg(feature = "cuda")]
+        Device::Cuda(dev) => {
+            use candle_core::cuda::cudarc::driver::{result, sys};
+            let ordinal = dev.cuda_stream().context().ordinal();
+            let cu_device = match result::device::get(ordinal as i32) {
+                Ok(d) => d,
+                Err(_) => return false,
+            };
+            unsafe {
+                result::device::get_attribute(
+                    cu_device,
+                    sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_INTEGRATED,
+                )
+                .map(|v| v != 0)
+                .unwrap_or(false)
+            }
+        }
+        _ => false,
+    }
+}

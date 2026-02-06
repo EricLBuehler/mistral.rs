@@ -654,6 +654,13 @@ pub struct ReplicatedLayer(Arc<dyn QuantMethod>);
 impl ReplicatedLayer {
     pub fn from_linear(lin: Linear) -> Result<Arc<dyn QuantMethod>> {
         let dev = lin.weight().device().clone();
+        // When immediate ISQ is active, the weight must be on CPU for GGML quantization.
+        // Move it there first, then quantize, which will place the result on `dev`.
+        let lin = if crate::get_immediate_isq().is_some() && !dev.is_cpu() {
+            Linear::new(lin.weight().to_device(&Device::Cpu)?, lin.bias().cloned())
+        } else {
+            lin
+        };
         let this_unquant = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
         let this: Arc<dyn QuantMethod> = apply_immediate_isq_always(this_unquant, &dev)?;
         Ok(this)

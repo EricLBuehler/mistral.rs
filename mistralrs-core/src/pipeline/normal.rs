@@ -533,7 +533,6 @@ impl Loader for NormalLoader {
 
         let allow_immediate_cli = self.config.imatrix.is_none()
             && self.config.calibration_file.is_none()
-            && !device.is_cuda()
             && in_situ_quant.is_some();
 
         let mut immediate_ty = None;
@@ -578,10 +577,18 @@ impl Loader for NormalLoader {
             );
         }
 
-        // Load onto the regular device if not using isq or if the calibration file is specified
+        // Load onto the regular device if not using isq or if the calibration file is specified.
+        // For immediate ISQ on discrete GPUs, load to CPU: the mapper will set the correct target
+        // device per-layer, and linear constructors will override to CPU for ISQ-targeted weights.
+        // On integrated/unified memory systems (e.g. Grace Blackwell), CPU and GPU share memory,
+        // so we load directly to the device.
         let load_device = if !loading_isq || self.config.calibration_file.is_some() {
             loading_isq = false;
-            device.clone()
+            if use_immediate && !crate::utils::normal::is_integrated_gpu(&device) {
+                Device::Cpu
+            } else {
+                device.clone()
+            }
         } else {
             Device::Cpu
         };
