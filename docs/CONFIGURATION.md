@@ -10,6 +10,7 @@ This document covers environment variables and server configuration for mistral.
 | `MISTRALRS_NO_MMAP=1` | Disable memory-mapped file loading, forcing all tensor data into memory |
 | `MISTRALRS_NO_MLA=1` | Disable [MLA](MLA.md) (Multi-head Latent Attention) optimization for DeepSeek V2/V3 and GLM-4.7-Flash |
 | `MISTRALRS_ISQ_SINGLETHREAD=1` | Force ISQ (In-Situ Quantization) to run single-threaded |
+| `MISTRALRS_IGPU_MEMORY_FRACTION` | Memory fraction for integrated/unified-memory CUDA GPUs (e.g. NVIDIA Grace Blackwell, Jetson). Float between 0.0 and 1.0, default: `0.75` |
 | `MCP_CONFIG_PATH` | Fallback path for MCP client configuration (used if `--mcp-config` not provided) |
 | `KEEP_ALIVE_INTERVAL` | SSE keep-alive interval in milliseconds (default: 10000) |
 | `HF_HUB_CACHE` | Override Hugging Face Hub cache directory |

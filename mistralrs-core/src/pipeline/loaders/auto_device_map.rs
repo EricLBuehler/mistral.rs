@@ -242,6 +242,21 @@ pub fn get_device_layers(
         let a = MemoryUsage.get_memory_available(&dev)?;
         avail.push((a, dev));
     }
+    // On unified memory systems (iGPUs), GPU and CPU share the same physical RAM.
+    // Track the total GPU budget so we can cap CPU capacity accordingly.
+    let has_unified_memory = avail
+        .iter()
+        .any(|(_, d)| !d.is_cpu() && crate::utils::normal::is_integrated_gpu(d));
+    let unified_gpu_budget: usize = if has_unified_memory {
+        avail
+            .iter()
+            .filter(|(_, d)| !d.is_cpu())
+            .map(|(a, _)| *a)
+            .sum()
+    } else {
+        0
+    };
+
     avail.reverse();
     layer_sizes_in_bytes.reverse();
 
@@ -269,8 +284,14 @@ pub fn get_device_layers(
         // For GPU/accelerators: keep a small dynamic safety reserve to avoid OOMs
         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let cap = if dev.is_cpu() {
-            // Allow unlimited capacity for CPU - swap will handle it
-            usize::MAX
+            if has_unified_memory {
+                // GPU and CPU share the same physical memory on unified architectures.
+                // Cap CPU to what remains after GPU budgets to prevent over-subscription.
+                avail_bytes.saturating_sub(unified_gpu_budget)
+            } else {
+                // Allow unlimited capacity for CPU - swap will handle it
+                usize::MAX
+            }
         } else {
             let reserve_fraction = (avail_bytes as f64 * GPU_RESERVE_FRACTION) as usize;
             let reserve = reserve_fraction.max(GPU_MIN_RESERVE_BYTES).min(avail_bytes);

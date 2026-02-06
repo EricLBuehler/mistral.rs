@@ -67,7 +67,7 @@ Immediate ISQ quantizes each weight as it is loaded during model construction ra
 
 On CPU and discrete GPUs (e.g. NVIDIA), quantization is parallelized across a thread pool so multiple weights are quantized concurrently during loading. On discrete GPUs, each weight is loaded to CPU, quantized, and then moved to the GPU. On unified memory systems (e.g. Apple Silicon, NVIDIA Grace Blackwell), weights are loaded directly to the device and quantized synchronously since CPU and GPU share the same memory.
 
-Set `MISTRALRS_ISQ_SINGLETHREAD=1` to force single-threaded quantization.
+Set `MISTRALRS_ISQ_SINGLETHREAD=1` to force single-threaded quantization. On CUDA integrated GPUs, the memory budget defaults to 75% of system RAM; set `MISTRALRS_IGPU_MEMORY_FRACTION` (0.0-1.0) to override this (see [Configuration](CONFIGURATION.md)).
 
 ### Deferred ISQ
 
