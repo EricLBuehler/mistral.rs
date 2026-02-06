@@ -13,7 +13,9 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{self, embedding, CausalMasker, GptOssRotaryEmbedding, MatMul, RmsNorm, RotaryEmbedding},
+    layers::{
+        self, embedding, CausalMasker, GptOssRotaryEmbedding, MatMul, RmsNorm, RotaryEmbedding,
+    },
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -328,8 +330,7 @@ impl Attention {
                 let (k, v) = if self.is_sliding && q_len > 1 {
                     match &*kv_cache {
                         KvCache::Rotating { k: kc, .. }
-                            if kc.current_seq_len >= kc.max_seq_len
-                                && kc.offset > 0 =>
+                            if kc.current_seq_len >= kc.max_seq_len && kc.offset > 0 =>
                         {
                             let dim = 2; // (batch, heads, seq, head_dim)
                             let offset = kc.offset;
@@ -525,8 +526,8 @@ impl GptOssMoE {
         };
         #[cfg(not(feature = "cuda"))]
         let (topk_weights, topk_ids) = {
-            use candle_core::DType;
             use crate::ops::TopKLastDimOp;
+            use candle_core::DType;
             let router_f32 = router_logits.to_dtype(DType::F32)?;
             let topk_result = router_f32.topk(self.num_experts_per_tok)?;
             let topk_weights = candle_nn::ops::softmax_last_dim(&topk_result.values)?;
@@ -860,11 +861,8 @@ impl Model {
         // The standard `make_causal_mask_matrix` returns a dummy (1,1) tensor when
         // flash-attn is enabled on CUDA, but attention_with_sinks does manual
         // attention and needs a real mask.
-        let causal_mask = CausalMasker.make_causal_mask_as_attn_bias(
-            input_ids,
-            &*cache,
-            xs.dtype(),
-        )?;
+        let causal_mask =
+            CausalMasker.make_causal_mask_as_attn_bias(input_ids, &*cache, xs.dtype())?;
 
         let sliding_mask = CausalMasker.make_sliding_window_causal_mask_as_attn_bias(
             input_ids,
