@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, Module, Result, Tensor, D};
+use candle_core::{Device, Module, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
     ColumnParallelLayer, MXFP4Layer, QuantMethod, QuantizedConfig, ReplicatedLayer,
@@ -13,7 +13,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{self, embedding, GptOssRotaryEmbedding, MatMul, RmsNorm, RotaryEmbedding},
+    layers::{self, embedding, CausalMasker, GptOssRotaryEmbedding, MatMul, RmsNorm, RotaryEmbedding},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -321,6 +321,34 @@ impl Attention {
             None => {
                 let (k, v) = kv_cache.append(&k, &v)?;
 
+                // For sliding window layers with a wrapped RotatingCache, the
+                // returned K/V are in circular buffer order (not temporal).
+                // Reorder to temporal order so the mask columns align correctly:
+                // [past_tokens | new_tokens].
+                let (k, v) = if self.is_sliding && q_len > 1 {
+                    match &*kv_cache {
+                        KvCache::Rotating { k: kc, .. }
+                            if kc.current_seq_len >= kc.max_seq_len
+                                && kc.offset > 0 =>
+                        {
+                            let dim = 2; // (batch, heads, seq, head_dim)
+                            let offset = kc.offset;
+                            let max_len = kc.max_seq_len;
+                            let p1_k = k.narrow(dim, offset, max_len - offset)?;
+                            let p2_k = k.narrow(dim, 0, offset)?;
+                            let p1_v = v.narrow(dim, offset, max_len - offset)?;
+                            let p2_v = v.narrow(dim, 0, offset)?;
+                            (
+                                Tensor::cat(&[&p1_k, &p2_k], dim)?,
+                                Tensor::cat(&[&p1_v, &p2_v], dim)?,
+                            )
+                        }
+                        _ => (k, v),
+                    }
+                } else {
+                    (k, v)
+                };
+
                 self.attention_with_sinks(
                     &q,
                     &k,
@@ -497,6 +525,7 @@ impl GptOssMoE {
         };
         #[cfg(not(feature = "cuda"))]
         let (topk_weights, topk_ids) = {
+            use candle_core::DType;
             use crate::ops::TopKLastDimOp;
             let router_f32 = router_logits.to_dtype(DType::F32)?;
             let topk_result = router_f32.topk(self.num_experts_per_tok)?;
@@ -825,60 +854,24 @@ impl Model {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let cache = &mut self.cache.normal().0;
 
-        let (_b_sz, tgt_len) = input_ids.dims2()?;
         let sliding_window = self.cfg.sliding_window;
 
-        let (causal_mask, sliding_mask) = if tgt_len == 1 {
-            (None, None)
-        } else {
-            let past_kv_len = cache[0].current_seq_len();
-            let kv_len = tgt_len + past_kv_len;
+        // Use the `_as_attn_bias` variants which always construct real masks.
+        // The standard `make_causal_mask_matrix` returns a dummy (1,1) tensor when
+        // flash-attn is enabled on CUDA, but attention_with_sinks does manual
+        // attention and needs a real mask.
+        let causal_mask = CausalMasker.make_causal_mask_as_attn_bias(
+            input_ids,
+            &*cache,
+            xs.dtype(),
+        )?;
 
-            let q_pos = Tensor::arange(
-                past_kv_len as u32,
-                (past_kv_len + tgt_len) as u32,
-                input_ids.device(),
-            )?
-            .to_dtype(DType::I64)?
-            .reshape((tgt_len, 1))?;
-            let k_pos = Tensor::arange(0u32, kv_len as u32, input_ids.device())?
-                .to_dtype(DType::I64)?
-                .reshape((1, kv_len))?;
-
-            let causal_mask_bool = k_pos.broadcast_gt(&q_pos)?;
-            let zeros = Tensor::zeros((tgt_len, kv_len), xs.dtype(), input_ids.device())?;
-            let neg_inf = Tensor::full(f32::NEG_INFINITY, (tgt_len, kv_len), input_ids.device())?
-                .to_dtype(xs.dtype())?;
-            let causal_mask = Some(
-                causal_mask_bool
-                    .where_cond(&neg_inf, &zeros)?
-                    .unsqueeze(0)?
-                    .unsqueeze(0)?,
-            );
-
-            let sliding_mask = if let Some(window) = sliding_window {
-                let window_tensor = Tensor::full(window as i64, q_pos.shape(), input_ids.device())?;
-                let min_k = q_pos.sub(&window_tensor)?.maximum(0i64)?;
-
-                let too_far_left = k_pos.broadcast_lt(&min_k)?;
-                let too_far_right = k_pos.broadcast_gt(&q_pos)?;
-                let sliding_mask_bool = too_far_left
-                    .to_dtype(DType::U8)?
-                    .add(&too_far_right.to_dtype(DType::U8)?)?
-                    .gt(0u8)?;
-
-                Some(
-                    sliding_mask_bool
-                        .where_cond(&neg_inf, &zeros)?
-                        .unsqueeze(0)?
-                        .unsqueeze(0)?,
-                )
-            } else {
-                None
-            };
-
-            (causal_mask, sliding_mask)
-        };
+        let sliding_mask = CausalMasker.make_sliding_window_causal_mask_as_attn_bias(
+            input_ids,
+            &*cache,
+            sliding_window,
+            xs.dtype(),
+        )?;
 
         let should_use_mask = metadata
             .as_ref()
