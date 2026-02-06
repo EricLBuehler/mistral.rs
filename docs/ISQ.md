@@ -1,6 +1,8 @@
-# In situ quantization
+# In situ quantization (ISQ)
 
-In situ quantization works by quantizing models inplace, with the chief benefit being reduced memory footprint when running the model. This enables larger model to be run on devices which would not fit the full weights, and may increase model inference performance.
+In situ quantization (ISQ) quantizes model weights in place as they are loaded, so the full unquantized model never needs to fit in memory. Using with I/O and parallel pipelining, this means you can load and run a model that is larger than the total amount of RAM (CPU or GPU) on your system.
+
+If the quantized weights are small enough to fit even though the original weights would not, you can still run the model! Like all quantization, ISQ may also increase inference performance due to reduced memory bandwidth pressure.
 
 **Quick start**: Just use `--isq 4` (or 2, 3, 5, 6, 8) and mistral.rs will pick the best quantization for your hardware:
 ```
