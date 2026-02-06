@@ -293,23 +293,13 @@ impl Attention {
             softmax_scale: self.scale,
         };
 
-        // Build FlashParams with causal=false for bidirectional attention.
-        // cumulative_seqlens = [0, q_len, 2*q_len, ...] for varlen flash attention.
-        let cumulative_seqlens = Tensor::from_vec(
-            (0..=b_sz as u32)
-                .map(|i| i * q_len as u32)
-                .collect::<Vec<u32>>(),
-            (b_sz + 1,),
-            xs.device(),
-        )?;
+        // Build FlashParams with causal=false for bidirectional vision attention.
+        // Empty cumulative_seqlens: flash backend uses the non-varlen path with causal=false.
         let flash_params = FlashParams {
-            max_q: q_len as u32,
-            max_k: q_len as u32,
-            cumulative_seqlens_q: HashMap::from([(
-                xs.device().location(),
-                cumulative_seqlens.clone(),
-            )]),
-            cumulative_seqlens_k: HashMap::from([(xs.device().location(), cumulative_seqlens)]),
+            max_q: 0,
+            max_k: 0,
+            cumulative_seqlens_q: HashMap::new(),
+            cumulative_seqlens_k: HashMap::new(),
             causal: false,
         };
 
