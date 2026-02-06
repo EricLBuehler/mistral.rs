@@ -64,33 +64,26 @@ impl Gemma3Model {
                 mm_tokens_per_image: _,
             } => {
                 assert!(*image_token_index < text_config.vocab_size);
-                tracing::info!("DEBUG: Building multi_modal_projector...");
-                let multi_modal_projector = Gemma3MultiModalProjector::new(
-                    cfg,
-                    vb.pp("multi_modal_projector")
-                        .set_device(normal_loading_metadata.real_device.clone()),
-                )?;
-                tracing::info!("DEBUG: Building vision_tower (SiGLIP)...");
-                let vision_tower = SiglipVisionTransformer::new(
-                    vision_config,
-                    vb.pp("vision_tower")
-                        .pp("vision_model")
-                        .set_device(normal_loading_metadata.real_device.clone()),
-                )?;
-                tracing::info!("DEBUG: Building language_model (TextModel)...");
-                let language_model = TextModel::new(
-                    text_config,
-                    vb.pp("language_model"),
-                    is_gptx,
-                    normal_loading_metadata,
-                    attention_mechanism,
-                    Some(*image_token_index),
-                )?;
-                tracing::info!("DEBUG: Assembling Gemma3Model struct...");
                 Ok(Self {
-                    multi_modal_projector: Some(multi_modal_projector),
-                    vision_tower: Some(vision_tower),
-                    language_model,
+                    multi_modal_projector: Some(Gemma3MultiModalProjector::new(
+                        cfg,
+                        vb.pp("multi_modal_projector")
+                            .set_device(normal_loading_metadata.real_device.clone()),
+                    )?),
+                    vision_tower: Some(SiglipVisionTransformer::new(
+                        vision_config,
+                        vb.pp("vision_tower")
+                            .pp("vision_model")
+                            .set_device(normal_loading_metadata.real_device.clone()),
+                    )?),
+                    language_model: TextModel::new(
+                        text_config,
+                        vb.pp("language_model"),
+                        is_gptx,
+                        normal_loading_metadata,
+                        attention_mechanism,
+                        Some(*image_token_index),
+                    )?,
                     cfg: cfg.clone(),
                 })
             }

@@ -616,8 +616,6 @@ impl Loader for VisionLoader {
             }
         };
 
-        info!("Model construction completed successfully.");
-
         // Handle the Gemma 3 1b case here
         let preprocessor_config: PreProcessorConfig = match paths.get_preprocessor_config().as_ref()
         {

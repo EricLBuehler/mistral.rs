@@ -21,16 +21,13 @@ pub fn apply_immediate_isq(
     let prefix = format!("{}.weight", vb.prefix());
     if let Some(ImmediateIsqMatch { ty, device }) = crate::resolve_immediate_isq(&params, &prefix) {
         let device = device.unwrap_or_else(|| vb.device().clone());
-        tracing::info!("Immediate ISQ: quantizing `{prefix}` to {ty:?} on {device:?}");
-        let result = layer.clone().apply_isq(
+        layer.clone().apply_isq(
             Some(ty),
             device,
             &AtomicUsize::new(0),
             None,
             params.guard.clone(),
-        );
-        tracing::info!("Immediate ISQ: done `{prefix}`");
-        result
+        )
     } else {
         Ok(layer)
     }

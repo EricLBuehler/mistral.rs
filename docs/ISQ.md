@@ -48,7 +48,11 @@ mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
-When using ISQ, it will automatically load ISQ-able weights into CPU memory before applying ISQ. The ISQ application process moves the weights to device memory. This process is implemented to avoid memory spikes from loading the model in full precision.
+ISQ supports two quantization strategies, selected automatically:
+
+- **Immediate ISQ** (default): Weights are quantized per-layer during model construction. This is memory-efficient because only one layer's unquantized weights need to be in memory at a time. On discrete GPUs, weights are loaded to CPU, quantized, and moved to the device. On integrated/unified memory systems (e.g. Apple Silicon, NVIDIA Grace Blackwell), weights are loaded directly to the device.
+
+- **Deferred ISQ**: The full model is loaded to CPU memory first, then all layers are quantized in a post-processing pass via `get_layers` and loaded to the correct device. This path is used when an imatrix file (`--imatrix`) or calibration file (`--calibration-file`) is provided, since these require either the full model or a forward pass before quantization can begin.
 
 For Mixture of Expert models, a method called [MoQE](https://arxiv.org/abs/2310.02410) can be applied to only quantize MoE layers. This is configured via the ISQ "organization" parameter in all APIs. The following models support MoQE:
 - [Phi 3.5 MoE](PHI3.5MOE.md)

@@ -492,14 +492,12 @@ impl TextModel {
                 &comm,
             )
         })?;
-        tracing::info!("DEBUG: All text layers built, building norm...");
         let norm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
 
-        tracing::info!("DEBUG: Norm built, building lm_head...");
         let lm_head = if !cfg.tie_word_embeddings {
             ReplicatedLayer::new(
                 cfg.hidden_size,
@@ -528,7 +526,6 @@ impl TextModel {
                     })
             })
             .collect::<Vec<_>>();
-        tracing::info!("DEBUG: lm_head built, assembling TextModel struct...");
         Ok(Self {
             embed_tokens,
             layers,
