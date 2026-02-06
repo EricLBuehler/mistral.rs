@@ -130,6 +130,7 @@ impl Kernels {
         file_system.insert("float8.metal", include_str!("float8.metal"));
         file_system.insert("float4.metal", include_str!("float4.metal"));
         file_system.insert("scalar_fp8.metal", include_str!("scalar_fp8.metal"));
+        file_system.insert("softmax_with_sinks.metal", include_str!("softmax_with_sinks.metal"));
 
         // Recursive include preprocessor
         fn preprocess_includes(
@@ -2649,6 +2650,85 @@ pub fn call_fused_glu(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, n_elements);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+// ============================================================================
+// Softmax with sinks kernel
+// ============================================================================
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_softmax_with_sinks(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    logits: &Buffer,
+    logits_offset: usize,
+    sinks: &Buffer,
+    sinks_offset: usize,
+    output: &Buffer,
+    num_heads: u32,
+    q_len: u32,
+    k_len: u32,
+    total_rows: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "softmax_with_sinks_float",
+        DType::F16 => "softmax_with_sinks_half",
+        DType::BF16 => "softmax_with_sinks_bfloat",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    // Choose thread group size based on k_len
+    let threads_per_group: usize = if k_len <= 64 {
+        64
+    } else if k_len <= 128 {
+        128
+    } else if k_len <= 256 {
+        256
+    } else {
+        512
+    };
+
+    // Shared memory: s_max(1) + s_sum(1) + warp_scratch(threads_per_group / 32)
+    let num_simdgroups = (threads_per_group + 31) / 32;
+    let shared_mem_size = (2 + num_simdgroups) * std::mem::size_of::<f32>();
+    encoder.set_threadgroup_memory_length(0, shared_mem_size);
+
+    set_params!(
+        encoder,
+        (
+            (logits, logits_offset),
+            (sinks, sinks_offset),
+            output,
+            num_heads,
+            q_len,
+            k_len
+        )
+    );
+
+    let thread_groups_count = MTLSize {
+        width: total_rows,
+        height: 1,
+        depth: 1,
+    };
+    let thread_group_size = MTLSize {
+        width: threads_per_group,
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(thread_groups_count, thread_group_size);
     Ok(())
 }
 
