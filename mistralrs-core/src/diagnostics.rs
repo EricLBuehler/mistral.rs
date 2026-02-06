@@ -43,6 +43,9 @@ pub struct DeviceInfo {
     /// Whether this GPU supports Flash Attention v3 (compute capability == 9.0, Hopper only)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flash_attn_v3_compatible: Option<bool>,
+    /// Whether this device uses unified memory (GPU and CPU share the same physical RAM)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unified_memory: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +136,7 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
         compute_capability: None,
         flash_attn_compatible: None,
         flash_attn_v3_compatible: None,
+        unified_memory: None,
     });
 
     #[cfg(feature = "cuda")]
@@ -167,6 +171,7 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
                         compute_capability: compute_cap,
                         flash_attn_compatible: flash_attn_v2_ok,
                         flash_attn_v3_compatible: flash_attn_v3_ok,
+                        unified_memory: Some(crate::utils::normal::is_integrated_gpu(&dev)),
                     });
                     ord += 1;
                 }
@@ -194,6 +199,7 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
                     compute_capability: None,
                     flash_attn_compatible: Some(true), // Metal always supports flash attention
                     flash_attn_v3_compatible: None,    // Flash Attn v3 is CUDA Hopper only
+                    unified_memory: Some(true),        // Apple Silicon always uses unified memory
                 });
             }
         }
@@ -445,6 +451,26 @@ pub fn run_doctor() -> DoctorReport {
                 suggestion: None,
             });
         }
+    }
+
+    // Unified memory detection
+    for dev in system
+        .devices
+        .iter()
+        .filter(|d| d.unified_memory == Some(true))
+    {
+        let kind = &dev.kind;
+        let ord = dev.ordinal.map(|o| format!(" {o}")).unwrap_or_default();
+        checks.push(DoctorCheck {
+            name: format!("{}_{}_unified_memory", kind, dev.ordinal.unwrap_or(0)),
+            status: DoctorStatus::Ok,
+            message: format!(
+                "{}{}: unified memory detected. GPU and CPU share the same physical RAM.",
+                kind.to_uppercase(),
+                ord,
+            ),
+            suggestion: None,
+        });
     }
 
     // CUDA compute capability + Flash Attention v2/v3 check

@@ -465,6 +465,7 @@ pub async fn build_vision_pipeline(
         hf_cache_path: builder.hf_cache_path.clone(),
         matformer_config_path: builder.matformer_config_path.clone(),
         matformer_slice_name: builder.matformer_slice_name.clone(),
+        organization: builder.organization,
     };
 
     if builder.with_logging {
@@ -585,6 +586,7 @@ pub async fn build_vision_pipeline(
             hf_cache_path: builder.hf_cache_path.clone(),
             matformer_config_path: builder.matformer_config_path.clone(),
             matformer_slice_name: builder.matformer_slice_name.clone(),
+            organization: Some(builder.organization),
         },
         token_source: builder.token_source.clone(),
         hf_revision: builder.hf_revision.clone(),

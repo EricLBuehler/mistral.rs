@@ -150,6 +150,7 @@ fn convert_to_model_selected(
                 hf_cache_path: device.hf_cache.clone(),
                 matformer_config_path: None,
                 matformer_slice_name: None,
+                organization: quantization.isq_organization,
             };
             Ok((
                 model_selected,

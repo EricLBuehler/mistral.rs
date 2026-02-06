@@ -1,6 +1,8 @@
-# In situ quantization
+# In situ quantization (ISQ)
 
-In situ quantization works by quantizing models inplace, with the chief benefit being reduced memory footprint when running the model. This enables larger model to be run on devices which would not fit the full weights, and may increase model inference performance.
+In situ quantization (ISQ) quantizes model weights in place as they are loaded, so the full unquantized model never needs to fit in memory. Using with I/O and parallel pipelining, this means you can load and run a model that is larger than the total amount of RAM (CPU or GPU) on your system.
+
+If the quantized weights are small enough to fit even though the original weights would not, you can still run the model! Like all quantization, ISQ may also increase inference performance due to reduced memory bandwidth pressure.
 
 **Quick start**: Just use `--isq 4` (or 2, 3, 5, 6, 8) and mistral.rs will pick the best quantization for your hardware:
 ```
@@ -48,12 +50,30 @@ mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
-When using ISQ, it will automatically load ISQ-able weights into CPU memory before applying ISQ. The ISQ application process moves the weights to device memory. This process is implemented to avoid memory spikes from loading the model in full precision.
-
 For Mixture of Expert models, a method called [MoQE](https://arxiv.org/abs/2310.02410) can be applied to only quantize MoE layers. This is configured via the ISQ "organization" parameter in all APIs. The following models support MoQE:
 - [Phi 3.5 MoE](PHI3.5MOE.md)
 - [DeepSeek V2](DEEPSEEKV2.md)
 - [DeepSeek V3 / DeepSeek R1](DEEPSEEKV3.md)
+- [GLM4-MoE](GLM4_MOE.md)
+- [GLM4-MoE-Lite](GLM4_MOE_LITE.md)
+- [Qwen 3 (MoE variants)](QWEN3.md)
+- [Qwen3-VL-MoE (MoE variants)](QWEN3VL.md)
+
+## Quantization strategies
+
+ISQ supports two quantization strategies, selected automatically based on your configuration:
+
+### Immediate ISQ (default)
+
+Immediate ISQ quantizes each weight as it is loaded during model construction rather than loading all weights first, then quantizing. This means only a small number of unquantized weight tensors need to be in CPU memory at any given time, enabling ISQ for models that would not otherwise fit in memory.
+
+Quantization is parallelized across a thread pool on all devices. Multiple weights are quantized concurrently on CPU during loading, then moved to the target device. The number of threads depends on the ISQ type: GGML types (Q2K-Q8K) use all available CPU threads, while GPU-quantized types (HQQ, AFQ) use a single thread since the GPU work is serialized by a guard.
+
+Set `MISTRALRS_ISQ_SINGLETHREAD=1` to force single-threaded quantization.
+
+### Deferred ISQ
+
+Deferred ISQ loads the full unquantized model into CPU memory first, then quantizes all weights in parallel in a post-processing pass. This path is used when an imatrix file (`--imatrix`) or calibration file (`--calibration-file`) is provided, since these require access to the full model or a forward pass before quantization can begin. Peak CPU memory usage is higher than immediate ISQ because the entire unquantized model must fit in memory during the quantization pass.
 
 ## Accuracy
 

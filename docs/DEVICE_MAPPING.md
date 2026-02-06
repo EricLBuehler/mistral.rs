@@ -20,6 +20,10 @@ To control the mapping across devices, you can set the following maximum paramet
 
 These parameters do not translate to hard limits during runtime, they only control the mapping.
 
+### Unified memory systems
+
+On integrated GPU systems (e.g. Apple Silicon, NVIDIA Grace Blackwell, Jetson) where GPU and CPU share the same physical RAM, the auto device mapper caps the GPU memory budget to a fraction of system RAM (75% by default for CUDA iGPUs, configurable via `MISTRALRS_IGPU_MEMORY_FRACTION`; Metal uses the `iogpu.wired_limit_mb` sysctl). CPU offload capacity is limited to the remaining fraction to prevent over-subscription of shared memory. Use `mistralrs doctor` to check whether your device is detected as unified memory.
+
 > [!NOTE]
 > The maximum sequence length is also used to ensure that a KV cache will fit for with and without PagedAttention.
 
