@@ -275,7 +275,7 @@ impl Gemma3ImageProcessor {
 
             (num_crops_w, 1)
         } else {
-            if (width as f64 / height as f64) < pan_and_scan_min_ratio_to_activate {
+            if (height as f64 / width as f64) < pan_and_scan_min_ratio_to_activate {
                 return vec![];
             }
 
@@ -370,7 +370,7 @@ impl ImagePreProcessor for Gemma3ImageProcessor {
         let image_mean = config.image_mean.unwrap_or(Self::DEFAULT_MEAN);
         let image_std = config.image_std.unwrap_or(Self::DEFAULT_STD);
         let do_convert_rgb = config.do_convert_rgb.unwrap_or(true);
-        let do_pan_and_scan = config.do_pan_and_scan.unwrap_or(do_convert_rgb);
+        let do_pan_and_scan = config.do_pan_and_scan.unwrap_or(false);
         // https://github.com/huggingface/transformers/blob/ea219ed164bead55a5513e8cfaa17a25d5613b9e/src/transformers/models/gemma3/processing_gemma3.py#L42
         let pan_and_scan_min_crop_size = config.pan_and_scan_min_crop_size.unwrap_or(256);
         let pan_and_scan_max_num_crops = config.pan_and_scan_max_num_crops.unwrap_or(4);

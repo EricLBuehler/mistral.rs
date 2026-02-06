@@ -1,4 +1,4 @@
-use std::f64;
+use std::{collections::HashMap, f64};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, LayerNorm, LayerNormConfig, Linear, Module};
@@ -7,6 +7,7 @@ use mistralrs_quant::{QuantizedConfig, ShardedVarBuilder};
 use crate::{
     attention::SdpaParams,
     layers::{self, Activation, Conv3dConfig, Conv3dNoBias, Sdpa},
+    pipeline::text_models_inputs_processor::FlashParams,
     utils::unvarbuilder::UnVarBuilder,
 };
 
@@ -177,13 +178,21 @@ impl VisionAttention {
             let k_chunk = k.narrow(0, start, len)?.transpose(0, 1)?.contiguous()?;
             let v_chunk = v.narrow(0, start, len)?.transpose(0, 1)?.contiguous()?;
 
+            let flash_params = FlashParams {
+                max_q: 0,
+                max_k: 0,
+                cumulative_seqlens_q: HashMap::new(),
+                cumulative_seqlens_k: HashMap::new(),
+                causal: false,
+            };
+
             let mut chunk_out = Sdpa
                 .run_attention(
                     &q_chunk.unsqueeze(0)?,
                     &k_chunk.unsqueeze(0)?,
                     &v_chunk.unsqueeze(0)?,
                     None,
-                    None,
+                    Some(&flash_params),
                     &SdpaParams {
                         n_kv_groups: 1,
                         sliding_window: None,

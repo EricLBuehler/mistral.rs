@@ -126,3 +126,10 @@ Avoid returning TODOs.
 2. **Device Indices**: CUDA device selection uses 0-based indexing
 3. **Chat Templates**: Models may need specific chat templates - check `chat_templates/` directory
 4. **Quantization**: Different quantization methods have different hardware requirements
+5. **Never use `Tensor::{from_vec,arange}` in hot loops**: `Tensor::{from_vec,arange}` with a GPU device causes a CPU-to-GPU sync. If you need a small tensor on GPU during forward, either precompute it at model init or start of forward pass.
+
+### Vision/Audio Model Pitfalls
+
+6. **Vision encoder attention must be bidirectional (non-causal)**:  `Sdpa.run_attention` with `flash_params: None` defaults to `causal = seq_len > 1` on the CUDA flash-attn path, which silently breaks vision/audio encoders. Always pass `FlashParams { causal: false, cumulative_seqlens_q: HashMap::new(), cumulative_seqlens_k: HashMap::new(), max_q: 0, max_k: 0 }` with `Some(&flash_params)` for any encoder that needs bidirectional attention. The empty `cumulative_seqlens` cause the flash backend to use the non-varlen kernel path, avoiding any tensor allocation in the forward pass.
+
+7. **`torch.bucketize(right=True)` requires `Ok(i) => i + 1`**: Rust's `binary_search_by` returns `Ok(i)` at the found position (bisect_left semantics). For `right=True` (bisect_right), you must use `Ok(i) => i + 1` to insert after equal elements. `Err(i) => i` is correct for both.
