@@ -391,7 +391,9 @@ pub fn paged_attention(
         alibi_slopes: alibi_slopes.cloned(),
         k_scale: k_scale.cloned(),
         v_scale: v_scale.cloned(),
-        sinks: sinks.cloned(),
+        sinks: sinks
+            .map(|s| s.to_dtype(candle_core::DType::F32))
+            .transpose()?,
     };
     q.apply_op1(op)
 }

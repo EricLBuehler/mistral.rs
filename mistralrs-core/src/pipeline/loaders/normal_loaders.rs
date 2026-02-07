@@ -4717,9 +4717,6 @@ impl NormalModelLoader for GptOssLoader {
         let cfg: crate::models::gpt_oss::Config = serde_json::from_str(config)?;
         Ok(Box::new(cfg))
     }
-    fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
-        Ok(false)
-    }
 }
 
 impl IsqModelLoader for GptOssLoader {
