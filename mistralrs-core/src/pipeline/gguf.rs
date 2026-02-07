@@ -498,6 +498,7 @@ impl Loader for GGUFLoader {
                 device,
                 &layer_devices,
                 silent,
+                None,
             )?;
             let cache_engine = CacheEngine::new(
                 model_config,

@@ -130,7 +130,10 @@ impl Kernels {
         file_system.insert("float8.metal", include_str!("float8.metal"));
         file_system.insert("float4.metal", include_str!("float4.metal"));
         file_system.insert("scalar_fp8.metal", include_str!("scalar_fp8.metal"));
-        file_system.insert("softmax_with_sinks.metal", include_str!("softmax_with_sinks.metal"));
+        file_system.insert(
+            "softmax_with_sinks.metal",
+            include_str!("softmax_with_sinks.metal"),
+        );
 
         // Recursive include preprocessor
         fn preprocess_includes(

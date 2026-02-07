@@ -1996,11 +1996,7 @@ impl CustomOp1 for SoftmaxWithSinks {
     }
 
     #[cfg(feature = "cuda")]
-    fn cuda_fwd(
-        &self,
-        storage: &CudaStorage,
-        layout: &Layout,
-    ) -> Result<(CudaStorage, Shape)> {
+    fn cuda_fwd(&self, storage: &CudaStorage, layout: &Layout) -> Result<(CudaStorage, Shape)> {
         use half::{bf16, f16};
 
         let device = storage.device();

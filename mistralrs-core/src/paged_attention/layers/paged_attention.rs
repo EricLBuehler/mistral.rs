@@ -135,10 +135,8 @@ impl PagedAttention {
                     // Can't use flash attention because sinks modify the softmax denominator.
                     // Expand KV heads for GQA before manual matmul.
                     let n_kv_groups = attention_heads / key_value_heads;
-                    let key_expanded =
-                        crate::layers::repeat_kv(key.clone(), n_kv_groups)?;
-                    let value_expanded =
-                        crate::layers::repeat_kv(value.clone(), n_kv_groups)?;
+                    let key_expanded = crate::layers::repeat_kv(key.clone(), n_kv_groups)?;
+                    let value_expanded = crate::layers::repeat_kv(value.clone(), n_kv_groups)?;
                     let logits = (query.matmul(&key_expanded.transpose(2, 3)?)?
                         * sdpa_params.softmax_scale as f64)?;
                     let logits = logits.broadcast_add(mask)?;

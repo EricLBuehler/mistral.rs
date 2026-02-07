@@ -245,7 +245,9 @@ impl candle_core::CustomOp1 for PagedAttention {
                 q_stride as i32,
                 kv_block_stride as i32,
                 kv_head_stride as i32,
-                sinks_storage_and_offset.as_ref().map(|(b, o)| (b as &_, *o)),
+                sinks_storage_and_offset
+                    .as_ref()
+                    .map(|(b, o)| (b as &_, *o)),
             )
             .map_err(candle_core::Error::wrap)?;
         } else {
@@ -301,7 +303,9 @@ impl candle_core::CustomOp1 for PagedAttention {
                 q_stride as i32,
                 kv_block_stride as i32,
                 kv_head_stride as i32,
-                sinks_storage_and_offset.as_ref().map(|(b, o)| (b as &_, *o)),
+                sinks_storage_and_offset
+                    .as_ref()
+                    .map(|(b, o)| (b as &_, *o)),
             )
             .map_err(candle_core::Error::wrap)?;
         }

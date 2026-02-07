@@ -799,9 +799,10 @@ pub fn call_paged_attention_v2(
         name.push_str(&format!("_nsl{NUM_SIMD_LANES}"));
         name.push_str(&format!("_ps{PARTITION_SIZE}"));
 
-        let reduce_constants = Some(ConstantValues::new(vec![
-            (40, Value::Bool(/* use_sinks */ sinks.is_some())),
-        ]));
+        let reduce_constants = Some(ConstantValues::new(vec![(
+            40,
+            Value::Bool(/* use_sinks */ sinks.is_some()),
+        )]));
         let pipeline = kernels.load_pipeline_with_constants(device, name, reduce_constants)?;
 
         let encoder = ep.encoder();
