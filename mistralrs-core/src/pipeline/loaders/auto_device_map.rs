@@ -1,7 +1,7 @@
 use std::fmt::{self, Display};
 
 use crate::paged_attention::{
-    calculate_cache_config, ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
+    calculate_cache_config, MemoryGpuConfig, ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
 };
 use crate::utils::debug::DeviceRepr;
 use crate::{DeviceLayerMapMetadata, DeviceMapMetadata, MemoryUsage, PagedAttentionConfig};
@@ -14,6 +14,19 @@ use super::DeviceMappedModelLoader;
 
 const GPU_RESERVE_FRACTION: f64 = 0.02;
 const GPU_MIN_RESERVE_BYTES: usize = 512 * 1024 * 1024; // 512MB safety buffer
+
+/// Usable device capacity after subtracting a small safety reserve for GPUs.
+/// CPU devices return `avail_bytes` unchanged.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn device_cap(avail_bytes: usize, dev: &Device) -> usize {
+    if dev.is_cpu() {
+        avail_bytes
+    } else {
+        let reserve_frac = (avail_bytes as f64 * GPU_RESERVE_FRACTION) as usize;
+        let reserve = reserve_frac.max(GPU_MIN_RESERVE_BYTES).min(avail_bytes);
+        avail_bytes.saturating_sub(reserve)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(crate) enum NonMappedSubModel {
@@ -199,8 +212,41 @@ pub fn get_device_layers(
     let model_cfg = loader.model_config(config)?;
     let kv_cache_elems = match paged_attn_config {
         Some(cfg) => {
+            // Compute an effective memory budget consistent with the capacity
+            // check below. The capacity check uses:
+            //   cap = get_memory_available() - reserve
+            // and requires: model_weights + activations + kv_total <= cap.
+            //
+            // Without this adjustment, calculate_cache_config uses
+            // get_total_memory() * f as the starting budget, which doesn't
+            // account for the GPU reserve or activation memory overhead,
+            // causing a constant ~(reserve + activations) overallocation.
+            let effective_mem_gpu = if matches!(cfg.mem_gpu, MemoryGpuConfig::ContextSize(_)) {
+                cfg.mem_gpu
+            } else {
+                let primary_dev = &devices[0];
+                let avail_bytes = MemoryUsage.get_memory_available(primary_dev)?;
+                let cap = device_cap(avail_bytes, primary_dev);
+
+                let act_overhead = non_mapped_max.max(mapped_max);
+                let budget_mb = cap.saturating_sub(act_overhead) / (1024 * 1024);
+
+                match cfg.mem_gpu {
+                    MemoryGpuConfig::MbAmount(user_mb) => {
+                        MemoryGpuConfig::MbAmount(budget_mb.min(user_mb))
+                    }
+                    MemoryGpuConfig::Utilization(f) => {
+                        let total_mb =
+                            MemoryUsage.get_total_memory(primary_dev)? / (1024 * 1024);
+                        let user_limit = (total_mb as f32 * f) as usize;
+                        MemoryGpuConfig::MbAmount(budget_mb.min(user_limit))
+                    }
+                    MemoryGpuConfig::ContextSize(_) => unreachable!(),
+                }
+            };
+
             let cache = calculate_cache_config(
-                cfg.mem_gpu,
+                effective_mem_gpu,
                 Some(cfg.block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE)),
                 dtype,
                 paged_attn_config
@@ -278,14 +324,7 @@ pub fn get_device_layers(
             .context("No more devices to map to. The model does not fit on this system.")?;
 
         // For GPU/accelerators: keep a small dynamic safety reserve to avoid OOMs
-        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-        let cap = if dev.is_cpu() {
-            avail_bytes
-        } else {
-            let reserve_fraction = (avail_bytes as f64 * GPU_RESERVE_FRACTION) as usize;
-            let reserve = reserve_fraction.max(GPU_MIN_RESERVE_BYTES).min(avail_bytes);
-            avail_bytes.saturating_sub(reserve)
-        };
+        let cap = device_cap(avail_bytes, &dev);
 
         // Algorithm is to check the following:
         // 1) (no mapping) if *everything* fits on the first dev (non mapped and mapped)
