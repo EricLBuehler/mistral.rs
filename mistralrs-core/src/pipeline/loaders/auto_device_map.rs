@@ -210,6 +210,7 @@ pub fn get_device_layers(
                 &devices[0],
                 &devices.iter().map(|d| Some(d.clone())).collect::<Vec<_>>(),
                 true,
+                Some(total_model_size_in_bytes),
             )?;
             let key_shape = calculate_key_block_shape(&*model_cfg, dtype, cache.block_size);
             let key_sz =

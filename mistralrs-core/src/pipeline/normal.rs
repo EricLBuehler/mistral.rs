@@ -939,6 +939,7 @@ impl Loader for NormalLoader {
                     .map(Some)
                     .collect::<Vec<_>>(),
                 silent,
+                None,
             )?;
 
             let mut layer_devices = Vec::new();
