@@ -237,26 +237,22 @@ pub fn get_device_layers(
     };
     let kv_cache_bytes = kv_cache_elems * dtype.size_in_bytes();
 
-    // prepare available memory per device, CPU fallback last
+    // prepare available memory per device, CPU fallback last (unless unified memory)
+    let has_unified_memory = devices
+        .iter()
+        .any(|d| crate::utils::normal::is_integrated_gpu(d));
+
     let mut avail = Vec::new();
-    for dev in [devices, &[Device::Cpu]].concat() {
-        let a = MemoryUsage.get_memory_available(&dev)?;
-        avail.push((a, dev));
+    for dev in devices {
+        let a = MemoryUsage.get_memory_available(dev)?;
+        avail.push((a, dev.clone()));
     }
     // On unified memory systems (iGPUs), GPU and CPU share the same physical RAM.
-    // Track the total GPU budget so we can cap CPU capacity accordingly.
-    let has_unified_memory = avail
-        .iter()
-        .any(|(_, d)| !d.is_cpu() && crate::utils::normal::is_integrated_gpu(d));
-    let unified_gpu_budget: usize = if has_unified_memory {
-        avail
-            .iter()
-            .filter(|(_, d)| !d.is_cpu())
-            .map(|(a, _)| *a)
-            .sum()
-    } else {
-        0
-    };
+    // Don't add CPU as a fallback device since it would double-count memory.
+    if !has_unified_memory {
+        let a = MemoryUsage.get_memory_available(&Device::Cpu)?;
+        avail.push((a, Device::Cpu));
+    }
 
     avail.reverse();
     layer_sizes_in_bytes.reverse();
@@ -281,18 +277,10 @@ pub fn get_device_layers(
             .pop()
             .context("No more devices to map to. The model does not fit on this system.")?;
 
-        // For CPU: effectively unlimited capacity since it can use swap memory
         // For GPU/accelerators: keep a small dynamic safety reserve to avoid OOMs
         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let cap = if dev.is_cpu() {
-            if has_unified_memory {
-                // GPU and CPU share the same physical memory on unified architectures.
-                // Cap CPU to what remains after GPU budgets to prevent over-subscription.
-                avail_bytes.saturating_sub(unified_gpu_budget)
-            } else {
-                // Allow unlimited capacity for CPU - swap will handle it
-                usize::MAX
-            }
+            avail_bytes
         } else {
             let reserve_fraction = (avail_bytes as f64 * GPU_RESERVE_FRACTION) as usize;
             let reserve = reserve_fraction.max(GPU_MIN_RESERVE_BYTES).min(avail_bytes);
