@@ -484,13 +484,12 @@ pub mod text_models_inputs_processor {
                 full_paged_attn_context_lens.push(seq.len());
 
                 if let Some(sliding_window) = paged_attn_metadata.sliding_window {
-                    let sliding_window_blocks =
-                        sliding_window.div_ceil(paged_attn_metadata.block_size);
-                    let slide_idx = if table.len() > sliding_window_blocks {
-                        table.len() - sliding_window_blocks
-                    } else {
-                        0
-                    };
+                    // Compute the block-aligned start of the sliding window.
+                    // The window covers tokens [window_start, seq.len()).
+                    // We include the full block containing window_start to avoid
+                    // missing tokens due to block alignment.
+                    let window_start = seq.len().saturating_sub(sliding_window);
+                    let slide_idx = window_start / paged_attn_metadata.block_size;
                     block_tables.push(table.get(slide_idx..).unwrap().to_vec());
                 } else {
                     block_tables.push(table);
@@ -498,7 +497,14 @@ pub mod text_models_inputs_processor {
 
                 let paged_attn_context_len =
                     if let Some(sliding_window) = paged_attn_metadata.sliding_window {
-                        seq.len().min(sliding_window)
+                        // context_len = tokens from the block-aligned window start to seq end.
+                        // May be up to (block_size - 1) larger than sliding_window when
+                        // the window start is not block-aligned.
+                        let window_start = seq.len().saturating_sub(sliding_window);
+                        let block_aligned_start = (window_start
+                            / paged_attn_metadata.block_size)
+                            * paged_attn_metadata.block_size;
+                        seq.len() - block_aligned_start
                     } else {
                         seq.len()
                     };
