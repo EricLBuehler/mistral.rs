@@ -241,11 +241,9 @@ pub mod text_models_inputs_processor {
                 // become very large at high context lengths.
                 let table_for_seq = table.clone();
 
-                let start_idx = if let Some(sliding_window) = paged_attn_metadata.sliding_window {
-                    prompt_len.saturating_sub(sliding_window)
-                } else {
-                    0
-                };
+                // Always write all tokens to ensure all attention layers have complete KV cache coverage.
+                // Models with interlevaed per-layer sliding windows have full-attention layers that need KV for the entire context during decode.
+                let start_idx = 0;
 
                 let mut slot_mapping = Vec::new();
                 let mut ctxt_len = Vec::new();
