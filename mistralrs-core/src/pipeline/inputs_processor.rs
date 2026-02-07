@@ -250,32 +250,34 @@ pub mod text_models_inputs_processor {
                 let mut slot_mapping = Vec::new();
                 let mut ctxt_len = Vec::new();
                 for i in chunk_offset_toks..prompt_len + chunk_offset_toks {
-                    if i < start_idx {
-                        // Pad [0,start_idx) with _PAD_TOKEN_ID
-                        slot_mapping.push(_PAD_SLOT_ID);
-                    }
                     ctxt_len.push(i);
 
-                    let block_number = if i / paged_attn_metadata.block_size >= table.len() {
-                        panic!(
-                            "Block table is too small (prompt)! i={} block_size={} table_len={}",
-                            i,
-                            paged_attn_metadata.block_size,
-                            table.len()
-                        );
+                    if i < start_idx {
+                        // Pad [0,start_idx) with _PAD_SLOT_ID
+                        slot_mapping.push(_PAD_SLOT_ID);
                     } else {
-                        table.get(i / paged_attn_metadata.block_size).unwrap()
-                    };
-                    let block_offset = i % paged_attn_metadata.block_size;
-                    // Use checked arithmetic to prevent overflow
-                    let slot = block_number
-                        .checked_mul(paged_attn_metadata.block_size)
-                        .and_then(|v| v.checked_add(block_offset))
-                        .expect("Slot calculation overflowed");
-                    slot_mapping.push(
-                        slot.try_into()
-                            .expect("Slot value too large for target integer type"),
-                    );
+                        let block_number =
+                            if i / paged_attn_metadata.block_size >= table.len() {
+                                panic!(
+                                    "Block table is too small (prompt)! i={} block_size={} table_len={}",
+                                    i,
+                                    paged_attn_metadata.block_size,
+                                    table.len()
+                                );
+                            } else {
+                                table.get(i / paged_attn_metadata.block_size).unwrap()
+                            };
+                        let block_offset = i % paged_attn_metadata.block_size;
+                        // Use checked arithmetic to prevent overflow
+                        let slot = block_number
+                            .checked_mul(paged_attn_metadata.block_size)
+                            .and_then(|v| v.checked_add(block_offset))
+                            .expect("Slot calculation overflowed");
+                        slot_mapping.push(
+                            slot.try_into()
+                                .expect("Slot value too large for target integer type"),
+                        );
+                    }
                 }
                 slot_mappings.push(slot_mapping);
                 paged_attn_context_lens.push(ctxt_len);
