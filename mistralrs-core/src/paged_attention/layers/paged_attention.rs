@@ -133,11 +133,17 @@ impl PagedAttention {
                 if let Some(sinks) = sinks {
                     // Sinks-aware prefill: compute Q@K^T, softmax_with_sinks, @V.
                     // Can't use flash attention because sinks modify the softmax denominator.
-                    let logits =
-                        (query.matmul(&key.transpose(2, 3)?)? * sdpa_params.softmax_scale as f64)?;
+                    // Expand KV heads for GQA before manual matmul.
+                    let n_kv_groups = attention_heads / key_value_heads;
+                    let key_expanded =
+                        crate::layers::repeat_kv(key.clone(), n_kv_groups)?;
+                    let value_expanded =
+                        crate::layers::repeat_kv(value.clone(), n_kv_groups)?;
+                    let logits = (query.matmul(&key_expanded.transpose(2, 3)?)?
+                        * sdpa_params.softmax_scale as f64)?;
                     let logits = logits.broadcast_add(mask)?;
                     let attn_weights = mistralrs_quant::softmax_with_sinks(&logits, sinks, None)?;
-                    Some(attn_weights.matmul(value)?)
+                    Some(attn_weights.matmul(&value_expanded)?)
                 } else {
                     match flash_params {
                         Some(_) => Some(Sdpa.run_attention(
