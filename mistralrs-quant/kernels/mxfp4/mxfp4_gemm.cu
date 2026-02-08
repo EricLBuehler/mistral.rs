@@ -696,6 +696,15 @@ extern "C" void launch_mxfp4_indexed_moe_gemm_bf16(
   CUDA_CHECK(cudaGetLastError());
 }
 
+extern "C" int mxfp4_get_max_smem_optin() {
+  int max_smem = 0;
+  int dev = 0;
+  cudaGetDevice(&dev);
+  cudaDeviceGetAttribute(&max_smem, cudaDevAttrMaxSharedMemoryPerBlockOptin,
+                         dev);
+  return max_smem;
+}
+
 extern "C" void launch_mxfp4_moe_grouped_gemm_f16(
     const __half *input, const uint8_t *weights, const uint8_t *weight_scales,
     const __half *biases, const uint32_t *indices, __half *output,

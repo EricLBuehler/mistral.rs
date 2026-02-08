@@ -90,6 +90,8 @@ extern "C" {
         stream: candle_core::cuda::cudarc::driver::sys::CUstream,
     );
 
+    pub(crate) fn mxfp4_get_max_smem_optin() -> i32;
+
     pub(crate) fn launch_mxfp4_moe_grouped_gemm_f16(
         input: *const f16,
         weights: *const u8,
