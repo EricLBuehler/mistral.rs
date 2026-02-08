@@ -73,93 +73,168 @@ __device__ __forceinline__ int2 get_int_from_table_16(const int q4,
 }
 
 // ============================================================================
-// MXFP4 Matmul Kernel (for linear forward)
+// Dequantize 8 FP4 values from one int32 (8 nibbles) using LUT and store
 // ============================================================================
 
-template <typename T, int BLOCK_M, int BLOCK_N, int BLOCK_K>
+__device__ __forceinline__ void dequant_store_8(int q4, float scale,
+                                                uint32_t LUT0, uint32_t LUT1,
+                                                uint32_t LUT2, uint32_t LUT3,
+                                                float *dst) {
+  int2 w = get_int_from_table_16(q4, LUT0, LUT1, LUT2, LUT3);
+  dst[0] = (float)(int8_t)(w.x) * scale;
+  dst[1] = (float)(int8_t)(w.y) * scale;
+  dst[2] = (float)(int8_t)(w.x >> 8) * scale;
+  dst[3] = (float)(int8_t)(w.y >> 8) * scale;
+  dst[4] = (float)(int8_t)(w.x >> 16) * scale;
+  dst[5] = (float)(int8_t)(w.y >> 16) * scale;
+  dst[6] = (float)(int8_t)(w.x >> 24) * scale;
+  dst[7] = (float)(int8_t)(w.y >> 24) * scale;
+}
+
+// ============================================================================
+// Optimized MXFP4 Matmul Kernel (for linear forward)
+// Key optimizations over the original:
+// 1. Vectorized uint4 weight loads (32 FP4 values per load, was 1 nibble)
+// 2. Register-level tiling: each thread computes TM x TN outputs
+// 3. LUT-based dequantization in registers (no constant memory latency)
+// 4. fmaf for fused multiply-add
+// ============================================================================
+
+template <typename T, int BLOCK_M, int BLOCK_N, int BLOCK_K, int TM, int TN>
 __global__ void mxfp4_matmul_tiled(const T *__restrict__ input,
                                    const uint8_t *__restrict__ weight,
                                    const uint8_t *__restrict__ weight_scale,
                                    const T *__restrict__ bias,
                                    T *__restrict__ output, int M, int N, int K,
                                    bool has_bias) {
-  __shared__ float s_input[BLOCK_M][BLOCK_K + 4];
-  __shared__ float s_weight[BLOCK_N][BLOCK_K + 4];
+  constexpr int THREADS_N = BLOCK_N / TN;
+  constexpr int THREADS_M = BLOCK_M / TM;
+  constexpr int NUM_THREADS = THREADS_N * THREADS_M;
+  // +1 padding reduces shared memory bank conflicts
+  constexpr int BK_PAD = BLOCK_K + 1;
 
-  const int bx = blockIdx.x;
-  const int by = blockIdx.y;
-  const int tx = threadIdx.x;
-  const int ty = threadIdx.y;
-  const int row = by * BLOCK_M + ty;
-  const int col = bx * BLOCK_N + tx;
+  __shared__ float s_input[BLOCK_M][BK_PAD];
+  __shared__ float s_weight[BLOCK_N][BK_PAD];
 
-  float acc = 0.0f;
-  const int num_threads = BLOCK_M * BLOCK_N;
-  const int tid = ty * BLOCK_N + tx;
+  // LUT in registers (values 2x scaled, compensated by 0.5f in scale)
+  const uint32_t LUT0 = 0x03020100;
+  const uint32_t LUT1 = 0x0C080604;
+  const uint32_t LUT2 = 0xFDFEFF00;
+  const uint32_t LUT3 = 0xF4F8FAFC;
+
+  const int tid = threadIdx.y * THREADS_N + threadIdx.x;
+  const int bx = blockIdx.x; // N dimension
+  const int by = blockIdx.y; // M dimension
   const int scale_stride = CEILDIV(K, MXFP4_BLOCK_SIZE);
 
+  // Initialize TM x TN accumulators per thread
+  float acc[TM][TN];
+#pragma unroll
+  for (int i = 0; i < TM; i++)
+#pragma unroll
+    for (int j = 0; j < TN; j++)
+      acc[i][j] = 0.0f;
+
   for (int k_tile = 0; k_tile < K; k_tile += BLOCK_K) {
-    for (int i = tid; i < BLOCK_M * BLOCK_K; i += num_threads) {
-      int lm = i / BLOCK_K;
-      int lk = i % BLOCK_K;
-      int gm = by * BLOCK_M + lm;
-      int gk = k_tile + lk;
+    // === Load input tile [BLOCK_M x BLOCK_K] to shared memory ===
+    for (int idx = tid; idx < BLOCK_M * BLOCK_K; idx += NUM_THREADS) {
+      const int lm = idx / BLOCK_K;
+      const int lk = idx % BLOCK_K;
+      const int gm = by * BLOCK_M + lm;
+      const int gk = k_tile + lk;
 
       float val = 0.0f;
       if (gm < M && gk < K) {
         if constexpr (std::is_same_v<T, half>) {
-          val = __half2float(__ldg(&input[gm * K + gk]));
+          val = __half2float(__ldg(&input[(size_t)gm * K + gk]));
         } else {
-          val = __bfloat162float(__ldg(&input[gm * K + gk]));
+          val = __bfloat162float(__ldg(&input[(size_t)gm * K + gk]));
         }
       }
       s_input[lm][lk] = val;
     }
 
-    for (int i = tid; i < BLOCK_N * BLOCK_K; i += num_threads) {
-      int ln = i / BLOCK_K;
-      int lk = i % BLOCK_K;
-      int gn = bx * BLOCK_N + ln;
-      int gk = k_tile + lk;
-
-      float val = 0.0f;
-      if (gn < N && gk < K) {
-        int byte_idx = gk / 2;
-        uint8_t packed = __ldg(&weight[gn * (K / 2) + byte_idx]);
-        int scale_idx = gk / MXFP4_BLOCK_SIZE;
+    // === Load weight tile [BLOCK_N x BLOCK_K] with vectorized dequant ===
+    // BLOCK_K = 32 = one MXFP4 block, so one uint4 load per row
+    for (int ln = tid; ln < BLOCK_N; ln += NUM_THREADS) {
+      const int gn = bx * BLOCK_N + ln;
+      if (gn < N) {
+        // One uint4 = 16 bytes = 32 packed FP4 values = one full MXFP4 block
+        uint4 w_vec = *reinterpret_cast<const uint4 *>(
+            &weight[(size_t)gn * (K / 2) + k_tile / 2]);
         float scale =
-            e8m0_to_float(__ldg(&weight_scale[gn * scale_stride + scale_idx]));
-        uint8_t nibble = (gk & 1) ? high_nibble(packed) : low_nibble(packed);
-        val = FP4_LUT[nibble] * scale;
+            e8m0_to_float(__ldg(&weight_scale[(size_t)gn * scale_stride +
+                                              k_tile / MXFP4_BLOCK_SIZE])) *
+            0.5f;
+
+        dequant_store_8(w_vec.x, scale, LUT0, LUT1, LUT2, LUT3,
+                        &s_weight[ln][0]);
+        dequant_store_8(w_vec.y, scale, LUT0, LUT1, LUT2, LUT3,
+                        &s_weight[ln][8]);
+        dequant_store_8(w_vec.z, scale, LUT0, LUT1, LUT2, LUT3,
+                        &s_weight[ln][16]);
+        dequant_store_8(w_vec.w, scale, LUT0, LUT1, LUT2, LUT3,
+                        &s_weight[ln][24]);
+      } else {
+        // Zero out invalid rows
+#pragma unroll
+        for (int k = 0; k < BLOCK_K; k++)
+          s_weight[ln][k] = 0.0f;
       }
-      s_weight[ln][lk] = val;
     }
 
     __syncthreads();
 
-    if (row < M && col < N) {
+    // === Register-tiled GEMM with outer product ===
 #pragma unroll
-      for (int k = 0; k < BLOCK_K; k++) {
-        acc += s_input[ty][k] * s_weight[tx][k];
-      }
+    for (int k = 0; k < BLOCK_K; k++) {
+      // Load input and weight fragments into registers
+      float a_frag[TM];
+      float b_frag[TN];
+
+#pragma unroll
+      for (int i = 0; i < TM; i++)
+        a_frag[i] = s_input[threadIdx.y * TM + i][k];
+
+#pragma unroll
+      for (int j = 0; j < TN; j++)
+        b_frag[j] = s_weight[threadIdx.x * TN + j][k];
+
+      // Outer product accumulation
+#pragma unroll
+      for (int i = 0; i < TM; i++)
+#pragma unroll
+        for (int j = 0; j < TN; j++)
+          acc[i][j] = fmaf(a_frag[i], b_frag[j], acc[i][j]);
     }
 
     __syncthreads();
   }
 
-  if (row < M && col < N) {
-    if (has_bias && bias != nullptr) {
-      if constexpr (std::is_same_v<T, half>) {
-        acc += __half2float(__ldg(&bias[col]));
-      } else {
-        acc += __bfloat162float(__ldg(&bias[col]));
+  // === Write output with bias ===
+#pragma unroll
+  for (int i = 0; i < TM; i++) {
+    const int row = by * BLOCK_M + threadIdx.y * TM + i;
+    if (row < M) {
+#pragma unroll
+      for (int j = 0; j < TN; j++) {
+        const int col = bx * BLOCK_N + threadIdx.x * TN + j;
+        if (col < N) {
+          float val = acc[i][j];
+          if (has_bias && bias != nullptr) {
+            if constexpr (std::is_same_v<T, half>) {
+              val += __half2float(__ldg(&bias[col]));
+            } else {
+              val += __bfloat162float(__ldg(&bias[col]));
+            }
+          }
+          if constexpr (std::is_same_v<T, half>) {
+            output[(size_t)row * N + col] = __float2half(val);
+          } else {
+            output[(size_t)row * N + col] = __float2bfloat16(val);
+          }
+        }
       }
-    }
-
-    if constexpr (std::is_same_v<T, half>) {
-      output[row * N + col] = __float2half(acc);
-    } else {
-      output[row * N + col] = __float2bfloat16(acc);
     }
   }
 }
@@ -378,13 +453,14 @@ extern "C" void launch_mxfp4_matmul_f16(const __half *input,
                                         const __half *bias, __half *output,
                                         int M, int N, int K, bool has_bias,
                                         cudaStream_t stream) {
-  constexpr int TILE = 32;
-  constexpr int TILE_K = 32;
+  constexpr int BM = 64, BN = 64, BK = 32, TM = 4, TN = 4;
+  constexpr int THREADS_N = BN / TN; // 16
+  constexpr int THREADS_M = BM / TM; // 16
 
-  dim3 block(TILE, TILE);
-  dim3 grid(CEILDIV(N, TILE), CEILDIV(M, TILE));
+  dim3 block(THREADS_N, THREADS_M);
+  dim3 grid(CEILDIV(N, BN), CEILDIV(M, BM));
 
-  mxfp4_gemm::mxfp4_matmul_tiled<half, TILE, TILE, TILE_K>
+  mxfp4_gemm::mxfp4_matmul_tiled<half, BM, BN, BK, TM, TN>
       <<<grid, block, 0, stream>>>(input, weight, weight_scale, bias, output, M,
                                    N, K, has_bias);
   CUDA_CHECK(cudaGetLastError());
@@ -395,13 +471,14 @@ launch_mxfp4_matmul_bf16(const __nv_bfloat16 *input, const uint8_t *weight,
                          const uint8_t *weight_scale, const __nv_bfloat16 *bias,
                          __nv_bfloat16 *output, int M, int N, int K,
                          bool has_bias, cudaStream_t stream) {
-  constexpr int TILE = 32;
-  constexpr int TILE_K = 32;
+  constexpr int BM = 64, BN = 64, BK = 32, TM = 4, TN = 4;
+  constexpr int THREADS_N = BN / TN; // 16
+  constexpr int THREADS_M = BM / TM; // 16
 
-  dim3 block(TILE, TILE);
-  dim3 grid(CEILDIV(N, TILE), CEILDIV(M, TILE));
+  dim3 block(THREADS_N, THREADS_M);
+  dim3 grid(CEILDIV(N, BN), CEILDIV(M, BM));
 
-  mxfp4_gemm::mxfp4_matmul_tiled<__nv_bfloat16, TILE, TILE, TILE_K>
+  mxfp4_gemm::mxfp4_matmul_tiled<__nv_bfloat16, BM, BN, BK, TM, TN>
       <<<grid, block, 0, stream>>>(input, weight, weight_scale, bias, output, M,
                                    N, K, has_bias);
   CUDA_CHECK(cudaGetLastError());

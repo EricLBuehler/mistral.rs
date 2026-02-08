@@ -23,9 +23,21 @@ pub fn mxfp4_matmul(
         candle_core::bail!("MXFP4 GEMM kernels not available");
     }
 
-    let input = input.contiguous()?;
-    let weight = weight.contiguous()?;
-    let scale = scale.contiguous()?;
+    let input = if input.is_contiguous() {
+        input.clone()
+    } else {
+        input.contiguous()?
+    };
+    let weight = if weight.is_contiguous() {
+        weight.clone()
+    } else {
+        weight.contiguous()?
+    };
+    let scale = if scale.is_contiguous() {
+        scale.clone()
+    } else {
+        scale.contiguous()?
+    };
 
     let input_dims = input.dims();
     let weight_dims = weight.dims();
@@ -99,18 +111,33 @@ pub fn mxfp4_matmul(
             };
 
             unsafe {
-                ffi::launch_mxfp4_matmul_f16(
-                    input_ptr as *const f16,
-                    weight_ptr as *const u8,
-                    scale_ptr as *const u8,
-                    bias_ptr,
-                    output_ptr as *mut f16,
-                    m as i32,
-                    n as i32,
-                    k as i32,
-                    has_bias,
-                    dev.cuda_stream().cu_stream(),
-                );
+                if ffi::HAVE_MXFP4_WMMA_KERNELS {
+                    ffi::launch_mxfp4_matmul_wmma_f16(
+                        input_ptr as *const f16,
+                        weight_ptr as *const u8,
+                        scale_ptr as *const u8,
+                        bias_ptr,
+                        output_ptr as *mut f16,
+                        m as i32,
+                        n as i32,
+                        k as i32,
+                        has_bias,
+                        dev.cuda_stream().cu_stream(),
+                    );
+                } else {
+                    ffi::launch_mxfp4_matmul_f16(
+                        input_ptr as *const f16,
+                        weight_ptr as *const u8,
+                        scale_ptr as *const u8,
+                        bias_ptr,
+                        output_ptr as *mut f16,
+                        m as i32,
+                        n as i32,
+                        k as i32,
+                        has_bias,
+                        dev.cuda_stream().cu_stream(),
+                    );
+                }
             }
 
             drop(_output_guard);
@@ -144,18 +171,33 @@ pub fn mxfp4_matmul(
             };
 
             unsafe {
-                ffi::launch_mxfp4_matmul_bf16(
-                    input_ptr as *const bf16,
-                    weight_ptr as *const u8,
-                    scale_ptr as *const u8,
-                    bias_ptr,
-                    output_ptr as *mut bf16,
-                    m as i32,
-                    n as i32,
-                    k as i32,
-                    has_bias,
-                    dev.cuda_stream().cu_stream(),
-                );
+                if ffi::HAVE_MXFP4_WMMA_KERNELS {
+                    ffi::launch_mxfp4_matmul_wmma_bf16(
+                        input_ptr as *const bf16,
+                        weight_ptr as *const u8,
+                        scale_ptr as *const u8,
+                        bias_ptr,
+                        output_ptr as *mut bf16,
+                        m as i32,
+                        n as i32,
+                        k as i32,
+                        has_bias,
+                        dev.cuda_stream().cu_stream(),
+                    );
+                } else {
+                    ffi::launch_mxfp4_matmul_bf16(
+                        input_ptr as *const bf16,
+                        weight_ptr as *const u8,
+                        scale_ptr as *const u8,
+                        bias_ptr,
+                        output_ptr as *mut bf16,
+                        m as i32,
+                        n as i32,
+                        k as i32,
+                        has_bias,
+                        dev.cuda_stream().cu_stream(),
+                    );
+                }
             }
 
             drop(_output_guard);

@@ -1,13 +1,12 @@
 // flash_attn_sinks.cu
 //
-// Fused flash attention with per-head attention sinks for prefill.
-// Uses FlashAttention-2 online softmax algorithm:
+// Tiled flash attention with per-head attention sinks for prefill.
+// Uses FlashAttention-2 online softmax with shared-memory K/V tiling:
 //   - Never materializes the N x N attention matrix
-//   - Processes Q one row at a time (one warp per row)
-//   - Integrates per-head sinks into the softmax denominator
-//
-// Sinks semantics: a "virtual" KV pair that contributes exp(sink_h) to the
-// softmax denominator but has no V contribution (probability mass absorption).
+//   - BR warps per block, each handling one Q row
+//   - K/V tiles loaded cooperatively into shared memory (float32)
+//   - Two-pass per tile: compute scores, then one rescale + V accumulation
+//   - Sinks integrated once after all tiles
 //
 // Layout: Q [B, num_heads, S, D], K [B, num_kv_heads, S, D], V same as K
 // GQA: kv_head = q_head / (num_heads / num_kv_heads)
@@ -83,32 +82,29 @@ __device__ __forceinline__ float warp_reduce_sum(float val) {
   return val;
 }
 
-__device__ __forceinline__ float warp_reduce_max(float val) {
-#pragma unroll
-  for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
-    val = fmaxf(val, __shfl_xor_sync(FULL_MASK, val, offset));
-  }
-  return val;
-}
-
 // ---------------------------------------------------------------------------
-// Flash attention kernel with sinks
-//
-// One warp per query row. NUM_WARPS warps per block (= NUM_WARPS Q rows/block)
-// Grid: (num_heads, batch_size, cdiv(seq_len, NUM_WARPS))
-// Block: (WARP_SIZE * NUM_WARPS)
-//
-// Each thread in a warp handles HEAD_DIM_PAD / WARP_SIZE elements of the
-// head dimension (coalesced: lane i reads d = i, i+32, i+64, ...).
+// Tiled flash attention kernel with sinks
 //
 // Template params:
-//   scalar_t: __half, __nv_bfloat16, or float
-//   HEAD_DIM: actual head dimension (64, 80, 96, 112, 128, 256)
-//   NUM_WARPS: number of warps (= Q rows) per block
+//   scalar_t : __half, __nv_bfloat16, or float
+//   HEAD_DIM : actual head dimension (64, 80, 96, 112, 128, 192, 256)
+//   BR       : number of warps per block (= number of Q rows per block)
+//   BC       : KV tile size (number of KV positions per shared-memory tile)
+//
+// Grid : (num_heads, batch_size, cdiv(seq_len, BR))
+// Block: (BR * WARP_SIZE)
+//
+// Shared memory (float32 to avoid bank conflicts):
+//   k_smem[BC][D_PAD]  — K tile
+//   v_smem[BC][D_PAD]  — V tile
+//
+// Each warp handles one Q row. Within each tile:
+//   Pass 1: compute BC dot-product scores using k_smem
+//   Pass 2: one rescale of accumulators, then accumulate V from v_smem
 // ---------------------------------------------------------------------------
 
-template <typename scalar_t, int HEAD_DIM, int NUM_WARPS>
-__launch_bounds__(WARP_SIZE *NUM_WARPS) __global__
+template <typename scalar_t, int HEAD_DIM, int BR, int BC>
+__launch_bounds__(BR *WARP_SIZE) __global__
     void flash_attn_sinks_kernel(
         const scalar_t *__restrict__ Q, // [B, num_heads, S, D]
         const scalar_t *__restrict__ K, // [B, num_kv_heads, S, D]
@@ -118,6 +114,16 @@ __launch_bounds__(WARP_SIZE *NUM_WARPS) __global__
         const float scale, const int seq_len, const int num_heads,
         const int num_kv_heads, const int window_size // 0 = no window (full)
     ) {
+  // Padded head dim for clean warp division (round up to multiple of 32)
+  constexpr int D_PAD =
+      ((HEAD_DIM + WARP_SIZE - 1) / WARP_SIZE) * WARP_SIZE;
+  constexpr int EPT = D_PAD / WARP_SIZE; // elements per thread
+  constexpr int BLOCK_SIZE = BR * WARP_SIZE;
+
+  // Shared memory for K and V tiles (float32 avoids bank conflicts)
+  __shared__ float k_smem[BC * D_PAD];
+  __shared__ float v_smem[BC * D_PAD];
+
   const int warp_id = threadIdx.x / WARP_SIZE;
   const int lane_id = threadIdx.x % WARP_SIZE;
 
@@ -129,19 +135,12 @@ __launch_bounds__(WARP_SIZE *NUM_WARPS) __global__
   const int kv_head_idx = head_idx / gqa_ratio;
 
   // Which query row this warp handles
-  const int q_row = q_tile_idx * NUM_WARPS + warp_id;
-  if (q_row >= seq_len)
-    return;
-
-  // Padded head dim for clean warp division
-  constexpr int D_PAD =
-      ((HEAD_DIM + WARP_SIZE - 1) / WARP_SIZE) * WARP_SIZE;
-  constexpr int EPT = D_PAD / WARP_SIZE; // elements per thread
+  const int q_row = q_tile_idx * BR + warp_id;
 
   // Offsets into contiguous [B, H, S, D] layout
   const int q_offset =
       ((batch_idx * num_heads + head_idx) * seq_len + q_row) * HEAD_DIM;
-  const int kv_head_offset =
+  const int kv_base =
       (batch_idx * num_kv_heads + kv_head_idx) * seq_len * HEAD_DIM;
 
   // Load Q row into registers (pre-scaled)
@@ -149,7 +148,9 @@ __launch_bounds__(WARP_SIZE *NUM_WARPS) __global__
 #pragma unroll
   for (int i = 0; i < EPT; i++) {
     const int d = i * WARP_SIZE + lane_id;
-    q_reg[i] = (d < HEAD_DIM) ? to_float(Q[q_offset + d]) * scale : 0.0f;
+    q_reg[i] = (q_row < seq_len && d < HEAD_DIM)
+                   ? to_float(Q[q_offset + d]) * scale
+                   : 0.0f;
   }
 
   // Output accumulator in registers
@@ -161,47 +162,117 @@ __launch_bounds__(WARP_SIZE *NUM_WARPS) __global__
   float m_i = -FLT_MAX; // running max
   float l_i = 0.0f;     // running sum of exp
 
-  // Causal attention: attend to positions [kv_start, q_row] inclusive
-  const int kv_start =
-      (window_size > 0) ? max(0, q_row - window_size + 1) : 0;
-  const int kv_end = q_row + 1;
+  // Block-level KV bounds (union of all warps' causal windows)
+  const int block_q_start = q_tile_idx * BR;
+  const int block_q_end = min(block_q_start + BR, seq_len);
+  const int block_kv_start =
+      (window_size > 0) ? max(0, block_q_start - window_size + 1) : 0;
+  const int block_kv_end = block_q_end; // max causal bound across warps
 
-  // Process K/V positions one at a time with online softmax
-  for (int j = kv_start; j < kv_end; j++) {
-    const int kv_offset = kv_head_offset + j * HEAD_DIM;
+  // Per-warp causal bounds
+  const int my_kv_start =
+      (window_size > 0 && q_row < seq_len)
+          ? max(0, q_row - window_size + 1)
+          : 0;
+  const int my_kv_end = (q_row < seq_len) ? (q_row + 1) : 0;
 
-    // Dot product: q_reg . K[j]
-    float dot = 0.0f;
-#pragma unroll
-    for (int i = 0; i < EPT; i++) {
-      const int d = i * WARP_SIZE + lane_id;
-      const float k_val =
-          (d < HEAD_DIM) ? to_float(__ldg(&K[kv_offset + d])) : 0.0f;
-      dot += q_reg[i] * k_val;
+  // Score buffer for current tile (in registers)
+  float scores[BC];
+
+  // Tile loop over K/V
+  for (int tile_start = block_kv_start; tile_start < block_kv_end;
+       tile_start += BC) {
+    const int tile_end = min(tile_start + BC, block_kv_end);
+    const int tile_len = tile_end - tile_start;
+
+    // --- Cooperatively load K tile into shared memory ---
+    for (int idx = threadIdx.x; idx < BC * D_PAD; idx += BLOCK_SIZE) {
+      const int kj = idx / D_PAD;
+      const int kd = idx % D_PAD;
+      k_smem[idx] =
+          (kj < tile_len && kd < HEAD_DIM)
+              ? to_float(
+                    __ldg(&K[kv_base + (tile_start + kj) * HEAD_DIM + kd]))
+              : 0.0f;
     }
-    dot = warp_reduce_sum(dot); // broadcast to all lanes
 
-    // Online softmax update
-    const float m_new = fmaxf(m_i, dot);
-    const float rescale = expf(m_i - m_new);
-    const float p = expf(dot - m_new);
-
-// Rescale old accumulators and update running stats
-#pragma unroll
-    for (int i = 0; i < EPT; i++)
-      o_acc[i] *= rescale;
-    l_i = l_i * rescale + p;
-    m_i = m_new;
-
-// Accumulate: o_acc += p * V[j]
-#pragma unroll
-    for (int i = 0; i < EPT; i++) {
-      const int d = i * WARP_SIZE + lane_id;
-      const float v_val =
-          (d < HEAD_DIM) ? to_float(__ldg(&V[kv_offset + d])) : 0.0f;
-      o_acc[i] += p * v_val;
+    // --- Cooperatively load V tile into shared memory ---
+    for (int idx = threadIdx.x; idx < BC * D_PAD; idx += BLOCK_SIZE) {
+      const int vj = idx / D_PAD;
+      const int vd = idx % D_PAD;
+      v_smem[idx] =
+          (vj < tile_len && vd < HEAD_DIM)
+              ? to_float(
+                    __ldg(&V[kv_base + (tile_start + vj) * HEAD_DIM + vd]))
+              : 0.0f;
     }
+    __syncthreads();
+
+    if (q_row < seq_len) {
+      // --- Pass 1: Compute scores for this tile ---
+      float tile_max = -FLT_MAX;
+
+      for (int j = 0; j < tile_len; j++) {
+        const int kv_pos = tile_start + j;
+
+        // Causal: no valid positions beyond q_row
+        if (kv_pos >= my_kv_end) {
+          // All remaining positions in tile are also beyond causal bound
+          for (int jj = j; jj < tile_len; jj++)
+            scores[jj] = -FLT_MAX;
+          break;
+        }
+
+        // Sliding window check
+        if (kv_pos < my_kv_start) {
+          scores[j] = -FLT_MAX;
+          continue;
+        }
+
+        // Dot product: q_reg . K[j] from shared memory
+        float dot = 0.0f;
+#pragma unroll
+        for (int i = 0; i < EPT; i++) {
+          dot += q_reg[i] * k_smem[j * D_PAD + i * WARP_SIZE + lane_id];
+        }
+        dot = warp_reduce_sum(dot);
+
+        scores[j] = dot;
+        tile_max = fmaxf(tile_max, dot);
+      }
+
+      // --- Pass 2: Online softmax update + V accumulation ---
+      if (tile_max > -FLT_MAX) {
+        const float m_new = fmaxf(m_i, tile_max);
+        const float rescale = expf(m_i - m_new);
+
+        // Rescale old accumulators (ONCE per tile, not per position)
+#pragma unroll
+        for (int i = 0; i < EPT; i++)
+          o_acc[i] *= rescale;
+        l_i *= rescale;
+        m_i = m_new;
+
+        // Accumulate V contributions
+        for (int j = 0; j < tile_len; j++) {
+          if (scores[j] <= -FLT_MAX)
+            continue; // masked position
+
+          const float p = expf(scores[j] - m_i);
+          l_i += p;
+
+#pragma unroll
+          for (int i = 0; i < EPT; i++) {
+            o_acc[i] += p * v_smem[j * D_PAD + i * WARP_SIZE + lane_id];
+          }
+        }
+      }
+    }
+    __syncthreads();
   }
+
+  if (q_row >= seq_len)
+    return;
 
   // Integrate per-head sinks into the softmax denominator.
   // The sink adds exp(sink_val) to the denominator but does NOT
@@ -238,41 +309,42 @@ void flash_attn_sinks_launch(const void *Q, const void *K, const void *V,
                              int batch_size, int seq_len, int num_heads,
                              int num_kv_heads, int head_dim, int window_size,
                              cudaStream_t stream) {
-  constexpr int NUM_WARPS = 4;
+  constexpr int BR = 8; // warps per block (= Q rows per block)
   const dim3 grid(num_heads, batch_size,
-                  (seq_len + NUM_WARPS - 1) / NUM_WARPS);
-  const dim3 block(WARP_SIZE * NUM_WARPS);
+                  (seq_len + BR - 1) / BR);
+  const dim3 block(WARP_SIZE * BR);
 
-#define LAUNCH_KERNEL(D)                                                       \
-  flash_attn_sinks_kernel<scalar_t, D, NUM_WARPS><<<grid, block, 0, stream>>>( \
-      reinterpret_cast<const scalar_t *>(Q),                                   \
-      reinterpret_cast<const scalar_t *>(K),                                   \
-      reinterpret_cast<const scalar_t *>(V),                                   \
-      reinterpret_cast<scalar_t *>(O), sinks, scale, seq_len, num_heads,       \
-      num_kv_heads, window_size);                                              \
+#define LAUNCH_KERNEL(D, BC_VAL)                                               \
+  flash_attn_sinks_kernel<scalar_t, D, BR, BC_VAL>                            \
+      <<<grid, block, 0, stream>>>(                                            \
+          reinterpret_cast<const scalar_t *>(Q),                               \
+          reinterpret_cast<const scalar_t *>(K),                               \
+          reinterpret_cast<const scalar_t *>(V),                               \
+          reinterpret_cast<scalar_t *>(O), sinks, scale, seq_len, num_heads,   \
+          num_kv_heads, window_size);                                          \
   FA_CUDA_CHECK(cudaGetLastError())
 
   switch (head_dim) {
   case 64:
-    LAUNCH_KERNEL(64);
+    LAUNCH_KERNEL(64, 64);
     break;
   case 80:
-    LAUNCH_KERNEL(80);
+    LAUNCH_KERNEL(80, 32);
     break;
   case 96:
-    LAUNCH_KERNEL(96);
+    LAUNCH_KERNEL(96, 32);
     break;
   case 112:
-    LAUNCH_KERNEL(112);
+    LAUNCH_KERNEL(112, 32);
     break;
   case 128:
-    LAUNCH_KERNEL(128);
+    LAUNCH_KERNEL(128, 32);
     break;
   case 192:
-    LAUNCH_KERNEL(192);
+    LAUNCH_KERNEL(192, 16);
     break;
   case 256:
-    LAUNCH_KERNEL(256);
+    LAUNCH_KERNEL(256, 16);
     break;
   default:
     fprintf(stderr,
