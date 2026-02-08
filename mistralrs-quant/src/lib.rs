@@ -73,12 +73,12 @@ pub use mxfp4::MXFP4Layer;
 pub use pending_layer::PendingIsqLayer;
 pub use pertensor_fp8::PerTensorFP8Linear;
 pub use unquantized::UnquantLinear;
+pub use utils::flash_attn_sinks_metal;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_interleaved;
 pub use utils::isq::apply_immediate_isq;
-#[cfg(feature = "cuda")]
 pub use utils::softmax_with_sinks;
 pub use utils::{fused_glu, GluActivationType};
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};

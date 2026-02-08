@@ -303,6 +303,7 @@ impl Attention {
                     input_metadata,
                     &self.sdpa_params,
                     Some(flash_params),
+                    Some(&self.sinks),
                 )?,
                 None => {
                     let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
@@ -317,6 +318,7 @@ impl Attention {
                         &input_metadata,
                         &self.sdpa_params,
                         Some(flash_params),
+                        Some(&self.sinks),
                     )?
                 }
             },
@@ -389,7 +391,21 @@ impl Attention {
         _flash_params: &FlashParams,
         _layer_idx: usize,
     ) -> Result<Tensor> {
-        let (b_sz, num_heads, q_len, _head_dim) = q.dims4()?;
+        // On Metal, use fused kernel (handles GQA internally, no need to expand K/V)
+        if q.device().is_metal() {
+            let window = self.sdpa_params.sliding_window.unwrap_or(0);
+            return mistralrs_quant::flash_attn_sinks_metal(
+                q,
+                k,
+                v,
+                Some(&self.sinks),
+                self.sdpa_params.softmax_scale,
+                window,
+            );
+        }
+
+        // CPU fallback: unfused path
+        let (_b_sz, _num_heads, _q_len, _head_dim) = q.dims4()?;
         let (_, _, k_len, _) = k.dims4()?;
 
         let k_expanded;
@@ -405,8 +421,7 @@ impl Attention {
         let attn_weights = (q.matmul(&k_ref.transpose(D::Minus2, D::Minus1)?)?
             * self.sdpa_params.softmax_scale as f64)?;
 
-        #[cfg(feature = "cuda")]
-        let scores = if let Some(mask) = attention_mask {
+        let attn_weights = if let Some(mask) = attention_mask {
             let mask_last_dim = mask.dim(D::Minus1)?;
             let causal_mask = if mask_last_dim > k_len {
                 mask.narrow(D::Minus1, 0, k_len)?
@@ -414,48 +429,13 @@ impl Attention {
             } else {
                 mask.to_dtype(attn_weights.dtype())?
             };
-            let attn_weights = attn_weights.broadcast_add(&causal_mask)?;
-
-            let sinks_expanded = self
-                .sinks
-                .reshape((1, num_heads, 1, 1))?
-                .broadcast_as((b_sz, num_heads, q_len, 1))?
-                .to_dtype(attn_weights.dtype())?;
-            let combined_logits = Tensor::cat(&[&attn_weights, &sinks_expanded], D::Minus1)?;
-
-            let max_logits = combined_logits.max_keepdim(D::Minus1)?;
-            let combined_logits = combined_logits.broadcast_sub(&max_logits)?;
-            let probs = candle_nn::ops::softmax_last_dim(&combined_logits)?;
-
-            probs.narrow(D::Minus1, 0, k_len)?.contiguous()?
+            attn_weights.broadcast_add(&causal_mask)?
         } else {
-            let sinks = self.sinks.to_dtype(attn_weights.dtype())?;
-            mistralrs_quant::softmax_with_sinks(&attn_weights, &sinks, None)?
+            attn_weights
         };
 
-        #[cfg(not(feature = "cuda"))]
-        let scores = {
-            let attn_weights = if let Some(mask) = attention_mask {
-                attn_weights.broadcast_add(mask)?
-            } else {
-                attn_weights
-            };
-
-            let sinks_expanded = self
-                .sinks
-                .reshape((1, num_heads, 1, 1))?
-                .broadcast_as((b_sz, num_heads, q_len, 1))?
-                .to_dtype(attn_weights.dtype())?;
-
-            let combined_logits = Tensor::cat(&[&attn_weights, &sinks_expanded], D::Minus1)?;
-
-            let max_logits = combined_logits.max_keepdim(D::Minus1)?;
-            let combined_logits = combined_logits.broadcast_sub(&max_logits)?;
-
-            let probs = candle_nn::ops::softmax_last_dim(&combined_logits)?;
-
-            probs.narrow(D::Minus1, 0, k_len)?.contiguous()?
-        };
+        let sinks = self.sinks.to_dtype(attn_weights.dtype())?;
+        let scores = mistralrs_quant::softmax_with_sinks(&attn_weights, &sinks, None)?;
 
         scores.matmul(v_ref)
     }
@@ -686,9 +666,6 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        if !matches!(attention_mechanism, AttentionImplementation::Eager) {
-            candle_core::bail!("gpt-oss currently only supports eager attention");
-        }
         let vb_m = vb.pp("model");
         let mapper = normal_loading_metadata.mapper;
 

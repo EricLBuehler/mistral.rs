@@ -328,6 +328,7 @@ impl Loader for GGUFLoader {
 
         // If auto, convert to Map
         let num_layers = model.get_metadata()[&format!("{arch}.block_count")].to_u32()? as usize;
+        let mut max_kv_tokens: Option<usize> = None;
         if let DeviceMapSetting::Auto(params) = mapper.clone() {
             let devices = device_map::get_all_similar_devices(device)?;
             // Initial dtype
@@ -356,6 +357,7 @@ impl Loader for GGUFLoader {
                 &params,
                 paged_attn_config.as_ref(),
             )?;
+            max_kv_tokens = Some(params.max_seq_len() * params.max_batch_size());
             mapper = DeviceMapSetting::Map(new);
         }
 
@@ -498,6 +500,8 @@ impl Loader for GGUFLoader {
                 device,
                 &layer_devices,
                 silent,
+                None,
+                max_kv_tokens,
             )?;
             let cache_engine = CacheEngine::new(
                 model_config,
