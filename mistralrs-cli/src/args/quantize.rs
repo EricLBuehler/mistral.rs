@@ -166,6 +166,135 @@ pub struct QuantizeVisionOptions {
     pub max_image_length: Option<usize>,
 }
 
+/// Default options for quantize command when no model type subcommand is specified.
+/// These mirror the Auto variant's options and are used to construct QuantizeModelType::Auto.
+#[derive(clap::Args, Clone)]
+pub struct QuantizeDefaultOptions {
+    /// HuggingFace model ID or local path to model directory
+    #[arg(short = 'm', long)]
+    pub model_id: Option<String>,
+
+    /// Path to local tokenizer.json file
+    #[arg(short = 't', long)]
+    pub tokenizer: Option<PathBuf>,
+
+    /// Model data type
+    #[arg(long, default_value = "auto", value_parser = parse_dtype)]
+    pub dtype: ModelDType,
+
+    /// In-situ quantization level (e.g., "4", "8", "q4_0", "q4_1", "q4k", etc.)
+    #[arg(long = "isq")]
+    pub in_situ_quant: Option<String>,
+
+    /// ISQ organization strategy: default or moqe
+    #[arg(long)]
+    pub isq_organization: Option<IsqOrganization>,
+
+    /// imatrix file for enhanced quantization
+    #[arg(long)]
+    pub imatrix: Option<PathBuf>,
+
+    /// Calibration file for imatrix generation
+    #[arg(long, conflicts_with = "imatrix")]
+    pub calibration_file: Option<PathBuf>,
+
+    /// Force CPU-only execution
+    #[arg(long)]
+    pub cpu: bool,
+
+    /// Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20")
+    #[arg(short = 'n', long, value_delimiter = ';')]
+    pub device_layers: Option<Vec<String>>,
+
+    /// Topology YAML file for device mapping
+    #[arg(long)]
+    pub topology: Option<PathBuf>,
+
+    /// Custom HuggingFace cache directory
+    #[arg(long)]
+    pub hf_cache: Option<PathBuf>,
+
+    /// Max sequence length for automatic device mapping
+    #[arg(long, default_value_t = 4096)]
+    pub max_seq_len: usize,
+
+    /// Max batch size for automatic device mapping
+    #[arg(long, default_value_t = 128)]
+    pub max_batch_size: usize,
+
+    /// Output path for the UQFF file
+    #[arg(short = 'o', long = "output")]
+    pub output_path: Option<PathBuf>,
+
+    /// Maximum edge length for image resizing (aspect ratio preserved)
+    #[arg(long)]
+    pub max_edge: Option<u32>,
+
+    /// Maximum number of images per request
+    #[arg(long)]
+    pub max_num_images: Option<usize>,
+
+    /// Maximum image dimension for device mapping
+    #[arg(long)]
+    pub max_image_length: Option<usize>,
+}
+
+impl QuantizeDefaultOptions {
+    /// Convert default options into a QuantizeModelType::Auto variant.
+    /// Returns an error if required fields are missing.
+    pub fn into_quantize_model_type(self) -> anyhow::Result<QuantizeModelType> {
+        let model_id = self
+            .model_id
+            .ok_or_else(|| anyhow::anyhow!("--model-id (-m) is required"))?;
+        let in_situ_quant = self
+            .in_situ_quant
+            .ok_or_else(|| anyhow::anyhow!("--isq is required"))?;
+        let output_path = self
+            .output_path
+            .ok_or_else(|| anyhow::anyhow!("--output (-o) is required"))?;
+
+        Ok(QuantizeModelType::Auto {
+            model: QuantizeModelSourceOptions {
+                model_id,
+                tokenizer: self.tokenizer,
+                dtype: self.dtype,
+            },
+            quantization: QuantizeQuantizationOptions {
+                in_situ_quant,
+                isq_organization: self.isq_organization,
+                imatrix: self.imatrix,
+                calibration_file: self.calibration_file,
+            },
+            device: QuantizeDeviceOptions {
+                cpu: self.cpu,
+                device_layers: self.device_layers,
+                topology: self.topology,
+                hf_cache: self.hf_cache,
+                max_seq_len: self.max_seq_len,
+                max_batch_size: self.max_batch_size,
+            },
+            output: QuantizeOutputOptions { output_path },
+            vision: QuantizeVisionOptions {
+                max_edge: self.max_edge,
+                max_num_images: self.max_num_images,
+                max_image_length: self.max_image_length,
+            },
+        })
+    }
+}
+
+/// Get the effective QuantizeModelType, using default options if no subcommand was provided.
+/// Returns an error if no subcommand is provided and required fields are missing.
+pub fn resolve_quantize_model_type(
+    model_type: Option<QuantizeModelType>,
+    default_options: QuantizeDefaultOptions,
+) -> anyhow::Result<QuantizeModelType> {
+    match model_type {
+        Some(mt) => Ok(mt),
+        None => default_options.into_quantize_model_type(),
+    }
+}
+
 fn parse_arch(s: &str) -> Result<NormalLoaderType, String> {
     s.parse()
 }
