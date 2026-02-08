@@ -150,18 +150,31 @@ impl PagedAttention {
                     }
                     #[cfg(not(all(feature = "cuda", target_family = "unix")))]
                     {
-                        // Fallback for non-CUDA (Metal, CPU): unfused path
-                        let n_kv_groups = attention_heads / key_value_heads;
-                        let key_expanded =
-                            crate::layers::repeat_kv(key.clone(), n_kv_groups)?;
-                        let value_expanded =
-                            crate::layers::repeat_kv(value.clone(), n_kv_groups)?;
-                        let logits = (query.matmul(&key_expanded.transpose(2, 3)?)?
-                            * sdpa_params.softmax_scale as f64)?;
-                        let logits = logits.broadcast_add(mask)?;
-                        let attn_weights =
-                            mistralrs_quant::softmax_with_sinks(&logits, sinks, None)?;
-                        Some(attn_weights.matmul(&value_expanded)?)
+                        if query.device().is_metal() {
+                            // Fused Metal flash attention with sinks
+                            let window = sdpa_params.sliding_window.unwrap_or(0);
+                            Some(mistralrs_quant::flash_attn_sinks_metal(
+                                query,
+                                key,
+                                value,
+                                Some(sinks),
+                                sdpa_params.softmax_scale,
+                                window,
+                            )?)
+                        } else {
+                            // CPU fallback: unfused path
+                            let n_kv_groups = attention_heads / key_value_heads;
+                            let key_expanded =
+                                crate::layers::repeat_kv(key.clone(), n_kv_groups)?;
+                            let value_expanded =
+                                crate::layers::repeat_kv(value.clone(), n_kv_groups)?;
+                            let logits = (query.matmul(&key_expanded.transpose(2, 3)?)?
+                                * sdpa_params.softmax_scale as f64)?;
+                            let logits = logits.broadcast_add(mask)?;
+                            let attn_weights =
+                                mistralrs_quant::softmax_with_sinks(&logits, sinks, None)?;
+                            Some(attn_weights.matmul(&value_expanded)?)
+                        }
                     }
                 } else {
                     match flash_params {

@@ -2191,6 +2191,234 @@ pub fn softmax_with_sinks(
     })
 }
 
+// ============================================================================
+// Fused flash attention with sinks (Metal)
+// ============================================================================
+
+struct FlashAttnSinksMetal {
+    key: Tensor,
+    value: Tensor,
+    sinks: Tensor, // [num_heads], always f32
+    softmax_scale: f32,
+    window_size: usize,
+}
+
+impl CustomOp1 for FlashAttnSinksMetal {
+    fn name(&self) -> &'static str {
+        "flash-attn-sinks-metal"
+    }
+
+    fn cpu_fwd(&self, _storage: &CpuStorage, _layout: &Layout) -> Result<(CpuStorage, Shape)> {
+        candle_core::bail!("flash_attn_sinks_metal: no CPU support, use softmax_with_sinks fallback")
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        q_storage: &candle_core::MetalStorage,
+        q_layout: &Layout,
+    ) -> Result<(candle_core::MetalStorage, Shape)> {
+        let dtype = q_storage.dtype();
+        let out_shape = q_layout.shape().clone();
+        let (batch_size, num_heads, q_len, head_dim) = q_layout.shape().dims4()?;
+
+        // Extract K storage
+        let (k_s, k_l) = self.key.storage_and_layout();
+        let k_metal = match &*k_s {
+            candle_core::Storage::Metal(s) => s,
+            _ => candle_core::bail!("flash_attn_sinks_metal: key must be a Metal tensor"),
+        };
+        let (_, num_kv_heads, k_len, _) = k_l.shape().dims4()?;
+
+        // Extract V storage
+        let (v_s, v_l) = self.value.storage_and_layout();
+        let v_metal = match &*v_s {
+            candle_core::Storage::Metal(s) => s,
+            _ => candle_core::bail!("flash_attn_sinks_metal: value must be a Metal tensor"),
+        };
+
+        // Extract sinks storage
+        let (s_s, s_l) = self.sinks.storage_and_layout();
+        let sinks_metal = match &*s_s {
+            candle_core::Storage::Metal(s) => s,
+            _ => candle_core::bail!("flash_attn_sinks_metal: sinks must be a Metal tensor"),
+        };
+        let sinks_offset = s_l.start_offset() * self.sinks.dtype().size_in_bytes();
+
+        let device = q_storage.device();
+        let elem_count = out_shape.elem_count();
+        let output = device.new_buffer(elem_count, dtype, "flash-attn-sinks-output")?;
+
+        let encoder = device.command_encoder()?;
+        encoder.set_label("flash-attn-sinks");
+
+        let kernels = crate::metal_kernels::Kernels::new();
+
+        let q_offset = q_layout.start_offset() * dtype.size_in_bytes();
+        let k_offset = k_l.start_offset() * dtype.size_in_bytes();
+        let v_offset = v_l.start_offset() * dtype.size_in_bytes();
+
+        if q_len == 1 {
+            // Decode path: use sdpa_vector_with_sinks
+            let gqa_factor = (num_heads / num_kv_heads) as i32;
+            let b = batch_size * num_heads;
+
+            // k_stride and v_stride: stride between consecutive KV positions in the head dimension
+            // For contiguous [B, Hkv, S, D] layout: stride between KV heads = S * D
+            let k_stride = k_l.stride()[1]; // stride for kv_head dim (= k_len * head_dim)
+            let v_stride = v_l.stride()[1];
+
+            let two_pass_threshold = 1024;
+            if k_len >= two_pass_threshold {
+                // Two-pass for long contexts
+                let blocks: usize = 32;
+                let intermediate = device.new_buffer(
+                    b * blocks * head_dim,
+                    DType::F32,
+                    "sdpa-sinks-intermediate",
+                )?;
+                let sums =
+                    device.new_buffer(b * blocks, DType::F32, "sdpa-sinks-sums")?;
+                let maxs =
+                    device.new_buffer(b * blocks, DType::F32, "sdpa-sinks-maxs")?;
+
+                crate::metal_kernels::call_sdpa_vector_with_sinks_2pass(
+                    device.device(),
+                    &encoder,
+                    &kernels,
+                    dtype,
+                    q_storage.buffer(),
+                    q_offset,
+                    k_metal.buffer(),
+                    k_offset,
+                    v_metal.buffer(),
+                    v_offset,
+                    sinks_metal.buffer(),
+                    sinks_offset,
+                    &output,
+                    &intermediate,
+                    &sums,
+                    &maxs,
+                    head_dim,
+                    gqa_factor,
+                    k_len as i32,
+                    k_stride,
+                    v_stride,
+                    self.softmax_scale,
+                    b,
+                )
+                .map_err(candle_core::Error::wrap)?;
+            } else {
+                // Single-pass
+                crate::metal_kernels::call_sdpa_vector_with_sinks(
+                    device.device(),
+                    &encoder,
+                    &kernels,
+                    dtype,
+                    q_storage.buffer(),
+                    q_offset,
+                    k_metal.buffer(),
+                    k_offset,
+                    v_metal.buffer(),
+                    v_offset,
+                    sinks_metal.buffer(),
+                    sinks_offset,
+                    &output,
+                    head_dim,
+                    gqa_factor,
+                    k_len as i32,
+                    k_stride,
+                    v_stride,
+                    self.softmax_scale,
+                    b,
+                )
+                .map_err(candle_core::Error::wrap)?;
+            }
+        } else {
+            // Prefill path: use flash_attn_sinks_kernel
+            crate::metal_kernels::call_flash_attn_sinks_prefill(
+                device.device(),
+                &encoder,
+                &kernels,
+                dtype,
+                q_storage.buffer(),
+                q_offset,
+                k_metal.buffer(),
+                k_offset,
+                v_metal.buffer(),
+                v_offset,
+                sinks_metal.buffer(),
+                sinks_offset,
+                &output,
+                self.softmax_scale,
+                batch_size,
+                q_len,
+                k_len,
+                num_heads,
+                num_kv_heads,
+                head_dim,
+                self.window_size,
+            )
+            .map_err(candle_core::Error::wrap)?;
+        }
+
+        let newstorage =
+            candle_core::MetalStorage::new(output, device.clone(), elem_count, dtype);
+        Ok((newstorage, out_shape))
+    }
+}
+
+/// Fused flash attention with per-head sinks for Metal devices.
+///
+/// Uses fused Metal kernels that compute Q·K^T → softmax_with_sinks → ×V
+/// without materializing the N×N attention matrix. Per-head sinks contribute
+/// to the softmax denominator without an associated value contribution.
+///
+/// Causal masking is applied for prefill (q_len > 1). For decode (q_len == 1),
+/// all K/V positions are attended to.
+///
+/// # Arguments
+///
+/// * `q` - Query tensor `[batch_size, num_heads, q_len, head_dim]`
+/// * `k` - Key tensor `[batch_size, num_kv_heads, k_len, head_dim]`
+/// * `v` - Value tensor `[batch_size, num_kv_heads, k_len, head_dim]`
+/// * `sinks` - Per-head sink values `[num_heads]` (will be cast to f32)
+/// * `softmax_scale` - Scaling factor (typically `1 / sqrt(head_dim)`)
+/// * `window_size` - Sliding window size (0 = full attention)
+///
+/// Returns `[batch_size, num_heads, q_len, head_dim]`
+#[allow(clippy::too_many_arguments)]
+pub fn flash_attn_sinks_metal(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    sinks: Option<&Tensor>,
+    softmax_scale: f32,
+    window_size: usize,
+) -> Result<Tensor> {
+    let q = q.contiguous()?;
+    let k = k.contiguous()?;
+    let v = v.contiguous()?;
+
+    let sinks = match sinks {
+        Some(s) => s.to_dtype(DType::F32)?.contiguous()?,
+        None => {
+            // No sinks: create zeros (no effect on softmax)
+            let num_heads = q.dim(1)?;
+            Tensor::zeros(num_heads, DType::F32, q.device())?
+        }
+    };
+
+    let op = FlashAttnSinksMetal {
+        key: k.clone(),
+        value: v.clone(),
+        sinks,
+        softmax_scale,
+        window_size,
+    };
+    q.apply_op1_no_bwd(&op)
+}
+
 /// Activation enum for fused GLU kernel.
 /// Must match the GluActivation enum in CUDA (ops.cu) and Metal (fused_glu.metal) kernels.
 #[derive(Clone, Copy, Debug)]

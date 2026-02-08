@@ -391,6 +391,20 @@ impl Attention {
         _flash_params: &FlashParams,
         _layer_idx: usize,
     ) -> Result<Tensor> {
+        // On Metal, use fused kernel (handles GQA internally, no need to expand K/V)
+        if q.device().is_metal() {
+            let window = self.sdpa_params.sliding_window.unwrap_or(0);
+            return mistralrs_quant::flash_attn_sinks_metal(
+                q,
+                k,
+                v,
+                Some(&self.sinks),
+                self.sdpa_params.softmax_scale,
+                window,
+            );
+        }
+
+        // CPU fallback: unfused path
         let (_b_sz, _num_heads, _q_len, _head_dim) = q.dims4()?;
         let (_, _, k_len, _) = k.dims4()?;
 
