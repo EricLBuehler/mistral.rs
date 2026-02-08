@@ -1,4 +1,4 @@
-use candle_core::{CudaStorage, Device, Result, Shape, Storage, Tensor};
+use candle_core::{CudaStorage, Device, IndexOp, Result, Shape, Storage, Tensor};
 use half::{bf16, f16};
 
 use super::ffi;
@@ -99,12 +99,13 @@ pub fn mxfp4_matmul(
 
             let bias_ptr = if has_bias {
                 let b = bias.unwrap();
+                let b_l = b.layout();
                 let b_storage = b.storage_and_layout().0;
                 let b_s = match &*b_storage {
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<f16>()?,
                     _ => candle_core::bail!("Expected CUDA storage for bias"),
                 };
-                let (ptr, _guard) = slice_ptr(b_s, 0);
+                let (ptr, _guard) = slice_ptr(b_s, b_l.start_offset());
                 ptr as *const f16
             } else {
                 std::ptr::null()
@@ -159,12 +160,13 @@ pub fn mxfp4_matmul(
 
             let bias_ptr = if has_bias {
                 let b = bias.unwrap();
+                let b_l = b.layout();
                 let b_storage = b.storage_and_layout().0;
                 let b_s = match &*b_storage {
                     Storage::Cuda(cuda_storage) => cuda_storage.as_cuda_slice::<bf16>()?,
                     _ => candle_core::bail!("Expected CUDA storage for bias"),
                 };
-                let (ptr, _guard) = slice_ptr(b_s, 0);
+                let (ptr, _guard) = slice_ptr(b_s, b_l.start_offset());
                 ptr as *const bf16
             } else {
                 std::ptr::null()
@@ -211,7 +213,104 @@ pub fn mxfp4_matmul(
     }
 }
 
+/// Expert-grouped MoE GEMM for prefill: groups tokens by expert and uses
+/// batched mxfp4_matmul (with WMMA tensor cores when available) instead of
+/// the per-token scalar dot-product kernel.
+///
+/// This converts many small vector-matrix products into fewer, larger
+/// matrix-matrix products with weight reuse across tokens sharing an expert.
+#[allow(clippy::too_many_arguments)]
+fn mxfp4_grouped_moe_gemm(
+    input: &Tensor,
+    weight: &Tensor,
+    scale: &Tensor,
+    bias: Option<&Tensor>,
+    indices: &Tensor,
+    num_tokens: usize,
+    topk: usize,
+    num_experts: usize,
+    n: usize,
+    k: usize,
+    input_has_topk_dim: bool,
+) -> Result<Tensor> {
+    let dev = input.device().clone();
+    let total_work = num_tokens * topk;
+
+    // 1. Transfer indices to CPU for grouping (small: num_tokens * topk * 4 bytes)
+    let indices_flat: Vec<u32> = indices.flatten_all()?.to_vec1()?;
+
+    // 2. Build per-expert work item lists: (flat_output_idx, input_row_idx)
+    let mut expert_groups: Vec<Vec<(usize, usize)>> = vec![Vec::new(); num_experts];
+    for t in 0..num_tokens {
+        for s in 0..topk {
+            let flat_idx = t * topk + s;
+            let expert_id = indices_flat[flat_idx] as usize;
+            let input_row = if input_has_topk_dim { flat_idx } else { t };
+            if expert_id < num_experts {
+                expert_groups[expert_id].push((flat_idx, input_row));
+            }
+        }
+    }
+
+    // 3. Flatten input if it has topk dimension: [num_tokens, topk, K] -> [num_tokens*topk, K]
+    let flat_input = if input_has_topk_dim {
+        input.reshape((total_work, k))?
+    } else {
+        input.clone()
+    };
+
+    // 4. Build sorted-by-expert input indices and output scatter mapping
+    let mut sorted_input_indices: Vec<u32> = Vec::with_capacity(total_work);
+    let mut output_positions: Vec<usize> = Vec::with_capacity(total_work);
+    let mut expert_offsets: Vec<(usize, usize, usize)> = Vec::new(); // (expert_id, start, count)
+
+    let mut pos = 0;
+    for (expert_id, items) in expert_groups.iter().enumerate() {
+        if items.is_empty() {
+            continue;
+        }
+        let start = pos;
+        for &(flat_out_idx, input_row) in items {
+            sorted_input_indices.push(input_row as u32);
+            output_positions.push(flat_out_idx);
+            pos += 1;
+        }
+        expert_offsets.push((expert_id, start, items.len()));
+    }
+
+    // 5. Gather input rows in expert-sorted order
+    let perm = Tensor::from_vec(sorted_input_indices, (total_work,), &dev)?;
+    let sorted_input = flat_input.index_select(&perm, 0)?;
+
+    // 6. Run mxfp4_matmul per expert group (dispatches to WMMA when available)
+    let mut result_chunks: Vec<Tensor> = Vec::with_capacity(expert_offsets.len());
+    for &(expert_id, start, count) in &expert_offsets {
+        let batch = sorted_input.narrow(0, start, count)?;
+        let expert_w = weight.i(expert_id)?;
+        let expert_s = scale.i(expert_id)?;
+        let expert_b = bias.map(|b| b.i(expert_id)).transpose()?;
+        let result = mxfp4_matmul(&batch, &expert_w, &expert_s, expert_b.as_ref())?;
+        result_chunks.push(result);
+    }
+
+    // 7. Concatenate results in sorted order
+    let sorted_output = Tensor::cat(&result_chunks, 0)?;
+
+    // 8. Inverse permutation to restore original [num_tokens * topk] order
+    let mut inv_perm = vec![0u32; total_work];
+    for (sorted_pos, &flat_out_idx) in output_positions.iter().enumerate() {
+        inv_perm[flat_out_idx] = sorted_pos as u32;
+    }
+    let inv_perm_t = Tensor::from_vec(inv_perm, (total_work,), &dev)?;
+    let output = sorted_output.index_select(&inv_perm_t, 0)?;
+
+    output.reshape((num_tokens, topk, n))
+}
+
 /// Perform MXFP4 indexed MoE GEMM: for each (token, expert_slot), compute input @ weight[expert].T + bias[expert]
+///
+/// For prefill (num_tokens > 1), uses expert-grouped batching through mxfp4_matmul (→ WMMA).
+/// For decode (num_tokens == 1), uses the per-token scalar kernel.
 ///
 /// Args:
 ///   input: [num_tokens, K] or [num_tokens, topk, K] in f16/bf16
@@ -275,6 +374,25 @@ pub fn mxfp4_indexed_moe_gemm(
         );
     }
 
+    // For prefill (multiple tokens), use expert-grouped batching
+    // which routes through mxfp4_matmul → WMMA tensor cores
+    if num_tokens > 1 {
+        return mxfp4_grouped_moe_gemm(
+            &input,
+            &weight,
+            &scale,
+            bias,
+            &indices,
+            num_tokens,
+            topk,
+            num_experts,
+            n,
+            k,
+            input_has_topk_dim,
+        );
+    }
+
+    // For decode (single token), use the per-token scalar kernel
     let dev = match input.device() {
         Device::Cuda(dev) => dev,
         _ => candle_core::bail!("Expected CUDA device"),
