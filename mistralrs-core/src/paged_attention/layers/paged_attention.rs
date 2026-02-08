@@ -1,4 +1,6 @@
 use candle_core::{DType, Device, Result, Tensor};
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+use mistralrs_paged_attn::flash_attn_sinks;
 use mistralrs_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
 
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
@@ -131,17 +133,36 @@ impl PagedAttention {
             None => None,
             Some(mask) => {
                 if let Some(sinks) = sinks {
-                    // Sinks-aware prefill: compute Q@K^T, softmax_with_sinks, @V.
-                    // Can't use flash attention because sinks modify the softmax denominator.
-                    // Expand KV heads for GQA before manual matmul.
-                    let n_kv_groups = attention_heads / key_value_heads;
-                    let key_expanded = crate::layers::repeat_kv(key.clone(), n_kv_groups)?;
-                    let value_expanded = crate::layers::repeat_kv(value.clone(), n_kv_groups)?;
-                    let logits = (query.matmul(&key_expanded.transpose(2, 3)?)?
-                        * sdpa_params.softmax_scale as f64)?;
-                    let logits = logits.broadcast_add(mask)?;
-                    let attn_weights = mistralrs_quant::softmax_with_sinks(&logits, sinks, None)?;
-                    Some(attn_weights.matmul(&value_expanded)?)
+                    // Sinks-aware prefill: fused flash attention with per-head sinks.
+                    // The sink adds exp(sink_h) to the softmax denominator without a
+                    // corresponding value contribution (probability mass absorption).
+                    #[cfg(all(feature = "cuda", target_family = "unix"))]
+                    {
+                        let window = sdpa_params.sliding_window.unwrap_or(0);
+                        Some(flash_attn_sinks(
+                            query,
+                            key,
+                            value,
+                            Some(sinks),
+                            sdpa_params.softmax_scale,
+                            window,
+                        )?)
+                    }
+                    #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+                    {
+                        // Fallback for non-CUDA (Metal, CPU): unfused path
+                        let n_kv_groups = attention_heads / key_value_heads;
+                        let key_expanded =
+                            crate::layers::repeat_kv(key.clone(), n_kv_groups)?;
+                        let value_expanded =
+                            crate::layers::repeat_kv(value.clone(), n_kv_groups)?;
+                        let logits = (query.matmul(&key_expanded.transpose(2, 3)?)?
+                            * sdpa_params.softmax_scale as f64)?;
+                        let logits = logits.broadcast_add(mask)?;
+                        let attn_weights =
+                            mistralrs_quant::softmax_with_sinks(&logits, sinks, None)?;
+                        Some(attn_weights.matmul(&value_expanded)?)
+                    }
                 } else {
                     match flash_params {
                         Some(_) => Some(Sdpa.run_attention(

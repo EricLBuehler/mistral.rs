@@ -313,4 +313,52 @@ extern "C" {
         v_scales: *const f32,
         stream: i64,
     );
+
+    pub fn flash_attn_sinks_f16(
+        q: *const c_void,
+        k: *const c_void,
+        v: *const c_void,
+        out: *mut c_void,
+        sinks: *const f32,
+        scale: f32,
+        batch_size: c_int,
+        seq_len: c_int,
+        num_heads: c_int,
+        num_kv_heads: c_int,
+        head_dim: c_int,
+        window_size: c_int,
+        stream: CUstream,
+    );
+
+    pub fn flash_attn_sinks_bf16(
+        q: *const c_void,
+        k: *const c_void,
+        v: *const c_void,
+        out: *mut c_void,
+        sinks: *const f32,
+        scale: f32,
+        batch_size: c_int,
+        seq_len: c_int,
+        num_heads: c_int,
+        num_kv_heads: c_int,
+        head_dim: c_int,
+        window_size: c_int,
+        stream: CUstream,
+    );
+
+    pub fn flash_attn_sinks_f32(
+        q: *const c_void,
+        k: *const c_void,
+        v: *const c_void,
+        out: *mut c_void,
+        sinks: *const f32,
+        scale: f32,
+        batch_size: c_int,
+        seq_len: c_int,
+        num_heads: c_int,
+        num_kv_heads: c_int,
+        head_dim: c_int,
+        window_size: c_int,
+        stream: CUstream,
+    );
 }
