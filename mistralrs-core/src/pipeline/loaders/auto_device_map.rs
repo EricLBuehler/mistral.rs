@@ -91,6 +91,14 @@ impl AutoDeviceMapParams {
             Self::Text { max_seq_len, .. } | Self::Vision { max_seq_len, .. } => *max_seq_len,
         }
     }
+
+    pub fn max_batch_size(&self) -> usize {
+        match self {
+            Self::Text { max_batch_size, .. } | Self::Vision { max_batch_size, .. } => {
+                *max_batch_size
+            }
+        }
+    }
 }
 
 impl Display for AutoDeviceMapParams {
@@ -212,37 +220,22 @@ pub fn get_device_layers(
     let model_cfg = loader.model_config(config)?;
     let kv_cache_elems = match paged_attn_config {
         Some(cfg) => {
-            // Compute an effective memory budget consistent with the capacity
-            // check below. The capacity check uses:
-            //   cap = get_memory_available() - reserve
-            // and requires: model_weights + activations + kv_total <= cap.
-            //
-            // Without this adjustment, calculate_cache_config uses
-            // get_total_memory() * f as the starting budget, which doesn't
-            // account for the GPU reserve or activation memory overhead,
-            // causing a constant ~(reserve + activations) overallocation.
-            let effective_mem_gpu = if matches!(cfg.mem_gpu, MemoryGpuConfig::ContextSize(_)) {
-                cfg.mem_gpu
-            } else {
-                let primary_dev = &devices[0];
-                let avail_bytes = MemoryUsage.get_memory_available(primary_dev)?;
-                let cap = device_cap(avail_bytes, primary_dev);
-
-                let act_overhead = non_mapped_max.max(mapped_max);
-                let budget_mb = cap.saturating_sub(act_overhead) / (1024 * 1024);
-
-                match cfg.mem_gpu {
-                    MemoryGpuConfig::MbAmount(user_mb) => {
-                        MemoryGpuConfig::MbAmount(budget_mb.min(user_mb))
-                    }
-                    MemoryGpuConfig::Utilization(f) => {
-                        let total_mb =
-                            MemoryUsage.get_total_memory(primary_dev)? / (1024 * 1024);
-                        let user_limit = (total_mb as f32 * f) as usize;
-                        MemoryGpuConfig::MbAmount(budget_mb.min(user_limit))
-                    }
-                    MemoryGpuConfig::ContextSize(_) => unreachable!(),
+            // For MbAmount, clamp to available memory so the capacity check
+            // below stays consistent. Utilization and ContextSize pass through
+            // to calculate_cache_config which handles model weight subtraction.
+            let effective_mem_gpu = match cfg.mem_gpu {
+                MemoryGpuConfig::MbAmount(user_mb) => {
+                    // Clamp user's KV budget to available memory.
+                    let primary_dev = &devices[0];
+                    let avail_bytes = MemoryUsage.get_memory_available(primary_dev)?;
+                    let cap = device_cap(avail_bytes, primary_dev);
+                    let act_overhead = non_mapped_max.max(mapped_max);
+                    let budget_mb = cap.saturating_sub(act_overhead) / (1024 * 1024);
+                    MemoryGpuConfig::MbAmount(budget_mb.min(user_mb))
                 }
+                // Pass through — calculate_cache_config handles model weight
+                // subtraction in its pre-loading Utilization path.
+                other => other,
             };
 
             let cache = calculate_cache_config(
@@ -257,6 +250,7 @@ pub fn get_device_layers(
                 &devices.iter().map(|d| Some(d.clone())).collect::<Vec<_>>(),
                 true,
                 Some(total_model_size_in_bytes),
+                Some(max_seq_len * max_batch_size),
             )?;
             let key_shape = calculate_key_block_shape(&*model_cfg, dtype, cache.block_size);
             let key_sz =

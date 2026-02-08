@@ -352,11 +352,13 @@ impl Loader for NormalLoader {
         };
 
         // If auto, convert to Map if not using nccl
+        let mut max_kv_tokens: Option<usize> = None;
         if use_nccl || cfg!(feature = "ring") {
             mapper = DeviceMapSetting::DummyNccl {
                 nm_device: available_devices[0].clone(),
             };
         } else if let DeviceMapSetting::Auto(params) = mapper.clone() {
+            max_kv_tokens = Some(params.max_seq_len() * params.max_batch_size());
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
 
@@ -940,6 +942,7 @@ impl Loader for NormalLoader {
                     .collect::<Vec<_>>(),
                 silent,
                 None,
+                max_kv_tokens,
             )?;
 
             let mut layer_devices = Vec::new();

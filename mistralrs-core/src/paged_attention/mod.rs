@@ -24,7 +24,7 @@ pub use scheduler::{
 };
 
 use crate::MemoryUsage;
-use tracing::{info, warn};
+use tracing::info;
 
 pub const DEFAULT_PAGED_ATTENTION_BLOCK_SIZE: usize = 32;
 
@@ -93,6 +93,11 @@ macro_rules! ctxt_to_blocks {
 /// (e.g. during device mapping) so the KV cache estimate reflects memory that will actually
 /// remain after the weights are loaded. Post-loading callers should pass `None` since
 /// `get_memory_available()` already reflects the loaded model.
+///
+/// `max_num_tokens`: on Metal (unified memory), caps the KV cache to this many tokens.
+/// Unlike CUDA with dedicated VRAM where unused memory is wasted, Metal's wired buffers
+/// compete with the OS and CPU for the same physical RAM. On CUDA this is ignored.
+/// If `None` on Metal, falls back to `config.max_seq_len()`.
 #[allow(clippy::too_many_arguments)]
 pub fn calculate_cache_config(
     mem_gpu: MemoryGpuConfig,
@@ -104,6 +109,7 @@ pub fn calculate_cache_config(
     layer_devices: &[Option<Device>],
     silent: bool,
     model_weight_size_in_bytes: Option<usize>,
+    max_num_tokens: Option<usize>,
 ) -> anyhow::Result<CacheConfig> {
     let block_size = block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
     if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {
@@ -123,16 +129,24 @@ pub fn calculate_cache_config(
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let mem_gpu = match mem_gpu {
-            MemoryGpuConfig::MbAmount(v) => v.saturating_sub(model_weight_per_device_mb),
+            MemoryGpuConfig::MbAmount(v) => v,
             MemoryGpuConfig::Utilization(f) => {
                 let total = MemoryUsage.get_total_memory(device)? as f32 / SIZE_IN_MB as f32;
                 if model_weight_size_in_bytes.is_some() {
                     // Pre-loading: compute budget from total memory and known model size.
                     (total * f - model_weight_per_device_mb as f32).max(0.0) as usize
                 } else {
-                    // Post-loading: model allocations have forced reclamation of stale pages, so free memory queries are accurate.
                     let free = MemoryUsage.get_memory_available(device)? as f32 / SIZE_IN_MB as f32;
-                    let used = total - free;
+                    #[allow(unused_mut)]
+                    let mut used = total - free;
+                    // On Metal, get_total_memory (wired limit) and get_memory_available
+                    // (recommendedMaxWorkingSetSize - allocated) have different bases,
+                    // so `total - free` is incorrect. Use the device's tracked
+                    // allocation size directly.
+                    #[cfg(feature = "metal")]
+                    if let Device::Metal(dev) = device {
+                        used = dev.current_allocated_size() as f32 / SIZE_IN_MB as f32;
+                    }
                     (total * f - used).max(0.0) as usize
                 }
             }
@@ -144,34 +158,26 @@ pub fn calculate_cache_config(
         min_mem_gpu = min_mem_gpu.min(mem_gpu);
     }
 
-    // // Cap at kv cache for max seq len
-    // let mem_for_toks =
-    //     ctxt_to_blocks!(config.max_seq_len(), dtype_size, block_size, config) / SIZE_IN_MB;
-    // let mem_gpu = min_mem_gpu.min(mem_for_toks);
-
-    // Cap Metal GPU memory to the wired (non‑paged) allocation limit reported by the kernel (`iogpu.wired_limit_mb`).
-    // Users can raise this limit with `sudo sysctl -w iogpu.wired_limit_mb=<desired_mb>`.
-    let mem_gpu = if matches!(device, Device::Metal(_)) {
-        let metal_cap_mb = MemoryUsage.get_total_memory(device)? / SIZE_IN_MB;
-
-        info!("Metal GPU wired limit is {metal_cap_mb} MB.");
-
-        if min_mem_gpu > metal_cap_mb {
+    // On Metal (unified memory), cap KV cache to what the model can actually use.
+    // Unlike CUDA with dedicated VRAM where unused memory is wasted, Metal's wired
+    // buffers compete with the OS and CPU for the same physical RAM.
+    // On CUDA, all available memory is used for maximum request concurrency (vLLM approach).
+    #[allow(unused_mut, unused_variables)]
+    let mut mem_gpu = min_mem_gpu;
+    if device.is_metal() {
+        let max_tokens = max_num_tokens.unwrap_or(config.max_seq_len());
+        let mem_for_tokens =
+            ctxt_to_blocks!(max_tokens, dtype_size, block_size, config) / SIZE_IN_MB;
+        if mem_for_tokens < mem_gpu {
             if !silent {
-                warn!(
-                    "Capping Metal GPU memory allocation from {} MB to {} MB (limited by iogpu.wired_limit_mb). \
-To raise this cap run: `sudo sysctl -w iogpu.wired_limit_mb=<desired_mb>`.",
-                    min_mem_gpu,
-                    metal_cap_mb
+                info!(
+                    "Metal: capping KV cache from {} MB to {} MB ({} tokens).",
+                    mem_gpu, mem_for_tokens, max_tokens
                 );
             }
-            metal_cap_mb
-        } else {
-            min_mem_gpu
+            mem_gpu = mem_for_tokens;
         }
-    } else {
-        min_mem_gpu
-    };
+    }
 
     let num_gpu_blocks = mb_to_blocks!(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
     if num_gpu_blocks == 0 {
