@@ -89,4 +89,72 @@ extern "C" {
         input_has_topk_dim: bool,
         stream: candle_core::cuda::cudarc::driver::sys::CUstream,
     );
+
+    pub(crate) fn launch_mxfp4_moe_grouped_gemm_f16(
+        input: *const f16,
+        weights: *const u8,
+        weight_scales: *const u8,
+        biases: *const f16,
+        indices: *const u32,
+        output: *mut f16,
+        num_tokens: i32,
+        topk: i32,
+        num_experts: i32,
+        n: i32,
+        k: i32,
+        has_bias: bool,
+        input_has_topk_dim: bool,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+    );
+
+    pub(crate) fn launch_mxfp4_moe_grouped_gemm_bf16(
+        input: *const bf16,
+        weights: *const u8,
+        weight_scales: *const u8,
+        biases: *const bf16,
+        indices: *const u32,
+        output: *mut bf16,
+        num_tokens: i32,
+        topk: i32,
+        num_experts: i32,
+        n: i32,
+        k: i32,
+        has_bias: bool,
+        input_has_topk_dim: bool,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+    );
+
+    pub(crate) fn launch_mxfp4_moe_grouped_gemm_wmma_f16(
+        input: *const f16,
+        weights: *const u8,
+        weight_scales: *const u8,
+        biases: *const f16,
+        indices: *const u32,
+        output: *mut f16,
+        num_tokens: i32,
+        topk: i32,
+        num_experts: i32,
+        n: i32,
+        k: i32,
+        has_bias: bool,
+        input_has_topk_dim: bool,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+    );
+
+    pub(crate) fn launch_mxfp4_moe_grouped_gemm_wmma_bf16(
+        input: *const bf16,
+        weights: *const u8,
+        weight_scales: *const u8,
+        biases: *const bf16,
+        indices: *const u32,
+        output: *mut bf16,
+        num_tokens: i32,
+        topk: i32,
+        num_experts: i32,
+        n: i32,
+        k: i32,
+        has_bias: bool,
+        input_has_topk_dim: bool,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+    );
 }

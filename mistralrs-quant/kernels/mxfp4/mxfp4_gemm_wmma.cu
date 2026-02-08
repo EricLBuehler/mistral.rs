@@ -303,6 +303,200 @@ __launch_bounds__(BLOCK_THREADS) __global__
   }
 }
 
+// ---------------------------------------------------------------------------
+// Fused MoE Grouped GEMM with WMMA tensor cores
+// Grid: (CEILDIV(N, N_BLK), num_experts)
+// Phase 1: token discovery in shared memory
+// Phase 2: outer M-tile loop with WMMA fragments, indirect I/O
+// ---------------------------------------------------------------------------
+
+template <typename T>
+__launch_bounds__(BLOCK_THREADS) __global__
+    void mxfp4_moe_grouped_gemm_wmma_kernel(
+        const T *__restrict__ input, const uint8_t *__restrict__ weights,
+        const uint8_t *__restrict__ weight_scales,
+        const T *__restrict__ biases, const uint32_t *__restrict__ indices,
+        T *__restrict__ output, int num_tokens, int topk, int num_experts,
+        int N, int K, bool has_bias, bool input_has_topk_dim) {
+  const uint32_t LUT0 = 0x03020100;
+  const uint32_t LUT1 = 0x0C080604;
+  const uint32_t LUT2 = 0xFDFEFF00;
+  const uint32_t LUT3 = 0xF4F8FAFC;
+
+  const int scale_stride = CEILDIV(K, MXFP4_BLOCK_SIZE);
+  const int expert_id = blockIdx.y;
+  const int n_base = blockIdx.x * N_BLK;
+  const int threadId = threadIdx.x;
+  const int total_work = num_tokens * topk;
+
+  const uint8_t *expert_weight = weights + (size_t)expert_id * N * (K / 2);
+  const uint8_t *expert_scale =
+      weight_scales + (size_t)expert_id * N * scale_stride;
+
+  // Dynamic shared memory layout:
+  //   [token_list: total_work ints (aligned to 16)]
+  //   [A_sh: M_BLK * K_BLK in T]
+  //   [B_sh: N_BLK * K_BLK in T]
+  //   [C_sh: M_BLK * N_BLK in float (aligned)]
+  extern __shared__ uint8_t smem_bytes[];
+  int *s_token_list = reinterpret_cast<int *>(smem_bytes);
+
+  // Counter for token discovery (reuse first element before token list is used)
+  __shared__ int num_my_tokens;
+
+  const int token_list_bytes = ((total_work * (int)sizeof(int)) + 15) & ~15;
+  T *A_sh = reinterpret_cast<T *>(smem_bytes + token_list_bytes);
+  T *B_sh = A_sh + M_BLK * K_BLK;
+  uint8_t *C_raw = reinterpret_cast<uint8_t *>(B_sh + N_BLK * K_BLK);
+  size_t align_off = reinterpret_cast<uintptr_t>(C_raw) % alignof(float);
+  if (align_off != 0)
+    C_raw += (alignof(float) - align_off);
+  float *C_sh = reinterpret_cast<float *>(C_raw);
+
+  // === Phase 1: Token discovery ===
+  if (threadId == 0)
+    num_my_tokens = 0;
+  __syncthreads();
+
+  for (int i = threadId; i < total_work; i += BLOCK_THREADS) {
+    if (__ldg(&indices[i]) == (uint32_t)expert_id) {
+      int pos = atomicAdd(&num_my_tokens, 1);
+      s_token_list[pos] = i;
+    }
+  }
+  __syncthreads();
+
+  const int M_expert = num_my_tokens;
+  if (M_expert == 0)
+    return;
+
+  const int warpId = threadId / 32;
+  const int warp_m_idx = warpId / WARPS_N;
+  const int warp_n_idx = warpId % WARPS_N;
+
+  VecT zero_vec;
+  zero_vec.x = zero_vec.y = zero_vec.z = zero_vec.w = 0.0f;
+
+  // === Phase 2: Outer M-tile loop ===
+  for (int m_tile = 0; m_tile < CEILDIV(M_expert, M_BLK); m_tile++) {
+    const int m_base = m_tile * M_BLK;
+
+    fragment<accumulator, WMMA_M_DIM, WMMA_N_DIM, WMMA_K_DIM, float> c_frag[2];
+    fill_fragment(c_frag[0], 0.0f);
+    fill_fragment(c_frag[1], 0.0f);
+
+    for (int k_base = 0; k_base < K; k_base += K_BLK) {
+      // Load input tile via indirection
+      constexpr int A_VEC_ELEMS = M_BLK * K_BLK / VEC_SIZE;
+      for (int i = threadId; i < A_VEC_ELEMS; i += BLOCK_THREADS) {
+        const int idx = i * VEC_SIZE;
+        const int lm = idx / K_BLK;
+        const int lk = idx % K_BLK;
+        const int work_pos = m_base + lm;
+        const int gk = k_base + lk;
+
+        if (work_pos < M_expert && gk < K) {
+          const int work_idx = s_token_list[work_pos];
+          const int input_row =
+              input_has_topk_dim ? work_idx : (work_idx / topk);
+          *reinterpret_cast<VecT *>(&A_sh[lm * K_BLK + lk]) =
+              *reinterpret_cast<const VecT *>(
+                  &input[(size_t)input_row * K + gk]);
+        } else {
+          *reinterpret_cast<VecT *>(&A_sh[lm * K_BLK + lk]) = zero_vec;
+        }
+      }
+
+      // Dequantize weight tile
+      for (int ln = threadId; ln < N_BLK; ln += BLOCK_THREADS) {
+        const int gn = n_base + ln;
+        if (gn < N) {
+          uint4 w_vec = *reinterpret_cast<const uint4 *>(
+              &expert_weight[(size_t)gn * (K / 2) + k_base / 2]);
+          float scale =
+              e8m0_to_float(
+                  __ldg(&expert_scale[(size_t)gn * scale_stride +
+                                      k_base / MXFP4_BLOCK_SIZE])) *
+              0.5f;
+          T *dst = &B_sh[ln * K_BLK];
+          dequant_store_8<T>(w_vec.x, scale, LUT0, LUT1, LUT2, LUT3, dst);
+          dequant_store_8<T>(w_vec.y, scale, LUT0, LUT1, LUT2, LUT3, dst + 8);
+          dequant_store_8<T>(w_vec.z, scale, LUT0, LUT1, LUT2, LUT3, dst + 16);
+          dequant_store_8<T>(w_vec.w, scale, LUT0, LUT1, LUT2, LUT3, dst + 24);
+        } else {
+          T *dst = &B_sh[ln * K_BLK];
+#pragma unroll
+          for (int k = 0; k < K_BLK; k++)
+            dst[k] = T(0);
+        }
+      }
+
+      __syncthreads();
+
+      // WMMA accumulation
+#pragma unroll
+      for (int k_step = 0; k_step < WMMA_K_STEPS; k_step++) {
+        fragment<matrix_a, WMMA_M_DIM, WMMA_N_DIM, WMMA_K_DIM, T, row_major>
+            a_frag;
+        const T *A_ptr =
+            A_sh + warp_m_idx * WMMA_M_DIM * K_BLK + k_step * WMMA_K_DIM;
+        load_matrix_sync(a_frag, A_ptr, K_BLK);
+
+#pragma unroll
+        for (int n_sub = 0; n_sub < 2; n_sub++) {
+          fragment<matrix_b, WMMA_M_DIM, WMMA_N_DIM, WMMA_K_DIM, T, col_major>
+              b_frag;
+          const T *B_ptr = B_sh +
+                           (warp_n_idx * 2 + n_sub) * WMMA_N_DIM * K_BLK +
+                           k_step * WMMA_K_DIM;
+          load_matrix_sync(b_frag, B_ptr, K_BLK);
+          mma_sync(c_frag[n_sub], a_frag, b_frag, c_frag[n_sub]);
+        }
+      }
+
+      __syncthreads();
+    } // end k_base
+
+    // Store accumulator fragments to C_sh
+    for (int n_sub = 0; n_sub < 2; n_sub++) {
+      float *C_ptr = C_sh + warp_m_idx * WMMA_M_DIM * N_BLK +
+                     (warp_n_idx * 2 + n_sub) * WMMA_N_DIM;
+      store_matrix_sync(C_ptr, c_frag[n_sub], N_BLK, mem_row_major);
+    }
+    __syncthreads();
+
+    // Write from C_sh to global output via indirection
+    constexpr int C_ELEMS = M_BLK * N_BLK;
+    for (int i = threadId; i < C_ELEMS; i += BLOCK_THREADS) {
+      const int lm = i / N_BLK;
+      const int ln = i % N_BLK;
+      const int work_pos = m_base + lm;
+      const int gn = n_base + ln;
+
+      if (work_pos < M_expert && gn < N) {
+        const int work_idx = s_token_list[work_pos];
+        float val = C_sh[lm * N_BLK + ln];
+        if (has_bias && biases != nullptr) {
+          if constexpr (std::is_same_v<T, half>) {
+            val +=
+                __half2float(__ldg(&biases[(size_t)expert_id * N + gn]));
+          } else {
+            val += __bfloat162float(
+                __ldg(&biases[(size_t)expert_id * N + gn]));
+          }
+        }
+        if constexpr (std::is_same_v<T, half>) {
+          output[(size_t)work_idx * N + gn] = __float2half(val);
+        } else {
+          output[(size_t)work_idx * N + gn] = __float2bfloat16(val);
+        }
+      }
+    }
+
+    __syncthreads();
+  } // end m_tile
+}
+
 } // namespace mxfp4_wmma
 
 // ---------------------------------------------------------------------------
@@ -349,5 +543,46 @@ extern "C" void launch_mxfp4_matmul_wmma_bf16(
   mxfp4_wmma::mxfp4_matmul_wmma_kernel<__nv_bfloat16>
       <<<grid, block, smem, stream>>>(input, weight, weight_scale, bias, output,
                                       M, N, K, has_bias);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+extern "C" void launch_mxfp4_moe_grouped_gemm_wmma_f16(
+    const __half *input, const uint8_t *weights, const uint8_t *weight_scales,
+    const __half *biases, const uint32_t *indices, __half *output,
+    int num_tokens, int topk, int num_experts, int N, int K, bool has_bias,
+    bool input_has_topk_dim, cudaStream_t stream) {
+  using namespace mxfp4_wmma;
+
+  dim3 grid(CEILDIV(N, N_BLK), num_experts);
+  dim3 block(BLOCK_THREADS);
+  int token_list_bytes = ((num_tokens * topk * (int)sizeof(int)) + 15) & ~15;
+  size_t smem = token_list_bytes + wmma_smem_bytes();
+
+  mxfp4_wmma::mxfp4_moe_grouped_gemm_wmma_kernel<half>
+      <<<grid, block, smem, stream>>>(input, weights, weight_scales, biases,
+                                      indices, output, num_tokens, topk,
+                                      num_experts, N, K, has_bias,
+                                      input_has_topk_dim);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+extern "C" void launch_mxfp4_moe_grouped_gemm_wmma_bf16(
+    const __nv_bfloat16 *input, const uint8_t *weights,
+    const uint8_t *weight_scales, const __nv_bfloat16 *biases,
+    const uint32_t *indices, __nv_bfloat16 *output, int num_tokens, int topk,
+    int num_experts, int N, int K, bool has_bias, bool input_has_topk_dim,
+    cudaStream_t stream) {
+  using namespace mxfp4_wmma;
+
+  dim3 grid(CEILDIV(N, N_BLK), num_experts);
+  dim3 block(BLOCK_THREADS);
+  int token_list_bytes = ((num_tokens * topk * (int)sizeof(int)) + 15) & ~15;
+  size_t smem = token_list_bytes + wmma_smem_bytes();
+
+  mxfp4_wmma::mxfp4_moe_grouped_gemm_wmma_kernel<__nv_bfloat16>
+      <<<grid, block, smem, stream>>>(input, weights, weight_scales, biases,
+                                      indices, output, num_tokens, topk,
+                                      num_experts, N, K, has_bias,
+                                      input_has_topk_dim);
   CUDA_CHECK(cudaGetLastError());
 }

@@ -441,6 +441,174 @@ __launch_bounds__(MOE_BLOCK_N *WARP_SIZE) __global__
   }
 }
 
+// ============================================================================
+// Fused MoE Grouped GEMM Kernel
+// Discovers tokens per expert on-GPU, then does tiled GEMM with indirect I/O.
+// Grid: (CEILDIV(N, BLOCK_N), num_experts)
+// Phase 1: all threads scan indices to build per-expert token list in smem
+// Phase 2: outer M-tile loop with register-tiled GEMM, indirect reads/writes
+// ============================================================================
+
+template <typename T, int BLOCK_M, int BLOCK_N, int BLOCK_K, int TM, int TN>
+__global__ void mxfp4_moe_grouped_gemm_tiled(
+    const T *__restrict__ input, const uint8_t *__restrict__ weights,
+    const uint8_t *__restrict__ weight_scales, const T *__restrict__ biases,
+    const uint32_t *__restrict__ indices, T *__restrict__ output,
+    int num_tokens, int topk, int num_experts, int N, int K, bool has_bias,
+    bool input_has_topk_dim) {
+  constexpr int THREADS_N = BLOCK_N / TN;
+  constexpr int THREADS_M = BLOCK_M / TM;
+  constexpr int NUM_THREADS = THREADS_N * THREADS_M;
+  constexpr int BK_PAD = BLOCK_K + 1;
+
+  __shared__ float s_input[BLOCK_M][BK_PAD];
+  __shared__ float s_weight[BLOCK_N][BK_PAD];
+  __shared__ int num_my_tokens;
+  extern __shared__ int s_token_list[];
+
+  const uint32_t LUT0 = 0x03020100;
+  const uint32_t LUT1 = 0x0C080604;
+  const uint32_t LUT2 = 0xFDFEFF00;
+  const uint32_t LUT3 = 0xF4F8FAFC;
+
+  const int tid = threadIdx.y * THREADS_N + threadIdx.x;
+  const int expert_id = blockIdx.y;
+  const int n_base = blockIdx.x * BLOCK_N;
+  const int scale_stride = CEILDIV(K, MXFP4_BLOCK_SIZE);
+  const int total_work = num_tokens * topk;
+
+  const uint8_t *expert_weight = weights + (size_t)expert_id * N * (K / 2);
+  const uint8_t *expert_scale =
+      weight_scales + (size_t)expert_id * N * scale_stride;
+
+  // === Phase 1: Token discovery ===
+  if (tid == 0)
+    num_my_tokens = 0;
+  __syncthreads();
+
+  for (int i = tid; i < total_work; i += NUM_THREADS) {
+    if (__ldg(&indices[i]) == (uint32_t)expert_id) {
+      int pos = atomicAdd(&num_my_tokens, 1);
+      s_token_list[pos] = i;
+    }
+  }
+  __syncthreads();
+
+  const int M_expert = num_my_tokens;
+  if (M_expert == 0)
+    return;
+
+  // === Phase 2: Tiled GEMM with indirect I/O ===
+  for (int m_tile = 0; m_tile < CEILDIV(M_expert, BLOCK_M); m_tile++) {
+    float acc[TM][TN];
+#pragma unroll
+    for (int i = 0; i < TM; i++)
+#pragma unroll
+      for (int j = 0; j < TN; j++)
+        acc[i][j] = 0.0f;
+
+    for (int k_tile = 0; k_tile < K; k_tile += BLOCK_K) {
+      // Load input tile via indirection
+      for (int idx = tid; idx < BLOCK_M * BLOCK_K; idx += NUM_THREADS) {
+        const int lm = idx / BLOCK_K;
+        const int lk = idx % BLOCK_K;
+        const int work_pos = m_tile * BLOCK_M + lm;
+        const int gk = k_tile + lk;
+
+        float val = 0.0f;
+        if (work_pos < M_expert && gk < K) {
+          const int work_idx = s_token_list[work_pos];
+          const int input_row =
+              input_has_topk_dim ? work_idx : (work_idx / topk);
+          if constexpr (std::is_same_v<T, half>) {
+            val = __half2float(__ldg(&input[(size_t)input_row * K + gk]));
+          } else {
+            val = __bfloat162float(__ldg(&input[(size_t)input_row * K + gk]));
+          }
+        }
+        s_input[lm][lk] = val;
+      }
+
+      // Load weight tile with vectorized dequant
+      for (int ln = tid; ln < BLOCK_N; ln += NUM_THREADS) {
+        const int gn = n_base + ln;
+        if (gn < N) {
+          uint4 w_vec = *reinterpret_cast<const uint4 *>(
+              &expert_weight[(size_t)gn * (K / 2) + k_tile / 2]);
+          float scale =
+              e8m0_to_float(
+                  __ldg(&expert_scale[(size_t)gn * scale_stride +
+                                      k_tile / MXFP4_BLOCK_SIZE])) *
+              0.5f;
+          dequant_store_8(w_vec.x, scale, LUT0, LUT1, LUT2, LUT3,
+                          &s_weight[ln][0]);
+          dequant_store_8(w_vec.y, scale, LUT0, LUT1, LUT2, LUT3,
+                          &s_weight[ln][8]);
+          dequant_store_8(w_vec.z, scale, LUT0, LUT1, LUT2, LUT3,
+                          &s_weight[ln][16]);
+          dequant_store_8(w_vec.w, scale, LUT0, LUT1, LUT2, LUT3,
+                          &s_weight[ln][24]);
+        } else {
+#pragma unroll
+          for (int k = 0; k < BLOCK_K; k++)
+            s_weight[ln][k] = 0.0f;
+        }
+      }
+
+      __syncthreads();
+
+#pragma unroll
+      for (int k = 0; k < BLOCK_K; k++) {
+        float a_frag[TM];
+        float b_frag[TN];
+#pragma unroll
+        for (int i = 0; i < TM; i++)
+          a_frag[i] = s_input[threadIdx.y * TM + i][k];
+#pragma unroll
+        for (int j = 0; j < TN; j++)
+          b_frag[j] = s_weight[threadIdx.x * TN + j][k];
+#pragma unroll
+        for (int i = 0; i < TM; i++)
+#pragma unroll
+          for (int j = 0; j < TN; j++)
+            acc[i][j] = fmaf(a_frag[i], b_frag[j], acc[i][j]);
+      }
+
+      __syncthreads();
+    } // end k_tile
+
+    // Write output via indirection
+#pragma unroll
+    for (int i = 0; i < TM; i++) {
+      const int work_pos = m_tile * BLOCK_M + threadIdx.y * TM + i;
+      if (work_pos < M_expert) {
+        const int work_idx = s_token_list[work_pos];
+#pragma unroll
+        for (int j = 0; j < TN; j++) {
+          const int col = n_base + threadIdx.x * TN + j;
+          if (col < N) {
+            float val = acc[i][j];
+            if (has_bias && biases != nullptr) {
+              if constexpr (std::is_same_v<T, half>) {
+                val += __half2float(
+                    __ldg(&biases[(size_t)expert_id * N + col]));
+              } else {
+                val += __bfloat162float(
+                    __ldg(&biases[(size_t)expert_id * N + col]));
+              }
+            }
+            if constexpr (std::is_same_v<T, half>) {
+              output[(size_t)work_idx * N + col] = __float2half(val);
+            } else {
+              output[(size_t)work_idx * N + col] = __float2bfloat16(val);
+            }
+          }
+        }
+      }
+    }
+  } // end m_tile
+}
+
 } // namespace mxfp4_gemm
 
 // ============================================================================
@@ -525,5 +693,42 @@ extern "C" void launch_mxfp4_indexed_moe_gemm_bf16(
       <<<grid, block, shared_mem_size, stream>>>(
           input, weights, weight_scales, biases, indices, output, num_tokens,
           topk, num_experts, N, K, has_bias, input_has_topk_dim);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+extern "C" void launch_mxfp4_moe_grouped_gemm_f16(
+    const __half *input, const uint8_t *weights, const uint8_t *weight_scales,
+    const __half *biases, const uint32_t *indices, __half *output,
+    int num_tokens, int topk, int num_experts, int N, int K, bool has_bias,
+    bool input_has_topk_dim, cudaStream_t stream) {
+  constexpr int BM = 64, BN = 64, BK = 32, TM = 4, TN = 4;
+  dim3 block(BN / TN, BM / TM);
+  dim3 grid(CEILDIV(N, BN), num_experts);
+  size_t smem = num_tokens * topk * sizeof(int);
+
+  mxfp4_gemm::mxfp4_moe_grouped_gemm_tiled<half, BM, BN, BK, TM, TN>
+      <<<grid, block, smem, stream>>>(input, weights, weight_scales, biases,
+                                      indices, output, num_tokens, topk,
+                                      num_experts, N, K, has_bias,
+                                      input_has_topk_dim);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+extern "C" void launch_mxfp4_moe_grouped_gemm_bf16(
+    const __nv_bfloat16 *input, const uint8_t *weights,
+    const uint8_t *weight_scales, const __nv_bfloat16 *biases,
+    const uint32_t *indices, __nv_bfloat16 *output, int num_tokens, int topk,
+    int num_experts, int N, int K, bool has_bias, bool input_has_topk_dim,
+    cudaStream_t stream) {
+  constexpr int BM = 64, BN = 64, BK = 32, TM = 4, TN = 4;
+  dim3 block(BN / TN, BM / TM);
+  dim3 grid(CEILDIV(N, BN), num_experts);
+  size_t smem = num_tokens * topk * sizeof(int);
+
+  mxfp4_gemm::mxfp4_moe_grouped_gemm_tiled<__nv_bfloat16, BM, BN, BK, TM, TN>
+      <<<grid, block, smem, stream>>>(input, weights, weight_scales, biases,
+                                      indices, output, num_tokens, topk,
+                                      num_experts, N, K, has_bias,
+                                      input_has_topk_dim);
   CUDA_CHECK(cudaGetLastError());
 }
