@@ -353,11 +353,13 @@ impl Loader for NormalLoader {
         };
 
         // If auto, convert to Map if not using nccl
+        let mut max_kv_tokens: Option<usize> = None;
         if use_nccl || cfg!(feature = "ring") {
             mapper = DeviceMapSetting::DummyNccl {
                 nm_device: available_devices[0].clone(),
             };
         } else if let DeviceMapSetting::Auto(params) = mapper.clone() {
+            max_kv_tokens = Some(params.max_seq_len() * params.max_batch_size());
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
 
@@ -534,7 +536,6 @@ impl Loader for NormalLoader {
 
         let allow_immediate_cli = self.config.imatrix.is_none()
             && self.config.calibration_file.is_none()
-            && !device.is_cuda()
             && in_situ_quant.is_some();
 
         let mut immediate_ty = None;
@@ -555,10 +556,13 @@ impl Loader for NormalLoader {
 
         let use_immediate = allow_immediate_cli || has_override_isq;
         if use_immediate {
-            mistralrs_quant::set_immediate_isq_with_overrides(
+            let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
+            info!("Applying immediate ISQ in parallel on {num_threads} threads.");
+            mistralrs_quant::set_immediate_isq_with_pool(
                 immediate_ty,
                 immediate_predicates.clone(),
                 topology_overrides.clone(),
+                pool,
             );
         }
 
@@ -579,10 +583,18 @@ impl Loader for NormalLoader {
             );
         }
 
-        // Load onto the regular device if not using isq or if the calibration file is specified
+        // Load onto the regular device if not using isq or if the calibration file is specified.
+        // For immediate ISQ on discrete GPUs, load to CPU: the mapper will set the correct target
+        // device per-layer, and linear constructors will override to CPU for ISQ-targeted weights.
+        // On integrated/unified memory systems (e.g. Grace Blackwell), CPU and GPU share memory,
+        // so we load directly to the device.
         let load_device = if !loading_isq || self.config.calibration_file.is_some() {
             loading_isq = false;
-            device.clone()
+            if use_immediate && !crate::utils::normal::is_integrated_gpu(&device) {
+                Device::Cpu
+            } else {
+                device.clone()
+            }
         } else {
             Device::Cpu
         };
@@ -930,6 +942,8 @@ impl Loader for NormalLoader {
                     .map(Some)
                     .collect::<Vec<_>>(),
                 silent,
+                None,
+                max_kv_tokens,
             )?;
 
             let mut layer_devices = Vec::new();

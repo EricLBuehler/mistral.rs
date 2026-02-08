@@ -74,6 +74,7 @@ pub struct VisionPipeline {
     silent: bool,
     prefixer: Arc<dyn MultimodalPromptPrefixer>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    organization: IsqOrganization,
 
     // For full UQFF serialization
     template_filename: Option<PathBuf>,
@@ -127,6 +128,7 @@ pub struct VisionSpecificConfig {
     pub hf_cache_path: Option<PathBuf>,
     pub matformer_config_path: Option<PathBuf>,
     pub matformer_slice_name: Option<String>,
+    pub organization: IsqOrganization,
 }
 
 impl VisionLoaderBuilder {
@@ -318,6 +320,7 @@ impl Loader for VisionLoader {
         };
 
         // If auto, convert to Map if not using nccl
+        let mut max_kv_tokens: Option<usize> = None;
         if use_nccl {
             mapper = DeviceMapSetting::DummyNccl {
                 nm_device: available_devices[0].clone(),
@@ -325,6 +328,7 @@ impl Loader for VisionLoader {
         } else if let DeviceMapSetting::Auto(mut params) = mapper.clone() {
             // We can promote to vision params if we get text params
             params = params.maybe_promote_to_vision();
+            max_kv_tokens = Some(params.max_seq_len() * params.max_batch_size());
 
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
@@ -502,14 +506,18 @@ impl Loader for VisionLoader {
 
         let allow_immediate_cli = self.config.imatrix.is_none()
             && self.config.calibration_file.is_none()
-            && !device.is_cuda()
             && in_situ_quant.is_some();
 
         let mut immediate_ty = None;
         let mut immediate_predicates = Vec::new();
         if allow_immediate_cli {
             immediate_ty = in_situ_quant;
-            immediate_predicates = self.inner.immediate_isq_predicates(&config)?;
+            immediate_predicates =
+                if matches!(self.config.organization, IsqOrganization::MoeExpertsOnly) {
+                    self.inner.immediate_isq_predicates_moqe(&config)?
+                } else {
+                    self.inner.immediate_isq_predicates(&config)?
+                };
             info!("Applying ISQ to {in_situ_quant:?}");
             if immediate_predicates.is_empty() {
                 warn!("No predicates for this model and ISQ setting detected. ISQ will not be applied to any weights!");
@@ -518,10 +526,13 @@ impl Loader for VisionLoader {
 
         let use_immediate = allow_immediate_cli || has_override_isq;
         if use_immediate {
-            mistralrs_quant::set_immediate_isq_with_overrides(
+            let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
+            info!("Applying immediate ISQ in parallel on {num_threads} threads.");
+            mistralrs_quant::set_immediate_isq_with_pool(
                 immediate_ty,
                 immediate_predicates.clone(),
                 topology_overrides.clone(),
+                pool,
             );
         }
 
@@ -542,10 +553,18 @@ impl Loader for VisionLoader {
             );
         }
 
-        // Load onto the regular device if not using isq or if the calibration file is specified
+        // Load onto the regular device if not using isq or if the calibration file is specified.
+        // For immediate ISQ on discrete GPUs, load to CPU: the mapper will set the correct target
+        // device per-layer, and linear constructors will override to CPU for ISQ-targeted weights.
+        // On integrated/unified memory systems (e.g. Grace Blackwell), CPU and GPU share memory,
+        // so we load directly to the device.
         let load_device = if !loading_isq || self.config.calibration_file.is_some() {
             loading_isq = false;
-            device.clone()
+            if use_immediate && !crate::utils::normal::is_integrated_gpu(&device) {
+                Device::Cpu
+            } else {
+                device.clone()
+            }
         } else {
             Device::Cpu
         };
@@ -567,7 +586,7 @@ impl Loader for VisionLoader {
                 &config,
                 loading_isq,
                 self.config.from_uqff.is_some(),
-                IsqOrganization::Default,
+                self.config.organization,
                 &*self.inner,
                 paths.as_ref(),
             )?;
@@ -602,6 +621,7 @@ impl Loader for VisionLoader {
                     self.config.from_uqff.is_some(),
                     device.clone(),
                     attention_mechanism,
+                    matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress,
                     matformer_slicing_config.clone(),
                 ),
@@ -669,7 +689,10 @@ impl Loader for VisionLoader {
 
             // NOTE: We ONLY calibrate the text bits of these models!!
             // So only those should be tracked!
-            model.begin_track_stats()?;
+            match self.config.organization {
+                IsqOrganization::Default => model.begin_track_stats()?,
+                IsqOrganization::MoeExpertsOnly => model.begin_track_stats_moe_experts_only()?,
+            }
 
             const CHUNK_SIZE: usize = 1024;
             let n_chunks: usize = tokens.len().div_ceil(CHUNK_SIZE);
@@ -757,7 +780,7 @@ impl Loader for VisionLoader {
                 self.config.topology.as_ref(),
                 silent,
                 imatrix_source,
-                IsqOrganization::Default,
+                self.config.organization,
                 should_quantize_pass,
                 self.config.write_uqff.as_ref(),
                 UqffFullSer {
@@ -795,6 +818,8 @@ impl Loader for VisionLoader {
                 &device,
                 &layer_devices,
                 silent,
+                None,
+                max_kv_tokens,
             )?;
             let cache_engine =
                 CacheEngine::new(model.config(), &cache_config, dtype, &device, layer_devices)?;
@@ -839,6 +864,7 @@ impl Loader for VisionLoader {
             preprocessor_config: Arc::new(preprocessor_config),
             topology: self.config.topology.clone(),
             silent,
+            organization: self.config.organization,
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
             config,
@@ -880,7 +906,7 @@ impl IsqPipelineMixin for VisionPipeline {
                 self.topology.as_ref(),
                 self.silent,
                 self.imatrix.as_ref().map(ImatrixDataSource::File),
-                IsqOrganization::Default,
+                self.organization,
                 true,
                 None,
                 UqffFullSer {

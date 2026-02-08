@@ -423,7 +423,7 @@ impl Loader for EmbeddingLoader {
             .as_ref()
             .is_some_and(|topology| topology.requires_post_quantization());
 
-        let allow_immediate_cli = !device.is_cuda() && in_situ_quant.is_some();
+        let allow_immediate_cli = in_situ_quant.is_some();
 
         let mut immediate_ty = None;
         let mut immediate_predicates = Vec::new();
@@ -438,10 +438,13 @@ impl Loader for EmbeddingLoader {
 
         let use_immediate = allow_immediate_cli || has_override_isq;
         if use_immediate {
-            mistralrs_quant::set_immediate_isq_with_overrides(
+            let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
+            info!("Applying immediate ISQ in parallel on {num_threads} threads.");
+            mistralrs_quant::set_immediate_isq_with_pool(
                 immediate_ty,
                 immediate_predicates.clone(),
                 topology_overrides.clone(),
+                pool,
             );
         }
 
@@ -453,10 +456,18 @@ impl Loader for EmbeddingLoader {
         };
         loading_isq |= topology_requires_post_quant;
 
-        // Load onto the regular device if not using isq
+        // Load onto the regular device if not using isq.
+        // For immediate ISQ on discrete GPUs, load to CPU: the mapper will set the correct target
+        // device per-layer, and linear constructors will override to CPU for ISQ-targeted weights.
+        // On integrated/unified memory systems (e.g. Grace Blackwell), CPU and GPU share memory,
+        // so we load directly to the device.
         let load_device = if !loading_isq {
             loading_isq = false;
-            device.clone()
+            if use_immediate && !crate::utils::normal::is_integrated_gpu(&device) {
+                Device::Cpu
+            } else {
+                device.clone()
+            }
         } else {
             Device::Cpu
         };

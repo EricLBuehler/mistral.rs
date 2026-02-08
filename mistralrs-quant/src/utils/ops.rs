@@ -3,6 +3,7 @@ use candle_core::{
     Result, Shape, Tensor, WithDType,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use rayon::slice::ParallelSliceMut;
 
 use std::{
     fmt::Display,
@@ -1852,15 +1853,313 @@ pub fn gptoss_swiglu_interleaved(
 ///   mask: Optional [batch, 1, q_len, k_len] - attention mask (0 = attend, -inf = mask)
 ///
 /// Returns: [batch, heads, q_len, k_len] - softmax probabilities (sink dropped from normalization)
-#[cfg(feature = "cuda")]
+struct SoftmaxWithSinks {
+    sinks: Tensor,
+    num_heads: usize,
+    q_len: usize,
+    k_len: usize,
+}
+
+impl CustomOp1 for SoftmaxWithSinks {
+    fn name(&self) -> &'static str {
+        "softmax-with-sinks"
+    }
+
+    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
+        use half::{bf16, f16};
+
+        let out_shape = layout.shape().clone();
+        let total_rows = out_shape.elem_count() / self.k_len;
+        let k_len = self.k_len;
+        let num_heads = self.num_heads;
+        let q_len = self.q_len;
+        let offset = layout.start_offset();
+
+        let sinks_data = self.sinks.storage_and_layout();
+        let sinks_cpu = match &*sinks_data.0 {
+            candle_core::Storage::Cpu(s) => s,
+            _ => candle_core::bail!("softmax_with_sinks cpu_fwd: sinks must be on CPU"),
+        };
+        let sinks_offset = sinks_data.1.start_offset();
+
+        match storage.dtype() {
+            DType::F32 => {
+                let logits = storage.as_slice::<f32>()?;
+                let sinks_vals = sinks_cpu.as_slice::<f32>()?;
+
+                let mut result = vec![0f32; total_rows * k_len];
+                result
+                    .par_chunks_mut(k_len)
+                    .enumerate()
+                    .for_each(|(row, out_row)| {
+                        let h = (row / q_len) % num_heads;
+                        let sink_val = sinks_vals[sinks_offset + h];
+                        let row_start = offset + row * k_len;
+
+                        let mut max_val = sink_val;
+                        for k in 0..k_len {
+                            let v = logits[row_start + k];
+                            if v > max_val {
+                                max_val = v;
+                            }
+                        }
+
+                        let mut sum = (sink_val - max_val).exp();
+                        for k in 0..k_len {
+                            let e = (logits[row_start + k] - max_val).exp();
+                            out_row[k] = e;
+                            sum += e;
+                        }
+
+                        let inv_sum = 1.0 / sum;
+                        for item in out_row.iter_mut().take(k_len) {
+                            *item *= inv_sum;
+                        }
+                    });
+
+                Ok((CpuStorage::F32(result), out_shape))
+            }
+            DType::F16 => {
+                let logits = storage.as_slice::<f16>()?;
+                let sinks_vals = sinks_cpu.as_slice::<f16>()?;
+
+                let mut result = vec![f16::ZERO; total_rows * k_len];
+                result
+                    .par_chunks_mut(k_len)
+                    .enumerate()
+                    .for_each(|(row, out_row)| {
+                        let h = (row / q_len) % num_heads;
+                        let sink_val = sinks_vals[sinks_offset + h].to_f32();
+                        let row_start = offset + row * k_len;
+
+                        let mut max_val = sink_val;
+                        for k in 0..k_len {
+                            let v = logits[row_start + k].to_f32();
+                            if v > max_val {
+                                max_val = v;
+                            }
+                        }
+
+                        let mut sum = (sink_val - max_val).exp();
+                        for k in 0..k_len {
+                            let e = (logits[row_start + k].to_f32() - max_val).exp();
+                            out_row[k] = f16::from_f32(e);
+                            sum += e;
+                        }
+
+                        let inv_sum = 1.0f32 / sum;
+                        for item in out_row.iter_mut().take(k_len) {
+                            *item = f16::from_f32(item.to_f32() * inv_sum);
+                        }
+                    });
+
+                Ok((CpuStorage::F16(result), out_shape))
+            }
+            DType::BF16 => {
+                let logits = storage.as_slice::<bf16>()?;
+                let sinks_vals = sinks_cpu.as_slice::<bf16>()?;
+
+                let mut result = vec![bf16::ZERO; total_rows * k_len];
+                result
+                    .par_chunks_mut(k_len)
+                    .enumerate()
+                    .for_each(|(row, out_row)| {
+                        let h = (row / q_len) % num_heads;
+                        let sink_val = sinks_vals[sinks_offset + h].to_f32();
+                        let row_start = offset + row * k_len;
+
+                        let mut max_val = sink_val;
+                        for k in 0..k_len {
+                            let v = logits[row_start + k].to_f32();
+                            if v > max_val {
+                                max_val = v;
+                            }
+                        }
+
+                        let mut sum = (sink_val - max_val).exp();
+                        for k in 0..k_len {
+                            let e = (logits[row_start + k].to_f32() - max_val).exp();
+                            out_row[k] = bf16::from_f32(e);
+                            sum += e;
+                        }
+
+                        let inv_sum = 1.0f32 / sum;
+                        for item in out_row.iter_mut().take(k_len) {
+                            *item = bf16::from_f32(item.to_f32() * inv_sum);
+                        }
+                    });
+
+                Ok((CpuStorage::BF16(result), out_shape))
+            }
+            other => candle_core::bail!("softmax_with_sinks: unsupported dtype {:?}", other),
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(&self, storage: &CudaStorage, layout: &Layout) -> Result<(CudaStorage, Shape)> {
+        use half::{bf16, f16};
+
+        let device = storage.device();
+        let dtype = storage.dtype();
+        let n_elements = layout.shape().elem_count();
+        let out_shape = layout.shape().clone();
+        let stream = device.cuda_stream().cu_stream();
+        let logits_offset = layout.start_offset();
+
+        let batch_size = out_shape.dims()[0];
+
+        let sinks_data = self.sinks.storage_and_layout();
+        let sinks_cuda = match &*sinks_data.0 {
+            candle_core::Storage::Cuda(s) => s,
+            _ => candle_core::bail!("softmax_with_sinks cuda_fwd: sinks must be on CUDA"),
+        };
+        let sinks_offset = sinks_data.1.start_offset();
+
+        match dtype {
+            DType::F16 => {
+                let output = device.alloc_zeros::<f16>(n_elements)?;
+                let logits_slice = storage.as_cuda_slice::<f16>()?;
+                let sinks_slice = sinks_cuda.as_cuda_slice::<f16>()?;
+
+                let (logits_ptr, _l_guard) = slice_ptr(logits_slice, logits_offset);
+                let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, sinks_offset);
+                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+                unsafe {
+                    ffi::softmax_with_sinks_f16(
+                        logits_ptr as *const c_void,
+                        sinks_ptr as *const c_void,
+                        std::ptr::null(), // mask pre-applied
+                        out_ptr as *mut c_void,
+                        batch_size as i32,
+                        self.num_heads as i32,
+                        self.q_len as i32,
+                        self.k_len as i32,
+                        1.0,
+                        stream,
+                    );
+                }
+
+                drop(_o_guard);
+                let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+                Ok((out_storage, out_shape))
+            }
+            DType::BF16 => {
+                let output = device.alloc_zeros::<bf16>(n_elements)?;
+                let logits_slice = storage.as_cuda_slice::<bf16>()?;
+                let sinks_slice = sinks_cuda.as_cuda_slice::<bf16>()?;
+
+                let (logits_ptr, _l_guard) = slice_ptr(logits_slice, logits_offset);
+                let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, sinks_offset);
+                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+                unsafe {
+                    ffi::softmax_with_sinks_bf16(
+                        logits_ptr as *const c_void,
+                        sinks_ptr as *const c_void,
+                        std::ptr::null(),
+                        out_ptr as *mut c_void,
+                        batch_size as i32,
+                        self.num_heads as i32,
+                        self.q_len as i32,
+                        self.k_len as i32,
+                        1.0,
+                        stream,
+                    );
+                }
+
+                drop(_o_guard);
+                let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+                Ok((out_storage, out_shape))
+            }
+            DType::F32 => {
+                let output = device.alloc_zeros::<f32>(n_elements)?;
+                let logits_slice = storage.as_cuda_slice::<f32>()?;
+                let sinks_slice = sinks_cuda.as_cuda_slice::<f32>()?;
+
+                let (logits_ptr, _l_guard) = slice_ptr(logits_slice, logits_offset);
+                let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, sinks_offset);
+                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+
+                unsafe {
+                    ffi::softmax_with_sinks_f32(
+                        logits_ptr as *const c_void,
+                        sinks_ptr as *const c_void,
+                        std::ptr::null(),
+                        out_ptr as *mut c_void,
+                        batch_size as i32,
+                        self.num_heads as i32,
+                        self.q_len as i32,
+                        self.k_len as i32,
+                        1.0,
+                        stream,
+                    );
+                }
+
+                drop(_o_guard);
+                let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+                Ok((out_storage, out_shape))
+            }
+            _ => candle_core::bail!("softmax_with_sinks: unsupported dtype {:?}", dtype),
+        }
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        storage: &candle_core::MetalStorage,
+        layout: &Layout,
+    ) -> Result<(candle_core::MetalStorage, Shape)> {
+        let dtype = storage.dtype();
+        let n_elements = layout.shape().elem_count();
+        let out_shape = layout.shape().clone();
+        let total_rows = n_elements / self.k_len;
+
+        let device = storage.device();
+        let encoder = device.command_encoder()?;
+        encoder.set_label("softmax-with-sinks");
+
+        let output = device.new_buffer(n_elements, dtype, "softmax-with-sinks-output")?;
+
+        let sinks_data = self.sinks.storage_and_layout();
+        let sinks_metal = match &*sinks_data.0 {
+            candle_core::Storage::Metal(s) => s,
+            _ => candle_core::bail!("softmax_with_sinks metal_fwd: sinks must be on Metal"),
+        };
+        let sinks_offset = sinks_data.1.start_offset() * self.sinks.dtype().size_in_bytes();
+
+        crate::metal_kernels::call_softmax_with_sinks(
+            device.device(),
+            &encoder,
+            &crate::metal_kernels::Kernels::new(),
+            dtype,
+            storage.buffer(),
+            layout.start_offset() * dtype.size_in_bytes(),
+            sinks_metal.buffer(),
+            sinks_offset,
+            &output,
+            self.num_heads as u32,
+            self.q_len as u32,
+            self.k_len as u32,
+            total_rows,
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        let newstorage = candle_core::MetalStorage::new(output, device.clone(), n_elements, dtype);
+        Ok((newstorage, out_shape))
+    }
+}
+
 pub fn softmax_with_sinks(
     logits: &Tensor,
     sinks: &Tensor,
     mask: Option<&Tensor>,
 ) -> Result<Tensor> {
-    use half::{bf16, f16};
-    use std::ffi::c_void;
-
+    let logits = if let Some(mask) = mask {
+        logits.broadcast_add(mask)?
+    } else {
+        logits.clone()
+    };
     let logits = logits.contiguous()?;
     let sinks = sinks.contiguous()?;
 
@@ -1872,7 +2171,6 @@ pub fn softmax_with_sinks(
         );
     }
 
-    let batch_size = dims[0];
     let num_heads = dims[1];
     let q_len = dims[2];
     let k_len = dims[3];
@@ -1885,173 +2183,240 @@ pub fn softmax_with_sinks(
         );
     }
 
-    let device = match logits.device() {
-        candle_core::Device::Cuda(dev) => dev,
-        _ => candle_core::bail!("softmax_with_sinks requires CUDA device"),
-    };
+    logits.apply_op1_no_bwd(&SoftmaxWithSinks {
+        sinks: sinks.clone(),
+        num_heads,
+        q_len,
+        k_len,
+    })
+}
 
-    let dtype = logits.dtype();
-    let n_elements = logits.elem_count();
+// ============================================================================
+// Fused flash attention with sinks (Metal)
+// ============================================================================
 
-    let logits_storage = logits.storage_and_layout().0;
-    let sinks_storage = sinks.storage_and_layout().0;
+#[allow(dead_code)]
+struct FlashAttnSinksMetal {
+    key: Tensor,
+    value: Tensor,
+    sinks: Tensor, // [num_heads], always f32
+    softmax_scale: f32,
+    window_size: usize,
+}
 
-    let logits_cuda = match &*logits_storage {
-        candle_core::Storage::Cuda(s) => s,
-        _ => candle_core::bail!("Expected CUDA storage for logits"),
-    };
-    let sinks_cuda = match &*sinks_storage {
-        candle_core::Storage::Cuda(s) => s,
-        _ => candle_core::bail!("Expected CUDA storage for sinks"),
-    };
-
-    // Handle optional mask
-    let mask = if let Some(m) = mask {
-        Some(m.contiguous()?)
-    } else {
-        None
-    };
-
-    let stream = device.cuda_stream().cu_stream();
-
-    match dtype {
-        DType::F16 => {
-            let output = device.alloc_zeros::<f16>(n_elements)?;
-
-            let logits_slice = logits_cuda.as_cuda_slice::<f16>()?;
-            let sinks_slice = sinks_cuda.as_cuda_slice::<f16>()?;
-
-            let (logits_ptr, _l_guard) = slice_ptr(logits_slice, 0);
-            let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, 0);
-            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
-
-            let mask_ptr = if let Some(ref m) = mask {
-                let m_storage = m.storage_and_layout().0;
-                let m_cuda = match &*m_storage {
-                    candle_core::Storage::Cuda(s) => s,
-                    _ => candle_core::bail!("Expected CUDA storage for mask"),
-                };
-                let m_slice = m_cuda.as_cuda_slice::<f16>()?;
-                let (ptr, _guard) = slice_ptr(m_slice, 0);
-                ptr as *const c_void
-            } else {
-                std::ptr::null()
-            };
-
-            unsafe {
-                ffi::softmax_with_sinks_f16(
-                    logits_ptr as *const c_void,
-                    sinks_ptr as *const c_void,
-                    mask_ptr,
-                    out_ptr as *mut c_void,
-                    batch_size as i32,
-                    num_heads as i32,
-                    q_len as i32,
-                    k_len as i32,
-                    1.0, // scale already applied to logits
-                    stream,
-                );
-            }
-
-            drop(_o_guard);
-            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
-            Ok(Tensor::from((
-                candle_core::Storage::Cuda(out_storage),
-                logits.shape().clone(),
-            )))
-        }
-        DType::BF16 => {
-            let output = device.alloc_zeros::<bf16>(n_elements)?;
-
-            let logits_slice = logits_cuda.as_cuda_slice::<bf16>()?;
-            let sinks_slice = sinks_cuda.as_cuda_slice::<bf16>()?;
-
-            let (logits_ptr, _l_guard) = slice_ptr(logits_slice, 0);
-            let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, 0);
-            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
-
-            let mask_ptr = if let Some(ref m) = mask {
-                let m_storage = m.storage_and_layout().0;
-                let m_cuda = match &*m_storage {
-                    candle_core::Storage::Cuda(s) => s,
-                    _ => candle_core::bail!("Expected CUDA storage for mask"),
-                };
-                let m_slice = m_cuda.as_cuda_slice::<bf16>()?;
-                let (ptr, _guard) = slice_ptr(m_slice, 0);
-                ptr as *const c_void
-            } else {
-                std::ptr::null()
-            };
-
-            unsafe {
-                ffi::softmax_with_sinks_bf16(
-                    logits_ptr as *const c_void,
-                    sinks_ptr as *const c_void,
-                    mask_ptr,
-                    out_ptr as *mut c_void,
-                    batch_size as i32,
-                    num_heads as i32,
-                    q_len as i32,
-                    k_len as i32,
-                    1.0,
-                    stream,
-                );
-            }
-
-            drop(_o_guard);
-            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
-            Ok(Tensor::from((
-                candle_core::Storage::Cuda(out_storage),
-                logits.shape().clone(),
-            )))
-        }
-        DType::F32 => {
-            let output = device.alloc_zeros::<f32>(n_elements)?;
-
-            let logits_slice = logits_cuda.as_cuda_slice::<f32>()?;
-            let sinks_slice = sinks_cuda.as_cuda_slice::<f32>()?;
-
-            let (logits_ptr, _l_guard) = slice_ptr(logits_slice, 0);
-            let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, 0);
-            let (out_ptr, _o_guard) = slice_ptr(&output, 0);
-
-            let mask_ptr = if let Some(ref m) = mask {
-                let m_storage = m.storage_and_layout().0;
-                let m_cuda = match &*m_storage {
-                    candle_core::Storage::Cuda(s) => s,
-                    _ => candle_core::bail!("Expected CUDA storage for mask"),
-                };
-                let m_slice = m_cuda.as_cuda_slice::<f32>()?;
-                let (ptr, _guard) = slice_ptr(m_slice, 0);
-                ptr as *const c_void
-            } else {
-                std::ptr::null()
-            };
-
-            unsafe {
-                ffi::softmax_with_sinks_f32(
-                    logits_ptr as *const c_void,
-                    sinks_ptr as *const c_void,
-                    mask_ptr,
-                    out_ptr as *mut c_void,
-                    batch_size as i32,
-                    num_heads as i32,
-                    q_len as i32,
-                    k_len as i32,
-                    1.0,
-                    stream,
-                );
-            }
-
-            drop(_o_guard);
-            let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
-            Ok(Tensor::from((
-                candle_core::Storage::Cuda(out_storage),
-                logits.shape().clone(),
-            )))
-        }
-        _ => candle_core::bail!("softmax_with_sinks: unsupported dtype {:?}", dtype),
+impl CustomOp1 for FlashAttnSinksMetal {
+    fn name(&self) -> &'static str {
+        "flash-attn-sinks-metal"
     }
+
+    fn cpu_fwd(&self, _storage: &CpuStorage, _layout: &Layout) -> Result<(CpuStorage, Shape)> {
+        candle_core::bail!(
+            "flash_attn_sinks_metal: no CPU support, use softmax_with_sinks fallback"
+        )
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        q_storage: &candle_core::MetalStorage,
+        q_layout: &Layout,
+    ) -> Result<(candle_core::MetalStorage, Shape)> {
+        let dtype = q_storage.dtype();
+        let out_shape = q_layout.shape().clone();
+        let (batch_size, num_heads, q_len, head_dim) = q_layout.shape().dims4()?;
+
+        // Extract K storage
+        let (k_s, k_l) = self.key.storage_and_layout();
+        let k_metal = match &*k_s {
+            candle_core::Storage::Metal(s) => s,
+            _ => candle_core::bail!("flash_attn_sinks_metal: key must be a Metal tensor"),
+        };
+        let (_, num_kv_heads, k_len, _) = k_l.shape().dims4()?;
+
+        // Extract V storage
+        let (v_s, v_l) = self.value.storage_and_layout();
+        let v_metal = match &*v_s {
+            candle_core::Storage::Metal(s) => s,
+            _ => candle_core::bail!("flash_attn_sinks_metal: value must be a Metal tensor"),
+        };
+
+        // Extract sinks storage
+        let (s_s, s_l) = self.sinks.storage_and_layout();
+        let sinks_metal = match &*s_s {
+            candle_core::Storage::Metal(s) => s,
+            _ => candle_core::bail!("flash_attn_sinks_metal: sinks must be a Metal tensor"),
+        };
+        let sinks_offset = s_l.start_offset() * self.sinks.dtype().size_in_bytes();
+
+        let device = q_storage.device();
+        let elem_count = out_shape.elem_count();
+        let output = device.new_buffer(elem_count, dtype, "flash-attn-sinks-output")?;
+
+        let encoder = device.command_encoder()?;
+        encoder.set_label("flash-attn-sinks");
+
+        let kernels = crate::metal_kernels::Kernels::new();
+
+        let q_offset = q_layout.start_offset() * dtype.size_in_bytes();
+        let k_offset = k_l.start_offset() * dtype.size_in_bytes();
+        let v_offset = v_l.start_offset() * dtype.size_in_bytes();
+
+        if q_len == 1 {
+            // Decode path: use sdpa_vector_with_sinks
+            let gqa_factor = (num_heads / num_kv_heads) as i32;
+            let b = batch_size * num_heads;
+
+            // k_stride and v_stride: stride between consecutive KV positions in the head dimension
+            // For contiguous [B, Hkv, S, D] layout: stride between KV heads = S * D
+            let k_stride = k_l.stride()[1]; // stride for kv_head dim (= k_len * head_dim)
+            let v_stride = v_l.stride()[1];
+
+            let two_pass_threshold = 1024;
+            if k_len >= two_pass_threshold {
+                // Two-pass for long contexts
+                let blocks: usize = 32;
+                let intermediate = device.new_buffer(
+                    b * blocks * head_dim,
+                    DType::F32,
+                    "sdpa-sinks-intermediate",
+                )?;
+                let sums = device.new_buffer(b * blocks, DType::F32, "sdpa-sinks-sums")?;
+                let maxs = device.new_buffer(b * blocks, DType::F32, "sdpa-sinks-maxs")?;
+
+                crate::metal_kernels::call_sdpa_vector_with_sinks_2pass(
+                    device.device(),
+                    &encoder,
+                    &kernels,
+                    dtype,
+                    q_storage.buffer(),
+                    q_offset,
+                    k_metal.buffer(),
+                    k_offset,
+                    v_metal.buffer(),
+                    v_offset,
+                    sinks_metal.buffer(),
+                    sinks_offset,
+                    &output,
+                    &intermediate,
+                    &sums,
+                    &maxs,
+                    head_dim,
+                    gqa_factor,
+                    k_len as i32,
+                    k_stride,
+                    v_stride,
+                    self.softmax_scale,
+                    b,
+                )
+                .map_err(candle_core::Error::wrap)?;
+            } else {
+                // Single-pass
+                crate::metal_kernels::call_sdpa_vector_with_sinks(
+                    device.device(),
+                    &encoder,
+                    &kernels,
+                    dtype,
+                    q_storage.buffer(),
+                    q_offset,
+                    k_metal.buffer(),
+                    k_offset,
+                    v_metal.buffer(),
+                    v_offset,
+                    sinks_metal.buffer(),
+                    sinks_offset,
+                    &output,
+                    head_dim,
+                    gqa_factor,
+                    k_len as i32,
+                    k_stride,
+                    v_stride,
+                    self.softmax_scale,
+                    b,
+                )
+                .map_err(candle_core::Error::wrap)?;
+            }
+        } else {
+            // Prefill path: use flash_attn_sinks_kernel
+            crate::metal_kernels::call_flash_attn_sinks_prefill(
+                device.device(),
+                &encoder,
+                &kernels,
+                dtype,
+                q_storage.buffer(),
+                q_offset,
+                k_metal.buffer(),
+                k_offset,
+                v_metal.buffer(),
+                v_offset,
+                sinks_metal.buffer(),
+                sinks_offset,
+                &output,
+                self.softmax_scale,
+                batch_size,
+                q_len,
+                k_len,
+                num_heads,
+                num_kv_heads,
+                head_dim,
+                self.window_size,
+            )
+            .map_err(candle_core::Error::wrap)?;
+        }
+
+        let newstorage = candle_core::MetalStorage::new(output, device.clone(), elem_count, dtype);
+        Ok((newstorage, out_shape))
+    }
+}
+
+/// Fused flash attention with per-head sinks for Metal devices.
+///
+/// Uses fused Metal kernels that compute Q·K^T → softmax_with_sinks → ×V
+/// without materializing the N×N attention matrix. Per-head sinks contribute
+/// to the softmax denominator without an associated value contribution.
+///
+/// Causal masking is applied for prefill (q_len > 1). For decode (q_len == 1),
+/// all K/V positions are attended to.
+///
+/// # Arguments
+///
+/// * `q` - Query tensor `[batch_size, num_heads, q_len, head_dim]`
+/// * `k` - Key tensor `[batch_size, num_kv_heads, k_len, head_dim]`
+/// * `v` - Value tensor `[batch_size, num_kv_heads, k_len, head_dim]`
+/// * `sinks` - Per-head sink values `[num_heads]` (will be cast to f32)
+/// * `softmax_scale` - Scaling factor (typically `1 / sqrt(head_dim)`)
+/// * `window_size` - Sliding window size (0 = full attention)
+///
+/// Returns `[batch_size, num_heads, q_len, head_dim]`
+#[allow(clippy::too_many_arguments)]
+pub fn flash_attn_sinks_metal(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    sinks: Option<&Tensor>,
+    softmax_scale: f32,
+    window_size: usize,
+) -> Result<Tensor> {
+    let q = q.contiguous()?;
+    let k = k.contiguous()?;
+    let v = v.contiguous()?;
+
+    let sinks = match sinks {
+        Some(s) => s.to_dtype(DType::F32)?.contiguous()?,
+        None => {
+            // No sinks: create zeros (no effect on softmax)
+            let num_heads = q.dim(1)?;
+            Tensor::zeros(num_heads, DType::F32, q.device())?
+        }
+    };
+
+    let op = FlashAttnSinksMetal {
+        key: k.clone(),
+        value: v.clone(),
+        sinks,
+        softmax_scale,
+        window_size,
+    };
+    q.apply_op1_no_bwd(&op)
 }
 
 /// Activation enum for fused GLU kernel.

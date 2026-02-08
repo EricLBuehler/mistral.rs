@@ -29,6 +29,7 @@ mod hqq;
 mod imatrix;
 mod lora;
 mod mxfp4;
+mod pending_layer;
 mod pertensor_fp8;
 pub mod rotary;
 pub mod safetensors;
@@ -69,14 +70,15 @@ pub use lora::{
     LoraAdapter, LoraConfig, StaticLoraConfig, MULTI_LORA_DELIMITER,
 };
 pub use mxfp4::MXFP4Layer;
+pub use pending_layer::PendingIsqLayer;
 pub use pertensor_fp8::PerTensorFP8Linear;
 pub use unquantized::UnquantLinear;
+pub use utils::flash_attn_sinks_metal;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_interleaved;
 pub use utils::isq::apply_immediate_isq;
-#[cfg(feature = "cuda")]
 pub use utils::softmax_with_sinks;
 pub use utils::{fused_glu, GluActivationType};
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
@@ -91,6 +93,10 @@ pub struct ImmediateIsqParams {
     pub ty: Option<IsqType>,
     pub predicates: Vec<Regex>,
     pub overrides: Vec<ImmediateIsqOverride>,
+    /// Thread pool for parallel immediate ISQ on discrete GPUs.
+    /// When `Some`, `apply_immediate_isq` will spawn quantization tasks
+    /// on this pool and return `PendingIsqLayer` wrappers.
+    pub pool: Option<Arc<rayon::ThreadPool>>,
 }
 
 #[derive(Clone, Debug)]
@@ -111,13 +117,15 @@ thread_local! {
 }
 
 pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>) {
-    set_immediate_isq_with_overrides(isq, predicates, Vec::new());
+    let (pool, _) = create_isq_thread_pool(isq);
+    set_immediate_isq_with_pool(isq, predicates, Vec::new(), pool);
 }
 
-pub fn set_immediate_isq_with_overrides(
+pub fn set_immediate_isq_with_pool(
     isq: Option<IsqType>,
     predicates: Vec<Regex>,
     overrides: Vec<ImmediateIsqOverride>,
+    pool: rayon::ThreadPool,
 ) {
     ENGINE_IMMEDIATE_ISQ.with(|cell| {
         *cell.borrow_mut() = Some(ImmediateIsqParams {
@@ -125,8 +133,33 @@ pub fn set_immediate_isq_with_overrides(
             ty: isq,
             predicates,
             overrides,
+            pool: Some(Arc::new(pool)),
         });
     });
+}
+
+/// Create a rayon thread pool for parallel immediate ISQ.
+/// Returns `(pool, num_threads)` so callers can log the thread count.
+///
+/// Thread count is based on the quantization type:
+/// - GGML types (Q2K-Q8K) and F8E4M3: `rayon::current_num_threads()` (CPU quantization)
+/// - HQQ/AFQ: 1 thread (GPU quantization, serialized by `QuantizeOntoGuard`)
+pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize) {
+    let num_threads = if std::env::var("MISTRALRS_ISQ_SINGLETHREAD").is_ok() {
+        1
+    } else if let Some(ty) = ty {
+        ty.get_max_isq_cpu_threads()
+            .map(usize::from)
+            .unwrap_or_else(rayon::current_num_threads)
+    } else {
+        rayon::current_num_threads()
+    };
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build()
+        .expect("Failed to create ISQ thread pool");
+    (pool, num_threads)
 }
 
 pub fn get_immediate_isq() -> Option<ImmediateIsqParams> {

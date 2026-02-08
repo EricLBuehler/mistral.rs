@@ -47,6 +47,7 @@ fn main() -> Result<(), String> {
     println!("cargo::rustc-check-cfg=cfg(has_scalar_fp8_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_vector_fp8_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_mxfp4_wmma_kernels)");
 
     #[cfg(feature = "cuda")]
     {
@@ -81,6 +82,8 @@ fn main() -> Result<(), String> {
             println!("cargo:rustc-cfg=has_blockwise_fp8_kernels");
             println!("cargo:rustc-cfg=has_scalar_fp8_kernels");
             println!("cargo:rustc-cfg=has_vector_fp8_kernels");
+            // WMMA tensor core MXFP4 kernel (FP16/BF16 WMMA requires SM >= 80)
+            println!("cargo:rustc-cfg=has_mxfp4_wmma_kernels");
         }
         // MXFP4 is always enabled with CUDA (uses LUT-based dequantization)
         println!("cargo:rustc-cfg=has_mxfp4_kernels");
@@ -88,7 +91,7 @@ fn main() -> Result<(), String> {
         let excluded_files = if cc_over_80 {
             vec!["dummy_*.cu", "*_dummy.cu"]
         } else {
-            vec!["marlin_*.cu", "*_fp8.cu", "*_fp8_gemm.cu"]
+            vec!["marlin_*.cu", "*_fp8.cu", "*_fp8_gemm.cu", "*_wmma.cu"]
         };
         builder = builder.exclude(&excluded_files);
 
@@ -139,7 +142,7 @@ fn main() -> Result<(), String> {
         use std::process::Command;
         use std::{env, str};
 
-        const METAL_SOURCES: [&str; 12] = [
+        const METAL_SOURCES: [&str; 14] = [
             "bitwise",
             "blockwise_fp8",
             "bnb_dequantize",
@@ -150,6 +153,8 @@ fn main() -> Result<(), String> {
             "quantized",
             "scalar_fp8",
             "scan",
+            "sdpa_with_sinks",
+            "softmax_with_sinks",
             "sort",
             "copy",
         ];

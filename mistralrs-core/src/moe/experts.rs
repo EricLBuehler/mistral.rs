@@ -42,12 +42,18 @@ impl MoEExpertsBackend {
         loading_isq: bool,
         quantization_config: &Option<QuantizedConfig>,
     ) -> Self {
+        let has_immediate_isq = mistralrs_quant::get_immediate_isq().is_some();
         let use_fast = device.is_metal()
-            || (device.is_cuda() && (loading_isq || quantization_config.is_some()));
+            || (device.is_cuda()
+                && (loading_isq || quantization_config.is_some() || has_immediate_isq));
 
         if use_fast {
             Self::Fast
-        } else if quantization_config.is_none() && !loading_isq && device.is_cuda() {
+        } else if quantization_config.is_none()
+            && !loading_isq
+            && !has_immediate_isq
+            && device.is_cuda()
+        {
             Self::Fused
         } else {
             Self::Slow

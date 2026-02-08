@@ -226,6 +226,7 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
             hf_cache_path: device.hf_cache.clone(),
             matformer_config_path: None,
             matformer_slice_name: None,
+            organization: quantization.isq_organization,
         }),
 
         ModelType::Diffusion { model, device: _ } => Ok(ModelSelected::DiffusionPlain {

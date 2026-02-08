@@ -501,6 +501,7 @@ fn parse_which(
             hf_cache_path,
             matformer_config_path,
             matformer_slice_name,
+            organization,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
@@ -517,6 +518,7 @@ fn parse_which(
                 hf_cache_path,
                 matformer_config_path,
                 matformer_slice_name,
+                organization: organization.map(Into::into).unwrap_or_default(),
             },
             chat_template,
             tokenizer_json,
