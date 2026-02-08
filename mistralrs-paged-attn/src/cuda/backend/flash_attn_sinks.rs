@@ -175,9 +175,7 @@ pub fn flash_attn_sinks(
     let op = FlashAttnSinks {
         key: k.clone(),
         value: v.clone(),
-        sinks: sinks
-            .map(|s| s.to_dtype(DType::F32))
-            .transpose()?,
+        sinks: sinks.map(|s| s.to_dtype(DType::F32)).transpose()?,
         softmax_scale,
         window_size,
     };

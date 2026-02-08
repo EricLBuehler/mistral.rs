@@ -1912,8 +1912,8 @@ impl CustomOp1 for SoftmaxWithSinks {
                         }
 
                         let inv_sum = 1.0 / sum;
-                        for k in 0..k_len {
-                            out_row[k] *= inv_sum;
+                        for item in out_row.iter_mut().take(k_len) {
+                            *item *= inv_sum;
                         }
                     });
 
@@ -1948,8 +1948,8 @@ impl CustomOp1 for SoftmaxWithSinks {
                         }
 
                         let inv_sum = 1.0f32 / sum;
-                        for k in 0..k_len {
-                            out_row[k] = f16::from_f32(out_row[k].to_f32() * inv_sum);
+                        for item in out_row.iter_mut().take(k_len) {
+                            *item = f16::from_f32(item.to_f32() * inv_sum);
                         }
                     });
 
@@ -1984,8 +1984,8 @@ impl CustomOp1 for SoftmaxWithSinks {
                         }
 
                         let inv_sum = 1.0f32 / sum;
-                        for k in 0..k_len {
-                            out_row[k] = bf16::from_f32(out_row[k].to_f32() * inv_sum);
+                        for item in out_row.iter_mut().take(k_len) {
+                            *item = bf16::from_f32(item.to_f32() * inv_sum);
                         }
                     });
 
@@ -2195,6 +2195,7 @@ pub fn softmax_with_sinks(
 // Fused flash attention with sinks (Metal)
 // ============================================================================
 
+#[allow(dead_code)]
 struct FlashAttnSinksMetal {
     key: Tensor,
     value: Tensor,
@@ -2209,7 +2210,9 @@ impl CustomOp1 for FlashAttnSinksMetal {
     }
 
     fn cpu_fwd(&self, _storage: &CpuStorage, _layout: &Layout) -> Result<(CpuStorage, Shape)> {
-        candle_core::bail!("flash_attn_sinks_metal: no CPU support, use softmax_with_sinks fallback")
+        candle_core::bail!(
+            "flash_attn_sinks_metal: no CPU support, use softmax_with_sinks fallback"
+        )
     }
 
     #[cfg(feature = "metal")]
@@ -2277,10 +2280,8 @@ impl CustomOp1 for FlashAttnSinksMetal {
                     DType::F32,
                     "sdpa-sinks-intermediate",
                 )?;
-                let sums =
-                    device.new_buffer(b * blocks, DType::F32, "sdpa-sinks-sums")?;
-                let maxs =
-                    device.new_buffer(b * blocks, DType::F32, "sdpa-sinks-maxs")?;
+                let sums = device.new_buffer(b * blocks, DType::F32, "sdpa-sinks-sums")?;
+                let maxs = device.new_buffer(b * blocks, DType::F32, "sdpa-sinks-maxs")?;
 
                 crate::metal_kernels::call_sdpa_vector_with_sinks_2pass(
                     device.device(),
@@ -2362,8 +2363,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
             .map_err(candle_core::Error::wrap)?;
         }
 
-        let newstorage =
-            candle_core::MetalStorage::new(output, device.clone(), elem_count, dtype);
+        let newstorage = candle_core::MetalStorage::new(output, device.clone(), elem_count, dtype);
         Ok((newstorage, out_shape))
     }
 }

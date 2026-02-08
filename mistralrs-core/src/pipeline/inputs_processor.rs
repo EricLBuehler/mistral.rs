@@ -254,17 +254,16 @@ pub mod text_models_inputs_processor {
                         // Pad [0,start_idx) with _PAD_SLOT_ID
                         slot_mapping.push(_PAD_SLOT_ID);
                     } else {
-                        let block_number =
-                            if i / paged_attn_metadata.block_size >= table.len() {
-                                panic!(
+                        let block_number = if i / paged_attn_metadata.block_size >= table.len() {
+                            panic!(
                                     "Block table is too small (prompt)! i={} block_size={} table_len={}",
                                     i,
                                     paged_attn_metadata.block_size,
                                     table.len()
                                 );
-                            } else {
-                                table.get(i / paged_attn_metadata.block_size).unwrap()
-                            };
+                        } else {
+                            table.get(i / paged_attn_metadata.block_size).unwrap()
+                        };
                         let block_offset = i % paged_attn_metadata.block_size;
                         // Use checked arithmetic to prevent overflow
                         let slot = block_number
@@ -499,8 +498,7 @@ pub mod text_models_inputs_processor {
                         // May be up to (block_size - 1) larger than sliding_window when
                         // the window start is not block-aligned.
                         let window_start = seq.len().saturating_sub(sliding_window);
-                        let block_aligned_start = (window_start
-                            / paged_attn_metadata.block_size)
+                        let block_aligned_start = (window_start / paged_attn_metadata.block_size)
                             * paged_attn_metadata.block_size;
                         seq.len() - block_aligned_start
                     } else {

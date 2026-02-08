@@ -278,9 +278,7 @@ pub fn get_device_layers(
     let kv_cache_bytes = kv_cache_elems * dtype.size_in_bytes();
 
     // prepare available memory per device, CPU fallback last (unless unified memory)
-    let has_unified_memory = devices
-        .iter()
-        .any(|d| crate::utils::normal::is_integrated_gpu(d));
+    let has_unified_memory = devices.iter().any(crate::utils::normal::is_integrated_gpu);
 
     let mut avail = Vec::new();
     for dev in devices {

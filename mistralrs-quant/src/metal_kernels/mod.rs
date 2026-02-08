@@ -2774,11 +2774,11 @@ pub fn call_sdpa_vector_with_sinks(
     output: &Buffer,
     head_dim: usize,
     gqa_factor: i32,
-    n: i32,         // k_len
+    n: i32, // k_len
     k_stride: usize,
     v_stride: usize,
     scale: f32,
-    b: usize,       // batch * num_heads
+    b: usize, // batch * num_heads
 ) -> Result<(), MetalKernelError> {
     let type_name = sdpa_with_sinks_dtype_name(ty)?;
     let name = format!("sdpa_vector_with_sinks_{type_name}_{head_dim}");
@@ -2814,7 +2814,7 @@ pub fn call_sdpa_vector_with_sinks(
         depth: 1,
     };
     let group_dims = MTLSize {
-        width: 1024,  // 32 simdgroups * 32 threads
+        width: 1024, // 32 simdgroups * 32 threads
         height: 1,
         depth: 1,
     };
@@ -2843,11 +2843,11 @@ pub fn call_sdpa_vector_with_sinks_2pass(
     maxs: &Buffer,
     head_dim: usize,
     gqa_factor: i32,
-    n: i32,         // k_len
+    n: i32, // k_len
     k_stride: usize,
     v_stride: usize,
     scale: f32,
-    b: usize,       // batch * num_heads
+    b: usize, // batch * num_heads
 ) -> Result<(), MetalKernelError> {
     let type_name = sdpa_with_sinks_dtype_name(ty)?;
     let blocks: u64 = 32;
@@ -2887,7 +2887,7 @@ pub fn call_sdpa_vector_with_sinks_2pass(
             depth: blocks as usize,
         };
         let group_dims = MTLSize {
-            width: 8 * 32,  // BN=8 simdgroups * 32 threads
+            width: 8 * 32, // BN=8 simdgroups * 32 threads
             height: 1,
             depth: 1,
         };
@@ -2920,7 +2920,7 @@ pub fn call_sdpa_vector_with_sinks_2pass(
             depth: 1,
         };
         let group_dims = MTLSize {
-            width: 1024,  // 32 * 32
+            width: 1024, // 32 * 32
             height: 1,
             depth: 1,
         };
@@ -2958,7 +2958,7 @@ pub fn call_flash_attn_sinks_prefill(
 ) -> Result<(), MetalKernelError> {
     let type_name = sdpa_with_sinks_dtype_name(ty)?;
 
-    let br: usize = 8;  // simdgroups per threadgroup
+    let br: usize = 8; // simdgroups per threadgroup
     let bc: usize = match head_dim {
         64 => 64,
         80 | 96 | 128 => 32,

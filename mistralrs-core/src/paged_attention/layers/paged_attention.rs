@@ -164,8 +164,7 @@ impl PagedAttention {
                         } else {
                             // CPU fallback: unfused path
                             let n_kv_groups = attention_heads / key_value_heads;
-                            let key_expanded =
-                                crate::layers::repeat_kv(key.clone(), n_kv_groups)?;
+                            let key_expanded = crate::layers::repeat_kv(key.clone(), n_kv_groups)?;
                             let value_expanded =
                                 crate::layers::repeat_kv(value.clone(), n_kv_groups)?;
                             let logits = (query.matmul(&key_expanded.transpose(2, 3)?)?
