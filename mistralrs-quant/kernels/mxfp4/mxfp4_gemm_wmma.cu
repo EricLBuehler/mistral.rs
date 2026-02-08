@@ -558,6 +558,10 @@ extern "C" void launch_mxfp4_moe_grouped_gemm_wmma_f16(
   int token_list_bytes = ((num_tokens * topk * (int)sizeof(int)) + 15) & ~15;
   size_t smem = token_list_bytes + wmma_smem_bytes();
 
+  CUDA_CHECK(cudaFuncSetAttribute(
+      mxfp4_wmma::mxfp4_moe_grouped_gemm_wmma_kernel<half>,
+      cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
+
   mxfp4_wmma::mxfp4_moe_grouped_gemm_wmma_kernel<half>
       <<<grid, block, smem, stream>>>(input, weights, weight_scales, biases,
                                       indices, output, num_tokens, topk,
@@ -578,6 +582,10 @@ extern "C" void launch_mxfp4_moe_grouped_gemm_wmma_bf16(
   dim3 block(BLOCK_THREADS);
   int token_list_bytes = ((num_tokens * topk * (int)sizeof(int)) + 15) & ~15;
   size_t smem = token_list_bytes + wmma_smem_bytes();
+
+  CUDA_CHECK(cudaFuncSetAttribute(
+      mxfp4_wmma::mxfp4_moe_grouped_gemm_wmma_kernel<__nv_bfloat16>,
+      cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
 
   mxfp4_wmma::mxfp4_moe_grouped_gemm_wmma_kernel<__nv_bfloat16>
       <<<grid, block, smem, stream>>>(input, weights, weight_scales, biases,
