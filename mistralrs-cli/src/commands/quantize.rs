@@ -37,9 +37,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
 
     let isq_values = get_isq_values(&model_type);
     let base_output = get_output_path(&model_type);
-    let file_mode = base_output
-        .extension()
-        .map_or(false, |ext| ext == "uqff");
+    let file_mode = base_output.extension().map_or(false, |ext| ext == "uqff");
 
     // Multiple ISQ values require directory output mode
     if isq_values.len() > 1 && file_mode {
@@ -100,7 +98,12 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
             .build()
             .await?;
 
-        info!("[{}/{}] UQFF generation for ISQ={} complete!", i + 1, total, isq);
+        info!(
+            "[{}/{}] UQFF generation for ISQ={} complete!",
+            i + 1,
+            total,
+            isq
+        );
     }
 
     if total > 1 {
@@ -221,11 +224,7 @@ fn convert_to_model_selected(
             Ok((model_selected, device.cpu, device.device_layers.clone()))
         }
 
-        QuantizeModelType::Embedding {
-            model,
-            device,
-            ..
-        } => {
+        QuantizeModelType::Embedding { model, device, .. } => {
             let model_selected = ModelSelected::Embedding {
                 model_id: model.model_id.clone(),
                 tokenizer_json: model
