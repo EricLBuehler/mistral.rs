@@ -151,7 +151,7 @@ runner = Runner(
 ## Creating a UQFF model
 
 Creating a UQFF model requires you to generate the UQFF file.
-- This means specifying a local path to a file ending in `.uqff`, where your new UQFF model will be created.
+- Specify an output path: either a `.uqff` file path or a directory where files will be auto-named.
 - The quantization of a UQFF model is determined from the ISQ or model topology (see the [topology docs](TOPOLOGY.md) for more details on how ISQ and the topology mix).
 
 Along with the UQFF file, the generation process will also output several `.json` configuration files and `residual.safetensors`. All of these files are considered the
@@ -169,9 +169,34 @@ After creating the UQFF file, you can upload the model to Hugging Face. To do th
 
 **⭐ Check out [uqff_maker](https://github.com/EricLBuehler/uqff_maker) to make UQFF models with an easy CLI!**
 
+**Single quantization (file output):**
 ```bash
-mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq 4 -o phi3.5-mini-instruct-q4k.uqff
+mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/phi3.5-mini-instruct-q4k.uqff
 ```
+
+**Single quantization (directory output):**
+```bash
+mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/
+```
+
+**Multiple quantizations at once (directory output):**
+
+Generate multiple UQFF files by specifying multiple `--isq` types. All quantizations go to the same output directory.
+
+```bash
+# Comma-separated ISQ types
+mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k,q8_0 -o phi3.5-uqff/
+
+# Equivalent: repeated --isq flags
+mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k --isq q8_0 -o phi3.5-uqff/
+```
+
+This produces the following in `phi3.5-uqff/`:
+- `q4k-0.uqff` (and additional shards `q4k-1.uqff`, ... if the model is large)
+- `q8_0-0.uqff` (and additional shards if needed)
+- Shared files: `config.json`, `tokenizer.json`, `residual.safetensors`, etc.
+
+> Note: Multiple `--isq` values require a directory output path (not a `.uqff` file path).
 
 ### Upload with Git
 To upload a UQFF model using Git, you will most likely need to set up Git LFS:

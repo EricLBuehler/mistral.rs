@@ -97,9 +97,10 @@ pub struct QuantizeModelSourceOptions {
 /// Quantization options for UQFF generation (ISQ-related only, no from_uqff)
 #[derive(Args, Clone)]
 pub struct QuantizeQuantizationOptions {
-    /// In-situ quantization level (e.g., "4", "8", "q4_0", "q4_1", "q4k", etc.)
-    #[arg(long = "isq", required = true)]
-    pub in_situ_quant: String,
+    /// In-situ quantization level(s). Multiple values can be comma-separated or specified
+    /// via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0").
+    #[arg(long = "isq", required = true, value_delimiter = ',')]
+    pub in_situ_quant: Vec<String>,
 
     /// ISQ organization strategy: default or moqe
     #[arg(long)]
@@ -145,7 +146,8 @@ pub struct QuantizeDeviceOptions {
 /// Output options for UQFF generation
 #[derive(Args, Clone)]
 pub struct QuantizeOutputOptions {
-    /// Output path for the UQFF file
+    /// Output path: a `.uqff` file path (single ISQ) or a directory (auto-names files per ISQ type).
+    /// Examples: `-o model/model-q4k.uqff` or `-o output/`
     #[arg(short = 'o', long = "output", required = true)]
     pub output_path: PathBuf,
 }
@@ -182,9 +184,10 @@ pub struct QuantizeDefaultOptions {
     #[arg(long, default_value = "auto", value_parser = parse_dtype)]
     pub dtype: ModelDType,
 
-    /// In-situ quantization level (e.g., "4", "8", "q4_0", "q4_1", "q4k", etc.)
-    #[arg(long = "isq")]
-    pub in_situ_quant: Option<String>,
+    /// In-situ quantization level(s). Multiple values can be comma-separated or specified
+    /// via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0").
+    #[arg(long = "isq", value_delimiter = ',')]
+    pub in_situ_quant: Vec<String>,
 
     /// ISQ organization strategy: default or moqe
     #[arg(long)]
@@ -222,7 +225,7 @@ pub struct QuantizeDefaultOptions {
     #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
     pub max_batch_size: usize,
 
-    /// Output path for the UQFF file
+    /// Output path: a `.uqff` file path (single ISQ) or a directory (auto-names files per ISQ type).
     #[arg(short = 'o', long = "output")]
     pub output_path: Option<PathBuf>,
 
@@ -246,9 +249,9 @@ impl QuantizeDefaultOptions {
         let model_id = self
             .model_id
             .ok_or_else(|| anyhow::anyhow!("--model-id (-m) is required"))?;
-        let in_situ_quant = self
-            .in_situ_quant
-            .ok_or_else(|| anyhow::anyhow!("--isq is required"))?;
+        if self.in_situ_quant.is_empty() {
+            return Err(anyhow::anyhow!("--isq is required"));
+        }
         let output_path = self
             .output_path
             .ok_or_else(|| anyhow::anyhow!("--output (-o) is required"))?;
@@ -260,7 +263,7 @@ impl QuantizeDefaultOptions {
                 dtype: self.dtype,
             },
             quantization: QuantizeQuantizationOptions {
-                in_situ_quant,
+                in_situ_quant: self.in_situ_quant,
                 isq_organization: self.isq_organization,
                 imatrix: self.imatrix,
                 calibration_file: self.calibration_file,
