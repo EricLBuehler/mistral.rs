@@ -1,7 +1,7 @@
 //! Quantize command argument structs for UQFF generation
 
 use clap::{Args, Subcommand};
-use mistralrs_core::{IsqOrganization, ModelDType, NormalLoaderType};
+use mistralrs_core::{AutoDeviceMapParams, IsqOrganization, ModelDType, NormalLoaderType};
 use std::path::PathBuf;
 
 /// Quantize model type selection (base models only, no adapter support)
@@ -134,11 +134,11 @@ pub struct QuantizeDeviceOptions {
     pub hf_cache: Option<PathBuf>,
 
     /// Max sequence length for automatic device mapping
-    #[arg(long, default_value_t = 4096)]
+    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
     pub max_seq_len: usize,
 
     /// Max batch size for automatic device mapping
-    #[arg(long, default_value_t = 128)]
+    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
     pub max_batch_size: usize,
 }
 
@@ -215,11 +215,11 @@ pub struct QuantizeDefaultOptions {
     pub hf_cache: Option<PathBuf>,
 
     /// Max sequence length for automatic device mapping
-    #[arg(long, default_value_t = 4096)]
+    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
     pub max_seq_len: usize,
 
     /// Max batch size for automatic device mapping
-    #[arg(long, default_value_t = 128)]
+    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
     pub max_batch_size: usize,
 
     /// Output path for the UQFF file
