@@ -455,6 +455,7 @@ impl Loader for EmbeddingLoader {
             in_situ_quant.is_some()
         };
         loading_isq |= topology_requires_post_quant;
+        loading_isq |= self.config.from_uqff.is_some();
 
         // Load onto the regular device if not using isq.
         // For immediate ISQ on discrete GPUs, load to CPU: the mapper will set the correct target
