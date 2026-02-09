@@ -157,10 +157,7 @@ fn generate_model_card(output_dir: &Path, model_id: &str, is_vision: bool) -> Re
         let entry = entry?;
         if entry.file_type()?.is_file() {
             let path = entry.path();
-            if path
-                .extension()
-                .and_then(|e| e.to_str()) == Some("uqff")
-            {
+            if path.extension().and_then(|e| e.to_str()) == Some("uqff") {
                 let stem = path
                     .file_stem()
                     .and_then(|s| s.to_str())
