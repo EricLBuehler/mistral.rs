@@ -58,7 +58,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
 
     let isq_values = get_isq_values(&model_type);
     let base_output = get_output_path(&model_type).clone();
-    let file_mode = base_output.extension().map_or(false, |ext| ext == "uqff");
+    let file_mode = base_output.extension().is_some_and(|ext| ext == "uqff");
     let model_id = get_model_id(&model_type).to_string();
     let is_vision = matches!(&model_type, QuantizeModelType::Vision { .. });
     let no_readme = get_no_readme(&model_type);
@@ -159,8 +159,7 @@ fn generate_model_card(output_dir: &Path, model_id: &str, is_vision: bool) -> Re
             let path = entry.path();
             if path
                 .extension()
-                .and_then(|e| e.to_str())
-                .map_or(false, |e| e == "uqff")
+                .and_then(|e| e.to_str()) == Some("uqff")
             {
                 let stem = path
                     .file_stem()
