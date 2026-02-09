@@ -233,8 +233,21 @@ pub fn get_device_layers(
                     let budget_mb = cap.saturating_sub(act_overhead) / (1024 * 1024);
                     MemoryGpuConfig::MbAmount(budget_mb.min(user_mb))
                 }
-                // Pass through — calculate_cache_config handles model weight
-                // subtraction in its pre-loading Utilization path.
+                MemoryGpuConfig::Utilization(f) => {
+                    // Prevent overallocation when total_memory > available_memory
+                    // (e.g., unified memory systems, other GPU processes using VRAM).
+                    // Cap the KV budget so model + activations + KV fits within
+                    // the device capacity derived from *available* memory.
+                    let primary_dev = &devices[0];
+                    let avail_bytes = MemoryUsage.get_memory_available(primary_dev)?;
+                    let cap = device_cap(avail_bytes, primary_dev);
+                    let act_overhead = non_mapped_max.max(mapped_max);
+                    let budget_mb = ((cap as f64 * f as f64) as usize)
+                        .saturating_sub(remaining + act_overhead)
+                        / (1024 * 1024);
+                    MemoryGpuConfig::MbAmount(budget_mb)
+                }
+                // ContextSize passes through to calculate_cache_config.
                 other => other,
             };
 
