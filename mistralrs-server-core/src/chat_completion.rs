@@ -126,11 +126,15 @@ impl futures::Stream for ChatCompletionStreamer {
                     self.done_state = DoneState::SendingDone;
                     Poll::Ready(Some(Ok(Event::default().data(msg))))
                 }
-                Response::ValidationError(e) => Poll::Ready(Some(Ok(
-                    Event::default().data(sanitize_error_message(e.as_ref()))
-                ))),
+                Response::ValidationError(e) => {
+                    self.done_state = DoneState::SendingDone;
+                    Poll::Ready(Some(Ok(
+                        Event::default().data(sanitize_error_message(e.as_ref()))
+                    )))
+                }
                 Response::InternalError(e) => {
                     MistralRs::maybe_log_error(self.state.clone(), &*e);
+                    self.done_state = DoneState::SendingDone;
                     Poll::Ready(Some(Ok(
                         Event::default().data(sanitize_error_message(e.as_ref()))
                     )))
