@@ -7,20 +7,6 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
-use axum::{
-    extract::{Json, State},
-    http::{self},
-    response::{
-        sse::{Event, KeepAlive, KeepAliveStream},
-        IntoResponse, Sse,
-    },
-};
-use mistralrs_core::{
-    CompletionChunkResponse, CompletionResponse, Constraint, MistralRs, NormalRequest, Request,
-    RequestMessage, Response, SamplingParams,
-};
-use tokio::sync::mpsc::{Receiver, Sender};
 use crate::{
     completion_core::{
         convert_stop_tokens, get_dry_sampling_params, handle_completion_error,
@@ -35,6 +21,20 @@ use crate::{
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
     util::{sanitize_error_message, validate_model_name},
 };
+use anyhow::Result;
+use axum::{
+    extract::{Json, State},
+    http::{self},
+    response::{
+        sse::{Event, KeepAlive, KeepAliveStream},
+        IntoResponse, Sse,
+    },
+};
+use mistralrs_core::{
+    CompletionChunkResponse, CompletionResponse, Constraint, MistralRs, NormalRequest, Request,
+    RequestMessage, Response, SamplingParams,
+};
+use tokio::sync::mpsc::{Receiver, Sender};
 
 /// A callback function that processes streaming response chunks before they are sent to the client.
 ///
