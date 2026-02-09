@@ -1288,14 +1288,14 @@ impl Qwen3VLRotaryEmbedding {
 
         // Apply interleaved MRoPE: start with temporal, overwrite H and W at interleaved positions
         // freqs_t = freqs[0] as base (all temporal)
-        let mut freqs_t = freqs.i(0)?;
+        let mut freqs_t = freqs.i(0)?.contiguous()?;
         let half_dim = freqs_t.dim(D::Minus1)?;
 
         // For H (dim=1) and W (dim=2), overwrite interleaved positions
         for (dim_idx, offset) in [(1usize, 1usize), (2usize, 2usize)] {
             let length = self.mrope_section[dim_idx] * 3;
             if length <= half_dim {
-                let freqs_dim = freqs.i(dim_idx)?;
+                let freqs_dim = freqs.i(dim_idx)?.contiguous()?;
                 // Overwrite positions offset, offset+3, offset+6, ... up to length
                 // We need to gather from freqs_dim at these indices and scatter into freqs_t
                 let indices: Vec<u32> = (offset..length).step_by(3).map(|i| i as u32).collect();
@@ -1319,10 +1319,10 @@ impl Qwen3VLRotaryEmbedding {
             }
         }
 
-        // emb = cat(freqs_t, freqs_t) along last dim -> (batch, seq_len, head_dim)
-        let emb = Tensor::cat(&[&freqs_t, &freqs_t], D::Minus1)?;
-        let cos = emb.cos()?.to_dtype(dtype)?.contiguous()?;
-        let sin = emb.sin()?.to_dtype(dtype)?.contiguous()?;
+        // cos/sin from freqs_t -> (batch, seq_len, head_dim/2)
+        // candle's rope() expects half-dim cos/sin and handles both halves internally
+        let cos = freqs_t.cos()?.to_dtype(dtype)?.contiguous()?;
+        let sin = freqs_t.sin()?.to_dtype(dtype)?.contiguous()?;
         Ok((cos, sin))
     }
 
