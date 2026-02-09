@@ -357,7 +357,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     finish_reason: fixup_sentencepiece!(reason),
                     index: seq.get_response_index(),
                     text,
-                    logprobs: None,
+                    logprobs: logprobs.map(|l| crate::Logprobs { content: Some(l) }),
                 };
                 seq.add_completion_choice_to_group(choice);
             }

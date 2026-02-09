@@ -177,7 +177,7 @@ pub struct CompletionChoice {
     pub finish_reason: String,
     pub index: usize,
     pub text: String,
-    pub logprobs: Option<()>,
+    pub logprobs: Option<Logprobs>,
 }
 
 generate_repr!(CompletionChoice);
