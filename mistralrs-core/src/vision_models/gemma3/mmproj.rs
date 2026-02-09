@@ -3,7 +3,7 @@ use candle_nn::Module;
 use mistralrs_quant::ShardedVarBuilder;
 
 use crate::{
-    layers::{AvgPool2d, RmsNorm},
+    layers::{AvgPool2d, GemmaRmsNorm},
     utils::unvarbuilder::UnVarBuilder,
 };
 
@@ -11,7 +11,7 @@ use super::config::Gemma3Config;
 
 pub struct Gemma3MultiModalProjector {
     mm_input_projection_weight: Tensor,
-    mm_soft_emb_norm: RmsNorm,
+    mm_soft_emb_norm: GemmaRmsNorm,
     patches_per_image: usize,
     avg_pool: AvgPool2d,
 }
@@ -32,7 +32,7 @@ impl Gemma3MultiModalProjector {
             (vision_config.hidden_size, text_config.hidden_size),
             "mm_input_projection_weight",
         )?;
-        let mm_soft_emb_norm = RmsNorm::new_gemma(
+        let mm_soft_emb_norm = GemmaRmsNorm::new(
             vision_config.hidden_size,
             vision_config.layer_norm_eps,
             vb.pp("mm_soft_emb_norm"),
@@ -76,7 +76,7 @@ impl Gemma3MultiModalProjector {
         let uvb = UnVarBuilder::new();
 
         uvb.pp("mm_soft_emb_norm")
-            .add(&self.mm_soft_emb_norm.undo_gemma().unwrap());
+            .add(&self.mm_soft_emb_norm);
 
         let mut tensors = uvb.to_safetensors();
         tensors.push((

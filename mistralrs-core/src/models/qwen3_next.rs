@@ -17,7 +17,7 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     kv_cache::{HybridCache, HybridCacheConfig, HybridLayerType},
-    layers::{embedding, linear_no_bias, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{embedding, linear_no_bias, CausalMasker, GemmaRmsNorm, MatMul, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -766,8 +766,8 @@ struct FullAttention {
     k_proj: Arc<dyn QuantMethod>,
     v_proj: Arc<dyn QuantMethod>,
     o_proj: Arc<dyn QuantMethod>,
-    q_norm: RmsNorm,
-    k_norm: RmsNorm,
+    q_norm: GemmaRmsNorm,
+    k_norm: GemmaRmsNorm,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -833,8 +833,8 @@ impl FullAttention {
 
         // QK norms use (1+weight) formulation; pass loading_isq=false to ensure device placement
         let vb_sa_norms = mapper.set_device(layer_idx, vb.pp("self_attn"), false);
-        let q_norm = RmsNorm::new_gemma(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
-        let k_norm = RmsNorm::new_gemma(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
+        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
+        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
 
         let rot_dim = (head_dim as f64 * cfg.partial_rotary_factor) as usize;
 
@@ -1205,8 +1205,8 @@ enum LayerImpl {
 
 struct DecoderLayer {
     layer_impl: LayerImpl,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
+    input_layernorm: GemmaRmsNorm,
+    post_attention_layernorm: GemmaRmsNorm,
     moe: SparseMoeBlock,
 }
 
@@ -1314,7 +1314,7 @@ pub struct Model {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
-    norm: RmsNorm,
+    norm: GemmaRmsNorm,
     lm_head: Arc<dyn QuantMethod>,
     local_cache: Arc<Mutex<LocalHybridCache>>,
     kv_cache: EitherCache,
@@ -1371,7 +1371,7 @@ impl Model {
             ))?
         };
 
-        let norm = RmsNorm::new_gemma(
+        let norm = GemmaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
@@ -1464,12 +1464,12 @@ impl Model {
             };
 
             // (1+weight) RMSNorm for layer norms
-            let input_layernorm = RmsNorm::new_gemma(
+            let input_layernorm = GemmaRmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(i, vb_layer.pp("input_layernorm"), false),
             )?;
-            let post_attention_layernorm = RmsNorm::new_gemma(
+            let post_attention_layernorm = GemmaRmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(i, vb_layer.pp("post_attention_layernorm"), false),
@@ -1669,33 +1669,21 @@ impl IsqModel for Model {
         let uvb = UnVarBuilder::new();
         let uvb_m = uvb.pp("model");
         uvb_m.pp("embed_tokens").add(&self.embed_tokens);
-        uvb_m.pp("norm").add(&self.norm.undo_gemma().unwrap());
+        uvb_m.pp("norm").add(&self.norm);
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let uvb_l = uvb_m.pp("layers").pp(layer_idx);
-            uvb_l.pp("input_layernorm").add(
-                &layer
-                    .input_layernorm
-                    .undo_gemma()
-                    .expect("undo gemma input_layernorm"),
-            );
-            uvb_l.pp("post_attention_layernorm").add(
-                &layer
-                    .post_attention_layernorm
-                    .undo_gemma()
-                    .expect("undo gemma post_attention_layernorm"),
-            );
+            uvb_l
+                .pp("input_layernorm")
+                .add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
 
             match &layer.layer_impl {
                 LayerImpl::FullAttention(attn) => {
-                    uvb_l
-                        .pp("self_attn")
-                        .pp("q_norm")
-                        .add(&attn.q_norm.undo_gemma().expect("undo gemma q_norm"));
-                    uvb_l
-                        .pp("self_attn")
-                        .pp("k_norm")
-                        .add(&attn.k_norm.undo_gemma().expect("undo gemma k_norm"));
+                    uvb_l.pp("self_attn").pp("q_norm").add(&attn.q_norm);
+                    uvb_l.pp("self_attn").pp("k_norm").add(&attn.k_norm);
                 }
                 LayerImpl::LinearAttention(gdn) => {
                     uvb_l
