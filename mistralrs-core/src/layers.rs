@@ -214,6 +214,9 @@ impl RmsNorm {
     }
 
     /// Gemma uses weight + 1.0
+    #[deprecated(
+        note = "Use GemmaRmsNorm::new() instead, which handles UQFF serialization correctly"
+    )]
     pub fn new_gemma(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
         let w = vb.get(size, "weight")?;
         let w = (w + 1.0)?;
@@ -236,6 +239,7 @@ impl RmsNorm {
     }
 
     /// Gemma uses weight + 1.0. Undo for UQFF generation.
+    #[deprecated(note = "Use GemmaRmsNorm instead, which handles UQFF serialization automatically")]
     pub fn undo_gemma(&self) -> Result<Self> {
         Ok(Self {
             eps: self.eps,
@@ -253,6 +257,45 @@ impl RmsNorm {
 }
 
 impl Module for RmsNorm {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+    }
+}
+
+/// Gemma-style RmsNorm that adds +1.0 to the weight during initialization.
+///
+/// Unlike using `RmsNorm::new_gemma()`, this type stores the original checkpoint
+/// weight separately, ensuring that UQFF serialization (via `ToTensors`) always
+/// returns the un-offset weight. This prevents the double-addition bug where
+/// `new_gemma` would add +1.0 on both write and read.
+#[derive(Debug, Clone)]
+pub struct GemmaRmsNorm {
+    eps: f64,
+    original_weight: Tensor,
+    weight: Tensor,
+}
+
+impl GemmaRmsNorm {
+    pub fn new(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
+        let original_weight = vb.get(size, "weight")?;
+        let weight = (&original_weight + 1.0)?;
+        Ok(Self {
+            eps,
+            original_weight,
+            weight,
+        })
+    }
+
+    pub fn weight(&self) -> &Tensor {
+        &self.weight
+    }
+
+    pub fn original_weight(&self) -> &Tensor {
+        &self.original_weight
+    }
+}
+
+impl Module for GemmaRmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
     }

@@ -546,6 +546,7 @@ impl Loader for VisionLoader {
             loading_isq = true;
         }
         loading_isq |= topology_requires_post_quant;
+        loading_isq |= self.config.from_uqff.is_some();
 
         if self.config.imatrix.is_some() && self.config.calibration_file.is_some() {
             anyhow::bail!(

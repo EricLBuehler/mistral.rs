@@ -158,14 +158,56 @@ pub fn parse_isq_value(s: &str, device: Option<&Device>) -> Result<IsqType, Stri
                 | IsqType::Q6K
                 | IsqType::HQQ8
                 | IsqType::HQQ4
-                | IsqType::F8E4M3 // | IsqType::HQQ3
-                                  // | IsqType::HQQ2
-                                  // | IsqType::HQQ1
+                | IsqType::F8E4M3
+                | IsqType::AFQ2
+                | IsqType::AFQ3
+                | IsqType::AFQ4
+                | IsqType::AFQ6
+                | IsqType::AFQ8 // | IsqType::HQQ3
+                                // | IsqType::HQQ2
+                                // | IsqType::HQQ1
         ) {
-            return Err("ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`, `FP8`".to_string());
+            return Err("ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`, `FP8`, `AFQ8`, `AFQ6`, `AFQ4`, `AFQ3`, `AFQ2`".to_string());
         }
     }
     Ok(tp)
+}
+
+/// Given a UQFF filename like `"q4k-0.uqff"`, returns `Some(("q4k", 0))`.
+/// Returns `None` for non-sharded filenames like `"model.uqff"` where the
+/// suffix after the last `-` is not a number.
+pub fn parse_uqff_shard(filename: &str) -> Option<(String, u64)> {
+    let stem = std::path::Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())?;
+    let (prefix, suffix) = stem.rsplit_once('-')?;
+    let index = suffix.parse::<u64>().ok()?;
+    Some((prefix.to_string(), index))
+}
+
+/// Expand a single UQFF filename to include all sibling shards.
+///
+/// Given `"q4k-0.uqff"` and a list of available files, returns
+/// `["q4k-0.uqff", "q4k-1.uqff", ...]` for all sequential indices found.
+/// Non-sharded filenames (those not matching `{prefix}-{N}.uqff`) are returned as-is.
+pub fn expand_uqff_shards(first_file: &str, available_files: &[String]) -> Vec<String> {
+    let Some((prefix, _)) = parse_uqff_shard(first_file) else {
+        return vec![first_file.to_string()];
+    };
+    let mut shards = Vec::new();
+    for index in 0u64.. {
+        let candidate = format!("{prefix}-{index}.uqff");
+        if available_files.iter().any(|f| f == &candidate) {
+            shards.push(candidate);
+        } else {
+            break;
+        }
+    }
+    if shards.is_empty() {
+        vec![first_file.to_string()]
+    } else {
+        shards
+    }
 }
 
 #[derive(Clone, Debug, Copy, Default, Deserialize, serde::Serialize)]
@@ -1108,6 +1150,18 @@ pub trait IsqModel {
                     Ok(())
                 })
                 .collect::<candle_core::Result<Vec<_>>>()?;
+        }
+
+        // Verify no DummyLayers remain after deserialization
+        {
+            let (check_tensors, _) = self.get_layers();
+            for (i, (tensor, layer_num)) in check_tensors.iter().enumerate() {
+                if tensor.name() == "dummy" {
+                    candle_core::bail!(
+                        "DummyLayer not replaced at index {i}, layer {layer_num:?} after load_from_artifacts"
+                    );
+                }
+            }
         }
 
         let delta = Instant::now().duration_since(t_start).as_secs_f32();

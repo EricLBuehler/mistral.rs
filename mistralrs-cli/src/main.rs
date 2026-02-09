@@ -16,7 +16,7 @@ use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use args::{resolve_model_type, CacheCommand, Cli, Command};
+use args::{resolve_model_type, resolve_quantize_model_type, CacheCommand, Cli, Command};
 use commands::{
     run_bench, run_cache_delete, run_cache_list, run_doctor, run_from_config, run_interactive,
     run_login, run_quantize, run_server, run_tune,
@@ -59,7 +59,11 @@ async fn main() -> Result<()> {
             generate(shell, &mut cmd, name, &mut std::io::stdout());
         }
 
-        Command::Quantize { model_type } => {
+        Command::Quantize {
+            model_type,
+            default_quantize,
+        } => {
+            let model_type = resolve_quantize_model_type(model_type, default_quantize)?;
             run_quantize(model_type, cli.global).await?;
         }
 

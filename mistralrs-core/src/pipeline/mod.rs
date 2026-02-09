@@ -50,9 +50,9 @@ pub use loaders::{
     MixtralLoader, ModelKind, ModelPaths, NormalLoaderType, NormalLoadingMetadata, NormalModel,
     NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader,
     PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader,
-    Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader, Qwen3VLLoader, Qwen3VLMoELoader,
-    SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader, VisionLoaderType,
-    VisionModel, VisionModelLoader,
+    Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3VLLoader,
+    Qwen3VLMoELoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
+    VisionLoaderType, VisionModel, VisionModelLoader,
 };
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(

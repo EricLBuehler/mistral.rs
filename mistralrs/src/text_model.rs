@@ -329,7 +329,10 @@ impl TextModelBuilder {
     )]
     /// Path to read a `.uqff` file from. Other necessary configuration files must be present at this location.
     ///
-    /// For example, these include:
+    /// For sharded UQFF models, you only need to specify the first shard file
+    /// (e.g., `q4k-0.uqff`). The remaining shards are auto-discovered.
+    ///
+    /// For example, required files include:
     /// - `residual.safetensors`
     /// - `tokenizer.json`
     /// - `config.json`
@@ -396,6 +399,10 @@ impl UqffTextModelBuilder {
     /// - Maximum number of sequences running is 32
     /// - Number of sequences to hold in prefix cache is 16.
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    ///
+    /// For sharded UQFF models, you only need to specify the first shard file
+    /// (e.g., `q4k-0.uqff`). The remaining shards are auto-discovered from the
+    /// same directory or Hugging Face repository.
     pub fn new(model_id: impl ToString, uqff_file: Vec<PathBuf>) -> Self {
         let mut inner = TextModelBuilder::new(model_id);
         inner.from_uqff = Some(uqff_file);

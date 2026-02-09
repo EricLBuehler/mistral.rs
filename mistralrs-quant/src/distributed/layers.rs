@@ -1827,6 +1827,16 @@ impl FusedExperts {
                 blockwise_fp8_moe(down_fp8, down_scale, weight_block_size, vb.dtype())?;
 
             (fused_gate_proj, fused_up_proj, fused_down_proj)
+        } else if !experts_vb.pp("0").contains_tensor("gate_proj.weight") {
+            // Handle the case where the layer is dummy (no tensors) during UQFF loading.
+            // Deserialize will handle it.
+            let fused_gate_proj: Arc<dyn QuantMethod> =
+                Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?);
+            let fused_up_proj: Arc<dyn QuantMethod> =
+                Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?);
+            let fused_down_proj: Arc<dyn QuantMethod> =
+                Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?);
+            (fused_gate_proj, fused_up_proj, fused_down_proj)
         } else {
             // Per-expert format: load each expert individually and stack
             // When immediate ISQ is active, load on CPU for GGML quantization.

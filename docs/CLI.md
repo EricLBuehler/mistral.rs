@@ -119,38 +119,49 @@ The `serve` command also accepts all [runtime options](#runtime-options).
 
 ### quantize - UQFF Generation
 
-Generate a UQFF (Unified Quantized File Format) file from a model.
+Generate UQFF (Unified Quantized File Format) files from a model. Supports multiple quantization types in a single command.
 
 ```bash
-mistralrs quantize <MODEL_TYPE> -m <MODEL_ID> --isq <LEVEL> -o <OUTPUT>
+mistralrs quantize <MODEL_TYPE> -m <MODEL_ID> --isq <LEVEL>[,<LEVEL>...] -o <OUTPUT>
 ```
 
 **Examples:**
 
 ```bash
-# Quantize a text model to 4-bit
-mistralrs quantize -m Qwen/Qwen3-4B --isq 4 -o qwen3-4b-q4.uqff
+# Quantize to a single type (file output)
+mistralrs quantize -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-uqff/qwen3-4b-q4k.uqff
 
-# Quantize with Q4_K format
-mistralrs quantize -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-q4k.uqff
+# Quantize to a single type (directory output, auto-named)
+mistralrs quantize -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-uqff/
+
+# Quantize to multiple types at once (directory output)
+mistralrs quantize -m Qwen/Qwen3-4B --isq q4k,q8_0 -o qwen3-4b-uqff/
+
+# Equivalent: repeated --isq flags
+mistralrs quantize -m Qwen/Qwen3-4B --isq q4k --isq q8_0 -o qwen3-4b-uqff/
 
 # Quantize a vision model
-mistralrs quantize -m google/gemma-3-4b-it --isq 4 -o gemma3-4b-q4.uqff
+mistralrs quantize -m google/gemma-3-4b-it --isq 4 -o gemma3-4b-uqff/
 
 # Quantize with imatrix for better quality
-mistralrs quantize -m Qwen/Qwen3-4B --isq q4k --imatrix imatrix.dat -o qwen3-4b-q4k.uqff
+mistralrs quantize -m Qwen/Qwen3-4B --isq q4k --imatrix imatrix.dat -o qwen3-4b-uqff/qwen3-4b-q4k.uqff
 ```
+
+When using directory output mode, the `quantize` command automatically:
+- Generates a `README.md` model card with Hugging Face frontmatter and example commands
+- Prints the `huggingface-cli upload` command to upload your UQFF to Hugging Face
 
 **Quantize Options:**
 
 | Option | Required | Description |
 |--------|----------|-------------|
 | `-m, --model-id <ID>` | Yes | Model ID or local path |
-| `--isq <LEVEL>` | Yes | Quantization level (see [ISQ Quantization](#isq-quantization)) |
-| `-o, --output <PATH>` | Yes | Output UQFF file path |
+| `--isq <LEVEL>` | Yes | Quantization level(s), comma-separated or repeated (see [ISQ Quantization](#isq-quantization)) |
+| `-o, --output <PATH>` | Yes | Output path: `.uqff` file (single ISQ) or directory (auto-named per ISQ type) |
 | `--isq-organization <TYPE>` | No | ISQ organization strategy: `default` or `moqe` |
 | `--imatrix <PATH>` | No | imatrix file for enhanced quantization |
 | `--calibration-file <PATH>` | No | Calibration file for imatrix generation |
+| `--no-readme` | No | Skip automatic README.md model card generation |
 
 ---
 
@@ -598,23 +609,26 @@ mistralrs run -m Qwen/Qwen3-4B --isq q4k --isq-organization moqe
 
 UQFF (Unified Quantized File Format) provides pre-quantized model files for faster loading.
 
-**Generate a UQFF file:**
+**Generate UQFF files:**
 
 ```bash
-mistralrs quantize auto -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-q4k.uqff
+mistralrs quantize -m Qwen/Qwen3-4B --isq q4k -o qwen3-4b-uqff/
 ```
 
 **Load from UQFF:**
 
 ```bash
-mistralrs run -m Qwen/Qwen3-4B --from-uqff qwen3-4b-q4k.uqff
+# Specify just the first shard -- remaining shards are auto-discovered
+mistralrs run -m Qwen/Qwen3-4B --from-uqff q4k-0.uqff
 ```
 
-**Multiple UQFF files (semicolon-separated):**
+**Multiple UQFF files (semicolon-separated, for different quantizations in one load):**
 
 ```bash
-mistralrs run -m Qwen/Qwen3-4B --from-uqff "part1.uqff;part2.uqff"
+mistralrs run -m Qwen/Qwen3-4B --from-uqff "q4k-0.uqff;q8_0-0.uqff"
 ```
+
+> Note: Shard auto-discovery means you no longer need to list every shard file. Specifying `q4k-0.uqff` will automatically find `q4k-1.uqff`, `q4k-2.uqff`, etc.
 
 ---
 

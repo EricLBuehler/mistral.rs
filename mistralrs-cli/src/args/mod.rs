@@ -77,7 +77,11 @@ pub enum Command {
     /// Generate UQFF quantized model file
     Quantize {
         #[command(subcommand)]
-        model_type: QuantizeModelType,
+        model_type: Option<QuantizeModelType>,
+
+        /// Default quantize options (used when model type is not specified)
+        #[command(flatten)]
+        default_quantize: QuantizeDefaultOptions,
     },
 
     /// Run system diagnostics and environment checks

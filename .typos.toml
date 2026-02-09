@@ -31,6 +31,8 @@ extend-ignore-re = [
     "thw",
     "iy",
     "mxfp4_get_max_smem_optin",
+    "alog",
+    "ba",
 ]
 
 [type.rust.extend-identifiers]

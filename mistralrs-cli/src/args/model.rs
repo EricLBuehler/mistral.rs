@@ -1,7 +1,7 @@
 //! Model-related argument structs
 
 use clap::{Args, ValueEnum};
-use mistralrs_core::{IsqOrganization, ModelDType, NormalLoaderType};
+use mistralrs_core::{AutoDeviceMapParams, IsqOrganization, ModelDType, NormalLoaderType};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -88,7 +88,9 @@ pub struct QuantizationOptions {
     #[arg(long = "isq")]
     pub in_situ_quant: Option<String>,
 
-    /// UQFF file(s) to load from (semicolon-separated for multiple)
+    /// UQFF file(s) to load from. Shards are auto-discovered: specifying the first
+    /// shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons
+    /// to separate different quantizations (e.g., "q4k-0.uqff;q8_0-0.uqff").
     #[arg(long)]
     pub from_uqff: Option<String>,
 
@@ -127,12 +129,12 @@ pub struct DeviceOptions {
     pub hf_cache: Option<PathBuf>,
 
     /// Max sequence length for automatic device mapping
-    #[arg(long, default_value_t = 4096)]
+    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
     #[serde(default = "default_max_seq_len")]
     pub max_seq_len: usize,
 
     /// Max batch size for automatic device mapping
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
     #[serde(default = "default_max_batch_size")]
     pub max_batch_size: usize,
 }
@@ -166,9 +168,9 @@ fn default_gqa() -> usize {
 }
 
 fn default_max_seq_len() -> usize {
-    4096
+    AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN
 }
 
 fn default_max_batch_size() -> usize {
-    1
+    AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE
 }
