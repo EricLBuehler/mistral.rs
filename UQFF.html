@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-dbe47197.js";
+            window.path_to_searchindex_js = "searchindex-559de736.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cf64f8f3.js"></script>
@@ -265,19 +265,26 @@ The uniquely powerful quantized file format.
 </li>
 </ul>
 <h2 id="loading-a-uqff-model"><a class="header" href="#loading-a-uqff-model">Loading a UQFF model</a></h2>
-<p>To load a UQFF model, one should specify the filename. This will be located based on the model ID, and can
+<p>To load a UQFF model, specify the filename of the first (or only) UQFF shard. This will be located based on the model ID, and can
 be loaded locally or from Hugging Face based on the model ID.</p>
 <ul>
-<li><code>phi3.5-mini-instruct-q4k.uqff</code></li>
-<li><code>../UQFF/phi3.5-mini-instruct-q4k.uqff</code></li>
+<li><code>phi3.5-mini-instruct-q4k-0.uqff</code></li>
+<li><code>../UQFF/phi3.5-mini-instruct-q4k-0.uqff</code></li>
 </ul>
 <p>You can find a <a href="https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c">collection of UQFF models here</a>, which each include a simple
 command to get started.</p>
 <blockquote>
 <p>Note: when loading an UQFF model, <em>any</em> ISQ setting will be ignored.</p>
 </blockquote>
+<h3 id="shard-auto-discovery"><a class="header" href="#shard-auto-discovery">Shard auto-discovery</a></h3>
+<p>Large models produce multiple shard files (e.g., <code>q4k-0.uqff</code>, <code>q4k-1.uqff</code>, <code>q4k-2.uqff</code>). You only need to specify <strong>one</strong> shard file – the remaining shards are auto-discovered from the same directory or Hugging Face repository.</p>
+<p>For example, if a model has shards <code>q4k-0.uqff</code>, <code>q4k-1.uqff</code>, and <code>q4k-2.uqff</code>:</p>
+<pre><code class="language-bash"># Just specify the first shard -- the rest are found automatically
+mistralrs run -m EricB/MyModel-UQFF --from-uqff q4k-0.uqff
+</code></pre>
+<p>This also works when multiple quantizations exist in the same repo (e.g., <code>q4k-*</code> and <code>q8_0-*</code>). Only the shards matching the specified prefix are loaded.</p>
 <h3 id="running-with-the-cli"><a class="header" href="#running-with-the-cli">Running with the CLI</a></h3>
-<pre><code class="language-bash">mistralrs run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-f8e4m3.uqff
+<pre><code class="language-bash">mistralrs run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-f8e4m3-0.uqff
 </code></pre>
 <h3 id="using-with-the-rust-sdk"><a class="header" href="#using-with-the-rust-sdk">Using with the Rust SDK</a></h3>
 <p>Check out the following examples:</p>
@@ -289,7 +296,7 @@ command to get started.</p>
 <p>Modify the <code>Which</code> instantiation as follows:</p>
 <pre><code class="language-diff">Which.Plain(
     model_id="EricB/Phi-3.5-mini-instruct-UQFF",
-+   from_uqff="phi3.5-mini-instruct-q4k.uqff"
++   from_uqff="phi3.5-mini-instruct-q4k-0.uqff"
 ),
 </code></pre>
 <h3 id="using-topology-for-device-mapping-with-uqff"><a class="header" href="#using-topology-for-device-mapping-with-uqff">Using topology for device mapping with UQFF</a></h3>
@@ -336,7 +343,7 @@ let model = UqffTextModelBuilder::new(
 <h2 id="creating-a-uqff-model"><a class="header" href="#creating-a-uqff-model">Creating a UQFF model</a></h2>
 <p>Creating a UQFF model requires you to generate the UQFF file.</p>
 <ul>
-<li>This means specifying a local path to a file ending in <code>.uqff</code>, where your new UQFF model will be created.</li>
+<li>Specify an output path: either a <code>.uqff</code> file path or a directory where files will be auto-named.</li>
 <li>The quantization of a UQFF model is determined from the ISQ or model topology (see the <a href="TOPOLOGY.html">topology docs</a> for more details on how ISQ and the topology mix).</li>
 </ul>
 <p>Along with the UQFF file, the generation process will also output several <code>.json</code> configuration files and <code>residual.safetensors</code>. All of these files are considered the
@@ -344,23 +351,40 @@ UQFF model, and should be kept together or uploaded.</p>
 <blockquote>
 <p>Note: Only the <code>.uqff</code> files are unique to the quantization level(s). If you are generating multiple UQFF files, it is OK for the others to be overwritten.</p>
 </blockquote>
-<p>After creating the UQFF file, you can upload the model to Hugging Face. To do this:</p>
-<ol>
-<li><a href="https://huggingface.co/docs/transformers/v4.17.0/en/create_a_model">Create a new model</a>.</li>
-<li>Upload the UQFF file:
-<ul>
-<li>With the web interface: <a href="https://huggingface.co/docs/hub/en/models-uploading#using-the-web-interface">guide here</a>.</li>
-<li>With Git: <a href="#upload-with-git-lfs">steps here</a></li>
-</ul>
-</li>
-<li>Locally, generate the model card file with <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/generate_uqff_card.py">this Python script</a>..</li>
-<li>In the web interface, press the <code>Create Model Card</code> button and paste the generated model card.</li>
-</ol>
-<p><strong>⭐ Check out <a href="https://github.com/EricLBuehler/uqff_maker">uqff_maker</a> to make UQFF models with an easy CLI!</strong></p>
-<pre><code class="language-bash">mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq 4 -o phi3.5-mini-instruct-q4k.uqff
+<p><strong>Single quantization (file output):</strong></p>
+<pre><code class="language-bash">mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/phi3.5-mini-instruct-q4k.uqff
 </code></pre>
-<h3 id="upload-with-git"><a class="header" href="#upload-with-git">Upload with Git</a></h3>
-<p>To upload a UQFF model using Git, you will most likely need to set up Git LFS:</p>
+<p><strong>Single quantization (directory output):</strong></p>
+<pre><code class="language-bash">mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/
+</code></pre>
+<p><strong>Multiple quantizations at once (directory output):</strong></p>
+<p>Generate multiple UQFF files by specifying multiple <code>--isq</code> types. All quantizations go to the same output directory.</p>
+<pre><code class="language-bash"># Comma-separated ISQ types
+mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k,q8_0 -o phi3.5-uqff/
+
+# Equivalent: repeated --isq flags
+mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k --isq q8_0 -o phi3.5-uqff/
+</code></pre>
+<p>This produces the following in <code>phi3.5-uqff/</code>:</p>
+<ul>
+<li><code>q4k-0.uqff</code> (and additional shards <code>q4k-1.uqff</code>, … if the model is large)</li>
+<li><code>q8_0-0.uqff</code> (and additional shards if needed)</li>
+<li><code>README.md</code> (auto-generated model card for Hugging Face)</li>
+<li>Shared files: <code>config.json</code>, <code>tokenizer.json</code>, <code>residual.safetensors</code>, etc.</li>
+</ul>
+<blockquote>
+<p>Note: Multiple <code>--isq</code> values require a directory output path (not a <code>.uqff</code> file path).</p>
+</blockquote>
+<h3 id="model-card-generation"><a class="header" href="#model-card-generation">Model card generation</a></h3>
+<p>When using directory output mode, the <code>quantize</code> command automatically generates a <code>README.md</code> model card in the output directory. This model card includes Hugging Face YAML frontmatter, a description, and an examples table with the appropriate <code>--from-uqff</code> commands for each quantization.</p>
+<p>To skip model card generation, use <code>--no-readme</code>:</p>
+<pre><code class="language-bash">mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/ --no-readme
+</code></pre>
+<h3 id="uploading-to-hugging-face"><a class="header" href="#uploading-to-hugging-face">Uploading to Hugging Face</a></h3>
+<p>After quantization completes in directory mode, the <code>quantize</code> command prints the <code>huggingface-cli</code> upload command you can use. The general form is:</p>
+<pre><code class="language-bash">huggingface-cli upload &lt;YOUR_USERNAME&gt;/&lt;MODEL_NAME&gt;-UQFF &lt;output_dir&gt; --repo-type model --private
+</code></pre>
+<p>Alternatively, you can upload with Git LFS:</p>
 <ol>
 <li>Install <a href="https://github.com/git-lfs/git-lfs?tab=readme-ov-file#installing">git-lfs</a></li>
 <li>Run <code>git lfs install</code></li>

@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-dbe47197.js";
+            window.path_to_searchindex_js = "searchindex-559de736.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cf64f8f3.js"></script>
@@ -337,7 +337,7 @@ in_situ_quant = "q4k"
 </thead>
 <tbody>
 <tr><td><code>in_situ_quant</code></td><td>ISQ level: <code>"4"</code>, <code>"8"</code>, <code>"q4_0"</code>, <code>"q4k"</code>, <code>"q6k"</code>, etc.</td></tr>
-<tr><td><code>from_uqff</code></td><td>UQFF file(s) to load (semicolon-separated)</td></tr>
+<tr><td><code>from_uqff</code></td><td>UQFF file(s) to load (semicolon-separated). Shards are auto-discovered: specifying the first shard (e.g., <code>q4k-0.uqff</code>) automatically finds <code>q4k-1.uqff</code>, etc.</td></tr>
 <tr><td><code>isq_organization</code></td><td>ISQ strategy: <code>"default"</code> or <code>"moqe"</code></td></tr>
 <tr><td><code>imatrix</code></td><td>imatrix file for enhanced quantization</td></tr>
 <tr><td><code>calibration_file</code></td><td>Calibration file for imatrix generation</td></tr>
