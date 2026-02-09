@@ -3,8 +3,8 @@ use mistralrs_quant::QuantizedConfig;
 use crate::layers::Activation;
 use crate::serde_default_fn;
 
-// Re-export vision config from qwen3_vl
-pub use crate::vision_models::qwen3_vl::config::VisionConfig;
+// Re-export vision config and MRopeScaling from qwen3_vl
+pub use crate::vision_models::qwen3_vl::config::{MRopeScaling, VisionConfig};
 
 serde_default_fn!(Vec<usize>, default_mlp_only_layers, Vec::new());
 serde_default_fn!(usize, default_decoder_sparse_step, 1);
@@ -27,6 +27,7 @@ pub struct TextConfig {
     pub rms_norm_eps: f64,
     pub rope_theta: f64,
     pub sliding_window: Option<usize>,
+    pub rope_scaling: MRopeScaling,
     #[serde(default)]
     pub quantization_config: Option<QuantizedConfig>,
     // MoE specific fields

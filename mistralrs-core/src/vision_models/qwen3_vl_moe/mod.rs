@@ -619,7 +619,6 @@ impl Qwen3VLMoEModel {
         let out = self.text.forward_embeds(
             input_embeds,
             attention_mask.as_ref(),
-            seqlen_offsets,
             &position_ids,
             context_lens,
             metadata,
