@@ -21,8 +21,6 @@ use mistralrs_core::{
     RequestMessage, Response, SamplingParams,
 };
 use tokio::sync::mpsc::{Receiver, Sender};
-use tracing::warn;
-
 use crate::{
     completion_core::{
         convert_stop_tokens, get_dry_sampling_params, handle_completion_error,
@@ -208,10 +206,6 @@ pub fn parse_request(
 
     let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
 
-    if oairequest.logprobs.is_some() {
-        warn!("Completion requests do not support logprobs.");
-    }
-
     let is_streaming = oairequest.stream.unwrap_or(false);
 
     let dry_params = get_dry_sampling_params(
@@ -234,7 +228,7 @@ pub fn parse_request(
                 top_k: oairequest.top_k,
                 top_p: oairequest.top_p,
                 min_p: oairequest.min_p,
-                top_n_logprobs: 1,
+                top_n_logprobs: oairequest.logprobs.unwrap_or(1),
                 frequency_penalty: oairequest.frequency_penalty,
                 presence_penalty: oairequest.presence_penalty,
                 repetition_penalty: oairequest.repetition_penalty,
@@ -245,7 +239,7 @@ pub fn parse_request(
                 dry_params,
             },
             response: tx,
-            return_logprobs: false,
+            return_logprobs: oairequest.logprobs.is_some(),
             is_streaming,
             suffix: oairequest.suffix,
             constraint: match oairequest.grammar {
