@@ -75,8 +75,7 @@ impl Gemma3MultiModalProjector {
     pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
-        uvb.pp("mm_soft_emb_norm")
-            .add(&self.mm_soft_emb_norm);
+        uvb.pp("mm_soft_emb_norm").add(&self.mm_soft_emb_norm);
 
         let mut tensors = uvb.to_safetensors();
         tensors.push((

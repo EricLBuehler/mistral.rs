@@ -17,7 +17,9 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     kv_cache::{HybridCache, HybridCacheConfig, HybridLayerType},
-    layers::{embedding, linear_no_bias, CausalMasker, GemmaRmsNorm, MatMul, RotaryEmbedding, Sdpa},
+    layers::{
+        embedding, linear_no_bias, CausalMasker, GemmaRmsNorm, MatMul, RotaryEmbedding, Sdpa,
+    },
     layers_masker::PastKvLenCache,
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -1673,9 +1675,7 @@ impl IsqModel for Model {
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let uvb_l = uvb_m.pp("layers").pp(layer_idx);
-            uvb_l
-                .pp("input_layernorm")
-                .add(&layer.input_layernorm);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
             uvb_l
                 .pp("post_attention_layernorm")
                 .add(&layer.post_attention_layernorm);

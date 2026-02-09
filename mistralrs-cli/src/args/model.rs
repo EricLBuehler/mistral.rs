@@ -88,7 +88,9 @@ pub struct QuantizationOptions {
     #[arg(long = "isq")]
     pub in_situ_quant: Option<String>,
 
-    /// UQFF file(s) to load from (semicolon-separated for multiple)
+    /// UQFF file(s) to load from. Shards are auto-discovered: specifying the first
+    /// shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons
+    /// to separate different quantizations (e.g., "q4k-0.uqff;q8_0-0.uqff").
     #[arg(long)]
     pub from_uqff: Option<String>,
 

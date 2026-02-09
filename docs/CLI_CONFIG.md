@@ -128,7 +128,7 @@ Define one or more models. Each `[[models]]` entry creates a new model.
 | Option | Description |
 |--------|-------------|
 | `in_situ_quant` | ISQ level: `"4"`, `"8"`, `"q4_0"`, `"q4k"`, `"q6k"`, etc. |
-| `from_uqff` | UQFF file(s) to load (semicolon-separated) |
+| `from_uqff` | UQFF file(s) to load (semicolon-separated). Shards are auto-discovered: specifying the first shard (e.g., `q4k-0.uqff`) automatically finds `q4k-1.uqff`, etc. |
 | `isq_organization` | ISQ strategy: `"default"` or `"moqe"` |
 | `imatrix` | imatrix file for enhanced quantization |
 | `calibration_file` | Calibration file for imatrix generation |

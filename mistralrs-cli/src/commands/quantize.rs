@@ -1,7 +1,8 @@
 //! Quantize command implementation for UQFF generation
 
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashSet};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use tracing::{info, warn};
@@ -31,13 +32,36 @@ fn get_output_path(model_type: &QuantizeModelType) -> &PathBuf {
     }
 }
 
+/// Extract the model ID from the QuantizeModelType
+fn get_model_id(model_type: &QuantizeModelType) -> &str {
+    match model_type {
+        QuantizeModelType::Auto { model, .. } => &model.model_id,
+        QuantizeModelType::Text { model, .. } => &model.model_id,
+        QuantizeModelType::Vision { model, .. } => &model.model_id,
+        QuantizeModelType::Embedding { model, .. } => &model.model_id,
+    }
+}
+
+/// Extract the no_readme flag from the QuantizeModelType
+fn get_no_readme(model_type: &QuantizeModelType) -> bool {
+    match model_type {
+        QuantizeModelType::Auto { output, .. } => output.no_readme,
+        QuantizeModelType::Text { output, .. } => output.no_readme,
+        QuantizeModelType::Vision { output, .. } => output.no_readme,
+        QuantizeModelType::Embedding { output, .. } => output.no_readme,
+    }
+}
+
 /// Run UQFF quantization and generation, supporting multiple ISQ types.
 pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) -> Result<()> {
     initialize_logging();
 
     let isq_values = get_isq_values(&model_type);
-    let base_output = get_output_path(&model_type);
+    let base_output = get_output_path(&model_type).clone();
     let file_mode = base_output.extension().map_or(false, |ext| ext == "uqff");
+    let model_id = get_model_id(&model_type).to_string();
+    let is_vision = matches!(&model_type, QuantizeModelType::Vision { .. });
+    let no_readme = get_no_readme(&model_type);
 
     // Multiple ISQ values require directory output mode
     if isq_values.len() > 1 && file_mode {
@@ -69,7 +93,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
         let effective_output = if file_mode {
             base_output.clone()
         } else {
-            std::fs::create_dir_all(base_output)?;
+            std::fs::create_dir_all(&base_output)?;
             base_output.join(format!("{}.uqff", isq.to_lowercase()))
         };
 
@@ -110,7 +134,133 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
         info!("All {} UQFF quantizations complete!", total);
     }
 
+    // Generate README.md model card in directory mode (unless disabled)
+    if !file_mode && !no_readme {
+        if let Err(e) = generate_model_card(&base_output, &model_id, is_vision) {
+            warn!("Failed to generate README.md: {}", e);
+        }
+    }
+
+    // Print upload hint in directory mode
+    if !file_mode {
+        print_upload_hint(&base_output, &model_id);
+    }
+
     Ok(())
+}
+
+/// Generate a README.md model card in the UQFF output directory.
+fn generate_model_card(output_dir: &Path, model_id: &str, is_vision: bool) -> Result<()> {
+    // Scan the output directory for .uqff files and group by prefix
+    let mut groups: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+    for entry in std::fs::read_dir(output_dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            let path = entry.path();
+            if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map_or(false, |e| e == "uqff")
+            {
+                let stem = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default();
+                // Group shards: strip trailing numeric suffix (e.g., "q4k-0" -> "q4k")
+                let key = if let Some((pre, suf)) = stem.rsplit_once('-') {
+                    if suf.chars().all(|c| c.is_ascii_digit()) {
+                        pre.to_string()
+                    } else {
+                        stem.to_string()
+                    }
+                } else {
+                    stem.to_string()
+                };
+                groups.entry(key).or_default().push(path);
+            }
+        }
+    }
+
+    if groups.is_empty() {
+        warn!("No .uqff files found in output directory, skipping README.md generation");
+        return Ok(());
+    }
+
+    let mut output = format!(
+        r#"---
+tags:
+  - uqff
+  - mistral.rs
+base_model: {model_id}
+base_model_relation: quantized
+---
+
+# `{model_id}`, UQFF quantization
+
+Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation: [UQFF docs](https://github.com/EricLBuehler/mistral.rs/blob/master/docs/UQFF.md).
+
+1) **Flexible**: Multiple quantization formats in *one* file format with *one* framework to run them all.
+2) **Reliable**: Compatibility ensured with *embedded* and *checked* semantic versioning information from day 1.
+3) **Easy**: Download UQFF models *easily* and *quickly* from Hugging Face, or use a local file.
+4) **Customizable**: Make and publish your own UQFF files in minutes.
+
+## Examples
+
+|Quantization|Command|
+|--|--|
+"#
+    );
+
+    let model_type_flag = if is_vision { " vision-plain" } else { "" };
+
+    for (prefix, paths) in &groups {
+        // Sort shards by numeric suffix
+        let mut paths_sorted = paths.clone();
+        paths_sorted.sort_by_key(|p| {
+            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+            if let Some((_, suf)) = stem.rsplit_once('-') {
+                suf.parse::<u64>().unwrap_or(u64::MAX)
+            } else {
+                u64::MAX
+            }
+        });
+
+        // Use only the first shard file (auto-discovery handles the rest)
+        let first_file = paths_sorted[0]
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+
+        let quant_name = prefix.to_uppercase();
+        output += &format!(
+            "|{quant_name}|`mistralrs run -m <REPO_ID>{model_type_flag} --from-uqff {first_file}`|\n"
+        );
+    }
+
+    let readme_path = output_dir.join("README.md");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&readme_path)?;
+    file.write_all(output.as_bytes())?;
+
+    info!("Generated model card at `{}`", readme_path.display());
+    Ok(())
+}
+
+/// Print the huggingface-cli upload command for the user.
+fn print_upload_hint(output_dir: &Path, model_id: &str) {
+    let model_name = Path::new(model_id)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(model_id);
+
+    info!("To upload your UQFF to Hugging Face, run:");
+    info!(
+        "  huggingface-cli upload <YOUR_USERNAME>/{model_name}-UQFF {} --repo-type model --private",
+        output_dir.display()
+    );
 }
 
 /// Convert QuantizeModelType to ModelSelected with write_uqff set.

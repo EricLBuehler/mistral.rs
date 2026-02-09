@@ -173,6 +173,43 @@ pub fn parse_isq_value(s: &str, device: Option<&Device>) -> Result<IsqType, Stri
     Ok(tp)
 }
 
+/// Given a UQFF filename like `"q4k-0.uqff"`, returns `Some(("q4k", 0))`.
+/// Returns `None` for non-sharded filenames like `"model.uqff"` where the
+/// suffix after the last `-` is not a number.
+pub fn parse_uqff_shard(filename: &str) -> Option<(String, u64)> {
+    let stem = std::path::Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())?;
+    let (prefix, suffix) = stem.rsplit_once('-')?;
+    let index = suffix.parse::<u64>().ok()?;
+    Some((prefix.to_string(), index))
+}
+
+/// Expand a single UQFF filename to include all sibling shards.
+///
+/// Given `"q4k-0.uqff"` and a list of available files, returns
+/// `["q4k-0.uqff", "q4k-1.uqff", ...]` for all sequential indices found.
+/// Non-sharded filenames (those not matching `{prefix}-{N}.uqff`) are returned as-is.
+pub fn expand_uqff_shards(first_file: &str, available_files: &[String]) -> Vec<String> {
+    let Some((prefix, _)) = parse_uqff_shard(first_file) else {
+        return vec![first_file.to_string()];
+    };
+    let mut shards = Vec::new();
+    for index in 0u64.. {
+        let candidate = format!("{prefix}-{index}.uqff");
+        if available_files.iter().any(|f| f == &candidate) {
+            shards.push(candidate);
+        } else {
+            break;
+        }
+    }
+    if shards.is_empty() {
+        vec![first_file.to_string()]
+    } else {
+        shards
+    }
+}
+
 #[derive(Clone, Debug, Copy, Default, Deserialize, serde::Serialize)]
 pub enum IsqOrganization {
     #[default]

@@ -74,7 +74,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Default`
 - `MoQE`: if applicable, only quantize MoE experts. https://arxiv.org/abs/2310.02410
 
-> Note: `from_uqff` specified a UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;).
+> Note: `from_uqff` specifies a UQFF path to load from. If provided, this takes precedence over applying ISQ. For sharded models, you only need to specify the first shard (e.g., `q4k-0.uqff`) -- the remaining shards are auto-discovered. For multiple different quantizations, use a semicolon delimiter (;).
 
 > Note: `enable_thinking` enables thinking for models that support the configuration.
 > Note: `truncate_sequence=True` trims prompts that would otherwise exceed the model's maximum context length. Leave it `False` to receive a validation error instead.

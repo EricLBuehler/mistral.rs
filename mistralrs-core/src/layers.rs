@@ -214,7 +214,9 @@ impl RmsNorm {
     }
 
     /// Gemma uses weight + 1.0
-    #[deprecated(note = "Use GemmaRmsNorm::new() instead, which handles UQFF serialization correctly")]
+    #[deprecated(
+        note = "Use GemmaRmsNorm::new() instead, which handles UQFF serialization correctly"
+    )]
     pub fn new_gemma(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
         let w = vb.get(size, "weight")?;
         let w = (w + 1.0)?;

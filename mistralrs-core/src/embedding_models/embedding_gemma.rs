@@ -569,9 +569,7 @@ impl IsqModel for EmbeddingGemma {
                 .pp("self_attn")
                 .pp("k_norm")
                 .add(&layer.self_attn.k_norm);
-            uvb_l
-                .pp("input_layernorm")
-                .add(&layer.input_layernorm);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
             uvb_l
                 .pp("post_attention_layernorm")
                 .add(&layer.post_attention_layernorm);
