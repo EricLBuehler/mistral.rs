@@ -1115,6 +1115,18 @@ pub trait IsqModel {
                 .collect::<candle_core::Result<Vec<_>>>()?;
         }
 
+        // Verify no DummyLayers remain after deserialization
+        {
+            let (check_tensors, _) = self.get_layers();
+            for (i, (tensor, layer_num)) in check_tensors.iter().enumerate() {
+                if tensor.name() == "dummy" {
+                    candle_core::bail!(
+                        "DummyLayer not replaced at index {i}, layer {layer_num:?} after load_from_artifacts"
+                    );
+                }
+            }
+        }
+
         let delta = Instant::now().duration_since(t_start).as_secs_f32();
         info!("Loaded in-situ quantization artifacts into {total_tensors} total tensors. Took {delta:.2}s", );
 

@@ -1176,6 +1176,7 @@ impl SparseMoeBlock {
 
         // 3. Shared expert with sigmoid gating
         let shared_out = self.shared_expert.forward(xs)?;
+
         let shared_gate = candle_nn::ops::sigmoid(
             &self
                 .shared_expert_gate
@@ -1622,12 +1623,15 @@ impl Model {
 
         let x = x.to_device(&self.device)?;
         let x = self.norm.forward(&x)?;
+
         let mut x = extract_logits(&x, context_lens)?;
 
         if let Some(t) = self.lm_head.quantized_act_type() {
             x = x.to_dtype(t)?;
         }
-        MatMul.qmethod_matmul(&x, &*self.lm_head)
+        let logits = MatMul.qmethod_matmul(&x, &*self.lm_head)?;
+
+        Ok(logits)
     }
 }
 
@@ -1665,29 +1669,33 @@ impl IsqModel for Model {
         let uvb = UnVarBuilder::new();
         let uvb_m = uvb.pp("model");
         uvb_m.pp("embed_tokens").add(&self.embed_tokens);
-        uvb_m
-            .pp("norm")
-            .add_tensor("weight", self.norm.weight().clone());
+        uvb_m.pp("norm").add(&self.norm.undo_gemma().unwrap());
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let uvb_l = uvb_m.pp("layers").pp(layer_idx);
-            uvb_l
-                .pp("input_layernorm")
-                .add_tensor("weight", layer.input_layernorm.weight().clone());
-            uvb_l
-                .pp("post_attention_layernorm")
-                .add_tensor("weight", layer.post_attention_layernorm.weight().clone());
+            uvb_l.pp("input_layernorm").add(
+                &layer
+                    .input_layernorm
+                    .undo_gemma()
+                    .expect("undo gemma input_layernorm"),
+            );
+            uvb_l.pp("post_attention_layernorm").add(
+                &layer
+                    .post_attention_layernorm
+                    .undo_gemma()
+                    .expect("undo gemma post_attention_layernorm"),
+            );
 
             match &layer.layer_impl {
                 LayerImpl::FullAttention(attn) => {
                     uvb_l
                         .pp("self_attn")
                         .pp("q_norm")
-                        .add_tensor("weight", attn.q_norm.weight().clone());
+                        .add(&attn.q_norm.undo_gemma().expect("undo gemma q_norm"));
                     uvb_l
                         .pp("self_attn")
                         .pp("k_norm")
-                        .add_tensor("weight", attn.k_norm.weight().clone());
+                        .add(&attn.k_norm.undo_gemma().expect("undo gemma k_norm"));
                 }
                 LayerImpl::LinearAttention(gdn) => {
                     uvb_l
