@@ -431,6 +431,12 @@ pub trait Pipeline:
         return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error>;
 
+    fn set_image_preview_sender(
+        &mut self,
+        _sender: Option<tokio::sync::mpsc::UnboundedSender<Vec<DynamicImage>>>,
+    ) {
+    }
+
     /// Returns the total of model execution time.
     #[allow(clippy::too_many_arguments)]
     async fn step(
@@ -445,6 +451,51 @@ pub trait Pipeline:
     ) -> Result<Duration, candle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
+                let mut preview_task = None;
+                let preview_interval = input_seqs
+                    .get(0)
+                    .and_then(|seq| seq.get_diffusion_diffusion_params())
+                    .and_then(|params| params.preview_interval)
+                    .filter(|interval| *interval > 0);
+
+                if preview_interval.is_some() {
+                    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+                    self.set_image_preview_sender(Some(tx));
+
+                    let responders = input_seqs
+                        .iter()
+                        .map(|seq| seq.responder())
+                        .collect::<Vec<_>>();
+                    let formats = input_seqs
+                        .iter()
+                        .map(|seq| {
+                            seq.image_gen_response_format()
+                                .unwrap_or(crate::ImageGenerationResponseFormat::Url)
+                        })
+                        .collect::<Vec<_>>();
+                    let created = input_seqs
+                        .get(0)
+                        .map(|seq| seq.creation_time() as u128)
+                        .unwrap_or_default();
+
+                    preview_task = Some(tokio::spawn(async move {
+                        while let Some(images) = rx.recv().await {
+                            if let Err(err) = response::send_image_preview_responses(
+                                &responders,
+                                &formats,
+                                images,
+                                created,
+                            )
+                            .await
+                            {
+                                tracing::warn!(error = %err, "Failed to send image preview");
+                            }
+                        }
+                    }));
+                } else {
+                    self.set_image_preview_sender(None);
+                }
+
                 let inputs_iter =
                     std::iter::once(self.get_processor().inputs_processor().process_inputs(
                         self.tokenizer(),
@@ -558,6 +609,8 @@ pub trait Pipeline:
                     return Ok(exec_duration);
                 }
 
+                self.set_image_preview_sender(None);
+
                 let start = Instant::now();
                 let logits_on_cpu = logits.len() > 1;
                 let logits = logits
@@ -664,6 +717,10 @@ pub trait Pipeline:
                 }
                 let end = Instant::now();
                 exec_duration += end.duration_since(start);
+
+                if let Some(task) = preview_task {
+                    task.abort();
+                }
 
                 Ok(exec_duration)
             }

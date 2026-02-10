@@ -1539,7 +1539,14 @@ impl Runner {
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
                 format: response_format,
-                generation_params: DiffusionGenerationParams { height, width },
+                generation_params: DiffusionGenerationParams {
+                    height,
+                    width,
+                    num_steps: None,
+                    guidance_scale: None,
+                    negative_prompt: None,
+                    preview_interval: None,
+                },
             },
             sampling_params: SamplingParams::deterministic(),
             response: tx,

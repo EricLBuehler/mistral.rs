@@ -7,6 +7,18 @@ use serde::Deserialize;
 
 use crate::layers::{conv2d, group_norm, MatMul};
 
+fn default_scaling_factor() -> f64 {
+    1.0
+}
+
+fn default_shift_factor() -> f64 {
+    0.0
+}
+
+fn default_batch_norm_eps() -> f64 {
+    1e-5
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub in_channels: usize,
@@ -14,8 +26,14 @@ pub struct Config {
     pub block_out_channels: Vec<usize>,
     pub layers_per_block: usize,
     pub latent_channels: usize,
+    /// Scaling factor for latent space. FLUX.1 uses specific values, FLUX.2 defaults to 1.0.
+    #[serde(default = "default_scaling_factor")]
     pub scaling_factor: f64,
+    /// Shift factor for latent space. FLUX.1 uses specific values, FLUX.2 defaults to 0.0.
+    #[serde(default = "default_shift_factor")]
     pub shift_factor: f64,
+    #[serde(default = "default_batch_norm_eps")]
+    pub batch_norm_eps: f64,
     pub norm_num_groups: usize,
 }
 

@@ -7,25 +7,109 @@ use serde::Deserialize;
 
 use crate::layers::{self, MatMul};
 
-const MLP_RATIO: f64 = 4.;
-const HIDDEN_SIZE: usize = 3072;
-const AXES_DIM: &[usize] = &[16, 56, 56];
-const THETA: usize = 10000;
+// FLUX.1 defaults
+const DEFAULT_MLP_RATIO: f64 = 4.;
+const DEFAULT_HIDDEN_SIZE: usize = 3072;
+const DEFAULT_AXES_DIM: &[usize] = &[16, 56, 56];
+const DEFAULT_THETA: usize = 10000;
+const DEFAULT_POOLED_PROJECTION_DIM: usize = 768;
+
+fn default_mlp_ratio() -> f64 {
+    DEFAULT_MLP_RATIO
+}
+
+fn default_pooled_projection_dim() -> usize {
+    DEFAULT_POOLED_PROJECTION_DIM
+}
+
+fn default_rope_theta() -> usize {
+    DEFAULT_THETA
+}
+
+fn default_axes_dims_rope() -> Vec<usize> {
+    DEFAULT_AXES_DIM.to_vec()
+}
+
+fn default_attention_head_dim() -> Option<usize> {
+    None
+}
+
+fn default_use_bias() -> bool {
+    true // FLUX.1 uses biases, FLUX.2 doesn't
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub in_channels: usize,
+    /// Pooled projection dimension for CLIP embeddings. FLUX.2 doesn't use this.
+    #[serde(default = "default_pooled_projection_dim")]
     pub pooled_projection_dim: usize,
     pub joint_attention_dim: usize,
     pub num_attention_heads: usize,
     pub num_layers: usize,
     pub num_single_layers: usize,
     pub guidance_embeds: bool,
+    /// MLP expansion ratio. FLUX.1 uses 4.0, FLUX.2 uses 3.0.
+    #[serde(default = "default_mlp_ratio")]
+    pub mlp_ratio: f64,
+    /// RoPE theta value. FLUX.1 uses 10000, FLUX.2 uses 2000.
+    #[serde(default = "default_rope_theta")]
+    pub rope_theta: usize,
+    /// Axis dimensions for RoPE. FLUX.1 uses [16, 56, 56], FLUX.2 uses [32, 32, 32, 32].
+    #[serde(default = "default_axes_dims_rope")]
+    pub axes_dims_rope: Vec<usize>,
+    /// Attention head dimension. If set, hidden_size = attention_head_dim * num_attention_heads.
+    /// Otherwise, falls back to default hidden size.
+    #[serde(default = "default_attention_head_dim")]
+    pub attention_head_dim: Option<usize>,
+    /// Whether to use biases in linear layers. FLUX.1 uses biases (true), FLUX.2 doesn't (false).
+    #[serde(default = "default_use_bias")]
+    pub use_bias: bool,
+}
+
+impl Config {
+    /// Get the hidden size for this model configuration.
+    pub fn hidden_size(&self) -> usize {
+        self.attention_head_dim
+            .map(|dim| dim * self.num_attention_heads)
+            .unwrap_or(DEFAULT_HIDDEN_SIZE)
+    }
+
+    /// Check if this is a FLUX.2 style model (detected by attention_head_dim being set)
+    pub fn is_flux2(&self) -> bool {
+        self.attention_head_dim.is_some()
+    }
+
+    /// Get whether to use biases in linear layers.
+    /// FLUX.1 uses biases, FLUX.2 doesn't.
+    /// Auto-detects based on attention_head_dim presence if use_bias is default.
+    pub fn should_use_bias(&self) -> bool {
+        // If attention_head_dim is set, this is FLUX.2 and shouldn't use bias
+        if self.is_flux2() {
+            false
+        } else {
+            self.use_bias
+        }
+    }
 }
 
 fn layer_norm(dim: usize, vb: ShardedVarBuilder) -> Result<LayerNorm> {
     let ws = Tensor::ones(dim, vb.dtype(), vb.device())?;
     Ok(LayerNorm::new_no_bias(ws, 1e-6))
+}
+
+/// Create a linear layer with or without bias based on config
+fn linear_maybe_bias(
+    in_dim: usize,
+    out_dim: usize,
+    use_bias: bool,
+    vb: ShardedVarBuilder,
+) -> Result<Linear> {
+    if use_bias {
+        layers::linear(in_dim, out_dim, vb)
+    } else {
+        layers::linear_no_bias(in_dim, out_dim, vb)
+    }
 }
 
 fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
@@ -384,8 +468,8 @@ pub struct DoubleStreamBlock {
 
 impl DoubleStreamBlock {
     fn new(cfg: &Config, vb: ShardedVarBuilder) -> Result<Self> {
-        let h_sz = HIDDEN_SIZE;
-        let mlp_sz = (h_sz as f64 * MLP_RATIO) as usize;
+        let h_sz = cfg.hidden_size();
+        let mlp_sz = (h_sz as f64 * cfg.mlp_ratio) as usize;
         let img_mod = Modulation2::new(h_sz, vb.pp("img_mod"))?;
         let img_norm1 = layer_norm(h_sz, vb.pp("img_norm1"))?;
         let img_attn = SelfAttention::new(h_sz, cfg.num_attention_heads, true, vb.pp("img_attn"))?;
@@ -497,8 +581,8 @@ pub struct SingleStreamBlock {
 
 impl SingleStreamBlock {
     fn new(cfg: &Config, vb: ShardedVarBuilder) -> Result<Self> {
-        let h_sz = HIDDEN_SIZE;
-        let mlp_sz = (h_sz as f64 * MLP_RATIO) as usize;
+        let h_sz = cfg.hidden_size();
+        let mlp_sz = (h_sz as f64 * cfg.mlp_ratio) as usize;
         let head_dim = h_sz / cfg.num_attention_heads;
         let linear1 = layers::linear(h_sz, h_sz * 3 + mlp_sz, vb.pp("linear1"))?;
         let linear2 = layers::linear(h_sz + mlp_sz, h_sz, vb.pp("linear2"))?;
@@ -628,14 +712,18 @@ impl Flux {
         device: Device,
         offloaded: bool,
     ) -> Result<Self> {
-        let img_in = layers::linear(
+        let hidden_size = cfg.hidden_size();
+        let use_bias = cfg.should_use_bias();
+        let img_in = linear_maybe_bias(
             cfg.in_channels,
-            HIDDEN_SIZE,
+            hidden_size,
+            use_bias,
             vb.pp("img_in").set_device(device.clone()),
         )?;
-        let txt_in = layers::linear(
+        let txt_in = linear_maybe_bias(
             cfg.joint_attention_dim,
-            HIDDEN_SIZE,
+            hidden_size,
+            use_bias,
             vb.pp("txt_in").set_device(device.clone()),
         )?;
         let mut double_blocks = Vec::with_capacity(cfg.num_layers);
@@ -652,18 +740,18 @@ impl Flux {
         }
         let time_in = MlpEmbedder::new(
             256,
-            HIDDEN_SIZE,
+            hidden_size,
             vb.pp("time_in").set_device(device.clone()),
         )?;
         let vector_in = MlpEmbedder::new(
             cfg.pooled_projection_dim,
-            HIDDEN_SIZE,
+            hidden_size,
             vb.pp("vector_in").set_device(device.clone()),
         )?;
         let guidance_in = if cfg.guidance_embeds {
             let mlp = MlpEmbedder::new(
                 256,
-                HIDDEN_SIZE,
+                hidden_size,
                 vb.pp("guidance_in").set_device(device.clone()),
             )?;
             Some(mlp)
@@ -671,13 +759,13 @@ impl Flux {
             None
         };
         let final_layer = LastLayer::new(
-            HIDDEN_SIZE,
+            hidden_size,
             1,
             cfg.in_channels,
             vb.pp("final_layer").set_device(device.clone()),
         )?;
-        let pe_dim = HIDDEN_SIZE / cfg.num_attention_heads;
-        let pe_embedder = EmbedNd::new(pe_dim, THETA, AXES_DIM.to_vec());
+        let pe_dim = hidden_size / cfg.num_attention_heads;
+        let pe_embedder = EmbedNd::new(pe_dim, cfg.rope_theta, cfg.axes_dims_rope.clone());
         Ok(Self {
             img_in,
             txt_in,
