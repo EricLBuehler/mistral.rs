@@ -28,7 +28,7 @@ extend-ignore-re = [
     "elem_to_loc_2_nd",
     "elem_to_loc_3_nd",
     "thr_reduce",
-    "thw",
+    "(?i)thw",
     "iy",
     "mxfp4_get_max_smem_optin",
     "alog",
