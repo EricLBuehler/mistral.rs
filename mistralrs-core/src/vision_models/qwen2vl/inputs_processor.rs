@@ -530,8 +530,8 @@ impl Qwen2VLImageProcessor {
 
         for mut image in images {
             image = image.resize_exact(
-                height,
                 width,
+                height,
                 config
                     .resampling
                     .map(|resample| Some(resample).to_filter())
