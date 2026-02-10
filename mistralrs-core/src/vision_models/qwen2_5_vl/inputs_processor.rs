@@ -216,6 +216,19 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 video_grid_thw_accum.push(video_grid_thw);
             }
 
+            // Cache the complete grid_thw for MRoPE position computation.
+            // Set once during the first inputs processor call when ALL images are present.
+            // Unlike cached_img_thw, this is never cleared by keep_num_images, so it
+            // remains valid even after prefix caching trims the image set.
+            for (idx, seq) in input_seqs.iter_mut().enumerate() {
+                if seq.multimodal.rope_img_grid_thw.is_none() {
+                    seq.multimodal.rope_img_grid_thw = image_grid_thw_accum[idx].clone();
+                }
+                if seq.multimodal.rope_vid_grid_thw.is_none() {
+                    seq.multimodal.rope_vid_grid_thw = video_grid_thw_accum[idx].clone();
+                }
+            }
+
             let image_grid_thw_accum = if image_grid_thw_accum.iter().any(|img| img.is_none()) {
                 None
             } else {
@@ -455,6 +468,32 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
 
         let seqlens = input_seqs.iter().map(|seq| seq.len()).collect::<Vec<_>>();
 
+        // Collect the complete rope grids from per-sequence cached values.
+        // These cover ALL images/videos in the full sequence (including prefix-cached ones)
+        // and are used for MRoPE position computation in get_rope_index.
+        let rope_img_grid_thw = {
+            let grids: Vec<_> = input_seqs
+                .iter()
+                .filter_map(|seq| seq.multimodal.rope_img_grid_thw.clone())
+                .collect();
+            if grids.is_empty() {
+                None
+            } else {
+                Some(Tensor::cat(&grids, 0).unwrap())
+            }
+        };
+        let rope_vid_grid_thw = {
+            let grids: Vec<_> = input_seqs
+                .iter()
+                .filter_map(|seq| seq.multimodal.rope_vid_grid_thw.clone())
+                .collect();
+            if grids.is_empty() {
+                None
+            } else {
+                Some(Tensor::cat(&grids, 0).unwrap())
+            }
+        };
+
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
@@ -465,6 +504,8 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 input_ids_full,
                 image_grid_thw,
                 video_grid_thw,
+                rope_img_grid_thw,
+                rope_vid_grid_thw,
                 seqlens,
                 continuous_img_pad,
                 continuous_vid_pad,

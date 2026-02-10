@@ -1241,13 +1241,18 @@ impl Qwen2VLRotaryEmbedding {
     }
 }
 
+/// Qwen3 VL uses **interleaved** MRoPE (not chunked like Qwen2 VL).
+/// Frequencies are arranged as THW THW THW... TTTT pattern.
+/// See `apply_interleaved_mrope` in modeling_qwen3_vl.py.
 #[derive(Debug, Clone)]
-pub struct Qwen2_5VLRotaryEmbedding {
+pub struct Qwen3VLRotaryEmbedding {
     inv_freq: Tensor,
-    mrope_section: Vec<usize>,
+    /// Precomputed interleave indices for H (dim=1, offset=1) and W (dim=2, offset=2).
+    /// Stored as (indices_1d, dim_idx) pairs. Created once at init to avoid CPU->GPU sync per step.
+    interleave_indices: Vec<(Tensor, usize)>,
 }
 
-impl Qwen2_5VLRotaryEmbedding {
+impl Qwen3VLRotaryEmbedding {
     pub fn new(
         base: f32,
         head_dim: usize,
@@ -1260,48 +1265,66 @@ impl Qwen2_5VLRotaryEmbedding {
             .collect();
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (inv_freq_len,), device)?.to_dtype(DType::F32)?;
+
+        // Precompute interleave index tensors for H (dim=1, offset=1) and W (dim=2, offset=2)
+        // to avoid CPU->GPU sync from Tensor::from_vec on every decode step.
+        let half_dim = head_dim / 2;
+        let mut interleave_indices = Vec::new();
+        for (dim_idx, offset) in [(1usize, 1usize), (2usize, 2usize)] {
+            let length = mrope_section[dim_idx] * 3;
+            if length <= half_dim {
+                let indices: Vec<u32> = (offset..length).step_by(3).map(|i| i as u32).collect();
+                if !indices.is_empty() {
+                    let num = indices.len();
+                    let idx_tensor = Tensor::from_vec(indices, (num,), device)?;
+                    interleave_indices.push((idx_tensor, dim_idx));
+                }
+            }
+        }
+
         Ok(Self {
             inv_freq,
-            mrope_section,
+            interleave_indices,
         })
     }
 
-    /// (cos, sin)
+    /// Compute (cos, sin) from 3D position_ids of shape (3, batch, seq_len).
+    /// Applies interleaved MRoPE: starts with temporal freqs, then overwrites
+    /// H positions (slice 1::3) and W positions (slice 2::3) within their sections.
     pub fn compute_cos_sin(&self, position_ids: &Tensor, dtype: DType) -> Result<(Tensor, Tensor)> {
+        // inv_freq: (head_dim/2,) -> (1, 1, head_dim/2, 1) -> expand to (3, batch, head_dim/2, 1)
         let inv_freq_expanded =
             self.inv_freq
                 .reshape((1, 1, (), 1))?
                 .repeat((3, position_ids.dim(1)?, 1, 1))?;
+        // position_ids: (3, batch, seq_len) -> (3, batch, 1, seq_len)
         let position_ids_expanded = position_ids.unsqueeze(2)?;
+        // freqs: (3, batch, head_dim/2, 1) @ (3, batch, 1, seq_len) -> (3, batch, head_dim/2, seq_len)
+        // -> transpose -> (3, batch, seq_len, head_dim/2)
         let freqs = inv_freq_expanded
             .matmul(&position_ids_expanded.to_dtype(inv_freq_expanded.dtype())?)?
             .transpose(2, 3)?;
-        let cos = freqs.cos()?;
-        let sin = freqs.sin()?;
 
-        let cos = Tensor::cat(
-            &cos.split(&self.mrope_section, D::Minus1)?
-                .into_iter()
-                .enumerate()
-                .map(|(i, m)| m.i(i % 3))
-                .collect::<Result<Vec<_>>>()?,
-            D::Minus1,
-        )?
-        .squeeze(0)?
-        .to_dtype(dtype)?
-        .contiguous()?;
-        let sin = Tensor::cat(
-            &sin.split(&self.mrope_section, D::Minus1)?
-                .into_iter()
-                .enumerate()
-                .map(|(i, m)| m.i(i % 3))
-                .collect::<Result<Vec<_>>>()?,
-            D::Minus1,
-        )?
-        .squeeze(0)?
-        .to_dtype(dtype)?
-        .contiguous()?;
+        // Apply interleaved MRoPE: start with temporal, overwrite H and W at interleaved positions
+        // freqs_t = freqs[0] as base (all temporal)
+        let mut freqs_t = freqs.i(0)?.contiguous()?;
+        let (batch, seq_len, _) = freqs_t.dims3()?;
 
+        // For H (dim=1) and W (dim=2), overwrite interleaved positions using precomputed indices
+        for (idx_tensor, dim_idx) in &self.interleave_indices {
+            let freqs_dim = freqs.i(*dim_idx)?.contiguous()?;
+            let num_indices = idx_tensor.dim(0)?;
+            let idx_expanded = idx_tensor
+                .reshape((1, 1, num_indices))?
+                .repeat((batch, seq_len, 1))?;
+            let src_vals = freqs_dim.gather(&idx_expanded, D::Minus1)?;
+            freqs_t = freqs_t.scatter(&idx_expanded, &src_vals, D::Minus1)?;
+        }
+
+        // cos/sin from freqs_t -> (batch, seq_len, head_dim/2)
+        // candle's rope() expects half-dim cos/sin and handles both halves internally
+        let cos = freqs_t.cos()?.to_dtype(dtype)?.contiguous()?;
+        let sin = freqs_t.sin()?.to_dtype(dtype)?.contiguous()?;
         Ok((cos, sin))
     }
 
@@ -1318,12 +1341,12 @@ impl Qwen2_5VLRotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-pub struct Qwen3VLRotaryEmbedding {
+pub struct Qwen2_5VLRotaryEmbedding {
     inv_freq: Tensor,
     mrope_section: Vec<usize>,
 }
 
-impl Qwen3VLRotaryEmbedding {
+impl Qwen2_5VLRotaryEmbedding {
     pub fn new(
         base: f32,
         head_dim: usize,

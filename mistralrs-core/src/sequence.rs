@@ -275,6 +275,12 @@ pub struct MultimodalData {
     pub cached_pixel_values: Option<Tensor>,
     pub cached_img_thw: Option<Tensor>,
     pub cached_vid_thw: Option<Tensor>,
+    /// Complete image grid THW covering ALL images in the sequence (including prefix-cached ones).
+    /// Used by Qwen VL models for MRoPE position computation in `get_rope_index`.
+    /// Unlike `cached_img_thw`, this is never cleared by `keep_num_images`.
+    pub rope_img_grid_thw: Option<Tensor>,
+    /// Complete video grid THW covering ALL videos in the sequence (including prefix-cached ones).
+    pub rope_vid_grid_thw: Option<Tensor>,
     pub has_changed_prompt: bool,
     pub image_gen_response_format: Option<ImageGenerationResponseFormat>,
     pub diffusion_params: Option<DiffusionGenerationParams>,
@@ -293,6 +299,8 @@ impl MultimodalData {
             cached_pixel_values: None,
             cached_img_thw: None,
             cached_vid_thw: None,
+            rope_img_grid_thw: None,
+            rope_vid_grid_thw: None,
             has_changed_prompt: false,
             image_gen_response_format,
             diffusion_params,
@@ -371,8 +379,13 @@ impl MultimodalData {
 
     pub fn keep_num_images(&mut self, images_to_keep: usize) {
         if let Some(imgs) = self.input_images.as_mut() {
-            imgs.keep_num_images(images_to_keep)
+            imgs.keep_num_images(images_to_keep);
         }
+        // Invalidate preprocessed pixel value cache — the trimmed image set
+        // no longer matches the cached tensor dimensions (used by Qwen VL models).
+        self.cached_pixel_values = None;
+        self.cached_img_thw = None;
+        self.cached_vid_thw = None;
     }
 
     pub fn image_gen_response_format(&self) -> Option<ImageGenerationResponseFormat> {

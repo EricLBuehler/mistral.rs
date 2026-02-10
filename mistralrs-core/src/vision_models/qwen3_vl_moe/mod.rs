@@ -2,7 +2,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use text::Qwen3VLMoETextModel;
 
@@ -10,7 +10,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     layers::CausalMasker,
-    layers_masker::{masked_fill, PastKvLenCache},
+    layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -78,313 +78,6 @@ impl Qwen3VLMoEModel {
     }
 
     #[allow(clippy::too_many_arguments)]
-    /// (position_ids, mrope_position_deltas)
-    fn get_rope_index(
-        &self,
-        input_ids: &Tensor,
-        image_grid_thw: Option<&Tensor>,
-        video_grid_thw: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
-    ) -> Result<(Tensor, Tensor)> {
-        if image_grid_thw.is_some() || video_grid_thw.is_some() {
-            let batch = input_ids.dim(0)?;
-            let seq_len = input_ids.dim(1)?;
-            let device = input_ids.device().clone();
-
-            let attention_mask_tensor = match attention_mask {
-                Some(mask) => mask.clone(),
-                None => Tensor::ones((batch, seq_len), DType::F32, &device)?,
-            };
-            let attention_mask_vec = attention_mask_tensor.to_vec2::<f32>()?;
-            let input_ids_vec = input_ids.to_vec2::<u32>()?;
-
-            let image_grid_data = if let Some(grid) = image_grid_thw {
-                let raw = grid.to_vec2::<u32>()?;
-                let mut data = Vec::with_capacity(raw.len());
-                for row in raw {
-                    if row.len() != 3 {
-                        candle_core::bail!("image_grid_thw entries must have length 3");
-                    }
-                    data.push([row[0], row[1], row[2]]);
-                }
-                Some(data)
-            } else {
-                None
-            };
-
-            let video_grid_data = if let Some(grid) = video_grid_thw {
-                let raw = grid.to_vec2::<u32>()?;
-                let mut repeated = Vec::new();
-                for row in raw {
-                    if row.len() != 3 {
-                        candle_core::bail!("video_grid_thw entries must have length 3");
-                    }
-                    let repeat = row[0] as usize;
-                    for _ in 0..repeat {
-                        repeated.push([1, row[1], row[2]]);
-                    }
-                }
-                Some(repeated)
-            } else {
-                None
-            };
-
-            let mut image_index = 0usize;
-            let mut video_index = 0usize;
-            let merge_size = self.spatial_merge_size as u32;
-
-            let mut position_ids_data = vec![vec![vec![1i64; seq_len]; batch]; 3];
-            let mut mrope_position_deltas = Vec::with_capacity(batch);
-
-            for batch_idx in 0..batch {
-                let mask_row = &attention_mask_vec[batch_idx];
-                let input_row = &input_ids_vec[batch_idx];
-
-                let mut valid_indices = Vec::new();
-                let mut filtered_tokens = Vec::new();
-                for (idx, (&token, &mask_val)) in input_row.iter().zip(mask_row.iter()).enumerate()
-                {
-                    if mask_val != 0.0 {
-                        valid_indices.push(idx);
-                        filtered_tokens.push(token);
-                    }
-                }
-
-                let mut positions_for_valid: Vec<[i64; 3]> =
-                    Vec::with_capacity(valid_indices.len());
-                let mut max_position_value: Option<i64> = None;
-
-                let mut spans = Vec::new();
-                let mut span_idx = 0usize;
-                while span_idx < filtered_tokens.len() {
-                    if filtered_tokens[span_idx] == self.vision_start_token_id {
-                        let mut end_idx = span_idx + 1;
-                        while end_idx < filtered_tokens.len()
-                            && filtered_tokens[end_idx] != self.vision_end_token_id
-                        {
-                            end_idx += 1;
-                        }
-                        if end_idx == filtered_tokens.len() {
-                            candle_core::bail!(
-                                "vision_start_token_id without matching vision_end_token_id"
-                            );
-                        }
-                        spans.push((span_idx, end_idx));
-                        span_idx = end_idx + 1;
-                    } else {
-                        span_idx += 1;
-                    }
-                }
-
-                let mut max_last_llm_pos_ids: Option<i64> = None;
-                let mut cursor = 0usize;
-
-                for (start_idx, end_idx) in spans {
-                    if start_idx + 1 > end_idx {
-                        continue;
-                    }
-
-                    let placeholder_start = filtered_tokens[start_idx + 1..end_idx]
-                        .iter()
-                        .enumerate()
-                        .find_map(|(offset, &tok)| {
-                            (tok == self.image_token_id || tok == self.video_token_id)
-                                .then_some(offset + start_idx + 1)
-                        });
-                    let placeholder_start = match placeholder_start {
-                        Some(pos) => pos,
-                        None => {
-                            candle_core::bail!(
-                                "vision span missing image/video placeholder tokens"
-                            );
-                        }
-                    };
-
-                    let text_len = placeholder_start.saturating_sub(cursor);
-                    let st_idx = max_last_llm_pos_ids.unwrap_or(0);
-                    for offset in 0..text_len {
-                        let pos_val = st_idx + offset as i64;
-                        positions_for_valid.push([pos_val, pos_val, pos_val]);
-                        max_position_value = Some(match max_position_value {
-                            Some(current) => current.max(pos_val),
-                            None => pos_val,
-                        });
-                    }
-
-                    let placeholder_token_id = filtered_tokens[placeholder_start];
-                    let placeholder_slice = &filtered_tokens[placeholder_start..end_idx];
-                    if placeholder_slice.is_empty() {
-                        candle_core::bail!("vision span placeholder slice is empty");
-                    }
-                    if !placeholder_slice
-                        .iter()
-                        .all(|&tok| tok == placeholder_token_id)
-                    {
-                        candle_core::bail!("Mixed placeholder tokens found within a vision span");
-                    }
-                    let placeholder_len = placeholder_slice.len();
-
-                    let (grid_t, grid_h, grid_w) = match placeholder_token_id {
-                        id if id == self.image_token_id => {
-                            let Some(ref img_grid) = image_grid_data else {
-                                candle_core::bail!(
-                                    "image_grid_thw required for image placeholders"
-                                );
-                            };
-                            if image_index >= img_grid.len() {
-                                candle_core::bail!(
-                                    "Not enough image_grid_thw entries for placeholders"
-                                );
-                            }
-                            let grid = img_grid[image_index];
-                            image_index += 1;
-                            if merge_size == 0
-                                || grid[1] % merge_size != 0
-                                || grid[2] % merge_size != 0
-                            {
-                                candle_core::bail!(
-                                    "image grid dimensions must be divisible by spatial_merge_size"
-                                );
-                            }
-                            (
-                                grid[0] as usize,
-                                (grid[1] / merge_size) as usize,
-                                (grid[2] / merge_size) as usize,
-                            )
-                        }
-                        id if id == self.video_token_id => {
-                            let Some(ref vid_grid) = video_grid_data else {
-                                candle_core::bail!(
-                                    "video_grid_thw required for video placeholders"
-                                );
-                            };
-                            if video_index >= vid_grid.len() {
-                                candle_core::bail!(
-                                    "Not enough video_grid_thw entries for placeholders"
-                                );
-                            }
-                            let grid = vid_grid[video_index];
-                            video_index += 1;
-                            if merge_size == 0
-                                || grid[1] % merge_size != 0
-                                || grid[2] % merge_size != 0
-                            {
-                                candle_core::bail!(
-                                    "video grid dimensions must be divisible by spatial_merge_size"
-                                );
-                            }
-                            (
-                                grid[0] as usize,
-                                (grid[1] / merge_size) as usize,
-                                (grid[2] / merge_size) as usize,
-                            )
-                        }
-                        other => {
-                            candle_core::bail!("Unexpected placeholder token id {other}");
-                        }
-                    };
-
-                    if grid_t == 0 || grid_h == 0 || grid_w == 0 {
-                        candle_core::bail!("Zero-sized grid encountered in vision span");
-                    }
-
-                    let expected_len = grid_t * grid_h * grid_w;
-                    if placeholder_len != expected_len {
-                        candle_core::bail!(
-                            "Placeholder token count {placeholder_len} does not match expected {expected_len}"
-                        );
-                    }
-
-                    let base_offset = st_idx + text_len as i64;
-                    for t in 0..grid_t {
-                        for h in 0..grid_h {
-                            for w in 0..grid_w {
-                                let t_pos = base_offset + t as i64;
-                                let h_pos = base_offset + h as i64;
-                                let w_pos = base_offset + w as i64;
-                                positions_for_valid.push([t_pos, h_pos, w_pos]);
-                                max_position_value = Some(match max_position_value {
-                                    Some(current) => current.max(t_pos).max(h_pos).max(w_pos),
-                                    None => t_pos.max(h_pos).max(w_pos),
-                                });
-                            }
-                        }
-                    }
-
-                    let max_dim = std::cmp::max(grid_t, std::cmp::max(grid_h, grid_w)) as i64;
-                    max_last_llm_pos_ids = Some(base_offset + max_dim);
-                    cursor = placeholder_start + placeholder_len;
-                }
-
-                if cursor < filtered_tokens.len() {
-                    let text_len = filtered_tokens.len() - cursor;
-                    let st_idx = max_last_llm_pos_ids.unwrap_or(0);
-                    for offset in 0..text_len {
-                        let pos_val = st_idx + offset as i64;
-                        positions_for_valid.push([pos_val, pos_val, pos_val]);
-                        max_position_value = Some(match max_position_value {
-                            Some(current) => current.max(pos_val),
-                            None => pos_val,
-                        });
-                    }
-                }
-
-                if positions_for_valid.len() != valid_indices.len() {
-                    candle_core::bail!(
-                        "Mismatch between computed positions ({}) and valid tokens ({})",
-                        positions_for_valid.len(),
-                        valid_indices.len()
-                    );
-                }
-
-                for (pos_idx, &seq_idx) in valid_indices.iter().enumerate() {
-                    let [p0, p1, p2] = positions_for_valid[pos_idx];
-                    position_ids_data[0][batch_idx][seq_idx] = p0;
-                    position_ids_data[1][batch_idx][seq_idx] = p1;
-                    position_ids_data[2][batch_idx][seq_idx] = p2;
-                }
-
-                let seq_total_len = input_row.len() as i64;
-                let max_position_value = max_position_value.unwrap_or(0);
-                mrope_position_deltas.push(max_position_value + 1 - seq_total_len);
-            }
-
-            let mut flat_positions = Vec::with_capacity(3 * batch * seq_len);
-            for plane in position_ids_data.iter().take(3) {
-                for row in plane.iter().take(batch) {
-                    flat_positions.extend_from_slice(row);
-                }
-            }
-            let position_ids = Tensor::from_vec(flat_positions, (3, batch, seq_len), &device)?;
-            let mrope_position_deltas =
-                Tensor::from_vec(mrope_position_deltas, (batch, 1), &device)?;
-
-            Ok((position_ids, mrope_position_deltas))
-        } else if let Some(attention_mask) = attention_mask {
-            let position_ids = (attention_mask.to_dtype(DType::F32)?.cumsum(D::Minus1)? - 1f64)?;
-            let position_ids = masked_fill(&position_ids, &attention_mask.eq(0f64)?, 1i64)?;
-            let position_ids = position_ids.unsqueeze(0)?.repeat((3, 1, 1))?;
-
-            let max_position_ids = position_ids.max(0)?.max_keepdim(D::Minus1)?;
-            let mrope_position_deltas =
-                ((max_position_ids + 1.)? - attention_mask.dim(D::Minus1)? as f64)?;
-
-            Ok((
-                position_ids.to_dtype(DType::I64)?,
-                mrope_position_deltas.to_dtype(DType::I64)?,
-            ))
-        } else {
-            let position_ids = Tensor::arange(0i64, input_ids.dim(1)? as i64, input_ids.device())?
-                .reshape((1, 1, ()))?
-                .repeat((3, input_ids.dim(0)?, 1))?;
-            let mrope_position_deltas =
-                Tensor::zeros((input_ids.dim(0)?, 1), DType::I64, input_ids.device())?;
-
-            Ok((position_ids, mrope_position_deltas))
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &self,
         input_ids: &Tensor,
@@ -393,6 +86,8 @@ impl Qwen3VLMoEModel {
         pixel_values_videos: Option<Tensor>,
         image_grid_thw: Option<Tensor>,
         video_grid_thw: Option<Tensor>,
+        rope_img_grid_thw: Option<Tensor>,
+        rope_vid_grid_thw: Option<Tensor>,
         seqlens: Vec<usize>,
         continuous_img_pad: Vec<Vec<(usize, usize)>>,
         continuous_vid_pad: Vec<Vec<(usize, usize)>>,
@@ -599,27 +294,33 @@ impl Qwen3VLMoEModel {
             input_ids_full
         };
 
+        let (position_ids, mrope_position_deltas) = super::qwen3_vl::get_rope_index(
+            ropeidx_input_ids,
+            rope_img_grid_thw.as_ref(),
+            rope_vid_grid_thw.as_ref(),
+            Some(&ropeidx_attn_mask),
+            self.spatial_merge_size,
+            self.image_token_id,
+            self.video_token_id,
+            self.vision_start_token_id,
+            self.vision_end_token_id,
+        )?;
         let position_ids = if attention_mask.is_some() {
-            self.get_rope_index(
-                ropeidx_input_ids,
-                image_grid_thw.as_ref(),
-                video_grid_thw.as_ref(),
-                Some(&ropeidx_attn_mask),
-            )?
-            .0
+            position_ids
         } else {
-            Tensor::new(
+            let mut position_ids = Tensor::new(
                 seqlen_offsets.iter().map(|x| *x as i64).collect::<Vec<_>>(),
                 input_ids.device(),
             )?
             .reshape((1, (), 1))?
-            .repeat((3, 1, 1))?
+            .repeat((3, 1, 1))?;
+            position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
+            position_ids
         };
 
         let out = self.text.forward_embeds(
             input_embeds,
             attention_mask.as_ref(),
-            seqlen_offsets,
             &position_ids,
             context_lens,
             metadata,
@@ -647,6 +348,8 @@ impl VisionModel for Qwen3VLMoEModel {
             input_ids_full,
             image_grid_thw,
             video_grid_thw,
+            rope_img_grid_thw,
+            rope_vid_grid_thw,
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
@@ -661,6 +364,8 @@ impl VisionModel for Qwen3VLMoEModel {
                 candle_core::bail!("Images and videos cannot be provided together.")
             }
         };
+        let rope_img = rope_img_grid_thw.or(image_grid_thw.clone());
+        let rope_vid = rope_vid_grid_thw.or(video_grid_thw.clone());
         self.forward(
             input_ids,
             &input_ids_full,
@@ -668,6 +373,8 @@ impl VisionModel for Qwen3VLMoEModel {
             pixel_values_video,
             image_grid_thw,
             video_grid_thw,
+            rope_img,
+            rope_vid,
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
@@ -698,6 +405,8 @@ impl VisionModel for Qwen3VLMoEModel {
             input_ids_full: input_ids.clone(),
             image_grid_thw: None,
             video_grid_thw: None,
+            rope_img_grid_thw: None,
+            rope_vid_grid_thw: None,
             seqlens: vec![input_ids.dims()[1]],
             continuous_img_pad: vec![],
             continuous_vid_pad: vec![],

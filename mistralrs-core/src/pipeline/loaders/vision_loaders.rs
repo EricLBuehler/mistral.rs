@@ -5570,6 +5570,9 @@ impl VisionModelLoader for Qwen3VLLoader {
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
+        true
+    }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen3VLPrefixer)
     }
@@ -5697,16 +5700,23 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
             embed_tokens + lm_head + norm
         };
 
-        let patch_merger = {
+        let (patch_merger, deepstack_mergers) = {
             let cfg = &cfg.vision_config;
             let hidden_size = cfg.hidden_size * cfg.spatial_merge_size.pow(2);
 
             let mlp0 = hidden_size * hidden_size + hidden_size;
-            let mlp2 = hidden_size * cfg.hidden_size + cfg.hidden_size;
+            let mlp2 = hidden_size * cfg.out_hidden_size + cfg.out_hidden_size;
 
+            // Main merger: norm uses cfg.hidden_size
             let ln_q = cfg.hidden_size + bias_if!(true, cfg.hidden_size);
+            let merger = mlp0 + mlp2 + ln_q;
 
-            mlp0 + mlp2 + ln_q
+            // Deepstack mergers: norm uses merged hidden_size
+            let ds_ln = hidden_size + bias_if!(true, hidden_size);
+            let ds_merger = mlp0 + mlp2 + ds_ln;
+            let deepstack = cfg.deepstack_visual_indexes.len() * ds_merger;
+
+            (merger, deepstack)
         };
 
         let patch_embed = {
@@ -5716,10 +5726,17 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
                 ..Default::default()
             };
             let kernel_sizes = [cfg.temporal_patch_size, cfg.patch_size, cfg.patch_size];
-            cfg.in_chans * cfg.hidden_size / conv_cfg.groups
+            let weight = cfg.in_chans * cfg.hidden_size / conv_cfg.groups
                 * kernel_sizes[0]
                 * kernel_sizes[1]
-                * kernel_sizes[2]
+                * kernel_sizes[2];
+            let bias = cfg.hidden_size;
+            weight + bias
+        };
+
+        let pos_embed = {
+            let cfg = &cfg.vision_config;
+            cfg.num_position_embeddings * cfg.hidden_size
         };
 
         let encoder_layer = {
@@ -5737,8 +5754,12 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
             norm1 + norm2 + fc1 + fc2 + qkv + out
         };
 
-        let elems =
-            text_elems + patch_merger + patch_embed + encoder_layer * cfg.vision_config.depth;
+        let elems = text_elems
+            + patch_merger
+            + deepstack_mergers
+            + patch_embed
+            + pos_embed
+            + encoder_layer * cfg.vision_config.depth;
 
         Ok(elems * dtype.size_in_bytes())
     }
@@ -5757,12 +5778,15 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
             let post_attention_layernorm = cfg.hidden_size;
 
             let size_in = cfg.hidden_size;
-            let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
-            let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
-            let q_proj = size_in * size_q / weight_pack_factor + size_q;
-            let k_proj = size_in * size_kv / weight_pack_factor + size_kv;
-            let v_proj = size_in * size_kv / weight_pack_factor + size_kv;
+            let size_q = cfg.head_dim * cfg.num_attention_heads;
+            let size_kv = cfg.head_dim * cfg.num_key_value_heads;
+            let q_proj = size_in * size_q / weight_pack_factor;
+            let k_proj = size_in * size_kv / weight_pack_factor;
+            let v_proj = size_in * size_kv / weight_pack_factor;
             let o_proj = size_q * size_in / weight_pack_factor;
+
+            let q_norm = cfg.head_dim;
+            let k_norm = cfg.head_dim;
 
             let h_size = cfg.hidden_size;
             let i_size = cfg.intermediate_size;
@@ -5776,6 +5800,8 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
                 + k_proj
                 + v_proj
                 + o_proj
+                + q_norm
+                + k_norm
                 + gate_proj
                 + up_proj
                 + down_proj
@@ -5864,6 +5890,9 @@ impl VisionModelLoader for Qwen3VLMoELoader {
         Arc::new(Qwen3VLMoEProcessor::new(max_edge))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
@@ -6029,16 +6058,23 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
             embed_tokens + lm_head + norm
         };
 
-        let patch_merger = {
+        let (patch_merger, deepstack_mergers) = {
             let cfg = &cfg.vision_config;
             let hidden_size = cfg.hidden_size * cfg.spatial_merge_size.pow(2);
 
             let mlp0 = hidden_size * hidden_size + hidden_size;
-            let mlp2 = hidden_size * cfg.hidden_size + cfg.hidden_size;
+            let mlp2 = hidden_size * cfg.out_hidden_size + cfg.out_hidden_size;
 
+            // Main merger: norm uses cfg.hidden_size
             let ln_q = cfg.hidden_size + bias_if!(true, cfg.hidden_size);
+            let merger = mlp0 + mlp2 + ln_q;
 
-            mlp0 + mlp2 + ln_q
+            // Deepstack mergers: norm uses merged hidden_size
+            let ds_ln = hidden_size + bias_if!(true, hidden_size);
+            let ds_merger = mlp0 + mlp2 + ds_ln;
+            let deepstack = cfg.deepstack_visual_indexes.len() * ds_merger;
+
+            (merger, deepstack)
         };
 
         let patch_embed = {
@@ -6048,10 +6084,17 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
                 ..Default::default()
             };
             let kernel_sizes = [cfg.temporal_patch_size, cfg.patch_size, cfg.patch_size];
-            cfg.in_chans * cfg.hidden_size / conv_cfg.groups
+            let weight = cfg.in_chans * cfg.hidden_size / conv_cfg.groups
                 * kernel_sizes[0]
                 * kernel_sizes[1]
-                * kernel_sizes[2]
+                * kernel_sizes[2];
+            let bias = cfg.hidden_size;
+            weight + bias
+        };
+
+        let pos_embed = {
+            let cfg = &cfg.vision_config;
+            cfg.num_position_embeddings * cfg.hidden_size
         };
 
         let encoder_layer = {
@@ -6069,8 +6112,12 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
             norm1 + norm2 + fc1 + fc2 + qkv + out
         };
 
-        let elems =
-            text_elems + patch_merger + patch_embed + encoder_layer * cfg.vision_config.depth;
+        let elems = text_elems
+            + patch_merger
+            + deepstack_mergers
+            + patch_embed
+            + pos_embed
+            + encoder_layer * cfg.vision_config.depth;
 
         Ok(elems * dtype.size_in_bytes())
     }
@@ -6092,14 +6139,15 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
             let post_attention_layernorm = text_cfg.hidden_size;
 
             let size_in = text_cfg.hidden_size;
-            let size_q = (text_cfg.hidden_size / text_cfg.num_attention_heads)
-                * text_cfg.num_attention_heads;
-            let size_kv = (text_cfg.hidden_size / text_cfg.num_attention_heads)
-                * text_cfg.num_key_value_heads;
-            let q_proj = size_in * size_q / weight_pack_factor + size_q;
-            let k_proj = size_in * size_kv / weight_pack_factor + size_kv;
-            let v_proj = size_in * size_kv / weight_pack_factor + size_kv;
+            let size_q = text_cfg.head_dim * text_cfg.num_attention_heads;
+            let size_kv = text_cfg.head_dim * text_cfg.num_key_value_heads;
+            let q_proj = size_in * size_q / weight_pack_factor;
+            let k_proj = size_in * size_kv / weight_pack_factor;
+            let v_proj = size_in * size_kv / weight_pack_factor;
             let o_proj = size_q * size_in / weight_pack_factor;
+
+            let q_norm = text_cfg.head_dim;
+            let k_norm = text_cfg.head_dim;
 
             // Check if this is a MoE layer
             let is_moe = !text_cfg.mlp_only_layers.contains(&layer_idx)
@@ -6134,6 +6182,8 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
                 + k_proj
                 + v_proj
                 + o_proj
+                + q_norm
+                + k_norm
                 + mlp_elems;
 
             layer_sizes.push(per_layer_elems * dtype.size_in_bytes());
