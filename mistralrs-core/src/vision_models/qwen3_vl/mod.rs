@@ -386,6 +386,8 @@ impl Qwen3VLModel {
         pixel_values_videos: Option<Tensor>,
         image_grid_thw: Option<Tensor>,
         video_grid_thw: Option<Tensor>,
+        rope_img_grid_thw: Option<Tensor>,
+        rope_vid_grid_thw: Option<Tensor>,
         seqlens: Vec<usize>,
         continuous_img_pad: Vec<Vec<(usize, usize)>>,
         continuous_vid_pad: Vec<Vec<(usize, usize)>>,
@@ -594,8 +596,8 @@ impl Qwen3VLModel {
 
         let (position_ids, mrope_position_deltas) = get_rope_index(
             ropeidx_input_ids,
-            image_grid_thw.as_ref(),
-            video_grid_thw.as_ref(),
+            rope_img_grid_thw.as_ref(),
+            rope_vid_grid_thw.as_ref(),
             Some(&ropeidx_attn_mask),
             self.spatial_merge_size,
             self.image_token_id,
@@ -634,6 +636,11 @@ pub(crate) struct Qwen3VLVisionSpecificArgs {
     pub input_ids_full: Tensor,
     pub image_grid_thw: Option<Tensor>, // Some when pixel values are provided
     pub video_grid_thw: Option<Tensor>, // Some when pixel values are provided
+    /// Complete image grid THW for ALL images in the full sequence (including prefix-cached ones).
+    /// Used for MRoPE position computation. Falls back to `image_grid_thw` if None.
+    pub rope_img_grid_thw: Option<Tensor>,
+    /// Complete video grid THW for ALL videos in the full sequence (including prefix-cached ones).
+    pub rope_vid_grid_thw: Option<Tensor>,
     pub seqlens: Vec<usize>,
     pub continuous_img_pad: Vec<Vec<(usize, usize)>>,
     pub continuous_vid_pad: Vec<Vec<(usize, usize)>>,
@@ -655,6 +662,8 @@ impl VisionModel for Qwen3VLModel {
             input_ids_full,
             image_grid_thw,
             video_grid_thw,
+            rope_img_grid_thw,
+            rope_vid_grid_thw,
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
@@ -669,6 +678,10 @@ impl VisionModel for Qwen3VLModel {
                 candle_core::bail!("Images and videos cannot be provided together.")
             }
         };
+        // Use the complete grid (covering all images/videos including prefix-cached ones)
+        // for MRoPE position computation. Falls back to current-frame grid.
+        let rope_img = rope_img_grid_thw.or(image_grid_thw.clone());
+        let rope_vid = rope_vid_grid_thw.or(video_grid_thw.clone());
         self.forward(
             input_ids,
             &input_ids_full,
@@ -676,6 +689,8 @@ impl VisionModel for Qwen3VLModel {
             pixel_values_video,
             image_grid_thw,
             video_grid_thw,
+            rope_img,
+            rope_vid,
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
@@ -706,6 +721,8 @@ impl VisionModel for Qwen3VLModel {
             input_ids_full: input_ids.clone(),
             image_grid_thw: None,
             video_grid_thw: None,
+            rope_img_grid_thw: None,
+            rope_vid_grid_thw: None,
             seqlens: vec![input_ids.dims()[1]],
             continuous_img_pad: vec![],
             continuous_vid_pad: vec![],

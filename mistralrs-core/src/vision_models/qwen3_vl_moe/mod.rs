@@ -86,6 +86,8 @@ impl Qwen3VLMoEModel {
         pixel_values_videos: Option<Tensor>,
         image_grid_thw: Option<Tensor>,
         video_grid_thw: Option<Tensor>,
+        rope_img_grid_thw: Option<Tensor>,
+        rope_vid_grid_thw: Option<Tensor>,
         seqlens: Vec<usize>,
         continuous_img_pad: Vec<Vec<(usize, usize)>>,
         continuous_vid_pad: Vec<Vec<(usize, usize)>>,
@@ -294,8 +296,8 @@ impl Qwen3VLMoEModel {
 
         let (position_ids, mrope_position_deltas) = super::qwen3_vl::get_rope_index(
             ropeidx_input_ids,
-            image_grid_thw.as_ref(),
-            video_grid_thw.as_ref(),
+            rope_img_grid_thw.as_ref(),
+            rope_vid_grid_thw.as_ref(),
             Some(&ropeidx_attn_mask),
             self.spatial_merge_size,
             self.image_token_id,
@@ -346,6 +348,8 @@ impl VisionModel for Qwen3VLMoEModel {
             input_ids_full,
             image_grid_thw,
             video_grid_thw,
+            rope_img_grid_thw,
+            rope_vid_grid_thw,
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
@@ -360,6 +364,8 @@ impl VisionModel for Qwen3VLMoEModel {
                 candle_core::bail!("Images and videos cannot be provided together.")
             }
         };
+        let rope_img = rope_img_grid_thw.or(image_grid_thw.clone());
+        let rope_vid = rope_vid_grid_thw.or(video_grid_thw.clone());
         self.forward(
             input_ids,
             &input_ids_full,
@@ -367,6 +373,8 @@ impl VisionModel for Qwen3VLMoEModel {
             pixel_values_video,
             image_grid_thw,
             video_grid_thw,
+            rope_img,
+            rope_vid,
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
@@ -397,6 +405,8 @@ impl VisionModel for Qwen3VLMoEModel {
             input_ids_full: input_ids.clone(),
             image_grid_thw: None,
             video_grid_thw: None,
+            rope_img_grid_thw: None,
+            rope_vid_grid_thw: None,
             seqlens: vec![input_ids.dims()[1]],
             continuous_img_pad: vec![],
             continuous_vid_pad: vec![],

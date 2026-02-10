@@ -275,6 +275,12 @@ pub struct MultimodalData {
     pub cached_pixel_values: Option<Tensor>,
     pub cached_img_thw: Option<Tensor>,
     pub cached_vid_thw: Option<Tensor>,
+    /// Complete image grid THW covering ALL images in the sequence (including prefix-cached ones).
+    /// Used by Qwen VL models for MRoPE position computation in `get_rope_index`.
+    /// Unlike `cached_img_thw`, this is never cleared by `keep_num_images`.
+    pub rope_img_grid_thw: Option<Tensor>,
+    /// Complete video grid THW covering ALL videos in the sequence (including prefix-cached ones).
+    pub rope_vid_grid_thw: Option<Tensor>,
     pub has_changed_prompt: bool,
     pub image_gen_response_format: Option<ImageGenerationResponseFormat>,
     pub diffusion_params: Option<DiffusionGenerationParams>,
@@ -293,6 +299,8 @@ impl MultimodalData {
             cached_pixel_values: None,
             cached_img_thw: None,
             cached_vid_thw: None,
+            rope_img_grid_thw: None,
+            rope_vid_grid_thw: None,
             has_changed_prompt: false,
             image_gen_response_format,
             diffusion_params,
