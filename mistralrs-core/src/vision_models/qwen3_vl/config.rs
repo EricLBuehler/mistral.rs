@@ -4,7 +4,11 @@ use crate::layers::Activation;
 
 use crate::serde_default_fn;
 
-serde_default_fn!(Activation, default_vision_hidden_act, Activation::GeluPytorchTanh);
+serde_default_fn!(
+    Activation,
+    default_vision_hidden_act,
+    Activation::GeluPytorchTanh
+);
 serde_default_fn!(usize, default_in_channels, 3);
 serde_default_fn!(usize, default_depth, 27);
 serde_default_fn!(usize, default_hidden_size, 1152);
@@ -15,7 +19,11 @@ serde_default_fn!(usize, default_patch_size, 16);
 serde_default_fn!(usize, default_spatial_merge_size, 2);
 serde_default_fn!(usize, default_temporal_patch_size, 2);
 serde_default_fn!(usize, default_num_position_embeddings, 2304);
-serde_default_fn!(Vec<usize>, default_deepstack_visual_indexes, vec![8, 16, 24]);
+serde_default_fn!(
+    Vec<usize>,
+    default_deepstack_visual_indexes,
+    vec![8, 16, 24]
+);
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct VisionConfig {
@@ -68,6 +76,7 @@ pub struct TextConfig {
     #[serde(default)]
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub max_window_layers: usize,
 }
 

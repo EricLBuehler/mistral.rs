@@ -183,7 +183,11 @@ macro_rules! b_to_mb {
     };
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss
+)]
 /// Core logic for automatic device mapping
 pub fn get_device_layers(
     loader: &dyn DeviceMappedModelLoader,

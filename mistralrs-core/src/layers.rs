@@ -1247,7 +1247,9 @@ impl Qwen2VLRotaryEmbedding {
 #[derive(Debug, Clone)]
 pub struct Qwen3VLRotaryEmbedding {
     inv_freq: Tensor,
-    mrope_section: Vec<usize>,
+    /// Precomputed interleave indices for H (dim=1, offset=1) and W (dim=2, offset=2).
+    /// Stored as (indices_1d, dim_idx) pairs. Created once at init to avoid CPU->GPU sync per step.
+    interleave_indices: Vec<(Tensor, usize)>,
 }
 
 impl Qwen3VLRotaryEmbedding {
@@ -1263,9 +1265,26 @@ impl Qwen3VLRotaryEmbedding {
             .collect();
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (inv_freq_len,), device)?.to_dtype(DType::F32)?;
+
+        // Precompute interleave index tensors for H (dim=1, offset=1) and W (dim=2, offset=2)
+        // to avoid CPU->GPU sync from Tensor::from_vec on every decode step.
+        let half_dim = head_dim / 2;
+        let mut interleave_indices = Vec::new();
+        for (dim_idx, offset) in [(1usize, 1usize), (2usize, 2usize)] {
+            let length = mrope_section[dim_idx] * 3;
+            if length <= half_dim {
+                let indices: Vec<u32> = (offset..length).step_by(3).map(|i| i as u32).collect();
+                if !indices.is_empty() {
+                    let num = indices.len();
+                    let idx_tensor = Tensor::from_vec(indices, (num,), device)?;
+                    interleave_indices.push((idx_tensor, dim_idx));
+                }
+            }
+        }
+
         Ok(Self {
             inv_freq,
-            mrope_section,
+            interleave_indices,
         })
     }
 
@@ -1289,34 +1308,17 @@ impl Qwen3VLRotaryEmbedding {
         // Apply interleaved MRoPE: start with temporal, overwrite H and W at interleaved positions
         // freqs_t = freqs[0] as base (all temporal)
         let mut freqs_t = freqs.i(0)?.contiguous()?;
-        let half_dim = freqs_t.dim(D::Minus1)?;
+        let (batch, seq_len, _) = freqs_t.dims3()?;
 
-        // For H (dim=1) and W (dim=2), overwrite interleaved positions
-        for (dim_idx, offset) in [(1usize, 1usize), (2usize, 2usize)] {
-            let length = self.mrope_section[dim_idx] * 3;
-            if length <= half_dim {
-                let freqs_dim = freqs.i(dim_idx)?.contiguous()?;
-                // Overwrite positions offset, offset+3, offset+6, ... up to length
-                // We need to gather from freqs_dim at these indices and scatter into freqs_t
-                let indices: Vec<u32> = (offset..length).step_by(3).map(|i| i as u32).collect();
-                if !indices.is_empty() {
-                    let num_indices = indices.len();
-                    let idx_tensor =
-                        Tensor::from_vec(indices, (num_indices,), freqs_t.device())?;
-
-                    // For each batch and seq position, gather the relevant frequency values
-                    let (batch, seq_len, _) = freqs_t.dims3()?;
-                    // Expand idx to (1, 1, num_indices) then broadcast
-                    let idx_expanded = idx_tensor
-                        .reshape((1, 1, num_indices))?
-                        .repeat((batch, seq_len, 1))?;
-
-                    let src_vals = freqs_dim.gather(&idx_expanded, D::Minus1)?;
-
-                    // Scatter the values back
-                    freqs_t = freqs_t.scatter(&idx_expanded, &src_vals, D::Minus1)?;
-                }
-            }
+        // For H (dim=1) and W (dim=2), overwrite interleaved positions using precomputed indices
+        for (idx_tensor, dim_idx) in &self.interleave_indices {
+            let freqs_dim = freqs.i(*dim_idx)?.contiguous()?;
+            let num_indices = idx_tensor.dim(0)?;
+            let idx_expanded = idx_tensor
+                .reshape((1, 1, num_indices))?
+                .repeat((batch, seq_len, 1))?;
+            let src_vals = freqs_dim.gather(&idx_expanded, D::Minus1)?;
+            freqs_t = freqs_t.scatter(&idx_expanded, &src_vals, D::Minus1)?;
         }
 
         // cos/sin from freqs_t -> (batch, seq_len, head_dim/2)
