@@ -202,7 +202,6 @@ impl VisionAttention {
                 )?
                 .squeeze(0)?
                 .transpose(0, 1)?;
-            chunk_out.device().synchronize()?;
             chunk_out = chunk_out.reshape((len, self.num_heads * self.head_dim))?;
             outputs.push(chunk_out.to_dtype(xs.dtype())?);
         }
