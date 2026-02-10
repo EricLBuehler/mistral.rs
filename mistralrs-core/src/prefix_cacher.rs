@@ -209,6 +209,23 @@ impl PrefixCacheManagerV2 {
                 None => 0,
             };
 
+            // Vision/audio models can use repeated placeholder tokens (e.g. <image_soft_token>)
+            // that are identical regardless of the actual image/audio content. This means
+            // token-level matching can extend through image/audio regions even when the
+            // underlying content differs, leaving stale vision/audio encoder outputs in the
+            // KV cache. Skip entries where any overlapping images or audios diverge.
+            let cached_image_count = v.image_hashes.as_ref().map_or(0, |h| h.len());
+            let input_image_count = image_hashes.map_or(0, |h| h.len());
+            if images_match_until < input_image_count.min(cached_image_count) {
+                continue;
+            }
+
+            let cached_audio_count = v.audio_hashes.as_ref().map_or(0, |h| h.len());
+            let input_audio_count = audio_hashes.map_or(0, |h| h.len());
+            if audios_match_until < input_audio_count.min(cached_audio_count) {
+                continue;
+            }
+
             if best_match
                 .as_ref()
                 .is_none_or(|(len, _, _, _)| match_len > *len)
