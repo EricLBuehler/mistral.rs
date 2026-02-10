@@ -5570,6 +5570,9 @@ impl VisionModelLoader for Qwen3VLLoader {
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
+        true
+    }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen3VLPrefixer)
     }
@@ -5887,6 +5890,9 @@ impl VisionModelLoader for Qwen3VLMoELoader {
         Arc::new(Qwen3VLMoEProcessor::new(max_edge))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
