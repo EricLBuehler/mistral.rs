@@ -244,6 +244,9 @@ pub use mistralrs_core::{MistralRs, RequestMessage, ResponseOk};
 // ========== Utilities ==========
 pub use mistralrs_core::{initialize_logging, paged_attn_supported, parse_isq_value};
 
+// ========== Loading Progress ==========
+pub use mistralrs_core::{set_loading_progress_callback, LoadingProgress, LoadingProgressGuard};
+
 // ========== llguidance ==========
 pub use mistralrs_core::llguidance;
 
