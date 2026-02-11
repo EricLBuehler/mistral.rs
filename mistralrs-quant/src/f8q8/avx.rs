@@ -39,7 +39,7 @@ unsafe fn mul_sum_i8_pairs_float(x: __m256i, y: __m256i) -> __m256 {
 #[inline(always)]
 pub(crate) fn vec_dot_f8q8_q8_0(n: usize, xs: &[BlockF8Q8], ys: &[BlockQ8_0]) -> Result<f32> {
     let qk = QK8_0;
-    if n % QK8_0 != 0 {
+    if !n.is_multiple_of(QK8_0) {
         candle_core::bail!("vec_dot_f8q8_q8_0: {n} is not divisible by {qk}")
     }
     unsafe {
