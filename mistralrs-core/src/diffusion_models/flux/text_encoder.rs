@@ -140,18 +140,10 @@ impl Attention {
         let (q, k) = self.rotary_emb.forward(&q, &k, &seqlen_offsets)?;
 
         // Attention
-        let attn_output = Sdpa.run_attention(
-            &q,
-            &k,
-            &v,
-            Some(attention_mask),
-            None,
-            &self.sdpa_params,
-        )?;
+        let attn_output =
+            Sdpa.run_attention(&q, &k, &v, Some(attention_mask), None, &self.sdpa_params)?;
 
-        let attn_output = attn_output
-            .transpose(1, 2)?
-            .reshape((b_sz, q_len, ()))?;
+        let attn_output = attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?;
 
         self.o_proj.forward(&attn_output)
     }
@@ -203,8 +195,11 @@ impl DecoderLayer {
         let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
             RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
-        let post_attention_layernorm =
-            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("post_attention_layernorm"))?;
+        let post_attention_layernorm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            vb.pp("post_attention_layernorm"),
+        )?;
 
         Ok(Self {
             self_attn,
@@ -229,8 +224,8 @@ impl DecoderLayer {
 
 /// Qwen3 Text Encoder for FLUX.2
 ///
-/// Extracts hidden states from layers 10, 20, 30 (0-indexed) and concatenates them
-/// to produce a 12288-dim embedding (3 * 4096).
+/// Extracts hidden states after layers 8, 17, 26 (0-indexed) and concatenates them
+/// to produce a `3 * hidden_size` embedding (e.g. 3 * 4096 = 12288 for 4096-dim models).
 pub struct Qwen3TextEncoder {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
@@ -319,26 +314,20 @@ impl Qwen3TextEncoder {
     fn create_attention_mask(&self, seq_len: usize, padding_mask: &Tensor) -> Result<Tensor> {
         // Causal mask where positions can only attend to previous positions
         let mask: Vec<f32> = (0..seq_len)
-            .flat_map(|i| {
-                (0..seq_len).map(move |j| {
-                    if j <= i {
-                        0.0
-                    } else {
-                        f32::NEG_INFINITY
-                    }
-                })
-            })
+            .flat_map(|i| (0..seq_len).map(move |j| if j <= i { 0.0 } else { f32::NEG_INFINITY }))
             .collect();
 
         let causal = Tensor::from_slice(&mask, (1, 1, seq_len, seq_len), &self.device)?
             .to_dtype(self.dtype)?;
 
-        // Padding mask: 1 for tokens, 0 for pad -> convert to 0 / -inf
+        // Padding mask: 1 for real tokens, 0 for pad tokens -> 0 / -1e9 bias
+        // Using -1e9 instead of NEG_INFINITY to avoid NaN from 0*inf in arithmetic
+        // and to sidestep Metal's missing where_cond F32 kernel.
         let padding = padding_mask
-            .to_dtype(self.dtype)?
+            .to_dtype(DType::F32)?
             .unsqueeze(1)?
             .unsqueeze(1)?;
-        let pad_bias = ((padding - 1.0)? * 1e9)?;
+        let pad_bias = ((padding - 1.0)? * 1e9)?.to_dtype(self.dtype)?;
         causal.broadcast_add(&pad_bias)
     }
 

@@ -52,7 +52,11 @@ impl Drop for LoadingProgressGuard {
 fn report_loading_progress(name: &'static str, current: u64, total: u64) {
     if let Ok(guard) = LOADING_PROGRESS_CALLBACK.lock() {
         if let Some(ref callback) = *guard {
-            callback(LoadingProgress { name, current, total });
+            callback(LoadingProgress {
+                name,
+                current,
+                total,
+            });
         }
     }
 }

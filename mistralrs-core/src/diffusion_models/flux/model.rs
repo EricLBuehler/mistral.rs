@@ -1,11 +1,17 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{Device, IndexOp, Result, Tensor, D};
 use candle_nn::{LayerNorm, Linear, RmsNorm};
 use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 
-use crate::layers::{self, MatMul};
+use std::collections::HashMap;
+
+use crate::attention::{Sdpa, SdpaParams};
+use crate::layers;
+use crate::pipeline::text_models_inputs_processor::FlashParams;
+
+use super::common;
 
 // FLUX.1 defaults
 const DEFAULT_MLP_RATIO: f64 = 4.;
@@ -112,43 +118,6 @@ fn linear_maybe_bias(
     }
 }
 
-fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
-    let dim = q.dim(D::Minus1)?;
-    let scale_factor = 1.0 / (dim as f64).sqrt();
-    let mut batch_dims = q.dims().to_vec();
-    batch_dims.pop();
-    batch_dims.pop();
-    let q = q.flatten_to(batch_dims.len() - 1)?;
-    let k = k.flatten_to(batch_dims.len() - 1)?;
-    let v = v.flatten_to(batch_dims.len() - 1)?;
-    let attn_weights = (MatMul.matmul(&q, &k.t()?)? * scale_factor)?;
-    let attn_scores = MatMul.matmul(&candle_nn::ops::softmax_last_dim(&attn_weights)?, &v)?;
-    batch_dims.push(attn_scores.dim(D::Minus2)?);
-    batch_dims.push(attn_scores.dim(D::Minus1)?);
-    attn_scores.reshape(batch_dims)
-}
-
-fn rope(pos: &Tensor, dim: usize, theta: usize) -> Result<Tensor> {
-    if dim % 2 == 1 {
-        candle_core::bail!("dim {dim} is odd")
-    }
-    let dev = pos.device();
-    let theta = theta as f64;
-    let inv_freq: Vec<_> = (0..dim)
-        .step_by(2)
-        .map(|i| 1f32 / theta.powf(i as f64 / dim as f64) as f32)
-        .collect();
-    let inv_freq_len = inv_freq.len();
-    let inv_freq = Tensor::from_vec(inv_freq, (1, 1, inv_freq_len), dev)?;
-    let inv_freq = inv_freq.to_dtype(pos.dtype())?;
-    let freqs = pos.unsqueeze(2)?.broadcast_mul(&inv_freq)?;
-    let cos = freqs.cos()?;
-    let sin = freqs.sin()?;
-    let out = Tensor::stack(&[&cos, &sin.neg()?, &sin, &cos], 3)?;
-    let (b, n, d, _ij) = out.dims4()?;
-    out.reshape((b, n, d, 2, 2))
-}
-
 fn apply_rope(x: &Tensor, freq_cis: &Tensor) -> Result<Tensor> {
     let dims = x.dims();
     let (b_sz, n_head, seq_len, n_embd) = x.dims4()?;
@@ -163,44 +132,39 @@ fn apply_rope(x: &Tensor, freq_cis: &Tensor) -> Result<Tensor> {
 fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Result<Tensor> {
     let q = apply_rope(q, pe)?.contiguous()?;
     let k = apply_rope(k, pe)?.contiguous()?;
-    let x = scaled_dot_product_attention(&q, &k, v)?;
-    x.transpose(1, 2)?.flatten_from(2)
-}
+    let v = v.contiguous()?;
 
-fn timestep_embedding(t: &Tensor, dim: usize, dtype: DType) -> Result<Tensor> {
-    const TIME_FACTOR: f64 = 1000.;
-    const MAX_PERIOD: f64 = 10000.;
-    if dim % 2 == 1 {
-        candle_core::bail!("{dim} is odd")
-    }
-    let dev = t.device();
-    let half = dim / 2;
-    let t = (t * TIME_FACTOR)?;
-    let arange = Tensor::arange(0, half as u32, dev)?.to_dtype(candle_core::DType::F32)?;
-    let freqs = (arange * (-MAX_PERIOD.ln() / half as f64))?.exp()?;
-    let args = t
-        .unsqueeze(1)?
-        .to_dtype(candle_core::DType::F32)?
-        .broadcast_mul(&freqs.unsqueeze(0)?)?;
-    let emb = Tensor::cat(&[args.cos()?, args.sin()?], D::Minus1)?.to_dtype(dtype)?;
-    Ok(emb)
+    let head_dim = q.dim(D::Minus1)?;
+    let sdpa_params = SdpaParams {
+        n_kv_groups: 1,
+        softcap: None,
+        softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+        sliding_window: None,
+    };
+    let flash_params = FlashParams {
+        causal: false,
+        cumulative_seqlens_q: HashMap::new(),
+        cumulative_seqlens_k: HashMap::new(),
+        max_q: 0,
+        max_k: 0,
+    };
+
+    let x = Sdpa.run_attention(&q, &k, &v, None, Some(&flash_params), &sdpa_params)?;
+    x.transpose(1, 2)?.flatten_from(2)
 }
 
 #[derive(Debug, Clone)]
 pub struct EmbedNd {
-    #[allow(unused)]
-    dim: usize,
-    theta: usize,
-    axes_dim: Vec<usize>,
+    inv_freqs: Vec<Tensor>,
 }
 
 impl EmbedNd {
-    fn new(dim: usize, theta: usize, axes_dim: Vec<usize>) -> Self {
-        Self {
-            dim,
-            theta,
-            axes_dim,
-        }
+    fn new(theta: usize, axes_dim: Vec<usize>, device: &Device) -> Result<Self> {
+        let inv_freqs = axes_dim
+            .iter()
+            .map(|&dim| common::precompute_inv_freq(dim, theta, device))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { inv_freqs })
     }
 }
 
@@ -209,11 +173,8 @@ impl candle_core::Module for EmbedNd {
         let n_axes = ids.dim(D::Minus1)?;
         let mut emb = Vec::with_capacity(n_axes);
         for idx in 0..n_axes {
-            let r = rope(
-                &ids.get_on_dim(D::Minus1, idx)?,
-                self.axes_dim[idx],
-                self.theta,
-            )?;
+            let r =
+                common::rope_with_inv_freq(&ids.get_on_dim(D::Minus1, idx)?, &self.inv_freqs[idx])?;
             emb.push(r)
         }
         let emb = Tensor::cat(&emb, 2)?;
@@ -698,6 +659,7 @@ pub struct Flux {
     vector_in: MlpEmbedder,
     guidance_in: Option<MlpEmbedder>,
     pe_embedder: EmbedNd,
+    timestep_freqs: common::TimestepFreqs,
     double_blocks: Vec<DoubleStreamBlock>,
     single_blocks: Vec<SingleStreamBlock>,
     final_layer: LastLayer,
@@ -764,8 +726,8 @@ impl Flux {
             cfg.in_channels,
             vb.pp("final_layer").set_device(device.clone()),
         )?;
-        let pe_dim = hidden_size / cfg.num_attention_heads;
-        let pe_embedder = EmbedNd::new(pe_dim, cfg.rope_theta, cfg.axes_dims_rope.clone());
+        let pe_embedder = EmbedNd::new(cfg.rope_theta, cfg.axes_dims_rope.clone(), &device)?;
+        let timestep_freqs = common::TimestepFreqs::new(256, &device)?;
         Ok(Self {
             img_in,
             txt_in,
@@ -773,12 +735,20 @@ impl Flux {
             vector_in,
             guidance_in,
             pe_embedder,
+            timestep_freqs,
             double_blocks,
             single_blocks,
             final_layer,
             device: device.clone(),
             offloaded,
         })
+    }
+
+    /// Precompute positional embeddings from txt_ids and img_ids.
+    /// Call once before the denoising loop; pass the result to each forward() call.
+    pub fn compute_pe(&self, txt_ids: &Tensor, img_ids: &Tensor) -> Result<Tensor> {
+        let ids = Tensor::cat(&[txt_ids, img_ids], 1)?;
+        ids.apply(&self.pe_embedder)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -791,6 +761,7 @@ impl Flux {
         timesteps: &Tensor,
         y: &Tensor,
         guidance: Option<&Tensor>,
+        pe: Option<&Tensor>,
     ) -> Result<Tensor> {
         if txt.rank() != 3 {
             candle_core::bail!("unexpected shape for txt {:?}", txt.shape())
@@ -799,16 +770,19 @@ impl Flux {
             candle_core::bail!("unexpected shape for img {:?}", img.shape())
         }
         let dtype = img.dtype();
-        let pe = {
-            let ids = Tensor::cat(&[txt_ids, img_ids], 1)?;
-            ids.apply(&self.pe_embedder)?
+        let pe = match pe {
+            Some(pe) => pe.clone(),
+            None => self.compute_pe(txt_ids, img_ids)?,
         };
         let mut txt = txt.apply(&self.txt_in)?;
         let mut img = img.apply(&self.img_in)?;
-        let vec_ = timestep_embedding(timesteps, 256, dtype)?.apply(&self.time_in)?;
+        let vec_ = self
+            .timestep_freqs
+            .embed(timesteps, dtype)?
+            .apply(&self.time_in)?;
         let vec_ = match (self.guidance_in.as_ref(), guidance) {
             (Some(g_in), Some(guidance)) => {
-                (vec_ + timestep_embedding(guidance, 256, dtype)?.apply(g_in))?
+                (vec_ + self.timestep_freqs.embed(guidance, dtype)?.apply(g_in))?
             }
             _ => vec_,
         };

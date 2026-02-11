@@ -5,12 +5,14 @@
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{Module, Result, Tensor, D};
+use candle_core::{Module, Result, Tensor};
 use candle_nn::{Conv2d, GroupNorm, Linear};
 use mistralrs_quant::{Convolution, ShardedVarBuilder};
 use serde::Deserialize;
 
-use crate::layers::{conv2d, group_norm, linear_b, MatMul};
+use crate::layers::{conv2d, group_norm, linear_b};
+
+pub use super::common::DiagonalGaussian;
 
 fn default_scaling_factor() -> f64 {
     1.0
@@ -40,11 +42,24 @@ pub struct Config {
     pub norm_num_groups: usize,
 }
 
+impl From<&super::autoencoder::Config> for Config {
+    fn from(cfg: &super::autoencoder::Config) -> Self {
+        Self {
+            in_channels: cfg.in_channels,
+            out_channels: cfg.out_channels,
+            block_out_channels: cfg.block_out_channels.clone(),
+            layers_per_block: cfg.layers_per_block,
+            latent_channels: cfg.latent_channels,
+            scaling_factor: cfg.scaling_factor,
+            shift_factor: cfg.shift_factor,
+            batch_norm_eps: cfg.batch_norm_eps,
+            norm_num_groups: cfg.norm_num_groups,
+        }
+    }
+}
+
 fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
-    let dim = q.dim(D::Minus1)?;
-    let scale_factor = 1.0 / (dim as f64).sqrt();
-    let attn_weights = (MatMul.matmul(q, &k.t()?)? * scale_factor)?;
-    MatMul.matmul(&candle_nn::ops::softmax_last_dim(&attn_weights)?, v)
+    super::common::scaled_dot_product_attention_simple(q, k, v)
 }
 
 /// Attention block with diffusers-style naming (to_q, to_k, to_v, to_out, group_norm)
@@ -56,7 +71,6 @@ struct AttnBlock {
     to_v: Linear,
     to_out: Linear,
     group_norm: GroupNorm,
-    channels: usize,
 }
 
 impl AttnBlock {
@@ -72,7 +86,6 @@ impl AttnBlock {
             to_v,
             to_out,
             group_norm,
-            channels: in_c,
         })
     }
 }
@@ -242,7 +255,10 @@ impl MidBlock {
         ];
         let vb_a = vb.pp("attentions");
         let attentions = vec![AttnBlock::new(in_c, vb_a.pp(0), cfg)?];
-        Ok(Self { resnets, attentions })
+        Ok(Self {
+            resnets,
+            attentions,
+        })
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
@@ -304,11 +320,15 @@ impl Encoder {
                 None
             };
 
-            down_blocks.push(DownBlock { resnets, downsamplers });
+            down_blocks.push(DownBlock {
+                resnets,
+                downsamplers,
+            });
         }
 
         let mid_block = MidBlock::new(block_in, vb.pp("mid_block"), cfg)?;
-        let conv_norm_out = group_norm(cfg.norm_num_groups, block_in, 1e-6, vb.pp("conv_norm_out"))?;
+        let conv_norm_out =
+            group_norm(cfg.norm_num_groups, block_in, 1e-6, vb.pp("conv_norm_out"))?;
         let conv_out = conv2d(
             block_in,
             2 * cfg.latent_channels,
@@ -392,10 +412,14 @@ impl Decoder {
                 None
             };
 
-            up_blocks.push(UpBlock { resnets, upsamplers });
+            up_blocks.push(UpBlock {
+                resnets,
+                upsamplers,
+            });
         }
 
-        let conv_norm_out = group_norm(cfg.norm_num_groups, prev_out, 1e-6, vb.pp("conv_norm_out"))?;
+        let conv_norm_out =
+            group_norm(cfg.norm_num_groups, prev_out, 1e-6, vb.pp("conv_norm_out"))?;
         let conv_out = conv2d(prev_out, cfg.out_channels, 3, conv_cfg, vb.pp("conv_out"))?;
 
         Ok(Self {
@@ -426,30 +450,6 @@ impl candle_nn::Module for Decoder {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct DiagonalGaussian {
-    sample: bool,
-    chunk_dim: usize,
-}
-
-impl DiagonalGaussian {
-    pub fn new(sample: bool, chunk_dim: usize) -> Result<Self> {
-        Ok(Self { sample, chunk_dim })
-    }
-}
-
-impl candle_nn::Module for DiagonalGaussian {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let chunks = xs.chunk(2, self.chunk_dim)?;
-        if self.sample {
-            let std = (&chunks[1] * 0.5)?.exp()?;
-            &chunks[0] + (std * chunks[0].randn_like(0., 1.))?
-        } else {
-            Ok(chunks[0].clone())
-        }
-    }
-}
-
 /// AutoencoderKL for FLUX.2 with diffusers-style naming
 ///
 /// Includes quant_conv, post_quant_conv, and BatchNorm (affine=False) layers.
@@ -460,9 +460,8 @@ pub struct AutoEncoderKL {
     reg: DiagonalGaussian,
     quant_conv: Conv2d,
     post_quant_conv: Conv2d,
-    bn_mean: Tensor,
-    bn_var: Tensor,
-    bn_eps: f64,
+    bn_mean_4d: Tensor,
+    bn_std_4d: Tensor,
     shift_factor: f64,
     scale_factor: f64,
 }
@@ -495,10 +494,14 @@ impl AutoEncoderKL {
         // FLUX.2 VAE uses this to normalize latents
         // Features = patch_size^2 * latent_channels = 2*2 * 32 = 128 for FLUX.2
         let bn_features = 4 * cfg.latent_channels; // patch_size=2, so 2*2=4
-        let bn_eps = cfg.batch_norm_eps;
         let bn_vb = vb.pp("bn");
         let bn_mean = bn_vb.get(bn_features, "running_mean")?;
         let bn_var = bn_vb.get(bn_features, "running_var")?;
+
+        // Precompute reshaped mean and std to avoid per-call reshape+sqrt
+        let bn_mean_4d = bn_mean.flatten_all()?.reshape((1, (), 1, 1))?;
+        let bn_std_4d =
+            (bn_var.flatten_all()?.reshape((1, (), 1, 1))? + cfg.batch_norm_eps)?.sqrt()?;
 
         Ok(Self {
             encoder,
@@ -506,9 +509,8 @@ impl AutoEncoderKL {
             reg,
             quant_conv,
             post_quant_conv,
-            bn_mean,
-            bn_var,
-            bn_eps,
+            bn_mean_4d,
+            bn_std_4d,
             scale_factor: cfg.scaling_factor,
             shift_factor: cfg.shift_factor,
         })
@@ -528,20 +530,14 @@ impl AutoEncoderKL {
     }
 
     pub fn denormalize_packed(&self, xs: &Tensor) -> Result<Tensor> {
-        let mean = self.bn_mean.flatten_all()?.reshape((1, (), 1, 1))?;
-        let var = self.bn_var.flatten_all()?.reshape((1, (), 1, 1))?;
-        let std = (var + self.bn_eps)?.sqrt()?;
-        let mean = mean.to_dtype(xs.dtype())?;
-        let std = std.to_dtype(xs.dtype())?;
+        let mean = self.bn_mean_4d.to_dtype(xs.dtype())?;
+        let std = self.bn_std_4d.to_dtype(xs.dtype())?;
         xs.broadcast_mul(&std)?.broadcast_add(&mean)
     }
 
     pub fn normalize_packed(&self, xs: &Tensor) -> Result<Tensor> {
-        let mean = self.bn_mean.flatten_all()?.reshape((1, (), 1, 1))?;
-        let var = self.bn_var.flatten_all()?.reshape((1, (), 1, 1))?;
-        let std = (var + self.bn_eps)?.sqrt()?;
-        let mean = mean.to_dtype(xs.dtype())?;
-        let std = std.to_dtype(xs.dtype())?;
+        let mean = self.bn_mean_4d.to_dtype(xs.dtype())?;
+        let std = self.bn_std_4d.to_dtype(xs.dtype())?;
         xs.broadcast_sub(&mean)?.broadcast_div(&std)
     }
 }

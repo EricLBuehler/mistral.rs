@@ -17,19 +17,12 @@ pub fn get_noise(
 ) -> Result<Tensor> {
     let height = height.div_ceil(16) * 2;
     let width = width.div_ceil(16) * 2;
-    Tensor::randn(0f32, 1., (num_samples, latent_channels, height, width), device)
-}
-
-pub fn get_noise_flux2(
-    num_samples: usize,
-    height: usize,
-    width: usize,
-    latent_channels: usize,
-    device: &Device,
-) -> Result<Tensor> {
-    let height = (height / 16) * 2;
-    let width = (width / 16) * 2;
-    Tensor::randn(0f32, 1., (num_samples, latent_channels, height, width), device)
+    Tensor::randn(
+        0f32,
+        1.,
+        (num_samples, latent_channels, height, width),
+        device,
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -43,12 +36,7 @@ pub struct State {
 
 impl State {
     /// Create state for FLUX.1 (requires both T5 and CLIP embeddings)
-    pub fn new(
-        t5_emb: &Tensor,
-        clip_emb: &Tensor,
-        img: &Tensor,
-        n_axes: usize,
-    ) -> Result<Self> {
+    pub fn new(t5_emb: &Tensor, clip_emb: &Tensor, img: &Tensor, n_axes: usize) -> Result<Self> {
         let (img, img_ids, txt, txt_ids) = Self::prepare_common(t5_emb, img, n_axes)?;
         let bs = img.dim(0)?;
         let vec = clip_emb.repeat(bs)?;
@@ -274,8 +262,7 @@ pub fn unpack_packed(xs: &Tensor, height: usize, width: usize) -> Result<Tensor>
     let (b, _h_w, c) = xs.dims3()?;
     let height = height / 16;
     let width = width / 16;
-    xs.reshape((b, height, width, c))?
-        .permute((0, 3, 1, 2))
+    xs.reshape((b, height, width, c))?.permute((0, 3, 1, 2))
 }
 
 pub fn unpatchify_packed(xs: &Tensor) -> Result<Tensor> {
@@ -317,14 +304,29 @@ fn denoise_inner(
     } else {
         None
     };
+    // Precompute PE and timestep vectors before the loop
+    let pe = model.compute_pe(txt_ids, img_ids)?;
+    let t_vecs: Vec<Tensor> = timesteps
+        .iter()
+        .map(|t| Tensor::full(*t as f32, b_sz, dev))
+        .collect::<Result<Vec<_>>>()?;
     let mut img = img.clone();
-    for window in timesteps.windows(2) {
+    for (step_idx, window) in timesteps.windows(2).enumerate() {
         let (t_curr, t_prev) = match window {
             [a, b] => (a, b),
             _ => continue,
         };
-        let t_vec = Tensor::full(*t_curr as f32, b_sz, dev)?;
-        let pred = model.forward(&img, img_ids, txt, txt_ids, &t_vec, vec_, guidance_tensor.as_ref())?;
+        let t_vec = &t_vecs[step_idx];
+        let pred = model.forward(
+            &img,
+            img_ids,
+            txt,
+            txt_ids,
+            t_vec,
+            vec_,
+            guidance_tensor.as_ref(),
+            Some(&pe),
+        )?;
         img = (img + pred * (t_prev - t_curr))?
     }
     Ok(img)

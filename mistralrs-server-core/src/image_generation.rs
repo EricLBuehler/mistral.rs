@@ -76,6 +76,7 @@ pub fn parse_request(
                 negative_prompt: None,
                 preview_interval: None,
             },
+            reference_images: None,
         },
         sampling_params: SamplingParams::deterministic(),
         response: tx,

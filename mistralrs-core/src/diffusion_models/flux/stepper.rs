@@ -2,13 +2,13 @@ use std::{cmp::Ordering, fs::File, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::Module;
+use either::Either;
 use hf_hub::api::sync::{Api, ApiError, ApiRepo};
 use image::{imageops::FilterType, DynamicImage, RgbImage};
+use indexmap::IndexMap;
 use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams, TruncationStrategy};
-use indexmap::IndexMap;
-use either::Either;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{info, warn};
 
@@ -19,10 +19,14 @@ use crate::{
         t5::{self, T5EncoderModel},
         DiffusionGenerationParams,
     },
-    pipeline::{chat_template::{apply_chat_template_to, ChatTemplate, ChatTemplateValue}, DiffusionModel},
+    pipeline::{
+        chat_template::{apply_chat_template_to, ChatTemplate, ChatTemplateValue},
+        DiffusionModel,
+    },
     utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor},
 };
 
+use super::sampling::FlowMatchScheduleConfig;
 use super::{
     autoencoder::AutoEncoder,
     autoencoder_kl::AutoEncoderKL,
@@ -30,7 +34,6 @@ use super::{
     model_flux2::Flux2,
     text_encoder::{Qwen3TextEncoder, Qwen3TextEncoderConfig},
 };
-use super::sampling::FlowMatchScheduleConfig;
 
 /// VAE wrapper that supports both FLUX.1 and FLUX.2 autoencoder formats
 #[derive(Debug, Clone)]
@@ -57,14 +60,20 @@ impl FluxVae {
         }
     }
 
-    pub fn denormalize_packed(&self, xs: &candle_core::Tensor) -> candle_core::Result<candle_core::Tensor> {
+    pub fn denormalize_packed(
+        &self,
+        xs: &candle_core::Tensor,
+    ) -> candle_core::Result<candle_core::Tensor> {
         match self {
             FluxVae::Flux1(_) => Ok(xs.clone()),
             FluxVae::Flux2(vae) => vae.denormalize_packed(xs),
         }
     }
 
-    pub fn normalize_packed(&self, xs: &candle_core::Tensor) -> candle_core::Result<candle_core::Tensor> {
+    pub fn normalize_packed(
+        &self,
+        xs: &candle_core::Tensor,
+    ) -> candle_core::Result<candle_core::Tensor> {
         match self {
             FluxVae::Flux1(_) => Ok(xs.clone()),
             FluxVae::Flux2(vae) => vae.normalize_packed(xs),
@@ -79,6 +88,14 @@ pub enum FluxTransformer {
 }
 
 impl FluxTransformer {
+    pub fn compute_pe(&self, txt_ids: &Tensor, img_ids: &Tensor) -> Result<Tensor> {
+        match self {
+            FluxTransformer::Flux1(model) => model.compute_pe(txt_ids, img_ids),
+            FluxTransformer::Flux2(model) => model.compute_pe(txt_ids, img_ids),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &mut self,
         img: &Tensor,
@@ -88,14 +105,15 @@ impl FluxTransformer {
         timesteps: &Tensor,
         y: &Tensor,
         guidance: Option<&Tensor>,
+        pe: Option<&Tensor>,
     ) -> Result<Tensor> {
         match self {
             FluxTransformer::Flux1(model) => {
-                model.forward(img, img_ids, txt, txt_ids, timesteps, y, guidance)
+                model.forward(img, img_ids, txt, txt_ids, timesteps, y, guidance, pe)
             }
             FluxTransformer::Flux2(model) => {
                 // FLUX.2 doesn't use guidance or y (CLIP pooled embedding)
-                model.forward(img, img_ids, txt, txt_ids, timesteps)
+                model.forward(img, img_ids, txt, txt_ids, timesteps, pe)
             }
         }
     }
@@ -307,7 +325,10 @@ fn get_qwen3_tokenization_with_mask(
         .iter()
         .map(|e| e.get_attention_mask().to_vec())
         .collect::<Vec<_>>();
-    Ok((Tensor::new(input_ids, device)?, Tensor::new(attention_mask, device)?))
+    Ok((
+        Tensor::new(input_ids, device)?,
+        Tensor::new(attention_mask, device)?,
+    ))
 }
 
 /// Helper to parse the model.safetensors.index.json and get shard file paths
@@ -361,14 +382,13 @@ fn get_qwen3_encoder_and_tokenizer(
     let config_content = std::fs::read_to_string(&config_file)?;
     let config: Qwen3TextEncoderConfig = serde_json::from_str(&config_content)?;
 
-    // DEBUG: Print config values to diagnose head_dim issue
-    eprintln!(
-        "DEBUG Qwen3 config: hidden_size={}, num_heads={}, num_kv_heads={}, head_dim={:?}, calculated={}",
-        config.hidden_size,
-        config.num_attention_heads,
-        config.num_key_value_heads,
-        config.head_dim,
-        config.head_dim()
+    info!(
+        hidden_size = config.hidden_size,
+        num_heads = config.num_attention_heads,
+        num_kv_heads = config.num_key_value_heads,
+        head_dim = ?config.head_dim,
+        head_dim_effective = config.head_dim(),
+        "Qwen3 text encoder config"
     );
 
     // Build encoder
@@ -378,7 +398,10 @@ fn get_qwen3_encoder_and_tokenizer(
     let tokenizer_file = api.get("tokenizer/tokenizer.json")?;
     let tokenizer = Tokenizer::from_file(tokenizer_file).map_err(anyhow::Error::msg)?;
 
-    info!("Qwen3 text encoder loaded (output dim: {})", encoder.output_dim());
+    info!(
+        "Qwen3 text encoder loaded (output dim: {})",
+        encoder.output_dim()
+    );
 
     let chat_template = load_flux2_chat_template(api).unwrap_or(None);
     Ok((encoder, tokenizer, chat_template))
@@ -402,7 +425,7 @@ fn load_flux2_chat_template(api: &ApiRepo) -> anyhow::Result<Option<ChatTemplate
     if let Ok(path) = config_path {
         let config = std::fs::read_to_string(path)?;
         let template: ChatTemplate = serde_json::from_str(&config)?;
-        return Ok(template.chat_template.map(|t| t));
+        return Ok(template.chat_template);
     }
 
     Ok(None)
@@ -489,8 +512,14 @@ impl FluxStepper {
         let rope_axes = flux_cfg.axes_dims_rope.len();
 
         // Load text encoder and tokenizer based on model type
-        let (text_tokenizer, qwen3_encoder, clip_encoder, clip_tokenizer, chat_template, flux2_schedule_cfg) =
-            if is_flux2 {
+        let (
+            text_tokenizer,
+            qwen3_encoder,
+            clip_encoder,
+            clip_tokenizer,
+            chat_template,
+            flux2_schedule_cfg,
+        ) = if is_flux2 {
             info!("FLUX.2 detected - loading Qwen3 text encoder");
             let model_repo = api.repo(hf_hub::Repo::model(model_id.to_string()));
             let (encoder, tokenizer, template) =
@@ -502,23 +531,20 @@ impl FluxStepper {
             let t5_tokenizer = get_t5_tokenizer(&api)?;
             info!("Loading CLIP model and tokenizer.");
             let (enc, tok) = get_clip_model_and_tokenizer(&api, device, silent)?;
-            (t5_tokenizer, None, Some(enc), Some(tok), None, FlowMatchScheduleConfig::default())
+            (
+                t5_tokenizer,
+                None,
+                Some(enc),
+                Some(tok),
+                None,
+                FlowMatchScheduleConfig::default(),
+            )
         };
 
         // Load VAE
         let flux_vae = if is_flux2 {
             info!("Using FLUX.2 VAE (AutoEncoderKL with latent_channels=32)");
-            let flux2_cfg = flux::autoencoder_kl::Config {
-                in_channels: flux_ae_cfg.in_channels,
-                out_channels: flux_ae_cfg.out_channels,
-                block_out_channels: flux_ae_cfg.block_out_channels.clone(),
-                layers_per_block: flux_ae_cfg.layers_per_block,
-                latent_channels: flux_ae_cfg.latent_channels,
-                scaling_factor: flux_ae_cfg.scaling_factor,
-                shift_factor: flux_ae_cfg.shift_factor,
-                batch_norm_eps: flux_ae_cfg.batch_norm_eps,
-                norm_num_groups: flux_ae_cfg.norm_num_groups,
-            };
+            let flux2_cfg = flux::autoencoder_kl::Config::from(flux_ae_cfg);
             FluxVae::Flux2(AutoEncoderKL::new(&flux2_cfg, flux_ae_vb)?)
         } else {
             info!("Using FLUX.1 VAE (latent_channels=16)");
@@ -571,7 +597,9 @@ impl DiffusionModel for FluxStepper {
         // Get text embeddings based on model type
         let text_embed = if self.is_flux2 {
             // FLUX.2: Use Qwen3 text encoder
-            let qwen3_encoder = self.qwen3_encoder.as_ref()
+            let qwen3_encoder = self
+                .qwen3_encoder
+                .as_ref()
                 .expect("Qwen3 encoder required for FLUX.2");
             let (input_ids, attention_mask) = get_qwen3_tokenization_with_mask(
                 &self.text_tok,
@@ -593,8 +621,11 @@ impl DiffusionModel for FluxStepper {
                         candle_core::bail!("T5 embedding length greater than 256, please shrink the prompt or use the -dev (with guidance distillation) version.")
                     }
                     Ordering::Less | Ordering::Equal => {
-                        t5_input_ids =
-                            t5_input_ids.pad_with_zeros(D::Minus1, 0, 256 - t5_input_ids.dim(1)?)?;
+                        t5_input_ids = t5_input_ids.pad_with_zeros(
+                            D::Minus1,
+                            0,
+                            256 - t5_input_ids.dim(1)?,
+                        )?;
                     }
                 }
             }
@@ -610,7 +641,7 @@ impl DiffusionModel for FluxStepper {
         };
 
         let img = if self.is_flux2 {
-            flux::sampling::get_noise_flux2(
+            flux::sampling::get_noise(
                 text_embed.dim(0)?,
                 params.height,
                 params.width,
@@ -634,8 +665,14 @@ impl DiffusionModel for FluxStepper {
             flux::sampling::State::new_flux2(&text_embed, &img, self.rope_axes)?
         } else {
             // FLUX.1 requires CLIP embeddings
-            let clip_tok = self.clip_tok.as_ref().expect("CLIP tokenizer required for FLUX.1");
-            let clip_text = self.clip_text.as_ref().expect("CLIP model required for FLUX.1");
+            let clip_tok = self
+                .clip_tok
+                .as_ref()
+                .expect("CLIP tokenizer required for FLUX.1");
+            let clip_text = self
+                .clip_text
+                .as_ref()
+                .expect("CLIP model required for FLUX.1");
             let clip_input_ids = get_tokenization(clip_tok, prompts.clone(), &self.device)?;
             let clip_embed = clip_text.forward(&clip_input_ids)?.to_dtype(self.dtype)?;
             flux::sampling::State::new(&text_embed, &clip_embed, &img, self.rope_axes)?
@@ -691,27 +728,55 @@ impl DiffusionModel for FluxStepper {
             let b_sz = img.dim(0)?;
             let dev = self.device.clone();
             let total_steps = timesteps.len().saturating_sub(1);
+
+            // Precompute PE once (img_ids/txt_ids are static across steps)
+            let pe = if let Some((_, cond_ids)) = &image_cond {
+                let combined_ids = Tensor::cat(&[&state.img_ids, cond_ids], 1)?;
+                self.flux_model.compute_pe(&state.txt_ids, &combined_ids)?
+            } else {
+                self.flux_model.compute_pe(&state.txt_ids, &state.img_ids)?
+            };
+
+            // Precompute all timestep vectors
+            let t_vecs: Vec<Tensor> = timesteps
+                .iter()
+                .map(|t| Tensor::full(*t as f32, b_sz, &dev))
+                .collect::<Result<Vec<_>>>()?;
+
             for (step_idx, window) in timesteps.windows(2).enumerate() {
                 let (t_curr, t_prev) = match window {
                     [a, b] => (a, b),
                     _ => continue,
                 };
-                let t_vec = Tensor::full(*t_curr as f32, b_sz, &dev)?;
-                let (img_in, img_ids_in, seq_len) = if let Some((cond_img, cond_ids)) = &image_cond {
+                let t_vec = &t_vecs[step_idx];
+                let (img_in, seq_len) = if let Some((cond_img, _)) = &image_cond {
                     let img_in = Tensor::cat(&[&img, cond_img], 1)?;
-                    let ids_in = Tensor::cat(&[&state.img_ids, cond_ids], 1)?;
-                    (img_in, ids_in, img.dim(1)?)
+                    (img_in, img.dim(1)?)
                 } else {
-                    (img.clone(), state.img_ids.clone(), img.dim(1)?)
+                    (img.clone(), img.dim(1)?)
                 };
 
-                let pred = self
-                    .flux_model
-                    .forward(&img_in, &img_ids_in, &state.txt, &state.txt_ids, &t_vec, &state.vec, None)?;
+                let pred = self.flux_model.forward(
+                    &img_in,
+                    &state.img_ids,
+                    &state.txt,
+                    &state.txt_ids,
+                    t_vec,
+                    &state.vec,
+                    None,
+                    Some(&pe),
+                )?;
                 let mut pred = if let Some(neg_txt) = &neg_text {
-                    let neg_pred = self
-                        .flux_model
-                        .forward(&img_in, &img_ids_in, neg_txt, &state.txt_ids, &t_vec, &state.vec, None)?;
+                    let neg_pred = self.flux_model.forward(
+                        &img_in,
+                        &state.img_ids,
+                        neg_txt,
+                        &state.txt_ids,
+                        t_vec,
+                        &state.vec,
+                        None,
+                        Some(&pe),
+                    )?;
                     (&neg_pred + ((&pred - &neg_pred)? * cfg_scale)?)?
                 } else {
                     pred

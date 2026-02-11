@@ -5,7 +5,9 @@ use candle_nn::{Conv2d, GroupNorm};
 use mistralrs_quant::{Convolution, ShardedVarBuilder};
 use serde::Deserialize;
 
-use crate::layers::{conv2d, group_norm, MatMul};
+use crate::layers::{conv2d, group_norm};
+
+pub use super::common::DiagonalGaussian;
 
 fn default_scaling_factor() -> f64 {
     1.0
@@ -38,10 +40,7 @@ pub struct Config {
 }
 
 fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
-    let dim = q.dim(D::Minus1)?;
-    let scale_factor = 1.0 / (dim as f64).sqrt();
-    let attn_weights = (MatMul.matmul(q, &k.t()?)? * scale_factor)?;
-    MatMul.matmul(&candle_nn::ops::softmax_last_dim(&attn_weights)?, v)
+    super::common::scaled_dot_product_attention_simple(q, k, v)
 }
 
 #[derive(Debug, Clone)]
@@ -370,30 +369,6 @@ impl candle_nn::Module for Decoder {
         h = self.norm_out.forward(&h)?;
         h = candle_nn::Activation::Swish.forward(&h)?;
         Convolution.forward_2d(&self.conv_out, &h)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DiagonalGaussian {
-    sample: bool,
-    chunk_dim: usize,
-}
-
-impl DiagonalGaussian {
-    pub fn new(sample: bool, chunk_dim: usize) -> Result<Self> {
-        Ok(Self { sample, chunk_dim })
-    }
-}
-
-impl candle_nn::Module for DiagonalGaussian {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let chunks = xs.chunk(2, self.chunk_dim)?;
-        if self.sample {
-            let std = (&chunks[1] * 0.5)?.exp()?;
-            &chunks[0] + (std * chunks[0].randn_like(0., 1.))?
-        } else {
-            Ok(chunks[0].clone())
-        }
     }
 }
 

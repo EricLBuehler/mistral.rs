@@ -273,7 +273,7 @@ impl Model {
             None,
             None,
         )
-            .await
+        .await
     }
 
     /// Generate an image using a specific model.
@@ -292,7 +292,7 @@ impl Model {
             model_id,
             None,
         )
-            .await
+        .await
     }
 
     /// Generate an image with optional reference images for image-to-image generation (FLUX.2).
@@ -374,7 +374,7 @@ impl Model {
             None,
             None,
         )
-            .await
+        .await
     }
 
     /// Stream image generation using a specific model.

@@ -807,6 +807,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
                 prompt: prompt.to_string(),
                 format: ImageGenerationResponseFormat::Url,
                 generation_params: diffusion_params.clone(),
+                reference_images: None,
             },
             sampling_params: SamplingParams::deterministic(),
             response: tx,

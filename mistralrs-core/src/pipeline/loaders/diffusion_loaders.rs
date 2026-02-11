@@ -15,8 +15,8 @@ use pyo3::pyclass;
 use regex::Regex;
 use serde::Deserialize;
 
-use tracing::info;
 use tokio::sync::mpsc::UnboundedSender;
+use tracing::info;
 
 use super::{ModelPaths, NormalLoadingMetadata};
 use crate::{
@@ -180,10 +180,16 @@ impl DiffusionModelLoader for FluxLoader {
             let ae_path = model_id.join("ae.safetensors");
             let vae_path = model_id.join("vae/diffusion_pytorch_model.safetensors");
             if ae_path.exists() {
-                info!("Loading `ae.safetensors` locally at `{}`", ae_path.display());
+                info!(
+                    "Loading `ae.safetensors` locally at `{}`",
+                    ae_path.display()
+                );
                 ae_path
             } else if vae_path.exists() {
-                info!("Loading `vae/diffusion_pytorch_model.safetensors` locally at `{}`", vae_path.display());
+                info!(
+                    "Loading `vae/diffusion_pytorch_model.safetensors` locally at `{}`",
+                    vae_path.display()
+                );
                 vae_path
             } else {
                 anyhow::bail!("Could not find ae.safetensors or vae/diffusion_pytorch_model.safetensors at {:?}", model_id);
@@ -199,7 +205,9 @@ impl DiffusionModelLoader for FluxLoader {
             {
                 // FLUX.2 diffusers format - VAE is in subdirectory
                 api.get("vae/diffusion_pytorch_model.safetensors")
-                    .with_context(|| "Could not get vae/diffusion_pytorch_model.safetensors from API")?
+                    .with_context(|| {
+                        "Could not get vae/diffusion_pytorch_model.safetensors from API"
+                    })?
             } else {
                 anyhow::bail!(
                     "Could not find ae.safetensors or vae/diffusion_pytorch_model.safetensors in model {:?}. Available files: {:?}",

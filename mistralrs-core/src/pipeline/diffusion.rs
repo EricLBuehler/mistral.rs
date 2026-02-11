@@ -65,8 +65,14 @@ impl DiffusionLoaderBuilder {
     pub fn build(self, loader: DiffusionLoaderType) -> Box<dyn Loader> {
         let model_id = self.model_id.clone().unwrap();
         let loader: Box<dyn DiffusionModelLoader> = match loader {
-            DiffusionLoaderType::Flux => Box::new(FluxLoader { offload: false, model_id: model_id.clone() }),
-            DiffusionLoaderType::FluxOffloaded => Box::new(FluxLoader { offload: true, model_id: model_id.clone() }),
+            DiffusionLoaderType::Flux => Box::new(FluxLoader {
+                offload: false,
+                model_id: model_id.clone(),
+            }),
+            DiffusionLoaderType::FluxOffloaded => Box::new(FluxLoader {
+                offload: true,
+                model_id: model_id.clone(),
+            }),
         };
         Box::new(DiffusionLoader {
             inner: loader,
@@ -325,8 +331,15 @@ impl Pipeline for DiffusionPipeline {
     ) -> candle_core::Result<ForwardInputsResult> {
         assert!(!return_raw_logits);
 
-        let ModelInputs { prompts, params, images } = *inputs.downcast().expect("Downcast failed.");
-        let img = self.model.forward(prompts, params, images)?.to_dtype(DType::U8)?;
+        let ModelInputs {
+            prompts,
+            params,
+            images,
+        } = *inputs.downcast().expect("Downcast failed.");
+        let img = self
+            .model
+            .forward(prompts, params, images)?
+            .to_dtype(DType::U8)?;
         let (_b, c, h, w) = img.dims4()?;
         let mut images = Vec::new();
         for b_img in img.chunk(img.dim(0)?, 0)? {
