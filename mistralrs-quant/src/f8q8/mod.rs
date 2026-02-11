@@ -59,7 +59,7 @@ const _: () = assert!(std::mem::size_of::<BlockQ8_0>() == 34);
 
 fn to_float(xs: &[BlockF8Q8], ys: &mut [f32]) -> Result<()> {
     let k = ys.len();
-    if k % QK8_0 != 0 {
+    if !k.is_multiple_of(QK8_0) {
         candle_core::bail!("dequantize_row_f8q8: {k} is not divisible by {QK8_0}");
     }
 
@@ -77,7 +77,7 @@ fn to_float(xs: &[BlockF8Q8], ys: &mut [f32]) -> Result<()> {
 
 fn from_float(xs: &[f32], ys: &mut [BlockF8Q8]) -> Result<()> {
     let k = xs.len();
-    if k % QK8_0 != 0 {
+    if !k.is_multiple_of(QK8_0) {
         candle_core::bail!("{k} is not divisible by {QK8_0}");
     }
     let nb = k / QK8_0;
@@ -118,7 +118,7 @@ fn vec_dot(n: usize, xs: &[BlockF8Q8], ys: &[BlockQ8_0]) -> Result<f32> {
 #[allow(dead_code)]
 fn vec_dot_unopt(n: usize, xs: &[BlockF8Q8], ys: &[BlockQ8_0]) -> Result<f32> {
     let qk = QK8_0;
-    if n % QK8_0 != 0 {
+    if !n.is_multiple_of(QK8_0) {
         candle_core::bail!("vec_dot_f8q8_q8_0: {n} is not divisible by {qk}")
     }
 
@@ -201,9 +201,8 @@ impl QuantMethod for F8Q8Linear {
     where
         Self: Sized,
     {
-        match method {
-            _ => candle_core::bail!("F8Q8Linear should be constructed via from_weight"),
-        }
+        let _ = method;
+        candle_core::bail!("F8Q8Linear should be constructed via from_weight")
     }
 
     fn dequantize_w(&self) -> Result<Tensor> {

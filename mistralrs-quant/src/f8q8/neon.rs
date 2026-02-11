@@ -32,7 +32,7 @@ unsafe fn vdotq_s32_local(vz: int32x4_t, a: int8x16_t, b: int8x16_t) -> int32x4_
 #[inline(always)]
 pub(crate) fn vec_dot_f8q8_q8_0(n: usize, xs: &[BlockF8Q8], ys: &[BlockQ8_0]) -> Result<f32> {
     let qk = QK8_0;
-    if n % QK8_0 != 0 {
+    if !n.is_multiple_of(QK8_0) {
         candle_core::bail!("vec_dot_f8q8_q8_0: {n} is not divisible by {qk}")
     }
     let nb = n / QK8_0;
@@ -163,7 +163,7 @@ pub(crate) fn i8mm_f8q8_q8_0(
     assert_eq!(ys_0.len(), ys_1.len());
     assert_eq!(xs_0.len(), ys_0.len());
     let qk = QK8_0;
-    if n % QK8_0 != 0 {
+    if !n.is_multiple_of(QK8_0) {
         candle_core::bail!("i8mm_f8q8_q8_0: {n} is not divisible by {qk}")
     }
     let nb = n / QK8_0;
