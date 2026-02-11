@@ -453,7 +453,7 @@ pub trait Pipeline:
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
                 let mut preview_task = None;
                 let preview_interval = input_seqs
-                    .get(0)
+                    .first()
                     .and_then(|seq| seq.get_diffusion_diffusion_params())
                     .and_then(|params| params.preview_interval)
                     .filter(|interval| *interval > 0);
@@ -474,7 +474,7 @@ pub trait Pipeline:
                         })
                         .collect::<Vec<_>>();
                     let created = input_seqs
-                        .get(0)
+                        .first()
                         .map(|seq| seq.creation_time() as u128)
                         .unwrap_or_default();
 

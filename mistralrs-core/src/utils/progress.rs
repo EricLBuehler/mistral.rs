@@ -107,6 +107,7 @@ pub fn new_multi_progress() -> MultiProgress {
 // Usage: `iter.with_progress(true)`
 // Similar to the `iter.tqdm()` feature except this supports opt-in via parameter.
 pub trait IterWithProgress<'a, T>: Iterator<Item = T> + 'a {
+    #[allow(dead_code)]
     fn with_progress(self, is_silent: bool) -> Box<dyn Iterator<Item = T> + 'a>
     where
         Self: Sized,

@@ -1930,9 +1930,5 @@ pub fn compute_n_kv_groups(
     } else {
         1
     };
-    if kv_replicate != 0 {
-        (num_attention_heads / total_num_kv_heads) / kv_replicate
-    } else {
-        num_attention_heads / total_num_kv_heads
-    }
+    (num_attention_heads / total_num_kv_heads) / kv_replicate
 }

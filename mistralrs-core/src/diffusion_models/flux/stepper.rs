@@ -39,9 +39,9 @@ use super::{
 #[derive(Debug, Clone)]
 pub enum FluxVae {
     /// Original FLUX.1 autoencoder format
-    Flux1(AutoEncoder),
+    Flux1(Box<AutoEncoder>),
     /// FLUX.2 diffusers-style AutoencoderKL format
-    Flux2(AutoEncoderKL),
+    Flux2(Box<AutoEncoderKL>),
 }
 
 impl FluxVae {
@@ -462,11 +462,15 @@ impl FluxStepper {
             packed_latents.push(packed.squeeze(0)?);
 
             let (_, _, h, w) = normalized.dims4()?;
-            let t_ids = Tensor::full(scale + scale * idx as u32, (h, w), dev)?;
-            let h_ids = Tensor::arange(0u32, h as u32, dev)?
+            let t_ids = Tensor::full(
+                scale + scale * u32::try_from(idx).expect("idx too large"),
+                (h, w),
+                dev,
+            )?;
+            let h_ids = Tensor::arange(0u32, u32::try_from(h).expect("h too large"), dev)?
                 .reshape(((), 1))?
                 .broadcast_as((h, w))?;
-            let w_ids = Tensor::arange(0u32, w as u32, dev)?
+            let w_ids = Tensor::arange(0u32, u32::try_from(w).expect("w too large"), dev)?
                 .reshape((1, ()))?
                 .broadcast_as((h, w))?;
             let l_ids = Tensor::full(0u32, (h, w), dev)?;
@@ -481,6 +485,7 @@ impl FluxStepper {
         let ids = Tensor::cat(&img_ids, 1)?.repeat((batch_size, 1, 1))?;
         Ok(Some((packed, ids)))
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         cfg: FluxStepperConfig,
         (flux_vb, flux_cfg): (ShardedVarBuilder, &flux::model::Config),
@@ -545,16 +550,22 @@ impl FluxStepper {
         let flux_vae = if is_flux2 {
             info!("Using FLUX.2 VAE (AutoEncoderKL with latent_channels=32)");
             let flux2_cfg = flux::autoencoder_kl::Config::from(flux_ae_cfg);
-            FluxVae::Flux2(AutoEncoderKL::new(&flux2_cfg, flux_ae_vb)?)
+            FluxVae::Flux2(Box::new(AutoEncoderKL::new(&flux2_cfg, flux_ae_vb)?))
         } else {
             info!("Using FLUX.1 VAE (latent_channels=16)");
-            FluxVae::Flux1(AutoEncoder::new(flux_ae_cfg, flux_ae_vb)?)
+            FluxVae::Flux1(Box::new(AutoEncoder::new(flux_ae_cfg, flux_ae_vb)?))
         };
 
         // Load transformer model
         let flux_model = if is_flux2 {
             info!("Loading FLUX.2 Transformer (Flux2Transformer2DModel)");
-            FluxTransformer::Flux2(Flux2::new(flux_cfg, flux_vb, device.clone(), dtype, offloaded)?)
+            FluxTransformer::Flux2(Flux2::new(
+                flux_cfg,
+                flux_vb,
+                device.clone(),
+                dtype,
+                offloaded,
+            )?)
         } else {
             info!("Loading FLUX.1 Transformer");
             FluxTransformer::Flux1(Flux::new(flux_cfg, flux_vb, device.clone(), offloaded)?)
@@ -592,7 +603,7 @@ impl DiffusionModel for FluxStepper {
         params: DiffusionGenerationParams,
         images: Option<Vec<DynamicImage>>,
     ) -> Result<Tensor> {
-        if params.height % 16 != 0 || params.width % 16 != 0 {
+        if !params.height.is_multiple_of(16) || !params.width.is_multiple_of(16) {
             candle_core::bail!(
                 "height ({}) and width ({}) must be multiples of 16",
                 params.height,
@@ -675,7 +686,11 @@ impl DiffusionModel for FluxStepper {
 
         // Use per-request params if provided, otherwise fall back to model defaults.
         // FLUX.2 needs 20-28 steps (28 default); schnell default of 4 is far too few.
-        let default_steps = if self.is_flux2 { 28 } else { self.cfg.num_steps };
+        let default_steps = if self.is_flux2 {
+            28
+        } else {
+            self.cfg.num_steps
+        };
         let num_steps = params.num_steps.unwrap_or(default_steps);
         let timesteps = if self.is_flux2 {
             flux::sampling::get_schedule_flux2(
@@ -731,6 +746,7 @@ impl DiffusionModel for FluxStepper {
             };
 
             // Precompute all timestep vectors
+            #[allow(clippy::cast_possible_truncation)]
             let t_vecs: Vec<Tensor> = timesteps
                 .iter()
                 .map(|t| Tensor::full(*t as f32, b_sz, &dev))
@@ -875,9 +891,14 @@ impl FluxStepper {
         for b_img in img.chunk(img.dim(0)?, 0)? {
             let flattened = b_img.squeeze(0)?.permute((1, 2, 0))?.flatten_all()?;
             images.push(DynamicImage::ImageRgb8(
-                RgbImage::from_raw(w as u32, h as u32, flattened.to_vec1::<u8>()?).ok_or(
-                    candle_core::Error::Msg("RgbImage has invalid capacity.".to_string()),
-                )?,
+                RgbImage::from_raw(
+                    u32::try_from(w).expect("w too large"),
+                    u32::try_from(h).expect("h too large"),
+                    flattened.to_vec1::<u8>()?,
+                )
+                .ok_or(candle_core::Error::Msg(
+                    "RgbImage has invalid capacity.".to_string(),
+                ))?,
             ));
         }
         Ok(images)
