@@ -1,7 +1,6 @@
 use crate::{
     get_mut_arcmutex, get_mut_group,
     harmony::HarmonyContext,
-    paged_attention::BlockRef,
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
@@ -9,7 +8,6 @@ use crate::{
     AudioInput, ChatCompletionResponse, Usage,
 };
 use crate::{
-    paged_attention::{BlockEngineSequence, LogicalTokenBlock},
     pipeline::{DiffusionGenerationParams, KvCache},
     response::CompletionChoice,
     tools::ToolCallingMatcher,
@@ -819,9 +817,12 @@ impl Sequence {
             .append_tokens_to_blocks(toks.iter().map(|x| *x as usize).collect::<Vec<_>>());
 
         if let Some(metadata) = paged_attn_metadata {
-            // Free and then reallocate as appropriate
-            get_mut_arcmutex!(metadata.block_engine).free_sequence(*self.id());
-            get_mut_arcmutex!(metadata.block_engine).allocate(self);
+            // Free and then reallocate with the new token count
+            let seq_id = *self.id();
+            let num_tokens = self.tokens.len();
+            let mut kv_mgr = get_mut_arcmutex!(metadata.kv_cache_manager);
+            kv_mgr.free(seq_id);
+            kv_mgr.allocate_slots(seq_id, num_tokens, &[]);
         }
     }
 

@@ -218,7 +218,7 @@ impl Engine {
         // This ensures PagedAttention prefix caching respects the same setting
         get_mut_arcmutex!(scheduler).set_prefix_caching_enabled(!no_prefix_cache);
 
-        let block_engine = get_mut_arcmutex!(scheduler).block_engine();
+        let has_paged_attention = get_mut_arcmutex!(scheduler).kv_cache_manager().is_some();
 
         Ok(Self {
             tx,
@@ -234,7 +234,7 @@ impl Engine {
             prefix_cacher: Arc::new(Mutex::new(PrefixCacheManagerV2::new(
                 prefix_cache_n,
                 no_prefix_cache,
-                block_engine,
+                has_paged_attention,
             ))),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
@@ -570,7 +570,7 @@ impl Engine {
                             let metadata = PagedAttentionMeta {
                                 block_size,
                                 sliding_window: pipeline.get_metadata().sliding_window,
-                                block_engine: scheduler.block_engine().unwrap(),
+                                kv_cache_manager: scheduler.kv_cache_manager().unwrap(),
                             };
 
                             let return_raw_logits = guards_mut[0].return_raw_logits;
@@ -591,7 +591,7 @@ impl Engine {
                                     rng.clone(),
                                     CacheBackendMetadata::PagedAttention {
                                         metadata,
-                                        blocks_to_copy: output.blocks_to_copy,
+                                        blocks_to_copy: HashMap::new(),
                                     },
                                 )
                                 .await

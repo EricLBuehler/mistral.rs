@@ -1,6 +1,7 @@
 use candle_core::{DType, Device, Result, Tensor};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use mistralrs_paged_attn::flash_attn_sinks;
+#[allow(unused_imports)]
 use mistralrs_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
 
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
@@ -127,6 +128,142 @@ impl PagedAttention {
 
         let (batch_size, attention_heads, seq_len, head_size) = query.shape().dims4()?;
         let (_, key_value_heads, _, _) = key.shape().dims4()?;
+
+        // === Prefix cache hit path ===
+        // When num_cached_tokens is set, Q/K/V contain ONLY new (non-cached) tokens.
+        // We write new tokens to cache via reshape_and_cache, then run
+        // context_attention_fwd which reads cached tokens from the paged KV cache
+        // and new tokens from the input tensors.
+        if let Some(num_cached) = &input_metadata.num_cached_tokens {
+            if attention_mask.is_some() {
+                let query_lens_data = input_metadata
+                    .query_lens
+                    .as_ref()
+                    .expect("query_lens required when num_cached_tokens is set");
+
+                // Reshape Q/K/V from [batch, heads, seq, dim] to [total_tokens, heads, dim]
+                let q_flat = query
+                    .transpose(1, 2)?
+                    .reshape(((), attention_heads, head_size))?;
+                let k_flat = key
+                    .transpose(1, 2)?
+                    .reshape(((), key_value_heads, head_size))?;
+                let v_flat = value
+                    .transpose(1, 2)?
+                    .reshape(((), key_value_heads, head_size))?;
+
+                // Write new tokens to cache for future decode steps
+                if key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
+                    reshape_and_cache(
+                        &k_flat,
+                        &v_flat,
+                        self.k_scale.as_ref(),
+                        self.v_scale.as_ref(),
+                        key_cache.as_mut().unwrap(),
+                        value_cache.as_mut().unwrap(),
+                        slot_mapping,
+                    )?;
+                }
+
+                let device = query.device();
+                let sliding_window_val =
+                    sdpa_params.sliding_window.map(|w| w as i32).unwrap_or(0);
+
+                #[cfg(all(feature = "cuda", target_family = "unix"))]
+                let result = {
+                    // Build auxiliary tensors for the CUDA fused kernel
+                    let context_lens_t = Tensor::new(
+                        &num_cached
+                            .iter()
+                            .map(|&c| c as i32)
+                            .collect::<Vec<_>>()[..],
+                        device,
+                    )?;
+                    let query_lens_t = Tensor::new(
+                        &query_lens_data
+                            .iter()
+                            .map(|&q| q as i32)
+                            .collect::<Vec<_>>()[..],
+                        device,
+                    )?;
+
+                    // Cumulative start offsets: [0, q0, q0+q1, ...]
+                    let mut start_locs = Vec::with_capacity(num_cached.len() + 1);
+                    start_locs.push(0i32);
+                    for &ql in query_lens_data {
+                        start_locs.push(start_locs.last().unwrap() + ql as i32);
+                    }
+                    let query_start_locs = Tensor::new(&start_locs[..], device)?;
+
+                    // Batch index for each new token: [0,0,...,1,1,...,2,2,...]
+                    let total_new: usize = query_lens_data.iter().sum();
+                    let mut seq_ids_data = Vec::with_capacity(total_new);
+                    for (i, &ql) in query_lens_data.iter().enumerate() {
+                        seq_ids_data.extend(std::iter::repeat(i as i32).take(ql));
+                    }
+                    let seq_ids = Tensor::new(&seq_ids_data[..], device)?;
+
+                    let max_total_kv = num_cached
+                        .iter()
+                        .zip(query_lens_data.iter())
+                        .map(|(&c, &q)| c + q)
+                        .max()
+                        .unwrap_or(0);
+
+                    mistralrs_paged_attn::context_attention_fwd(
+                        &q_flat,
+                        &k_flat,
+                        &v_flat,
+                        self.k_scale.as_ref(),
+                        self.v_scale.as_ref(),
+                        key_cache.as_ref().unwrap(),
+                        value_cache.as_ref().unwrap(),
+                        block_tables,
+                        &context_lens_t,
+                        &query_lens_t,
+                        &query_start_locs,
+                        &seq_ids,
+                        sdpa_params.softmax_scale,
+                        sliding_window_val,
+                        sinks,
+                        max_total_kv,
+                    )?
+                };
+
+                #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+                let result = {
+                    // CPU/Metal fallback: convert block_tables tensor to Vec<Vec<u32>>
+                    let bt = block_tables.to_device(&Device::Cpu)?;
+                    let (nseq, nblk) = bt.dims2()?;
+                    let bt_data: Vec<u32> = bt.flatten_all()?.to_vec1()?;
+                    let block_tables_vec: Vec<Vec<u32>> = (0..nseq)
+                        .map(|i| bt_data[i * nblk..(i + 1) * nblk].to_vec())
+                        .collect();
+
+                    super::context_attention_cpu::context_attention_fwd_cpu(
+                        &q_flat,
+                        &k_flat,
+                        &v_flat,
+                        key_cache.as_ref().unwrap(),
+                        value_cache.as_ref().unwrap(),
+                        &block_tables_vec,
+                        num_cached,
+                        query_lens_data,
+                        sdpa_params.softmax_scale,
+                        sdpa_params.sliding_window,
+                        sinks,
+                    )?
+                };
+
+                // Reshape from [total_new_tokens, num_heads, head_size] to
+                // [batch_size, num_heads, seq_len, head_size] to match flash_attn output format.
+                let result = result
+                    .reshape((batch_size, seq_len, attention_heads, head_size))?
+                    .transpose(1, 2)?;
+
+                return Ok(result);
+            }
+        }
 
         #[allow(clippy::cast_possible_truncation)]
         let att = match attention_mask {

@@ -8,8 +8,8 @@ use tokio::sync::Mutex;
 use crate::{
     engine::IntervalLogger,
     paged_attention::{
-        BlockEngine, BlockTables, CacheConfig, PagedAttentionScheduler,
-        PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
+        CacheConfig, KVCacheManager, PagedAttentionScheduler, PagedAttentionSchedulerConfig,
+        PagedAttentionSchedulerOutput,
     },
     sequence::Sequence,
 };
@@ -63,9 +63,8 @@ pub trait Scheduler: Send + Sync {
     fn get_finished_mamba_indices(&self) -> Vec<usize>;
 
     // PagedAttention metadata
-    fn block_tables(&self) -> Option<BlockTables>;
     fn block_size(&self) -> Option<usize>;
-    fn block_engine(&self) -> Option<Arc<Mutex<BlockEngine>>>;
+    fn kv_cache_manager(&self) -> Option<Arc<Mutex<KVCacheManager>>>;
 
     /// Set whether prefix caching is enabled. Called by Engine after creation
     /// to synchronize with the global no_prefix_cache setting.

@@ -19,6 +19,10 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=src/cuda/flashinfer_mla_decode.cu");
     println!("cargo:rerun-if-changed=src/cuda/update_kvscales.cu");
     println!("cargo:rerun-if-changed=src/cuda/flash_attn_sinks.cu");
+    println!("cargo:rerun-if-changed=src/cuda/context_attention_fwd.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/context_attention_fwd_f16.cu");
+    println!("cargo:rerun-if-changed=src/cuda/context_attention_fwd_bf16.cu");
+    println!("cargo:rerun-if-changed=src/cuda/context_attention_fwd_f32.cu");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/cp_async.cuh");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/exception.h");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/fastdiv.cuh");

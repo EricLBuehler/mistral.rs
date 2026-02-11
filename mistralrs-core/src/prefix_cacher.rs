@@ -1,11 +1,9 @@
-use std::sync::Arc;
-
 use candle_core::{Device, Result};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use tracing::info;
 
-use crate::{paged_attention::BlockEngine, pipeline::KvCache, sequence::Sequence};
+use crate::{pipeline::KvCache, sequence::Sequence};
 
 #[derive(PartialEq, Eq, Debug, Hash)]
 struct Tokens(Vec<u32>);
@@ -38,7 +36,7 @@ pub struct PrefixCacheManagerV2 {
     caches: IndexMap<Tokens, CacheElement>,
     n_on_device: usize,
     no_prefix_cache: bool,
-    block_engine: Option<Arc<tokio::sync::Mutex<BlockEngine>>>,
+    has_paged_attention: bool,
 }
 
 #[derive(Clone)]
@@ -56,16 +54,16 @@ impl PrefixCacheManagerV2 {
     pub fn new(
         n_on_device: usize,
         no_prefix_cache: bool,
-        block_engine: Option<Arc<tokio::sync::Mutex<BlockEngine>>>,
+        has_paged_attention: bool,
     ) -> Self {
-        if !no_prefix_cache && block_engine.is_none() {
+        if !no_prefix_cache && !has_paged_attention {
             info!("Prefix caching enabled (sequence-level, non-paged attention). Expect higher multi-turn throughput for both text and multimodal.");
         }
         PrefixCacheManagerV2 {
             caches: IndexMap::new(),
             n_on_device,
             no_prefix_cache,
-            block_engine,
+            has_paged_attention,
         }
     }
 
@@ -76,10 +74,9 @@ impl PrefixCacheManagerV2 {
             return;
         }
 
-        // For paged attention, prefix caching is handled by the low-level
-        // PrefixCacher in BlockEngine. PrefixCacheManagerV2 only handles
-        // non-paged attention caching.
-        if self.block_engine.is_none() {
+        // For paged attention, prefix caching is handled by the KVCacheManager.
+        // PrefixCacheManagerV2 only handles non-paged attention caching.
+        if !self.has_paged_attention {
             let cache = seq.normal_cache().to_vec();
 
             self.caches.insert(
@@ -169,10 +166,9 @@ impl PrefixCacheManagerV2 {
             return Ok(None);
         }
 
-        if self.block_engine.is_some() {
-            // For paged attention, prefix caching is handled by the low-level
-            // PrefixCacher in BlockEngine. PrefixCacheManagerV2 only handles
-            // non-paged attention caching.
+        if self.has_paged_attention {
+            // For paged attention, prefix caching is handled by the KVCacheManager.
+            // PrefixCacheManagerV2 only handles non-paged attention caching.
             return Ok(None);
         }
 
