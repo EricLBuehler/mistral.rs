@@ -1562,7 +1562,7 @@ impl SequenceGroup {
                 .send(Response::Chunk(ChatCompletionChunkResponse {
                     id: seq.id.to_string(),
                     choices: swap_streaming_chunks,
-                    created: seq.timestamp,
+                    created: seq.creation_time() as u128,
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
@@ -1581,7 +1581,7 @@ impl SequenceGroup {
                 .send(Response::CompletionChunk(CompletionChunkResponse {
                     id: seq.id.to_string(),
                     choices: swap_streaming_chunks,
-                    created: seq.timestamp,
+                    created: seq.creation_time() as u128,
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "text_completion".to_string(),
