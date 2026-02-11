@@ -191,8 +191,7 @@ pub(crate) fn i8mm_f8q8_q8_0(
             let yv1_0 = vld1q_s8(y1.qs.as_ptr());
             let yv1_1 = vld1q_s8(y1.qs.as_ptr().add(16));
 
-            let i8mm =
-                I8mmParams::new(xv0_0, xv0_1, xv1_0, xv1_1, yv0_0, yv0_1, yv1_0, yv1_1);
+            let i8mm = I8mmParams::new(xv0_0, xv0_1, xv1_0, xv1_1, yv0_0, yv0_1, yv1_0, yv1_1);
             let loop_sum_s32 = i8mm.calculate(vdupq_n_s32(0));
 
             // scaling

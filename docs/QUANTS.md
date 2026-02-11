@@ -10,6 +10,7 @@ Mistral.rs supports the following quantization:
       - AFQ
       - HQQ
       - FP8
+      - F8Q8
 - GGUF/GGML
     - Q, K type
     - Supported in GGUF/GGML and GGUF/GGML adapter models

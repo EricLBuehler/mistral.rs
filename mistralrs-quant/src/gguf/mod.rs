@@ -147,7 +147,10 @@ impl QuantMethod for GgufMatMul {
                 };
                 let t = t.to_device(&device)?;
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                return Ok(Arc::new(crate::F8Q8Linear::from_weight(&t, self.b.clone())?));
+                return Ok(Arc::new(crate::F8Q8Linear::from_weight(
+                    &t,
+                    self.b.clone(),
+                )?));
             }
             let t = match &self.w {
                 QMatMul::QTensor(q) => q.dequantize(&q.device())?,

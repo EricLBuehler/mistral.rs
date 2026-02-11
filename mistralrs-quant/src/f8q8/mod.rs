@@ -12,8 +12,7 @@ use half::f16;
 
 use crate::{
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
-    IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde,
-    QuantizedSerdeType,
+    IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
 };
 
 #[cfg(target_feature = "avx")]
@@ -228,10 +227,7 @@ impl QuantMethod for F8Q8Linear {
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
         let dequant = self.dequantize(delta.dtype())?;
         let new_w = (dequant + delta)?;
-        Ok(Arc::new(Self::from_weight(
-            &new_w,
-            self.bias.clone(),
-        )?))
+        Ok(Arc::new(Self::from_weight(&new_w, self.bias.clone())?))
     }
 
     fn apply_isq(
@@ -251,16 +247,9 @@ impl QuantMethod for F8Q8Linear {
                 // Dequantize and re-quantize to requested type
                 let w = self.dequantize(DType::F32)?;
                 let b = self.bias.clone();
-                let unquant = crate::UnquantLinear::new(QuantMethodConfig::Unquantized(
-                    Linear::new(w, b),
-                ))?;
-                Arc::new(unquant).apply_isq(
-                    Some(other),
-                    device,
-                    n_quantized,
-                    None,
-                    guard,
-                )
+                let unquant =
+                    crate::UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(w, b)))?;
+                Arc::new(unquant).apply_isq(Some(other), device, n_quantized, None, guard)
             }
         }
     }

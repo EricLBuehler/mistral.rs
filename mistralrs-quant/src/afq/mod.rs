@@ -196,7 +196,11 @@ impl QuantMethod for AfqLayer {
             Some(IsqType::F8Q8) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 let w = self.dequantize_w()?.to_device(&device)?;
-                let b = self.bias.as_ref().map(|b| b.to_device(&device)).transpose()?;
+                let b = self
+                    .bias
+                    .as_ref()
+                    .map(|b| b.to_device(&device))
+                    .transpose()?;
                 Ok(Arc::new(crate::F8Q8Linear::from_weight(&w, b)?))
             }
             _ => todo!(),
