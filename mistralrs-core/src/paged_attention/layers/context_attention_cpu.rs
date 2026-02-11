@@ -20,7 +20,7 @@ use candle_core::{Result, Tensor};
 /// * `softmax_scale` - Scaling factor for QK products
 /// * `sliding_window` - Optional sliding window size
 /// * `sinks` - Optional per-head sink values `[num_heads]`
-#[allow(clippy::too_many_arguments)]
+#[allow(dead_code, clippy::too_many_arguments, clippy::cast_possible_truncation)]
 pub fn context_attention_fwd_cpu(
     query: &Tensor,
     key: &Tensor,
@@ -81,7 +81,7 @@ pub fn context_attention_fwd_cpu(
             for t in 0..ctx_len {
                 let block_idx = t / block_size;
                 let block_offset = t % block_size;
-                let physical_block = block_table[block_idx] as u32;
+                let physical_block = block_table[block_idx];
                 slot_indices.push(physical_block * block_size as u32 + block_offset as u32);
             }
             let slot_tensor = Tensor::new(slot_indices.as_slice(), device)?;
@@ -158,7 +158,9 @@ pub fn context_attention_fwd_cpu(
 /// and masked positions are -inf. Query token at local position `q` can attend to:
 /// - All context positions `[0, ctx_len)` (already computed)
 /// - New tokens `[ctx_len, ctx_len + q]` (causal within new tokens)
+///
 /// Optionally restricted by sliding window on the query's global position.
+#[allow(dead_code)]
 fn build_context_causal_mask(
     q_len: usize,
     total_kv: usize,

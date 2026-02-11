@@ -77,8 +77,8 @@ impl KVCacheManager {
     /// Create a KV cache manager that shares a block pool with another manager.
     ///
     /// This is used for models with multiple KV cache types (e.g., full attention
-    /// + sliding window) that need separate block tracking but share the same
-    /// physical blocks.
+    /// + sliding window) that need separate block tracking but share the same physical blocks.
+    #[allow(dead_code)]
     pub fn new_shared(
         block_pool: BlockPool,
         block_size: usize,
@@ -404,6 +404,7 @@ impl KVCacheManager {
         let req = self.req_to_blocks.get(&request_id)?;
         let mut table = Vec::with_capacity(max_blocks);
 
+        #[allow(clippy::cast_possible_truncation)]
         for &block_id in &req.block_ids {
             table.push(block_id as i32);
         }

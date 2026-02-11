@@ -46,6 +46,7 @@ impl PagedAttention {
     /// value_cache: shape = [num_blocks, num_kv_heads, head_size,
     ///     block_size]
     /// input_metadata: metadata for paged attention.
+    #[allow(clippy::too_many_arguments, clippy::cast_possible_truncation)]
     pub fn forward(
         &self,
         query: &Tensor,
@@ -199,7 +200,7 @@ impl PagedAttention {
                     let total_new: usize = query_lens_data.iter().sum();
                     let mut seq_ids_data = Vec::with_capacity(total_new);
                     for (i, &ql) in query_lens_data.iter().enumerate() {
-                        seq_ids_data.extend(std::iter::repeat(i as i32).take(ql));
+                        seq_ids_data.extend(std::iter::repeat_n(i as i32, ql));
                     }
                     let seq_ids = Tensor::new(&seq_ids_data[..], device)?;
 

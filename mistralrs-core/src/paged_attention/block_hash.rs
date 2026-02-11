@@ -46,8 +46,10 @@ pub enum ExtraHashKey {
     /// The identifier is a content-based hash of the raw media data.
     MultiModalHash(String),
     /// LoRA adapter name — different adapters produce different KV values.
+    #[allow(dead_code)]
     LoraName(String),
     /// User-provided cache salt for per-request isolation.
+    #[allow(dead_code)]
     CacheSalt(String),
 }
 

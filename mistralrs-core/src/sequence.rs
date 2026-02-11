@@ -75,98 +75,6 @@ pub enum SequenceRecognizer {
     None,
 }
 
-enum SequenceCustomMetadata {
-    PagedAttention {
-        logical_token_blocks: Vec<LogicalTokenBlock>,
-        physical_blocks_prefill: Option<Vec<BlockRef>>,
-        block_size: usize,
-    },
-    None,
-}
-
-macro_rules! blocks_to_add_new_tok {
-    ($logical_token_blocks:expr) => {{
-        let last = $logical_token_blocks.last();
-        match last {
-            // If the last block is not full (including the common "empty sentinel"
-            // case after an exact block-size prompt), we can reuse it.
-            Some(last) if !last.is_full() => 0,
-            // Otherwise we need to allocate a new physical block.
-            _ => 1,
-        }
-    }};
-}
-
-pub(crate) fn util_append_token_to_blocks(
-    tok: usize,
-    logical_token_blocks: &mut Vec<LogicalTokenBlock>,
-    block_size: usize,
-) {
-    let last = logical_token_blocks.last_mut();
-    match last {
-        Some(last) => {
-            last.append_token_id(tok);
-        }
-        None => {
-            logical_token_blocks.push(LogicalTokenBlock::new(block_size));
-            // SAFETY: We just pushed a block, so last_mut() will return Some
-            logical_token_blocks
-                .last_mut()
-                .expect("just pushed a block, vector cannot be empty")
-                .append_token_id(tok);
-        }
-    }
-    // SAFETY: At this point, we either had a block or just created one above,
-    // so the vector is guaranteed to be non-empty.
-    if logical_token_blocks
-        .last()
-        .expect("logical_token_blocks should not be empty after appending")
-        .is_full()
-    {
-        logical_token_blocks.push(LogicalTokenBlock::new(block_size));
-    }
-}
-
-impl SequenceCustomMetadata {
-    fn append_token_to_blocks(&mut self, tok: usize) {
-        match self {
-            Self::PagedAttention {
-                logical_token_blocks,
-                physical_blocks_prefill: _,
-                block_size,
-            } => {
-                util_append_token_to_blocks(tok, logical_token_blocks, *block_size);
-            }
-            Self::None => (),
-        }
-    }
-
-    fn pop_token_from_blocks(&mut self) {
-        match self {
-            Self::PagedAttention {
-                logical_token_blocks,
-                physical_blocks_prefill: _,
-                block_size: _,
-            } => {
-                let last = logical_token_blocks.last_mut().unwrap();
-                last.pop_token();
-            }
-            Self::None => (),
-        }
-    }
-
-    fn append_tokens_to_blocks(&mut self, toks: Vec<usize>) {
-        for tok in toks {
-            self.append_token_to_blocks(tok);
-        }
-    }
-
-    fn remove_tokens_from_blocks(&mut self, n: usize) {
-        for _ in 0..n {
-            self.pop_token_from_blocks();
-        }
-    }
-}
 
 #[derive(Clone, Copy)]
 pub enum SeqStepType {
@@ -454,7 +362,6 @@ pub struct Sequence {
     stream_idx: usize,
     pub recognizer: SequenceRecognizer,
     scheduling_urgency: usize, // The number of passes since scheduling
-    waitlisted_count: usize, // Used in PagedAttention to alert the user when a sequence repeatedly cannot be scheduled
 
     // GPU things
     pub prompt_tok_per_sec: f32,
@@ -463,9 +370,6 @@ pub struct Sequence {
     pub step_start_instant: Option<Instant>,
     group: Arc<Mutex<SequenceGroup>>,
     state: RwLock<SequenceState>,
-
-    // Custom backend metadata
-    custom_metadata: SequenceCustomMetadata,
 
     // Tool calls
     pub tools: Option<Arc<ToolCallingMatcher>>,
@@ -477,63 +381,6 @@ pub struct Sequence {
     think_tag_context: Option<ThinkTagContext>,
 }
 
-impl BlockEngineSequence for Sequence {
-    fn blocks_to_add_new_tok(&self) -> usize {
-        match &self.custom_metadata {
-            SequenceCustomMetadata::PagedAttention {
-                logical_token_blocks,
-                physical_blocks_prefill: _,
-                block_size: _,
-            } => {
-                blocks_to_add_new_tok!(logical_token_blocks)
-            }
-            SequenceCustomMetadata::None => unreachable!(),
-        }
-    }
-
-    fn get_id(&self) -> usize {
-        self.id
-    }
-
-    fn logical_token_blocks(&self) -> &[LogicalTokenBlock] {
-        match &self.custom_metadata {
-            SequenceCustomMetadata::PagedAttention {
-                logical_token_blocks,
-                physical_blocks_prefill: _,
-                block_size: _,
-            } => logical_token_blocks,
-            SequenceCustomMetadata::None => unreachable!(),
-        }
-    }
-
-    fn take_physical_blocks_prefill(&mut self) -> Option<Vec<BlockRef>> {
-        match &mut self.custom_metadata {
-            SequenceCustomMetadata::PagedAttention {
-                logical_token_blocks: _,
-                physical_blocks_prefill,
-                block_size: _,
-            } => physical_blocks_prefill.take(),
-            SequenceCustomMetadata::None => None,
-        }
-    }
-
-    fn increment_waitlist_count(&mut self) -> usize {
-        let prev = self.waitlisted_count;
-        self.waitlisted_count += 1;
-        prev
-    }
-
-    fn set_prefix_cache_len(&mut self, len: usize) {
-        self.prefix_cache_len = len;
-    }
-
-    fn block_size(&self) -> usize {
-        match &self.custom_metadata {
-            SequenceCustomMetadata::PagedAttention { block_size, .. } => *block_size,
-            SequenceCustomMetadata::None => unreachable!(),
-        }
-    }
-}
 
 impl Sequence {
     #[allow(clippy::too_many_arguments)]
@@ -572,17 +419,7 @@ impl Sequence {
         eos_tokens: Vec<u32>,
     ) -> Self {
         let prompt_len = tokens.len();
-        let mut custom_metadata = if let Some(block_size) = block_size {
-            SequenceCustomMetadata::PagedAttention {
-                logical_token_blocks: Vec::new(),
-                physical_blocks_prefill: None,
-                block_size,
-            }
-        } else {
-            SequenceCustomMetadata::None
-        };
-        custom_metadata
-            .append_tokens_to_blocks(tokens.iter().map(|x| *x as usize).collect::<Vec<_>>());
+        let _ = block_size; // Block management handled by KVCacheManager
         Self {
             tokens,
             prompt,
@@ -634,7 +471,6 @@ impl Sequence {
                 image_gen_response_format,
                 diffusion_params,
             ),
-            custom_metadata,
             tools,
             sequence_stepping_type,
             return_raw_logits,
@@ -642,7 +478,6 @@ impl Sequence {
             eos_tokens,
             total_prompt_time: None,
             step_start_instant: None,
-            waitlisted_count: 0,
             harmony_context: None,
             think_tag_context: None,
         }
@@ -676,30 +511,6 @@ impl Sequence {
         self.prefill_prompt_toks = Some(toks);
         self.set_state(SequenceState::RunningPrefillPrompt);
         self.token_offset = offset;
-        self
-    }
-
-    pub fn prefill_v2_paged(
-        mut self,
-        logical_blocks: Vec<LogicalTokenBlock>,
-        physical_blocks: Vec<BlockRef>,
-        toks: Vec<u32>,
-        offset: usize,
-    ) -> Self {
-        self.prefill_prompt_toks = Some(toks);
-        self.set_state(SequenceState::RunningPrefillPrompt);
-        self.token_offset = offset;
-
-        if let SequenceCustomMetadata::PagedAttention {
-            logical_token_blocks,
-            physical_blocks_prefill,
-            block_size: _,
-        } = &mut self.custom_metadata
-        {
-            *logical_token_blocks = logical_blocks;
-            *physical_blocks_prefill = Some(physical_blocks);
-        }
-
         self
     }
 
@@ -802,19 +613,6 @@ impl Sequence {
     ) {
         self.tokens.clone_from(&toks);
         self.prompt_len = self.tokens.len();
-        // Handle possible block engine
-        match &mut self.custom_metadata {
-            SequenceCustomMetadata::PagedAttention {
-                logical_token_blocks,
-                physical_blocks_prefill: _,
-                block_size: _,
-            } => {
-                logical_token_blocks.clear();
-            }
-            SequenceCustomMetadata::None => (),
-        }
-        self.custom_metadata
-            .append_tokens_to_blocks(toks.iter().map(|x| *x as usize).collect::<Vec<_>>());
 
         if let Some(metadata) = paged_attn_metadata {
             // Free and then reallocate with the new token count
@@ -888,16 +686,12 @@ impl Sequence {
     pub(crate) fn add_tmp_tok(&mut self, tok: u32) {
         self.is_tmp = true;
         self.tokens.push(tok);
-        // Handle possible block engine
-        self.custom_metadata.append_token_to_blocks(tok as usize);
     }
 
     /// Internal api to remove n raw tokens.
     pub(crate) fn remove_tmp_tok(&mut self, n: usize) {
         self.is_tmp = false;
         self.tokens.truncate(self.tokens.len() - n);
-        // Handle possible block engine
-        self.custom_metadata.remove_tokens_from_blocks(n);
     }
 
     pub fn add_token(
@@ -919,9 +713,6 @@ impl Sequence {
         }
         self.last_logprob = tok.logprob;
         self.last_is_done = *is_done;
-
-        self.custom_metadata
-            .append_token_to_blocks(tok.token as usize);
 
         // Process token through Harmony parser if in Harmony mode
         if let Some(ref mut harmony_ctx) = self.harmony_context {

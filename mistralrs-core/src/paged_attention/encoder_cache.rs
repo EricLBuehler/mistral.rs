@@ -7,6 +7,8 @@
 //! (checking the cache before running the encoder, storing outputs after) will
 //! be added incrementally for each vision/audio model.
 
+#![allow(dead_code)]
+
 use std::collections::{HashMap, HashSet};
 
 use candle_core::Tensor;
