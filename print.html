@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-559de736.js";
+            window.path_to_searchindex_js = "searchindex-70d5e0d5.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cf64f8f3.js"></script>
@@ -7401,6 +7401,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 <li>AFQ</li>
 <li>HQQ</li>
 <li>FP8</li>
+<li>F8Q8</li>
 </ul>
 </li>
 </ul>
@@ -7535,6 +7536,7 @@ python3 scripts/convert_to_gptq.py --src path/to/model --dst output/model/path -
 <li>HQQ4</li>
 <li>HQQ8</li>
 <li>FP8</li>
+<li>F8Q8</li>
 </ul>
 <pre><code>mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 </code></pre>
@@ -7607,14 +7609,17 @@ The uniquely powerful quantized file format.
 <li><a href="#support">Support</a></li>
 <li><a href="#loading-a-uqff-model">Loading a UQFF model</a>
 <ul>
+<li><a href="#shard-auto-discovery">Shard auto-discovery</a></li>
 <li><a href="#running-with-the-cli">Running with the CLI</a></li>
-<li><a href="#using-with-the-rust-api">Using with the Rust SDK</a></li>
-<li><a href="#using-the-python-api">Using the Python SDK</a></li>
+<li><a href="#using-with-the-rust-sdk">Using with the Rust SDK</a></li>
+<li><a href="#using-the-python-sdk">Using the Python SDK</a></li>
+<li><a href="#using-topology-for-device-mapping-with-uqff">Using topology for device mapping with UQFF</a></li>
 </ul>
 </li>
 <li><a href="#creating-a-uqff-model">Creating a UQFF model</a>
 <ul>
-<li><a href="#upload-with-git">Upload with Git</a></li>
+<li><a href="#model-card-generation">Model card generation</a></li>
+<li><a href="#uploading-to-hugging-face">Uploading to Hugging Face</a></li>
 </ul>
 </li>
 <li><a href="#list-of-models">List of models</a></li>
@@ -7668,6 +7673,12 @@ The uniquely powerful quantized file format.
 <li>AFQ4</li>
 <li>AFQ6</li>
 <li>AFQ8</li>
+</ul>
+</li>
+<li>
+<p>F8Q8:</p>
+<ul>
+<li>F8Q8</li>
 </ul>
 </li>
 </ul>
