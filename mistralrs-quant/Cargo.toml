@@ -50,6 +50,7 @@ metal = [
     "dep:candle-metal-kernels",
 ]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
+arm-nightly-feat = []
 ring = []
 
 cuda-11040 = []
