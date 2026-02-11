@@ -276,20 +276,8 @@ fn get_qwen3_tokenization_with_mask(
     prompts: Vec<String>,
     device: &Device,
     chat_template: Option<&ChatTemplateValue>,
-    max_seq_len: usize,
 ) -> Result<(Tensor, Tensor)> {
-    let mut tok = tok.clone();
-    tok.with_padding(Some(PaddingParams {
-        strategy: PaddingStrategy::Fixed(max_seq_len),
-        ..Default::default()
-    }));
-    tok.with_truncation(Some(TruncationParams {
-        max_length: max_seq_len,
-        strategy: TruncationStrategy::LongestFirst,
-        ..Default::default()
-    }))
-    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-
+    // Tokenizer is pre-configured with padding/truncation at FluxStepper init
     let mut rendered = Vec::with_capacity(prompts.len());
     for prompt in prompts {
         if let Some(template) = chat_template {
@@ -522,8 +510,20 @@ impl FluxStepper {
         ) = if is_flux2 {
             info!("FLUX.2 detected - loading Qwen3 text encoder");
             let model_repo = api.repo(hf_hub::Repo::model(model_id.to_string()));
-            let (encoder, tokenizer, template) =
+            let (encoder, mut tokenizer, template) =
                 get_qwen3_encoder_and_tokenizer(&model_repo, dtype, device, silent)?;
+            // Configure padding/truncation once rather than cloning per forward pass
+            tokenizer.with_padding(Some(PaddingParams {
+                strategy: PaddingStrategy::Fixed(512),
+                ..Default::default()
+            }));
+            tokenizer
+                .with_truncation(Some(TruncationParams {
+                    max_length: 512,
+                    strategy: TruncationStrategy::LongestFirst,
+                    ..Default::default()
+                }))
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             let sched_cfg = load_flux2_scheduler_config(&model_repo).unwrap_or_default();
             (tokenizer, Some(encoder), None, None, template, sched_cfg)
         } else {
@@ -554,7 +554,7 @@ impl FluxStepper {
         // Load transformer model
         let flux_model = if is_flux2 {
             info!("Loading FLUX.2 Transformer (Flux2Transformer2DModel)");
-            FluxTransformer::Flux2(Flux2::new(flux_cfg, flux_vb, device.clone(), dtype)?)
+            FluxTransformer::Flux2(Flux2::new(flux_cfg, flux_vb, device.clone(), dtype, offloaded)?)
         } else {
             info!("Loading FLUX.1 Transformer");
             FluxTransformer::Flux1(Flux::new(flux_cfg, flux_vb, device.clone(), offloaded)?)
@@ -592,21 +592,26 @@ impl DiffusionModel for FluxStepper {
         params: DiffusionGenerationParams,
         images: Option<Vec<DynamicImage>>,
     ) -> Result<Tensor> {
+        if params.height % 16 != 0 || params.width % 16 != 0 {
+            candle_core::bail!(
+                "height ({}) and width ({}) must be multiples of 16",
+                params.height,
+                params.width
+            );
+        }
         let preview_interval = params.preview_interval.unwrap_or(0);
         let prompt_len = prompts.len();
         // Get text embeddings based on model type
         let text_embed = if self.is_flux2 {
             // FLUX.2: Use Qwen3 text encoder
-            let qwen3_encoder = self
-                .qwen3_encoder
-                .as_ref()
-                .expect("Qwen3 encoder required for FLUX.2");
+            let Some(qwen3_encoder) = self.qwen3_encoder.as_ref() else {
+                candle_core::bail!("Qwen3 encoder required for FLUX.2 but not loaded");
+            };
             let (input_ids, attention_mask) = get_qwen3_tokenization_with_mask(
                 &self.text_tok,
                 prompts.clone(),
                 &self.device,
                 self.flux2_chat_template.as_ref(),
-                self.flux2_max_seq_len,
             )?;
             info!("Running Qwen3 text encoder");
             qwen3_encoder
@@ -640,23 +645,13 @@ impl DiffusionModel for FluxStepper {
             t5_encoder.forward(&t5_input_ids)?
         };
 
-        let img = if self.is_flux2 {
-            flux::sampling::get_noise(
-                text_embed.dim(0)?,
-                params.height,
-                params.width,
-                self.latent_channels,
-                self.device(),
-            )?
-        } else {
-            flux::sampling::get_noise(
-                text_embed.dim(0)?,
-                params.height,
-                params.width,
-                self.latent_channels,
-                self.device(),
-            )?
-        }
+        let img = flux::sampling::get_noise(
+            text_embed.dim(0)?,
+            params.height,
+            params.width,
+            self.latent_channels,
+            self.device(),
+        )?
         .to_dtype(self.dtype)?;
 
         // Create state - FLUX.2 doesn't use CLIP embeddings
@@ -678,8 +673,10 @@ impl DiffusionModel for FluxStepper {
             flux::sampling::State::new(&text_embed, &clip_embed, &img, self.rope_axes)?
         };
 
-        // Use per-request params if provided, otherwise fall back to model defaults
-        let num_steps = params.num_steps.unwrap_or(self.cfg.num_steps);
+        // Use per-request params if provided, otherwise fall back to model defaults.
+        // FLUX.2 needs 20-28 steps (28 default); schnell default of 4 is far too few.
+        let default_steps = if self.is_flux2 { 28 } else { self.cfg.num_steps };
+        let num_steps = params.num_steps.unwrap_or(default_steps);
         let timesteps = if self.is_flux2 {
             flux::sampling::get_schedule_flux2(
                 num_steps,
@@ -711,15 +708,11 @@ impl DiffusionModel for FluxStepper {
                     neg_prompts,
                     &self.device,
                     self.flux2_chat_template.as_ref(),
-                    self.flux2_max_seq_len,
                 )?;
-                Some(
-                    self.qwen3_encoder
-                        .as_ref()
-                        .expect("Qwen3 encoder required for FLUX.2")
-                        .forward(&neg_ids, &neg_mask)?
-                        .to_dtype(self.dtype)?,
-                )
+                let Some(enc) = self.qwen3_encoder.as_ref() else {
+                    candle_core::bail!("Qwen3 encoder required for FLUX.2 but not loaded");
+                };
+                Some(enc.forward(&neg_ids, &neg_mask)?.to_dtype(self.dtype)?)
             } else {
                 None
             };
@@ -846,6 +839,8 @@ impl DiffusionModel for FluxStepper {
     fn max_seq_len(&self) -> usize {
         if self.is_guidance {
             usize::MAX
+        } else if self.is_flux2 {
+            self.flux2_max_seq_len
         } else {
             256
         }

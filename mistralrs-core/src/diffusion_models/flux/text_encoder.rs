@@ -140,6 +140,11 @@ impl Attention {
         let (q, k) = self.rotary_emb.forward(&q, &k, &seqlen_offsets)?;
 
         // Attention
+        // Note: On the CUDA flash-attn path, the explicit mask is ignored and
+        // flash_params=None defaults to causal=true (seq_len > 1). This is
+        // acceptable because we use right-padding: real tokens are always to the
+        // left, so the causal mask alone prevents them from attending to padding.
+        // Padding token outputs are never used downstream.
         let attn_output =
             Sdpa.run_attention(&q, &k, &v, Some(attention_mask), None, &self.sdpa_params)?;
 

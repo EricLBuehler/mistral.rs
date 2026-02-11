@@ -2,9 +2,24 @@
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
 use candle_core::{DType, Device, Result, Tensor, D};
 
 use crate::layers::MatMul;
+use crate::pipeline::text_models_inputs_processor::FlashParams;
+
+/// Shared FlashParams for diffusion attention (bidirectional, non-causal).
+///
+/// Avoids allocating empty HashMaps on every attention call (~57 blocks × 20-50 steps).
+pub(super) static DIFFUSION_FLASH_PARAMS: LazyLock<FlashParams> = LazyLock::new(|| FlashParams {
+    causal: false,
+    cumulative_seqlens_q: HashMap::new(),
+    cumulative_seqlens_k: HashMap::new(),
+    max_q: 0,
+    max_k: 0,
+});
 
 /// Precompute the inv_freq tensor for a given RoPE dimension and theta.
 ///

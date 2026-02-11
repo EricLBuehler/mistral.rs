@@ -5,11 +5,8 @@ use candle_nn::{LayerNorm, Linear, RmsNorm};
 use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 
-use std::collections::HashMap;
-
 use crate::attention::{Sdpa, SdpaParams};
 use crate::layers;
-use crate::pipeline::text_models_inputs_processor::FlashParams;
 
 use super::common;
 
@@ -141,15 +138,14 @@ fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Result<Tensor> 
         softmax_scale: 1.0 / (head_dim as f32).sqrt(),
         sliding_window: None,
     };
-    let flash_params = FlashParams {
-        causal: false,
-        cumulative_seqlens_q: HashMap::new(),
-        cumulative_seqlens_k: HashMap::new(),
-        max_q: 0,
-        max_k: 0,
-    };
-
-    let x = Sdpa.run_attention(&q, &k, &v, None, Some(&flash_params), &sdpa_params)?;
+    let x = Sdpa.run_attention(
+        &q,
+        &k,
+        &v,
+        None,
+        Some(&common::DIFFUSION_FLASH_PARAMS),
+        &sdpa_params,
+    )?;
     x.transpose(1, 2)?.flatten_from(2)
 }
 

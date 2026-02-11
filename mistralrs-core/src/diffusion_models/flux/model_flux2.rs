@@ -17,11 +17,8 @@ use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{LayerNorm, Linear, RmsNorm};
 use mistralrs_quant::ShardedVarBuilder;
 
-use std::collections::HashMap;
-
 use crate::attention::{Sdpa, SdpaParams};
 use crate::layers;
-use crate::pipeline::text_models_inputs_processor::FlashParams;
 
 use super::common;
 
@@ -85,17 +82,14 @@ fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Result<Tensor> 
         softmax_scale: 1.0 / (head_dim as f32).sqrt(),
         sliding_window: None,
     };
-    // Diffusion attention is bidirectional (non-causal).
-    // Empty cumulative_seqlens avoids the varlen kernel path.
-    let flash_params = FlashParams {
-        causal: false,
-        cumulative_seqlens_q: HashMap::new(),
-        cumulative_seqlens_k: HashMap::new(),
-        max_q: 0,
-        max_k: 0,
-    };
-
-    let x = Sdpa.run_attention(&q, &k, &v, None, Some(&flash_params), &sdpa_params)?;
+    let x = Sdpa.run_attention(
+        &q,
+        &k,
+        &v,
+        None,
+        Some(&common::DIFFUSION_FLASH_PARAMS),
+        &sdpa_params,
+    )?;
     x.transpose(1, 2)?.flatten_from(2)
 }
 
@@ -214,6 +208,20 @@ impl Flux2Mlp {
     }
 }
 
+impl Flux2Mlp {
+    fn cast_to(&mut self, device: &Device) -> Result<()> {
+        self.gate_up = Linear::new(
+            self.gate_up.weight().to_device(device)?,
+            self.gate_up.bias().map(|x| x.to_device(device).unwrap()),
+        );
+        self.down = Linear::new(
+            self.down.weight().to_device(device)?,
+            self.down.bias().map(|x| x.to_device(device).unwrap()),
+        );
+        Ok(())
+    }
+}
+
 impl candle_core::Module for Flux2Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let gate_up = xs.apply(&self.gate_up)?;
@@ -257,6 +265,38 @@ impl Flux2SelfAttention {
         let q = q.apply(&self.norm.query_norm)?;
         let k = k.apply(&self.norm.key_norm)?;
         Ok((q, k, v))
+    }
+
+    fn cast_to(&mut self, device: &Device) -> Result<()> {
+        self.qkv = Linear::new(
+            self.qkv.weight().to_device(device)?,
+            self.qkv.bias().map(|x| x.to_device(device).unwrap()),
+        );
+        self.proj = Linear::new(
+            self.proj.weight().to_device(device)?,
+            self.proj.bias().map(|x| x.to_device(device).unwrap()),
+        );
+        self.norm = QkNorm {
+            query_norm: RmsNorm::new(
+                self.norm
+                    .query_norm
+                    .clone()
+                    .into_inner()
+                    .weight()
+                    .to_device(device)?,
+                1e-6,
+            ),
+            key_norm: RmsNorm::new(
+                self.norm
+                    .key_norm
+                    .clone()
+                    .into_inner()
+                    .weight()
+                    .to_device(device)?,
+                1e-6,
+            ),
+        };
+        Ok(())
     }
 }
 
@@ -374,6 +414,20 @@ impl Flux2DoubleStreamBlock {
 
         Ok((img, txt))
     }
+
+    fn cast_to(&mut self, device: &Device) -> Result<()> {
+        self.norm1 = LayerNorm::new_no_bias(self.norm1.weight().to_device(device)?, 1e-6);
+        self.norm2 = LayerNorm::new_no_bias(self.norm2.weight().to_device(device)?, 1e-6);
+        self.norm1_context =
+            LayerNorm::new_no_bias(self.norm1_context.weight().to_device(device)?, 1e-6);
+        self.norm2_context =
+            LayerNorm::new_no_bias(self.norm2_context.weight().to_device(device)?, 1e-6);
+        self.img_attn.cast_to(device)?;
+        self.img_mlp.cast_to(device)?;
+        self.txt_attn.cast_to(device)?;
+        self.txt_mlp.cast_to(device)?;
+        Ok(())
+    }
 }
 
 /// FLUX.2 Single Stream Block (single_blocks.*)
@@ -455,6 +509,39 @@ impl Flux2SingleStreamBlock {
         // Residual + gate
         xs + gate.broadcast_mul(&output)?
     }
+
+    fn cast_to(&mut self, device: &Device) -> Result<()> {
+        self.pre_norm = LayerNorm::new_no_bias(self.pre_norm.weight().to_device(device)?, 1e-6);
+        self.linear1 = Linear::new(
+            self.linear1.weight().to_device(device)?,
+            self.linear1.bias().map(|x| x.to_device(device).unwrap()),
+        );
+        self.linear2 = Linear::new(
+            self.linear2.weight().to_device(device)?,
+            self.linear2.bias().map(|x| x.to_device(device).unwrap()),
+        );
+        self.norm = QkNorm {
+            query_norm: RmsNorm::new(
+                self.norm
+                    .query_norm
+                    .clone()
+                    .into_inner()
+                    .weight()
+                    .to_device(device)?,
+                1e-6,
+            ),
+            key_norm: RmsNorm::new(
+                self.norm
+                    .key_norm
+                    .clone()
+                    .into_inner()
+                    .weight()
+                    .to_device(device)?,
+                1e-6,
+            ),
+        };
+        Ok(())
+    }
 }
 
 /// Final layer: final_layer.adaLN_modulation.1, final_layer.linear
@@ -513,10 +600,18 @@ pub struct Flux2 {
     double_blocks: Vec<Flux2DoubleStreamBlock>,
     single_blocks: Vec<Flux2SingleStreamBlock>,
     final_layer: Flux2LastLayer,
+    device: Device,
+    offloaded: bool,
 }
 
 impl Flux2 {
-    pub fn new(cfg: &Config, vb: ShardedVarBuilder, device: Device, dtype: DType) -> Result<Self> {
+    pub fn new(
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        device: Device,
+        dtype: DType,
+        offloaded: bool,
+    ) -> Result<Self> {
         let hidden_size = cfg.hidden_size();
 
         let img_in = linear_no_bias(
@@ -591,6 +686,8 @@ impl Flux2 {
             double_blocks,
             single_blocks,
             final_layer,
+            device,
+            offloaded,
         })
     }
 
@@ -635,13 +732,25 @@ impl Flux2 {
         let double_mod_txt = self.double_stream_modulation_txt.forward(&vec_)?;
         let single_mod = self.single_stream_modulation.forward(&vec_)?;
 
-        for block in self.double_blocks.iter() {
+        for block in self.double_blocks.iter_mut() {
+            if self.offloaded {
+                block.cast_to(&self.device)?;
+            }
             (img, txt) = block.forward(&img, &txt, &pe, &double_mod_img, &double_mod_txt)?;
+            if self.offloaded {
+                block.cast_to(&Device::Cpu)?;
+            }
         }
 
         let mut combined = Tensor::cat(&[&txt, &img], 1)?;
-        for block in self.single_blocks.iter() {
+        for block in self.single_blocks.iter_mut() {
+            if self.offloaded {
+                block.cast_to(&self.device)?;
+            }
             combined = block.forward(&combined, &pe, &single_mod)?;
+            if self.offloaded {
+                block.cast_to(&Device::Cpu)?;
+            }
         }
 
         let img = combined.i((.., txt.dim(1)?..))?;

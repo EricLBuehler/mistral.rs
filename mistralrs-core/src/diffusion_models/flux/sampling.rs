@@ -260,8 +260,8 @@ pub fn unpack(xs: &Tensor, height: usize, width: usize) -> Result<Tensor> {
 
 pub fn unpack_packed(xs: &Tensor, height: usize, width: usize) -> Result<Tensor> {
     let (b, _h_w, c) = xs.dims3()?;
-    let height = height / 16;
-    let width = width / 16;
+    let height = height.div_ceil(16);
+    let width = width.div_ceil(16);
     xs.reshape((b, height, width, c))?.permute((0, 3, 1, 2))
 }
 
