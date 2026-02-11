@@ -45,6 +45,7 @@ mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 - HQQ4
 - HQQ8
 - FP8
+- F8Q8
 
 ```
 mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct

@@ -10,10 +10,12 @@ It has grown beyon simply quantization and is used by `mistral.rs` to power:
 - cuBLASlt integration
 
 Currently supported:
-- GGUF: `GgufMatMul`(2-8 bit quantization, with imatrix)
-- Gptq/Awq: `GptqAwqLayer`(with CUDA marlin kernel)
+- AFQ: `GgufMatMul` (2-8 bit quantization optimized for Metal and compatible with MLX)
+- GGUF: `GgufMatMul` (2-8 bit quantization, with imatrix)
+- Gptq/Awq: `GptqAwqLayer` (with CUDA marlin kernel)
 - Hqq: `HqqLayer` (4, 8 bit quantization)
-- FP8: `FP8Linear`(optimized on CUDA)
+- FP8: `FP8Linear`
+- F8Q8: `F8Q8Linear`
 - Unquantized (used for ISQ): `UnquantLinear`
 - Bnb: `BnbLinear` (int8, fp4, nf4)
 
