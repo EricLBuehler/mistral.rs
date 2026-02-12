@@ -15,7 +15,7 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::Sequence,
+    sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
     vision_models::gemma3n::audio_processing::AudioProcessor,
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
@@ -272,6 +272,15 @@ impl InputsProcessor for Gemma3nImageProcessor {
                         .expect("Tokenization failed!");
 
                     let ids = toks.get_ids().to_vec();
+
+                    // Build mm_features for position-aware prefix cache hashing
+                    if seq.mm_features().is_empty() {
+                        if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
+                            let ranges = find_image_placeholder_ranges(&ids, IMAGE_TOKEN_ID);
+                            seq.set_mm_features(build_mm_features_from_ranges(&ranges, &hashes));
+                        }
+                    }
+
                     seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
 
                     has_changed_prompt = true;

@@ -23,7 +23,7 @@ use crate::{
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
         ProcessorCreator,
     },
-    sequence::Sequence,
+    sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
 };
 
 use crate::vision_models::{
@@ -314,6 +314,16 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 i += token_count;
             }
             if !has_changed_prompt {
+                // Build mm_features for position-aware prefix cache hashing
+                if seq.mm_features().is_empty() {
+                    if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
+                        let ranges = find_image_placeholder_ranges(
+                            seq.get_toks(),
+                            IMAGE_SPECIAL_TOKEN_ID as u32,
+                        );
+                        seq.set_mm_features(build_mm_features_from_ranges(&ranges, &hashes));
+                    }
+                }
                 seq.multimodal.has_changed_prompt = true;
             }
             toks.push(seq.get_toks().to_vec());

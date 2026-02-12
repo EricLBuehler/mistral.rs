@@ -12,7 +12,9 @@ use crate::{
     engine::IntervalLogger,
     get_mut_arcmutex,
     paged_attention::{
-        block_hash::{compute_block_hashes, compute_new_block_hashes, BlockHash, ExtraHashKey},
+        block_hash::{
+            compute_block_hashes, compute_new_block_hashes, BlockHash, MultiModalFeature,
+        },
         kv_cache_manager::KVCacheManager,
     },
     scheduler::{Scheduler, SchedulerOutput},
@@ -85,43 +87,25 @@ impl PagedAttentionScheduler {
 
     /// Compute or update block hashes for a sequence.
     ///
-    /// `extra_keys_base`: additional hash keys applied to every block (e.g., multimodal
-    /// content hashes). For sequences with images/audio, each media item's content hash
-    /// is included so that blocks in sequences with different media always hash differently.
+    /// `mm_features`: per-item multimodal feature positions. Each feature's content hash
+    /// is included only in blocks whose token range overlaps with that feature's placeholder
+    /// tokens, ensuring that adding a new image at the end of a conversation doesn't
+    /// invalidate hashes for earlier (unchanged) blocks.
     fn ensure_block_hashes(
         &mut self,
         seq_id: usize,
         tokens: &[u32],
-        extra_keys_base: &[ExtraHashKey],
+        mm_features: &[MultiModalFeature],
     ) {
         let hashes = self.seq_block_hashes.entry(seq_id).or_default();
         if hashes.is_empty() {
             // Compute all hashes from scratch
-            *hashes = compute_block_hashes(tokens, self.block_size, &[], extra_keys_base);
+            *hashes = compute_block_hashes(tokens, self.block_size, mm_features, &[]);
         } else {
             // Incrementally compute new block hashes
-            let new =
-                compute_new_block_hashes(tokens, self.block_size, hashes, &[], extra_keys_base);
+            let new = compute_new_block_hashes(tokens, self.block_size, hashes, mm_features, &[]);
             hashes.extend(new);
         }
-    }
-
-    /// Build extra hash keys from a sequence's multimodal content hashes.
-    /// Each image/audio hash is included as a global extra key so that sequences
-    /// with different media always produce different block hashes.
-    fn build_mm_extra_keys(seq: &Sequence) -> Vec<ExtraHashKey> {
-        let mut keys = Vec::new();
-        if let Some(hashes) = seq.image_hashes() {
-            for h in hashes {
-                keys.push(ExtraHashKey::MultiModalHash(format!("img:{h}")));
-            }
-        }
-        if let Some(hashes) = seq.audio_hashes() {
-            for h in hashes {
-                keys.push(ExtraHashKey::MultiModalHash(format!("aud:{h}")));
-            }
-        }
-        keys
     }
 
     /// Bucket sequences by (length, has_images && is_prompt, token_offset).
@@ -201,11 +185,11 @@ impl PagedAttentionScheduler {
             let seq_id = *seq_guard.id();
             let tokens = seq_guard.get_toks().to_vec();
             let num_tokens = tokens.len();
-            let mm_extra_keys = Self::build_mm_extra_keys(&seq_guard);
+            let mm_features = seq_guard.mm_features().to_vec();
             drop(seq_guard);
 
             // Compute block hashes for prefix cache lookup
-            self.ensure_block_hashes(seq_id, &tokens, &mm_extra_keys);
+            self.ensure_block_hashes(seq_id, &tokens, &mm_features);
             let block_hashes = self
                 .seq_block_hashes
                 .get(&seq_id)
@@ -382,14 +366,14 @@ impl PagedAttentionScheduler {
 
     pub fn free_finished_sequence_groups(&mut self) {
         // Collect finished sequence info before modifying self.running
-        let mut finished: Vec<(usize, Vec<u32>, Vec<ExtraHashKey>)> = Vec::new();
+        let mut finished: Vec<(usize, Vec<u32>, Vec<MultiModalFeature>)> = Vec::new();
         for seq in self.running.iter() {
             let seq_guard = get_mut_arcmutex!(seq);
             if seq_guard.is_finished_paged_attn() {
                 let id = *seq_guard.id();
                 let tokens = seq_guard.get_toks().to_vec();
-                let mm_keys = Self::build_mm_extra_keys(&seq_guard);
-                finished.push((id, tokens, mm_keys));
+                let mm_features = seq_guard.mm_features().to_vec();
+                finished.push((id, tokens, mm_features));
             }
         }
 
@@ -398,8 +382,8 @@ impl PagedAttentionScheduler {
             .retain(|seq| !get_mut_arcmutex!(seq).is_finished_paged_attn());
 
         // Cache and free blocks for finished sequences
-        for (id, tokens, mm_keys) in &finished {
-            self.ensure_block_hashes(*id, tokens, mm_keys);
+        for (id, tokens, mm_features) in &finished {
+            self.ensure_block_hashes(*id, tokens, mm_features);
             let block_hashes = self.seq_block_hashes.get(id).cloned().unwrap_or_default();
             let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
             kv_mgr.cache_blocks(*id, &block_hashes, tokens.len());
@@ -421,11 +405,11 @@ impl PagedAttentionScheduler {
         seq_guard.set_state(SequenceState::Waiting);
         let seq_id = *seq_guard.id();
         let tokens = seq_guard.get_toks().to_vec();
-        let mm_extra_keys = Self::build_mm_extra_keys(&seq_guard);
+        let mm_features = seq_guard.mm_features().to_vec();
         drop(seq_guard);
 
         // Ensure block hashes are up-to-date before freeing
-        self.ensure_block_hashes(seq_id, &tokens, &mm_extra_keys);
+        self.ensure_block_hashes(seq_id, &tokens, &mm_features);
         let block_hashes = self
             .seq_block_hashes
             .get(&seq_id)

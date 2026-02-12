@@ -1,6 +1,7 @@
 use crate::{
     get_mut_arcmutex, get_mut_group,
     harmony::HarmonyContext,
+    paged_attention::block_hash::MultiModalFeature,
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
@@ -189,6 +190,11 @@ pub struct MultimodalData {
     pub has_changed_prompt: bool,
     pub image_gen_response_format: Option<ImageGenerationResponseFormat>,
     pub diffusion_params: Option<DiffusionGenerationParams>,
+    /// Per-item multimodal feature positions for prefix caching block hashing.
+    /// Each entry records which token range a multimodal item (image/audio) occupies,
+    /// so that only blocks overlapping with that item include its content hash.
+    /// Set once during the first `process_inputs()` call and never modified thereafter.
+    mm_features: Vec<MultiModalFeature>,
 }
 
 impl MultimodalData {
@@ -209,6 +215,7 @@ impl MultimodalData {
             has_changed_prompt: false,
             image_gen_response_format,
             diffusion_params,
+            mm_features: Vec::new(),
         }
     }
 
@@ -300,6 +307,88 @@ impl MultimodalData {
     pub fn diffusion_params(&self) -> Option<DiffusionGenerationParams> {
         self.diffusion_params.clone()
     }
+
+    /// Per-item multimodal feature positions for prefix caching block hashing.
+    pub fn mm_features(&self) -> &[MultiModalFeature] {
+        &self.mm_features
+    }
+
+    /// Set per-item multimodal feature positions. Should be called once during the
+    /// first `process_inputs()` call when all images/audios are available.
+    pub fn set_mm_features(&mut self, features: Vec<MultiModalFeature>) {
+        self.mm_features = features;
+    }
+}
+
+/// Scan a token sequence for contiguous runs of a placeholder token ID.
+/// Returns `(offset, length)` pairs for each run, in order of appearance.
+///
+/// Used by vision model input processors to find where each image's placeholder
+/// tokens are in the expanded token sequence, so that `MultiModalFeature` entries
+/// can be built for position-aware prefix cache block hashing.
+pub fn find_image_placeholder_ranges(tokens: &[u32], placeholder_id: u32) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i] == placeholder_id {
+            let start = i;
+            while i < tokens.len() && tokens[i] == placeholder_id {
+                i += 1;
+            }
+            ranges.push((start, i - start));
+        } else {
+            i += 1;
+        }
+    }
+    ranges
+}
+
+/// Scan a token sequence for ranges delimited by start and end token IDs (inclusive).
+/// Returns `(offset, length)` pairs for each range found.
+///
+/// Useful for models like Llama4 that wrap each image in `<|image_start|>...<|image_end|>`.
+pub fn find_image_delimited_ranges(
+    tokens: &[u32],
+    start_id: u32,
+    end_id: u32,
+) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i] == start_id {
+            let start = i;
+            // Find matching end token
+            while i < tokens.len() && tokens[i] != end_id {
+                i += 1;
+            }
+            if i < tokens.len() {
+                // Include the end token
+                ranges.push((start, i - start + 1));
+            }
+        }
+        i += 1;
+    }
+    ranges
+}
+
+/// Build `MultiModalFeature` entries from placeholder token ranges and image hashes.
+///
+/// Pairs each contiguous run of placeholder tokens (found by `find_image_placeholder_ranges`)
+/// with the corresponding image content hash. If there are more images than placeholder ranges
+/// (or vice versa), only the overlapping pairs are included.
+pub fn build_mm_features_from_ranges(
+    ranges: &[(usize, usize)],
+    hashes: &[u64],
+) -> Vec<MultiModalFeature> {
+    ranges
+        .iter()
+        .zip(hashes.iter())
+        .map(|(&(offset, length), hash)| MultiModalFeature {
+            identifier: format!("img:{hash}"),
+            offset,
+            length,
+        })
+        .collect()
 }
 
 pub struct Sequence {
@@ -987,6 +1076,17 @@ impl Sequence {
 
     pub fn image_gen_response_format(&self) -> Option<ImageGenerationResponseFormat> {
         self.multimodal.image_gen_response_format()
+    }
+
+    /// Per-item multimodal feature positions for prefix caching block hashing.
+    pub fn mm_features(&self) -> &[MultiModalFeature] {
+        self.multimodal.mm_features()
+    }
+
+    /// Set per-item multimodal feature positions. Should be called once during the
+    /// first `process_inputs()` call when all images/audios are available.
+    pub fn set_mm_features(&mut self, features: Vec<MultiModalFeature>) {
+        self.multimodal.set_mm_features(features);
     }
 
     pub fn sequence_stepping_type(&self) -> &SeqStepType {

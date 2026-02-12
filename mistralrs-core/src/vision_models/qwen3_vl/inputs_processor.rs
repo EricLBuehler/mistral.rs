@@ -6,7 +6,7 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::Sequence,
+    sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::{PreProcessorConfig, ToFilter},
@@ -339,6 +339,20 @@ impl InputsProcessor for Qwen3VLImageProcessor {
 
                 if !seq.multimodal.has_changed_prompt {
                     seq.set_initial_prompt(detok.clone());
+
+                    // Build mm_features for position-aware prefix cache hashing
+                    if seq.mm_features().is_empty() {
+                        if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
+                            if let Some(img_tok_id) =
+                                tokenizer.token_to_id(Qwen3VLProcessor::IMAGE_PAD)
+                            {
+                                let ranges = find_image_placeholder_ranges(&ids, img_tok_id);
+                                seq.set_mm_features(build_mm_features_from_ranges(
+                                    &ranges, &hashes,
+                                ));
+                            }
+                        }
+                    }
 
                     seq.set_toks_and_reallocate(ids.clone(), paged_attn_metadata.as_mut());
                     seq.multimodal.has_changed_prompt = true;

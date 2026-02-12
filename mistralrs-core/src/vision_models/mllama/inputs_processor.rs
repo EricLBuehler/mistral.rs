@@ -23,7 +23,7 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::Sequence,
+    sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::{PreProcessorConfig, ToFilter},
@@ -308,6 +308,16 @@ impl InputsProcessor for MLlamaImageProcessor {
                 aspect_ratio_ids_accum.push(aspect_ratio_ids.unwrap().unsqueeze(0).unwrap());
                 aspect_ratio_mask_accum.push(aspect_ratio_mask.unwrap().unsqueeze(0).unwrap());
                 num_tiles_accum.push(num_tiles.unwrap());
+
+                // Build mm_features for position-aware prefix cache hashing
+                if seq.mm_features().is_empty() {
+                    if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
+                        let img_tok_id =
+                            tokenizer.encode_fast(IMAGE_TOKEN, false).unwrap().get_ids()[0];
+                        let ranges = find_image_placeholder_ranges(seq.get_toks(), img_tok_id);
+                        seq.set_mm_features(build_mm_features_from_ranges(&ranges, &hashes));
+                    }
+                }
 
                 seq.multimodal.has_changed_prompt = true;
             }

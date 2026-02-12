@@ -15,7 +15,7 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::Sequence,
+    sequence::{build_mm_features_from_ranges, find_image_delimited_ranges, Sequence},
     vision_models::ModelInputs,
 };
 
@@ -199,6 +199,20 @@ impl InputsProcessor for Idefics3ImageProcessor {
                         .expect("Detokenization failed!");
 
                     let ids = toks.get_ids().to_vec();
+
+                    // Build mm_features for position-aware prefix cache hashing
+                    if seq.mm_features().is_empty() {
+                        if let (Some(hashes), Some(fake_id)) = (
+                            seq.image_hashes().map(|h| h.to_vec()),
+                            tokenizer.token_to_id(FAKE_IMAGE_TOKEN),
+                        ) {
+                            // Each image is wrapped in FAKE_IMAGE_TOKEN pairs.
+                            // Find all FAKE_IMAGE_TOKEN...FAKE_IMAGE_TOKEN ranges.
+                            let ranges = find_image_delimited_ranges(&ids, fake_id, fake_id);
+                            seq.set_mm_features(build_mm_features_from_ranges(&ranges, &hashes));
+                        }
+                    }
+
                     seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
                     seq.multimodal.has_changed_prompt = true;
                 }

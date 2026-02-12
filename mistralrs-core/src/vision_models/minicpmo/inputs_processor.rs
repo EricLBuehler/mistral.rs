@@ -16,7 +16,7 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::Sequence,
+    sequence::{build_mm_features_from_ranges, find_image_delimited_ranges, Sequence},
     vision_models::ModelInputs,
 };
 
@@ -217,6 +217,34 @@ impl InputsProcessor for MiniCpmOImageProcessor {
 
                 if !seq.multimodal.has_changed_prompt {
                     seq.set_initial_prompt(final_text.clone());
+
+                    // Build mm_features for position-aware prefix cache hashing
+                    if seq.mm_features().is_empty() {
+                        if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
+                            let im_start = tokenizer
+                                .encode_fast(
+                                    self.config
+                                        .im_start_token
+                                        .clone()
+                                        .unwrap_or(DEFAULT_IM_START_TOKEN.to_string()),
+                                    false,
+                                )
+                                .unwrap()
+                                .get_ids()[0];
+                            let im_end = tokenizer
+                                .encode_fast(
+                                    self.config
+                                        .im_end_token
+                                        .clone()
+                                        .unwrap_or(DEFAULT_IM_END_TOKEN.to_string()),
+                                    false,
+                                )
+                                .unwrap()
+                                .get_ids()[0];
+                            let ranges = find_image_delimited_ranges(&input_ids, im_start, im_end);
+                            seq.set_mm_features(build_mm_features_from_ranges(&ranges, &hashes));
+                        }
+                    }
 
                     seq.set_toks_and_reallocate(input_ids.clone(), paged_attn_metadata.as_mut());
                     seq.multimodal.has_changed_prompt = true;
