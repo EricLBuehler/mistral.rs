@@ -176,23 +176,23 @@ impl PagedAttention {
                     let context_lens_t = Tensor::new(
                         &num_cached
                             .iter()
-                            .map(|&c| c as i32)
+                            .map(|&c| c as u32)
                             .collect::<Vec<_>>()[..],
                         device,
                     )?;
                     let query_lens_t = Tensor::new(
                         &query_lens_data
                             .iter()
-                            .map(|&q| q as i32)
+                            .map(|&q| q as u32)
                             .collect::<Vec<_>>()[..],
                         device,
                     )?;
 
                     // Cumulative start offsets: [0, q0, q0+q1, ...]
                     let mut start_locs = Vec::with_capacity(num_cached.len() + 1);
-                    start_locs.push(0i32);
+                    start_locs.push(0u32);
                     for &ql in query_lens_data {
-                        start_locs.push(start_locs.last().unwrap() + ql as i32);
+                        start_locs.push(start_locs.last().unwrap() + ql as u32);
                     }
                     let query_start_locs = Tensor::new(&start_locs[..], device)?;
 
@@ -200,7 +200,7 @@ impl PagedAttention {
                     let total_new: usize = query_lens_data.iter().sum();
                     let mut seq_ids_data = Vec::with_capacity(total_new);
                     for (i, &ql) in query_lens_data.iter().enumerate() {
-                        seq_ids_data.extend(std::iter::repeat_n(i as i32, ql));
+                        seq_ids_data.extend(std::iter::repeat_n(i as u32, ql));
                     }
                     let seq_ids = Tensor::new(&seq_ids_data[..], device)?;
 

@@ -1,6 +1,7 @@
 use crate::cuda::backend::slice_ptr;
 use crate::cuda::ffi::{
     context_attention_fwd_bf16, context_attention_fwd_f16, context_attention_fwd_f32,
+    context_attention_fwd_v2_bf16, context_attention_fwd_v2_f16, context_attention_fwd_v2_f32,
 };
 use candle::backend::BackendStorage;
 use candle::cuda_backend::cudarc::driver::DevicePtr;
@@ -260,43 +261,111 @@ impl ContextAttention {
         let (qsl_ptr, _qsl_guard) = qsl.device_ptr(qsl.stream());
         let (si_ptr, _si_guard) = si.device_ptr(si.stream());
 
-        let context_attention_fwd_func = match dtype {
-            DType::F16 => context_attention_fwd_f16,
-            DType::BF16 => context_attention_fwd_bf16,
-            DType::F32 => context_attention_fwd_f32,
-            dtype => candle::bail!("dtype {dtype:?} is not supported"),
-        };
+        // v1/v2 dispatch: use v1 when all logits fit in one partition,
+        // v2 (partitioned) for longer sequences.
+        let partition_size = 512usize;
+        let max_num_partitions = self.max_total_kv_len.div_ceil(partition_size);
+        let use_v1 = max_num_partitions == 1 && partition_size.is_multiple_of(block_size);
 
-        unsafe {
-            context_attention_fwd_func(
-                out_ptr as *const std::ffi::c_void,
-                q_ptr as *const std::ffi::c_void,
-                k_ptr as *const std::ffi::c_void,
-                v_ptr as *const std::ffi::c_void,
-                kc_ptr as *const std::ffi::c_void,
-                vc_ptr as *const std::ffi::c_void,
-                num_kv_heads as c_int,
-                self.softmax_scale,
-                bt_ptr as *const i32,
-                cl_ptr as *const i32,
-                ql_ptr as *const i32,
-                qsl_ptr as *const i32,
-                si_ptr as *const i32,
-                max_num_blocks_per_seq as c_int,
-                total_new_tokens as c_int,
-                num_heads as c_int,
-                head_size as c_int,
-                block_size as c_int,
-                kv_block_stride as c_int,
-                kv_head_stride as c_int,
-                dev.cuda_stream().cu_stream(),
-                cache_dtype,
-                k_scale_ptr,
-                v_scale_ptr,
-                self.sliding_window,
-                sinks_ptr,
-                self.max_total_kv_len as c_int,
-            )
+        if use_v1 {
+            let context_attention_fwd_func = match dtype {
+                DType::F16 => context_attention_fwd_f16,
+                DType::BF16 => context_attention_fwd_bf16,
+                DType::F32 => context_attention_fwd_f32,
+                dtype => candle::bail!("dtype {dtype:?} is not supported"),
+            };
+
+            unsafe {
+                context_attention_fwd_func(
+                    out_ptr as *const std::ffi::c_void,
+                    q_ptr as *const std::ffi::c_void,
+                    k_ptr as *const std::ffi::c_void,
+                    v_ptr as *const std::ffi::c_void,
+                    kc_ptr as *const std::ffi::c_void,
+                    vc_ptr as *const std::ffi::c_void,
+                    num_kv_heads as c_int,
+                    self.softmax_scale,
+                    bt_ptr as *const i32,
+                    cl_ptr as *const i32,
+                    ql_ptr as *const i32,
+                    qsl_ptr as *const i32,
+                    si_ptr as *const i32,
+                    max_num_blocks_per_seq as c_int,
+                    total_new_tokens as c_int,
+                    num_heads as c_int,
+                    head_size as c_int,
+                    block_size as c_int,
+                    kv_block_stride as c_int,
+                    kv_head_stride as c_int,
+                    dev.cuda_stream().cu_stream(),
+                    cache_dtype,
+                    k_scale_ptr,
+                    v_scale_ptr,
+                    self.sliding_window,
+                    sinks_ptr,
+                    self.max_total_kv_len as c_int,
+                )
+            }
+        } else {
+            // v2: allocate temp buffers for partitioned attention
+            let exp_sums_shape =
+                Shape::from((total_new_tokens, num_heads, max_num_partitions));
+            let tmp_out_shape =
+                Shape::from((total_new_tokens, num_heads, max_num_partitions, head_size));
+            let tmp_out_buf = unsafe { dev.alloc::<T>(tmp_out_shape.elem_count()) }?;
+            let exp_sums_buf = unsafe { dev.alloc::<f32>(exp_sums_shape.elem_count()) }?;
+            let max_logits_buf =
+                unsafe { dev.alloc::<f32>(exp_sums_shape.elem_count()) }?;
+
+            let (tmp_out_ptr, _tmp_out_guard) =
+                tmp_out_buf.device_ptr(tmp_out_buf.stream());
+            let (exp_sums_ptr, _exp_sums_guard) =
+                exp_sums_buf.device_ptr(exp_sums_buf.stream());
+            let (max_logits_ptr, _max_logits_guard) =
+                max_logits_buf.device_ptr(max_logits_buf.stream());
+
+            let context_attention_fwd_v2_func = match dtype {
+                DType::F16 => context_attention_fwd_v2_f16,
+                DType::BF16 => context_attention_fwd_v2_bf16,
+                DType::F32 => context_attention_fwd_v2_f32,
+                dtype => candle::bail!("dtype {dtype:?} is not supported"),
+            };
+
+            unsafe {
+                context_attention_fwd_v2_func(
+                    out_ptr as *const std::ffi::c_void,
+                    exp_sums_ptr as *const f32,
+                    max_logits_ptr as *const f32,
+                    tmp_out_ptr as *const std::ffi::c_void,
+                    q_ptr as *const std::ffi::c_void,
+                    k_ptr as *const std::ffi::c_void,
+                    v_ptr as *const std::ffi::c_void,
+                    kc_ptr as *const std::ffi::c_void,
+                    vc_ptr as *const std::ffi::c_void,
+                    num_kv_heads as c_int,
+                    self.softmax_scale,
+                    bt_ptr as *const i32,
+                    cl_ptr as *const i32,
+                    ql_ptr as *const i32,
+                    qsl_ptr as *const i32,
+                    si_ptr as *const i32,
+                    max_num_blocks_per_seq as c_int,
+                    total_new_tokens as c_int,
+                    num_heads as c_int,
+                    head_size as c_int,
+                    block_size as c_int,
+                    kv_block_stride as c_int,
+                    kv_head_stride as c_int,
+                    dev.cuda_stream().cu_stream(),
+                    cache_dtype,
+                    k_scale_ptr,
+                    v_scale_ptr,
+                    self.sliding_window,
+                    sinks_ptr,
+                    self.max_total_kv_len as c_int,
+                    max_num_partitions as c_int,
+                )
+            }
         }
 
         drop(out_guard);
