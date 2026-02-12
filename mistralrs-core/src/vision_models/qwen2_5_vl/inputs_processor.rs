@@ -147,10 +147,10 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
         let (
             new_input,
             pixel_values,
-            image_grid_thw,
-            video_grid_thw,
-            continuous_img_pad,
-            continuous_vid_pad,
+            mut image_grid_thw,
+            mut video_grid_thw,
+            mut continuous_img_pad,
+            mut continuous_vid_pad,
             input_ids_searching,
             image_nums,
             video_nums,
@@ -470,12 +470,76 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
         };
 
         let (input, input_ids_full) = match (new_input, is_prompt) {
-            (Some(new_input), true) => (new_input.clone(), new_input),
+            (Some(new_input), true) => (input, new_input),
             (Some(new_input), false) => (input, new_input),
             (None, _) => (input.clone(), input.clone()),
         };
 
-        let pixel_values = if is_prompt { pixel_values } else { None };
+        let mut pixel_values = if is_prompt { pixel_values } else { None };
+
+        // Adjust continuous pad ranges for prefix caching: drop cached ranges, shift new ones.
+        // Also trim pixel_values and grid_thw to exclude cached images/videos so the vision
+        // encoder only produces embeddings for the non-cached ones.
+        if is_prompt {
+            let mut total_cached_images = 0usize;
+            let mut total_cached_videos = 0usize;
+            for (seq, (img_pads, vid_pads)) in input_seqs.iter().zip(
+                continuous_img_pad
+                    .iter_mut()
+                    .zip(continuous_vid_pad.iter_mut()),
+            ) {
+                let prefix_len = seq.prefix_cache_len();
+                if prefix_len > 0 {
+                    let img_before = img_pads.len();
+                    img_pads.retain(|(start, _)| *start >= prefix_len);
+                    total_cached_images += img_before - img_pads.len();
+                    for (start, end) in img_pads.iter_mut() {
+                        *start -= prefix_len;
+                        *end -= prefix_len;
+                    }
+                    let vid_before = vid_pads.len();
+                    vid_pads.retain(|(start, _)| *start >= prefix_len);
+                    total_cached_videos += vid_before - vid_pads.len();
+                    for (start, end) in vid_pads.iter_mut() {
+                        *start -= prefix_len;
+                        *end -= prefix_len;
+                    }
+                }
+            }
+            if total_cached_images > 0 {
+                if let Some(ref grid) = image_grid_thw {
+                    let total = grid.dim(0).unwrap();
+                    let remaining = total.saturating_sub(total_cached_images);
+                    if remaining > 0 {
+                        image_grid_thw =
+                            Some(grid.narrow(0, total_cached_images, remaining).unwrap());
+                    } else {
+                        image_grid_thw = None;
+                    }
+                }
+                if let Some(ref pv) = pixel_values {
+                    let n_imgs = pv.dim(1).unwrap();
+                    let remaining = n_imgs.saturating_sub(total_cached_images);
+                    if remaining > 0 {
+                        pixel_values = Some(pv.narrow(1, total_cached_images, remaining).unwrap());
+                    } else {
+                        pixel_values = None;
+                    }
+                }
+            }
+            if total_cached_videos > 0 {
+                if let Some(ref grid) = video_grid_thw {
+                    let total = grid.dim(0).unwrap();
+                    let remaining = total.saturating_sub(total_cached_videos);
+                    if remaining > 0 {
+                        video_grid_thw =
+                            Some(grid.narrow(0, total_cached_videos, remaining).unwrap());
+                    } else {
+                        video_grid_thw = None;
+                    }
+                }
+            }
+        }
 
         let seqlens = input_seqs.iter().map(|seq| seq.len()).collect::<Vec<_>>();
 
