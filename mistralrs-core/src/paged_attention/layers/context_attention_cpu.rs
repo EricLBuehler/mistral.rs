@@ -293,7 +293,6 @@ mod tests {
     #[test]
     fn test_context_attention_fwd_cpu_with_context() {
         let device = Device::Cpu;
-        let dtype = DType::F32;
         let num_heads = 2;
         let num_kv_heads = 2;
         let head_size = 4;
