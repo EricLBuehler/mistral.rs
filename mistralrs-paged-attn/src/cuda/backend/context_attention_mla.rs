@@ -73,13 +73,7 @@ fn gather_cached_mla(
         // Read block tables to CPU
         let bt_2d = block_tables.to_dtype(candle_core::DType::I64)?;
         let bt_data: Vec<Vec<i64>> = (0..ctx_lens.len())
-            .map(|i| {
-                bt_2d
-                    .get(i)
-                    .unwrap()
-                    .to_vec1::<i64>()
-                    .unwrap_or_default()
-            })
+            .map(|i| bt_2d.get(i).unwrap().to_vec1::<i64>().unwrap_or_default())
             .collect();
 
         let mut slot_indices = Vec::with_capacity(total_ctx as usize);
@@ -190,8 +184,14 @@ pub fn context_attention_fwd_mla(
         let full_ckv;
         let full_kpe;
         if ctx_len > 0 {
-            let ckv_ctx = ckv_cached.as_ref().unwrap().narrow(0, ctx_offset, ctx_len)?;
-            let kpe_ctx = kpe_cached.as_ref().unwrap().narrow(0, ctx_offset, ctx_len)?;
+            let ckv_ctx = ckv_cached
+                .as_ref()
+                .unwrap()
+                .narrow(0, ctx_offset, ctx_len)?;
+            let kpe_ctx = kpe_cached
+                .as_ref()
+                .unwrap()
+                .narrow(0, ctx_offset, ctx_len)?;
             full_ckv = Tensor::cat(&[&ckv_ctx, &ckv_new_i], 0)?; // [total_kv, kv_lora_rank]
             full_kpe = Tensor::cat(&[&kpe_ctx, &kpe_new_i], 0)?; // [total_kv, kpe_head_dim]
             ctx_offset += ctx_len;
@@ -251,16 +251,13 @@ mod tests {
         let block_size = 4;
 
         // 3 new tokens, no context
-        let q_nope =
-            Tensor::randn(0f32, 1.0, (3, num_heads, qk_nope_head_dim), &device).unwrap();
+        let q_nope = Tensor::randn(0f32, 1.0, (3, num_heads, qk_nope_head_dim), &device).unwrap();
         let q_pe = Tensor::randn(0f32, 1.0, (3, num_heads, qk_rope_head_dim), &device).unwrap();
         let ckv_new = Tensor::randn(0f32, 1.0, (3, kv_lora_rank), &device).unwrap();
         let kpe_new = Tensor::randn(0f32, 1.0, (3, kpe_head_dim), &device).unwrap();
 
-        let ckv_cache =
-            Tensor::zeros((2, block_size, kv_lora_rank), DType::F32, &device).unwrap();
-        let kpe_cache =
-            Tensor::zeros((2, block_size, kpe_head_dim), DType::F32, &device).unwrap();
+        let ckv_cache = Tensor::zeros((2, block_size, kv_lora_rank), DType::F32, &device).unwrap();
+        let kpe_cache = Tensor::zeros((2, block_size, kpe_head_dim), DType::F32, &device).unwrap();
 
         let block_tables = Tensor::new(&[0i32, 1], &device)
             .unwrap()
@@ -305,17 +302,14 @@ mod tests {
         let block_size = 4;
 
         // 1 new token, 2 cached tokens
-        let q_nope =
-            Tensor::randn(0f32, 1.0, (1, num_heads, qk_nope_head_dim), &device).unwrap();
+        let q_nope = Tensor::randn(0f32, 1.0, (1, num_heads, qk_nope_head_dim), &device).unwrap();
         let q_pe = Tensor::randn(0f32, 1.0, (1, num_heads, qk_rope_head_dim), &device).unwrap();
         let ckv_new = Tensor::randn(0f32, 1.0, (1, kv_lora_rank), &device).unwrap();
         let kpe_new = Tensor::randn(0f32, 1.0, (1, kpe_head_dim), &device).unwrap();
 
         // Cache with some data
-        let ckv_cache =
-            Tensor::randn(0f32, 1.0, (2, block_size, kv_lora_rank), &device).unwrap();
-        let kpe_cache =
-            Tensor::randn(0f32, 1.0, (2, block_size, kpe_head_dim), &device).unwrap();
+        let ckv_cache = Tensor::randn(0f32, 1.0, (2, block_size, kv_lora_rank), &device).unwrap();
+        let kpe_cache = Tensor::randn(0f32, 1.0, (2, block_size, kpe_head_dim), &device).unwrap();
 
         let block_tables = Tensor::new(&[0i32, 1], &device)
             .unwrap()
@@ -369,10 +363,8 @@ mod tests {
         let ckv_new = Tensor::randn(0f32, 1.0, (total_new, kv_lora_rank), &device).unwrap();
         let kpe_new = Tensor::randn(0f32, 1.0, (total_new, kpe_head_dim), &device).unwrap();
 
-        let ckv_cache =
-            Tensor::randn(0f32, 1.0, (4, block_size, kv_lora_rank), &device).unwrap();
-        let kpe_cache =
-            Tensor::randn(0f32, 1.0, (4, block_size, kpe_head_dim), &device).unwrap();
+        let ckv_cache = Tensor::randn(0f32, 1.0, (4, block_size, kv_lora_rank), &device).unwrap();
+        let kpe_cache = Tensor::randn(0f32, 1.0, (4, block_size, kpe_head_dim), &device).unwrap();
 
         let block_tables = Tensor::new(&[0i32, 1, 2, 3], &device)
             .unwrap()

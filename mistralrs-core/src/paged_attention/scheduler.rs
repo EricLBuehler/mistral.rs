@@ -206,7 +206,11 @@ impl PagedAttentionScheduler {
 
             // Compute block hashes for prefix cache lookup
             self.ensure_block_hashes(seq_id, &tokens, &mm_extra_keys);
-            let block_hashes = self.seq_block_hashes.get(&seq_id).cloned().unwrap_or_default();
+            let block_hashes = self
+                .seq_block_hashes
+                .get(&seq_id)
+                .cloned()
+                .unwrap_or_default();
 
             // Look up prefix cache hits
             let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
@@ -238,7 +242,8 @@ impl PagedAttentionScheduler {
 
                             // Retry allocation
                             let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
-                            let retry = kv_mgr.allocate_slots(seq_id, num_tokens, &computed.block_ids);
+                            let retry =
+                                kv_mgr.allocate_slots(seq_id, num_tokens, &computed.block_ids);
                             drop(kv_mgr);
 
                             if retry.is_none() {
@@ -421,7 +426,11 @@ impl PagedAttentionScheduler {
 
         // Ensure block hashes are up-to-date before freeing
         self.ensure_block_hashes(seq_id, &tokens, &mm_extra_keys);
-        let block_hashes = self.seq_block_hashes.get(&seq_id).cloned().unwrap_or_default();
+        let block_hashes = self
+            .seq_block_hashes
+            .get(&seq_id)
+            .cloned()
+            .unwrap_or_default();
 
         // Cache all full blocks and free — blocks stay in cache for LRU reuse
         let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);

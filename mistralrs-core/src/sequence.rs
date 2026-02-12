@@ -75,7 +75,6 @@ pub enum SequenceRecognizer {
     None,
 }
 
-
 #[derive(Clone, Copy)]
 pub enum SeqStepType {
     PromptAndDecode,
@@ -380,7 +379,6 @@ pub struct Sequence {
     // Think tag parsing context (for models using <think>...</think> tags)
     think_tag_context: Option<ThinkTagContext>,
 }
-
 
 impl Sequence {
     #[allow(clippy::too_many_arguments)]

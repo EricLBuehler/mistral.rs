@@ -51,11 +51,7 @@ pub enum MatchingCache {
 }
 
 impl PrefixCacheManagerV2 {
-    pub fn new(
-        n_on_device: usize,
-        no_prefix_cache: bool,
-        has_paged_attention: bool,
-    ) -> Self {
+    pub fn new(n_on_device: usize, no_prefix_cache: bool, has_paged_attention: bool) -> Self {
         if !no_prefix_cache && !has_paged_attention {
             info!("Prefix caching enabled (sequence-level, non-paged attention). Expect higher multi-turn throughput for both text and multimodal.");
         }

@@ -396,11 +396,7 @@ impl KVCacheManager {
     /// Build the block table for a request (for the paged attention kernel).
     ///
     /// Returns the block IDs in sequence order, padded to `max_blocks` with 0.
-    pub fn get_block_table(
-        &self,
-        request_id: usize,
-        max_blocks: usize,
-    ) -> Option<Vec<i32>> {
+    pub fn get_block_table(&self, request_id: usize, max_blocks: usize) -> Option<Vec<i32>> {
         let req = self.req_to_blocks.get(&request_id)?;
         let mut table = Vec::with_capacity(max_blocks);
 
@@ -485,9 +481,7 @@ mod tests {
         assert_eq!(computed.block_ids.len(), 2);
 
         // Allocate with cached blocks
-        let new_blocks = mgr
-            .allocate_slots(2, 12, &computed.block_ids)
-            .unwrap();
+        let new_blocks = mgr.allocate_slots(2, 12, &computed.block_ids).unwrap();
         assert_eq!(new_blocks.len(), 1); // only 1 new block needed
         assert_eq!(mgr.num_blocks_for_request(2), 3); // 2 cached + 1 new
     }

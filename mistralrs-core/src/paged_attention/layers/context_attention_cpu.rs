@@ -20,7 +20,11 @@ use candle_core::{Result, Tensor};
 /// * `softmax_scale` - Scaling factor for QK products
 /// * `sliding_window` - Optional sliding window size
 /// * `sinks` - Optional per-head sink values `[num_heads]`
-#[allow(dead_code, clippy::too_many_arguments, clippy::cast_possible_truncation)]
+#[allow(
+    dead_code,
+    clippy::too_many_arguments,
+    clippy::cast_possible_truncation
+)]
 pub fn context_attention_fwd_cpu(
     query: &Tensor,
     key: &Tensor,
@@ -262,9 +266,12 @@ mod tests {
         let v = Tensor::randn(0f32, 1.0, (2, num_kv_heads, head_size), &device).unwrap();
 
         // Empty cache (1 block, but unused)
-        let key_cache =
-            Tensor::zeros((1, num_kv_heads, head_size / x, block_size, x), dtype, &device)
-                .unwrap();
+        let key_cache = Tensor::zeros(
+            (1, num_kv_heads, head_size / x, block_size, x),
+            dtype,
+            &device,
+        )
+        .unwrap();
         let value_cache =
             Tensor::zeros((1, num_kv_heads, head_size, block_size), dtype, &device).unwrap();
 
@@ -305,9 +312,13 @@ mod tests {
         let v = Tensor::randn(0f32, 1.0, (1, num_kv_heads, head_size), &device).unwrap();
 
         // Cache with some data in block 0
-        let key_cache =
-            Tensor::randn(0f32, 1.0, (2, num_kv_heads, head_size / x, block_size, x), &device)
-                .unwrap();
+        let key_cache = Tensor::randn(
+            0f32,
+            1.0,
+            (2, num_kv_heads, head_size / x, block_size, x),
+            &device,
+        )
+        .unwrap();
         let value_cache =
             Tensor::randn(0f32, 1.0, (2, num_kv_heads, head_size, block_size), &device).unwrap();
 

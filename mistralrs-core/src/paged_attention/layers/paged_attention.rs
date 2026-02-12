@@ -167,17 +167,13 @@ impl PagedAttention {
                 }
 
                 let device = query.device();
-                let sliding_window_val =
-                    sdpa_params.sliding_window.map(|w| w as i32).unwrap_or(0);
+                let sliding_window_val = sdpa_params.sliding_window.map(|w| w as i32).unwrap_or(0);
 
                 #[cfg(all(feature = "cuda", target_family = "unix"))]
                 let result = {
                     // Build auxiliary tensors for the CUDA fused kernel
                     let context_lens_t = Tensor::new(
-                        &num_cached
-                            .iter()
-                            .map(|&c| c as u32)
-                            .collect::<Vec<_>>()[..],
+                        &num_cached.iter().map(|&c| c as u32).collect::<Vec<_>>()[..],
                         device,
                     )?;
                     let query_lens_t = Tensor::new(

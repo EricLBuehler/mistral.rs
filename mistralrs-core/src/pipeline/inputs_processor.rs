@@ -282,11 +282,11 @@ pub mod text_models_inputs_processor {
 
                     let block_number = if i / paged_attn_metadata.block_size >= table.len() {
                         panic!(
-                                "Block table is too small (prompt)! i={} block_size={} table_len={}",
-                                i,
-                                paged_attn_metadata.block_size,
-                                table.len()
-                            );
+                            "Block table is too small (prompt)! i={} block_size={} table_len={}",
+                            i,
+                            paged_attn_metadata.block_size,
+                            table.len()
+                        );
                     } else {
                         table.get(i / paged_attn_metadata.block_size).unwrap()
                     };
@@ -783,10 +783,8 @@ pub mod text_models_inputs_processor {
     ) -> Result<InnerInputProcessorOutput> {
         let offset = input_seqs[0].token_offset();
         // Collect prefix cache lens when paged attention is in use
-        let prefix_cache_lens: Vec<usize> = input_seqs
-            .iter()
-            .map(|s| s.prefix_cache_len())
-            .collect();
+        let prefix_cache_lens: Vec<usize> =
+            input_seqs.iter().map(|s| s.prefix_cache_len()).collect();
         let has_paged_attn = paged_attn_metadata.is_some();
         make_prompt_chunk(
             offset,
@@ -797,7 +795,11 @@ pub mod text_models_inputs_processor {
             return_raw_logits,
             paged_attn_metadata,
             mapper,
-            if has_paged_attn { Some(&prefix_cache_lens) } else { None },
+            if has_paged_attn {
+                Some(&prefix_cache_lens)
+            } else {
+                None
+            },
         )
         .map(|inputs| InnerInputProcessorOutput {
             inputs,

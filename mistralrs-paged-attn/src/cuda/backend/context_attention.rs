@@ -121,14 +121,10 @@ impl ContextAttention {
         let vc_rank = vc_l.stride().len();
 
         if q_rank != 3 {
-            candle::bail!(
-                "context-attention expects `q` tensor to be of rank 3 (q: {q_l:?})"
-            )
+            candle::bail!("context-attention expects `q` tensor to be of rank 3 (q: {q_l:?})")
         }
         if k_rank != 3 {
-            candle::bail!(
-                "context-attention expects `k` tensor to be of rank 3 (k: {k_l:?})"
-            )
+            candle::bail!("context-attention expects `k` tensor to be of rank 3 (k: {k_l:?})")
         }
         if kc_rank != 5 {
             candle::bail!(
@@ -308,19 +304,15 @@ impl ContextAttention {
             }
         } else {
             // v2: allocate temp buffers for partitioned attention
-            let exp_sums_shape =
-                Shape::from((total_new_tokens, num_heads, max_num_partitions));
+            let exp_sums_shape = Shape::from((total_new_tokens, num_heads, max_num_partitions));
             let tmp_out_shape =
                 Shape::from((total_new_tokens, num_heads, max_num_partitions, head_size));
             let tmp_out_buf = unsafe { dev.alloc::<T>(tmp_out_shape.elem_count()) }?;
             let exp_sums_buf = unsafe { dev.alloc::<f32>(exp_sums_shape.elem_count()) }?;
-            let max_logits_buf =
-                unsafe { dev.alloc::<f32>(exp_sums_shape.elem_count()) }?;
+            let max_logits_buf = unsafe { dev.alloc::<f32>(exp_sums_shape.elem_count()) }?;
 
-            let (tmp_out_ptr, _tmp_out_guard) =
-                tmp_out_buf.device_ptr(tmp_out_buf.stream());
-            let (exp_sums_ptr, _exp_sums_guard) =
-                exp_sums_buf.device_ptr(exp_sums_buf.stream());
+            let (tmp_out_ptr, _tmp_out_guard) = tmp_out_buf.device_ptr(tmp_out_buf.stream());
+            let (exp_sums_ptr, _exp_sums_guard) = exp_sums_buf.device_ptr(exp_sums_buf.stream());
             let (max_logits_ptr, _max_logits_guard) =
                 max_logits_buf.device_ptr(max_logits_buf.stream());
 

@@ -88,14 +88,23 @@ impl FreeKVCacheBlockQueue {
     ///
     /// `blocks` must already contain the fake head at `fake_head` and fake tail at `fake_tail`.
     /// All blocks in `block_ids` are linked between them.
-    fn new(blocks: &mut [KVCacheBlock], block_ids: &[usize], fake_head: usize, fake_tail: usize) -> Self {
+    fn new(
+        blocks: &mut [KVCacheBlock],
+        block_ids: &[usize],
+        fake_head: usize,
+        fake_tail: usize,
+    ) -> Self {
         let n = block_ids.len();
 
         // Link consecutive blocks
         for i in 0..n {
             let id = block_ids[i];
             blocks[id].prev_free = if i > 0 { block_ids[i - 1] } else { fake_head };
-            blocks[id].next_free = if i + 1 < n { block_ids[i + 1] } else { fake_tail };
+            blocks[id].next_free = if i + 1 < n {
+                block_ids[i + 1]
+            } else {
+                fake_tail
+            };
         }
 
         // Connect fake head and tail
@@ -175,7 +184,7 @@ impl FreeKVCacheBlockQueue {
 pub struct BlockHashToBlockMap {
     cache: HashMap<BlockHashWithGroupId, CachedBlocks>,
 }
-    
+
 enum CachedBlocks {
     Single(usize),
     Multiple(HashMap<usize, usize>), // block_id -> block_id
