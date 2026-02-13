@@ -196,10 +196,20 @@ impl PagedAttentionScheduler {
                 .cloned()
                 .unwrap_or_default();
 
+            info!(
+                "Scheduler: seq {seq_id} num_tokens={num_tokens}, mm_features={}, block_hashes={}",
+                mm_features.len(),
+                block_hashes.len(),
+            );
+
             // Look up prefix cache hits
             let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
             let computed = kv_mgr.get_computed_blocks(&block_hashes, num_tokens);
             let num_computed = computed.num_computed_tokens;
+            info!(
+                "Scheduler: seq {seq_id} computed_blocks={}, num_computed_tokens={num_computed}",
+                computed.block_ids.len(),
+            );
 
             // Try to allocate blocks
             let alloc_result = kv_mgr.allocate_slots(seq_id, num_tokens, &computed.block_ids);
@@ -385,6 +395,12 @@ impl PagedAttentionScheduler {
         for (id, tokens, mm_features) in &finished {
             self.ensure_block_hashes(*id, tokens, mm_features);
             let block_hashes = self.seq_block_hashes.get(id).cloned().unwrap_or_default();
+            info!(
+                "Scheduler: caching finished seq {id}: tokens={}, mm_features={}, block_hashes={}",
+                tokens.len(),
+                mm_features.len(),
+                block_hashes.len(),
+            );
             let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
             kv_mgr.cache_blocks(*id, &block_hashes, tokens.len());
             drop(kv_mgr);

@@ -167,6 +167,131 @@ impl PagedAttention {
                 }
 
                 let device = query.device();
+
+                // Fast path: gather all K/V from paged cache into contiguous tensors,
+                // then use flash_attn_varlen. Much faster than the context_attention_fwd
+                // kernel because flash attention is heavily optimized with tiling.
+                // Flash attention automatically right-aligns Q when seqlen_q < seqlen_k
+                // (causal), so Q token 0 correctly attends to all cached context tokens.
+                #[cfg(feature = "flash-attn")]
+                if sinks.is_none() && key_cache.as_ref().unwrap().dtype() != DType::F8E4M3 {
+                    let kc = key_cache.as_ref().unwrap();
+                    let vc = value_cache.as_ref().unwrap();
+                    let (_, _, _, block_size_dim, _) = kc.dims5()?;
+
+                    let mut all_k = Vec::new();
+                    let mut all_v = Vec::new();
+                    let mut cu_seqlens_q_vec = vec![0u32];
+                    let mut cu_seqlens_k_vec = vec![0u32];
+                    let mut max_sq = 0usize;
+                    let mut max_sk = 0usize;
+
+                    for (i, (&nc, &ql)) in
+                        num_cached.iter().zip(query_lens_data.iter()).enumerate()
+                    {
+                        let total_kv = nc + ql;
+                        let n_blocks = total_kv.div_ceil(block_size_dim);
+
+                        let block_ids = block_tables
+                            .narrow(0, i, 1)?
+                            .squeeze(0)?
+                            .narrow(0, 0, n_blocks)?;
+
+                        // K cache: [n_blk, kv_h, hd/x, bs, x] -> [total_kv, kv_h, hd]
+                        let k_seq = kc
+                            .index_select(&block_ids, 0)?
+                            .permute((0, 3, 1, 2, 4))?
+                            .contiguous()?
+                            .reshape((
+                                n_blocks * block_size_dim,
+                                key_value_heads,
+                                head_size,
+                            ))?
+                            .narrow(0, 0, total_kv)?;
+
+                        // V cache: [n_blk, kv_h, hd, bs] -> [total_kv, kv_h, hd]
+                        let v_seq = vc
+                            .index_select(&block_ids, 0)?
+                            .permute((0, 3, 1, 2))?
+                            .contiguous()?
+                            .reshape((
+                                n_blocks * block_size_dim,
+                                key_value_heads,
+                                head_size,
+                            ))?
+                            .narrow(0, 0, total_kv)?;
+
+                        all_k.push(k_seq);
+                        all_v.push(v_seq);
+                        cu_seqlens_q_vec
+                            .push(cu_seqlens_q_vec.last().unwrap() + ql as u32);
+                        cu_seqlens_k_vec
+                            .push(cu_seqlens_k_vec.last().unwrap() + total_kv as u32);
+                        max_sq = max_sq.max(ql);
+                        max_sk = max_sk.max(total_kv);
+                    }
+
+                    let k_all = Tensor::cat(&all_k, 0)?;
+                    let v_all = Tensor::cat(&all_v, 0)?;
+                    let cu_q = Tensor::new(&cu_seqlens_q_vec[..], device)?;
+                    let cu_k = Tensor::new(&cu_seqlens_k_vec[..], device)?;
+
+                    let window_left = sdpa_params.sliding_window;
+                    let window_right = Some(0); // causal
+
+                    let result = if let Some(softcap) = sdpa_params.softcap {
+                        candle_flash_attn::flash_attn_varlen_alibi_windowed_softcap(
+                            &q_flat,
+                            &k_all,
+                            &v_all,
+                            alibi_slopes.as_ref(),
+                            &cu_q,
+                            &cu_k,
+                            max_sq,
+                            max_sk,
+                            sdpa_params.softmax_scale,
+                            window_left,
+                            window_right,
+                            softcap,
+                        )?
+                    } else if let Some(ref slopes) = alibi_slopes {
+                        candle_flash_attn::flash_attn_varlen_alibi_windowed(
+                            &q_flat,
+                            &k_all,
+                            &v_all,
+                            slopes,
+                            &cu_q,
+                            &cu_k,
+                            max_sq,
+                            max_sk,
+                            sdpa_params.softmax_scale,
+                            window_left,
+                            window_right,
+                        )?
+                    } else {
+                        candle_flash_attn::flash_attn_varlen_windowed(
+                            &q_flat,
+                            &k_all,
+                            &v_all,
+                            &cu_q,
+                            &cu_k,
+                            max_sq,
+                            max_sk,
+                            sdpa_params.softmax_scale,
+                            window_left,
+                            window_right,
+                        )?
+                    };
+
+                    // flash_attn_varlen output: [total_new_tokens, num_heads, head_size]
+                    let result = result
+                        .reshape((batch_size, seq_len, attention_heads, head_size))?
+                        .transpose(1, 2)?;
+                    return Ok(result);
+                }
+
+                // Fallback: context_attention_fwd kernel (for sinks, fp8 cache,
+                // or when flash-attn feature is not enabled)
                 let sliding_window_val = sdpa_params.sliding_window.map(|w| w as i32).unwrap_or(0);
 
                 #[cfg(all(feature = "cuda", target_family = "unix"))]

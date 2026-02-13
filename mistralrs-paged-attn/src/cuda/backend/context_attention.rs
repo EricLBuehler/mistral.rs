@@ -257,11 +257,23 @@ impl ContextAttention {
         let (qsl_ptr, _qsl_guard) = qsl.device_ptr(qsl.stream());
         let (si_ptr, _si_guard) = si.device_ptr(si.stream());
 
-        // v1/v2 dispatch: use v1 when all logits fit in one partition,
-        // v2 (partitioned) for longer sequences.
+        // v1/v2 dispatch: prefer v1 (monolithic) when the shared memory logits
+        // array fits, since it avoids the partition+reduce overhead of v2.
+        // V1 needs: max(padded_kv * 4, (NUM_WARPS/2) * head_size * 4) bytes.
+        // 48KB is the baseline dynamic shared memory on all CUDA GPUs;
+        // SET_MaxDynamicSharedMemorySize in the launcher can raise it further.
+        const NUM_THREADS: usize = 128;
+        const WARP_SIZE: usize = 32;
+        const V1_SHARED_MEM_LIMIT: usize = 48 * 1024;
+        let padded_kv = self.max_total_kv_len.div_ceil(block_size) * block_size;
+        let v1_logits_bytes = padded_kv * std::mem::size_of::<f32>();
+        let v1_outputs_bytes =
+            (NUM_THREADS / WARP_SIZE / 2) * head_size * std::mem::size_of::<f32>();
+        let v1_shared_mem = std::cmp::max(v1_logits_bytes, v1_outputs_bytes);
+        let use_v1 = v1_shared_mem <= V1_SHARED_MEM_LIMIT;
+
         let partition_size = 512usize;
         let max_num_partitions = self.max_total_kv_len.div_ceil(partition_size);
-        let use_v1 = max_num_partitions == 1 && partition_size.is_multiple_of(block_size);
 
         if use_v1 {
             let context_attention_fwd_func = match dtype {
