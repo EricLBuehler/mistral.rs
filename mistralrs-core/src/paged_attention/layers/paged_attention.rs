@@ -131,30 +131,17 @@ impl PagedAttention {
         let (_, key_value_heads, _, _) = key.shape().dims4()?;
 
         // === Prefix cache hit path ===
-        // When num_cached_tokens is set, Q/K/V contain ONLY new (non-cached) tokens.
-        // We write new tokens to cache via reshape_and_cache, then gather all
-        // K/V from the paged cache (including the just-written new tokens) and
-        // run attention over the full context.
-        if let Some(num_cached) = &input_metadata.num_cached_tokens {
+        if input_metadata.num_cached_tokens.is_some() {
             if attention_mask.is_some() {
-                let query_lens_data = input_metadata
-                    .query_lens
-                    .as_ref()
-                    .expect("query_lens required when num_cached_tokens is set");
-
-                // Reshape Q/K/V from [batch, heads, seq, dim] to [total_tokens, heads, dim]
-                let q_flat = query
-                    .transpose(1, 2)?
-                    .reshape(((), attention_heads, head_size))?;
-                let k_flat = key
-                    .transpose(1, 2)?
-                    .reshape(((), key_value_heads, head_size))?;
-                let v_flat = value
-                    .transpose(1, 2)?
-                    .reshape(((), key_value_heads, head_size))?;
-
                 // Write new tokens to cache for future decode steps
                 if key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
+                    let k_flat = key
+                        .transpose(1, 2)?
+                        .reshape(((), key_value_heads, head_size))?;
+                    let v_flat =
+                        value
+                            .transpose(1, 2)?
+                            .reshape(((), key_value_heads, head_size))?;
                     reshape_and_cache(
                         &k_flat,
                         &v_flat,
@@ -166,15 +153,13 @@ impl PagedAttention {
                     )?;
                 }
 
+                assert!(
+                    alibi_slopes.is_none(),
+                    "alibi slopes not supported in prefix cache path"
+                );
+
                 let device = query.device();
-                let out_dtype = q_flat.dtype();
-                let max_sq = query_lens_data.iter().copied().max().unwrap_or(0);
-                let max_sk = num_cached
-                    .iter()
-                    .zip(query_lens_data.iter())
-                    .map(|(&c, &q)| c + q)
-                    .max()
-                    .unwrap_or(0);
+                let out_dtype = query.dtype();
 
                 // Gather all K/V from paged cache into contiguous tensors.
                 // The gather kernel handles x-unpacking for K, transpose for V,
@@ -195,127 +180,20 @@ impl PagedAttention {
                     out_dtype,
                 )?;
 
-                // Fast path: flash_attn_varlen for CUDA with flash-attn feature
-                #[cfg(feature = "flash-attn")]
-                if device.is_cuda() && out_dtype != DType::F32 {
-                    let cu_q = input_metadata
-                        .cu_seqlens_q
-                        .as_ref()
-                        .unwrap()
-                        .get(&device.location())
-                        .unwrap();
+                // gathered: (total_kv, kv_heads, dim) -> (1, kv_heads, total_kv, dim)
+                let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
+                let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
 
-                    let window_left = sdpa_params.sliding_window;
-                    let window_right = Some(0); // causal
+                let result = Sdpa.run_attention(
+                    query,
+                    &k_4d,
+                    &v_4d,
+                    attention_mask,
+                    flash_params,
+                    sdpa_params,
+                )?;
 
-                    let result = if let Some(softcap) = sdpa_params.softcap {
-                        candle_flash_attn::flash_attn_varlen_alibi_windowed_softcap(
-                            &q_flat,
-                            &k_gathered,
-                            &v_gathered,
-                            alibi_slopes.as_ref(),
-                            cu_q,
-                            cu_kv,
-                            max_sq,
-                            max_sk,
-                            sdpa_params.softmax_scale,
-                            window_left,
-                            window_right,
-                            softcap,
-                        )?
-                    } else if let Some(ref slopes) = alibi_slopes {
-                        candle_flash_attn::flash_attn_varlen_alibi_windowed(
-                            &q_flat,
-                            &k_gathered,
-                            &v_gathered,
-                            slopes,
-                            cu_q,
-                            cu_kv,
-                            max_sq,
-                            max_sk,
-                            sdpa_params.softmax_scale,
-                            window_left,
-                            window_right,
-                        )?
-                    } else {
-                        candle_flash_attn::flash_attn_varlen_windowed(
-                            &q_flat,
-                            &k_gathered,
-                            &v_gathered,
-                            cu_q,
-                            cu_kv,
-                            max_sq,
-                            max_sk,
-                            sdpa_params.softmax_scale,
-                            window_left,
-                            window_right,
-                        )?
-                    };
-
-                    let result = result
-                        .reshape((batch_size, seq_len, attention_heads, head_size))?
-                        .transpose(1, 2)?;
-                    return Ok(result);
-                }
-
-                // Fallback: per-sequence attention with causal mask
-                // (for Metal, CPU, and CUDA without flash-attn)
-                {
-                    let mut outputs = Vec::new();
-                    let mut kv_offset = 0usize;
-                    let mut q_offset = 0usize;
-
-                    for (&nc, &ql) in num_cached.iter().zip(query_lens_data.iter()) {
-                        let total_kv = nc + ql;
-                        let q_seq = q_flat.narrow(0, q_offset, ql)?;
-                        let k_seq = k_gathered.narrow(0, kv_offset, total_kv)?;
-                        let v_seq = v_gathered.narrow(0, kv_offset, total_kv)?;
-
-                        // Shape to (1, heads, seq, dim) for Sdpa
-                        let q_4d = q_seq.unsqueeze(0)?.transpose(1, 2)?;
-                        let k_4d = k_seq.unsqueeze(0)?.transpose(1, 2)?;
-                        let v_4d = v_seq.unsqueeze(0)?.transpose(1, 2)?;
-
-                        // Causal mask: q[i] attends to kv[0..nc+i+1]
-                        // Create on CPU first to avoid synchronous CPU-to-GPU copy
-                        // from Tensor::from_vec with a GPU device.
-                        let mask = {
-                            let mask_data: Vec<f32> = (0..ql)
-                                .flat_map(|qi| {
-                                    (0..total_kv).map(move |kj| {
-                                        if kj <= nc + qi {
-                                            0.0f32
-                                        } else {
-                                            f32::NEG_INFINITY
-                                        }
-                                    })
-                                })
-                                .collect();
-                            Tensor::from_vec(mask_data, (1, 1, ql, total_kv), &Device::Cpu)?
-                                .to_dtype(q_flat.dtype())?
-                                .to_device(device)?
-                        };
-
-                        let out_seq = Sdpa.run_attention_noflash(
-                            &q_4d,
-                            &k_4d,
-                            &v_4d,
-                            Some(&mask),
-                            sdpa_params,
-                        )?;
-                        // (1, heads, ql, dim) -> (ql, heads, dim)
-                        outputs.push(out_seq.squeeze(0)?.transpose(0, 1)?);
-
-                        q_offset += ql;
-                        kv_offset += total_kv;
-                    }
-
-                    let result = Tensor::cat(&outputs, 0)?;
-                    let result = result
-                        .reshape((batch_size, seq_len, attention_heads, head_size))?
-                        .transpose(1, 2)?;
-                    return Ok(result);
-                }
+                return Ok(result);
             }
         }
 
