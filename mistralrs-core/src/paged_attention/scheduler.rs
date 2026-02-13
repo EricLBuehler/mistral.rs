@@ -172,9 +172,9 @@ impl PagedAttentionScheduler {
         let mut scheduled: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
         let mut for_waiting_again: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
         let mut did_ignore = false;
-        let mut num_cached_tokens_vec: Vec<usize> = Vec::new();
 
         while !self.waiting.is_empty() {
+            did_ignore = false;
             let seq = self.waiting.front().unwrap().clone();
 
             if self.running.len() >= self.config.max_num_seqs {
@@ -198,7 +198,14 @@ impl PagedAttentionScheduler {
 
             // Look up prefix cache hits
             let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
-            let computed = kv_mgr.get_computed_blocks(&block_hashes, num_tokens);
+            let computed = if self.prefix_caching_enabled {
+                kv_mgr.get_computed_blocks(&block_hashes, num_tokens)
+            } else {
+                super::kv_cache_manager::ComputedBlocks {
+                    block_ids: Vec::new(),
+                    num_computed_tokens: 0,
+                }
+            };
             let num_computed = computed.num_computed_tokens;
             // Try to allocate blocks
             let alloc_result = kv_mgr.allocate_slots(seq_id, num_tokens, &computed.block_ids);
@@ -259,6 +266,12 @@ impl PagedAttentionScheduler {
             if !scheduled.is_empty()
                 && get_mut_arcmutex!(scheduled[0]).has_images() != new_seq_has_images
             {
+                // Free allocated blocks before deferring this image-incompatible sequence
+                if !did_ignore {
+                    let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
+                    kv_mgr.free(seq_id);
+                    drop(kv_mgr);
+                }
                 let seq = self.waiting.pop_front().unwrap();
                 for_waiting_again.push_back(seq);
                 continue;
@@ -268,7 +281,6 @@ impl PagedAttentionScheduler {
                 get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
                 // Set prefix cache len so the pipeline knows to skip cached tokens
                 get_mut_arcmutex!(seq).set_prefix_cache_len(num_computed);
-                num_cached_tokens_vec.push(num_computed);
             }
 
             let seq = self.waiting.pop_front().unwrap();
@@ -284,12 +296,20 @@ impl PagedAttentionScheduler {
             // have the same length (required for correct flash attention varlen operation).
             let scheduled = self.bucket_and_preempt_sequences(scheduled);
 
+            // Rebuild num_cached_tokens from the bucketed sequences.
+            // prefix_cache_len was set per-sequence above, so this stays aligned
+            // even after bucketing removes sequences from non-contiguous positions.
+            let num_cached_tokens: Vec<usize> = scheduled
+                .iter()
+                .map(|seq| get_mut_arcmutex!(seq).prefix_cache_len())
+                .collect();
+
             logger.set_num_running(self.running.len());
             logger.set_num_waiting(self.waiting.len());
 
             return PagedAttentionSchedulerOutput {
                 scheduled: scheduled.into_iter().collect(),
-                num_cached_tokens: num_cached_tokens_vec,
+                num_cached_tokens,
             };
         }
 
@@ -381,12 +401,14 @@ impl PagedAttentionScheduler {
             .retain(|seq| !get_mut_arcmutex!(seq).is_finished_paged_attn());
 
         // Cache and free blocks for finished sequences
-        for (id, tokens, mm_features) in &finished {
-            self.ensure_block_hashes(*id, tokens, mm_features);
-            let block_hashes = self.seq_block_hashes.get(id).cloned().unwrap_or_default();
-            let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
-            kv_mgr.cache_blocks(*id, &block_hashes, tokens.len());
-            drop(kv_mgr);
+        if self.prefix_caching_enabled {
+            for (id, tokens, mm_features) in &finished {
+                self.ensure_block_hashes(*id, tokens, mm_features);
+                let block_hashes = self.seq_block_hashes.get(id).cloned().unwrap_or_default();
+                let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
+                kv_mgr.cache_blocks(*id, &block_hashes, tokens.len());
+                drop(kv_mgr);
+            }
         }
 
         let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
@@ -417,7 +439,9 @@ impl PagedAttentionScheduler {
 
         // Cache all full blocks and free — blocks stay in cache for LRU reuse
         let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
-        kv_mgr.cache_blocks(seq_id, &block_hashes, tokens.len());
+        if self.prefix_caching_enabled {
+            kv_mgr.cache_blocks(seq_id, &block_hashes, tokens.len());
+        }
         kv_mgr.free(seq_id);
         drop(kv_mgr);
 

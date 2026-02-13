@@ -277,6 +277,8 @@ impl PagedAttention {
                         let v_4d = v_seq.unsqueeze(0)?.transpose(1, 2)?;
 
                         // Causal mask: q[i] attends to kv[0..nc+i+1]
+                        // Create on CPU first to avoid synchronous CPU-to-GPU copy
+                        // from Tensor::from_vec with a GPU device.
                         let mask = {
                             let mask_data: Vec<f32> = (0..ql)
                                 .flat_map(|qi| {
@@ -289,8 +291,9 @@ impl PagedAttention {
                                     })
                                 })
                                 .collect();
-                            Tensor::from_vec(mask_data, (1, 1, ql, total_kv), device)?
+                            Tensor::from_vec(mask_data, (1, 1, ql, total_kv), &Device::Cpu)?
                                 .to_dtype(q_flat.dtype())?
+                                .to_device(device)?
                         };
 
                         let out_seq = Sdpa.run_attention_noflash(
