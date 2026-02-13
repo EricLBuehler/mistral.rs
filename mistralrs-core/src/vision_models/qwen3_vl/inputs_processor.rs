@@ -21,7 +21,6 @@ use mistralrs_vision::{
 };
 use std::{any::Any, sync::Arc};
 use tokenizers::Tokenizer;
-use tracing::info;
 
 use super::Qwen3VLVisionSpecificArgs;
 
@@ -359,13 +358,6 @@ impl InputsProcessor for Qwen3VLImageProcessor {
 
                     seq.set_toks_and_reallocate(ids.clone(), paged_attn_metadata.as_mut());
                     seq.multimodal.has_changed_prompt = true;
-                    info!(
-                        "Qwen3VL: token expansion {} -> {} (expanded {}), prefix_cache_len after reallocate: {}",
-                        toks_before,
-                        ids.len(),
-                        ids.len() as isize - toks_before as isize,
-                        seq.prefix_cache_len(),
-                    );
                 }
                 all_ids.push(ids.clone());
 
@@ -462,17 +454,6 @@ impl InputsProcessor for Qwen3VLImageProcessor {
 
         let mut pixel_values = if is_prompt { pixel_values } else { None };
 
-        if is_prompt {
-            for seq in input_seqs.iter() {
-                info!(
-                    "Qwen3VL: after get_prompt_input: seq toks={}, prefix_cache_len={}, input shape={:?}",
-                    seq.get_toks().len(),
-                    seq.prefix_cache_len(),
-                    input.shape(),
-                );
-            }
-        }
-
         // Adjust continuous pad ranges for prefix caching: drop cached ranges, shift new ones.
         // Also trim pixel_values and grid_thw to exclude cached images/videos so the vision
         // encoder only produces embeddings for the non-cached ones.
@@ -538,15 +519,6 @@ impl InputsProcessor for Qwen3VLImageProcessor {
                 // share the pixel_values tensor. Currently Qwen VL handles video
                 // pixel values separately via pixel_values_videos in the model forward.
             }
-            info!(
-                "Qwen3VL: prefix cache adjustment: cached_images={}, cached_videos={}, \
-                 img_pads_remaining={:?}, pixel_values={:?}, image_grid_thw={:?}",
-                total_cached_images,
-                total_cached_videos,
-                continuous_img_pad.iter().map(|p| p.len()).collect::<Vec<_>>(),
-                pixel_values.as_ref().map(|t| t.shape().clone()),
-                image_grid_thw.as_ref().map(|t| t.shape().clone()),
-            );
         }
 
         let seqlens = input_seqs.iter().map(|seq| seq.len()).collect::<Vec<_>>();

@@ -16,7 +16,6 @@ use crate::{
     ImageGenerationResponse, ImageGenerationResponseFormat,
 };
 use candle_core::Tensor;
-use tracing::info;
 use std::{
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
@@ -707,11 +706,6 @@ impl Sequence {
             // Free and then reallocate with the new token count
             let seq_id = *self.id();
             let num_tokens = self.tokens.len();
-            info!(
-                "set_toks_and_reallocate: seq {seq_id} {old_len} -> {num_tokens} tokens, \
-                 freeing + reallocating with NO computed blocks (prefix_cache_len stays {})",
-                self.prefix_cache_len,
-            );
             let mut kv_mgr = get_mut_arcmutex!(metadata.kv_cache_manager);
             kv_mgr.free(seq_id);
             kv_mgr.allocate_slots(seq_id, num_tokens, &[]);
