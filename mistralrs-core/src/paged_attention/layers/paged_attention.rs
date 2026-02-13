@@ -184,12 +184,39 @@ impl PagedAttention {
                 let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
                 let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
 
+                // Build a local FlashParams with packed K cu_seqlens from
+                // cu_seqlens_kv (matching the gathered KV layout). The pipeline's
+                // flash_params uses padded seqlens_k which doesn't match packed KV.
+                // Q seqlens stay padded since Q is still in padded batch layout.
+                let prefix_flash_params = flash_params.map(|fp| {
+                    let max_kv = input_metadata
+                        .num_cached_tokens
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .zip(input_metadata.query_lens.as_ref().unwrap().iter())
+                        .map(|(&nc, &ql)| (nc + ql) as u32)
+                        .max()
+                        .unwrap_or(0);
+                    FlashParams {
+                        max_q: fp.max_q,
+                        max_k: max_kv,
+                        cumulative_seqlens_q: fp.cumulative_seqlens_q.clone(),
+                        cumulative_seqlens_k: input_metadata
+                            .cu_seqlens_kv
+                            .as_ref()
+                            .unwrap()
+                            .clone(),
+                        causal: fp.causal,
+                    }
+                });
+
                 let result = Sdpa.run_attention(
                     query,
                     &k_4d,
                     &v_4d,
                     attention_mask,
-                    flash_params,
+                    prefix_flash_params.as_ref(),
                     sdpa_params,
                 )?;
 

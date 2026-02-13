@@ -153,6 +153,17 @@ pub mod text_models_inputs_processor {
         }
     }
 
+    /// Flash attention sequence length metadata.
+    ///
+    /// `cumulative_seqlens_q/k` use **padded** lengths (each sequence is padded to
+    /// `max_len` in the batch). This matches the padded Q/K tensors in the normal
+    /// prefill and decode paths.
+    ///
+    /// For the **prefix cache path**, K/V are gathered from the paged cache into a
+    /// packed (non-padded) layout via `gather_kv_cache`. The packed K/V lengths are
+    /// given by `PagedAttentionInputMetadata::cu_seqlens_kv`, NOT by
+    /// `cumulative_seqlens_k` here. The prefix cache attention call must build a
+    /// local `FlashParams` that swaps in `cu_seqlens_kv` for K.
     #[derive(Clone, Debug)]
     pub struct FlashParams {
         pub max_q: u32,
@@ -254,6 +265,7 @@ pub mod text_models_inputs_processor {
             }
 
             if flash_attn {
+                // Padded lengths — see FlashParams doc comment for prefix cache nuance.
                 seqlens_q.push(padded.len() as u32);
                 seqlens_k.push((padded.len() + chunk_offset_toks + cached) as u32);
             }
