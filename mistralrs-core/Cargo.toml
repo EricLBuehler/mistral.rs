@@ -120,7 +120,6 @@ cuda = [
     "mistralrs-quant/cuda",
     "dep:mistralrs-paged-attn",
     "mistralrs-paged-attn/cuda",
-    "float8/cuda",
 ]
 cudnn = ["candle-core/cudnn"]
 metal = [
