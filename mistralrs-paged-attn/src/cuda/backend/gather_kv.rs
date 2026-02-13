@@ -49,7 +49,11 @@ pub fn gather_kv_cache(
     // num_tokens = cu_seq_lens[-1], num_seqs = len(cu_seq_lens) - 1
     let cu_seq_lens_len = cu_seq_lens.dims1()?;
     let num_seqs = cu_seq_lens_len - 1;
-    let num_tokens = cu_seq_lens.i(cu_seq_lens_len - 1)?.to_scalar::<i32>()? as usize;
+    let num_tokens = if cu_seq_lens.dtype() == DType::I32 {
+        cu_seq_lens.i(cu_seq_lens_len - 1)?.to_scalar::<i32>()? as usize
+    } else {
+        cu_seq_lens.i(cu_seq_lens_len - 1)?.to_scalar::<u32>()? as usize
+    };
 
     if num_tokens == 0 {
         let k_out = Tensor::zeros((0, num_kv_heads, head_size), out_dtype, key_cache.device())?;

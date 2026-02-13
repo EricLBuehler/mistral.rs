@@ -120,7 +120,7 @@ pub mod text_models_inputs_processor {
         /// Cumulative query lengths [batch+1], u32 — for Sdpa varlen flash path.
         /// Precomputed to avoid Tensor::new in the forward hot path.
         pub cu_seqlens_q: Option<HashMap<DeviceLocation, Tensor>>,
-        /// Cumulative KV lengths [batch+1], i32 — for gather_kv_cache kernel.
+        /// Cumulative KV lengths [batch+1], u32 — for gather_kv_cache and flash_attn_varlen.
         /// Each entry is sum of (cached + new) tokens.
         pub cu_seqlens_kv: Option<HashMap<DeviceLocation, Tensor>>,
     }
@@ -453,9 +453,10 @@ pub mod text_models_inputs_processor {
                 },
                 cu_seqlens_kv: if has_any_cache_hit {
                     // Cumulative KV lengths: [0, c0+q0, c0+q0+c1+q1, ...]
-                    let mut cu_kv = vec![0i32];
+                    // U32 to match flash-attn varlen expectations
+                    let mut cu_kv = vec![0u32];
                     for (&nc, &ql) in num_cached_tokens_vec.iter().zip(query_lens_vec.iter()) {
-                        cu_kv.push(cu_kv.last().unwrap() + (nc + ql) as i32);
+                        cu_kv.push(cu_kv.last().unwrap() + (nc + ql) as u32);
                     }
                     let cu_kv_t = Tensor::new(&cu_kv[..], &Device::Cpu)?;
                     let devices = mapper.unwrap().get_unique_devices();
