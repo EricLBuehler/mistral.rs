@@ -1,6 +1,4 @@
 #[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
-pub mod context_attention_cpu;
-#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
 pub mod paged_attention;
 #[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
 pub use paged_attention::PagedAttention;

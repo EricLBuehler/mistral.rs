@@ -340,8 +340,6 @@ impl InputsProcessor for Qwen3VLImageProcessor {
                 if !seq.multimodal.has_changed_prompt {
                     seq.set_initial_prompt(detok.clone());
 
-                    let toks_before = seq.get_toks().len();
-
                     // Build mm_features for position-aware prefix cache hashing
                     if seq.mm_features().is_empty() {
                         if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {

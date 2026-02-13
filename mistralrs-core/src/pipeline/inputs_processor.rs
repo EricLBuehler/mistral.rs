@@ -111,12 +111,18 @@ pub mod text_models_inputs_processor {
         pub paged_kv_o_indptr: Option<HashMap<DeviceLocation, Tensor>>,
         pub paged_kv_chunk_size: Option<HashMap<DeviceLocation, Tensor>>,
         /// Number of cached tokens per sequence (from prefix cache hits).
-        /// When present and > 0, context_attention_fwd is used during prefill
+        /// When present and > 0, gather_kv_cache + Sdpa is used during prefill
         /// instead of flash attention. The Q/K/V tensors should only contain
         /// the NEW (non-cached) tokens.
         pub num_cached_tokens: Option<Vec<usize>>,
-        /// Number of new tokens per sequence (query lengths for context_attention_fwd).
+        /// Number of new tokens per sequence (query lengths).
         pub query_lens: Option<Vec<usize>>,
+        /// Cumulative query lengths [batch+1], u32 — for Sdpa varlen flash path.
+        /// Precomputed to avoid Tensor::new in the forward hot path.
+        pub cu_seqlens_q: Option<HashMap<DeviceLocation, Tensor>>,
+        /// Cumulative KV lengths [batch+1], i32 — for gather_kv_cache kernel.
+        /// Each entry is sum of (cached + new) tokens.
+        pub cu_seqlens_kv: Option<HashMap<DeviceLocation, Tensor>>,
     }
 
     impl PagedAttentionInputMetadata {
@@ -141,6 +147,8 @@ pub mod text_models_inputs_processor {
                 paged_kv_chunk_size: None,
                 num_cached_tokens: None,
                 query_lens: None,
+                cu_seqlens_q: None,
+                cu_seqlens_kv: None,
             })
         }
     }
@@ -418,12 +426,44 @@ pub mod text_models_inputs_processor {
                 paged_kv_o_indptr: None,
                 paged_kv_chunk_size: None,
                 num_cached_tokens: if has_any_cache_hit {
-                    Some(num_cached_tokens_vec)
+                    Some(num_cached_tokens_vec.clone())
                 } else {
                     None
                 },
                 query_lens: if has_any_cache_hit {
-                    Some(query_lens_vec)
+                    Some(query_lens_vec.clone())
+                } else {
+                    None
+                },
+                cu_seqlens_q: if has_any_cache_hit {
+                    // Cumulative query lengths for Sdpa varlen: [0, q0, q0+q1, ...]
+                    let mut cu_q = vec![0u32];
+                    for &ql in &query_lens_vec {
+                        cu_q.push(cu_q.last().unwrap() + ql as u32);
+                    }
+                    let cu_q_t = Tensor::new(&cu_q[..], &Device::Cpu)?;
+                    let devices = mapper.unwrap().get_unique_devices();
+                    let mut map = HashMap::new();
+                    for device in &devices {
+                        map.insert(device.location(), cu_q_t.to_device(device)?);
+                    }
+                    Some(map)
+                } else {
+                    None
+                },
+                cu_seqlens_kv: if has_any_cache_hit {
+                    // Cumulative KV lengths: [0, c0+q0, c0+q0+c1+q1, ...]
+                    let mut cu_kv = vec![0i32];
+                    for (&nc, &ql) in num_cached_tokens_vec.iter().zip(query_lens_vec.iter()) {
+                        cu_kv.push(cu_kv.last().unwrap() + (nc + ql) as i32);
+                    }
+                    let cu_kv_t = Tensor::new(&cu_kv[..], &Device::Cpu)?;
+                    let devices = mapper.unwrap().get_unique_devices();
+                    let mut map = HashMap::new();
+                    for device in &devices {
+                        map.insert(device.location(), cu_kv_t.to_device(device)?);
+                    }
+                    Some(map)
                 } else {
                     None
                 },
@@ -750,6 +790,8 @@ pub mod text_models_inputs_processor {
                 paged_kv_chunk_size: Some(paged_kv_chunk_size_map),
                 num_cached_tokens: None,
                 query_lens: None,
+                cu_seqlens_q: None,
+                cu_seqlens_kv: None,
             })
         } else {
             None

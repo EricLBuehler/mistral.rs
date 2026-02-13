@@ -589,10 +589,7 @@ impl Engine {
                                     &mut *get_mut_arcmutex!(self.prefix_cacher),
                                     self.disable_eos_stop,
                                     rng.clone(),
-                                    CacheBackendMetadata::PagedAttention {
-                                        metadata,
-                                        blocks_to_copy: HashMap::new(),
-                                    },
+                                    CacheBackendMetadata::PagedAttention { metadata },
                                 )
                                 .await
                         };

@@ -698,7 +698,6 @@ impl Sequence {
         toks: Vec<u32>,
         paged_attn_metadata: Option<&mut PagedAttentionMeta>,
     ) {
-        let old_len = self.tokens.len();
         self.tokens.clone_from(&toks);
         self.prompt_len = self.tokens.len();
 

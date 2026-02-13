@@ -132,9 +132,9 @@ impl PagedAttention {
 
         // === Prefix cache hit path ===
         // When num_cached_tokens is set, Q/K/V contain ONLY new (non-cached) tokens.
-        // We write new tokens to cache via reshape_and_cache, then run
-        // context_attention_fwd which reads cached tokens from the paged KV cache
-        // and new tokens from the input tensors.
+        // We write new tokens to cache via reshape_and_cache, then gather all
+        // K/V from the paged cache (including the just-written new tokens) and
+        // run attention over the full context.
         if let Some(num_cached) = &input_metadata.num_cached_tokens {
             if attention_mask.is_some() {
                 let query_lens_data = input_metadata
@@ -167,74 +167,43 @@ impl PagedAttention {
                 }
 
                 let device = query.device();
+                let out_dtype = q_flat.dtype();
+                let max_sq = query_lens_data.iter().copied().max().unwrap_or(0);
+                let max_sk = num_cached
+                    .iter()
+                    .zip(query_lens_data.iter())
+                    .map(|(&c, &q)| c + q)
+                    .max()
+                    .unwrap_or(0);
 
-                // Fast path: gather all K/V from paged cache into contiguous tensors,
-                // then use flash_attn_varlen. Much faster than the context_attention_fwd
-                // kernel because flash attention is heavily optimized with tiling.
-                // Flash attention automatically right-aligns Q when seqlen_q < seqlen_k
-                // (causal), so Q token 0 correctly attends to all cached context tokens.
+                // Gather all K/V from paged cache into contiguous tensors.
+                // The gather kernel handles x-unpacking for K, transpose for V,
+                // and FP8 dequantization via k_scale/v_scale when applicable.
+                let cu_kv = input_metadata
+                    .cu_seqlens_kv
+                    .as_ref()
+                    .expect("cu_seqlens_kv required for prefix cache path")
+                    .get(&device.location())
+                    .unwrap();
+                let (k_gathered, v_gathered) = mistralrs_paged_attn::gather_kv_cache(
+                    key_cache.as_ref().unwrap(),
+                    value_cache.as_ref().unwrap(),
+                    self.k_scale.as_ref(),
+                    self.v_scale.as_ref(),
+                    block_tables,
+                    cu_kv,
+                    out_dtype,
+                )?;
+
+                // Fast path: flash_attn_varlen for CUDA with flash-attn feature
                 #[cfg(feature = "flash-attn")]
-                if sinks.is_none() && key_cache.as_ref().unwrap().dtype() != DType::F8E4M3 {
-                    let kc = key_cache.as_ref().unwrap();
-                    let vc = value_cache.as_ref().unwrap();
-                    let (_, _, _, block_size_dim, _) = kc.dims5()?;
-
-                    let mut all_k = Vec::new();
-                    let mut all_v = Vec::new();
-                    let mut cu_seqlens_q_vec = vec![0u32];
-                    let mut cu_seqlens_k_vec = vec![0u32];
-                    let mut max_sq = 0usize;
-                    let mut max_sk = 0usize;
-
-                    for (i, (&nc, &ql)) in
-                        num_cached.iter().zip(query_lens_data.iter()).enumerate()
-                    {
-                        let total_kv = nc + ql;
-                        let n_blocks = total_kv.div_ceil(block_size_dim);
-
-                        let block_ids = block_tables
-                            .narrow(0, i, 1)?
-                            .squeeze(0)?
-                            .narrow(0, 0, n_blocks)?;
-
-                        // K cache: [n_blk, kv_h, hd/x, bs, x] -> [total_kv, kv_h, hd]
-                        let k_seq = kc
-                            .index_select(&block_ids, 0)?
-                            .permute((0, 3, 1, 2, 4))?
-                            .contiguous()?
-                            .reshape((
-                                n_blocks * block_size_dim,
-                                key_value_heads,
-                                head_size,
-                            ))?
-                            .narrow(0, 0, total_kv)?;
-
-                        // V cache: [n_blk, kv_h, hd, bs] -> [total_kv, kv_h, hd]
-                        let v_seq = vc
-                            .index_select(&block_ids, 0)?
-                            .permute((0, 3, 1, 2))?
-                            .contiguous()?
-                            .reshape((
-                                n_blocks * block_size_dim,
-                                key_value_heads,
-                                head_size,
-                            ))?
-                            .narrow(0, 0, total_kv)?;
-
-                        all_k.push(k_seq);
-                        all_v.push(v_seq);
-                        cu_seqlens_q_vec
-                            .push(cu_seqlens_q_vec.last().unwrap() + ql as u32);
-                        cu_seqlens_k_vec
-                            .push(cu_seqlens_k_vec.last().unwrap() + total_kv as u32);
-                        max_sq = max_sq.max(ql);
-                        max_sk = max_sk.max(total_kv);
-                    }
-
-                    let k_all = Tensor::cat(&all_k, 0)?;
-                    let v_all = Tensor::cat(&all_v, 0)?;
-                    let cu_q = Tensor::new(&cu_seqlens_q_vec[..], device)?;
-                    let cu_k = Tensor::new(&cu_seqlens_k_vec[..], device)?;
+                if device.is_cuda() && out_dtype != DType::F32 {
+                    let cu_q = input_metadata
+                        .cu_seqlens_q
+                        .as_ref()
+                        .unwrap()
+                        .get(&device.location())
+                        .unwrap();
 
                     let window_left = sdpa_params.sliding_window;
                     let window_right = Some(0); // causal
@@ -242,11 +211,11 @@ impl PagedAttention {
                     let result = if let Some(softcap) = sdpa_params.softcap {
                         candle_flash_attn::flash_attn_varlen_alibi_windowed_softcap(
                             &q_flat,
-                            &k_all,
-                            &v_all,
+                            &k_gathered,
+                            &v_gathered,
                             alibi_slopes.as_ref(),
-                            &cu_q,
-                            &cu_k,
+                            cu_q,
+                            &cu_kv.to_dtype(DType::U32)?,
                             max_sq,
                             max_sk,
                             sdpa_params.softmax_scale,
@@ -257,11 +226,11 @@ impl PagedAttention {
                     } else if let Some(ref slopes) = alibi_slopes {
                         candle_flash_attn::flash_attn_varlen_alibi_windowed(
                             &q_flat,
-                            &k_all,
-                            &v_all,
+                            &k_gathered,
+                            &v_gathered,
                             slopes,
-                            &cu_q,
-                            &cu_k,
+                            cu_q,
+                            &cu_kv.to_dtype(DType::U32)?,
                             max_sq,
                             max_sk,
                             sdpa_params.softmax_scale,
@@ -271,10 +240,10 @@ impl PagedAttention {
                     } else {
                         candle_flash_attn::flash_attn_varlen_windowed(
                             &q_flat,
-                            &k_all,
-                            &v_all,
-                            &cu_q,
-                            &cu_k,
+                            &k_gathered,
+                            &v_gathered,
+                            cu_q,
+                            &cu_kv.to_dtype(DType::U32)?,
                             max_sq,
                             max_sk,
                             sdpa_params.softmax_scale,
@@ -283,107 +252,67 @@ impl PagedAttention {
                         )?
                     };
 
-                    // flash_attn_varlen output: [total_new_tokens, num_heads, head_size]
                     let result = result
                         .reshape((batch_size, seq_len, attention_heads, head_size))?
                         .transpose(1, 2)?;
                     return Ok(result);
                 }
 
-                // Fallback: context_attention_fwd kernel (for sinks, fp8 cache,
-                // or when flash-attn feature is not enabled)
-                let sliding_window_val = sdpa_params.sliding_window.map(|w| w as i32).unwrap_or(0);
+                // Fallback: per-sequence attention with causal mask
+                // (for Metal, CPU, and CUDA without flash-attn)
+                {
+                    let mut outputs = Vec::new();
+                    let mut kv_offset = 0usize;
+                    let mut q_offset = 0usize;
 
-                #[cfg(all(feature = "cuda", target_family = "unix"))]
-                let result = {
-                    // Build auxiliary tensors for the CUDA fused kernel
-                    let context_lens_t = Tensor::new(
-                        &num_cached.iter().map(|&c| c as u32).collect::<Vec<_>>()[..],
-                        device,
-                    )?;
-                    let query_lens_t = Tensor::new(
-                        &query_lens_data
-                            .iter()
-                            .map(|&q| q as u32)
-                            .collect::<Vec<_>>()[..],
-                        device,
-                    )?;
+                    for (&nc, &ql) in num_cached.iter().zip(query_lens_data.iter()) {
+                        let total_kv = nc + ql;
+                        let q_seq = q_flat.narrow(0, q_offset, ql)?;
+                        let k_seq = k_gathered.narrow(0, kv_offset, total_kv)?;
+                        let v_seq = v_gathered.narrow(0, kv_offset, total_kv)?;
 
-                    // Cumulative start offsets: [0, q0, q0+q1, ...]
-                    let mut start_locs = Vec::with_capacity(num_cached.len() + 1);
-                    start_locs.push(0u32);
-                    for &ql in query_lens_data {
-                        start_locs.push(start_locs.last().unwrap() + ql as u32);
+                        // Shape to (1, heads, seq, dim) for Sdpa
+                        let q_4d = q_seq.unsqueeze(0)?.transpose(1, 2)?;
+                        let k_4d = k_seq.unsqueeze(0)?.transpose(1, 2)?;
+                        let v_4d = v_seq.unsqueeze(0)?.transpose(1, 2)?;
+
+                        // Causal mask: q[i] attends to kv[0..nc+i+1]
+                        let mask = {
+                            let mask_data: Vec<f32> = (0..ql)
+                                .flat_map(|qi| {
+                                    (0..total_kv).map(move |kj| {
+                                        if kj <= nc + qi {
+                                            0.0f32
+                                        } else {
+                                            f32::NEG_INFINITY
+                                        }
+                                    })
+                                })
+                                .collect();
+                            Tensor::from_vec(mask_data, (1, 1, ql, total_kv), device)?
+                                .to_dtype(q_flat.dtype())?
+                        };
+
+                        let out_seq = Sdpa.run_attention_noflash(
+                            &q_4d,
+                            &k_4d,
+                            &v_4d,
+                            Some(&mask),
+                            sdpa_params,
+                        )?;
+                        // (1, heads, ql, dim) -> (ql, heads, dim)
+                        outputs.push(out_seq.squeeze(0)?.transpose(0, 1)?);
+
+                        q_offset += ql;
+                        kv_offset += total_kv;
                     }
-                    let query_start_locs = Tensor::new(&start_locs[..], device)?;
 
-                    // Batch index for each new token: [0,0,...,1,1,...,2,2,...]
-                    let total_new: usize = query_lens_data.iter().sum();
-                    let mut seq_ids_data = Vec::with_capacity(total_new);
-                    for (i, &ql) in query_lens_data.iter().enumerate() {
-                        seq_ids_data.extend(std::iter::repeat_n(i as u32, ql));
-                    }
-                    let seq_ids = Tensor::new(&seq_ids_data[..], device)?;
-
-                    let max_total_kv = num_cached
-                        .iter()
-                        .zip(query_lens_data.iter())
-                        .map(|(&c, &q)| c + q)
-                        .max()
-                        .unwrap_or(0);
-
-                    mistralrs_paged_attn::context_attention_fwd(
-                        &q_flat,
-                        &k_flat,
-                        &v_flat,
-                        self.k_scale.as_ref(),
-                        self.v_scale.as_ref(),
-                        key_cache.as_ref().unwrap(),
-                        value_cache.as_ref().unwrap(),
-                        block_tables,
-                        &context_lens_t,
-                        &query_lens_t,
-                        &query_start_locs,
-                        &seq_ids,
-                        sdpa_params.softmax_scale,
-                        sliding_window_val,
-                        sinks,
-                        max_total_kv,
-                    )?
-                };
-
-                #[cfg(not(all(feature = "cuda", target_family = "unix")))]
-                let result = {
-                    // CPU/Metal fallback: convert block_tables tensor to Vec<Vec<u32>>
-                    let bt = block_tables.to_device(&Device::Cpu)?;
-                    let (nseq, nblk) = bt.dims2()?;
-                    let bt_data: Vec<u32> = bt.flatten_all()?.to_vec1()?;
-                    let block_tables_vec: Vec<Vec<u32>> = (0..nseq)
-                        .map(|i| bt_data[i * nblk..(i + 1) * nblk].to_vec())
-                        .collect();
-
-                    super::context_attention_cpu::context_attention_fwd_cpu(
-                        &q_flat,
-                        &k_flat,
-                        &v_flat,
-                        key_cache.as_ref().unwrap(),
-                        value_cache.as_ref().unwrap(),
-                        &block_tables_vec,
-                        num_cached,
-                        query_lens_data,
-                        sdpa_params.softmax_scale,
-                        sdpa_params.sliding_window,
-                        sinks,
-                    )?
-                };
-
-                // Reshape from [total_new_tokens, num_heads, head_size] to
-                // [batch_size, num_heads, seq_len, head_size] to match flash_attn output format.
-                let result = result
-                    .reshape((batch_size, seq_len, attention_heads, head_size))?
-                    .transpose(1, 2)?;
-
-                return Ok(result);
+                    let result = Tensor::cat(&outputs, 0)?;
+                    let result = result
+                        .reshape((batch_size, seq_len, attention_heads, head_size))?
+                        .transpose(1, 2)?;
+                    return Ok(result);
+                }
             }
         }
 

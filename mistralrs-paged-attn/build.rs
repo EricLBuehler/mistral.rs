@@ -16,13 +16,10 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=src/cuda/reshape_and_cache_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/concat_and_cache_mla_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/gather_mla_cache_kernel.cu");
+    println!("cargo:rerun-if-changed=src/cuda/gather_kv_cache_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer_mla_decode.cu");
     println!("cargo:rerun-if-changed=src/cuda/update_kvscales.cu");
     println!("cargo:rerun-if-changed=src/cuda/flash_attn_sinks.cu");
-    println!("cargo:rerun-if-changed=src/cuda/context_attention_fwd.cuh");
-    println!("cargo:rerun-if-changed=src/cuda/context_attention_fwd_f16.cu");
-    println!("cargo:rerun-if-changed=src/cuda/context_attention_fwd_bf16.cu");
-    println!("cargo:rerun-if-changed=src/cuda/context_attention_fwd_f32.cu");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/cp_async.cuh");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/exception.h");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/fastdiv.cuh");
@@ -102,11 +99,12 @@ fn main() -> Result<(), String> {
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_fp8)");
 
-    const METAL_SOURCES: [&str; 4] = [
+    const METAL_SOURCES: [&str; 5] = [
         "copy_blocks",
         "pagedattention",
         "reshape_and_cache",
         "kv_scale_update",
+        "gather_kv_cache",
     ];
     for src in METAL_SOURCES {
         println!("cargo::rerun-if-changed=src/metal/kernels/{src}.metal");

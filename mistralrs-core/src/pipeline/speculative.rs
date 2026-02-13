@@ -623,10 +623,7 @@ impl Pipeline for SpeculativePipeline {
 
                 Ok(exec_duration)
             }
-            CacheBackendMetadata::PagedAttention {
-                metadata: _,
-                blocks_to_copy: _,
-            } => unreachable!(),
+            CacheBackendMetadata::PagedAttention { .. } => unreachable!(),
         }
     }
     fn category(&self) -> ModelCategory {

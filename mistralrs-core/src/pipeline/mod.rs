@@ -91,7 +91,6 @@ use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 pub use speech::{SpeechLoader, SpeechPipeline};
 use std::any::Any;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -341,7 +340,6 @@ pub enum CacheBackendMetadata {
     },
     PagedAttention {
         metadata: PagedAttentionMeta,
-        blocks_to_copy: HashMap<usize, Vec<usize>>,
     },
 }
 
@@ -667,17 +665,7 @@ pub trait Pipeline:
 
                 Ok(exec_duration)
             }
-            CacheBackendMetadata::PagedAttention {
-                metadata,
-                blocks_to_copy,
-            } => {
-                // Cloning might be bad?
-                self.get_metadata()
-                    .cache_engine
-                    .as_ref()
-                    .expect("PagedAttention must have cache engines.")
-                    .execute_scheduler_ops(&blocks_to_copy)?;
-
+            CacheBackendMetadata::PagedAttention { metadata } => {
                 let inputs_iter =
                     std::iter::once(self.get_processor().inputs_processor().process_inputs(
                         self.tokenizer(),
