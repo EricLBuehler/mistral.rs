@@ -66,7 +66,7 @@ fn gather_cached_mla(
         let (_, _, kpe_head_dim) = kpe_cache.dims3()?;
         let num_blocks = ckv_cache.dims3()?.0;
 
-        // Flatten cache: [num_blocks, block_size, dim] → [num_blocks*block_size, dim]
+        // Flatten cache: [num_blocks, block_size, dim] -> [num_blocks*block_size, dim]
         let flat_ckv = ckv_cache.reshape((num_blocks * block_size, kv_lora_rank))?;
         let flat_kpe = kpe_cache.reshape((num_blocks * block_size, kpe_head_dim))?;
 
@@ -204,7 +204,7 @@ pub fn context_attention_fwd_mla(
         let ql_t = ql_i.transpose(0, 1)?; // [num_heads, q_len, kv_lora_rank]
         let qpe_t = qpe_i.transpose(0, 1)?; // [num_heads, q_len, qk_rope_head_dim]
 
-        // Expand ckv/kpe across heads: [total_kv, dim] → [num_heads, total_kv, dim]
+        // Expand ckv/kpe across heads: [total_kv, dim] -> [num_heads, total_kv, dim]
         let ckv_exp = full_ckv
             .unsqueeze(0)?
             .expand((num_heads, total_kv, kv_lora_rank))?;
@@ -212,7 +212,7 @@ pub fn context_attention_fwd_mla(
             .unsqueeze(0)?
             .expand((num_heads, total_kv, qk_rope_head_dim))?;
 
-        // Score = ql_nope @ ckv^T + q_pe @ kpe^T → [num_heads, q_len, total_kv]
+        // Score = ql_nope @ ckv^T + q_pe @ kpe^T -> [num_heads, q_len, total_kv]
         let score_nope = ql_t.matmul(&ckv_exp.transpose(1, 2)?)?;
         let score_pe = qpe_t.matmul(&kpe_exp.transpose(1, 2)?)?;
         let scores = ((score_nope + score_pe)? * softmax_scale as f64)?;
@@ -224,7 +224,7 @@ pub fn context_attention_fwd_mla(
         // Softmax
         let attn_weights = softmax_last_dim(&scores)?;
 
-        // Output in latent space: attn_weights @ ckv → [num_heads, q_len, kv_lora_rank]
+        // Output in latent space: attn_weights @ ckv -> [num_heads, q_len, kv_lora_rank]
         let out_i = attn_weights.matmul(&ckv_exp)?;
         let out_i = out_i.transpose(0, 1)?; // [q_len, num_heads, kv_lora_rank]
 

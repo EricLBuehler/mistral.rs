@@ -1,6 +1,4 @@
 use candle_core::{DType, Device, Result, Tensor};
-#[cfg(all(feature = "cuda", target_family = "unix"))]
-use mistralrs_paged_attn::flash_attn_sinks;
 #[allow(unused_imports)]
 use mistralrs_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
 
@@ -58,7 +56,6 @@ impl PagedAttention {
         input_metadata: &PagedAttentionInputMetadata,
         sdpa_params: &SdpaParams,
         flash_params: Option<&FlashParams>,
-        sinks: Option<&Tensor>,
     ) -> Result<Tensor> {
         if let (Some(k_scale), Some(v_scale), Some(key_cache)) =
             (&self.k_scale, &self.v_scale, &key_cache)
@@ -131,307 +128,104 @@ impl PagedAttention {
         let (_, key_value_heads, _, _) = key.shape().dims4()?;
 
         // === Prefix cache hit path ===
-        if input_metadata.num_cached_tokens.is_some() {
-            if attention_mask.is_some() {
-                // Write new tokens to cache for future decode steps
-                if key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
-                    let k_flat = key
-                        .transpose(1, 2)?
-                        .reshape(((), key_value_heads, head_size))?;
-                    let v_flat =
-                        value
-                            .transpose(1, 2)?
-                            .reshape(((), key_value_heads, head_size))?;
-                    reshape_and_cache(
-                        &k_flat,
-                        &v_flat,
-                        self.k_scale.as_ref(),
-                        self.v_scale.as_ref(),
-                        key_cache.as_mut().unwrap(),
-                        value_cache.as_mut().unwrap(),
-                        slot_mapping,
-                    )?;
-                }
-
-                assert!(
-                    alibi_slopes.is_none(),
-                    "alibi slopes not supported in prefix cache path"
-                );
-
-                let device = query.device();
-                let out_dtype = query.dtype();
-
-                // Gather all K/V from paged cache into contiguous tensors.
-                // The gather kernel handles x-unpacking for K, transpose for V,
-                // and FP8 dequantization via k_scale/v_scale when applicable.
-                let cu_kv = input_metadata
-                    .cu_seqlens_kv
-                    .as_ref()
-                    .expect("cu_seqlens_kv required for prefix cache path")
-                    .get(&device.location())
-                    .unwrap();
-                let (k_gathered, v_gathered) = mistralrs_paged_attn::gather_kv_cache(
-                    key_cache.as_ref().unwrap(),
-                    value_cache.as_ref().unwrap(),
+        if input_metadata.num_cached_tokens.is_some() && attention_mask.is_some() {
+            // Write new tokens to cache for future decode steps
+            if key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
+                let k_flat = key
+                    .transpose(1, 2)?
+                    .reshape(((), key_value_heads, head_size))?;
+                let v_flat = value
+                    .transpose(1, 2)?
+                    .reshape(((), key_value_heads, head_size))?;
+                reshape_and_cache(
+                    &k_flat,
+                    &v_flat,
                     self.k_scale.as_ref(),
                     self.v_scale.as_ref(),
-                    block_tables,
-                    cu_kv,
-                    out_dtype,
+                    key_cache.as_mut().unwrap(),
+                    value_cache.as_mut().unwrap(),
+                    slot_mapping,
                 )?;
+            }
 
-                // gathered: (total_kv, kv_heads, dim) -> (1, kv_heads, total_kv, dim)
-                let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
-                let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
+            assert!(
+                alibi_slopes.is_none(),
+                "alibi slopes not supported in prefix cache path"
+            );
 
-                // Build a local FlashParams with packed K cu_seqlens from
-                // cu_seqlens_kv (matching the gathered KV layout). The pipeline's
-                // flash_params uses padded seqlens_k which doesn't match packed KV.
-                // Q seqlens stay padded since Q is still in padded batch layout.
-                let prefix_flash_params = flash_params.map(|fp| {
-                    let max_kv = input_metadata
-                        .num_cached_tokens
+            let device = query.device();
+
+            // Gather all K/V from paged cache into contiguous tensors.
+            // The gather kernel handles x-unpacking for K, transpose for V,
+            // and FP8 dequantization via k_scale/v_scale when applicable.
+            let cu_kv = input_metadata
+                .cu_seqlens_kv
+                .as_ref()
+                .expect("cu_seqlens_kv required for prefix cache path")
+                .get(&device.location())
+                .unwrap();
+            let (k_gathered, v_gathered) = mistralrs_paged_attn::gather_kv_cache(
+                key_cache.as_ref().unwrap(),
+                value_cache.as_ref().unwrap(),
+                self.k_scale.as_ref(),
+                self.v_scale.as_ref(),
+                block_tables,
+                cu_kv,
+                query.dtype(),
+            )?;
+
+            // gathered: (total_kv, kv_heads, dim) -> (1, kv_heads, total_kv, dim)
+            let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
+            let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
+
+            // Build a local FlashParams with packed K cu_seqlens from
+            // cu_seqlens_kv (matching the gathered KV layout). The pipeline's
+            // flash_params uses padded seqlens_k which doesn't match packed KV.
+            // Q seqlens stay padded since Q is still in padded batch layout.
+            let prefix_flash_params = flash_params.map(|fp| {
+                let max_kv = input_metadata
+                    .num_cached_tokens
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .zip(input_metadata.query_lens.as_ref().unwrap().iter())
+                    .map(|(&nc, &ql)| (nc + ql) as u32)
+                    .max()
+                    .unwrap_or(0);
+                FlashParams {
+                    max_q: fp.max_q,
+                    max_k: max_kv,
+                    cumulative_seqlens_q: fp.cumulative_seqlens_q.clone(),
+                    cumulative_seqlens_k: input_metadata
+                        .cu_seqlens_kv
                         .as_ref()
                         .unwrap()
-                        .iter()
-                        .zip(input_metadata.query_lens.as_ref().unwrap().iter())
-                        .map(|(&nc, &ql)| (nc + ql) as u32)
-                        .max()
-                        .unwrap_or(0);
-                    FlashParams {
-                        max_q: fp.max_q,
-                        max_k: max_kv,
-                        cumulative_seqlens_q: fp.cumulative_seqlens_q.clone(),
-                        cumulative_seqlens_k: input_metadata
-                            .cu_seqlens_kv
-                            .as_ref()
-                            .unwrap()
-                            .clone(),
-                        causal: fp.causal,
-                    }
-                });
-
-                // Sinks-aware prefix cache path: use fused flash_attn_sinks
-                // which now supports separate q_len/kv_len with bottom-right
-                // causal masking (matching the Metal kernel).
-                if let Some(sinks) = sinks {
-                    let window = sdpa_params.sliding_window.unwrap_or(0);
-
-                    if batch_size == 1 {
-                        // batch=1: packed == padded, call fused kernel directly
-                        #[cfg(all(feature = "cuda", target_family = "unix"))]
-                        {
-                            return flash_attn_sinks(
-                                query,
-                                &k_4d,
-                                &v_4d,
-                                Some(sinks),
-                                sdpa_params.softmax_scale,
-                                window,
-                            );
-                        }
-                        #[cfg(not(all(feature = "cuda", target_family = "unix")))]
-                        {
-                            if query.device().is_metal() {
-                                return mistralrs_quant::flash_attn_sinks_metal(
-                                    query,
-                                    &k_4d,
-                                    &v_4d,
-                                    Some(sinks),
-                                    sdpa_params.softmax_scale,
-                                    window,
-                                );
-                            }
-                            // CPU fallback: unfused attention with sinks
-                            let n_kv_groups = attention_heads / key_value_heads;
-                            let k_exp =
-                                crate::layers::repeat_kv(k_4d, n_kv_groups)?;
-                            let v_exp =
-                                crate::layers::repeat_kv(v_4d, n_kv_groups)?;
-                            let logits = (query
-                                .matmul(&k_exp.transpose(2, 3)?)?
-                                * sdpa_params.softmax_scale as f64)?;
-                            let logits =
-                                logits.broadcast_add(attention_mask.unwrap())?;
-                            let weights =
-                                mistralrs_quant::softmax_with_sinks(
-                                    &logits, sinks, None,
-                                )?;
-                            return weights.matmul(&v_exp);
-                        }
-                    }
-
-                    // batch > 1: iterate per batch item with fused kernel
-                    let cu_kv_vec = cu_kv.to_vec1::<u32>()?;
-                    let query_lens =
-                        input_metadata.query_lens.as_ref().unwrap();
-                    let mut results = Vec::with_capacity(batch_size);
-                    for b in 0..batch_size {
-                        let actual_q_len = query_lens[b];
-                        let q_b = query
-                            .narrow(0, b, 1)?
-                            .narrow(2, 0, actual_q_len)?;
-                        let kv_start = cu_kv_vec[b] as usize;
-                        let kv_end = cu_kv_vec[b + 1] as usize;
-                        let kv_len = kv_end - kv_start;
-                        let k_b = k_gathered
-                            .narrow(0, kv_start, kv_len)?
-                            .unsqueeze(0)?
-                            .transpose(1, 2)?;
-                        let v_b = v_gathered
-                            .narrow(0, kv_start, kv_len)?
-                            .unsqueeze(0)?
-                            .transpose(1, 2)?;
-
-                        #[cfg(all(feature = "cuda", target_family = "unix"))]
-                        let out_b = flash_attn_sinks(
-                            &q_b,
-                            &k_b,
-                            &v_b,
-                            Some(sinks),
-                            sdpa_params.softmax_scale,
-                            window,
-                        )?;
-                        #[cfg(not(all(
-                            feature = "cuda",
-                            target_family = "unix"
-                        )))]
-                        let out_b = if query.device().is_metal() {
-                            mistralrs_quant::flash_attn_sinks_metal(
-                                &q_b,
-                                &k_b,
-                                &v_b,
-                                Some(sinks),
-                                sdpa_params.softmax_scale,
-                                window,
-                            )?
-                        } else {
-                            // CPU fallback per item
-                            let n_kv_groups =
-                                attention_heads / key_value_heads;
-                            let k_exp = crate::layers::repeat_kv(
-                                k_b,
-                                n_kv_groups,
-                            )?;
-                            let v_exp = crate::layers::repeat_kv(
-                                v_b,
-                                n_kv_groups,
-                            )?;
-                            let logits = (q_b
-                                .matmul(&k_exp.transpose(2, 3)?)?
-                                * sdpa_params.softmax_scale as f64)?;
-                            let mask_b = attention_mask
-                                .unwrap()
-                                .narrow(0, b, 1)?
-                                .narrow(2, 0, actual_q_len)?
-                                .narrow(3, 0, kv_len)?;
-                            let logits = logits.broadcast_add(&mask_b)?;
-                            mistralrs_quant::softmax_with_sinks(
-                                &logits, sinks, None,
-                            )?
-                            .matmul(&v_exp)?
-                        };
-
-                        if actual_q_len < seq_len {
-                            let pad = Tensor::zeros(
-                                (
-                                    1,
-                                    attention_heads,
-                                    seq_len - actual_q_len,
-                                    head_size,
-                                ),
-                                out_dtype,
-                                device,
-                            )?;
-                            results
-                                .push(Tensor::cat(&[out_b, pad], 2)?);
-                        } else {
-                            results.push(out_b);
-                        }
-                    }
-                    return Ok(Tensor::cat(&results, 0)?);
+                        .clone(),
+                    causal: fp.causal,
                 }
+            });
 
-                let result = Sdpa.run_attention(
-                    query,
-                    &k_4d,
-                    &v_4d,
-                    attention_mask,
-                    prefix_flash_params.as_ref(),
-                    sdpa_params,
-                )?;
-
-                return Ok(result);
-            }
+            return Sdpa.run_attention(
+                query,
+                &k_4d,
+                &v_4d,
+                attention_mask,
+                prefix_flash_params.as_ref(),
+                sdpa_params,
+            );
         }
 
         #[allow(clippy::cast_possible_truncation)]
         let att = match attention_mask {
             None => None,
-            Some(mask) => {
-                if let Some(sinks) = sinks {
-                    // Sinks-aware prefill: fused flash attention with per-head sinks.
-                    // The sink adds exp(sink_h) to the softmax denominator without a
-                    // corresponding value contribution (probability mass absorption).
-                    #[cfg(all(feature = "cuda", target_family = "unix"))]
-                    {
-                        let window = sdpa_params.sliding_window.unwrap_or(0);
-                        Some(flash_attn_sinks(
-                            query,
-                            key,
-                            value,
-                            Some(sinks),
-                            sdpa_params.softmax_scale,
-                            window,
-                        )?)
-                    }
-                    #[cfg(not(all(feature = "cuda", target_family = "unix")))]
-                    {
-                        if query.device().is_metal() {
-                            // Fused Metal flash attention with sinks
-                            let window = sdpa_params.sliding_window.unwrap_or(0);
-                            Some(mistralrs_quant::flash_attn_sinks_metal(
-                                query,
-                                key,
-                                value,
-                                Some(sinks),
-                                sdpa_params.softmax_scale,
-                                window,
-                            )?)
-                        } else {
-                            // CPU fallback: unfused path
-                            let n_kv_groups = attention_heads / key_value_heads;
-                            let key_expanded = crate::layers::repeat_kv(key.clone(), n_kv_groups)?;
-                            let value_expanded =
-                                crate::layers::repeat_kv(value.clone(), n_kv_groups)?;
-                            let logits = (query.matmul(&key_expanded.transpose(2, 3)?)?
-                                * sdpa_params.softmax_scale as f64)?;
-                            let logits = logits.broadcast_add(mask)?;
-                            let attn_weights =
-                                mistralrs_quant::softmax_with_sinks(&logits, sinks, None)?;
-                            Some(attn_weights.matmul(&value_expanded)?)
-                        }
-                    }
-                } else {
-                    match flash_params {
-                        Some(_) => Some(Sdpa.run_attention(
-                            query,
-                            key,
-                            value,
-                            Some(mask),
-                            flash_params,
-                            sdpa_params,
-                        )?),
-                        None => Some(Sdpa.run_attention_noflash(
-                            query,
-                            key,
-                            value,
-                            Some(mask),
-                            sdpa_params,
-                        )?),
-                    }
-                }
-            }
+            Some(mask) => Some(Sdpa.run_attention(
+                query,
+                key,
+                value,
+                Some(mask),
+                flash_params,
+                sdpa_params,
+            )?),
         };
 
         // paged-attn expects [batch_size, num_tokens, num_heads, head_size]
@@ -507,7 +301,7 @@ impl PagedAttention {
             },
             sdpa_params.softmax_scale,
             sdpa_params.softcap.unwrap_or(1.0f32),
-            sinks,
+            sdpa_params.sinks.as_ref(),
         )?;
 
         Ok(res)

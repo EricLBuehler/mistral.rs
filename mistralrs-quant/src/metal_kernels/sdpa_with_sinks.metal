@@ -557,6 +557,194 @@ template <typename T, int HEAD_DIM, int BR, int BC>
 }
 
 // ============================================================================
+// Prefill varlen: flash_attn_sinks_varlen_kernel
+// Q padded [B, num_heads, max_q_len, D], K/V packed [total_kv, num_kv_heads, D]
+// q_lens[B], cu_seqlens_k[B+1]
+// ============================================================================
+
+template <typename T, int HEAD_DIM, int BR, int BC>
+[[kernel]] void flash_attn_sinks_varlen_kernel(
+    const device T* Q [[buffer(0)]],           // [B, num_heads, max_q_len, D]
+    const device T* K [[buffer(1)]],           // [total_kv, num_kv_heads, D]
+    const device T* V [[buffer(2)]],           // [total_kv, num_kv_heads, D]
+    const device float* sinks [[buffer(3)]],   // [num_heads]
+    device T* O [[buffer(4)]],                 // [B, num_heads, max_q_len, D]
+    const device int* q_lens_buf [[buffer(5)]],     // [B]
+    const device int* cu_seqlens_k [[buffer(6)]],   // [B+1]
+    const constant float& scale,
+    const constant int& max_q_len,
+    const constant int& num_heads,
+    const constant int& num_kv_heads,
+    const constant int& window_size,
+    threadgroup float* shared_mem [[threadgroup(0)]],
+    uint3 tgpig [[threadgroup_position_in_grid]],
+    uint3 tpitg3 [[thread_position_in_threadgroup]]) {
+
+  const uint tpitg = tpitg3.x;
+
+  constexpr int SIMD_SIZE = 32;
+  constexpr int D_PAD = ((HEAD_DIM + SIMD_SIZE - 1) / SIMD_SIZE) * SIMD_SIZE;
+  constexpr int EPT = D_PAD / SIMD_SIZE;
+  constexpr int BLOCK_SIZE = BR * SIMD_SIZE;
+
+  threadgroup float* k_smem = shared_mem;
+  threadgroup float* v_smem = shared_mem + BC * D_PAD;
+
+  const int simd_gid = tpitg / SIMD_SIZE;
+  const int simd_lid = tpitg % SIMD_SIZE;
+
+  const int head_idx = tgpig.x;
+  const int batch_idx = tgpig.y;
+  const int q_tile_idx = tgpig.z;
+
+  const int gqa_ratio = num_heads / num_kv_heads;
+  const int kv_head_idx = head_idx / gqa_ratio;
+
+  // Per-batch-item lengths
+  const int my_q_len = q_lens_buf[batch_idx];
+  const int kv_start = cu_seqlens_k[batch_idx];
+  const int my_kv_len = cu_seqlens_k[batch_idx + 1] - kv_start;
+
+  const int q_row = q_tile_idx * BR + simd_gid;
+
+  if (q_row >= my_q_len)
+    return;
+
+  const int kv_offset = my_kv_len - my_q_len;
+
+  // Q offset: padded [B, H, max_q_len, D]
+  const int q_offset =
+      ((batch_idx * num_heads + head_idx) * max_q_len + q_row) * HEAD_DIM;
+
+  // Load Q row into registers (pre-scaled)
+  float q_reg[EPT];
+  for (int i = 0; i < EPT; i++) {
+    const int d = i * SIMD_SIZE + simd_lid;
+    q_reg[i] = (d < HEAD_DIM) ? float(Q[q_offset + d]) * scale : 0.0f;
+  }
+
+  float o_acc[EPT];
+  for (int i = 0; i < EPT; i++)
+    o_acc[i] = 0.0f;
+
+  float m_i = -INFINITY;
+  float l_i = 0.0f;
+
+  // Block-level KV bounds
+  const int block_q_start = q_tile_idx * BR;
+  const int block_q_end = min(block_q_start + BR, my_q_len);
+  const int block_kv_start =
+      (window_size > 0) ? max(0, block_q_start + kv_offset - window_size + 1) : 0;
+  const int block_kv_end = min(my_kv_len, block_q_end + kv_offset);
+
+  const int my_kv_start_w =
+      (window_size > 0) ? max(0, q_row + kv_offset - window_size + 1) : 0;
+  const int my_kv_end = q_row + kv_offset + 1;
+
+  float scores[BC];
+
+  for (int tile_start = block_kv_start; tile_start < block_kv_end;
+       tile_start += BC) {
+    const int tile_end = min(tile_start + BC, block_kv_end);
+    const int tile_len = tile_end - tile_start;
+
+    // --- Cooperatively load K tile from packed [total_kv, num_kv_heads, D] ---
+    for (int idx = int(tpitg); idx < BC * D_PAD; idx += BLOCK_SIZE) {
+      const int kj = idx / D_PAD;
+      const int kd = idx % D_PAD;
+      k_smem[idx] =
+          (kj < tile_len && kd < HEAD_DIM)
+              ? float(K[((kv_start + tile_start + kj) * num_kv_heads +
+                         kv_head_idx) * HEAD_DIM + kd])
+              : 0.0f;
+    }
+
+    // --- Cooperatively load V tile from packed layout ---
+    for (int idx = int(tpitg); idx < BC * D_PAD; idx += BLOCK_SIZE) {
+      const int vj = idx / D_PAD;
+      const int vd = idx % D_PAD;
+      v_smem[idx] =
+          (vj < tile_len && vd < HEAD_DIM)
+              ? float(V[((kv_start + tile_start + vj) * num_kv_heads +
+                         kv_head_idx) * HEAD_DIM + vd])
+              : 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // --- Pass 1: Compute scores ---
+    float tile_max = -INFINITY;
+
+    for (int j = 0; j < tile_len; j++) {
+      const int kv_pos = tile_start + j;
+
+      if (kv_pos >= my_kv_end) {
+        for (int jj = j; jj < tile_len; jj++)
+          scores[jj] = -INFINITY;
+        break;
+      }
+
+      if (kv_pos < my_kv_start_w) {
+        scores[j] = -INFINITY;
+        continue;
+      }
+
+      float dot = 0.0f;
+      for (int i = 0; i < EPT; i++) {
+        dot += q_reg[i] * k_smem[j * D_PAD + i * SIMD_SIZE + simd_lid];
+      }
+      dot = warp_reduce_sum(dot);
+
+      scores[j] = dot;
+      tile_max = max(tile_max, dot);
+    }
+
+    // --- Pass 2: Online softmax update + V accumulation ---
+    if (tile_max > -INFINITY) {
+      const float m_new = max(m_i, tile_max);
+      const float rescale = fast::exp(m_i - m_new);
+
+      for (int i = 0; i < EPT; i++)
+        o_acc[i] *= rescale;
+      l_i *= rescale;
+      m_i = m_new;
+
+      for (int j = 0; j < tile_len; j++) {
+        if (scores[j] <= -INFINITY)
+          continue;
+
+        const float p = fast::exp(scores[j] - m_i);
+        l_i += p;
+
+        for (int i = 0; i < EPT; i++) {
+          o_acc[i] += p * v_smem[j * D_PAD + i * SIMD_SIZE + simd_lid];
+        }
+      }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+
+  // Integrate sinks
+  {
+    const float sink_val = sinks[head_idx];
+    const float m_new = max(m_i, sink_val);
+    const float rescale = fast::exp(m_i - m_new);
+    for (int i = 0; i < EPT; i++)
+      o_acc[i] *= rescale;
+    l_i = l_i * rescale + fast::exp(sink_val - m_new);
+    m_i = m_new;
+  }
+
+  // Normalize and write output
+  const float inv_l = (l_i > 0.0f) ? (1.0f / l_i) : 0.0f;
+  for (int i = 0; i < EPT; i++) {
+    const int d = i * SIMD_SIZE + simd_lid;
+    if (d < HEAD_DIM) {
+      O[q_offset + d] = static_cast<T>(o_acc[i] * inv_l);
+    }
+  }
+}
+
+// ============================================================================
 // Instantiation macros
 // ============================================================================
 
@@ -648,4 +836,37 @@ instantiate_flash_attn_sinks_heads(float)
 instantiate_flash_attn_sinks_heads(half)
 #if __METAL_VERSION__ >= 310
 instantiate_flash_attn_sinks_heads(bfloat16_t)
+#endif
+
+// --- Prefill varlen: flash_attn_sinks_varlen_kernel ---
+#define instantiate_flash_attn_sinks_varlen(type, hd, br, bc)                  \
+  template [[host_name("flash_attn_sinks_varlen_" #type "_hd" #hd "_br" #br "_bc" #bc)]] \
+  [[kernel]] void flash_attn_sinks_varlen_kernel<type, hd, br, bc>(            \
+      const device type* Q [[buffer(0)]],                                      \
+      const device type* K [[buffer(1)]],                                      \
+      const device type* V [[buffer(2)]],                                      \
+      const device float* sinks [[buffer(3)]],                                 \
+      device type* O [[buffer(4)]],                                            \
+      const device int* q_lens_buf [[buffer(5)]],                              \
+      const device int* cu_seqlens_k [[buffer(6)]],                            \
+      const constant float& scale,                                             \
+      const constant int& max_q_len,                                           \
+      const constant int& num_heads,                                           \
+      const constant int& num_kv_heads,                                        \
+      const constant int& window_size,                                         \
+      threadgroup float* shared_mem [[threadgroup(0)]],                        \
+      uint3 tgpig [[threadgroup_position_in_grid]],                            \
+      uint3 tpitg3 [[thread_position_in_threadgroup]]);
+
+#define instantiate_flash_attn_sinks_varlen_heads(type)                        \
+  instantiate_flash_attn_sinks_varlen(type, 64,  8, 64)                       \
+  instantiate_flash_attn_sinks_varlen(type, 80,  8, 32)                       \
+  instantiate_flash_attn_sinks_varlen(type, 96,  8, 32)                       \
+  instantiate_flash_attn_sinks_varlen(type, 128, 8, 32)                       \
+  instantiate_flash_attn_sinks_varlen(type, 256, 8, 16)
+
+instantiate_flash_attn_sinks_varlen_heads(float)
+instantiate_flash_attn_sinks_varlen_heads(half)
+#if __METAL_VERSION__ >= 310
+instantiate_flash_attn_sinks_varlen_heads(bfloat16_t)
 #endif

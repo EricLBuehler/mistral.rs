@@ -15,6 +15,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{
         self, embedding, CausalMasker, GptOssRotaryEmbedding, MatMul, RmsNorm, RotaryEmbedding,
+        Sdpa,
     },
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -135,13 +136,11 @@ fn gptoss_swiglu(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -> Result<T
     up_plus_one.mul(&glu)
 }
 
-/// Attention with per-head sinks
 struct Attention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
     v_proj: Arc<dyn QuantMethod>,
     o_proj: Arc<dyn QuantMethod>,
-    sinks: Tensor, // [num_heads] - per-head attention sink values
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -224,7 +223,6 @@ impl Attention {
             k_proj,
             v_proj,
             o_proj,
-            sinks,
             num_heads: num_heads / comm.world_size(),
             num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
             head_dim,
@@ -239,13 +237,12 @@ impl Attention {
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window,
+                sinks: Some(sinks),
             },
             is_sliding,
         })
     }
 
-    /// GPT-OSS specific attention forward with sinks
-    /// The sinks are added to attention logits before softmax, then dropped after
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
@@ -255,7 +252,7 @@ impl Attention {
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-        layer_idx: usize,
+        _layer_idx: usize,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -304,7 +301,6 @@ impl Attention {
                     input_metadata,
                     &self.sdpa_params,
                     Some(flash_params),
-                    Some(&self.sinks),
                 )?,
                 None => {
                     let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
@@ -319,7 +315,6 @@ impl Attention {
                         &input_metadata,
                         &self.sdpa_params,
                         Some(flash_params),
-                        Some(&self.sinks),
                     )?
                 }
             },
@@ -353,14 +348,13 @@ impl Attention {
                     (k, v)
                 };
 
-                self.attention_with_sinks(
+                Sdpa.run_attention(
                     &q,
                     &k,
                     &v,
                     attention_mask,
-                    seqlen_offsets,
-                    flash_params,
-                    layer_idx,
+                    Some(flash_params),
+                    &self.sdpa_params,
                 )?
             }
         };
@@ -380,66 +374,6 @@ impl Attention {
         Ok(res)
     }
 
-    /// Attention with sinks: sinks are added as extra logits, softmaxed, then dropped
-    #[allow(clippy::too_many_arguments)]
-    fn attention_with_sinks(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        v: &Tensor,
-        attention_mask: Option<&Tensor>,
-        _seqlen_offsets: &[usize],
-        _flash_params: &FlashParams,
-        _layer_idx: usize,
-    ) -> Result<Tensor> {
-        // On Metal, use fused kernel (handles GQA internally, no need to expand K/V)
-        if q.device().is_metal() {
-            let window = self.sdpa_params.sliding_window.unwrap_or(0);
-            return mistralrs_quant::flash_attn_sinks_metal(
-                q,
-                k,
-                v,
-                Some(&self.sinks),
-                self.sdpa_params.softmax_scale,
-                window,
-            );
-        }
-
-        // CPU fallback: unfused path
-        let (_b_sz, _num_heads, _q_len, _head_dim) = q.dims4()?;
-        let (_, _, k_len, _) = k.dims4()?;
-
-        let k_expanded;
-        let v_expanded;
-        let (k_ref, v_ref): (&Tensor, &Tensor) = if self.sdpa_params.n_kv_groups > 1 {
-            k_expanded = crate::layers::repeat_kv(k.clone(), self.sdpa_params.n_kv_groups)?;
-            v_expanded = crate::layers::repeat_kv(v.clone(), self.sdpa_params.n_kv_groups)?;
-            (&k_expanded, &v_expanded)
-        } else {
-            (k, v)
-        };
-
-        let attn_weights = (q.matmul(&k_ref.transpose(D::Minus2, D::Minus1)?)?
-            * self.sdpa_params.softmax_scale as f64)?;
-
-        let attn_weights = if let Some(mask) = attention_mask {
-            let mask_last_dim = mask.dim(D::Minus1)?;
-            let causal_mask = if mask_last_dim > k_len {
-                mask.narrow(D::Minus1, 0, k_len)?
-                    .to_dtype(attn_weights.dtype())?
-            } else {
-                mask.to_dtype(attn_weights.dtype())?
-            };
-            attn_weights.broadcast_add(&causal_mask)?
-        } else {
-            attn_weights
-        };
-
-        let sinks = self.sinks.to_dtype(attn_weights.dtype())?;
-        let scores = mistralrs_quant::softmax_with_sinks(&attn_weights, &sinks, None)?;
-
-        scores.matmul(v_ref)
-    }
 }
 
 struct GptOssMoE {
@@ -840,8 +774,7 @@ impl Model {
 
         // Use the `_as_attn_bias` variants which always construct real masks.
         // The standard `make_causal_mask_matrix` returns a dummy (1,1) tensor when
-        // flash-attn is enabled on CUDA, but attention_with_sinks does manual
-        // attention and needs a real mask.
+        // flash-attn is enabled on CUDA, but the CPU sinks fallback needs a real mask.
         let mask_cache: &dyn PastKvLenCache = metadata
             .as_ref()
             .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)

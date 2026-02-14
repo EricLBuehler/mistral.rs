@@ -433,17 +433,13 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                         // Adjust image_bound positions: subtract prefix_cache_len
                         let adjusted: Vec<Vec<u32>> = bounds[cached_slices..]
                             .iter()
-                            .map(|row| {
-                                vec![row[0] - prefix_len as u32, row[1] - prefix_len as u32]
-                            })
+                            .map(|row| vec![row[0] - prefix_len as u32, row[1] - prefix_len as u32])
                             .collect();
                         ib_all[seq_idx] = Tensor::new(adjusted, device).unwrap();
                     } else {
                         // All slices cached for this sequence
-                        ts_all[seq_idx] =
-                            Tensor::zeros((0, 2), DType::U32, device).unwrap();
-                        ib_all[seq_idx] =
-                            Tensor::zeros((0, 2), DType::U32, device).unwrap();
+                        ts_all[seq_idx] = Tensor::zeros((0, 2), DType::U32, device).unwrap();
+                        ib_all[seq_idx] = Tensor::zeros((0, 2), DType::U32, device).unwrap();
                     }
                 }
                 if !any_remaining {

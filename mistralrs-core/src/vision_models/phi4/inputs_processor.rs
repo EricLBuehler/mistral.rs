@@ -375,8 +375,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                     let total = pv.dim(0).unwrap();
                     let remaining = total.saturating_sub(total_cached_images);
                     if remaining > 0 {
-                        pixel_values =
-                            Some(pv.narrow(0, total_cached_images, remaining).unwrap());
+                        pixel_values = Some(pv.narrow(0, total_cached_images, remaining).unwrap());
                         if let Some(ref mask) = pixel_attention_mask {
                             pixel_attention_mask =
                                 Some(mask.narrow(0, total_cached_images, remaining).unwrap());

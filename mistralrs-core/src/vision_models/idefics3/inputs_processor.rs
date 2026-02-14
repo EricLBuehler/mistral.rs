@@ -271,7 +271,11 @@ impl InputsProcessor for Idefics3ImageProcessor {
         // Trim pixel_values and pixel_attention_mask to exclude sub-images
         // already covered by the prefix cache.
         let mut pixel_values = if is_prompt { pixel_values } else { None };
-        let mut pixel_attention_mask = if is_prompt { pixel_attention_mask } else { None };
+        let mut pixel_attention_mask = if is_prompt {
+            pixel_attention_mask
+        } else {
+            None
+        };
         if is_prompt {
             if let Some(ref pv) = pixel_values {
                 let total_cached: usize = input_seqs

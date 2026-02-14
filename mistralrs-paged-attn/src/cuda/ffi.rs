@@ -385,4 +385,58 @@ extern "C" {
         window_size: c_int,
         stream: CUstream,
     );
+
+    pub fn flash_attn_sinks_varlen_f16(
+        q: *const c_void,
+        k: *const c_void,
+        v: *const c_void,
+        out: *mut c_void,
+        sinks: *const f32,
+        q_lens: *const c_int,
+        cu_seqlens_k: *const c_int,
+        scale: f32,
+        batch_size: c_int,
+        max_q_len: c_int,
+        num_heads: c_int,
+        num_kv_heads: c_int,
+        head_dim: c_int,
+        window_size: c_int,
+        stream: CUstream,
+    );
+
+    pub fn flash_attn_sinks_varlen_bf16(
+        q: *const c_void,
+        k: *const c_void,
+        v: *const c_void,
+        out: *mut c_void,
+        sinks: *const f32,
+        q_lens: *const c_int,
+        cu_seqlens_k: *const c_int,
+        scale: f32,
+        batch_size: c_int,
+        max_q_len: c_int,
+        num_heads: c_int,
+        num_kv_heads: c_int,
+        head_dim: c_int,
+        window_size: c_int,
+        stream: CUstream,
+    );
+
+    pub fn flash_attn_sinks_varlen_f32(
+        q: *const c_void,
+        k: *const c_void,
+        v: *const c_void,
+        out: *mut c_void,
+        sinks: *const f32,
+        q_lens: *const c_int,
+        cu_seqlens_k: *const c_int,
+        scale: f32,
+        batch_size: c_int,
+        max_q_len: c_int,
+        num_heads: c_int,
+        num_kv_heads: c_int,
+        head_dim: c_int,
+        window_size: c_int,
+        stream: CUstream,
+    );
 }

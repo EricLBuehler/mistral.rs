@@ -72,8 +72,8 @@ impl KVCacheBlock {
 /// to avoid branching. Supports O(1) `popleft`, `remove`, and `append`.
 ///
 /// Eviction order:
-/// - Front (head) = least recently used → evict first
-/// - Back (tail) = most recently freed → evict last
+/// - Front (head) = least recently used -> evict first
+/// - Back (tail) = most recently freed -> evict last
 struct FreeKVCacheBlockQueue {
     /// Number of free blocks currently in the queue.
     num_free_blocks: usize,
@@ -178,7 +178,7 @@ impl FreeKVCacheBlockQueue {
 /// Map from block hash (with group ID) to cached block(s).
 ///
 /// Most hash keys map to a single block. When hash collisions or duplicate
-/// caching occur, the value becomes a HashMap of block_id → block_id.
+/// caching occur, the value becomes a HashMap of block_id -> block_id.
 /// This follows vLLM's `BlockHashToBlockMap` optimization to avoid allocating
 /// a HashMap for the common single-block case.
 pub struct BlockHashToBlockMap {

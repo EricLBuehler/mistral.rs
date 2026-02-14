@@ -859,6 +859,7 @@ impl FullAttention {
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window,
+                sinks: None,
             },
         })
     }
@@ -946,7 +947,7 @@ impl FullAttention {
                     input_metadata,
                     &self.sdpa_params,
                     Some(flash_params),
-                    None, // sinks
+
                 )?,
                 None => {
                     let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
@@ -961,7 +962,7 @@ impl FullAttention {
                         &input_metadata,
                         &self.sdpa_params,
                         Some(flash_params),
-                        None, // sinks
+    
                     )?
                 }
             },
