@@ -1,4 +1,4 @@
-use candle_core::{backend::BackendStorage, DType, IndexOp, Result, Storage, Tensor};
+use candle_core::{DType, IndexOp, Result, Storage, Tensor};
 
 use crate::metal::kernels::{self, PagedAttentionDType};
 
@@ -71,89 +71,94 @@ pub fn gather_kv_cache(
         key_cache.device(),
     )?;
 
-    // Extract storage
-    let (kc_s, kc_l) = key_cache.storage_and_layout();
-    let kc = match &*kc_s {
-        Storage::Metal(s) => s,
-        _ => candle_core::bail!("key_cache must be a metal tensor"),
-    };
-    let (vc_s, vc_l) = value_cache.storage_and_layout();
-    let vc = match &*vc_s {
-        Storage::Metal(s) => s,
-        _ => candle_core::bail!("value_cache must be a metal tensor"),
-    };
-    let (ko_s, ko_l) = k_out.storage_and_layout();
-    let ko = match &*ko_s {
-        Storage::Metal(s) => s,
-        _ => candle_core::bail!("k_out must be a metal tensor"),
-    };
-    let (vo_s, vo_l) = v_out.storage_and_layout();
-    let vo = match &*vo_s {
-        Storage::Metal(s) => s,
-        _ => candle_core::bail!("v_out must be a metal tensor"),
-    };
-    let (bt_s, bt_l) = block_table.storage_and_layout();
-    let bt = match &*bt_s {
-        Storage::Metal(s) => s,
-        _ => candle_core::bail!("block_table must be a metal tensor"),
-    };
-    let (cu_s, cu_l) = cu_seq_lens.storage_and_layout();
-    let cu = match &*cu_s {
-        Storage::Metal(s) => s,
-        _ => candle_core::bail!("cu_seq_lens must be a metal tensor"),
-    };
-
-    // Scale buffers
-    let k_v_scale = if let (Some(ks), Some(vs)) = (k_scale, v_scale) {
-        let (ks_s, _) = ks.storage_and_layout();
-        let ks = match &*ks_s {
+    // Scope all storage guards so they drop before we return k_out/v_out.
+    {
+        // Extract storage
+        let (kc_s, kc_l) = key_cache.storage_and_layout();
+        let kc = match &*kc_s {
             Storage::Metal(s) => s,
-            _ => candle_core::bail!("k_scale must be a metal tensor"),
+            _ => candle_core::bail!("key_cache must be a metal tensor"),
         };
-        let (vs_s, _) = vs.storage_and_layout();
-        let vs = match &*vs_s {
+        let (vc_s, vc_l) = value_cache.storage_and_layout();
+        let vc = match &*vc_s {
             Storage::Metal(s) => s,
-            _ => candle_core::bail!("v_scale must be a metal tensor"),
+            _ => candle_core::bail!("value_cache must be a metal tensor"),
         };
-        Some((ks.buffer(), vs.buffer()))
-    } else {
-        None
-    };
+        let (ko_s, ko_l) = k_out.storage_and_layout();
+        let ko = match &*ko_s {
+            Storage::Metal(s) => s,
+            _ => candle_core::bail!("k_out must be a metal tensor"),
+        };
+        let (vo_s, vo_l) = v_out.storage_and_layout();
+        let vo = match &*vo_s {
+            Storage::Metal(s) => s,
+            _ => candle_core::bail!("v_out must be a metal tensor"),
+        };
+        let (bt_s, bt_l) = block_table.storage_and_layout();
+        let bt = match &*bt_s {
+            Storage::Metal(s) => s,
+            _ => candle_core::bail!("block_table must be a metal tensor"),
+        };
+        let (cu_s, cu_l) = cu_seq_lens.storage_and_layout();
+        let cu = match &*cu_s {
+            Storage::Metal(s) => s,
+            _ => candle_core::bail!("cu_seq_lens must be a metal tensor"),
+        };
 
-    let (_, block_table_stride) = bt_l.shape().dims2()?;
+        // Scale buffers - guards must live as long as k_v_scale
+        let ks_guard;
+        let vs_guard;
+        let k_v_scale = if let (Some(ks), Some(vs)) = (k_scale, v_scale) {
+            ks_guard = ks.storage_and_layout();
+            let ks = match &*ks_guard.0 {
+                Storage::Metal(s) => s,
+                _ => candle_core::bail!("k_scale must be a metal tensor"),
+            };
+            vs_guard = vs.storage_and_layout();
+            let vs = match &*vs_guard.0 {
+                Storage::Metal(s) => s,
+                _ => candle_core::bail!("v_scale must be a metal tensor"),
+            };
+            Some((ks.buffer(), vs.buffer()))
+        } else {
+            None
+        };
 
-    let dev = key_cache.device().as_metal_device()?;
-    let encoder = dev.command_encoder()?;
-    encoder.set_label("gather-kv-cache");
+        let (_, block_table_stride) = bt_l.shape().dims2()?;
 
-    kernels::call_gather_kv_cache(
-        dev.device(),
-        &encoder,
-        &kernels::Kernels::new(),
-        cache_ty,
-        out_ty,
-        kc.buffer(),
-        kc_l.start_offset() * cache_dtype.size_in_bytes(),
-        vc.buffer(),
-        vc_l.start_offset() * cache_dtype.size_in_bytes(),
-        ko.buffer(),
-        ko_l.start_offset() * out_dtype.size_in_bytes(),
-        vo.buffer(),
-        vo_l.start_offset() * out_dtype.size_in_bytes(),
-        k_v_scale,
-        bt.buffer(),
-        bt_l.start_offset() * block_table.dtype().size_in_bytes(),
-        cu.buffer(),
-        cu_l.start_offset() * cu_seq_lens.dtype().size_in_bytes(),
-        num_tokens as i32,
-        num_seqs as i32,
-        block_size as i32,
-        block_table_stride as i32,
-        num_kv_heads as i32,
-        head_size as i32,
-        x as i32,
-    )
-    .map_err(candle_core::Error::wrap)?;
+        let dev = key_cache.device().as_metal_device()?;
+        let encoder = dev.command_encoder()?;
+        encoder.set_label("gather-kv-cache");
+
+        kernels::call_gather_kv_cache(
+            dev.device(),
+            &encoder,
+            &kernels::Kernels::new(),
+            cache_ty,
+            out_ty,
+            kc.buffer(),
+            kc_l.start_offset() * cache_dtype.size_in_bytes(),
+            vc.buffer(),
+            vc_l.start_offset() * cache_dtype.size_in_bytes(),
+            ko.buffer(),
+            ko_l.start_offset() * out_dtype.size_in_bytes(),
+            vo.buffer(),
+            vo_l.start_offset() * out_dtype.size_in_bytes(),
+            k_v_scale,
+            bt.buffer(),
+            bt_l.start_offset() * block_table.dtype().size_in_bytes(),
+            cu.buffer(),
+            cu_l.start_offset() * cu_seq_lens.dtype().size_in_bytes(),
+            num_tokens as i32,
+            num_seqs as i32,
+            block_size as i32,
+            block_table_stride as i32,
+            num_kv_heads as i32,
+            head_size as i32,
+            x as i32,
+        )
+        .map_err(candle_core::Error::wrap)?;
+    }
 
     Ok((k_out, v_out))
 }
