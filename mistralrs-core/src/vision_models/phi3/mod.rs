@@ -1342,6 +1342,19 @@ impl VisionModel for Model {
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
         Box::new(Phi3VisionSpecificArgs::default())
     }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
+    }
 }
 
 impl AnyMoeBaseModelMixin for Model {

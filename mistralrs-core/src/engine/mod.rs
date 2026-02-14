@@ -220,6 +220,8 @@ impl Engine {
 
         let has_paged_attention = get_mut_arcmutex!(scheduler).kv_cache_manager().is_some();
 
+        let encoder_cache_counters = get_mut_arcmutex!(pipeline).encoder_cache_counters();
+
         Ok(Self {
             tx,
             rx: Arc::new(Mutex::new(rx)),
@@ -239,7 +241,7 @@ impl Engine {
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
             throughput_logging_enabled,
-            logger: IntervalLogger::new(Duration::from_secs(5)),
+            logger: IntervalLogger::new(Duration::from_secs(5), encoder_cache_counters),
             handles: Arc::new(Mutex::new(Vec::new())),
             pending_notify: Arc::new(Notify::new()),
         })

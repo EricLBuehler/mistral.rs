@@ -396,6 +396,19 @@ impl VisionModel for Mistral3Model {
     fn config(&self) -> &ModelConfigMetadata {
         self.text_model.config()
     }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
+    }
 }
 
 impl AnyMoeBaseModelMixin for Mistral3Model {

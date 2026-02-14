@@ -4,7 +4,8 @@
 //! media across requests (or after a prefix-cache partial hit) can skip the
 //! expensive encoder pass.  Uses a simple LRU eviction strategy.
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use candle_core::Tensor;
 use indexmap::IndexMap;
@@ -21,6 +22,8 @@ pub struct EncoderCacheManager {
     /// Insertion-ordered map; most-recently-used entries live at the back.
     cache: IndexMap<u64, Vec<Tensor>>,
     max_entries: usize,
+    hits: Arc<AtomicUsize>,
+    misses: Arc<AtomicUsize>,
 }
 
 impl EncoderCacheManager {
@@ -29,7 +32,14 @@ impl EncoderCacheManager {
         Self {
             cache: IndexMap::with_capacity(max_entries),
             max_entries,
+            hits: Arc::new(AtomicUsize::new(0)),
+            misses: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    /// Return clones of the hit/miss counter Arcs (hits, misses).
+    pub fn counters(&self) -> (Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        (self.hits.clone(), self.misses.clone())
     }
 
     /// Look up a cached encoder output by content hash.
@@ -41,8 +51,10 @@ impl EncoderCacheManager {
         if let Some(entry) = self.cache.shift_remove(&content_hash) {
             let cloned = entry.clone();
             self.cache.insert(content_hash, entry);
+            self.hits.fetch_add(1, Ordering::Relaxed);
             Some(cloned)
         } else {
+            self.misses.fetch_add(1, Ordering::Relaxed);
             None
         }
     }

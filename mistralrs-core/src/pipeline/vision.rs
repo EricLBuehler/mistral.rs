@@ -1050,6 +1050,15 @@ impl Pipeline for VisionPipeline {
             prefixer: self.prefixer.clone(),
         }
     }
+
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        self.model.encoder_cache_counters()
+    }
 }
 
 impl AnyMoePipelineMixin for VisionPipeline {

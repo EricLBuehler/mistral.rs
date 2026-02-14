@@ -543,6 +543,19 @@ impl VisionModel for Gemma3nModel {
     fn config(&self) -> &ModelConfigMetadata {
         self.language_model.config()
     }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
+    }
 }
 
 impl AnyMoeBaseModelMixin for Gemma3nModel {}

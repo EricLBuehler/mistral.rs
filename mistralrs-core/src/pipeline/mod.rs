@@ -92,6 +92,7 @@ pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline}
 pub use speech::{SpeechLoader, SpeechPipeline};
 use std::any::Any;
 use std::fmt::Debug;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
@@ -868,6 +869,11 @@ pub trait Pipeline:
     ) -> Result<(), candle_core::Error>;
 
     fn category(&self) -> ModelCategory;
+
+    /// Return encoder cache hit/miss counters (hits, misses) if this pipeline has an encoder cache.
+    fn encoder_cache_counters(&self) -> Option<(Arc<AtomicUsize>, Arc<AtomicUsize>)> {
+        None
+    }
 }
 
 pub(crate) fn extract_logits(

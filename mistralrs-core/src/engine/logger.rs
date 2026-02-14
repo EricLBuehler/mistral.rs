@@ -18,7 +18,10 @@ pub struct IntervalLogger {
 
 impl IntervalLogger {
     /// Starts an interval logger. Call `begin_logging` to begin the logging process.
-    pub fn new(interval: Duration) -> Self {
+    pub fn new(
+        interval: Duration,
+        encoder_cache_counters: Option<(Arc<AtomicUsize>, Arc<AtomicUsize>)>,
+    ) -> Self {
         let prefix_cache_hits = Arc::new(AtomicUsize::new(0));
         let tokens_processed = Arc::new(AtomicUsize::new(0));
         let total_new_seqs = Arc::new(AtomicUsize::new(0));
@@ -32,6 +35,10 @@ impl IntervalLogger {
         let t_enable_logging = enable_logging.clone();
         let t_num_running = num_running.clone();
         let t_num_waiting = num_waiting.clone();
+        let (t_enc_hits, t_enc_misses) = match encoder_cache_counters {
+            Some((h, m)) => (Some(h), Some(m)),
+            None => (None, None),
+        };
         thread::spawn(move || {
             // Start the actual logging
             loop {
@@ -47,8 +54,25 @@ impl IntervalLogger {
                 let num_waiting = t_num_waiting.load(Ordering::Relaxed);
 
                 if total_new_seqs != 0 && tokens_processed != 0 {
+                    let enc_cache_info =
+                        if let (Some(ref hits), Some(ref misses)) = (&t_enc_hits, &t_enc_misses) {
+                            let h = hits.load(Ordering::Relaxed);
+                            let m = misses.load(Ordering::Relaxed);
+                            let total = h + m;
+                            if total > 0 {
+                                format!(
+                                    ", Encoder cache hitrate {:.2}%",
+                                    100. * h as f64 / total as f64
+                                )
+                            } else {
+                                String::new()
+                            }
+                        } else {
+                            String::new()
+                        };
+
                     info!(
-                        "Throughput (T/s) {:.2}, Prefix cache hitrate {:.2}%, {num_running} running, {num_waiting} waiting",
+                        "Throughput (T/s) {:.2}, Prefix cache hitrate {:.2}%{enc_cache_info}, {num_running} running, {num_waiting} waiting",
                         tokens_processed as f64 / interval.as_secs_f64(),
                         100. * prefix_cache_hits as f64 / total_new_seqs as f64,
                     );

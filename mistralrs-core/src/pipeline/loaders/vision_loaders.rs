@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::{fmt::Debug, str::FromStr};
 
@@ -89,6 +90,10 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     fn config(&self) -> &ModelConfigMetadata;
     /// For a prompt without images. Requires batch size of 1!
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any>;
+    /// Return encoder cache hit/miss counters (hits, misses) if this model has an encoder cache.
+    fn encoder_cache_counters(&self) -> Option<(Arc<AtomicUsize>, Arc<AtomicUsize>)> {
+        None
+    }
 }
 
 pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {

@@ -612,6 +612,19 @@ impl VisionModel for Qwen2_5VLModel {
             image_hashes: vec![],
         })
     }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
+    }
 }
 
 impl IsqModel for Qwen2_5VLModel {
