@@ -127,8 +127,12 @@ impl Engine {
             }
         }
 
-        let images = match request.messages {
-            RequestMessage::VisionChat { ref images, .. } => Some(images.clone()),
+        let images = match &request.messages {
+            RequestMessage::VisionChat { images, .. } => Some(images.clone()),
+            RequestMessage::ImageGeneration {
+                reference_images: Some(images),
+                ..
+            } => Some(images.clone()),
             _ => None,
         };
 

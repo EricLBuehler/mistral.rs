@@ -16,6 +16,7 @@ use crate::{
 };
 
 use super::DiffusionGenerationParams;
+use image::DynamicImage;
 
 pub struct DiffusionProcessor;
 
@@ -52,6 +53,7 @@ pub struct DiffusionInputsProcessor;
 pub struct ModelInputs {
     pub(crate) prompts: Vec<String>,
     pub(crate) params: DiffusionGenerationParams,
+    pub(crate) images: Option<Vec<DynamicImage>>,
 }
 
 impl InputsProcessor for DiffusionInputsProcessor {
@@ -81,6 +83,7 @@ impl InputsProcessor for DiffusionInputsProcessor {
             params: input_seqs[0]
                 .get_diffusion_diffusion_params()
                 .context("Diffusion model params must be present")?,
+            images: input_seqs[0].clone_images(),
         };
         Ok(InputProcessorOutput {
             inputs: Box::new(inputs),

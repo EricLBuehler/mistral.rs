@@ -10,6 +10,11 @@ pub(crate) mod tokens;
 pub(crate) mod unvarbuilder;
 pub(crate) mod varbuilder_utils;
 
+// Re-export loading progress types for external use
+pub use progress::{
+    set_loading_progress_callback, LoadingProgress, LoadingProgressCallback, LoadingProgressGuard,
+};
+
 #[doc(hidden)]
 #[macro_export]
 macro_rules! get_mut_arcmutex {

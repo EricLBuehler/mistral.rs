@@ -91,6 +91,9 @@ pub enum RequestMessage {
         prompt: String,
         format: ImageGenerationResponseFormat,
         generation_params: DiffusionGenerationParams,
+        /// Optional reference images for image-to-image generation (FLUX.2)
+        #[serde(skip)]
+        reference_images: Option<Vec<image::DynamicImage>>,
     },
     SpeechGeneration {
         prompt: String,

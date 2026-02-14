@@ -638,7 +638,7 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                         }
                         Response::ImageGeneration(res) => {
                             let _ = user_sender.send(Response::ImageGeneration(res)).await;
-                            return;
+                            continue;
                         }
                         Response::Raw {
                             logits_chunks,

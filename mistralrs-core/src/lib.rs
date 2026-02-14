@@ -140,6 +140,9 @@ pub use utils::debug::initialize_logging;
 pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};
 pub use utils::{paged_attn_supported, using_flash_attn};
+pub use utils::{
+    set_loading_progress_callback, LoadingProgress, LoadingProgressCallback, LoadingProgressGuard,
+};
 
 // re-export llguidance for easier LlguidanceGrammar construction
 pub use llguidance;
