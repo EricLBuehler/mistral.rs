@@ -480,19 +480,26 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
         // Adjust continuous pad ranges for prefix caching: drop cached ranges, shift new ones.
         // Also trim pixel_values and grid_thw to exclude cached images/videos so the vision
         // encoder only produces embeddings for the non-cached ones.
+        let mut per_seq_cached_images: Vec<usize> = vec![0; input_seqs.len()];
         if is_prompt {
             let mut total_cached_images = 0usize;
             let mut total_cached_videos = 0usize;
-            for (seq, (img_pads, vid_pads)) in input_seqs.iter().zip(
-                continuous_img_pad
-                    .iter_mut()
-                    .zip(continuous_vid_pad.iter_mut()),
-            ) {
+            for (seq_idx, (seq, (img_pads, vid_pads))) in input_seqs
+                .iter()
+                .zip(
+                    continuous_img_pad
+                        .iter_mut()
+                        .zip(continuous_vid_pad.iter_mut()),
+                )
+                .enumerate()
+            {
                 let prefix_len = seq.prefix_cache_len();
                 if prefix_len > 0 {
                     let img_before = img_pads.len();
                     img_pads.retain(|(start, _)| *start >= prefix_len);
-                    total_cached_images += img_before - img_pads.len();
+                    let cached = img_before - img_pads.len();
+                    total_cached_images += cached;
+                    per_seq_cached_images[seq_idx] = cached;
                     for (start, end) in img_pads.iter_mut() {
                         *start -= prefix_len;
                         *end -= prefix_len;
@@ -592,10 +599,11 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
         let image_hashes: Vec<u64> = if is_prompt {
             input_seqs
                 .iter()
-                .flat_map(|seq| {
+                .enumerate()
+                .flat_map(|(seq_idx, seq)| {
                     seq.image_hashes()
                         .map(|h| {
-                            let cached = seq.count_prefix_cached_mm_items();
+                            let cached = per_seq_cached_images[seq_idx];
                             if cached < h.len() {
                                 h[cached..].to_vec()
                             } else {
