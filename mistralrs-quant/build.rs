@@ -188,12 +188,14 @@ fn main() -> Result<(), String> {
             let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
             std::fs::write(out_dir.join("mistralrs_quant.metallib"), []).unwrap();
             std::fs::write(out_dir.join("mistralrs_quant_ios.metallib"), []).unwrap();
+            std::fs::write(out_dir.join("mistralrs_quant_tvos.metallib"), []).unwrap();
             return Ok(());
         }
 
         enum Platform {
             MacOS,
             Ios,
+            TvOS,
         }
 
         impl Platform {
@@ -201,15 +203,18 @@ fn main() -> Result<(), String> {
                 match self {
                     Platform::MacOS => "macosx",
                     Platform::Ios => "iphoneos",
+                    Platform::TvOS => "appletvos",
                 }
             }
 
             fn metal_std(&self) -> &str {
-                // Use Metal 3.1 unified standard for both platforms
-                // This fixes Xcode 26+ where the default Metal standard may be too low
+                // Use Metal 3.1 unified standard for all platforms.
+                // This fixes Xcode 26+ where the default Metal standard may be too low.
                 // https://github.com/EricLBuehler/mistral.rs/issues/1844
+                //
+                // Note: tvOS devices with A15+ (Apple TV 4K 3rd gen) support Metal 3.1.
                 match self {
-                    Platform::MacOS | Platform::Ios => "metal3.1",
+                    Platform::MacOS | Platform::Ios | Platform::TvOS => "metal3.1",
                 }
             }
         }
@@ -268,6 +273,7 @@ fn main() -> Result<(), String> {
             let lib_name = match platform {
                 Platform::MacOS => "mistralrs_quant.metallib",
                 Platform::Ios => "mistralrs_quant_ios.metallib",
+                Platform::TvOS => "mistralrs_quant_tvos.metallib",
             };
             let metallib = out_dir.join(lib_name);
             let mut compile_metallib_cmd = Command::new("xcrun");
@@ -306,6 +312,7 @@ fn main() -> Result<(), String> {
 
         compile(Platform::MacOS)?;
         compile(Platform::Ios)?;
+        compile(Platform::TvOS)?;
 
         Ok(())
     }
