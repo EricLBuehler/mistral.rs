@@ -1089,6 +1089,20 @@ impl Sequence {
         self.multimodal.set_mm_features(features);
     }
 
+    /// Count the number of multimodal items whose placeholder tokens fall entirely
+    /// within the prefix cache. Used by vision model inputs_processors to trim
+    /// pixel_values so they match only the non-cached image placeholder positions.
+    pub fn count_prefix_cached_mm_items(&self) -> usize {
+        let prefix_len = self.prefix_cache_len();
+        if prefix_len == 0 {
+            return 0;
+        }
+        self.mm_features()
+            .iter()
+            .filter(|f| f.offset < prefix_len)
+            .count()
+    }
+
     pub fn sequence_stepping_type(&self) -> &SeqStepType {
         &self.sequence_stepping_type
     }

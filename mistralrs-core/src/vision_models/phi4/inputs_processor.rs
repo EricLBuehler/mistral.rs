@@ -354,22 +354,11 @@ impl InputsProcessor for Phi4MMInputsProcessor {
 
         // Compute the number of cached images before entering the closure,
         // since input_seqs is not available inside it.
-        let total_cached_images = if is_prompt {
-            let mut count = 0usize;
-            for seq in input_seqs.iter() {
-                let prefix_len = seq.prefix_cache_len();
-                if prefix_len > 0 {
-                    let ranges = find_image_placeholder_ranges(
-                        seq.get_toks(),
-                        IMAGE_SPECIAL_TOKEN_ID as u32,
-                    );
-                    count += ranges
-                        .iter()
-                        .filter(|(start, _)| *start < prefix_len)
-                        .count();
-                }
-            }
-            count
+        let total_cached_images: usize = if is_prompt {
+            input_seqs
+                .iter()
+                .map(|seq| seq.count_prefix_cached_mm_items())
+                .sum()
         } else {
             0
         };

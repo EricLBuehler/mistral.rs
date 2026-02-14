@@ -274,23 +274,10 @@ impl InputsProcessor for Idefics3ImageProcessor {
         let mut pixel_attention_mask = if is_prompt { pixel_attention_mask } else { None };
         if is_prompt {
             if let Some(ref pv) = pixel_values {
-                let mut total_cached = 0usize;
-                for seq in input_seqs.iter() {
-                    let prefix_len = seq.prefix_cache_len();
-                    if prefix_len > 0 {
-                        if let Some(fake_id) = tokenizer.token_to_id(FAKE_IMAGE_TOKEN) {
-                            let ranges = find_image_delimited_ranges(
-                                seq.get_toks(),
-                                fake_id,
-                                fake_id,
-                            );
-                            total_cached += ranges
-                                .iter()
-                                .filter(|(start, _)| *start < prefix_len)
-                                .count();
-                        }
-                    }
-                }
+                let total_cached: usize = input_seqs
+                    .iter()
+                    .map(|seq| seq.count_prefix_cached_mm_items())
+                    .sum();
                 if total_cached > 0 {
                     let total = pv.dim(1).unwrap();
                     let remaining = total.saturating_sub(total_cached);
