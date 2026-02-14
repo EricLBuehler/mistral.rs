@@ -1,4 +1,4 @@
-use candle_core::{DType, Result, Tensor};
+use candle_core::{Result, Tensor};
 use mistralrs_quant::MatMul;
 
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
 ///   CPU   -> unfused matmul + softmax_with_sinks
 ///
 /// Varlen is used when flash_params contains cu_seqlens_k for this device AND
-/// q has batch > 1 AND k is packed (dim 0 == 1).
+/// q has batch > 1.
 #[allow(unused_variables, clippy::too_many_arguments)]
 pub(crate) fn sinks_attn(
     q: &Tensor,
@@ -28,9 +28,8 @@ pub(crate) fn sinks_attn(
     let (b_sz, _n_heads, _q_len, _head_dim) = q.dims4()?;
     let window_size = sdpa_params.sliding_window.unwrap_or(0);
 
-    // Detect varlen: flash_params has cu_seqlens_k AND k is packed (dim 0 == 1) AND batch > 1
+    // Detect varlen: flash_params has cu_seqlens_k AND batch > 1
     let is_varlen = b_sz > 1
-        && k.dim(0)? == 1
         && flash_params
             .is_some_and(|fp| fp.cumulative_seqlens_k.contains_key(&q.device().location()));
 
@@ -89,7 +88,8 @@ fn sinks_attn_regular(
     sinks_attn_cpu(q, k, v, sinks, mask, sdpa_params)
 }
 
-/// Varlen sinks attention: Q [B, H, max_q, D], K/V packed [1, kv_H, total_kv, D]
+/// Varlen sinks attention: Q [B, H, max_q, D], K/V packed [total_kv, kv_H, D]
+/// or K/V [1, kv_H, total_kv, D] (squeezed+transposed automatically).
 #[allow(unused_variables)]
 fn sinks_attn_varlen(
     q: &Tensor,
@@ -102,21 +102,16 @@ fn sinks_attn_varlen(
 ) -> Result<Tensor> {
     let device = q.device();
 
-    // K/V are [1, kv_H, total_kv, D] -> [total_kv, kv_H, D]
-    let k_packed = k.squeeze(0)?.transpose(0, 1)?;
-    let v_packed = v.squeeze(0)?.transpose(0, 1)?;
+    // Handle K/V shape: 4D [1, kv_H, total, D] -> 3D [total, kv_H, D], or 3D as-is
+    let (k_packed, v_packed) = if k.dims().len() == 4 {
+        (k.squeeze(0)?.transpose(0, 1)?, v.squeeze(0)?.transpose(0, 1)?)
+    } else {
+        (k.clone(), v.clone())
+    };
 
-    // Get cu_seqlens from flash_params
+    // Get cu_seqlens from flash_params (already on GPU as U32, no conversion needed)
     let cu_seqlens_q = &flash_params.cumulative_seqlens_q[&device.location()];
     let cu_seqlens_k = &flash_params.cumulative_seqlens_k[&device.location()];
-
-    // Compute q_lens from cu_seqlens_q: diff of consecutive entries
-    let cu_q_vec: Vec<i64> = cu_seqlens_q.to_vec1()?;
-    let q_lens_vec: Vec<i32> = cu_q_vec.windows(2).map(|w| (w[1] - w[0]) as i32).collect();
-    let q_lens = Tensor::new(q_lens_vec, device)?;
-
-    // cu_seqlens_k needs to be i32 for our kernel
-    let cu_k = cu_seqlens_k.to_dtype(DType::I32)?;
 
     #[cfg(feature = "cuda")]
     if device.is_cuda() {
@@ -125,8 +120,8 @@ fn sinks_attn_varlen(
             &k_packed,
             &v_packed,
             Some(sinks),
-            &q_lens,
-            &cu_k,
+            cu_seqlens_q,
+            cu_seqlens_k,
             sdpa_params.softmax_scale,
             window_size,
         );
@@ -139,18 +134,17 @@ fn sinks_attn_varlen(
             &k_packed,
             &v_packed,
             Some(sinks),
-            &q_lens,
-            &cu_k,
+            cu_seqlens_q,
+            cu_seqlens_k,
             sdpa_params.softmax_scale,
             window_size,
         );
     }
 
-    // CPU fallback: per-sequence loop
-    sinks_attn_cpu_varlen(q, &k_packed, &v_packed, sinks, sdpa_params, &cu_q_vec, &{
-        let cu_k_vec: Vec<i64> = cu_seqlens_k.to_vec1()?;
-        cu_k_vec
-    })
+    // CPU fallback: per-sequence loop (to_vec1 is fine on CPU path)
+    let cu_q_vec: Vec<u32> = cu_seqlens_q.to_vec1()?;
+    let cu_k_vec: Vec<u32> = cu_seqlens_k.to_vec1()?;
+    sinks_attn_cpu_varlen(q, &k_packed, &v_packed, sinks, sdpa_params, &cu_q_vec, &cu_k_vec)
 }
 
 /// CPU fallback: unfused matmul + softmax_with_sinks
@@ -177,8 +171,8 @@ fn sinks_attn_cpu_varlen(
     v_packed: &Tensor,
     sinks: &Tensor,
     sdpa_params: &SdpaParams,
-    cu_q: &[i64],
-    cu_k: &[i64],
+    cu_q: &[u32],
+    cu_k: &[u32],
 ) -> Result<Tensor> {
     let (b_sz, num_heads, max_q, head_dim) = q.dims4()?;
     let device = q.device();

@@ -5,7 +5,7 @@ use candle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Ten
 use candle_core as candle;
 use candle_core::cuda::cudarc::driver::{DevicePtr, DeviceSlice};
 use half::{bf16, f16};
-use std::ffi::c_int;
+use std::ffi::{c_int, c_uint};
 
 struct FlashAttnSinks {
     key: Tensor,
@@ -145,8 +145,8 @@ struct FlashAttnSinksVarlen {
     key: Tensor,   // [total_kv, num_kv_heads, D]
     value: Tensor, // [total_kv, num_kv_heads, D]
     sinks: Option<Tensor>,
-    q_lens: Tensor,       // [B] i32
-    cu_seqlens_k: Tensor, // [B+1] i32
+    cu_seqlens_q: Tensor, // [B+1] u32
+    cu_seqlens_k: Tensor, // [B+1] u32
     softmax_scale: f32,
     window_size: usize,
 }
@@ -208,22 +208,22 @@ impl FlashAttnSinksVarlen {
         let v_view = v_slice.slice(v_l.start_offset()..);
         let (v_ptr, _v_guard) = v_view.device_ptr(v_view.stream());
 
-        // q_lens pointer (i32)
-        let (ql_s, ql_l) = self.q_lens.storage_and_layout();
-        let ql_cuda = match &*ql_s {
+        // cu_seqlens_q pointer (u32)
+        let (csq_s, csq_l) = self.cu_seqlens_q.storage_and_layout();
+        let csq_cuda = match &*csq_s {
             Storage::Cuda(s) => s,
-            _ => candle::bail!("flash_attn_sinks_varlen: q_lens must be a cuda tensor"),
+            _ => candle::bail!("flash_attn_sinks_varlen: cu_seqlens_q must be a cuda tensor"),
         };
-        let ql_slice = ql_cuda.as_cuda_slice::<i32>()?;
-        let (ql_ptr, _ql_guard) = slice_ptr(ql_slice, ql_l.start_offset());
+        let csq_slice = csq_cuda.as_cuda_slice::<u32>()?;
+        let (csq_ptr, _csq_guard) = slice_ptr(csq_slice, csq_l.start_offset());
 
-        // cu_seqlens_k pointer (i32)
+        // cu_seqlens_k pointer (u32)
         let (csk_s, csk_l) = self.cu_seqlens_k.storage_and_layout();
         let csk_cuda = match &*csk_s {
             Storage::Cuda(s) => s,
             _ => candle::bail!("flash_attn_sinks_varlen: cu_seqlens_k must be a cuda tensor"),
         };
-        let csk_slice = csk_cuda.as_cuda_slice::<i32>()?;
+        let csk_slice = csk_cuda.as_cuda_slice::<u32>()?;
         let (csk_ptr, _csk_guard) = slice_ptr(csk_slice, csk_l.start_offset());
 
         // Sinks pointer
@@ -259,8 +259,8 @@ impl FlashAttnSinksVarlen {
                 v_ptr as *const std::ffi::c_void,
                 out_ptr as *mut std::ffi::c_void,
                 sinks_ptr,
-                ql_ptr as *const c_int,
-                csk_ptr as *const c_int,
+                csq_ptr as *const c_uint,
+                csk_ptr as *const c_uint,
                 self.softmax_scale,
                 batch_size as c_int,
                 max_q_len as c_int,
@@ -350,8 +350,8 @@ pub fn flash_attn_sinks(
 /// * `k` - Key tensor `[total_kv, num_kv_heads, head_dim]` (packed)
 /// * `v` - Value tensor `[total_kv, num_kv_heads, head_dim]` (packed)
 /// * `sinks` - Optional per-head sink values `[num_heads]` (will be cast to f32)
-/// * `q_lens` - Per-sequence query lengths `[batch_size]` (i32)
-/// * `cu_seqlens_k` - Cumulative KV sequence lengths `[batch_size + 1]` (i32)
+/// * `cu_seqlens_q` - Cumulative Q sequence lengths `[batch_size + 1]` (u32)
+/// * `cu_seqlens_k` - Cumulative KV sequence lengths `[batch_size + 1]` (u32)
 /// * `softmax_scale` - Scaling factor (typically `1 / sqrt(head_dim)`)
 /// * `window_size` - Sliding window size (0 = full causal attention)
 ///
@@ -362,7 +362,7 @@ pub fn flash_attn_sinks_varlen(
     k: &Tensor,
     v: &Tensor,
     sinks: Option<&Tensor>,
-    q_lens: &Tensor,
+    cu_seqlens_q: &Tensor,
     cu_seqlens_k: &Tensor,
     softmax_scale: f32,
     window_size: usize,
@@ -375,7 +375,7 @@ pub fn flash_attn_sinks_varlen(
         key: k.clone(),
         value: v.clone(),
         sinks: sinks.map(|s| s.to_dtype(DType::F32)).transpose()?,
-        q_lens: q_lens.clone(),
+        cu_seqlens_q: cu_seqlens_q.clone(),
         cu_seqlens_k: cu_seqlens_k.clone(),
         softmax_scale,
         window_size,

@@ -1,4 +1,4 @@
-use core::ffi::{c_int, c_long, c_void};
+use core::ffi::{c_int, c_long, c_uint, c_void};
 
 use candle_core::cuda::cudarc::driver::sys::CUstream;
 
@@ -392,8 +392,8 @@ extern "C" {
         v: *const c_void,
         out: *mut c_void,
         sinks: *const f32,
-        q_lens: *const c_int,
-        cu_seqlens_k: *const c_int,
+        cu_seqlens_q: *const c_uint,
+        cu_seqlens_k: *const c_uint,
         scale: f32,
         batch_size: c_int,
         max_q_len: c_int,
@@ -410,8 +410,8 @@ extern "C" {
         v: *const c_void,
         out: *mut c_void,
         sinks: *const f32,
-        q_lens: *const c_int,
-        cu_seqlens_k: *const c_int,
+        cu_seqlens_q: *const c_uint,
+        cu_seqlens_k: *const c_uint,
         scale: f32,
         batch_size: c_int,
         max_q_len: c_int,
@@ -428,8 +428,8 @@ extern "C" {
         v: *const c_void,
         out: *mut c_void,
         sinks: *const f32,
-        q_lens: *const c_int,
-        cu_seqlens_k: *const c_int,
+        cu_seqlens_q: *const c_uint,
+        cu_seqlens_k: *const c_uint,
         scale: f32,
         batch_size: c_int,
         max_q_len: c_int,

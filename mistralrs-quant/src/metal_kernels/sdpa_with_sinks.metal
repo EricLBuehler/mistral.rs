@@ -559,7 +559,7 @@ template <typename T, int HEAD_DIM, int BR, int BC>
 // ============================================================================
 // Prefill varlen: flash_attn_sinks_varlen_kernel
 // Q padded [B, num_heads, max_q_len, D], K/V packed [total_kv, num_kv_heads, D]
-// q_lens[B], cu_seqlens_k[B+1]
+// cu_seqlens_q[B+1], cu_seqlens_k[B+1]
 // ============================================================================
 
 template <typename T, int HEAD_DIM, int BR, int BC>
@@ -569,8 +569,8 @@ template <typename T, int HEAD_DIM, int BR, int BC>
     const device T* V [[buffer(2)]],           // [total_kv, num_kv_heads, D]
     const device float* sinks [[buffer(3)]],   // [num_heads]
     device T* O [[buffer(4)]],                 // [B, num_heads, max_q_len, D]
-    const device int* q_lens_buf [[buffer(5)]],     // [B]
-    const device int* cu_seqlens_k [[buffer(6)]],   // [B+1]
+    const device uint* cu_seqlens_q [[buffer(5)]],   // [B+1]
+    const device uint* cu_seqlens_k [[buffer(6)]],  // [B+1]
     const constant float& scale,
     const constant int& max_q_len,
     const constant int& num_heads,
@@ -600,10 +600,10 @@ template <typename T, int HEAD_DIM, int BR, int BC>
   const int gqa_ratio = num_heads / num_kv_heads;
   const int kv_head_idx = head_idx / gqa_ratio;
 
-  // Per-batch-item lengths
-  const int my_q_len = q_lens_buf[batch_idx];
-  const int kv_start = cu_seqlens_k[batch_idx];
-  const int my_kv_len = cu_seqlens_k[batch_idx + 1] - kv_start;
+  // Per-batch-item lengths (derived from cumulative arrays)
+  const int my_q_len = (int)(cu_seqlens_q[batch_idx + 1] - cu_seqlens_q[batch_idx]);
+  const int kv_start = (int)cu_seqlens_k[batch_idx];
+  const int my_kv_len = (int)(cu_seqlens_k[batch_idx + 1] - cu_seqlens_k[batch_idx]);
 
   const int q_row = q_tile_idx * BR + simd_gid;
 
@@ -847,8 +847,8 @@ instantiate_flash_attn_sinks_heads(bfloat16_t)
       const device type* V [[buffer(2)]],                                      \
       const device float* sinks [[buffer(3)]],                                 \
       device type* O [[buffer(4)]],                                            \
-      const device int* q_lens_buf [[buffer(5)]],                              \
-      const device int* cu_seqlens_k [[buffer(6)]],                            \
+      const device uint* cu_seqlens_q [[buffer(5)]],                            \
+      const device uint* cu_seqlens_k [[buffer(6)]],                           \
       const constant float& scale,                                             \
       const constant int& max_q_len,                                           \
       const constant int& num_heads,                                           \

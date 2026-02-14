@@ -313,9 +313,8 @@ __launch_bounds__(BR *WARP_SIZE) __global__
 // K/V are packed: [total_kv, num_kv_heads, D]
 // O is padded: [B, num_heads, max_q_len, D]
 //
-// q_lens[B]:        actual query length per batch item
-// cu_seqlens_k[B+1]: cumulative KV lengths (cu_seqlens_k[i+1]-cu_seqlens_k[i]
-//                    = kv_len for batch item i)
+// cu_seqlens_q[B+1]: cumulative Q lengths
+// cu_seqlens_k[B+1]: cumulative KV lengths
 //
 // Grid : (num_heads, batch_size, cdiv(max_q_len, BR))
 // Block: (BR * WARP_SIZE)
@@ -329,8 +328,8 @@ __launch_bounds__(BR *WARP_SIZE) __global__
         const scalar_t *__restrict__ V,     // [total_kv, num_kv_heads, D]
         scalar_t *__restrict__ O,           // [B, num_heads, max_q_len, D]
         const float *__restrict__ sinks,    // [num_heads] or nullptr
-        const int *__restrict__ q_lens,     // [B]
-        const int *__restrict__ cu_seqlens_k, // [B+1]
+        const unsigned int *__restrict__ cu_seqlens_q, // [B+1]
+        const unsigned int *__restrict__ cu_seqlens_k, // [B+1]
         const float scale, const int max_q_len,
         const int num_heads, const int num_kv_heads,
         const int window_size // 0 = no window (full)
@@ -353,10 +352,10 @@ __launch_bounds__(BR *WARP_SIZE) __global__
   const int gqa_ratio = num_heads / num_kv_heads;
   const int kv_head_idx = head_idx / gqa_ratio;
 
-  // Per-batch-item lengths
-  const int my_q_len = q_lens[batch_idx];
-  const int kv_start = cu_seqlens_k[batch_idx];
-  const int my_kv_len = cu_seqlens_k[batch_idx + 1] - kv_start;
+  // Per-batch-item lengths (derived from cumulative arrays)
+  const int my_q_len = (int)(cu_seqlens_q[batch_idx + 1] - cu_seqlens_q[batch_idx]);
+  const int kv_start = (int)cu_seqlens_k[batch_idx];
+  const int my_kv_len = (int)(cu_seqlens_k[batch_idx + 1] - cu_seqlens_k[batch_idx]);
 
   const int q_row = q_tile_idx * BR + warp_id;
 
@@ -622,7 +621,7 @@ extern "C" void flash_attn_sinks_f32(const void *Q, const void *K,
 template <typename scalar_t>
 void flash_attn_sinks_varlen_launch(
     const void *Q, const void *K, const void *V, void *O, const float *sinks,
-    const int *q_lens, const int *cu_seqlens_k, float scale, int batch_size,
+    const unsigned int *cu_seqlens_q, const unsigned int *cu_seqlens_k, float scale, int batch_size,
     int max_q_len, int num_heads, int num_kv_heads, int head_dim,
     int window_size, cudaStream_t stream) {
   constexpr int BR = 8;
@@ -635,7 +634,7 @@ void flash_attn_sinks_varlen_launch(
           reinterpret_cast<const scalar_t *>(Q),                               \
           reinterpret_cast<const scalar_t *>(K),                               \
           reinterpret_cast<const scalar_t *>(V),                               \
-          reinterpret_cast<scalar_t *>(O), sinks, q_lens, cu_seqlens_k, scale, \
+          reinterpret_cast<scalar_t *>(O), sinks, cu_seqlens_q, cu_seqlens_k, scale, \
           max_q_len, num_heads, num_kv_heads, window_size);                    \
   FA_CUDA_CHECK(cudaGetLastError())
 
@@ -677,10 +676,10 @@ void flash_attn_sinks_varlen_launch(
 
 extern "C" void flash_attn_sinks_varlen_f16(
     const void *Q, const void *K, const void *V, void *O, const float *sinks,
-    const int *q_lens, const int *cu_seqlens_k, float scale, int batch_size,
+    const unsigned int *cu_seqlens_q, const unsigned int *cu_seqlens_k, float scale, int batch_size,
     int max_q_len, int num_heads, int num_kv_heads, int head_dim,
     int window_size, cudaStream_t stream) {
-  flash_attn_sinks_varlen_launch<__half>(Q, K, V, O, sinks, q_lens,
+  flash_attn_sinks_varlen_launch<__half>(Q, K, V, O, sinks, cu_seqlens_q,
                                           cu_seqlens_k, scale, batch_size,
                                           max_q_len, num_heads, num_kv_heads,
                                           head_dim, window_size, stream);
@@ -688,20 +687,20 @@ extern "C" void flash_attn_sinks_varlen_f16(
 
 extern "C" void flash_attn_sinks_varlen_bf16(
     const void *Q, const void *K, const void *V, void *O, const float *sinks,
-    const int *q_lens, const int *cu_seqlens_k, float scale, int batch_size,
+    const unsigned int *cu_seqlens_q, const unsigned int *cu_seqlens_k, float scale, int batch_size,
     int max_q_len, int num_heads, int num_kv_heads, int head_dim,
     int window_size, cudaStream_t stream) {
   flash_attn_sinks_varlen_launch<__nv_bfloat16>(
-      Q, K, V, O, sinks, q_lens, cu_seqlens_k, scale, batch_size, max_q_len,
+      Q, K, V, O, sinks, cu_seqlens_q, cu_seqlens_k, scale, batch_size, max_q_len,
       num_heads, num_kv_heads, head_dim, window_size, stream);
 }
 
 extern "C" void flash_attn_sinks_varlen_f32(
     const void *Q, const void *K, const void *V, void *O, const float *sinks,
-    const int *q_lens, const int *cu_seqlens_k, float scale, int batch_size,
+    const unsigned int *cu_seqlens_q, const unsigned int *cu_seqlens_k, float scale, int batch_size,
     int max_q_len, int num_heads, int num_kv_heads, int head_dim,
     int window_size, cudaStream_t stream) {
-  flash_attn_sinks_varlen_launch<float>(Q, K, V, O, sinks, q_lens,
+  flash_attn_sinks_varlen_launch<float>(Q, K, V, O, sinks, cu_seqlens_q,
                                          cu_seqlens_k, scale, batch_size,
                                          max_q_len, num_heads, num_kv_heads,
                                          head_dim, window_size, stream);

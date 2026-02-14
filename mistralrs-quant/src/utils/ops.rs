@@ -2421,11 +2421,11 @@ pub fn flash_attn_sinks_metal(
 
 #[allow(dead_code)]
 struct FlashAttnSinksVarlenMetal {
-    key: Tensor,          // [total_kv, num_kv_heads, D]
-    value: Tensor,        // [total_kv, num_kv_heads, D]
-    sinks: Tensor,        // [num_heads], always f32
-    q_lens: Tensor,       // [B] i32
-    cu_seqlens_k: Tensor, // [B+1] i32
+    key: Tensor,            // [total_kv, num_kv_heads, D]
+    value: Tensor,          // [total_kv, num_kv_heads, D]
+    sinks: Tensor,          // [num_heads], always f32
+    cu_seqlens_q: Tensor,   // [B+1] u32
+    cu_seqlens_k: Tensor,   // [B+1] u32
     softmax_scale: f32,
     window_size: usize,
 }
@@ -2472,13 +2472,13 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
         };
         let sinks_offset = s_l.start_offset() * self.sinks.dtype().size_in_bytes();
 
-        // Extract q_lens storage
-        let (ql_s, ql_l) = self.q_lens.storage_and_layout();
-        let ql_metal = match &*ql_s {
+        // Extract cu_seqlens_q storage
+        let (csq_s, csq_l) = self.cu_seqlens_q.storage_and_layout();
+        let csq_metal = match &*csq_s {
             candle_core::Storage::Metal(s) => s,
-            _ => candle_core::bail!("flash_attn_sinks_varlen_metal: q_lens must be a Metal tensor"),
+            _ => candle_core::bail!("flash_attn_sinks_varlen_metal: cu_seqlens_q must be a Metal tensor"),
         };
-        let ql_offset = ql_l.start_offset() * DType::I32.size_in_bytes();
+        let csq_offset = csq_l.start_offset() * DType::U32.size_in_bytes();
 
         // Extract cu_seqlens_k storage
         let (csk_s, csk_l) = self.cu_seqlens_k.storage_and_layout();
@@ -2488,7 +2488,7 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
                 "flash_attn_sinks_varlen_metal: cu_seqlens_k must be a Metal tensor"
             ),
         };
-        let csk_offset = csk_l.start_offset() * DType::I32.size_in_bytes();
+        let csk_offset = csk_l.start_offset() * DType::U32.size_in_bytes();
 
         let device = q_storage.device();
         let elem_count = out_shape.elem_count();
@@ -2517,8 +2517,8 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
             sinks_metal.buffer(),
             sinks_offset,
             &output,
-            ql_metal.buffer(),
-            ql_offset,
+            csq_metal.buffer(),
+            csq_offset,
             csk_metal.buffer(),
             csk_offset,
             self.softmax_scale,
@@ -2547,8 +2547,8 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
 /// * `k` - Key tensor `[total_kv, num_kv_heads, head_dim]` (packed)
 /// * `v` - Value tensor `[total_kv, num_kv_heads, head_dim]` (packed)
 /// * `sinks` - Per-head sink values `[num_heads]` (will be cast to f32)
-/// * `q_lens` - Per-sequence query lengths `[batch_size]` (i32)
-/// * `cu_seqlens_k` - Cumulative KV sequence lengths `[batch_size + 1]` (i32)
+/// * `cu_seqlens_q` - Cumulative Q sequence lengths `[batch_size + 1]` (u32)
+/// * `cu_seqlens_k` - Cumulative KV sequence lengths `[batch_size + 1]` (u32)
 /// * `softmax_scale` - Scaling factor (typically `1 / sqrt(head_dim)`)
 /// * `window_size` - Sliding window size (0 = full attention)
 ///
@@ -2559,7 +2559,7 @@ pub fn flash_attn_sinks_varlen_metal(
     k: &Tensor,
     v: &Tensor,
     sinks: Option<&Tensor>,
-    q_lens: &Tensor,
+    cu_seqlens_q: &Tensor,
     cu_seqlens_k: &Tensor,
     softmax_scale: f32,
     window_size: usize,
@@ -2580,7 +2580,7 @@ pub fn flash_attn_sinks_varlen_metal(
         key: k.clone(),
         value: v.clone(),
         sinks,
-        q_lens: q_lens.clone(),
+        cu_seqlens_q: cu_seqlens_q.clone(),
         cu_seqlens_k: cu_seqlens_k.clone(),
         softmax_scale,
         window_size,
