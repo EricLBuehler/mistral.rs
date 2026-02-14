@@ -307,6 +307,12 @@ impl Qwen2_5VLModel {
             let mut xs = self.text.embed_tokens(input_ids)?;
 
             if let Some(pixel_values) = pixel_values {
+                let mut pixel_values = pixel_values;
+                let ndim = pixel_values.dims().len();
+                if ndim > 2 {
+                    let last_dim = pixel_values.dim(ndim - 1)?;
+                    pixel_values = pixel_values.reshape(((), last_dim))?;
+                }
                 let grid_thw = image_grid_thw
                     .as_ref()
                     .context("pixel_values require image_grid_thw")?;
