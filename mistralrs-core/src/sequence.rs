@@ -1099,7 +1099,7 @@ impl Sequence {
         }
         self.mm_features()
             .iter()
-            .filter(|f| f.offset < prefix_len)
+            .filter(|f| f.offset + f.length <= prefix_len)
             .count()
     }
 

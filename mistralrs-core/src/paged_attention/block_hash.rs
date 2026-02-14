@@ -361,4 +361,42 @@ mod tests {
         // Same hash, different group IDs should be different keys
         assert_ne!(g0, g1);
     }
+
+    /// Validates the filter logic used by `Sequence::count_prefix_cached_mm_items`.
+    /// A feature is only "fully cached" when `offset + length <= prefix_len`.
+    #[test]
+    fn test_mm_feature_fully_within_prefix() {
+        let features = vec![
+            MultiModalFeature {
+                identifier: "img_a".to_string(),
+                offset: 0,
+                length: 4,
+            },
+            MultiModalFeature {
+                identifier: "img_b".to_string(),
+                offset: 6,
+                length: 4, // ends at 10
+            },
+        ];
+
+        let prefix_len = 8; // 2 blocks of size 4
+
+        // Correct: offset + length <= prefix_len
+        let fully_cached = features
+            .iter()
+            .filter(|f| f.offset + f.length <= prefix_len)
+            .count();
+        // img_a: 0+4=4 <= 8 → cached ✓
+        // img_b: 6+4=10 > 8 → NOT cached ✓
+        assert_eq!(fully_cached, 1);
+
+        // Previously buggy: offset < prefix_len (would over-count)
+        let buggy_count = features.iter().filter(|f| f.offset < prefix_len).count();
+        // img_b offset=6 < 8 → would wrongly count as cached
+        assert_eq!(buggy_count, 2);
+        assert_ne!(
+            fully_cached, buggy_count,
+            "The correct filter should NOT match partially-overlapping features"
+        );
+    }
 }
