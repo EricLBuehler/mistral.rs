@@ -16,6 +16,7 @@ use crate::{
     layers::{
         self, embedding, CausalMasker, GptOssRotaryEmbedding, MatMul, RmsNorm, RotaryEmbedding,
     },
+    layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -841,12 +842,16 @@ impl Model {
         // The standard `make_causal_mask_matrix` returns a dummy (1,1) tensor when
         // flash-attn is enabled on CUDA, but attention_with_sinks does manual
         // attention and needs a real mask.
+        let mask_cache: &dyn PastKvLenCache = metadata
+            .as_ref()
+            .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+            .unwrap_or(cache as &dyn PastKvLenCache);
         let causal_mask =
-            CausalMasker.make_causal_mask_as_attn_bias(input_ids, &*cache, xs.dtype())?;
+            CausalMasker.make_causal_mask_as_attn_bias(input_ids, mask_cache, xs.dtype())?;
 
         let sliding_mask = CausalMasker.make_sliding_window_causal_mask_as_attn_bias(
             input_ids,
-            &*cache,
+            mask_cache,
             sliding_window,
             xs.dtype(),
         )?;

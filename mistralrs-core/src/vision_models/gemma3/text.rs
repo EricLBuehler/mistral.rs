@@ -14,6 +14,7 @@ use crate::{
         embedding, CausalMasker, Gemma3RotaryEmbedding, GemmaRmsNorm, MatMul, Mlp, RotaryEmbedding,
         ScaledEmbedding, Sdpa,
     },
+    layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -583,11 +584,15 @@ impl TextModel {
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
             // Build real masks (not flash-attn dummies) with bidirectional regions for image tokens
             let image_token_index = self.image_token_index.unwrap();
+            let mask_cache: &dyn PastKvLenCache = metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(cache as &dyn PastKvLenCache);
             let causal_mask =
-                CausalMasker.make_causal_mask_as_attn_bias(input_ids, &*cache, xs.dtype())?;
+                CausalMasker.make_causal_mask_as_attn_bias(input_ids, mask_cache, xs.dtype())?;
             let sliding_mask = CausalMasker.make_sliding_window_causal_mask_as_attn_bias(
                 input_ids,
-                &*cache,
+                mask_cache,
                 Some(self.sliding_window),
                 xs.dtype(),
             )?;
@@ -625,7 +630,10 @@ impl TextModel {
             // Standard path: use CausalMasker (returns dummy (1,1) when flash-attn on CUDA)
             let attention_mask = CausalMasker.make_causal_mask_matrix(
                 input_ids,
-                &*cache,
+                metadata
+                    .as_ref()
+                    .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                    .unwrap_or(cache as &dyn PastKvLenCache),
                 xs.dtype(),
                 self.cfg.num_attn_heads,
             )?;
@@ -638,7 +646,10 @@ impl TextModel {
             });
             let sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
                 input_ids,
-                &*cache,
+                metadata
+                    .as_ref()
+                    .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                    .unwrap_or(cache as &dyn PastKvLenCache),
                 Some(self.sliding_window),
                 xs.dtype(),
                 self.cfg.num_attn_heads,
