@@ -350,6 +350,25 @@ impl QRmsNorm {
     }
 }
 
+pub struct GatedRmsNorm(RmsNorm);
+
+impl GatedRmsNorm {
+    pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
+        let w = inner.inner().weight().clone();
+        Ok(Self(RmsNorm { eps, weight: w }))
+    }
+
+    fn forward(&self, x: &Tensor, gate: Option<&Tensor>) -> Result<Tensor> {
+        let x = if let Some(gate) = gate {
+            x.broadcast_mul(&gate.to_dtype(x.dtype())?)?.contiguous()?
+        } else {
+            x.contiguous()?
+        };
+        candle_nn::ops::rms_norm(&x, &self.0.weight, self.0.eps as f32)
+    }
+}
+
 /// RoPE supporting LongRope
 #[derive(Debug, Clone)]
 pub struct PhiRotaryEmbedding {
