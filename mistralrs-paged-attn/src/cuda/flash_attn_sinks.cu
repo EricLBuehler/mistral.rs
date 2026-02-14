@@ -91,7 +91,7 @@ __device__ __forceinline__ float warp_reduce_sum(float val) {
 //   BR       : number of warps per block (= number of Q rows per block)
 //   BC       : KV tile size (number of KV positions per shared-memory tile)
 //
-// Grid : (num_heads, batch_size, cdiv(seq_len, BR))
+// Grid : (num_heads, batch_size, cdiv(q_len, BR))
 // Block: (BR * WARP_SIZE)
 //
 // Shared memory (float32 to avoid bank conflicts):
@@ -215,7 +215,7 @@ __launch_bounds__(BR *WARP_SIZE) __global__
     }
     __syncthreads();
 
-    if (q_row < seq_len) {
+    if (q_row < q_len) {
       // --- Pass 1: Compute scores for this tile ---
       float tile_max = -FLT_MAX;
 
