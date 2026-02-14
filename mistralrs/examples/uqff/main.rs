@@ -1,6 +1,6 @@
 use anyhow::Result;
 use mistralrs::{
-    PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, UqffTextModelBuilder,
+    PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, TextMessages, UqffTextModelBuilder,
 };
 
 #[tokio::main]
@@ -15,7 +15,7 @@ async fn main() -> Result<()> {
     .build()
     .await?;
 
-    let request = RequestBuilder::new()
+    let messages = TextMessages::new()
         .add_message(
             TextMessageRole::System,
             "You are an AI agent with a specialty in programming.",
@@ -23,10 +23,9 @@ async fn main() -> Result<()> {
         .add_message(
             TextMessageRole::User,
             "Hello! How are you? Please write generic binary search function in Rust.",
-        )
-        .set_sampler_max_len(256);
+        );
 
-    let response = model.send_chat_request(request).await?;
+    let response = model.send_chat_request(messages).await?;
 
     println!("{}", response.choices[0].message.content.as_ref().unwrap());
     dbg!(
@@ -38,8 +37,7 @@ async fn main() -> Result<()> {
     let request = RequestBuilder::new().return_logprobs(true).add_message(
         TextMessageRole::User,
         "Please write a mathematical equation where a few numbers are added.",
-    )
-    .set_sampler_max_len(256);
+    );
 
     let response = model.send_chat_request(request).await?;
 
