@@ -128,8 +128,16 @@ impl PagedAttentionScheduler {
 
         for seq in sequences {
             let seq_guard = get_mut_arcmutex!(seq);
+            // Use effective length for prompts so sequences with different
+            // prefix cache hits land in separate buckets. The causal offset
+            // (seqlen_k - seqlen_q) is only correct when all Qs are the same.
+            let effective_len = if seq_guard.is_prompt() {
+                seq_guard.len().saturating_sub(seq_guard.prefix_cache_len())
+            } else {
+                seq_guard.len()
+            };
             let key: BucketKey = (
-                seq_guard.len(),
+                effective_len,
                 seq_guard.images().is_some() && seq_guard.is_prompt(),
                 seq_guard.token_offset(),
             );
