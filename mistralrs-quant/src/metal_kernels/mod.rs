@@ -23,6 +23,8 @@ type ComputePipelineState = ComputePipeline;
 const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mistralrs_quant.metallib"));
 #[cfg(target_os = "ios")]
 const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mistralrs_quant_ios.metallib"));
+#[cfg(target_os = "tvos")]
+const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mistralrs_quant_tvos.metallib"));
 
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
