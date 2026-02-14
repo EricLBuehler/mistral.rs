@@ -12,17 +12,17 @@
 // state. Shared memory holds k_buf and q_buf (2*BK floats).
 //
 // Optimizations over naive version:
-//   - Template BK → float s[BK] lives in true registers (1 cycle vs ~30)
-//   - #pragma unroll on all k-loops → full ILP
+//   - Template BK -> float s[BK] lives in true registers (1 cycle vs ~30)
+//   - #pragma unroll on all k-loops -> full ILP
 //   - Fused decay+kv_mem pass and fused state_update+output pass
 //   - __fmaf_rn intrinsics for guaranteed fused multiply-add
-//   - BV=64 threads → 2 warps, 6 blocks/SM on Ampere
+//   - BV=64 threads -> 2 warps, 6 blocks/SM on Ampere
 //
 // q,k: [BH, S, K]  v: [BH, S, V]  g,beta: [BH, S]
 // state: [BH, K, V] (in/out)  output: [BH, S, V]
 // ============================================================================
 
-// Optimized kernel: BK known at compile time → registers + full unrolling
+// Optimized kernel: BK known at compile time -> registers + full unrolling
 template <int BK, int BV>
 __global__ void gated_delta_rule_recurrence_kernel_tiled(
     const float *__restrict__ q,     // [BH, S, K]

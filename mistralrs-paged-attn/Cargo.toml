@@ -26,5 +26,5 @@ cudaforge = { workspace = true, optional = true }
 anyhow.workspace = true
 
 [features]
-cuda = ["dep:cudaforge"]
+cuda = ["dep:cudaforge", "candle-core/cuda"]
 metal = ["dep:objc2-metal", "dep:objc2-foundation", "dep:candle-metal-kernels"]

@@ -4,6 +4,7 @@
     clippy::too_many_arguments
 )]
 use std::any::Any;
+use std::sync::{Arc, Mutex};
 
 use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Activation, Linear};
@@ -11,6 +12,7 @@ use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 
 use crate::amoe::{AnyMoeBaseModelMixin, MlpLayer};
 use crate::device_map::DeviceMapper;
+use crate::paged_attention::encoder_cache::EncoderCacheManager;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::IsqModel;
@@ -30,6 +32,7 @@ pub(crate) struct LLaVANextVisionSpecificArgs {
     pub image_sizes: Option<Vec<(usize, usize)>>, // width, height
     pub num_image_tokens: Option<Vec<usize>>,     // number of image tokens for each image
     pub num_image_samples: Option<Vec<usize>>,    // number of image samples for each image
+    pub image_hashes: Vec<u64>,
 }
 
 pub struct MMProjector {
@@ -122,6 +125,7 @@ pub struct Model {
     config: Config,
     device: Device,
     dtype: DType,
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
 impl Model {
@@ -182,6 +186,7 @@ impl Model {
             config: config.clone(),
             device,
             dtype,
+            encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
     }
 
@@ -219,6 +224,7 @@ impl Model {
         num_image_tokens: Vec<usize>,
         num_image_samples: Vec<usize>,
         image_sizes: &[(u32, u32)],
+        image_hashes: &[u64],
     ) -> Result<Tensor> {
         let image_indexes = input_ids
             .squeeze(0)?
@@ -228,12 +234,75 @@ impl Model {
             .to_vec1::<u32>()?;
         let mut result = input_ids.clamp(0i64, i64::MAX)?.to_dtype(DType::U32)?;
         result = self.llm.embed(&result)?; //[seq_len,hidden_size]
-        let image_features = self.encode_images(&images.to_dtype(self.dtype)?)?; //[sum of samples of all images,patch_size*patch_size,hidden_size]
-        let mut image_features_vec = Vec::new();
-        let mut index = 0;
-        for num_image_sample in num_image_samples {
-            image_features_vec.push(image_features.i(index..index + num_image_sample)?);
-            index += num_image_sample;
+
+        let images_typed = images.to_dtype(self.dtype)?;
+        let n_images = num_image_samples.len();
+
+        // Per-image caching: each image may have multiple samples (base + tiles).
+        let image_features_vec: Vec<Tensor>;
+        if image_hashes.len() == n_images && n_images > 0 {
+            // Compute sample offset ranges per image.
+            let mut sample_offsets = vec![0usize; n_images + 1];
+            for (i, &ns) in num_image_samples.iter().enumerate() {
+                sample_offsets[i + 1] = sample_offsets[i] + ns;
+            }
+
+            let mut per_image: Vec<Option<Tensor>> = vec![None; n_images];
+            let mut miss_indices: Vec<usize> = Vec::new();
+            {
+                let mut guard = self
+                    .encoder_cache
+                    .lock()
+                    .expect("encoder cache lock poisoned");
+                for (i, &hash) in image_hashes.iter().enumerate() {
+                    if let Some(cached) = guard.get(hash) {
+                        per_image[i] = Some(cached[0].clone());
+                    } else {
+                        miss_indices.push(i);
+                    }
+                }
+            }
+
+            if !miss_indices.is_empty() {
+                // Collect miss samples and encode them as a batch.
+                let miss_samples: Vec<Tensor> = miss_indices
+                    .iter()
+                    .flat_map(|&idx| {
+                        let (start, end) = (sample_offsets[idx], sample_offsets[idx + 1]);
+                        (start..end).map(|j| images_typed.get(j).unwrap())
+                    })
+                    .collect();
+                let miss_pixels = Tensor::stack(&miss_samples, 0)?;
+                let miss_encoded = self.encode_images(&miss_pixels)?;
+
+                let mut offset = 0;
+                let mut guard = self
+                    .encoder_cache
+                    .lock()
+                    .expect("encoder cache lock poisoned");
+                for &idx in &miss_indices {
+                    let ns = num_image_samples[idx];
+                    let encoded = miss_encoded.i(offset..offset + ns)?;
+                    guard.insert(image_hashes[idx], vec![encoded.clone()]);
+                    per_image[idx] = Some(encoded);
+                    offset += ns;
+                }
+            }
+
+            image_features_vec = per_image
+                .into_iter()
+                .map(|o| o.expect("all images should be resolved"))
+                .collect();
+        } else {
+            // Fallback: no hashes, encode all at once.
+            let image_features = self.encode_images(&images_typed)?;
+            let mut feats = Vec::new();
+            let mut index = 0;
+            for num_image_sample in &num_image_samples {
+                feats.push(image_features.i(index..index + num_image_sample)?);
+                index += num_image_sample;
+            }
+            image_features_vec = feats;
         }
         let image_features_vec = image_features_vec
             .iter()
@@ -301,6 +370,7 @@ impl Model {
         image_sizes: Option<Vec<(u32, u32)>>,
         num_image_tokens: Option<Vec<usize>>,
         num_image_samples: Option<Vec<usize>>,
+        image_hashes: &[u64],
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
@@ -315,6 +385,7 @@ impl Model {
                 num_image_tokens.unwrap(),
                 num_image_samples.unwrap(),
                 &image_sizes.unwrap(),
+                image_hashes,
             )?;
             self.llm.forward_input_embed(
                 input_ids,
@@ -387,6 +458,7 @@ impl VisionModel for Model {
             image_sizes,
             num_image_tokens,
             num_image_samples,
+            image_hashes,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `LLaVANextVisionSpecificArgs`");
@@ -402,6 +474,7 @@ impl VisionModel for Model {
             image_sizes,
             num_image_tokens,
             num_image_samples,
+            &image_hashes,
             seqlen_offsets,
             context_lens,
             position_ids,
@@ -430,6 +503,19 @@ impl VisionModel for Model {
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
         Box::new(LLaVANextVisionSpecificArgs::default())
+    }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
     }
 }
 

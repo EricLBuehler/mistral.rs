@@ -1284,7 +1284,6 @@ impl CausalSelfAttention {
                     input_metadata,
                     &self.sdpa_params,
                     Some(flash_params),
-                    None, // sinks
                 )?,
                 None => {
                     let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
@@ -1299,7 +1298,6 @@ impl CausalSelfAttention {
                         &input_metadata,
                         &self.sdpa_params,
                         Some(flash_params),
-                        None, // sinks
                     )?
                 }
             },
@@ -1399,6 +1397,7 @@ impl CausalSelfAttention {
                 // GraniteMoeHybrid uses attention_multiplier instead of 1/sqrt(d)
                 softmax_scale: cfg.attention_multiplier,
                 sliding_window: None,
+                sinks: None,
             },
         })
     }

@@ -338,6 +338,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                     softcap: None,
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: Some(context_window),
+                    sinks: None,
                 },
                 dtype,
             })

@@ -6,6 +6,7 @@ mod ops;
 mod uqff;
 
 pub use ops::flash_attn_sinks_metal;
+pub use ops::flash_attn_sinks_varlen_metal;
 #[cfg(feature = "cuda")]
 pub use ops::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]

@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
@@ -8,7 +8,9 @@ use crate::{
     layers::{self, Activation, RmsNorm},
     models,
     ops::SplitOp,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
@@ -165,6 +167,7 @@ pub struct Mistral3Model {
     vision_model: Mistral3VisionModel,
     mmproj: Mistral3MultiModalProjector,
     cfg: Mistral3Config,
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
 impl Mistral3Model {
@@ -201,6 +204,7 @@ impl Mistral3Model {
             text_model,
             mmproj,
             cfg: cfg.clone(),
+            encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
     }
 
@@ -222,6 +226,7 @@ impl Mistral3Model {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
+        image_hashes: &[u64],
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         image_sizes: Option<Vec<(u32, u32)>>,
@@ -241,10 +246,52 @@ impl Mistral3Model {
             let indices = mask_flat.nonzero()?.squeeze(1)?;
 
             let image_sizes = image_sizes.unwrap();
-            let image_features = self.get_image_features(
-                &pixel_values.to_dtype(self.vision_model.dtype())?,
-                image_sizes,
-            )?;
+            let dtype = self.vision_model.dtype();
+            let pixel_values = pixel_values.to_dtype(dtype)?;
+
+            // Per-image caching (Mistral3 has variable patch counts per image).
+            let n_images = image_hashes.len();
+            let image_features = if n_images > 0 {
+                let mut per_image: Vec<Tensor> = Vec::with_capacity(n_images);
+                let mut miss_indices = Vec::new();
+                {
+                    let mut guard = self
+                        .encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned");
+                    for (i, &hash) in image_hashes.iter().enumerate() {
+                        if let Some(cached) = guard.get(hash) {
+                            per_image.push(cached[0].clone());
+                        } else {
+                            per_image.push(Tensor::zeros(
+                                1,
+                                candle_core::DType::F32,
+                                pixel_values.device(),
+                            )?);
+                            miss_indices.push(i);
+                        }
+                    }
+                }
+                if !miss_indices.is_empty() {
+                    // Encode only misses, one at a time (variable resolution).
+                    for &idx in &miss_indices {
+                        let single_pv = pixel_values.get(idx)?.unsqueeze(0)?;
+                        let single_size = vec![image_sizes[idx]];
+                        let feats = self.get_image_features(&single_pv, single_size)?;
+                        {
+                            let mut guard = self
+                                .encoder_cache
+                                .lock()
+                                .expect("encoder cache lock poisoned");
+                            guard.insert(image_hashes[idx], vec![feats.clone()]);
+                        }
+                        per_image[idx] = feats;
+                    }
+                }
+                Tensor::cat(&per_image, 0)?
+            } else {
+                self.get_image_features(&pixel_values, image_sizes)?
+            };
 
             let mut x_flat = input_embeds.flatten_all()?;
             let src_flat = image_features.flatten_all()?;
@@ -299,6 +346,7 @@ impl IsqModel for Mistral3Model {
 #[derive(Default)]
 pub struct Mistral3SpecificArgs {
     pub image_sizes: Option<Vec<(u32, u32)>>,
+    pub image_hashes: Vec<u64>,
 }
 
 impl VisionModel for Mistral3Model {
@@ -313,12 +361,16 @@ impl VisionModel for Mistral3Model {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
-        let Mistral3SpecificArgs { image_sizes } = *model_specific_args
+        let Mistral3SpecificArgs {
+            image_sizes,
+            image_hashes,
+        } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Mistral3SpecificArgs`");
         self.forward(
             input_ids,
             pixel_values,
+            &image_hashes,
             seqlen_offsets,
             context_lens,
             image_sizes,
@@ -343,6 +395,19 @@ impl VisionModel for Mistral3Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         self.text_model.config()
+    }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
     }
 }
 

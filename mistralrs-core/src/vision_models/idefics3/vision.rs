@@ -263,6 +263,7 @@ impl Attention {
                 softcap: None,
                 softmax_scale: scale,
                 sliding_window: None,
+                sinks: None,
             },
         })
     }

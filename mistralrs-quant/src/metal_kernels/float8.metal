@@ -52,13 +52,13 @@ inline uchar float_to_fp8_e4m3(float f) {
   }
   // handle zero and subnormals
   if (exp <= 0) {
-    // subnormal or underflow → zero
+    // subnormal or underflow -> zero
     return uchar(sign << 7);
   }
   // round-to-nearest-even: add half-ULP
   uint mant_rounded = (man + (1 << (23 - 3 - 1))) >> (23 - 3);
   if (mant_rounded == (1 << 3)) {
-    // overflow in mantissa → bump exponent
+    // overflow in mantissa -> bump exponent
     mant_rounded = 0;
     exp += 1;
     if (exp >= 0xF) {

@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     engine::{IntervalLogger, TERMINATE_ALL_NEXT_STEP},
-    paged_attention::{BlockEngine, BlockTables},
+    paged_attention::KVCacheManager,
     sequence::{Sequence, SequenceState, StopReason},
 };
 
@@ -327,9 +327,6 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
             self.waiting.add(seq);
         }
     }
-    fn block_tables(&self) -> Option<BlockTables> {
-        None
-    }
     fn block_size(&self) -> Option<usize> {
         None
     }
@@ -344,7 +341,7 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
             .filter_map(|seq| seq.mamba_state_idx())
             .collect()
     }
-    fn block_engine(&self) -> Option<Arc<tokio::sync::Mutex<BlockEngine>>> {
+    fn kv_cache_manager(&self) -> Option<Arc<tokio::sync::Mutex<KVCacheManager>>> {
         None
     }
     fn set_prefix_caching_enabled(&mut self, _enabled: bool) {

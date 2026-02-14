@@ -97,7 +97,7 @@ pub(crate) fn get_2d_grid_dims_divisor(
 /// * `dim0`, `dim1`, `dim2` – logical extents of the tensor “tile” in each
 ///   dimension (with `dim0` varying fastest).
 /// * `pow2` – desired power‑of‑two for the total number of threads
-///   (`10 → 1024`, `9 → 512`, …).
+///   (`10 -> 1024`, `9 -> 512`, …).
 pub(crate) fn get_block_dims(dim0: usize, dim1: usize, dim2: usize, pow2: usize) -> MTLSize {
     let mut pows = [0usize; 3];
     let mut sum = 0usize;

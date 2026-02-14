@@ -4,7 +4,10 @@ mod config;
 mod inputs_processor;
 mod vision;
 
-use std::any::Any;
+use std::{
+    any::Any,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 pub use config::Idefics3Config;
@@ -16,7 +19,9 @@ use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
     models::llama::Llama,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
@@ -25,12 +30,18 @@ use crate::{
     AnyMoeConfig, AnyMoeExpertType,
 };
 
+pub(crate) struct Idefics3SpecificArgs {
+    pub pixel_attention_mask: Option<Tensor>,
+    pub image_hashes: Vec<u64>,
+}
+
 pub struct Idefics3Model {
     text_model: Llama,
     connector: Idefics3Connector,
     vision: Idefics3VisionTransformer,
     config: Idefics3Config,
     dtype: DType,
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
 impl Idefics3Model {
@@ -66,6 +77,7 @@ impl Idefics3Model {
             vision,
             config: cfg.clone(),
             dtype: vb.dtype(),
+            encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
     }
 
@@ -93,6 +105,7 @@ impl Idefics3Model {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         pixel_attention_mask: Option<Tensor>,
+        image_hashes: &[u64],
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -179,13 +192,50 @@ impl Idefics3Model {
 
             let pixel_values = pixel_values.to_dtype(self.dtype)?;
 
-            // Get seq from vision encoder
-            let image_hidden_states = self
-                .vision
-                .forward(&pixel_values, Some(&patch_attention_mask))?;
-
-            // Modality proj and perceiver resampling
-            let image_hidden_states = self.connector.forward(&image_hidden_states)?;
+            // Get seq from vision encoder + connector, with per-image caching
+            let image_hidden_states = if !image_hashes.is_empty() {
+                let n = pixel_values.dim(0)?;
+                let mut per_image: Vec<Option<Tensor>> = vec![None; n];
+                let mut miss_indices: Vec<usize> = Vec::new();
+                {
+                    let mut guard = self
+                        .encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned");
+                    for (i, &hash) in image_hashes.iter().enumerate() {
+                        if let Some(cached) = guard.get(hash) {
+                            per_image[i] = Some(cached[0].clone());
+                        } else {
+                            miss_indices.push(i);
+                        }
+                    }
+                }
+                if !miss_indices.is_empty() {
+                    for &i in &miss_indices {
+                        let pv = pixel_values.get(i)?.unsqueeze(0)?;
+                        let mask = patch_attention_mask.get(i)?.unsqueeze(0)?;
+                        let hidden = self.vision.forward(&pv, Some(&mask))?;
+                        let hidden = self.connector.forward(&hidden)?;
+                        let result = hidden.squeeze(0)?;
+                        {
+                            let mut guard = self
+                                .encoder_cache
+                                .lock()
+                                .expect("encoder cache lock poisoned");
+                            guard.insert(image_hashes[i], vec![result.clone()]);
+                        }
+                        per_image[i] = Some(result);
+                    }
+                }
+                let slices: Vec<Tensor> = per_image.into_iter().map(|t| t.unwrap()).collect();
+                Tensor::stack(&slices, 0)?
+            } else {
+                // No caching: original path
+                let image_hidden_states = self
+                    .vision
+                    .forward(&pixel_values, Some(&patch_attention_mask))?;
+                self.connector.forward(&image_hidden_states)?
+            };
 
             self.inputs_merger(&indices, &input_embeds, &image_hidden_states)?
                 .to_dtype(self.dtype)?
@@ -278,15 +328,19 @@ impl VisionModel for Idefics3Model {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
-        let pixel_attention_mask: Option<Tensor> = *model_specific_args
+        let Idefics3SpecificArgs {
+            pixel_attention_mask,
+            image_hashes,
+        } = *model_specific_args
             .downcast()
-            .expect("Cannot downcast into `Option<Tensor>`");
+            .expect("Cannot downcast into `Idefics3SpecificArgs`");
         self.forward_inner(
             input_ids,
             pixel_values,
             seqlen_offsets,
             context_lens,
             pixel_attention_mask,
+            &image_hashes,
             metadata,
             flash_params,
         )
@@ -307,7 +361,22 @@ impl VisionModel for Idefics3Model {
         self.text_model.config()
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
-        let args: Option<Tensor> = None;
-        Box::new(args)
+        Box::new(Idefics3SpecificArgs {
+            pixel_attention_mask: None,
+            image_hashes: vec![],
+        })
+    }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
     }
 }

@@ -300,6 +300,7 @@ impl Attention {
                 softcap: None,
                 softmax_scale: 1.0,
                 sliding_window,
+                sinks: None,
             },
             q_norm,
             k_norm,

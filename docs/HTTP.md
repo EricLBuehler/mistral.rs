@@ -59,9 +59,9 @@ Mistral.rs validates that the `model` parameter in API requests matches the mode
 - The special model name `"default"` can be used to bypass this validation entirely
 
 **Examples:**
-- ✅ Request with `"model": "meta-llama/Llama-3.2-3B-Instruct"` when `meta-llama/Llama-3.2-3B-Instruct` is loaded → **succeeds**
-- ❌ Request with `"model": "gpt-4"` when `mistral-7b-instruct` is loaded → **fails**
-- ✅ Request with `"model": "default"` regardless of loaded model → **always succeeds**
+- ✅ Request with `"model": "meta-llama/Llama-3.2-3B-Instruct"` when `meta-llama/Llama-3.2-3B-Instruct` is loaded -> **succeeds**
+- ❌ Request with `"model": "gpt-4"` when `mistral-7b-instruct` is loaded -> **fails**
+- ✅ Request with `"model": "default"` regardless of loaded model -> **always succeeds**
 
 **Usage:** Use `"default"` in the model field when you need to satisfy API clients that require a model parameter but don't need to specify a particular model. This is demonstrated in all the examples below.
 

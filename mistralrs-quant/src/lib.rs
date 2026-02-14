@@ -76,6 +76,7 @@ pub use pending_layer::PendingIsqLayer;
 pub use pertensor_fp8::PerTensorFP8Linear;
 pub use unquantized::UnquantLinear;
 pub use utils::flash_attn_sinks_metal;
+pub use utils::flash_attn_sinks_varlen_metal;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]
@@ -570,7 +571,7 @@ impl IsqType {
                 .div_ceil(GgmlDType::Q6K.type_size()),
             Self::Q8K => (dtype.size_in_bytes() * GgmlDType::Q8K.block_size())
                 .div_ceil(GgmlDType::Q8K.type_size()),
-            // F8Q8: 33 bytes per 32 values → similar to Q8_0
+            // F8Q8: 33 bytes per 32 values -> similar to Q8_0
             Self::F8Q8 => (dtype.size_in_bytes() * 32).div_ceil(33),
             // Estimates
             Self::HQQ4 => 4,

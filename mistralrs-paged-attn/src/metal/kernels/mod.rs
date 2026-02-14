@@ -129,6 +129,10 @@ impl Kernels {
             "kv_scale_update.metal",
             include_str!("kv_scale_update.metal"),
         );
+        file_system.insert(
+            "gather_kv_cache.metal",
+            include_str!("gather_kv_cache.metal"),
+        );
         file_system.insert("utils.metal", include_str!("utils.metal"));
         file_system.insert("float8.metal", include_str!("float8.metal"));
 
@@ -245,6 +249,7 @@ impl Kernels {
             "pagedattention.metal",
             "reshape_and_cache.metal",
             "kv_scale_update.metal",
+            "gather_kv_cache.metal",
         ];
 
         for file in main_files {
@@ -845,6 +850,110 @@ pub fn call_paged_attention_v2(
         };
         encoder.dispatch_thread_groups(thread_groups_count, thread_group_size);
     }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_gather_kv_cache(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    cache_ty: PagedAttentionDType,
+    out_ty: PagedAttentionDType,
+    key_cache: &Buffer,
+    key_cache_offset: usize,
+    value_cache: &Buffer,
+    value_cache_offset: usize,
+    k_out: &Buffer,
+    k_out_offset: usize,
+    v_out: &Buffer,
+    v_out_offset: usize,
+    k_v_scale: Option<(&Buffer, &Buffer)>,
+    block_table: &Buffer,
+    block_table_offset: usize,
+    cu_seq_lens: &Buffer,
+    cu_seq_lens_offset: usize,
+    num_tokens: i32,
+    num_seqs: i32,
+    block_size: i32,
+    block_table_stride: i32,
+    num_kv_heads: i32,
+    head_size: i32,
+    x: i32,
+) -> Result<(), MetalKernelError> {
+    let name = format!(
+        "gather_kv_cache_cache_{}_out_{}",
+        cache_ty.to_repr(),
+        out_ty.to_repr()
+    );
+
+    let constants = Some(ConstantValues::new(vec![(
+        10,
+        Value::Bool(/* use_fp8_scales */ k_v_scale.is_some()),
+    )]));
+
+    let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_buffer(0, Some(key_cache), key_cache_offset);
+    encoder.set_buffer(1, Some(value_cache), value_cache_offset);
+    encoder.set_buffer(2, Some(k_out), k_out_offset);
+    encoder.set_buffer(3, Some(v_out), v_out_offset);
+    if let Some((k_scale, v_scale)) = k_v_scale {
+        encoder.set_buffer(4, Some(k_scale), 0_usize);
+        encoder.set_buffer(5, Some(v_scale), 0_usize);
+    }
+    encoder.set_buffer(6, Some(block_table), block_table_offset);
+    encoder.set_buffer(7, Some(cu_seq_lens), cu_seq_lens_offset);
+    encoder.set_bytes_raw(
+        8,
+        core::mem::size_of_val(&num_tokens),
+        &num_tokens as *const _ as *const c_void,
+    );
+    encoder.set_bytes_raw(
+        9,
+        core::mem::size_of_val(&num_seqs),
+        &num_seqs as *const _ as *const c_void,
+    );
+    encoder.set_bytes_raw(
+        10,
+        core::mem::size_of_val(&block_size),
+        &block_size as *const _ as *const c_void,
+    );
+    encoder.set_bytes_raw(
+        11,
+        core::mem::size_of_val(&block_table_stride),
+        &block_table_stride as *const _ as *const c_void,
+    );
+    encoder.set_bytes_raw(
+        12,
+        core::mem::size_of_val(&num_kv_heads),
+        &num_kv_heads as *const _ as *const c_void,
+    );
+    encoder.set_bytes_raw(
+        13,
+        core::mem::size_of_val(&head_size),
+        &head_size as *const _ as *const c_void,
+    );
+    encoder.set_bytes_raw(
+        14,
+        core::mem::size_of_val(&x),
+        &x as *const _ as *const c_void,
+    );
+
+    let thread_groups_count = MTLSize {
+        width: num_tokens as usize,
+        height: 1,
+        depth: 1,
+    };
+    let threads_per_threadgroup = MTLSize {
+        width: (num_kv_heads * head_size).min(512) as usize,
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
     Ok(())
 }
 

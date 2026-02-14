@@ -713,6 +713,7 @@ impl Loader for VisionLoader {
                     false,
                     None,
                     None,
+                    None,
                 )?;
                 let _ = model.forward(
                     &inputs.input,
@@ -1048,6 +1049,15 @@ impl Pipeline for VisionPipeline {
         ModelCategory::Vision {
             prefixer: self.prefixer.clone(),
         }
+    }
+
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        self.model.encoder_cache_counters()
     }
 }
 
