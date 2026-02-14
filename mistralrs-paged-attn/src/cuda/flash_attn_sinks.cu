@@ -106,13 +106,14 @@ __device__ __forceinline__ float warp_reduce_sum(float val) {
 template <typename scalar_t, int HEAD_DIM, int BR, int BC>
 __launch_bounds__(BR *WARP_SIZE) __global__
     void flash_attn_sinks_kernel(
-        const scalar_t *__restrict__ Q, // [B, num_heads, S, D]
-        const scalar_t *__restrict__ K, // [B, num_kv_heads, S, D]
-        const scalar_t *__restrict__ V, // [B, num_kv_heads, S, D]
-        scalar_t *__restrict__ O,       // [B, num_heads, S, D]
+        const scalar_t *__restrict__ Q, // [B, num_heads, q_len, D]
+        const scalar_t *__restrict__ K, // [B, num_kv_heads, kv_len, D]
+        const scalar_t *__restrict__ V, // [B, num_kv_heads, kv_len, D]
+        scalar_t *__restrict__ O,       // [B, num_heads, q_len, D]
         const float *__restrict__ sinks, // [num_heads] or nullptr
-        const float scale, const int seq_len, const int num_heads,
-        const int num_kv_heads, const int window_size // 0 = no window (full)
+        const float scale, const int q_len, const int kv_len,
+        const int num_heads, const int num_kv_heads,
+        const int window_size // 0 = no window (full)
     ) {
   // Padded head dim for clean warp division (round up to multiple of 32)
   constexpr int D_PAD =
@@ -137,18 +138,22 @@ __launch_bounds__(BR *WARP_SIZE) __global__
   // Which query row this warp handles
   const int q_row = q_tile_idx * BR + warp_id;
 
+  // Offset between Q local row index and absolute KV position
+  // (bottom-right aligned causal masking, matching Metal kernel)
+  const int kv_offset = kv_len - q_len;
+
   // Offsets into contiguous [B, H, S, D] layout
   const int q_offset =
-      ((batch_idx * num_heads + head_idx) * seq_len + q_row) * HEAD_DIM;
+      ((batch_idx * num_heads + head_idx) * q_len + q_row) * HEAD_DIM;
   const int kv_base =
-      (batch_idx * num_kv_heads + kv_head_idx) * seq_len * HEAD_DIM;
+      (batch_idx * num_kv_heads + kv_head_idx) * kv_len * HEAD_DIM;
 
   // Load Q row into registers (pre-scaled)
   float q_reg[EPT];
 #pragma unroll
   for (int i = 0; i < EPT; i++) {
     const int d = i * WARP_SIZE + lane_id;
-    q_reg[i] = (q_row < seq_len && d < HEAD_DIM)
+    q_reg[i] = (q_row < q_len && d < HEAD_DIM)
                    ? to_float(Q[q_offset + d]) * scale
                    : 0.0f;
   }
@@ -164,17 +169,19 @@ __launch_bounds__(BR *WARP_SIZE) __global__
 
   // Block-level KV bounds (union of all warps' causal windows)
   const int block_q_start = q_tile_idx * BR;
-  const int block_q_end = min(block_q_start + BR, seq_len);
+  const int block_q_end = min(block_q_start + BR, q_len);
   const int block_kv_start =
-      (window_size > 0) ? max(0, block_q_start - window_size + 1) : 0;
-  const int block_kv_end = block_q_end; // max causal bound across warps
+      (window_size > 0) ? max(0, block_q_start + kv_offset - window_size + 1)
+                        : 0;
+  const int block_kv_end =
+      min(kv_len, block_q_end + kv_offset); // max causal bound across warps
 
   // Per-warp causal bounds
   const int my_kv_start =
-      (window_size > 0 && q_row < seq_len)
-          ? max(0, q_row - window_size + 1)
+      (window_size > 0 && q_row < q_len)
+          ? max(0, q_row + kv_offset - window_size + 1)
           : 0;
-  const int my_kv_end = (q_row < seq_len) ? (q_row + 1) : 0;
+  const int my_kv_end = (q_row < q_len) ? (q_row + kv_offset + 1) : 0;
 
   // Score buffer for current tile (in registers)
   float scores[BC];
@@ -271,7 +278,7 @@ __launch_bounds__(BR *WARP_SIZE) __global__
     __syncthreads();
   }
 
-  if (q_row >= seq_len)
+  if (q_row >= q_len)
     return;
 
   // Integrate per-head sinks into the softmax denominator.
@@ -306,12 +313,12 @@ __launch_bounds__(BR *WARP_SIZE) __global__
 template <typename scalar_t>
 void flash_attn_sinks_launch(const void *Q, const void *K, const void *V,
                              void *O, const float *sinks, float scale,
-                             int batch_size, int seq_len, int num_heads,
-                             int num_kv_heads, int head_dim, int window_size,
-                             cudaStream_t stream) {
+                             int batch_size, int q_len, int kv_len,
+                             int num_heads, int num_kv_heads, int head_dim,
+                             int window_size, cudaStream_t stream) {
   constexpr int BR = 8; // warps per block (= Q rows per block)
   const dim3 grid(num_heads, batch_size,
-                  (seq_len + BR - 1) / BR);
+                  (q_len + BR - 1) / BR);
   const dim3 block(WARP_SIZE * BR);
 
 #define LAUNCH_KERNEL(D, BC_VAL)                                               \
@@ -320,8 +327,8 @@ void flash_attn_sinks_launch(const void *Q, const void *K, const void *V,
           reinterpret_cast<const scalar_t *>(Q),                               \
           reinterpret_cast<const scalar_t *>(K),                               \
           reinterpret_cast<const scalar_t *>(V),                               \
-          reinterpret_cast<scalar_t *>(O), sinks, scale, seq_len, num_heads,   \
-          num_kv_heads, window_size);                                          \
+          reinterpret_cast<scalar_t *>(O), sinks, scale, q_len, kv_len,        \
+          num_heads, num_kv_heads, window_size);                               \
   FA_CUDA_CHECK(cudaGetLastError())
 
   switch (head_dim) {
@@ -363,35 +370,36 @@ void flash_attn_sinks_launch(const void *Q, const void *K, const void *V,
 extern "C" void flash_attn_sinks_f16(const void *Q, const void *K,
                                      const void *V, void *O,
                                      const float *sinks, float scale,
-                                     int batch_size, int seq_len,
+                                     int batch_size, int q_len, int kv_len,
                                      int num_heads, int num_kv_heads,
                                      int head_dim, int window_size,
                                      cudaStream_t stream) {
   flash_attn_sinks_launch<__half>(Q, K, V, O, sinks, scale, batch_size,
-                                  seq_len, num_heads, num_kv_heads, head_dim,
-                                  window_size, stream);
+                                  q_len, kv_len, num_heads, num_kv_heads,
+                                  head_dim, window_size, stream);
 }
 
 extern "C" void flash_attn_sinks_bf16(const void *Q, const void *K,
                                       const void *V, void *O,
                                       const float *sinks, float scale,
-                                      int batch_size, int seq_len,
+                                      int batch_size, int q_len, int kv_len,
                                       int num_heads, int num_kv_heads,
                                       int head_dim, int window_size,
                                       cudaStream_t stream) {
   flash_attn_sinks_launch<__nv_bfloat16>(Q, K, V, O, sinks, scale, batch_size,
-                                         seq_len, num_heads, num_kv_heads,
-                                         head_dim, window_size, stream);
+                                         q_len, kv_len, num_heads,
+                                         num_kv_heads, head_dim, window_size,
+                                         stream);
 }
 
 extern "C" void flash_attn_sinks_f32(const void *Q, const void *K,
                                      const void *V, void *O,
                                      const float *sinks, float scale,
-                                     int batch_size, int seq_len,
+                                     int batch_size, int q_len, int kv_len,
                                      int num_heads, int num_kv_heads,
                                      int head_dim, int window_size,
                                      cudaStream_t stream) {
-  flash_attn_sinks_launch<float>(Q, K, V, O, sinks, scale, batch_size, seq_len,
-                                 num_heads, num_kv_heads, head_dim, window_size,
-                                 stream);
+  flash_attn_sinks_launch<float>(Q, K, V, O, sinks, scale, batch_size, q_len,
+                                 kv_len, num_heads, num_kv_heads, head_dim,
+                                 window_size, stream);
 }

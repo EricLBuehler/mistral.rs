@@ -26,7 +26,7 @@ impl FlashAttnSinks {
         let dtype = q.dtype();
         let dev = q.device();
         let out_shape = q_l.shape().clone();
-        let (batch_size, num_heads, seq_len, head_dim) = q_l.shape().dims4()?;
+        let (batch_size, num_heads, q_len, head_dim) = q_l.shape().dims4()?;
 
         // Extract K storage
         let (k_s, k_l) = self.key.storage_and_layout();
@@ -34,7 +34,7 @@ impl FlashAttnSinks {
             Storage::Cuda(s) => s,
             _ => candle::bail!("flash_attn_sinks: key must be a cuda tensor"),
         };
-        let (_, num_kv_heads, _, _) = k_l.shape().dims4()?;
+        let (_, num_kv_heads, kv_len, _) = k_l.shape().dims4()?;
 
         // Extract V storage
         let (v_s, v_l) = self.value.storage_and_layout();
@@ -106,7 +106,8 @@ impl FlashAttnSinks {
                 sinks_ptr,
                 self.softmax_scale,
                 batch_size as c_int,
-                seq_len as c_int,
+                q_len as c_int,
+                kv_len as c_int,
                 num_heads as c_int,
                 num_kv_heads as c_int,
                 head_dim as c_int,

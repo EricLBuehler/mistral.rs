@@ -211,6 +211,147 @@ impl PagedAttention {
                     }
                 });
 
+                // Sinks-aware prefix cache path: use fused flash_attn_sinks
+                // which now supports separate q_len/kv_len with bottom-right
+                // causal masking (matching the Metal kernel).
+                if let Some(sinks) = sinks {
+                    let window = sdpa_params.sliding_window.unwrap_or(0);
+
+                    if batch_size == 1 {
+                        // batch=1: packed == padded, call fused kernel directly
+                        #[cfg(all(feature = "cuda", target_family = "unix"))]
+                        {
+                            return flash_attn_sinks(
+                                query,
+                                &k_4d,
+                                &v_4d,
+                                Some(sinks),
+                                sdpa_params.softmax_scale,
+                                window,
+                            );
+                        }
+                        #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+                        {
+                            if query.device().is_metal() {
+                                return mistralrs_quant::flash_attn_sinks_metal(
+                                    query,
+                                    &k_4d,
+                                    &v_4d,
+                                    Some(sinks),
+                                    sdpa_params.softmax_scale,
+                                    window,
+                                );
+                            }
+                            // CPU fallback: unfused attention with sinks
+                            let n_kv_groups = attention_heads / key_value_heads;
+                            let k_exp =
+                                crate::layers::repeat_kv(k_4d, n_kv_groups)?;
+                            let v_exp =
+                                crate::layers::repeat_kv(v_4d, n_kv_groups)?;
+                            let logits = (query
+                                .matmul(&k_exp.transpose(2, 3)?)?
+                                * sdpa_params.softmax_scale as f64)?;
+                            let logits =
+                                logits.broadcast_add(attention_mask.unwrap())?;
+                            let weights =
+                                mistralrs_quant::softmax_with_sinks(
+                                    &logits, sinks, None,
+                                )?;
+                            return weights.matmul(&v_exp);
+                        }
+                    }
+
+                    // batch > 1: iterate per batch item with fused kernel
+                    let cu_kv_vec = cu_kv.to_vec1::<u32>()?;
+                    let query_lens =
+                        input_metadata.query_lens.as_ref().unwrap();
+                    let mut results = Vec::with_capacity(batch_size);
+                    for b in 0..batch_size {
+                        let actual_q_len = query_lens[b];
+                        let q_b = query
+                            .narrow(0, b, 1)?
+                            .narrow(2, 0, actual_q_len)?;
+                        let kv_start = cu_kv_vec[b] as usize;
+                        let kv_end = cu_kv_vec[b + 1] as usize;
+                        let kv_len = kv_end - kv_start;
+                        let k_b = k_gathered
+                            .narrow(0, kv_start, kv_len)?
+                            .unsqueeze(0)?
+                            .transpose(1, 2)?;
+                        let v_b = v_gathered
+                            .narrow(0, kv_start, kv_len)?
+                            .unsqueeze(0)?
+                            .transpose(1, 2)?;
+
+                        #[cfg(all(feature = "cuda", target_family = "unix"))]
+                        let out_b = flash_attn_sinks(
+                            &q_b,
+                            &k_b,
+                            &v_b,
+                            Some(sinks),
+                            sdpa_params.softmax_scale,
+                            window,
+                        )?;
+                        #[cfg(not(all(
+                            feature = "cuda",
+                            target_family = "unix"
+                        )))]
+                        let out_b = if query.device().is_metal() {
+                            mistralrs_quant::flash_attn_sinks_metal(
+                                &q_b,
+                                &k_b,
+                                &v_b,
+                                Some(sinks),
+                                sdpa_params.softmax_scale,
+                                window,
+                            )?
+                        } else {
+                            // CPU fallback per item
+                            let n_kv_groups =
+                                attention_heads / key_value_heads;
+                            let k_exp = crate::layers::repeat_kv(
+                                k_b,
+                                n_kv_groups,
+                            )?;
+                            let v_exp = crate::layers::repeat_kv(
+                                v_b,
+                                n_kv_groups,
+                            )?;
+                            let logits = (q_b
+                                .matmul(&k_exp.transpose(2, 3)?)?
+                                * sdpa_params.softmax_scale as f64)?;
+                            let mask_b = attention_mask
+                                .unwrap()
+                                .narrow(0, b, 1)?
+                                .narrow(2, 0, actual_q_len)?
+                                .narrow(3, 0, kv_len)?;
+                            let logits = logits.broadcast_add(&mask_b)?;
+                            mistralrs_quant::softmax_with_sinks(
+                                &logits, sinks, None,
+                            )?
+                            .matmul(&v_exp)?
+                        };
+
+                        if actual_q_len < seq_len {
+                            let pad = Tensor::zeros(
+                                (
+                                    1,
+                                    attention_heads,
+                                    seq_len - actual_q_len,
+                                    head_size,
+                                ),
+                                out_dtype,
+                                device,
+                            )?;
+                            results
+                                .push(Tensor::cat(&[out_b, pad], 2)?);
+                        } else {
+                            results.push(out_b);
+                        }
+                    }
+                    return Ok(Tensor::cat(&results, 0)?);
+                }
+
                 let result = Sdpa.run_attention(
                     query,
                     &k_4d,
