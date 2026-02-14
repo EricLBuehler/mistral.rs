@@ -2,7 +2,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use candle_core::{Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use mistralrs_vision::{ApplyTransforms, Normalize, ToTensor, Transforms};
 use regex::Regex;
@@ -389,6 +389,70 @@ impl InputsProcessor for MiniCpmOImageProcessor {
             )
             .unwrap()
         };
+
+        // Trim pixel_values_all, image_bound, and tgt_sizes to exclude slices
+        // already covered by the prefix cache.
+        let (mut pixel_values_all, mut image_bound, mut tgt_sizes) =
+            (pixel_values_all, image_bound, tgt_sizes);
+        if is_prompt {
+            if let (Some(ref mut pv_all), Some(ref mut ib_all), Some(ref mut ts_all)) =
+                (&mut pixel_values_all, &mut image_bound, &mut tgt_sizes)
+            {
+                let mut any_remaining = false;
+                for (seq_idx, seq) in input_seqs.iter().enumerate() {
+                    let prefix_len = seq.prefix_cache_len();
+                    if prefix_len == 0 {
+                        if !pv_all[seq_idx].is_empty() {
+                            any_remaining = true;
+                        }
+                        continue;
+                    }
+
+                    let bounds = ib_all[seq_idx].to_vec2::<u32>().unwrap();
+                    let cached_slices = bounds
+                        .iter()
+                        .filter(|row| (row[0] as usize) < prefix_len)
+                        .count();
+
+                    if cached_slices == 0 {
+                        if !pv_all[seq_idx].is_empty() {
+                            any_remaining = true;
+                        }
+                        continue;
+                    }
+
+                    let remaining = bounds.len() - cached_slices;
+                    // Trim pixel_values
+                    pv_all[seq_idx] = pv_all[seq_idx].split_off(cached_slices);
+
+                    if remaining > 0 {
+                        any_remaining = true;
+                        // Trim tgt_sizes
+                        ts_all[seq_idx] =
+                            ts_all[seq_idx].narrow(0, cached_slices, remaining).unwrap();
+                        // Adjust image_bound positions: subtract prefix_cache_len
+                        let adjusted: Vec<Vec<u32>> = bounds[cached_slices..]
+                            .iter()
+                            .map(|row| {
+                                vec![row[0] - prefix_len as u32, row[1] - prefix_len as u32]
+                            })
+                            .collect();
+                        ib_all[seq_idx] = Tensor::new(adjusted, device).unwrap();
+                    } else {
+                        // All slices cached for this sequence
+                        ts_all[seq_idx] =
+                            Tensor::zeros((0, 2), DType::U32, device).unwrap();
+                        ib_all[seq_idx] =
+                            Tensor::zeros((0, 2), DType::U32, device).unwrap();
+                    }
+                }
+                if !any_remaining {
+                    pixel_values_all = None;
+                    image_bound = None;
+                    tgt_sizes = None;
+                }
+            }
+        }
 
         let args = MiniCpmOSpecificArgs {
             pixel_values_all,
