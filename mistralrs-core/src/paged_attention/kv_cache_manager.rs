@@ -534,12 +534,12 @@ mod tests {
         assert_eq!(slots.len(), 8);
 
         // First 4 tokens should be in block_ids[0]
-        for i in 0..4 {
-            assert_eq!(slots[i], (block_ids[0] * 4 + i) as i64);
+        for (i, slot) in slots.iter().enumerate().take(4) {
+            assert_eq!(*slot, (block_ids[0] * 4 + i) as i64);
         }
         // Next 4 in block_ids[1]
-        for i in 0..4 {
-            assert_eq!(slots[4 + i], (block_ids[1] * 4 + i) as i64);
+        for (i, slot) in slots[4..].iter().enumerate().take(4) {
+            assert_eq!(*slot, (block_ids[1] * 4 + i) as i64);
         }
     }
 

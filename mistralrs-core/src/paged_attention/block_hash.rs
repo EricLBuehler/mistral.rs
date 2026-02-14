@@ -307,11 +307,11 @@ mod tests {
         };
 
         // Block [0..4) overlaps with feature [2..8)
-        let keys = generate_mm_extra_keys(0, 4, &[feature.clone()]);
+        let keys = generate_mm_extra_keys(0, 4, std::slice::from_ref(&feature));
         assert_eq!(keys.len(), 1);
 
         // Block [4..8) overlaps with feature [2..8)
-        let keys = generate_mm_extra_keys(4, 4, &[feature.clone()]);
+        let keys = generate_mm_extra_keys(4, 4, std::slice::from_ref(&feature));
         assert_eq!(keys.len(), 1);
 
         // Block [8..12) does NOT overlap with feature [2..8)
