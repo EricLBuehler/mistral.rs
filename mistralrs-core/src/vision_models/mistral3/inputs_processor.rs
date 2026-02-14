@@ -147,14 +147,11 @@ impl InputsProcessor for Mistral3ImageProcessor {
                 let image_sizes_all = image_sizes_all.unwrap();
 
                 // Deliberately no .unsqueeze here
-                pixel_values_accum.push(pixel_values.clone());
-                image_sizes_accum.extend_from_slice(&image_sizes_all);
-
                 let mut prompt = tokenizer
                     .decode(seq.get_toks(), false)
                     .expect("Detokenization failed!");
 
-                let mut image_sizes_all_iter = image_sizes_all.into_iter();
+                let mut image_sizes_all_iter = image_sizes_all.iter().copied();
                 let mut replace_strings = Vec::new();
                 while prompt.contains(&self.image_token) {
                     let (height, width) = image_sizes_all_iter.next().unwrap();
@@ -208,12 +205,31 @@ impl InputsProcessor for Mistral3ImageProcessor {
                     seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
                     seq.multimodal.has_changed_prompt = true;
                 }
+
+                // Per-sequence prefix cache trimming of pixel_values and image_sizes
+                let cached = seq.count_prefix_cached_mm_items();
+                let n_images = pixel_values.dim(0).unwrap_or(0);
+                if cached < n_images {
+                    if cached > 0 {
+                        pixel_values_accum.push(
+                            pixel_values.narrow(0, cached, n_images - cached).unwrap(),
+                        );
+                        image_sizes_accum.extend_from_slice(&image_sizes_all[cached..]);
+                    } else {
+                        pixel_values_accum.push(pixel_values.clone());
+                        image_sizes_accum.extend_from_slice(&image_sizes_all);
+                    }
+                }
             }
 
-            (
-                Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
-                Some(image_sizes_accum),
-            )
+            if pixel_values_accum.is_empty() {
+                (None, None)
+            } else {
+                (
+                    Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
+                    Some(image_sizes_accum),
+                )
+            }
         } else {
             (None, None)
         };
@@ -260,30 +276,8 @@ impl InputsProcessor for Mistral3ImageProcessor {
             .unwrap()
         };
 
-        // Trim pixel_values and image_sizes to exclude images already covered by the prefix cache.
-        let mut pixel_values = if is_prompt { pixel_values } else { None };
-        let mut image_sizes = if is_prompt { image_sizes } else { None };
-        if is_prompt {
-            if let Some(ref pv) = pixel_values {
-                let total_cached_images: usize = input_seqs
-                    .iter()
-                    .map(|seq| seq.count_prefix_cached_mm_items())
-                    .sum();
-                if total_cached_images > 0 {
-                    let total = pv.dim(0).unwrap();
-                    let remaining = total.saturating_sub(total_cached_images);
-                    if remaining > 0 {
-                        pixel_values = Some(pv.narrow(0, total_cached_images, remaining).unwrap());
-                        if let Some(ref sizes) = image_sizes {
-                            image_sizes = Some(sizes[total_cached_images..].to_vec());
-                        }
-                    } else {
-                        pixel_values = None;
-                        image_sizes = None;
-                    }
-                }
-            }
-        }
+        let pixel_values = if is_prompt { pixel_values } else { None };
+        let image_sizes = if is_prompt { image_sizes } else { None };
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,

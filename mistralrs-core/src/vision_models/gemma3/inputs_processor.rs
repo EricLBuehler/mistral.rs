@@ -148,9 +148,6 @@ impl InputsProcessor for Gemma3ImageProcessor {
 
                 let num_crops = num_crops.unwrap();
 
-                // Deliberately no .unsqueeze here
-                pixel_values_accum.push(pixel_values.clone());
-
                 let mut prompt = tokenizer
                     .decode(seq.get_toks(), false)
                     .expect("Detokenization failed!");
@@ -195,9 +192,26 @@ impl InputsProcessor for Gemma3ImageProcessor {
                     seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
                     seq.multimodal.has_changed_prompt = true;
                 }
+
+                // Per-sequence prefix cache trimming of pixel_values
+                let cached = seq.count_prefix_cached_mm_items();
+                let n_images = pixel_values.dim(0).unwrap_or(0);
+                if cached < n_images {
+                    if cached > 0 {
+                        pixel_values_accum.push(
+                            pixel_values.narrow(0, cached, n_images - cached).unwrap(),
+                        );
+                    } else {
+                        pixel_values_accum.push(pixel_values.clone());
+                    }
+                }
             }
 
-            Some(Tensor::cat(&pixel_values_accum, 0).unwrap())
+            if pixel_values_accum.is_empty() {
+                None
+            } else {
+                Some(Tensor::cat(&pixel_values_accum, 0).unwrap())
+            }
         } else {
             None
         };
@@ -244,29 +258,7 @@ impl InputsProcessor for Gemma3ImageProcessor {
             .unwrap()
         };
 
-        // Trim pixel_values to exclude images already covered by the prefix cache.
-        // When prefix caching is active, get_prompt_input trims tokens so that
-        // image placeholder tokens from earlier turns are removed. We must remove
-        // the corresponding pixel_values entries so the vision encoder output
-        // matches the remaining placeholder positions in the trimmed input_ids.
-        let mut pixel_values = if is_prompt { pixel_values } else { None };
-        if is_prompt {
-            if let Some(ref pv) = pixel_values {
-                let total_cached_images: usize = input_seqs
-                    .iter()
-                    .map(|seq| seq.count_prefix_cached_mm_items())
-                    .sum();
-                if total_cached_images > 0 {
-                    let total = pv.dim(0).unwrap();
-                    let remaining = total.saturating_sub(total_cached_images);
-                    if remaining > 0 {
-                        pixel_values = Some(pv.narrow(0, total_cached_images, remaining).unwrap());
-                    } else {
-                        pixel_values = None;
-                    }
-                }
-            }
-        }
+        let pixel_values = if is_prompt { pixel_values } else { None };
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,

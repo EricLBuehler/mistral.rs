@@ -504,33 +504,57 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 }
             }
             if total_cached_images > 0 {
+                let n_seqs = input_seqs.len().max(1);
+                let per_seq_cached = total_cached_images / n_seqs;
                 if let Some(ref grid) = image_grid_thw {
-                    let total = grid.dim(0).unwrap();
-                    let remaining = total.saturating_sub(total_cached_images);
-                    if remaining > 0 {
-                        image_grid_thw =
-                            Some(grid.narrow(0, total_cached_images, remaining).unwrap());
+                    let total_grid = grid.dim(0).unwrap();
+                    let grid_per_seq = total_grid / n_seqs;
+                    let remaining_per_seq = grid_per_seq.saturating_sub(per_seq_cached);
+                    if remaining_per_seq > 0 {
+                        let trimmed: Vec<Tensor> = (0..n_seqs)
+                            .map(|i| {
+                                grid.narrow(
+                                    0,
+                                    i * grid_per_seq + per_seq_cached,
+                                    remaining_per_seq,
+                                )
+                                .unwrap()
+                            })
+                            .collect();
+                        image_grid_thw = Some(Tensor::cat(&trimmed, 0).unwrap());
                     } else {
                         image_grid_thw = None;
                     }
                 }
                 if let Some(ref pv) = pixel_values {
                     let n_imgs = pv.dim(1).unwrap();
-                    let remaining = n_imgs.saturating_sub(total_cached_images);
+                    let remaining = n_imgs.saturating_sub(per_seq_cached);
                     if remaining > 0 {
-                        pixel_values = Some(pv.narrow(1, total_cached_images, remaining).unwrap());
+                        pixel_values = Some(pv.narrow(1, per_seq_cached, remaining).unwrap());
                     } else {
                         pixel_values = None;
                     }
                 }
             }
             if total_cached_videos > 0 {
+                let n_seqs = input_seqs.len().max(1);
+                let per_seq_cached_vids = total_cached_videos / n_seqs;
                 if let Some(ref grid) = video_grid_thw {
-                    let total = grid.dim(0).unwrap();
-                    let remaining = total.saturating_sub(total_cached_videos);
-                    if remaining > 0 {
-                        video_grid_thw =
-                            Some(grid.narrow(0, total_cached_videos, remaining).unwrap());
+                    let total_grid = grid.dim(0).unwrap();
+                    let grid_per_seq = total_grid / n_seqs;
+                    let remaining_per_seq = grid_per_seq.saturating_sub(per_seq_cached_vids);
+                    if remaining_per_seq > 0 {
+                        let trimmed: Vec<Tensor> = (0..n_seqs)
+                            .map(|i| {
+                                grid.narrow(
+                                    0,
+                                    i * grid_per_seq + per_seq_cached_vids,
+                                    remaining_per_seq,
+                                )
+                                .unwrap()
+                            })
+                            .collect();
+                        video_grid_thw = Some(Tensor::cat(&trimmed, 0).unwrap());
                     } else {
                         video_grid_thw = None;
                     }

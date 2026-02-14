@@ -140,6 +140,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             let mut image_sizes_accum = Vec::new();
             let mut num_img_tokens_accum = Vec::new();
             for seq in input_seqs.iter_mut() {
+                let cached = seq.count_prefix_cached_mm_items();
                 let imgs = seq
                     .take_images()
                     .expect("Need to have images by this point.");
@@ -170,18 +171,31 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                     .expect("Preprocessor failed");
                 let image_sizes = image_sizes_all.unwrap();
                 let pixel_attention_mask = pixel_attention_mask.unwrap();
-                pixel_values_accum.push(pixel_values);
-                pixel_attention_masks_accum.push(pixel_attention_mask);
-                // Using extend on purpose
-                image_sizes_accum.extend(image_sizes);
+                // Trim cached images per-sequence before pushing.
+                let n_images = pixel_values.dim(0).unwrap_or(0);
+                if cached < n_images {
+                    if cached > 0 {
+                        pixel_values_accum.push(pixel_values.narrow(0, cached, n_images - cached).unwrap());
+                        pixel_attention_masks_accum.push(pixel_attention_mask.narrow(0, cached, n_images - cached).unwrap());
+                    } else {
+                        pixel_values_accum.push(pixel_values);
+                        pixel_attention_masks_accum.push(pixel_attention_mask);
+                    }
+                    // Using extend on purpose
+                    image_sizes_accum.extend(image_sizes[cached..].to_vec());
+                }
                 num_img_tokens_accum.push(num_img_tokens.unwrap());
             }
-            (
-                Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
-                Some(Tensor::cat(&pixel_attention_masks_accum, 0).unwrap()),
-                Some(image_sizes_accum),
-                Some(num_img_tokens_accum),
-            )
+            if !pixel_values_accum.is_empty() {
+                (
+                    Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
+                    Some(Tensor::cat(&pixel_attention_masks_accum, 0).unwrap()),
+                    Some(image_sizes_accum),
+                    Some(num_img_tokens_accum),
+                )
+            } else {
+                (None, None, None, Some(num_img_tokens_accum))
+            }
         } else if has_audios {
             (None, None, None, Some(vec![vec![]; input_seqs.len()]))
         } else {
@@ -352,44 +366,10 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             )
         };
 
-        // Compute the number of cached images before entering the closure,
-        // since input_seqs is not available inside it.
-        let total_cached_images: usize = if is_prompt {
-            input_seqs
-                .iter()
-                .map(|seq| seq.count_prefix_cached_mm_items())
-                .sum()
-        } else {
-            0
-        };
-
         result.map(move |metadata| {
-            let mut pixel_values = pixel_values.clone();
-            let mut pixel_attention_mask = pixel_attention_mask.clone();
-            let mut image_sizes = image_sizes.clone();
-
-            // Trim pixel_values, image_attention_mask, and image_sizes to exclude
-            // images already covered by the prefix cache.
-            if total_cached_images > 0 {
-                if let Some(ref pv) = pixel_values {
-                    let total = pv.dim(0).unwrap();
-                    let remaining = total.saturating_sub(total_cached_images);
-                    if remaining > 0 {
-                        pixel_values = Some(pv.narrow(0, total_cached_images, remaining).unwrap());
-                        if let Some(ref mask) = pixel_attention_mask {
-                            pixel_attention_mask =
-                                Some(mask.narrow(0, total_cached_images, remaining).unwrap());
-                        }
-                        if let Some(ref sizes) = image_sizes {
-                            image_sizes = Some(sizes[total_cached_images..].to_vec());
-                        }
-                    } else {
-                        pixel_values = None;
-                        pixel_attention_mask = None;
-                        image_sizes = None;
-                    }
-                }
-            }
+            let pixel_values = pixel_values.clone();
+            let pixel_attention_mask = pixel_attention_mask.clone();
+            let image_sizes = image_sizes.clone();
 
             let text_models_inputs_processor::InnerInputProcessorOutput {
                 inputs:

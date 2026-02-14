@@ -162,9 +162,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
                         (usize::MAX, usize::MAX), // Don't use it here...
                     )
                     .expect("Preprocessing failed");
-                pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
-                pixel_attention_mask_accum
-                    .push(pixel_attention_mask.unwrap().unsqueeze(0).unwrap());
+                let pixel_attention_mask = pixel_attention_mask.unwrap();
 
                 if !seq.multimodal.has_changed_prompt {
                     let detok = tokenizer
@@ -216,12 +214,42 @@ impl InputsProcessor for Idefics3ImageProcessor {
                     seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
                     seq.multimodal.has_changed_prompt = true;
                 }
+
+                // Per-sequence prefix cache trimming of pixel_values and pixel_attention_mask
+                let cached = seq.count_prefix_cached_mm_items();
+                let n_sub = pixel_values.dim(0).unwrap_or(0);
+                if cached < n_sub {
+                    if cached > 0 {
+                        pixel_values_accum.push(
+                            pixel_values
+                                .narrow(0, cached, n_sub - cached)
+                                .unwrap()
+                                .unsqueeze(0)
+                                .unwrap(),
+                        );
+                        pixel_attention_mask_accum.push(
+                            pixel_attention_mask
+                                .narrow(0, cached, n_sub - cached)
+                                .unwrap()
+                                .unsqueeze(0)
+                                .unwrap(),
+                        );
+                    } else {
+                        pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
+                        pixel_attention_mask_accum
+                            .push(pixel_attention_mask.unsqueeze(0).unwrap());
+                    }
+                }
             }
 
-            (
-                Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
-                Some(Tensor::cat(&pixel_attention_mask_accum, 0).unwrap()),
-            )
+            if pixel_values_accum.is_empty() {
+                (None, None)
+            } else {
+                (
+                    Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
+                    Some(Tensor::cat(&pixel_attention_mask_accum, 0).unwrap()),
+                )
+            }
         } else {
             (None, None)
         };
@@ -268,36 +296,12 @@ impl InputsProcessor for Idefics3ImageProcessor {
             .unwrap()
         };
 
-        // Trim pixel_values and pixel_attention_mask to exclude sub-images
-        // already covered by the prefix cache.
-        let mut pixel_values = if is_prompt { pixel_values } else { None };
-        let mut pixel_attention_mask = if is_prompt {
+        let pixel_values = if is_prompt { pixel_values } else { None };
+        let pixel_attention_mask = if is_prompt {
             pixel_attention_mask
         } else {
             None
         };
-        if is_prompt {
-            if let Some(ref pv) = pixel_values {
-                let total_cached: usize = input_seqs
-                    .iter()
-                    .map(|seq| seq.count_prefix_cached_mm_items())
-                    .sum();
-                if total_cached > 0 {
-                    let total = pv.dim(1).unwrap();
-                    let remaining = total.saturating_sub(total_cached);
-                    if remaining > 0 {
-                        pixel_values = Some(pv.narrow(1, total_cached, remaining).unwrap());
-                        if let Some(ref mask) = pixel_attention_mask {
-                            pixel_attention_mask =
-                                Some(mask.narrow(1, total_cached, remaining).unwrap());
-                        }
-                    } else {
-                        pixel_values = None;
-                        pixel_attention_mask = None;
-                    }
-                }
-            }
-        }
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,

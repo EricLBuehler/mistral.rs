@@ -219,16 +219,24 @@ impl InputsProcessor for Llama4ImageProcessor {
                     )
                     .expect("Preprocessing failed");
                 // Intentionally don't unsqueeze here as the BS is already included. Just stack now.
-                pixel_values_accum.push(pixel_values);
+                // Trim cached images per-sequence before pushing.
+                let cached = seq.count_prefix_cached_mm_items();
+                let n_images = pixel_values.dim(0).unwrap_or(0);
+                if cached < n_images {
+                    if cached > 0 {
+                        pixel_values_accum.push(pixel_values.narrow(0, cached, n_images - cached).unwrap());
+                    } else {
+                        pixel_values_accum.push(pixel_values);
+                    }
+                }
                 aspect_ratios_accum.push(aspect_ratio_ids.unwrap());
             }
 
-            let pixel_values = Tensor::cat(&pixel_values_accum, 0).unwrap();
             let aspect_ratios = Tensor::cat(&aspect_ratios_accum, 0).unwrap();
 
             let (image_h, image_w) = (
-                pixel_values.dim(D::Minus2).unwrap(),
-                pixel_values.dim(D::Minus1).unwrap(),
+                pixel_values_accum[0].dim(D::Minus2).unwrap(),
+                pixel_values_accum[0].dim(D::Minus1).unwrap(),
             );
             let num_patches_per_chunk =
                 (image_h / self.patch_size) * (image_w / self.patch_size) / self.downsample_ratio;
@@ -284,7 +292,11 @@ impl InputsProcessor for Llama4ImageProcessor {
                 }
             }
 
-            Some(pixel_values)
+            if !pixel_values_accum.is_empty() {
+                Some(Tensor::cat(&pixel_values_accum, 0).unwrap())
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -331,25 +343,7 @@ impl InputsProcessor for Llama4ImageProcessor {
             .unwrap()
         };
 
-        // Trim pixel_values to exclude images already covered by the prefix cache.
-        let mut pixel_values = if is_prompt { pixel_values } else { None };
-        if is_prompt {
-            if let Some(ref pv) = pixel_values {
-                let total_cached_images: usize = input_seqs
-                    .iter()
-                    .map(|seq| seq.count_prefix_cached_mm_items())
-                    .sum();
-                if total_cached_images > 0 {
-                    let total = pv.dim(0).unwrap();
-                    let remaining = total.saturating_sub(total_cached_images);
-                    if remaining > 0 {
-                        pixel_values = Some(pv.narrow(0, total_cached_images, remaining).unwrap());
-                    } else {
-                        pixel_values = None;
-                    }
-                }
-            }
-        }
+        let pixel_values = if is_prompt { pixel_values } else { None };
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
