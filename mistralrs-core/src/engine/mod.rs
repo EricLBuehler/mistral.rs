@@ -30,7 +30,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, LazyLock,
     },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     select,
@@ -167,7 +167,7 @@ pub struct Engine {
     is_debug: bool,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
-    logger: IntervalLogger,
+    logger: Arc<IntervalLogger>,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
     pending_notify: Arc<Notify>,
 }
@@ -196,6 +196,7 @@ impl Engine {
         search_callback: Option<Arc<search::SearchCallback>>,
         tool_callbacks: tools::ToolCallbacks,
         tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+        logger: Arc<IntervalLogger>,
     ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
@@ -220,8 +221,6 @@ impl Engine {
 
         let has_paged_attention = get_mut_arcmutex!(scheduler).kv_cache_manager().is_some();
 
-        let encoder_cache_counters = get_mut_arcmutex!(pipeline).encoder_cache_counters();
-
         Ok(Self {
             tx,
             rx: Arc::new(Mutex::new(rx)),
@@ -241,7 +240,7 @@ impl Engine {
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
             throughput_logging_enabled,
-            logger: IntervalLogger::new(Duration::from_secs(5), encoder_cache_counters),
+            logger,
             handles: Arc::new(Mutex::new(Vec::new())),
             pending_notify: Arc::new(Notify::new()),
         })

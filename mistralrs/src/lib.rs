@@ -239,7 +239,7 @@ pub use mistralrs_core::{LayerTopology, Topology};
 pub use mistralrs_core::TokenSource;
 
 // ========== Engine (Advanced) ==========
-pub use mistralrs_core::{MistralRs, RequestMessage, ResponseOk};
+pub use mistralrs_core::{IntervalLogger, MistralRs, RequestMessage, ResponseOk};
 
 // ========== Utilities ==========
 pub use mistralrs_core::{initialize_logging, paged_attn_supported, parse_isq_value};

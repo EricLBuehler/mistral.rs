@@ -14,6 +14,8 @@ pub struct IntervalLogger {
     total_new_seqs: Arc<AtomicUsize>,
     num_running: Arc<AtomicUsize>,
     num_waiting: Arc<AtomicUsize>,
+    encoder_cache_hits: Option<Arc<AtomicUsize>>,
+    encoder_cache_misses: Option<Arc<AtomicUsize>>,
 }
 
 impl IntervalLogger {
@@ -35,10 +37,12 @@ impl IntervalLogger {
         let t_enable_logging = enable_logging.clone();
         let t_num_running = num_running.clone();
         let t_num_waiting = num_waiting.clone();
-        let (t_enc_hits, t_enc_misses) = match encoder_cache_counters {
+        let (encoder_cache_hits, encoder_cache_misses) = match encoder_cache_counters {
             Some((h, m)) => (Some(h), Some(m)),
             None => (None, None),
         };
+        let t_enc_hits = encoder_cache_hits.clone();
+        let t_enc_misses = encoder_cache_misses.clone();
         thread::spawn(move || {
             // Start the actual logging
             loop {
@@ -87,6 +91,8 @@ impl IntervalLogger {
             enable_logging,
             num_running,
             num_waiting,
+            encoder_cache_hits,
+            encoder_cache_misses,
         }
     }
 
@@ -113,5 +119,23 @@ impl IntervalLogger {
 
     pub fn set_num_waiting(&self, waiting: usize) {
         self.num_waiting.store(waiting, Ordering::Relaxed);
+    }
+
+    /// Return cumulative prefix cache (hits, total_sequences).
+    pub fn prefix_cache_stats(&self) -> (usize, usize) {
+        (
+            self.prefix_cache_hits.load(Ordering::Relaxed),
+            self.total_new_seqs.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Return cumulative encoder cache (hits, misses), or `None` if no encoder cache exists.
+    pub fn encoder_cache_stats(&self) -> Option<(usize, usize)> {
+        match (&self.encoder_cache_hits, &self.encoder_cache_misses) {
+            (Some(h), Some(m)) => {
+                Some((h.load(Ordering::Relaxed), m.load(Ordering::Relaxed)))
+            }
+            _ => None,
+        }
     }
 }
