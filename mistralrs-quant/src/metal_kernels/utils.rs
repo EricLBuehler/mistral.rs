@@ -1,3 +1,8 @@
+// Portions of this file are adapted from Apple's MLX framework
+// (https://github.com/ml-explore/mlx)
+// Licensed under the Apache License 2.0
+// Copyright © 2023 Apple Inc.
+
 use candle_metal_kernels::metal::{Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipeline};
 use objc2_metal::MTLSize;
 use std::ffi::c_void;

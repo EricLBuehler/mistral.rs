@@ -1,3 +1,8 @@
+// Portions of this file are adapted from the vLLM project
+// (https://github.com/vllm-project/vllm)
+// Licensed under the Apache License 2.0
+// Copyright contributors to the vLLM project
+
 #include "marlin/marlin.cuh"
 #include "marlin/marlin_dtypes.cuh"
 #include <assert.h>
