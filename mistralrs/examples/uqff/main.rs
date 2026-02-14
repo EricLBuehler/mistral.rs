@@ -1,7 +1,5 @@
 use anyhow::Result;
-use mistralrs::{
-    PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, UqffTextModelBuilder,
-};
+use mistralrs::{PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, UqffTextModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -35,11 +33,13 @@ async fn main() -> Result<()> {
     );
 
     // Next example: Return some logprobs with the `RequestBuilder`, which enables higher configurability.
-    let request = RequestBuilder::new().return_logprobs(true).add_message(
-        TextMessageRole::User,
-        "Please write a mathematical equation where a few numbers are added.",
-    )
-    .set_sampler_max_len(256);
+    let request = RequestBuilder::new()
+        .return_logprobs(true)
+        .add_message(
+            TextMessageRole::User,
+            "Please write a mathematical equation where a few numbers are added.",
+        )
+        .set_sampler_max_len(256);
 
     let response = model.send_chat_request(request).await?;
 
