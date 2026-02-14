@@ -191,7 +191,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                         context_lens,
                         position_ids,
                         pixel_values: None,
-                        model_specific_args: Box::new(Phi3VisionSpecificArgs { image_sizes: None }),
+                        model_specific_args: Box::new(Phi3VisionSpecificArgs { image_sizes: None, image_hashes: vec![] }),
                         paged_attn_meta,
                         flash_meta,
                     });
@@ -358,6 +358,12 @@ impl InputsProcessor for Phi3InputsProcessor {
                     },
                 seq_indices,
             } = metadata;
+            let image_hashes: Vec<u64> = input_seqs.iter().flat_map(|seq| {
+                seq.image_hashes().map(|h| {
+                    let cached = seq.count_prefix_cached_mm_items();
+                    if cached < h.len() { h[cached..].to_vec() } else { vec![] }
+                }).unwrap_or_default()
+            }).collect();
             let inputs: Box<dyn Any> = Box::new(ModelInputs {
                 input_ids: input,
                 seqlen_offsets: positions,
@@ -366,6 +372,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                 pixel_values: pixel_values.clone(),
                 model_specific_args: Box::new(Phi3VisionSpecificArgs {
                     image_sizes: image_sizes.clone(),
+                    image_hashes,
                 }),
                 paged_attn_meta,
                 flash_meta,

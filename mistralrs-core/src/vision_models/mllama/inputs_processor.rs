@@ -416,6 +416,17 @@ impl InputsProcessor for MLlamaImageProcessor {
             .unwrap()
         };
 
+        let image_hashes: Vec<u64> = if is_prompt {
+            input_seqs.iter().flat_map(|seq| {
+                seq.image_hashes().map(|h| {
+                    let cached = seq.count_prefix_cached_mm_items();
+                    if cached < h.len() { h[cached..].to_vec() } else { vec![] }
+                }).unwrap_or_default()
+            }).collect()
+        } else {
+            vec![]
+        };
+
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
@@ -426,6 +437,7 @@ impl InputsProcessor for MLlamaImageProcessor {
                 aspect_ratio_ids,
                 aspect_ratio_mask,
                 cross_attn_mask,
+                image_hashes,
             }),
             paged_attn_meta,
             flash_meta,

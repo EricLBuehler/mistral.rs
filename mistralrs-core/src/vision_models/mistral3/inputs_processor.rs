@@ -279,13 +279,24 @@ impl InputsProcessor for Mistral3ImageProcessor {
         let pixel_values = if is_prompt { pixel_values } else { None };
         let image_sizes = if is_prompt { image_sizes } else { None };
 
+        let image_hashes: Vec<u64> = if is_prompt {
+            input_seqs.iter().flat_map(|seq| {
+                seq.image_hashes().map(|h| {
+                    let cached = seq.count_prefix_cached_mm_items();
+                    if cached < h.len() { h[cached..].to_vec() } else { vec![] }
+                }).unwrap_or_default()
+            }).collect()
+        } else {
+            vec![]
+        };
+
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
             context_lens,
             position_ids,
             pixel_values,
-            model_specific_args: Box::new(Mistral3SpecificArgs { image_sizes }),
+            model_specific_args: Box::new(Mistral3SpecificArgs { image_sizes, image_hashes }),
             paged_attn_meta,
             flash_meta,
         });

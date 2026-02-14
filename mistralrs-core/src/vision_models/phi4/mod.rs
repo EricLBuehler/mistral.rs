@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{any::Any, collections::HashMap, sync::Arc};
+use std::{any::Any, collections::HashMap, sync::{Arc, Mutex}};
 
 use candle_core::{Device, Result, Tensor, D};
 use candle_nn::Module;
@@ -13,7 +13,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{self, Activation, CausalMasker, Phi4MMRotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -344,6 +344,7 @@ pub struct Phi4MMModel {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: Option<usize>,
     cfg: ModelConfigMetadata,
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
 impl Phi4MMModel {
@@ -459,6 +460,7 @@ impl Phi4MMModel {
             },
             mapper,
             embed_tokens_extend,
+            encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
     }
 
@@ -551,6 +553,7 @@ pub(crate) struct Phi4MMVisionSpecificArgs {
     pub input_audio_embeds: Option<Tensor>,
     pub audio_embed_sizes: Option<Vec<usize>>,
     pub audio_attention_mask: Option<Tensor>,
+    pub image_hashes: Vec<u64>,
 }
 
 impl VisionModel for Phi4MMModel {
@@ -572,6 +575,7 @@ impl VisionModel for Phi4MMModel {
             input_audio_embeds,
             audio_attention_mask,
             audio_embed_sizes,
+            image_hashes: _,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Phi4MMVisionSpecificArgs`");

@@ -246,6 +246,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                             input_audio_embeds: None,
                             audio_embed_sizes: None,
                             audio_attention_mask: None,
+                            image_hashes: vec![],
                         }),
                         paged_attn_meta,
                         flash_meta,
@@ -343,6 +344,17 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             toks.push(seq.get_toks().to_vec());
         }
 
+        let image_hashes: Vec<u64> = if is_prompt {
+            input_seqs.iter().flat_map(|seq| {
+                seq.image_hashes().map(|h| {
+                    let cached = seq.count_prefix_cached_mm_items();
+                    if cached < h.len() { h[cached..].to_vec() } else { vec![] }
+                }).unwrap_or_default()
+            }).collect()
+        } else {
+            vec![]
+        };
+
         let result = if is_prompt {
             get_prompt_input(
                 toks.iter().map(Vec::as_slice).collect(),
@@ -396,6 +408,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                     input_audio_embeds: input_audio_embeds.clone(),
                     audio_embed_sizes: audio_embed_sizes.clone(),
                     audio_attention_mask: audio_attention_mask.clone(),
+                    image_hashes,
                 }),
                 paged_attn_meta,
                 flash_meta,

@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{any::Any, sync::Arc};
+use std::{any::Any, sync::{Arc, Mutex}};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
@@ -11,7 +11,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::CausalMasker,
     layers_masker::PastKvLenCache,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
@@ -34,6 +34,7 @@ pub struct Qwen3VLMoEModel {
     video_token_id: u32,
     vision_start_token_id: u32,
     vision_end_token_id: u32,
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
 impl Qwen3VLMoEModel {
@@ -74,6 +75,7 @@ impl Qwen3VLMoEModel {
             video_token_id: cfg.video_token_id,
             vision_start_token_id: cfg.vision_start_token_id,
             vision_end_token_id: cfg.vision_end_token_id,
+            encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
     }
 
@@ -93,6 +95,7 @@ impl Qwen3VLMoEModel {
         continuous_vid_pad: Vec<Vec<(usize, usize)>>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
+        image_hashes: &[u64],
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -127,8 +130,123 @@ impl Qwen3VLMoEModel {
             if dims.len() == 3 {
                 pixel_values = pixel_values.reshape((dims[0] * dims[1], dims[2]))?;
             }
-            let (image_embeds, deepstack_image_embeds) =
-                self.vision.forward(&pixel_values, image_grid_thw_ref)?;
+
+            let (image_embeds, deepstack_image_embeds) = if !image_hashes.is_empty() {
+                let n_images = image_hashes.len();
+                let grid_data = image_grid_thw_ref.to_vec2::<u32>()?;
+                let patches_per_image: Vec<usize> = grid_data
+                    .iter()
+                    .map(|row| row[0] as usize * row[1] as usize * row[2] as usize)
+                    .collect();
+                let merge = self.spatial_merge_size as usize;
+                let output_tokens_per_image: Vec<usize> = grid_data
+                    .iter()
+                    .map(|row| {
+                        (row[0] as usize)
+                            * (row[1] as usize / merge)
+                            * (row[2] as usize / merge)
+                    })
+                    .collect();
+
+                // per_image[i] = Some(vec![image_embeds_i, ds_0_i, ds_1_i, ...])
+                let mut per_image: Vec<Option<Vec<Tensor>>> = vec![None; n_images];
+                let mut miss_indices = Vec::new();
+                {
+                    let mut guard =
+                        self.encoder_cache.lock().expect("encoder cache lock poisoned");
+                    for (i, &hash) in image_hashes.iter().enumerate() {
+                        if let Some(cached) = guard.get(hash) {
+                            per_image[i] = Some(cached);
+                        } else {
+                            miss_indices.push(i);
+                        }
+                    }
+                }
+
+                if miss_indices.is_empty() {
+                    // All cached - reassemble
+                    let main_parts: Vec<Tensor> = per_image
+                        .iter()
+                        .map(|o| o.as_ref().unwrap()[0].clone())
+                        .collect();
+                    let image_embeds = Tensor::cat(&main_parts, 0)?;
+                    let n_ds_layers = per_image[0].as_ref().unwrap().len() - 1;
+                    let mut deepstack_layers = Vec::with_capacity(n_ds_layers);
+                    for layer_idx in 0..n_ds_layers {
+                        let layer_parts: Vec<Tensor> = per_image
+                            .iter()
+                            .map(|o| o.as_ref().unwrap()[1 + layer_idx].clone())
+                            .collect();
+                        deepstack_layers.push(Tensor::cat(&layer_parts, 0)?);
+                    }
+                    (image_embeds, deepstack_layers)
+                } else {
+                    // Collect miss pixel slices and grid rows
+                    let mut miss_pixel_slices = Vec::new();
+                    let mut miss_grid_rows = Vec::new();
+                    let mut pv_offset = 0usize;
+                    for (i, &n_patches) in patches_per_image.iter().enumerate() {
+                        if miss_indices.contains(&i) {
+                            miss_pixel_slices
+                                .push(pixel_values.narrow(0, pv_offset, n_patches)?);
+                            miss_grid_rows.push(image_grid_thw_ref.i(i)?);
+                        }
+                        pv_offset += n_patches;
+                    }
+                    let miss_pixels = Tensor::cat(&miss_pixel_slices, 0)?;
+                    let miss_grid = Tensor::stack(&miss_grid_rows, 0)?;
+
+                    let (encoded_main, encoded_ds) =
+                        self.vision.forward(&miss_pixels, &miss_grid)?;
+
+                    // Compute output tokens per miss image
+                    let miss_output_tokens: Vec<usize> = miss_indices
+                        .iter()
+                        .map(|&i| output_tokens_per_image[i])
+                        .collect();
+
+                    // Split and cache per-image
+                    let mut enc_offset = 0usize;
+                    {
+                        let mut guard = self
+                            .encoder_cache
+                            .lock()
+                            .expect("encoder cache lock poisoned");
+                        for (j, &orig_idx) in miss_indices.iter().enumerate() {
+                            let n_out = miss_output_tokens[j];
+                            let single_main = encoded_main.narrow(0, enc_offset, n_out)?;
+                            let mut cache_entry = vec![single_main.clone()];
+                            for ds_layer in &encoded_ds {
+                                let single_ds = ds_layer.narrow(0, enc_offset, n_out)?;
+                                cache_entry.push(single_ds.clone());
+                            }
+                            enc_offset += n_out;
+                            guard.insert(image_hashes[orig_idx], cache_entry.clone());
+                            per_image[orig_idx] = Some(cache_entry);
+                        }
+                    }
+
+                    // Reassemble all images
+                    let main_parts: Vec<Tensor> = per_image
+                        .iter()
+                        .map(|o| o.as_ref().unwrap()[0].clone())
+                        .collect();
+                    let image_embeds = Tensor::cat(&main_parts, 0)?;
+                    let n_ds_layers = per_image[0].as_ref().unwrap().len() - 1;
+                    let mut deepstack_layers = Vec::with_capacity(n_ds_layers);
+                    for layer_idx in 0..n_ds_layers {
+                        let layer_parts: Vec<Tensor> = per_image
+                            .iter()
+                            .map(|o| o.as_ref().unwrap()[1 + layer_idx].clone())
+                            .collect();
+                        deepstack_layers.push(Tensor::cat(&layer_parts, 0)?);
+                    }
+                    (image_embeds, deepstack_layers)
+                }
+            } else {
+                self.vision.forward(&pixel_values, image_grid_thw_ref)?
+            };
+
             let image_embeds = image_embeds.to_device(&device)?.to_dtype(self.text.dtype)?;
             let deepstack_image_embeds = deepstack_image_embeds
                 .into_iter()
@@ -353,6 +471,7 @@ impl VisionModel for Qwen3VLMoEModel {
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
+            image_hashes,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Qwen3VLVisionSpecificArgs`");
@@ -380,6 +499,7 @@ impl VisionModel for Qwen3VLMoEModel {
             continuous_vid_pad,
             seqlen_offsets,
             context_lens,
+            &image_hashes,
             metadata,
             flash_params,
         )
@@ -410,6 +530,7 @@ impl VisionModel for Qwen3VLMoEModel {
             seqlens: vec![input_ids.dims()[1]],
             continuous_img_pad: vec![],
             continuous_vid_pad: vec![],
+            image_hashes: vec![],
         })
     }
 }

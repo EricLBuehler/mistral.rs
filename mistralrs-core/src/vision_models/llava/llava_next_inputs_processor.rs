@@ -218,6 +218,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                             image_sizes: None,
                             num_image_tokens: None,
                             num_image_samples: None,
+                            image_hashes: vec![],
                         }),
                         paged_attn_meta,
                         flash_meta,
@@ -363,6 +364,12 @@ impl InputsProcessor for LLaVANextInputProcessor {
                     },
                 seq_indices,
             } = metadata;
+            let image_hashes: Vec<u64> = input_seqs.iter().flat_map(|seq| {
+                seq.image_hashes().map(|h| {
+                    let cached = seq.count_prefix_cached_mm_items();
+                    if cached < h.len() { h[cached..].to_vec() } else { vec![] }
+                }).unwrap_or_default()
+            }).collect();
             let inputs: Box<dyn Any> = Box::new(ModelInputs {
                 input_ids: input,
                 seqlen_offsets: positions,
@@ -373,6 +380,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                     image_sizes: image_sizes.clone(),
                     num_image_tokens: Some(num_image_tokens_flat.clone()),
                     num_image_samples: Some(num_image_samples.clone()),
+                    image_hashes,
                 }),
                 paged_attn_meta,
                 flash_meta,

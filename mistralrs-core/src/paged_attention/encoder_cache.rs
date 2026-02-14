@@ -1,42 +1,25 @@
 //! Encoder output cache for multimodal models.
 //!
-//! Caches vision/audio encoder outputs so that when a prefix cache hit occurs,
-//! the encoder doesn't need to re-process media that was already encoded.
-//!
-//! This is a placeholder for the full encoder cache. Per-model integration
-//! (checking the cache before running the encoder, storing outputs after) will
-//! be added incrementally for each vision/audio model.
+//! Caches vision/audio encoder outputs keyed by content hash so that identical
+//! media across requests (or after a prefix-cache partial hit) can skip the
+//! expensive encoder pass.  Uses a simple LRU eviction strategy.
 
-#![allow(dead_code)]
-
-use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 
 use candle_core::Tensor;
+use indexmap::IndexMap;
 
-/// A cached encoder output for a single multimodal input.
-struct CachedEncoderOutput {
-    /// The encoder output tensor (e.g., vision features after projection).
-    output: Tensor,
-    /// Set of sequence IDs currently referencing this cached output.
-    active_users: HashSet<usize>,
-}
-
-/// Manages cached encoder outputs for multimodal models.
+/// LRU cache for encoder outputs.
 ///
-/// When a sequence has a prefix cache hit, its images/audio may already have
-/// been encoded by a previous request. The `EncoderCacheManager` stores these
-/// encoder outputs keyed by the content hash of the media data.
+/// Each entry stores one or more tensors (e.g. Qwen3-VL returns both main
+/// embeddings and deep-stack embeddings).  Keys are the same `u64` content
+/// hashes already computed for images/audio in [`crate::sequence::Sequence`].
 ///
-/// Usage pattern (to be wired into each vision model):
-/// 1. Before running the vision encoder, check `get(content_hash)`.
-/// 2. On cache hit: use the cached tensor, call `add_user(hash, seq_id)`.
-/// 3. On cache miss: run the encoder, call `insert(hash, tensor, seq_id)`.
-/// 4. When a sequence completes, call `remove_user(hash, seq_id)`.
-/// 5. Entries with no active users are candidates for LRU eviction.
+/// The cache is typically stored behind `Arc<Mutex<…>>` on each model struct
+/// and accessed from `forward()` via interior mutability.
 pub struct EncoderCacheManager {
-    /// Map from content hash to cached encoder output.
-    cache: HashMap<String, CachedEncoderOutput>,
-    /// Maximum number of cached entries.
+    /// Insertion-ordered map; most-recently-used entries live at the back.
+    cache: IndexMap<u64, Vec<Tensor>>,
     max_entries: usize,
 }
 
@@ -44,64 +27,42 @@ impl EncoderCacheManager {
     /// Create a new encoder cache with the given capacity.
     pub fn new(max_entries: usize) -> Self {
         Self {
-            cache: HashMap::new(),
+            cache: IndexMap::with_capacity(max_entries),
             max_entries,
         }
     }
 
     /// Look up a cached encoder output by content hash.
-    pub fn get(&self, content_hash: &str) -> Option<&Tensor> {
-        self.cache.get(content_hash).map(|entry| &entry.output)
+    ///
+    /// On hit the entry is moved to the back (most-recently-used position)
+    /// and the tensors are cloned (cheap — Candle tensors are `Arc`-backed).
+    pub fn get(&mut self, content_hash: u64) -> Option<Vec<Tensor>> {
+        // `shift_remove` + re-insert moves the entry to the back.
+        if let Some(entry) = self.cache.shift_remove(&content_hash) {
+            let cloned = entry.clone();
+            self.cache.insert(content_hash, entry);
+            Some(cloned)
+        } else {
+            None
+        }
     }
 
     /// Insert a new encoder output into the cache.
-    pub fn insert(&mut self, content_hash: String, output: Tensor, seq_id: usize) {
-        if self.cache.len() >= self.max_entries {
-            self.evict_lru();
+    ///
+    /// If the cache is at capacity the least-recently-used (front) entry is
+    /// evicted first.
+    pub fn insert(&mut self, content_hash: u64, outputs: Vec<Tensor>) {
+        if self.cache.contains_key(&content_hash) {
+            // Already cached (race between concurrent callers); just bump LRU.
+            self.cache.shift_remove(&content_hash);
+            self.cache.insert(content_hash, outputs);
+            return;
         }
-        let entry = self
-            .cache
-            .entry(content_hash)
-            .or_insert_with(|| CachedEncoderOutput {
-                output,
-                active_users: HashSet::new(),
-            });
-        entry.active_users.insert(seq_id);
-    }
-
-    /// Add a sequence as a user of an existing cached entry.
-    pub fn add_user(&mut self, content_hash: &str, seq_id: usize) {
-        if let Some(entry) = self.cache.get_mut(content_hash) {
-            entry.active_users.insert(seq_id);
+        if self.cache.len() >= self.max_entries && self.max_entries > 0 {
+            // Evict the oldest (front) entry.
+            self.cache.shift_remove_index(0);
         }
-    }
-
-    /// Remove a sequence from a cached entry's user set.
-    pub fn remove_user(&mut self, content_hash: &str, seq_id: usize) {
-        if let Some(entry) = self.cache.get_mut(content_hash) {
-            entry.active_users.remove(&seq_id);
-        }
-    }
-
-    /// Remove all references for a sequence across all cached entries.
-    pub fn free_sequence(&mut self, seq_id: usize) {
-        for entry in self.cache.values_mut() {
-            entry.active_users.remove(&seq_id);
-        }
-    }
-
-    /// Evict entries with no active users to make room for new entries.
-    fn evict_lru(&mut self) {
-        // Remove the first entry with no active users
-        let key_to_remove = self
-            .cache
-            .iter()
-            .find(|(_, entry)| entry.active_users.is_empty())
-            .map(|(k, _)| k.clone());
-
-        if let Some(key) = key_to_remove {
-            self.cache.remove(&key);
-        }
+        self.cache.insert(content_hash, outputs);
     }
 
     /// Number of cached entries.
@@ -113,4 +74,110 @@ impl EncoderCacheManager {
     pub fn is_empty(&self) -> bool {
         self.cache.is_empty()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: cache-aware batch encoding for "Pattern A" models whose
+// pixel_values have shape (N, C, H, W) with one image per dim-0 slice.
+// ---------------------------------------------------------------------------
+
+/// Encode a batch of images with per-image caching.
+///
+/// * `image_hashes` – one content hash per image, length **N**.
+/// * `pixel_values` – stacked pixel tensor of shape `(N, C, H, W)`.
+/// * `cache`        – shared encoder cache (behind `Mutex`).
+/// * `encode_fn`    – called with a `(M, C, H, W)` tensor of **only** the
+///   cache-miss images.  Must return `Vec<Tensor>` where each element is a
+///   `(M, …)` tensor (the first element is the main embedding; extra elements
+///   are auxiliary, e.g. deep-stack features).
+///
+/// Returns `Vec<Tensor>` in the same multi-output layout as `encode_fn`, but
+/// now covering **all N** images (hits + misses reassembled in order).
+pub fn cached_encode_images(
+    image_hashes: &[u64],
+    pixel_values: &Tensor,
+    cache: &Mutex<EncoderCacheManager>,
+    encode_fn: impl FnOnce(&Tensor) -> candle_core::Result<Vec<Tensor>>,
+) -> candle_core::Result<Vec<Tensor>> {
+    let n_images = image_hashes.len();
+    if n_images == 0 {
+        return encode_fn(pixel_values);
+    }
+    debug_assert_eq!(
+        n_images,
+        pixel_values.dim(0)?,
+        "image_hashes length must match pixel_values dim-0"
+    );
+
+    // Phase 1 – probe cache for each image.
+    let mut hits: Vec<Option<Vec<Tensor>>> = vec![None; n_images];
+    let mut miss_indices: Vec<usize> = Vec::new();
+    {
+        let mut guard = cache.lock().expect("encoder cache lock poisoned");
+        for (i, &hash) in image_hashes.iter().enumerate() {
+            if let Some(cached) = guard.get(hash) {
+                hits[i] = Some(cached);
+            } else {
+                miss_indices.push(i);
+            }
+        }
+    }
+
+    // Fast path – all cached.
+    if miss_indices.is_empty() {
+        return assemble(hits, n_images);
+    }
+
+    // Phase 2 – encode only the misses.
+    let miss_pixels = if miss_indices.len() == n_images {
+        // All misses – encode full batch without splitting.
+        pixel_values.clone()
+    } else {
+        let slices: Vec<Tensor> = miss_indices
+            .iter()
+            .map(|&i| pixel_values.get(i))
+            .collect::<candle_core::Result<Vec<_>>>()?;
+        Tensor::stack(&slices, 0)?
+    };
+
+    let encoded = encode_fn(&miss_pixels)?;
+
+    // Phase 3 – store per-image results in cache and fill `hits`.
+    {
+        let mut guard = cache.lock().expect("encoder cache lock poisoned");
+        for (batch_idx, &orig_idx) in miss_indices.iter().enumerate() {
+            let per_image: Vec<Tensor> = encoded
+                .iter()
+                .map(|t| t.get(batch_idx))
+                .collect::<candle_core::Result<Vec<_>>>()?;
+            guard.insert(image_hashes[orig_idx], per_image.clone());
+            hits[orig_idx] = Some(per_image);
+        }
+    }
+
+    assemble(hits, n_images)
+}
+
+/// Re-stack per-image tensors into full-batch tensors.
+fn assemble(hits: Vec<Option<Vec<Tensor>>>, n_images: usize) -> candle_core::Result<Vec<Tensor>> {
+    // Determine how many output tensors per image (e.g. 1 for most, 2 for deepstack).
+    let n_outputs = hits[0]
+        .as_ref()
+        .map(|v| v.len())
+        .unwrap_or(1);
+
+    let mut result = Vec::with_capacity(n_outputs);
+    for out_idx in 0..n_outputs {
+        let slices: Vec<Tensor> = (0..n_images)
+            .map(|i| {
+                hits[i]
+                    .as_ref()
+                    .expect("all images should be resolved")
+                    [out_idx]
+                    .clone()
+            })
+            .collect();
+        result.push(Tensor::stack(&slices, 0)?);
+    }
+    Ok(result)
 }
