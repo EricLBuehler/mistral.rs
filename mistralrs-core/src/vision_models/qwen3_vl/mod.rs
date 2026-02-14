@@ -431,9 +431,10 @@ impl Qwen3VLModel {
                 candle_core::bail!("pixel_values require image_grid_thw");
             };
             let mut pixel_values = pixel_values.clone();
-            let dims = pixel_values.dims();
-            if dims.len() == 3 {
-                pixel_values = pixel_values.reshape((dims[0] * dims[1], dims[2]))?;
+            let ndim = pixel_values.dims().len();
+            if ndim > 2 {
+                let last_dim = pixel_values.dim(ndim - 1)?;
+                pixel_values = pixel_values.reshape(((), last_dim))?;
             }
 
             let (image_embeds, deepstack_image_embeds) = if !image_hashes.is_empty() {
@@ -594,9 +595,10 @@ impl Qwen3VLModel {
                 candle_core::bail!("pixel_values_videos require video_grid_thw");
             };
             let mut pixel_values = pixel_values_videos.clone();
-            let dims = pixel_values.dims();
-            if dims.len() == 3 {
-                pixel_values = pixel_values.reshape((dims[0] * dims[1], dims[2]))?;
+            let ndim = pixel_values.dims().len();
+            if ndim > 2 {
+                let last_dim = pixel_values.dim(ndim - 1)?;
+                pixel_values = pixel_values.reshape(((), last_dim))?;
             }
             let (video_embeds, deepstack_video_embeds) =
                 self.vision.forward(&pixel_values, video_grid_thw_ref)?;
