@@ -352,9 +352,57 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             )
         };
 
+        // Compute the number of cached images before entering the closure,
+        // since input_seqs is not available inside it.
+        let total_cached_images = if is_prompt {
+            let mut count = 0usize;
+            for seq in input_seqs.iter() {
+                let prefix_len = seq.prefix_cache_len();
+                if prefix_len > 0 {
+                    let ranges = find_image_placeholder_ranges(
+                        seq.get_toks(),
+                        IMAGE_SPECIAL_TOKEN_ID as u32,
+                    );
+                    count += ranges
+                        .iter()
+                        .filter(|(start, _)| *start < prefix_len)
+                        .count();
+                }
+            }
+            count
+        } else {
+            0
+        };
+
         result.map(move |metadata| {
-            let pixel_values = pixel_values.clone();
-            let pixel_attention_mask = pixel_attention_mask.clone();
+            let mut pixel_values = pixel_values.clone();
+            let mut pixel_attention_mask = pixel_attention_mask.clone();
+            let mut image_sizes = image_sizes.clone();
+
+            // Trim pixel_values, image_attention_mask, and image_sizes to exclude
+            // images already covered by the prefix cache.
+            if total_cached_images > 0 {
+                if let Some(ref pv) = pixel_values {
+                    let total = pv.dim(0).unwrap();
+                    let remaining = total.saturating_sub(total_cached_images);
+                    if remaining > 0 {
+                        pixel_values =
+                            Some(pv.narrow(0, total_cached_images, remaining).unwrap());
+                        if let Some(ref mask) = pixel_attention_mask {
+                            pixel_attention_mask =
+                                Some(mask.narrow(0, total_cached_images, remaining).unwrap());
+                        }
+                        if let Some(ref sizes) = image_sizes {
+                            image_sizes = Some(sizes[total_cached_images..].to_vec());
+                        }
+                    } else {
+                        pixel_values = None;
+                        pixel_attention_mask = None;
+                        image_sizes = None;
+                    }
+                }
+            }
+
             let text_models_inputs_processor::InnerInputProcessorOutput {
                 inputs:
                     text_models_inputs_processor::InputMetadata {
@@ -376,7 +424,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 model_specific_args: Box::new(Phi4MMVisionSpecificArgs {
                     input_image_embeds: pixel_values,
                     image_attention_mask: pixel_attention_mask,
-                    image_sizes: image_sizes.clone(),
+                    image_sizes,
                     input_audio_embeds: input_audio_embeds.clone(),
                     audio_embed_sizes: audio_embed_sizes.clone(),
                     audio_attention_mask: audio_attention_mask.clone(),

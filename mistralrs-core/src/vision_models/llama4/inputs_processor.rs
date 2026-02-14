@@ -331,6 +331,43 @@ impl InputsProcessor for Llama4ImageProcessor {
             .unwrap()
         };
 
+        // Trim pixel_values to exclude images already covered by the prefix cache.
+        let mut pixel_values = if is_prompt { pixel_values } else { None };
+        if is_prompt {
+            if let Some(ref pv) = pixel_values {
+                let mut total_cached_images = 0usize;
+                for seq in input_seqs.iter() {
+                    let prefix_len = seq.prefix_cache_len();
+                    if prefix_len > 0 {
+                        if let (Some(start_id), Some(end_id)) = (
+                            tokenizer.token_to_id(IMAGE_START),
+                            tokenizer.token_to_id(IMAGE_END),
+                        ) {
+                            let ranges = find_image_delimited_ranges(
+                                seq.get_toks(),
+                                start_id,
+                                end_id,
+                            );
+                            total_cached_images += ranges
+                                .iter()
+                                .filter(|(start, _)| *start < prefix_len)
+                                .count();
+                        }
+                    }
+                }
+                if total_cached_images > 0 {
+                    let total = pv.dim(0).unwrap();
+                    let remaining = total.saturating_sub(total_cached_images);
+                    if remaining > 0 {
+                        pixel_values =
+                            Some(pv.narrow(0, total_cached_images, remaining).unwrap());
+                    } else {
+                        pixel_values = None;
+                    }
+                }
+            }
+        }
+
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,

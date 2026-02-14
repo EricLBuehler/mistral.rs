@@ -260,6 +260,42 @@ impl InputsProcessor for Mistral3ImageProcessor {
             .unwrap()
         };
 
+        // Trim pixel_values and image_sizes to exclude images already covered by the prefix cache.
+        let mut pixel_values = if is_prompt { pixel_values } else { None };
+        let mut image_sizes = if is_prompt { image_sizes } else { None };
+        if is_prompt {
+            if let Some(ref pv) = pixel_values {
+                let mut total_cached_images = 0usize;
+                for seq in input_seqs.iter() {
+                    let prefix_len = seq.prefix_cache_len();
+                    if prefix_len > 0 {
+                        if let Some(img_tok_id) = tokenizer.token_to_id(&self.image_token) {
+                            let ranges =
+                                find_image_placeholder_ranges(seq.get_toks(), img_tok_id);
+                            total_cached_images += ranges
+                                .iter()
+                                .filter(|(start, _)| *start < prefix_len)
+                                .count();
+                        }
+                    }
+                }
+                if total_cached_images > 0 {
+                    let total = pv.dim(0).unwrap();
+                    let remaining = total.saturating_sub(total_cached_images);
+                    if remaining > 0 {
+                        pixel_values =
+                            Some(pv.narrow(0, total_cached_images, remaining).unwrap());
+                        if let Some(ref sizes) = image_sizes {
+                            image_sizes = Some(sizes[total_cached_images..].to_vec());
+                        }
+                    } else {
+                        pixel_values = None;
+                        image_sizes = None;
+                    }
+                }
+            }
+        }
+
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,

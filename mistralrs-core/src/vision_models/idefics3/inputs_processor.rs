@@ -268,6 +268,46 @@ impl InputsProcessor for Idefics3ImageProcessor {
             .unwrap()
         };
 
+        // Trim pixel_values and pixel_attention_mask to exclude sub-images
+        // already covered by the prefix cache.
+        let mut pixel_values = if is_prompt { pixel_values } else { None };
+        let mut pixel_attention_mask = if is_prompt { pixel_attention_mask } else { None };
+        if is_prompt {
+            if let Some(ref pv) = pixel_values {
+                let mut total_cached = 0usize;
+                for seq in input_seqs.iter() {
+                    let prefix_len = seq.prefix_cache_len();
+                    if prefix_len > 0 {
+                        if let Some(fake_id) = tokenizer.token_to_id(FAKE_IMAGE_TOKEN) {
+                            let ranges = find_image_delimited_ranges(
+                                seq.get_toks(),
+                                fake_id,
+                                fake_id,
+                            );
+                            total_cached += ranges
+                                .iter()
+                                .filter(|(start, _)| *start < prefix_len)
+                                .count();
+                        }
+                    }
+                }
+                if total_cached > 0 {
+                    let total = pv.dim(1).unwrap();
+                    let remaining = total.saturating_sub(total_cached);
+                    if remaining > 0 {
+                        pixel_values = Some(pv.narrow(1, total_cached, remaining).unwrap());
+                        if let Some(ref mask) = pixel_attention_mask {
+                            pixel_attention_mask =
+                                Some(mask.narrow(1, total_cached, remaining).unwrap());
+                        }
+                    } else {
+                        pixel_values = None;
+                        pixel_attention_mask = None;
+                    }
+                }
+            }
+        }
+
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
