@@ -162,3 +162,246 @@ fn assemble(hits: Vec<Option<Vec<Tensor>>>, n_images: usize) -> candle_core::Res
     }
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::{Device, Tensor};
+
+    fn dummy_tensor(val: f32) -> Tensor {
+        Tensor::new(&[val], &Device::Cpu).unwrap()
+    }
+
+    // -----------------------------------------------------------------------
+    // EncoderCacheManager unit tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_insert_and_get() {
+        let mut cache = EncoderCacheManager::new(4);
+        let t = dummy_tensor(1.0);
+        cache.insert(100, vec![t.clone()]);
+
+        let result = cache.get(100);
+        assert!(result.is_some());
+        let result = result.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].to_vec1::<f32>().unwrap(),
+            t.to_vec1::<f32>().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_get_miss() {
+        let mut cache = EncoderCacheManager::new(4);
+        assert!(cache.get(999).is_none());
+    }
+
+    #[test]
+    fn test_lru_eviction() {
+        let mut cache = EncoderCacheManager::new(3);
+        cache.insert(1, vec![dummy_tensor(1.0)]);
+        cache.insert(2, vec![dummy_tensor(2.0)]);
+        cache.insert(3, vec![dummy_tensor(3.0)]);
+
+        // Cache is full. Inserting a 4th should evict key=1 (oldest).
+        cache.insert(4, vec![dummy_tensor(4.0)]);
+
+        assert!(cache.get(1).is_none(), "key 1 should have been evicted");
+        assert!(cache.get(2).is_some());
+        assert!(cache.get(3).is_some());
+        assert!(cache.get(4).is_some());
+    }
+
+    #[test]
+    fn test_get_bumps_lru_order() {
+        let mut cache = EncoderCacheManager::new(3);
+        cache.insert(1, vec![dummy_tensor(1.0)]);
+        cache.insert(2, vec![dummy_tensor(2.0)]);
+        cache.insert(3, vec![dummy_tensor(3.0)]);
+
+        // Access key=1 to bump it to most-recently-used.
+        let _ = cache.get(1);
+
+        // Now key=2 is the oldest. Inserting key=4 should evict key=2.
+        cache.insert(4, vec![dummy_tensor(4.0)]);
+
+        assert!(cache.get(1).is_some(), "key 1 was accessed, should survive");
+        assert!(cache.get(2).is_none(), "key 2 should have been evicted");
+        assert!(cache.get(3).is_some());
+        assert!(cache.get(4).is_some());
+    }
+
+    #[test]
+    fn test_insert_duplicate_updates_lru() {
+        let mut cache = EncoderCacheManager::new(3);
+        cache.insert(1, vec![dummy_tensor(1.0)]);
+        cache.insert(2, vec![dummy_tensor(2.0)]);
+        cache.insert(3, vec![dummy_tensor(3.0)]);
+
+        // Re-insert key=1 with new data — should bump it, not create duplicate.
+        cache.insert(1, vec![dummy_tensor(10.0)]);
+
+        // key=2 is now oldest.
+        cache.insert(4, vec![dummy_tensor(4.0)]);
+
+        assert!(
+            cache.get(1).is_some(),
+            "key 1 was re-inserted, should survive"
+        );
+        assert!(cache.get(2).is_none(), "key 2 should have been evicted");
+
+        // Verify the value was updated.
+        let val = cache.get(1).unwrap()[0].to_vec1::<f32>().unwrap();
+        assert_eq!(val, vec![10.0]);
+    }
+
+    #[test]
+    fn test_multi_tensor_entries() {
+        let mut cache = EncoderCacheManager::new(4);
+        let t1 = dummy_tensor(1.0);
+        let t2 = dummy_tensor(2.0);
+        cache.insert(42, vec![t1, t2]);
+
+        let result = cache.get(42).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].to_vec1::<f32>().unwrap(), vec![1.0]);
+        assert_eq!(result[1].to_vec1::<f32>().unwrap(), vec![2.0]);
+    }
+
+    // -----------------------------------------------------------------------
+    // cached_encode_images tests
+    // -----------------------------------------------------------------------
+
+    /// Build a (N, 1) pixel_values tensor for testing.
+    fn make_pixels(vals: &[f32]) -> Tensor {
+        Tensor::from_slice(vals, (vals.len(), 1), &Device::Cpu).unwrap()
+    }
+
+    #[test]
+    fn test_cached_encode_all_miss() {
+        let cache = Mutex::new(EncoderCacheManager::new(32));
+        let pixels = make_pixels(&[10.0, 20.0, 30.0]);
+        let hashes = [1u64, 2, 3];
+
+        let result = cached_encode_images(&hashes, &pixels, &cache, |pv| {
+            // Identity encoder: return input as-is.
+            Ok(vec![pv.clone()])
+        })
+        .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].dims(), &[3, 1]);
+        assert_eq!(
+            result[0].to_vec2::<f32>().unwrap(),
+            vec![vec![10.0], vec![20.0], vec![30.0]]
+        );
+
+        // All entries should now be cached.
+        let mut guard = cache.lock().unwrap();
+        assert!(guard.get(1).is_some());
+        assert!(guard.get(2).is_some());
+        assert!(guard.get(3).is_some());
+    }
+
+    #[test]
+    fn test_cached_encode_all_hit() {
+        let cache = Mutex::new(EncoderCacheManager::new(32));
+
+        // Pre-populate cache.
+        {
+            let mut guard = cache.lock().unwrap();
+            guard.insert(1, vec![Tensor::new(&[100.0f32], &Device::Cpu).unwrap()]);
+            guard.insert(2, vec![Tensor::new(&[200.0f32], &Device::Cpu).unwrap()]);
+        }
+
+        let pixels = make_pixels(&[10.0, 20.0]);
+        let hashes = [1u64, 2];
+
+        let encode_called = std::sync::atomic::AtomicBool::new(false);
+        let result = cached_encode_images(&hashes, &pixels, &cache, |pv| {
+            encode_called.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(vec![pv.clone()])
+        })
+        .unwrap();
+
+        assert!(
+            !encode_called.load(std::sync::atomic::Ordering::SeqCst),
+            "encode_fn should NOT be called when everything is cached"
+        );
+        // Should return the cached values, not the raw pixels.
+        assert_eq!(
+            result[0].to_vec2::<f32>().unwrap(),
+            vec![vec![100.0], vec![200.0]]
+        );
+    }
+
+    #[test]
+    fn test_cached_encode_partial_hit() {
+        let cache = Mutex::new(EncoderCacheManager::new(32));
+
+        // Pre-populate only hash=2.
+        {
+            let mut guard = cache.lock().unwrap();
+            guard.insert(2, vec![Tensor::new(&[200.0f32], &Device::Cpu).unwrap()]);
+        }
+
+        let pixels = make_pixels(&[10.0, 20.0, 30.0]);
+        let hashes = [1u64, 2, 3];
+
+        let result = cached_encode_images(&hashes, &pixels, &cache, |pv| {
+            // Encoder doubles the value (so we can distinguish from raw pixels).
+            Ok(vec![(pv * 2.0)?])
+        })
+        .unwrap();
+
+        let output = result[0].to_vec2::<f32>().unwrap();
+        // Image 0 (hash=1): miss, encoded = 10*2 = 20
+        assert_eq!(output[0], vec![20.0]);
+        // Image 1 (hash=2): hit, cached = 200
+        assert_eq!(output[1], vec![200.0]);
+        // Image 2 (hash=3): miss, encoded = 30*2 = 60
+        assert_eq!(output[2], vec![60.0]);
+    }
+
+    #[test]
+    fn test_cached_encode_multi_output() {
+        let cache = Mutex::new(EncoderCacheManager::new(32));
+        let pixels = make_pixels(&[5.0, 6.0]);
+        let hashes = [10u64, 20];
+
+        // Encoder returns two output tensors per image (e.g. main + deepstack).
+        let result = cached_encode_images(&hashes, &pixels, &cache, |pv| {
+            let main = pv.clone();
+            let aux = (pv * 10.0)?;
+            Ok(vec![main, aux])
+        })
+        .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(
+            result[0].to_vec2::<f32>().unwrap(),
+            vec![vec![5.0], vec![6.0]]
+        );
+        assert_eq!(
+            result[1].to_vec2::<f32>().unwrap(),
+            vec![vec![50.0], vec![60.0]]
+        );
+
+        // Second call should be fully cached and return the same values.
+        let result2 = cached_encode_images(&hashes, &pixels, &cache, |_| {
+            panic!("should not be called on full cache hit");
+        })
+        .unwrap();
+
+        assert_eq!(
+            result2[0].to_vec2::<f32>().unwrap(),
+            vec![vec![5.0], vec![6.0]]
+        );
+        assert_eq!(
+            result2[1].to_vec2::<f32>().unwrap(),
+            vec![vec![50.0], vec![60.0]]
+        );
+    }
+}
