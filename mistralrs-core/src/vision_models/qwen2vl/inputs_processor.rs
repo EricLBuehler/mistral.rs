@@ -513,12 +513,8 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                     if remaining_per_seq > 0 {
                         let trimmed: Vec<Tensor> = (0..n_seqs)
                             .map(|i| {
-                                grid.narrow(
-                                    0,
-                                    i * grid_per_seq + per_seq_cached,
-                                    remaining_per_seq,
-                                )
-                                .unwrap()
+                                grid.narrow(0, i * grid_per_seq + per_seq_cached, remaining_per_seq)
+                                    .unwrap()
                             })
                             .collect();
                         image_grid_thw = Some(Tensor::cat(&trimmed, 0).unwrap());

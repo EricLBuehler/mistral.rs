@@ -9,8 +9,7 @@ use crate::{
     models,
     ops::SplitOp,
     paged_attention::{
-        encoder_cache::EncoderCacheManager,
-        AttentionImplementation, ModelConfigMetadata,
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -256,13 +255,19 @@ impl Mistral3Model {
                 let mut per_image: Vec<Tensor> = Vec::with_capacity(n_images);
                 let mut miss_indices = Vec::new();
                 {
-                    let mut guard =
-                        self.encoder_cache.lock().expect("encoder cache lock poisoned");
+                    let mut guard = self
+                        .encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
                         if let Some(cached) = guard.get(hash) {
                             per_image.push(cached[0].clone());
                         } else {
-                            per_image.push(Tensor::zeros(1, candle_core::DType::F32, pixel_values.device())?);
+                            per_image.push(Tensor::zeros(
+                                1,
+                                candle_core::DType::F32,
+                                pixel_values.device(),
+                            )?);
                             miss_indices.push(i);
                         }
                     }
@@ -274,7 +279,10 @@ impl Mistral3Model {
                         let single_size = vec![image_sizes[idx]];
                         let feats = self.get_image_features(&single_pv, single_size)?;
                         {
-                            let mut guard = self.encoder_cache.lock().expect("encoder cache lock poisoned");
+                            let mut guard = self
+                                .encoder_cache
+                                .lock()
+                                .expect("encoder cache lock poisoned");
                             guard.insert(image_hashes[idx], vec![feats.clone()]);
                         }
                         per_image[idx] = feats;

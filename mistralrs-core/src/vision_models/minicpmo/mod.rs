@@ -1,4 +1,7 @@
-use std::{any::Any, sync::{Arc, Mutex}};
+use std::{
+    any::Any,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 pub use config::MiniCpmOConfig;
@@ -10,7 +13,9 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     models::qwen2,
-    paged_attention::{encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
@@ -119,8 +124,10 @@ impl MiniCpmOModel {
                 let mut per_image_features: Vec<Option<Tensor>> = vec![None; n_total_images];
                 let mut miss_indices = Vec::new();
                 {
-                    let mut guard =
-                        self.encoder_cache.lock().expect("encoder cache lock poisoned");
+                    let mut guard = self
+                        .encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
                         if let Some(cached) = guard.get(hash) {
                             per_image_features[i] = Some(cached[0].clone());
@@ -144,8 +151,7 @@ impl MiniCpmOModel {
                         let single_pv = single_pv.permute((0, 2, 1))?.reshape((1, 3, (), l))?;
                         let single_pv = single_pv.to_dtype(self.llm.embed_dtype())?;
 
-                        let max_patches =
-                            (tgt_size_vec[0][0] * tgt_size_vec[0][1]) as usize;
+                        let max_patches = (tgt_size_vec[0][0] * tgt_size_vec[0][1]) as usize;
                         let mut patch_attn_mask =
                             Tensor::zeros((1, 1, max_patches), DType::U8, device)?;
                         patch_attn_mask = patch_attn_mask.slice_assign(
@@ -210,8 +216,7 @@ impl MiniCpmOModel {
                     .permute((0, 2, 1))?
                     .reshape((b, 3, (), l))?;
 
-                let mut patch_attn_mask =
-                    Tensor::zeros((b, 1, max_patches), DType::U8, device)?;
+                let mut patch_attn_mask = Tensor::zeros((b, 1, max_patches), DType::U8, device)?;
                 for (i, tgt_sizes_vec_i) in tgt_sizes_vec.iter().enumerate().take(b) {
                     let n = (tgt_sizes_vec_i[0] * tgt_sizes_vec_i[1]) as usize;
                     patch_attn_mask = patch_attn_mask.slice_assign(

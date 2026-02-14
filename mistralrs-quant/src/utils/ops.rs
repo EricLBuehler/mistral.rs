@@ -2421,11 +2421,11 @@ pub fn flash_attn_sinks_metal(
 
 #[allow(dead_code)]
 struct FlashAttnSinksVarlenMetal {
-    key: Tensor,            // [total_kv, num_kv_heads, D]
-    value: Tensor,          // [total_kv, num_kv_heads, D]
-    sinks: Tensor,          // [num_heads], always f32
-    cu_seqlens_q: Tensor,   // [B+1] u32
-    cu_seqlens_k: Tensor,   // [B+1] u32
+    key: Tensor,          // [total_kv, num_kv_heads, D]
+    value: Tensor,        // [total_kv, num_kv_heads, D]
+    sinks: Tensor,        // [num_heads], always f32
+    cu_seqlens_q: Tensor, // [B+1] u32
+    cu_seqlens_k: Tensor, // [B+1] u32
     softmax_scale: f32,
     window_size: usize,
 }
@@ -2476,7 +2476,9 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
         let (csq_s, csq_l) = self.cu_seqlens_q.storage_and_layout();
         let csq_metal = match &*csq_s {
             candle_core::Storage::Metal(s) => s,
-            _ => candle_core::bail!("flash_attn_sinks_varlen_metal: cu_seqlens_q must be a Metal tensor"),
+            _ => candle_core::bail!(
+                "flash_attn_sinks_varlen_metal: cu_seqlens_q must be a Metal tensor"
+            ),
         };
         let csq_offset = csq_l.start_offset() * DType::U32.size_in_bytes();
 

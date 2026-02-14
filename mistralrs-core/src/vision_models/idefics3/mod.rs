@@ -4,7 +4,10 @@ mod config;
 mod inputs_processor;
 mod vision;
 
-use std::{any::Any, sync::{Arc, Mutex}};
+use std::{
+    any::Any,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 pub use config::Idefics3Config;
@@ -16,7 +19,9 @@ use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
     models::llama::Llama,
-    paged_attention::{encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
@@ -193,8 +198,10 @@ impl Idefics3Model {
                 let mut per_image: Vec<Option<Tensor>> = vec![None; n];
                 let mut miss_indices: Vec<usize> = Vec::new();
                 {
-                    let mut guard =
-                        self.encoder_cache.lock().expect("encoder cache lock poisoned");
+                    let mut guard = self
+                        .encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
                         if let Some(cached) = guard.get(hash) {
                             per_image[i] = Some(cached[0].clone());

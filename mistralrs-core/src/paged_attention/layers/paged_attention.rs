@@ -196,11 +196,7 @@ impl PagedAttention {
                     max_q: fp.max_q,
                     max_k: max_kv,
                     cumulative_seqlens_q: fp.cumulative_seqlens_q.clone(),
-                    cumulative_seqlens_k: input_metadata
-                        .cu_seqlens_kv
-                        .as_ref()
-                        .unwrap()
-                        .clone(),
+                    cumulative_seqlens_k: input_metadata.cu_seqlens_kv.as_ref().unwrap().clone(),
                     causal: fp.causal,
                 }
             });

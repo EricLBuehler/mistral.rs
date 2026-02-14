@@ -1,6 +1,9 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{any::Any, sync::{Arc, Mutex}};
+use std::{
+    any::Any,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
@@ -12,7 +15,9 @@ use crate::{
     device_map::DeviceMapper,
     layers::CausalMasker,
     layers_masker::{masked_fill, PastKvLenCache},
-    paged_attention::{encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
@@ -317,8 +322,10 @@ impl Qwen2_5VLModel {
                     let mut per_image: Vec<Option<Tensor>> = vec![None; n_images];
                     let mut miss_indices = Vec::new();
                     {
-                        let mut guard =
-                            self.encoder_cache.lock().expect("encoder cache lock poisoned");
+                        let mut guard = self
+                            .encoder_cache
+                            .lock()
+                            .expect("encoder cache lock poisoned");
                         for (i, &hash) in image_hashes.iter().enumerate() {
                             if let Some(cached) = guard.get(hash) {
                                 per_image[i] = Some(cached[0].clone());
@@ -329,10 +336,8 @@ impl Qwen2_5VLModel {
                     }
 
                     if miss_indices.is_empty() {
-                        let parts: Vec<Tensor> = per_image
-                            .into_iter()
-                            .map(|t| t.unwrap())
-                            .collect();
+                        let parts: Vec<Tensor> =
+                            per_image.into_iter().map(|t| t.unwrap()).collect();
                         Tensor::cat(&parts, 0)?
                     } else {
                         // Collect miss pixel slices and grid rows
@@ -341,8 +346,7 @@ impl Qwen2_5VLModel {
                         let mut offset = 0usize;
                         for (i, &n_patches) in patches_per_image.iter().enumerate() {
                             if miss_indices.contains(&i) {
-                                miss_pixel_slices
-                                    .push(pixel_values.narrow(0, offset, n_patches)?);
+                                miss_pixel_slices.push(pixel_values.narrow(0, offset, n_patches)?);
                                 miss_grid_rows.push(grid_thw.i(i)?);
                             }
                             offset += n_patches;
@@ -375,18 +379,13 @@ impl Qwen2_5VLModel {
                                 let n_out = miss_output_tokens[j];
                                 let single = encoded.narrow(0, enc_offset, n_out)?;
                                 enc_offset += n_out;
-                                guard.insert(
-                                    image_hashes[orig_idx],
-                                    vec![single.clone()],
-                                );
+                                guard.insert(image_hashes[orig_idx], vec![single.clone()]);
                                 per_image[orig_idx] = Some(single);
                             }
                         }
 
-                        let parts: Vec<Tensor> = per_image
-                            .into_iter()
-                            .map(|t| t.unwrap())
-                            .collect();
+                        let parts: Vec<Tensor> =
+                            per_image.into_iter().map(|t| t.unwrap()).collect();
                         Tensor::cat(&parts, 0)?
                     }
                 } else {

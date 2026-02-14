@@ -236,8 +236,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
                         );
                     } else {
                         pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
-                        pixel_attention_mask_accum
-                            .push(pixel_attention_mask.unsqueeze(0).unwrap());
+                        pixel_attention_mask_accum.push(pixel_attention_mask.unsqueeze(0).unwrap());
                     }
                 }
             }
@@ -304,12 +303,21 @@ impl InputsProcessor for Idefics3ImageProcessor {
         };
 
         let image_hashes: Vec<u64> = if is_prompt {
-            input_seqs.iter().flat_map(|seq| {
-                seq.image_hashes().map(|h| {
-                    let cached = seq.count_prefix_cached_mm_items();
-                    if cached < h.len() { h[cached..].to_vec() } else { vec![] }
-                }).unwrap_or_default()
-            }).collect()
+            input_seqs
+                .iter()
+                .flat_map(|seq| {
+                    seq.image_hashes()
+                        .map(|h| {
+                            let cached = seq.count_prefix_cached_mm_items();
+                            if cached < h.len() {
+                                h[cached..].to_vec()
+                            } else {
+                                vec![]
+                            }
+                        })
+                        .unwrap_or_default()
+                })
+                .collect()
         } else {
             vec![]
         };

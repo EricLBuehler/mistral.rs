@@ -11,7 +11,12 @@ use either::Either;
 use mistralrs_quant::{
     BitWiseOp, NonZeroOp, QuantMethod, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder,
 };
-use std::{any::Any, collections::HashMap, fmt::Debug, sync::{Arc, Mutex}};
+use std::{
+    any::Any,
+    collections::HashMap,
+    fmt::Debug,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
@@ -23,7 +28,10 @@ use crate::{
         PhiRotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
-    paged_attention::{encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        PagedAttention,
+    },
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -276,7 +284,6 @@ impl Attention {
                     input_metadata,
                     &self.sdpa_params,
                     Some(flash_params),
-
                 )?,
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -294,7 +301,6 @@ impl Attention {
                         &input_metadata,
                         &self.sdpa_params,
                         Some(flash_params),
-    
                     )?
                 }
             },
@@ -752,8 +758,7 @@ impl ImageEmbedding {
                     let mut per_image_cached: Vec<Option<Tensor>> = vec![None; bs];
                     let mut miss_indices = Vec::new();
                     if n_hashes > 0 && n_hashes == bs {
-                        let mut guard =
-                            encoder_cache.lock().expect("encoder cache lock poisoned");
+                        let mut guard = encoder_cache.lock().expect("encoder cache lock poisoned");
                         for (i, &hash) in image_hashes.iter().enumerate() {
                             if let Some(cached) = guard.get(hash) {
                                 per_image_cached[i] = Some(cached[0].clone());
@@ -774,10 +779,8 @@ impl ImageEmbedding {
                             .map(|&i| pixel_values.get(i))
                             .collect::<Result<Vec<_>>>()?;
                         let miss_pv = Tensor::stack(&miss_pv, 0)?;
-                        let miss_features =
-                            self.get_image_features(&miss_pv.flatten(0, 1)?)?;
-                        let base_feat_dim =
-                            (miss_features.dims()[1] as f32).sqrt() as usize;
+                        let miss_features = self.get_image_features(&miss_pv.flatten(0, 1)?)?;
+                        let base_feat_dim = (miss_features.dims()[1] as f32).sqrt() as usize;
                         assert_eq!(base_feat_dim, 24);
                         let miss_bs = miss_indices.len();
                         let miss_features = miss_features.reshape((
@@ -787,8 +790,7 @@ impl ImageEmbedding {
                             self.image_dim_out,
                         ))?;
                         for (batch_idx, &orig_idx) in miss_indices.iter().enumerate() {
-                            img_features_per_image[orig_idx] =
-                                Some(miss_features.get(batch_idx)?);
+                            img_features_per_image[orig_idx] = Some(miss_features.get(batch_idx)?);
                         }
                     }
 
@@ -865,32 +867,28 @@ impl ImageEmbedding {
                         // (1, num_img_tokens, 1024*4)
 
                         let img = match self.hd_transform_order.as_str() {
-                            "glb_sub" => {
-                                Tensor::cat(
-                                    &[
-                                        glb_img,
-                                        self.glb_gn
-                                            .as_ref()
-                                            .expect("Need `glb_gn` if `use_hd_transform`")
-                                            .clone(),
-                                        sub_img,
-                                    ],
-                                    1,
-                                )?
-                            }
-                            "sub_glb" => {
-                                Tensor::cat(
-                                    &[
-                                        sub_img,
-                                        self.glb_gn
-                                            .as_ref()
-                                            .expect("Need `glb_gn` if `use_hd_transform`")
-                                            .clone(),
-                                        glb_img,
-                                    ],
-                                    1,
-                                )?
-                            }
+                            "glb_sub" => Tensor::cat(
+                                &[
+                                    glb_img,
+                                    self.glb_gn
+                                        .as_ref()
+                                        .expect("Need `glb_gn` if `use_hd_transform`")
+                                        .clone(),
+                                    sub_img,
+                                ],
+                                1,
+                            )?,
+                            "sub_glb" => Tensor::cat(
+                                &[
+                                    sub_img,
+                                    self.glb_gn
+                                        .as_ref()
+                                        .expect("Need `glb_gn` if `use_hd_transform`")
+                                        .clone(),
+                                    glb_img,
+                                ],
+                                1,
+                            )?,
                             other => {
                                 candle_core::bail!("Invalid hd_transform_order=`{other}`");
                             }
@@ -906,9 +904,8 @@ impl ImageEmbedding {
 
                         // Cache the projected features for this image
                         if n_hashes > 0 && bs_ < n_hashes {
-                            let mut guard = encoder_cache
-                                .lock()
-                                .expect("encoder cache lock poisoned");
+                            let mut guard =
+                                encoder_cache.lock().expect("encoder cache lock poisoned");
                             guard.insert(image_hashes[bs_], vec![layerout.clone()]);
                         }
 
@@ -925,8 +922,7 @@ impl ImageEmbedding {
                     let mut per_image_features: Vec<Option<Tensor>> = vec![None; n_imgs];
                     let mut miss_indices = Vec::new();
                     {
-                        let mut guard =
-                            encoder_cache.lock().expect("encoder cache lock poisoned");
+                        let mut guard = encoder_cache.lock().expect("encoder cache lock poisoned");
                         for (i, &hash) in image_hashes.iter().enumerate() {
                             if let Some(cached) = guard.get(hash) {
                                 per_image_features[i] = Some(cached[0].clone());
@@ -945,9 +941,8 @@ impl ImageEmbedding {
                                 .reshape(((), self.image_dim_out))?;
                             let feats = self.layers.forward(&tt)?;
                             {
-                                let mut guard = encoder_cache
-                                    .lock()
-                                    .expect("encoder cache lock poisoned");
+                                let mut guard =
+                                    encoder_cache.lock().expect("encoder cache lock poisoned");
                                 guard.insert(image_hashes[idx], vec![feats.clone()]);
                             }
                             per_image_features[idx] = Some(feats);
@@ -1311,7 +1306,10 @@ impl VisionModel for Model {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let Phi3VisionSpecificArgs { image_sizes, image_hashes } = *model_specific_args
+        let Phi3VisionSpecificArgs {
+            image_sizes,
+            image_hashes,
+        } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Phi3VisionSpecificArgs`");
         self.forward(

@@ -104,7 +104,10 @@ fn sinks_attn_varlen(
 
     // Handle K/V shape: 4D [1, kv_H, total, D] -> 3D [total, kv_H, D], or 3D as-is
     let (k_packed, v_packed) = if k.dims().len() == 4 {
-        (k.squeeze(0)?.transpose(0, 1)?, v.squeeze(0)?.transpose(0, 1)?)
+        (
+            k.squeeze(0)?.transpose(0, 1)?,
+            v.squeeze(0)?.transpose(0, 1)?,
+        )
     } else {
         (k.clone(), v.clone())
     };
@@ -144,7 +147,15 @@ fn sinks_attn_varlen(
     // CPU fallback: per-sequence loop (to_vec1 is fine on CPU path)
     let cu_q_vec: Vec<u32> = cu_seqlens_q.to_vec1()?;
     let cu_k_vec: Vec<u32> = cu_seqlens_k.to_vec1()?;
-    sinks_attn_cpu_varlen(q, &k_packed, &v_packed, sinks, sdpa_params, &cu_q_vec, &cu_k_vec)
+    sinks_attn_cpu_varlen(
+        q,
+        &k_packed,
+        &v_packed,
+        sinks,
+        sdpa_params,
+        &cu_q_vec,
+        &cu_k_vec,
+    )
 }
 
 /// CPU fallback: unfused matmul + softmax_with_sinks

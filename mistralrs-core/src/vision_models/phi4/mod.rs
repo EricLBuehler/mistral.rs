@@ -1,6 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{any::Any, collections::HashMap, sync::{Arc, Mutex}};
+use std::{
+    any::Any,
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{Device, Result, Tensor, D};
 use candle_nn::Module;
@@ -13,7 +17,10 @@ use crate::{
     device_map::DeviceMapper,
     layers::{self, Activation, CausalMasker, Phi4MMRotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
-    paged_attention::{encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        PagedAttention,
+    },
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -152,7 +159,6 @@ impl Attention {
                     input_metadata,
                     &self.sdpa_params,
                     Some(flash_params),
-
                 )?,
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -170,7 +176,6 @@ impl Attention {
                         &input_metadata,
                         &self.sdpa_params,
                         Some(flash_params),
-    
                     )?
                 }
             },
@@ -479,6 +484,7 @@ impl Phi4MMModel {
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
+        image_hashes: &[u64],
     ) -> Result<Tensor> {
         let mut xs = if input_image_embeds.is_some() || input_audio_embeds.is_some() {
             let projection_mode = match (&input_image_embeds, &input_audio_embeds) {
@@ -496,6 +502,8 @@ impl Phi4MMModel {
                 audio_embed_sizes,
                 audio_attention_mask.as_ref(),
                 projection_mode,
+                image_hashes,
+                &self.encoder_cache,
             )?
         } else {
             self.embed_tokens.forward(input_ids)?
@@ -575,7 +583,7 @@ impl VisionModel for Phi4MMModel {
             input_audio_embeds,
             audio_attention_mask,
             audio_embed_sizes,
-            image_hashes: _,
+            image_hashes,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Phi4MMVisionSpecificArgs`");
@@ -593,6 +601,7 @@ impl VisionModel for Phi4MMModel {
             context_lens,
             metadata,
             flash_params,
+            &image_hashes,
         )
     }
     fn cache(&self) -> &EitherCache {

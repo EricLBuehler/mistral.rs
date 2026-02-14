@@ -1,6 +1,9 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{any::Any, sync::{Arc, Mutex}};
+use std::{
+    any::Any,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
@@ -12,7 +15,9 @@ use crate::{
     device_map::DeviceMapper,
     layers::CausalMasker,
     layers_masker::{masked_fill, PastKvLenCache},
-    paged_attention::{encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
@@ -442,9 +447,7 @@ impl Qwen3VLModel {
                 let output_tokens_per_image: Vec<usize> = grid_data
                     .iter()
                     .map(|row| {
-                        (row[0] as usize)
-                            * (row[1] as usize / merge)
-                            * (row[2] as usize / merge)
+                        (row[0] as usize) * (row[1] as usize / merge) * (row[2] as usize / merge)
                     })
                     .collect();
 
@@ -452,8 +455,10 @@ impl Qwen3VLModel {
                 let mut per_image: Vec<Option<Vec<Tensor>>> = vec![None; n_images];
                 let mut miss_indices = Vec::new();
                 {
-                    let mut guard =
-                        self.encoder_cache.lock().expect("encoder cache lock poisoned");
+                    let mut guard = self
+                        .encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
                         if let Some(cached) = guard.get(hash) {
                             per_image[i] = Some(cached);
@@ -487,8 +492,7 @@ impl Qwen3VLModel {
                     let mut pv_offset = 0usize;
                     for (i, &n_patches) in patches_per_image.iter().enumerate() {
                         if miss_indices.contains(&i) {
-                            miss_pixel_slices
-                                .push(pixel_values.narrow(0, pv_offset, n_patches)?);
+                            miss_pixel_slices.push(pixel_values.narrow(0, pv_offset, n_patches)?);
                             miss_grid_rows.push(image_grid_thw_ref.i(i)?);
                         }
                         pv_offset += n_patches;

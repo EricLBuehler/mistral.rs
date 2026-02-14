@@ -224,7 +224,8 @@ impl InputsProcessor for Llama4ImageProcessor {
                 let n_images = pixel_values.dim(0).unwrap_or(0);
                 if cached < n_images {
                     if cached > 0 {
-                        pixel_values_accum.push(pixel_values.narrow(0, cached, n_images - cached).unwrap());
+                        pixel_values_accum
+                            .push(pixel_values.narrow(0, cached, n_images - cached).unwrap());
                     } else {
                         pixel_values_accum.push(pixel_values);
                     }
@@ -346,12 +347,21 @@ impl InputsProcessor for Llama4ImageProcessor {
         let pixel_values = if is_prompt { pixel_values } else { None };
 
         let image_hashes: Vec<u64> = if is_prompt {
-            input_seqs.iter().flat_map(|seq| {
-                seq.image_hashes().map(|h| {
-                    let cached = seq.count_prefix_cached_mm_items();
-                    if cached < h.len() { h[cached..].to_vec() } else { vec![] }
-                }).unwrap_or_default()
-            }).collect()
+            input_seqs
+                .iter()
+                .flat_map(|seq| {
+                    seq.image_hashes()
+                        .map(|h| {
+                            let cached = seq.count_prefix_cached_mm_items();
+                            if cached < h.len() {
+                                h[cached..].to_vec()
+                            } else {
+                                vec![]
+                            }
+                        })
+                        .unwrap_or_default()
+                })
+                .collect()
         } else {
             vec![]
         };

@@ -229,7 +229,6 @@ impl Attention {
                     input_metadata,
                     &self.sdpa_params,
                     flash_params,
-
                 )?,
                 None => {
                     let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
@@ -244,7 +243,6 @@ impl Attention {
                         &input_metadata,
                         &self.sdpa_params,
                         flash_params,
-    
                     )?
                 }
             },

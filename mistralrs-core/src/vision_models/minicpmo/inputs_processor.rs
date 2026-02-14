@@ -451,12 +451,21 @@ impl InputsProcessor for MiniCpmOImageProcessor {
         }
 
         let image_hashes: Vec<u64> = if is_prompt {
-            input_seqs.iter().flat_map(|seq| {
-                seq.image_hashes().map(|h| {
-                    let cached = seq.count_prefix_cached_mm_items();
-                    if cached < h.len() { h[cached..].to_vec() } else { vec![] }
-                }).unwrap_or_default()
-            }).collect()
+            input_seqs
+                .iter()
+                .flat_map(|seq| {
+                    seq.image_hashes()
+                        .map(|h| {
+                            let cached = seq.count_prefix_cached_mm_items();
+                            if cached < h.len() {
+                                h[cached..].to_vec()
+                            } else {
+                                vec![]
+                            }
+                        })
+                        .unwrap_or_default()
+                })
+                .collect()
         } else {
             vec![]
         };

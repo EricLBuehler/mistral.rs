@@ -6,7 +6,11 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
 use mistralrs_quant::{Convolution, ShardedVarBuilder};
 use serde::Deserialize;
-use std::{any::Any, ops::Mul, sync::{Arc, Mutex}};
+use std::{
+    any::Any,
+    ops::Mul,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
@@ -16,7 +20,9 @@ use crate::{
         MatMul, QLinear, RmsNorm,
     },
     models::mistral::Model as Mistral,
-    paged_attention::{encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
@@ -1178,8 +1184,10 @@ impl Idefics2 {
                 let mut per_image: Vec<Option<Tensor>> = vec![None; n];
                 let mut miss_indices: Vec<usize> = Vec::new();
                 {
-                    let mut guard =
-                        self.encoder_cache.lock().expect("encoder cache lock poisoned");
+                    let mut guard = self
+                        .encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
                         if let Some(cached) = guard.get(hash) {
                             per_image[i] = Some(cached[0].clone());

@@ -10,7 +10,9 @@ use text::TextModel;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
-    paged_attention::{encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
@@ -178,8 +180,10 @@ impl Gemma3nModel {
                 let mut per_image: Vec<Option<Tensor>> = vec![None; n_images];
                 let mut miss_indices = Vec::new();
                 {
-                    let mut guard =
-                        self.encoder_cache.lock().expect("encoder cache lock poisoned");
+                    let mut guard = self
+                        .encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
                         if let Some(cached) = guard.get(hash) {
                             per_image[i] = Some(cached[0].clone());
@@ -196,9 +200,10 @@ impl Gemma3nModel {
                             .forward(&single_pv.to_dtype(self.vision_dtype)?)?
                             .to_dtype(input_embeds.dtype())?;
                         let (_, channels, h, w) = vision_features.dims4()?;
-                        let vision_features = vision_features
-                            .permute((0, 2, 3, 1))?
-                            .reshape((1, h * w, channels))?;
+                        let vision_features =
+                            vision_features
+                                .permute((0, 2, 3, 1))?
+                                .reshape((1, h * w, channels))?;
                         let feats = self.embed_vision.forward_vision(&vision_features)?;
                         let feats = feats.squeeze(0)?;
                         {
@@ -211,8 +216,7 @@ impl Gemma3nModel {
                         per_image[idx] = Some(feats);
                     }
                 }
-                let parts: Vec<Tensor> =
-                    per_image.into_iter().map(|t| t.unwrap()).collect();
+                let parts: Vec<Tensor> = per_image.into_iter().map(|t| t.unwrap()).collect();
                 Tensor::stack(&parts, 0)?
             } else {
                 // Original path: no caching
@@ -221,9 +225,11 @@ impl Gemma3nModel {
                     .forward(&pixel_values.to_dtype(self.vision_dtype)?)?
                     .to_dtype(input_embeds.dtype())?;
                 let (batch_size, channels, h, w) = vision_features.dims4()?;
-                let vision_features = vision_features
-                    .permute((0, 2, 3, 1))?
-                    .reshape((batch_size, h * w, channels))?;
+                let vision_features = vision_features.permute((0, 2, 3, 1))?.reshape((
+                    batch_size,
+                    h * w,
+                    channels,
+                ))?;
                 self.embed_vision.forward_vision(&vision_features)?
             };
 
@@ -285,8 +291,10 @@ impl Gemma3nModel {
                 let mut per_audio: Vec<Option<Tensor>> = vec![None; n_audio];
                 let mut miss_indices = Vec::new();
                 {
-                    let mut guard =
-                        self.encoder_cache.lock().expect("encoder cache lock poisoned");
+                    let mut guard = self
+                        .encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned");
                     for (i, &hash) in audio_hashes.iter().enumerate() {
                         if let Some(cached) = guard.get(hash) {
                             per_audio[i] = Some(cached[0].clone());
@@ -299,10 +307,9 @@ impl Gemma3nModel {
                     for &idx in &miss_indices {
                         let single_mel = audio_mel.get(idx)?.unsqueeze(0)?;
                         let single_mask = audio_mel_mask.get(idx)?.unsqueeze(0)?;
-                        let (audio_features, _) = self.audio_tower.forward(
-                            &single_mel.to_dtype(input_embeds.dtype())?,
-                            &single_mask,
-                        )?;
+                        let (audio_features, _) = self
+                            .audio_tower
+                            .forward(&single_mel.to_dtype(input_embeds.dtype())?, &single_mask)?;
                         let mut feats = self.embed_audio.forward_vision(&audio_features)?;
 
                         // Pad audio embeddings to expected length
@@ -310,12 +317,9 @@ impl Gemma3nModel {
                         let num_audio_embeddings = feats.dim(1)?;
                         if num_audio_embeddings < expected_audio_tokens {
                             let audio_vocab_size = self.cfg.audio_config.vocab_size;
-                            let padding_token_id = Tensor::new(
-                                &[(audio_vocab_size - 1) as u32],
-                                feats.device(),
-                            )?;
-                            let padding_embed =
-                                self.embed_audio.forward_text(&padding_token_id)?;
+                            let padding_token_id =
+                                Tensor::new(&[(audio_vocab_size - 1) as u32], feats.device())?;
+                            let padding_embed = self.embed_audio.forward_text(&padding_token_id)?;
                             let num_padding = expected_audio_tokens - num_audio_embeddings;
                             let padding_embeds =
                                 padding_embed.unsqueeze(0)?.repeat(&[1, num_padding, 1])?;
@@ -332,8 +336,7 @@ impl Gemma3nModel {
                         per_audio[idx] = Some(feats);
                     }
                 }
-                let parts: Vec<Tensor> =
-                    per_audio.into_iter().map(|t| t.unwrap()).collect();
+                let parts: Vec<Tensor> = per_audio.into_iter().map(|t| t.unwrap()).collect();
                 Tensor::stack(&parts, 0)?
             } else {
                 // Original path: no caching
@@ -349,9 +352,8 @@ impl Gemma3nModel {
                         Tensor::new(&[(audio_vocab_size - 1) as u32], audio_embeds.device())?;
                     let padding_embed = self.embed_audio.forward_text(&padding_token_id)?;
                     let num_padding = expected_audio_tokens - num_audio_embeddings;
-                    let padding_embeds = padding_embed
-                        .unsqueeze(0)?
-                        .repeat(&[1, num_padding, 1])?;
+                    let padding_embeds =
+                        padding_embed.unsqueeze(0)?.repeat(&[1, num_padding, 1])?;
                     audio_embeds = Tensor::cat(&[&audio_embeds, &padding_embeds], 1)?;
                 }
                 audio_embeds

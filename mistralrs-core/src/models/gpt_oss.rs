@@ -373,7 +373,6 @@ impl Attention {
         }
         Ok(res)
     }
-
 }
 
 struct GptOssMoE {

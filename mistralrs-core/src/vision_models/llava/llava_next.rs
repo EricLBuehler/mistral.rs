@@ -250,8 +250,10 @@ impl Model {
             let mut per_image: Vec<Option<Tensor>> = vec![None; n_images];
             let mut miss_indices: Vec<usize> = Vec::new();
             {
-                let mut guard =
-                    self.encoder_cache.lock().expect("encoder cache lock poisoned");
+                let mut guard = self
+                    .encoder_cache
+                    .lock()
+                    .expect("encoder cache lock poisoned");
                 for (i, &hash) in image_hashes.iter().enumerate() {
                     if let Some(cached) = guard.get(hash) {
                         per_image[i] = Some(cached[0].clone());
@@ -274,8 +276,10 @@ impl Model {
                 let miss_encoded = self.encode_images(&miss_pixels)?;
 
                 let mut offset = 0;
-                let mut guard =
-                    self.encoder_cache.lock().expect("encoder cache lock poisoned");
+                let mut guard = self
+                    .encoder_cache
+                    .lock()
+                    .expect("encoder cache lock poisoned");
                 for &idx in &miss_indices {
                     let ns = num_image_samples[idx];
                     let encoded = miss_encoded.i(offset..offset + ns)?;

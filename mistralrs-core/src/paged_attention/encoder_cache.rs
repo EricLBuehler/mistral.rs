@@ -64,16 +64,6 @@ impl EncoderCacheManager {
         }
         self.cache.insert(content_hash, outputs);
     }
-
-    /// Number of cached entries.
-    pub fn len(&self) -> usize {
-        self.cache.len()
-    }
-
-    /// Whether the cache is empty.
-    pub fn is_empty(&self) -> bool {
-        self.cache.is_empty()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -161,21 +151,12 @@ pub fn cached_encode_images(
 /// Re-stack per-image tensors into full-batch tensors.
 fn assemble(hits: Vec<Option<Vec<Tensor>>>, n_images: usize) -> candle_core::Result<Vec<Tensor>> {
     // Determine how many output tensors per image (e.g. 1 for most, 2 for deepstack).
-    let n_outputs = hits[0]
-        .as_ref()
-        .map(|v| v.len())
-        .unwrap_or(1);
+    let n_outputs = hits[0].as_ref().map(|v| v.len()).unwrap_or(1);
 
     let mut result = Vec::with_capacity(n_outputs);
     for out_idx in 0..n_outputs {
         let slices: Vec<Tensor> = (0..n_images)
-            .map(|i| {
-                hits[i]
-                    .as_ref()
-                    .expect("all images should be resolved")
-                    [out_idx]
-                    .clone()
-            })
+            .map(|i| hits[i].as_ref().expect("all images should be resolved")[out_idx].clone())
             .collect();
         result.push(Tensor::stack(&slices, 0)?);
     }
