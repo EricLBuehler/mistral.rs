@@ -607,8 +607,7 @@ template <typename T, int HEAD_DIM, int BR, int BC>
 
   const int q_row = q_tile_idx * BR + simd_gid;
 
-  if (q_row >= my_q_len)
-    return;
+  const bool q_row_valid = (q_row < my_q_len);
 
   const int kv_offset = my_kv_len - my_q_len;
 
@@ -620,7 +619,7 @@ template <typename T, int HEAD_DIM, int BR, int BC>
   float q_reg[EPT];
   for (int i = 0; i < EPT; i++) {
     const int d = i * SIMD_SIZE + simd_lid;
-    q_reg[i] = (d < HEAD_DIM) ? float(Q[q_offset + d]) * scale : 0.0f;
+    q_reg[i] = (q_row_valid && d < HEAD_DIM) ? float(Q[q_offset + d]) * scale : 0.0f;
   }
 
   float o_acc[EPT];
@@ -671,57 +670,62 @@ template <typename T, int HEAD_DIM, int BR, int BC>
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    // --- Pass 1: Compute scores ---
-    float tile_max = -INFINITY;
-
-    for (int j = 0; j < tile_len; j++) {
-      const int kv_pos = tile_start + j;
-
-      if (kv_pos >= my_kv_end) {
-        for (int jj = j; jj < tile_len; jj++)
-          scores[jj] = -INFINITY;
-        break;
-      }
-
-      if (kv_pos < my_kv_start_w) {
-        scores[j] = -INFINITY;
-        continue;
-      }
-
-      float dot = 0.0f;
-      for (int i = 0; i < EPT; i++) {
-        dot += q_reg[i] * k_smem[j * D_PAD + i * SIMD_SIZE + simd_lid];
-      }
-      dot = warp_reduce_sum(dot);
-
-      scores[j] = dot;
-      tile_max = max(tile_max, dot);
-    }
-
-    // --- Pass 2: Online softmax update + V accumulation ---
-    if (tile_max > -INFINITY) {
-      const float m_new = max(m_i, tile_max);
-      const float rescale = fast::exp(m_i - m_new);
-
-      for (int i = 0; i < EPT; i++)
-        o_acc[i] *= rescale;
-      l_i *= rescale;
-      m_i = m_new;
+    if (q_row_valid) {
+      // --- Pass 1: Compute scores ---
+      float tile_max = -INFINITY;
 
       for (int j = 0; j < tile_len; j++) {
-        if (scores[j] <= -INFINITY)
+        const int kv_pos = tile_start + j;
+
+        if (kv_pos >= my_kv_end) {
+          for (int jj = j; jj < tile_len; jj++)
+            scores[jj] = -INFINITY;
+          break;
+        }
+
+        if (kv_pos < my_kv_start_w) {
+          scores[j] = -INFINITY;
           continue;
+        }
 
-        const float p = fast::exp(scores[j] - m_i);
-        l_i += p;
-
+        float dot = 0.0f;
         for (int i = 0; i < EPT; i++) {
-          o_acc[i] += p * v_smem[j * D_PAD + i * SIMD_SIZE + simd_lid];
+          dot += q_reg[i] * k_smem[j * D_PAD + i * SIMD_SIZE + simd_lid];
+        }
+        dot = warp_reduce_sum(dot);
+
+        scores[j] = dot;
+        tile_max = max(tile_max, dot);
+      }
+
+      // --- Pass 2: Online softmax update + V accumulation ---
+      if (tile_max > -INFINITY) {
+        const float m_new = max(m_i, tile_max);
+        const float rescale = fast::exp(m_i - m_new);
+
+        for (int i = 0; i < EPT; i++)
+          o_acc[i] *= rescale;
+        l_i *= rescale;
+        m_i = m_new;
+
+        for (int j = 0; j < tile_len; j++) {
+          if (scores[j] <= -INFINITY)
+            continue;
+
+          const float p = fast::exp(scores[j] - m_i);
+          l_i += p;
+
+          for (int i = 0; i < EPT; i++) {
+            o_acc[i] += p * v_smem[j * D_PAD + i * SIMD_SIZE + simd_lid];
+          }
         }
       }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
   }
+
+  if (!q_row_valid)
+    return;
 
   // Integrate sinks
   {
@@ -829,7 +833,9 @@ instantiate_sdpa_vector_with_sinks_heads(bfloat16_t)
   instantiate_flash_attn_sinks(type, 64,  8, 64)                              \
   instantiate_flash_attn_sinks(type, 80,  8, 32)                              \
   instantiate_flash_attn_sinks(type, 96,  8, 32)                              \
+  instantiate_flash_attn_sinks(type, 112, 8, 32)                              \
   instantiate_flash_attn_sinks(type, 128, 8, 32)                              \
+  instantiate_flash_attn_sinks(type, 192, 8, 16)                              \
   instantiate_flash_attn_sinks(type, 256, 8, 16)
 
 instantiate_flash_attn_sinks_heads(float)
@@ -862,7 +868,9 @@ instantiate_flash_attn_sinks_heads(bfloat16_t)
   instantiate_flash_attn_sinks_varlen(type, 64,  8, 64)                       \
   instantiate_flash_attn_sinks_varlen(type, 80,  8, 32)                       \
   instantiate_flash_attn_sinks_varlen(type, 96,  8, 32)                       \
+  instantiate_flash_attn_sinks_varlen(type, 112, 8, 32)                       \
   instantiate_flash_attn_sinks_varlen(type, 128, 8, 32)                       \
+  instantiate_flash_attn_sinks_varlen(type, 192, 8, 16)                       \
   instantiate_flash_attn_sinks_varlen(type, 256, 8, 16)
 
 instantiate_flash_attn_sinks_varlen_heads(float)

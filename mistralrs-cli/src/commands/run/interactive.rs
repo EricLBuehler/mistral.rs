@@ -425,8 +425,8 @@ async fn text_interactive_mode(
                 let (prefix_hits, prefix_total) = logger.prefix_cache_stats();
                 if prefix_total > 0 {
                     println!(
-                        "Prefix cache hitrate: {:.0}%",
-                        100. * prefix_hits as f64 / prefix_total as f64
+                        "Prefix cache: {} hits / {} turns",
+                        prefix_hits, prefix_total
                     );
                 }
             }
@@ -748,18 +748,16 @@ async fn vision_interactive_mode(
                 let (prefix_hits, prefix_total) = logger.prefix_cache_stats();
                 if prefix_total > 0 {
                     println!(
-                        "Prefix cache hitrate: {:.0}%",
-                        100. * prefix_hits as f64 / prefix_total as f64
+                        "Prefix cache: {} hits / {} turns",
+                        prefix_hits, prefix_total
                     );
                 }
                 if let Some((hits, misses)) = logger.encoder_cache_stats() {
                     let total = hits + misses;
                     if total > 0 {
                         println!(
-                            "Encoder cache: {} hits, {} misses ({:.0}% hitrate)",
-                            hits,
-                            misses,
-                            100. * hits as f64 / total as f64
+                            "Encoder cache: {} hits / {} turns",
+                            hits, total
                         );
                     }
                 }

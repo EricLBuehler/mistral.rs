@@ -2961,8 +2961,8 @@ pub fn call_flash_attn_sinks_prefill(
     let br: usize = 8; // simdgroups per threadgroup
     let bc: usize = match head_dim {
         64 => 64,
-        80 | 96 | 128 => 32,
-        256 => 16,
+        80 | 96 | 112 | 128 => 32,
+        192 | 256 => 16,
         _ => {
             return Err(MetalKernelError::CompilationError(format!(
                 "flash_attn_sinks: unsupported head_dim={head_dim}"
@@ -3052,8 +3052,8 @@ pub fn call_flash_attn_sinks_varlen_prefill(
     let br: usize = 8;
     let bc: usize = match head_dim {
         64 => 64,
-        80 | 96 | 128 => 32,
-        256 => 16,
+        80 | 96 | 112 | 128 => 32,
+        192 | 256 => 16,
         _ => {
             return Err(MetalKernelError::CompilationError(format!(
                 "flash_attn_sinks_varlen: unsupported head_dim={head_dim}"

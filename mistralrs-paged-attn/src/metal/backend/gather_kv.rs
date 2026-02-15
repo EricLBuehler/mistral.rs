@@ -23,6 +23,19 @@ pub fn gather_kv_cache(
     let block_table = block_table.contiguous()?;
     let cu_seq_lens = cu_seq_lens.contiguous()?;
 
+    if !matches!(block_table.dtype(), DType::I32 | DType::U32) {
+        candle_core::bail!(
+            "gather_kv_cache expects i32/u32 block_table (got {:?})",
+            block_table.dtype()
+        );
+    }
+    if !matches!(cu_seq_lens.dtype(), DType::I32 | DType::U32) {
+        candle_core::bail!(
+            "gather_kv_cache expects i32/u32 cu_seq_lens (got {:?})",
+            cu_seq_lens.dtype()
+        );
+    }
+
     let cache_ty = match cache_dtype {
         DType::F16 => PagedAttentionDType::F16,
         DType::BF16 => PagedAttentionDType::BF16,
