@@ -399,7 +399,10 @@ impl ModelWeights {
             let ys = layer.mlp.forward(&ys)?;
             xs = (ys + residual)?
         }
-        let xs = xs.apply(&self.output_norm)?.i((.., seq_len - 1, ..))?;
+        let xs = xs
+            .apply(&self.output_norm)?
+            .i((.., seq_len - 1, ..))?
+            .contiguous()?;
         MatMul.qmatmul(&xs, &self.output)
     }
 }
