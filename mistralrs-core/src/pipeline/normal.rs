@@ -817,6 +817,7 @@ impl Loader for NormalLoader {
                     false,
                     None,
                     Some(pipeline_mapper.as_ref()),
+                    None,
                 )?;
 
                 model.forward(

@@ -1,6 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{any::Any, collections::HashMap, sync::Arc};
+use std::{
+    any::Any,
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{Device, Result, Tensor, D};
 use candle_nn::Module;
@@ -13,7 +17,10 @@ use crate::{
     device_map::DeviceMapper,
     layers::{self, Activation, CausalMasker, Phi4MMRotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        PagedAttention,
+    },
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -82,6 +89,7 @@ impl Attention {
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: cfg.sliding_window,
+                sinks: None,
             },
         })
     }
@@ -151,7 +159,6 @@ impl Attention {
                     input_metadata,
                     &self.sdpa_params,
                     Some(flash_params),
-                    None, // sinks
                 )?,
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -169,7 +176,6 @@ impl Attention {
                         &input_metadata,
                         &self.sdpa_params,
                         Some(flash_params),
-                        None, // sinks
                     )?
                 }
             },
@@ -343,6 +349,7 @@ pub struct Phi4MMModel {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: Option<usize>,
     cfg: ModelConfigMetadata,
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
 impl Phi4MMModel {
@@ -458,6 +465,7 @@ impl Phi4MMModel {
             },
             mapper,
             embed_tokens_extend,
+            encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
     }
 
@@ -476,6 +484,7 @@ impl Phi4MMModel {
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
+        image_hashes: &[u64],
     ) -> Result<Tensor> {
         let mut xs = if input_image_embeds.is_some() || input_audio_embeds.is_some() {
             let projection_mode = match (&input_image_embeds, &input_audio_embeds) {
@@ -493,6 +502,8 @@ impl Phi4MMModel {
                 audio_embed_sizes,
                 audio_attention_mask.as_ref(),
                 projection_mode,
+                image_hashes,
+                &self.encoder_cache,
             )?
         } else {
             self.embed_tokens.forward(input_ids)?
@@ -550,6 +561,7 @@ pub(crate) struct Phi4MMVisionSpecificArgs {
     pub input_audio_embeds: Option<Tensor>,
     pub audio_embed_sizes: Option<Vec<usize>>,
     pub audio_attention_mask: Option<Tensor>,
+    pub image_hashes: Vec<u64>,
 }
 
 impl VisionModel for Phi4MMModel {
@@ -571,6 +583,7 @@ impl VisionModel for Phi4MMModel {
             input_audio_embeds,
             audio_attention_mask,
             audio_embed_sizes,
+            image_hashes,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Phi4MMVisionSpecificArgs`");
@@ -588,6 +601,7 @@ impl VisionModel for Phi4MMModel {
             context_lens,
             metadata,
             flash_params,
+            &image_hashes,
         )
     }
     fn cache(&self) -> &EitherCache {
@@ -607,6 +621,19 @@ impl VisionModel for Phi4MMModel {
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
         Box::new(Phi4MMVisionSpecificArgs::default())
+    }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
     }
 }
 

@@ -183,11 +183,11 @@ For other authentication schemes, use the `headers` field:
 
 ### Without Prefix
 Tools are registered with their original names:
-- MCP tool: `search` → Registered as: `search`
+- MCP tool: `search` -> Registered as: `search`
 
 ### With Prefix
 When `tool_prefix` is set, all tools from that server get prefixed:
-- MCP tool: `search` with prefix `web` → Registered as: `web_search`
+- MCP tool: `search` with prefix `web` -> Registered as: `web_search`
 
 This prevents conflicts when multiple servers provide tools with the same name.
 

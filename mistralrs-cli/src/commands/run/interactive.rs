@@ -421,6 +421,15 @@ async fn text_interactive_mode(
                 "Decode: {} tokens, {:.2} T/s",
                 last_usage.completion_tokens, last_usage.avg_compl_tok_per_sec
             );
+            if let Ok(logger) = mistralrs.get_logger(None) {
+                let (prefix_hits, prefix_total) = logger.prefix_cache_stats();
+                if prefix_total > 0 {
+                    println!(
+                        "Prefix cache: {} hits / {} turns",
+                        prefix_hits, prefix_total
+                    );
+                }
+            }
         }
         let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
@@ -735,6 +744,21 @@ async fn vision_interactive_mode(
                 "Decode: {} tokens, {:.2} T/s",
                 last_usage.completion_tokens, last_usage.avg_compl_tok_per_sec
             );
+            if let Ok(logger) = mistralrs.get_logger(None) {
+                let (prefix_hits, prefix_total) = logger.prefix_cache_stats();
+                if prefix_total > 0 {
+                    println!(
+                        "Prefix cache: {} hits / {} turns",
+                        prefix_hits, prefix_total
+                    );
+                }
+                if let Some((hits, misses)) = logger.encoder_cache_stats() {
+                    let total = hits + misses;
+                    if total > 0 {
+                        println!("Encoder cache: {} hits / {} turns", hits, total);
+                    }
+                }
+            }
         }
         let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();

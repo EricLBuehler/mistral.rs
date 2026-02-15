@@ -1,23 +1,24 @@
-/// The higher-level manager of the blocks allocated. Operations performed by the block engine do
-/// not directly change memory.
-mod block_engine;
-mod block_engine_sequence;
+/// Content-addressable block hashing for prefix caching (vLLM v1 approach).
+pub mod block_hash;
+/// Flat block pool with LRU free list for KV cache block management (vLLM v1 approach).
+pub mod block_pool;
 /// This is the lower-level manager of the cache. It manages swapping and copying the blocks and
 /// actually allocates the KV cache for the CPU and GPU. It is used by the LLMEngine to execute
 /// operations issued by the scheduler.
 mod cache_engine;
 mod config;
+/// Encoder output cache for multimodal models (vision/audio encoder outputs).
+pub mod encoder_cache;
+/// KV Cache Manager: high-level block allocation, prefix cache lookups, per-request tracking.
+pub mod kv_cache_manager;
 mod layers;
-/// Prefix caching for KV cache reuse across requests with shared prefixes.
-mod prefix_cacher;
 mod scheduler;
 pub const _PAD_SLOT_ID: i64 = -1;
 
-pub use block_engine::{BlockEngine, BlockRef, BlockTables, LogicalTokenBlock};
-pub use block_engine_sequence::BlockEngineSequence;
 pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
 use candle_core::{DType, Device};
 pub use config::{KvCacheLayout, ModelConfigLike, ModelConfigMetadata};
+pub use kv_cache_manager::KVCacheManager;
 pub use layers::PagedAttention;
 pub use scheduler::{
     PagedAttentionScheduler, PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,

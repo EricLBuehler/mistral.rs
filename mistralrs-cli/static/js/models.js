@@ -1,7 +1,7 @@
 // Model management functionality
 
 // Global model state
-const models = Object.create(null); // name → kind
+const models = Object.create(null); // name -> kind
 let prevModel = null;
 
 /**
