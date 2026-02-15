@@ -755,10 +755,7 @@ async fn vision_interactive_mode(
                 if let Some((hits, misses)) = logger.encoder_cache_stats() {
                     let total = hits + misses;
                     if total > 0 {
-                        println!(
-                            "Encoder cache: {} hits / {} turns",
-                            hits, total
-                        );
+                        println!("Encoder cache: {} hits / {} turns", hits, total);
                     }
                 }
             }

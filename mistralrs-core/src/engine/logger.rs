@@ -104,6 +104,21 @@ impl IntervalLogger {
         self.enable_logging.store(true, Ordering::Relaxed);
     }
 
+    /// Reset all counters to zero. Call after warmup/dummy runs to get clean stats.
+    pub fn reset(&self) {
+        self.prefix_cache_hits.store(0, Ordering::Relaxed);
+        self.tokens_processed.store(0, Ordering::Relaxed);
+        self.total_new_seqs.store(0, Ordering::Relaxed);
+        self.num_running.store(0, Ordering::Relaxed);
+        self.num_waiting.store(0, Ordering::Relaxed);
+        if let Some(ref hits) = self.encoder_cache_hits {
+            hits.store(0, Ordering::Relaxed);
+        }
+        if let Some(ref misses) = self.encoder_cache_misses {
+            misses.store(0, Ordering::Relaxed);
+        }
+    }
+
     pub fn add_tokens_processed(&self, num_tokens: usize) {
         self.tokens_processed
             .fetch_add(num_tokens, Ordering::Relaxed);
