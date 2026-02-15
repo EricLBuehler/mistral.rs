@@ -215,6 +215,7 @@ impl Attention {
                 softcap: None,
                 softmax_scale: cfg.softmax_scale(),
                 sliding_window: None,
+                sinks: None,
             },
             mla_weights,
         })
@@ -351,7 +352,6 @@ impl Attention {
                                     input_metadata,
                                     &self.sdpa_params,
                                     Some(flash_params),
-                                    None, // sinks
                                 )?
                                 .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
                         }
@@ -379,7 +379,6 @@ impl Attention {
                                     &input_metadata,
                                     &self.sdpa_params,
                                     Some(flash_params),
-                                    None, // sinks
                                 )?
                                 .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
                         }

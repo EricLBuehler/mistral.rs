@@ -15,11 +15,14 @@ The uniquely powerful quantized file format.
   - [Motivation](#motivation)
   - [Support](#support)
   - [Loading a UQFF model](#loading-a-uqff-model)
+    - [Shard auto-discovery](#shard-auto-discovery)
     - [Running with the CLI](#running-with-the-cli)
-    - [Using with the Rust SDK](#using-with-the-rust-api)
-    - [Using the Python SDK](#using-the-python-api)
+    - [Using with the Rust SDK](#using-with-the-rust-sdk)
+    - [Using the Python SDK](#using-the-python-sdk)
+    - [Using topology for device mapping with UQFF](#using-topology-for-device-mapping-with-uqff)
   - [Creating a UQFF model](#creating-a-uqff-model)
-    - [Upload with Git](#upload-with-git)
+    - [Model card generation](#model-card-generation)
+    - [Uploading to Hugging Face](#uploading-to-hugging-face)
   - [List of models](#list-of-models)
 
 ## Motivation
@@ -65,6 +68,9 @@ The following quantization formats are supported in UQFF. One can, of course, be
     - AFQ4
     - AFQ6
     - AFQ8
+
+- F8Q8:
+    - F8Q8
 
 ## Loading a UQFF model
 

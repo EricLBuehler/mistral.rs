@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use config::Gemma3nConfig;
@@ -10,7 +10,9 @@ use text::TextModel;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
@@ -37,6 +39,7 @@ pub struct Gemma3nModel {
     embed_audio: Gemma3nMultimodalEmbedder,
     cfg: config::Gemma3nConfig,
     vision_dtype: DType,
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
 impl Gemma3nModel {
@@ -107,6 +110,7 @@ impl Gemma3nModel {
             embed_audio,
             cfg: cfg.clone(),
             vision_dtype,
+            encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
     }
 
@@ -121,6 +125,8 @@ impl Gemma3nModel {
         flash_params: &FlashParams,
         audio_mel: Option<&Tensor>,
         audio_mel_mask: Option<&Tensor>,
+        image_hashes: &[u64],
+        audio_hashes: &[u64],
     ) -> Result<Tensor> {
         let vision_vocab_offset = self.cfg.vision_config.vocab_offset as f64;
         let audio_vocab_offset = self.cfg.audio_config.vocab_offset as f64;
@@ -168,20 +174,64 @@ impl Gemma3nModel {
 
             input_embeds = x_flat.reshape(input_embeds.shape())?;
 
-            // Process vision inputs through vision tower
-            let vision_features = self
-                .vision_tower
-                .forward(&pixel_values.to_dtype(self.vision_dtype)?)?
-                .to_dtype(input_embeds.dtype())?;
-
-            // Reshape vision features to (batch_size * num_images, soft_tokens_per_image, hidden_size)
-            let (batch_size, channels, h, w) = vision_features.dims4()?;
-            let vision_features = vision_features
-                .permute((0, 2, 3, 1))? // NCHW -> NHWC
-                .reshape((batch_size, h * w, channels))?;
-
-            // Convert vision features to embeddings using multimodal embedder
-            let image_embeds = self.embed_vision.forward_vision(&vision_features)?;
+            // Process vision inputs through vision tower, with per-image caching
+            let n_images = pixel_values.dim(0)?;
+            let image_embeds = if !image_hashes.is_empty() && image_hashes.len() == n_images {
+                let mut per_image: Vec<Option<Tensor>> = vec![None; n_images];
+                let mut miss_indices = Vec::new();
+                {
+                    let mut guard = self
+                        .encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned");
+                    for (i, &hash) in image_hashes.iter().enumerate() {
+                        if let Some(cached) = guard.get(hash) {
+                            per_image[i] = Some(cached[0].clone());
+                        } else {
+                            miss_indices.push(i);
+                        }
+                    }
+                }
+                if !miss_indices.is_empty() {
+                    for &idx in &miss_indices {
+                        let single_pv = pixel_values.get(idx)?.unsqueeze(0)?;
+                        let vision_features = self
+                            .vision_tower
+                            .forward(&single_pv.to_dtype(self.vision_dtype)?)?
+                            .to_dtype(input_embeds.dtype())?;
+                        let (_, channels, h, w) = vision_features.dims4()?;
+                        let vision_features =
+                            vision_features
+                                .permute((0, 2, 3, 1))?
+                                .reshape((1, h * w, channels))?;
+                        let feats = self.embed_vision.forward_vision(&vision_features)?;
+                        let feats = feats.squeeze(0)?;
+                        {
+                            let mut guard = self
+                                .encoder_cache
+                                .lock()
+                                .expect("encoder cache lock poisoned");
+                            guard.insert(image_hashes[idx], vec![feats.clone()]);
+                        }
+                        per_image[idx] = Some(feats);
+                    }
+                }
+                let parts: Vec<Tensor> = per_image.into_iter().map(|t| t.unwrap()).collect();
+                Tensor::stack(&parts, 0)?
+            } else {
+                // Original path: no caching
+                let vision_features = self
+                    .vision_tower
+                    .forward(&pixel_values.to_dtype(self.vision_dtype)?)?
+                    .to_dtype(input_embeds.dtype())?;
+                let (batch_size, channels, h, w) = vision_features.dims4()?;
+                let vision_features = vision_features.permute((0, 2, 3, 1))?.reshape((
+                    batch_size,
+                    h * w,
+                    channels,
+                ))?;
+                self.embed_vision.forward_vision(&vision_features)?
+            };
 
             // Only do the replacement if we have image tokens to replace
             if indices.dim(0)? > 0 {
@@ -235,39 +285,79 @@ impl Gemma3nModel {
 
             input_embeds = x_flat.reshape(input_embeds.shape())?;
 
-            // Process audio through audio tower
-            let (audio_features, _) = self
-                .audio_tower
-                .forward(&audio_mel.to_dtype(input_embeds.dtype())?, audio_mel_mask)?;
+            // Process audio through audio tower, with per-audio caching
+            let n_audio = audio_mel.dim(0)?;
+            let audio_embeds = if !audio_hashes.is_empty() && audio_hashes.len() == n_audio {
+                let mut per_audio: Vec<Option<Tensor>> = vec![None; n_audio];
+                let mut miss_indices = Vec::new();
+                {
+                    let mut guard = self
+                        .encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned");
+                    for (i, &hash) in audio_hashes.iter().enumerate() {
+                        if let Some(cached) = guard.get(hash) {
+                            per_audio[i] = Some(cached[0].clone());
+                        } else {
+                            miss_indices.push(i);
+                        }
+                    }
+                }
+                if !miss_indices.is_empty() {
+                    for &idx in &miss_indices {
+                        let single_mel = audio_mel.get(idx)?.unsqueeze(0)?;
+                        let single_mask = audio_mel_mask.get(idx)?.unsqueeze(0)?;
+                        let (audio_features, _) = self
+                            .audio_tower
+                            .forward(&single_mel.to_dtype(input_embeds.dtype())?, &single_mask)?;
+                        let mut feats = self.embed_audio.forward_vision(&audio_features)?;
 
-            // Convert audio features to embeddings
-            let mut audio_embeds = self.embed_audio.forward_vision(&audio_features)?;
-
-            // Pad audio embeddings to expected length (188) if needed
-            // This matches the transformers implementation
-            let expected_audio_tokens = self.cfg.audio_soft_tokens_per_image;
-            let num_audio_embeddings = audio_embeds.dim(1)?;
-
-            if num_audio_embeddings < expected_audio_tokens {
-                // Get the padding embedding (last token in audio vocabulary)
-                let audio_vocab_size = self.cfg.audio_config.vocab_size;
-                let padding_token_id =
-                    Tensor::new(&[(audio_vocab_size - 1) as u32], audio_embeds.device())?;
-
-                // Get the padding embedding
-                let padding_embed = self.embed_audio.forward_text(&padding_token_id)?;
-
-                // Calculate how many padding embeddings we need
-                let num_padding = expected_audio_tokens - num_audio_embeddings;
-
-                // Repeat the padding embedding
-                let padding_embeds = padding_embed
-                    .unsqueeze(0)? // Add batch dimension
-                    .repeat(&[1, num_padding, 1])?; // [1, num_padding, embed_dim]
-
-                // Concatenate original embeddings with padding
-                audio_embeds = Tensor::cat(&[&audio_embeds, &padding_embeds], 1)?;
-            }
+                        // Pad audio embeddings to expected length
+                        let expected_audio_tokens = self.cfg.audio_soft_tokens_per_image;
+                        let num_audio_embeddings = feats.dim(1)?;
+                        if num_audio_embeddings < expected_audio_tokens {
+                            let audio_vocab_size = self.cfg.audio_config.vocab_size;
+                            let padding_token_id =
+                                Tensor::new(&[(audio_vocab_size - 1) as u32], feats.device())?;
+                            let padding_embed = self.embed_audio.forward_text(&padding_token_id)?;
+                            let num_padding = expected_audio_tokens - num_audio_embeddings;
+                            let padding_embeds =
+                                padding_embed.unsqueeze(0)?.repeat(&[1, num_padding, 1])?;
+                            feats = Tensor::cat(&[&feats, &padding_embeds], 1)?;
+                        }
+                        let feats = feats.squeeze(0)?;
+                        {
+                            let mut guard = self
+                                .encoder_cache
+                                .lock()
+                                .expect("encoder cache lock poisoned");
+                            guard.insert(audio_hashes[idx], vec![feats.clone()]);
+                        }
+                        per_audio[idx] = Some(feats);
+                    }
+                }
+                let parts: Vec<Tensor> = per_audio.into_iter().map(|t| t.unwrap()).collect();
+                Tensor::stack(&parts, 0)?
+            } else {
+                // Original path: no caching
+                let (audio_features, _) = self
+                    .audio_tower
+                    .forward(&audio_mel.to_dtype(input_embeds.dtype())?, audio_mel_mask)?;
+                let mut audio_embeds = self.embed_audio.forward_vision(&audio_features)?;
+                let expected_audio_tokens = self.cfg.audio_soft_tokens_per_image;
+                let num_audio_embeddings = audio_embeds.dim(1)?;
+                if num_audio_embeddings < expected_audio_tokens {
+                    let audio_vocab_size = self.cfg.audio_config.vocab_size;
+                    let padding_token_id =
+                        Tensor::new(&[(audio_vocab_size - 1) as u32], audio_embeds.device())?;
+                    let padding_embed = self.embed_audio.forward_text(&padding_token_id)?;
+                    let num_padding = expected_audio_tokens - num_audio_embeddings;
+                    let padding_embeds =
+                        padding_embed.unsqueeze(0)?.repeat(&[1, num_padding, 1])?;
+                    audio_embeds = Tensor::cat(&[&audio_embeds, &padding_embeds], 1)?;
+                }
+                audio_embeds
+            };
 
             // Only do the replacement if we have audio tokens to replace
             if indices.dim(0)? > 0 {
@@ -402,6 +492,8 @@ impl IsqModel for Gemma3nModel {
 pub struct Gemma3nSpecificArgs {
     pub audio_mel: Option<Tensor>,
     pub audio_mel_mask: Option<Tensor>,
+    pub image_hashes: Vec<u64>,
+    pub audio_hashes: Vec<u64>,
 }
 
 impl VisionModel for Gemma3nModel {
@@ -429,6 +521,8 @@ impl VisionModel for Gemma3nModel {
             flash_params,
             args.audio_mel.as_ref(),
             args.audio_mel_mask.as_ref(),
+            &args.image_hashes,
+            &args.audio_hashes,
         )
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
@@ -448,6 +542,19 @@ impl VisionModel for Gemma3nModel {
     }
     fn config(&self) -> &ModelConfigMetadata {
         self.language_model.config()
+    }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
     }
 }
 

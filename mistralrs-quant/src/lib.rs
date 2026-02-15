@@ -21,6 +21,7 @@ mod blockwise_fp8;
 pub mod cublaslt;
 pub mod distributed;
 mod dummy;
+pub mod f8q8;
 mod fp8;
 pub mod gemv;
 mod gguf;
@@ -57,6 +58,7 @@ pub use distributed::{
     BarrierLike, Comm, Id, RingConfig, SumAllReduce,
 };
 pub use dummy::DummyLayer;
+pub use f8q8::F8Q8Linear;
 pub use fp8::FP8Linear;
 #[cfg(feature = "cuda")]
 pub use gemv::gemv;
@@ -74,6 +76,7 @@ pub use pending_layer::PendingIsqLayer;
 pub use pertensor_fp8::PerTensorFP8Linear;
 pub use unquantized::UnquantLinear;
 pub use utils::flash_attn_sinks_metal;
+pub use utils::flash_attn_sinks_varlen_metal;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]
@@ -536,6 +539,7 @@ pub enum IsqType {
     AFQ4,
     AFQ3,
     AFQ2,
+    F8Q8,
 }
 
 impl IsqType {
@@ -567,6 +571,8 @@ impl IsqType {
                 .div_ceil(GgmlDType::Q6K.type_size()),
             Self::Q8K => (dtype.size_in_bytes() * GgmlDType::Q8K.block_size())
                 .div_ceil(GgmlDType::Q8K.type_size()),
+            // F8Q8: 33 bytes per 32 values -> similar to Q8_0
+            Self::F8Q8 => (dtype.size_in_bytes() * 32).div_ceil(33),
             // Estimates
             Self::HQQ4 => 4,
             Self::HQQ8 => 2,
@@ -587,7 +593,7 @@ impl IsqType {
                 // Use 1 because our HQQ quantizes on the GPU
                 Some(1.try_into().unwrap())
             }
-            IsqType::F8E4M3 => None,
+            IsqType::F8E4M3 | IsqType::F8Q8 => None,
             IsqType::Q2K
             | IsqType::Q3K
             | IsqType::Q4K
@@ -676,6 +682,7 @@ pub enum QuantizedSerdeType {
     Hqq = 2,
     Fp8 = 3,
     Afq = 4,
+    F8Q8 = 5,
 }
 
 impl TryFrom<usize> for QuantizedSerdeType {
@@ -687,6 +694,7 @@ impl TryFrom<usize> for QuantizedSerdeType {
             2 => Ok(Self::Hqq),
             3 => Ok(Self::Fp8),
             4 => Ok(Self::Afq),
+            5 => Ok(Self::F8Q8),
             other => candle_core::bail!("QuantizedSerdeType {other} is invalid."),
         }
     }

@@ -15,7 +15,7 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::Sequence,
+    sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
     vision_models::gemma3n::audio_processing::AudioProcessor,
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
@@ -253,9 +253,6 @@ impl InputsProcessor for Gemma3nImageProcessor {
                     )
                     .expect("Preprocessing failed");
 
-                // Store pixel values
-                pixel_values_accum.push(pixel_values.clone());
-
                 // Replace <image> placeholders with full image sequence
                 if !seq.multimodal.has_changed_prompt {
                     let mut prompt = tokenizer
@@ -272,13 +269,54 @@ impl InputsProcessor for Gemma3nImageProcessor {
                         .expect("Tokenization failed!");
 
                     let ids = toks.get_ids().to_vec();
+
+                    // Build mm_features for position-aware prefix cache hashing
+                    if seq.mm_features().is_empty() {
+                        if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
+                            let ranges = find_image_placeholder_ranges(&ids, IMAGE_TOKEN_ID);
+                            seq.set_mm_features(build_mm_features_from_ranges(
+                                &ranges, &hashes, "img",
+                            ));
+                        }
+                    }
+                    // Also include audio features in mm_features for prefix cache hashing
+                    if let Some(audio_hashes) = seq.audio_hashes().map(|h| h.to_vec()) {
+                        if !audio_hashes.is_empty() {
+                            let audio_ranges = find_image_placeholder_ranges(&ids, AUDIO_TOKEN_ID);
+                            let audio_features = build_mm_features_from_ranges(
+                                &audio_ranges,
+                                &audio_hashes,
+                                "audio",
+                            );
+                            let mut features = seq.mm_features().to_vec();
+                            features.extend(audio_features);
+                            seq.set_mm_features(features);
+                        }
+                    }
+
                     seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
 
                     has_changed_prompt = true;
                 }
+
+                // Per-sequence prefix cache trimming of pixel_values
+                let cached = seq.count_prefix_cached_mm_items();
+                let n_images = pixel_values.dim(0).unwrap_or(0);
+                if cached < n_images {
+                    if cached > 0 {
+                        pixel_values_accum
+                            .push(pixel_values.narrow(0, cached, n_images - cached).unwrap());
+                    } else {
+                        pixel_values_accum.push(pixel_values.clone());
+                    }
+                }
             }
 
-            Some(Tensor::cat(&pixel_values_accum, 0).unwrap())
+            if pixel_values_accum.is_empty() {
+                None
+            } else {
+                Some(Tensor::cat(&pixel_values_accum, 0).unwrap())
+            }
         } else {
             None
         };
@@ -329,6 +367,37 @@ impl InputsProcessor for Gemma3nImageProcessor {
             .unwrap()
         };
 
+        let pixel_values = if is_prompt { pixel_values } else { None };
+
+        let image_hashes: Vec<u64> = if is_prompt {
+            input_seqs
+                .iter()
+                .flat_map(|seq| {
+                    seq.image_hashes()
+                        .map(|h| {
+                            let cached = seq.count_prefix_cached_mm_items();
+                            if cached < h.len() {
+                                h[cached..].to_vec()
+                            } else {
+                                vec![]
+                            }
+                        })
+                        .unwrap_or_default()
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+        let audio_hashes: Vec<u64> = if is_prompt {
+            input_seqs
+                .iter()
+                .flat_map(|seq| seq.audio_hashes().map(|h| h.to_vec()).unwrap_or_default())
+                .collect()
+        } else {
+            vec![]
+        };
+
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
@@ -338,6 +407,8 @@ impl InputsProcessor for Gemma3nImageProcessor {
             model_specific_args: Box::new(Gemma3nSpecificArgs {
                 audio_mel,
                 audio_mel_mask,
+                image_hashes,
+                audio_hashes,
             }),
             paged_attn_meta,
             flash_meta,

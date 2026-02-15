@@ -9,7 +9,7 @@ Exposed tools:
 
 | Tool | Minimum `input` -> `output` modalities | Description |
 | -- | -- | -- |
-| `chat` | `Text` → `Text` | Wraps the OpenAI `/v1/chat/completions` endpoint |
+| `chat` | `Text` -> `Text` | Wraps the OpenAI `/v1/chat/completions` endpoint |
 
 
 ---

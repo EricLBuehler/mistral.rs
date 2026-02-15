@@ -30,7 +30,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, LazyLock,
     },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     select,
@@ -167,7 +167,7 @@ pub struct Engine {
     is_debug: bool,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
-    logger: IntervalLogger,
+    logger: Arc<IntervalLogger>,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
     pending_notify: Arc<Notify>,
 }
@@ -196,6 +196,7 @@ impl Engine {
         search_callback: Option<Arc<search::SearchCallback>>,
         tool_callbacks: tools::ToolCallbacks,
         tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+        logger: Arc<IntervalLogger>,
     ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
@@ -218,7 +219,7 @@ impl Engine {
         // This ensures PagedAttention prefix caching respects the same setting
         get_mut_arcmutex!(scheduler).set_prefix_caching_enabled(!no_prefix_cache);
 
-        let block_engine = get_mut_arcmutex!(scheduler).block_engine();
+        let has_paged_attention = get_mut_arcmutex!(scheduler).kv_cache_manager().is_some();
 
         Ok(Self {
             tx,
@@ -234,12 +235,12 @@ impl Engine {
             prefix_cacher: Arc::new(Mutex::new(PrefixCacheManagerV2::new(
                 prefix_cache_n,
                 no_prefix_cache,
-                block_engine,
+                has_paged_attention,
             ))),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
             throughput_logging_enabled,
-            logger: IntervalLogger::new(Duration::from_secs(5)),
+            logger,
             handles: Arc::new(Mutex::new(Vec::new())),
             pending_notify: Arc::new(Notify::new()),
         })
@@ -570,7 +571,7 @@ impl Engine {
                             let metadata = PagedAttentionMeta {
                                 block_size,
                                 sliding_window: pipeline.get_metadata().sliding_window,
-                                block_engine: scheduler.block_engine().unwrap(),
+                                kv_cache_manager: scheduler.kv_cache_manager().unwrap(),
                             };
 
                             let return_raw_logits = guards_mut[0].return_raw_logits;
@@ -589,10 +590,7 @@ impl Engine {
                                     &mut *get_mut_arcmutex!(self.prefix_cacher),
                                     self.disable_eos_stop,
                                     rng.clone(),
-                                    CacheBackendMetadata::PagedAttention {
-                                        metadata,
-                                        blocks_to_copy: output.blocks_to_copy,
-                                    },
+                                    CacheBackendMetadata::PagedAttention { metadata },
                                 )
                                 .await
                         };

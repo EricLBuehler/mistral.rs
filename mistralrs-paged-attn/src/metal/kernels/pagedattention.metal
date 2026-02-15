@@ -1,4 +1,12 @@
-// Updated from MLX commit has f70764a
+// Portions of this file are adapted from Apple's MLX framework
+// (https://github.com/ml-explore/mlx)
+// Licensed under the Apache License 2.0
+// Copyright © 2023 Apple Inc.
+
+// Portions of this file are adapted from the vLLM project
+// (https://github.com/vllm-project/vllm)
+// Licensed under the Apache License 2.0
+// Copyright contributors to the vLLM project
 
 #include "utils.metal"
 #include <metal_simdgroup>
@@ -564,7 +572,7 @@ inline Vec fp8_convert(const thread Quant_vec &, float scale) {
   static_assert(sizeof(Vec) == 0, "Missing fp8_convert specialisation");
 }
 
-// ========================================== FP8 → float/half/bfloat
+// ========================================== FP8 -> float/half/bfloat
 inline float __dequant_single(uchar v, float scale) {
   return fp8_e4m3_to_float(v) * scale;
 }

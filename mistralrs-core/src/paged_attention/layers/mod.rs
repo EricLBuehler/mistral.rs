@@ -34,7 +34,6 @@ pub mod paged_attention {
             _input_metadata: &PagedAttentionInputMetadata,
             _sdpa_params: &SdpaParams,
             _flash_params: Option<&FlashParams>,
-            _sinks: Option<&Tensor>,
         ) -> Result<Tensor> {
             candle_core::bail!("Paged attention requires the CUDA or Metal feature flags.");
         }

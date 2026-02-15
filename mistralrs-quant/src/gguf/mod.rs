@@ -139,6 +139,19 @@ impl QuantMethod for GgufMatMul {
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         if let Some(dtype) = dtype {
+            // F8Q8 is not a GgmlDType, so intercept before try_into()
+            if dtype == IsqType::F8Q8 {
+                let t = match &self.w {
+                    QMatMul::QTensor(q) => q.dequantize(&q.device())?,
+                    QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
+                };
+                let t = t.to_device(&device)?;
+                n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Ok(Arc::new(crate::F8Q8Linear::from_weight(
+                    &t,
+                    self.b.clone(),
+                )?));
+            }
             let t = match &self.w {
                 QMatMul::QTensor(q) => q.dequantize(&q.device())?,
                 QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),

@@ -1,5 +1,6 @@
 FROM nvidia/cuda:13.0.2-cudnn-devel-ubi9 AS builder
 
+RUN dnf install -y git
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN rustup update nightly && rustup default nightly

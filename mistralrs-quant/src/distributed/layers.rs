@@ -11,8 +11,8 @@ use crate::{
     pertensor_fp8::pertensor_fp8_linear_b,
     should_apply_immediate_isq,
     utils::isq::{apply_immediate_isq, apply_immediate_isq_always},
-    AfqLayer, BnbLinear, DistributedKind, DummyLayer, FP8Linear, GgufMatMul, HqqLayer, MXFP4Layer,
-    QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
+    AfqLayer, BnbLinear, DistributedKind, DummyLayer, F8Q8Linear, FP8Linear, GgufMatMul, HqqLayer,
+    MXFP4Layer, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
     QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
@@ -316,6 +316,7 @@ impl QuantizedSerde for RowParallelLayer {
             QuantizedSerdeType::Hqq => HqqLayer::deserialize_ext_bias(data, device, guard)?,
             QuantizedSerdeType::Fp8 => FP8Linear::deserialize_ext_bias(data, device, guard)?,
             QuantizedSerdeType::Afq => AfqLayer::deserialize_ext_bias(data, device, guard)?,
+            QuantizedSerdeType::F8Q8 => F8Q8Linear::deserialize_ext_bias(data, device, guard)?,
         };
         Ok(Arc::new(Self {
             weight,
@@ -642,6 +643,7 @@ impl QuantizedSerde for ColumnParallelLayer {
             QuantizedSerdeType::Hqq => HqqLayer::deserialize_ext_bias(data, device, guard)?,
             QuantizedSerdeType::Fp8 => FP8Linear::deserialize_ext_bias(data, device, guard)?,
             QuantizedSerdeType::Afq => AfqLayer::deserialize_ext_bias(data, device, guard)?,
+            QuantizedSerdeType::F8Q8 => F8Q8Linear::deserialize_ext_bias(data, device, guard)?,
         };
         Ok(Arc::new(Self { weight, bias }))
     }
@@ -929,6 +931,7 @@ impl QuantizedSerde for ReplicatedLayer {
             QuantizedSerdeType::Hqq => HqqLayer::deserialize(data, device, comm, guard)?,
             QuantizedSerdeType::Fp8 => FP8Linear::deserialize(data, device, comm, guard)?,
             QuantizedSerdeType::Afq => AfqLayer::deserialize(data, device, comm, guard)?,
+            QuantizedSerdeType::F8Q8 => F8Q8Linear::deserialize(data, device, comm, guard)?,
         };
         Ok(Arc::new(Self(deserialized)))
     }

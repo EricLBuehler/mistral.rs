@@ -342,6 +342,20 @@ impl QuantMethod for UnquantLinear {
                     dtype: DType::F8E4M3,
                 })?))
             }
+            Some(IsqType::F8Q8) => {
+                let _acquired_quantize_guard = guard.acquire(&device);
+                if imatrix_weight.is_some() {
+                    candle_core::bail!("F8Q8 does not support imatrix.");
+                }
+
+                let w = self.w.to_device(&device)?;
+                let b = if let Some(b) = &self.b {
+                    Some(b.to_device(&device)?)
+                } else {
+                    None
+                };
+                Ok(Arc::new(crate::F8Q8Linear::from_weight(&w, b)?))
+            }
             None => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 // Ignore imatrix altogether

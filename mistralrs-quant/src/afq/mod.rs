@@ -186,13 +186,25 @@ impl QuantMethod for AfqLayer {
 
     fn apply_isq(
         self: Arc<Self>,
-        _dtype: Option<IsqType>,
-        _device: Device,
+        dtype: Option<IsqType>,
+        device: Device,
         _n_quantized: &AtomicUsize,
         _imatrix_weight: Option<Vec<f32>>,
-        _guard: QuantizeOntoGuard,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        todo!()
+        match dtype {
+            Some(IsqType::F8Q8) => {
+                let _acquired_quantize_guard = guard.acquire(&device);
+                let w = self.dequantize_w()?.to_device(&device)?;
+                let b = self
+                    .bias
+                    .as_ref()
+                    .map(|b| b.to_device(&device))
+                    .transpose()?;
+                Ok(Arc::new(crate::F8Q8Linear::from_weight(&w, b)?))
+            }
+            _ => todo!(),
+        }
     }
 }
 

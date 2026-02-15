@@ -101,6 +101,11 @@ pub async fn run_bench(
             let _ = run_single_bench(&mistralrs, 32, 16).await;
         }
         info!("Warmup complete.");
+
+        // Reset logger counters so benchmark stats are clean
+        if let Ok(logger) = mistralrs.get_logger(None) {
+            logger.reset();
+        }
     }
 
     // Run benchmarks

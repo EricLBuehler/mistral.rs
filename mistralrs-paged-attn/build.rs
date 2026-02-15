@@ -16,6 +16,7 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=src/cuda/reshape_and_cache_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/concat_and_cache_mla_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/gather_mla_cache_kernel.cu");
+    println!("cargo:rerun-if-changed=src/cuda/gather_kv_cache_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer_mla_decode.cu");
     println!("cargo:rerun-if-changed=src/cuda/update_kvscales.cu");
     println!("cargo:rerun-if-changed=src/cuda/flash_attn_sinks.cu");
@@ -98,11 +99,12 @@ fn main() -> Result<(), String> {
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_fp8)");
 
-    const METAL_SOURCES: [&str; 4] = [
+    const METAL_SOURCES: [&str; 5] = [
         "copy_blocks",
         "pagedattention",
         "reshape_and_cache",
         "kv_scale_update",
+        "gather_kv_cache",
     ];
     for src in METAL_SOURCES {
         println!("cargo::rerun-if-changed=src/metal/kernels/{src}.metal");
@@ -126,12 +128,14 @@ fn main() -> Result<(), String> {
         let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
         std::fs::write(out_dir.join("mistralrs_paged_attention.metallib"), []).unwrap();
         std::fs::write(out_dir.join("mistralrs_paged_attention_ios.metallib"), []).unwrap();
+        std::fs::write(out_dir.join("mistralrs_paged_attention_tvos.metallib"), []).unwrap();
         return Ok(());
     }
 
     enum Platform {
         MacOS,
         Ios,
+        TvOS,
     }
 
     impl Platform {
@@ -139,15 +143,18 @@ fn main() -> Result<(), String> {
             match self {
                 Platform::MacOS => "macosx",
                 Platform::Ios => "iphoneos",
+                Platform::TvOS => "appletvos",
             }
         }
 
         fn metal_std(&self) -> &str {
-            // Use Metal 3.0 unified standard for both platforms
-            // This fixes Xcode 26+ where the default Metal standard may be too low
+            // Use Metal 3.0 unified standard for all platforms.
+            // This fixes Xcode 26+ where the default Metal standard may be too low.
             // https://github.com/EricLBuehler/mistral.rs/issues/1844
+            //
+            // Note: tvOS devices with A15+ (Apple TV 4K 3rd gen) support Metal 3.0+.
             match self {
-                Platform::MacOS | Platform::Ios => "metal3.0",
+                Platform::MacOS | Platform::Ios | Platform::TvOS => "metal3.0",
             }
         }
     }
@@ -205,6 +212,7 @@ fn main() -> Result<(), String> {
         let lib_name = match platform {
             Platform::MacOS => "mistralrs_paged_attention.metallib",
             Platform::Ios => "mistralrs_paged_attention_ios.metallib",
+            Platform::TvOS => "mistralrs_paged_attention_tvos.metallib",
         };
         let metallib = out_dir.join(lib_name);
         let mut compile_metallib_cmd = Command::new("xcrun");
@@ -242,6 +250,7 @@ fn main() -> Result<(), String> {
 
     compile(Platform::MacOS)?;
     compile(Platform::Ios)?;
+    compile(Platform::TvOS)?;
 
     Ok(())
 }

@@ -3,7 +3,8 @@ use candle_core::Device;
 use engine::Engine;
 pub use engine::{
     get_engine_terminate_flag, reset_engine_terminate_flag, should_terminate_engine_sequences,
-    EngineInstruction, SearchEmbeddingModel, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
+    EngineInstruction, IntervalLogger, SearchEmbeddingModel, ENGINE_INSTRUCTIONS,
+    TERMINATE_ALL_NEXT_STEP,
 };
 use hf_hub::Cache;
 pub use lora::Ordering;
@@ -14,7 +15,7 @@ use pyo3::exceptions::PyValueError;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{
     cell::RefCell,
     error::Error,
@@ -275,6 +276,7 @@ struct EngineInstance {
     reboot_state: RebootState,
     config: MistralRsConfig,
     category: ModelCategory,
+    logger: Arc<IntervalLogger>,
 }
 
 /// The MistralRs struct handles sending requests to multiple engines.
@@ -542,7 +544,14 @@ impl MistralRs {
             ModelCategory::Diffusion | ModelCategory::Speech => None,
             _ => Some(metadata.max_seq_len),
         };
+        let encoder_cache_counters = pipeline_guard.encoder_cache_counters();
         drop(pipeline_guard);
+
+        let logger = Arc::new(IntervalLogger::new(
+            Duration::from_secs(5),
+            encoder_cache_counters,
+        ));
+        let logger_for_engine = logger.clone();
 
         info!("Pipeline input modalities are {:?}", &modalities.input);
         info!("Pipeline output modalities are {:?}", &modalities.output);
@@ -575,6 +584,7 @@ impl MistralRs {
                         config.search_callback.clone(),
                         config.tool_callbacks.clone(),
                         config.tool_callbacks_with_tools.clone(),
+                        logger_for_engine,
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -599,6 +609,7 @@ impl MistralRs {
                         config.search_callback.clone(),
                         config.tool_callbacks.clone(),
                         config.tool_callbacks_with_tools.clone(),
+                        logger_for_engine,
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -612,6 +623,7 @@ impl MistralRs {
             reboot_state,
             config: mistralrs_config,
             category,
+            logger,
         })
     }
 
@@ -816,6 +828,9 @@ impl MistralRs {
                     warn!("Dummy run failed!");
                 }
             });
+
+            // Reset logger counters so the dummy run doesn't pollute stats
+            engine_instance.logger.reset();
         }
 
         // Create engines map with the first engine
@@ -1086,6 +1101,24 @@ impl MistralRs {
         }
 
         Ok(false)
+    }
+
+    /// Get the interval logger for a specific model. If model_id is None, uses default engine.
+    pub fn get_logger(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<Arc<IntervalLogger>, MistralRsError> {
+        let resolved_model_id = self.resolve_alias_or_default(model_id)?;
+
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        if let Some(engine_instance) = engines.get(&resolved_model_id) {
+            Ok(engine_instance.logger.clone())
+        } else {
+            Err(MistralRsError::EnginePoisoned)
+        }
     }
 
     /// Get model category for a specific model. If model_id is None, uses default engine.

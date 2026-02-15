@@ -1,9 +1,12 @@
+use std::sync::Mutex;
+
 use candle_core::{Result, Tensor, D};
 use candle_nn::Module;
 use mistralrs_quant::ShardedVarBuilder;
 
 use crate::{
-    utils::unvarbuilder::UnVarBuilder, vision_models::phi4::image_embedding::IMAGE_SPECIAL_TOKEN_ID,
+    paged_attention::encoder_cache::EncoderCacheManager, utils::unvarbuilder::UnVarBuilder,
+    vision_models::phi4::image_embedding::IMAGE_SPECIAL_TOKEN_ID,
 };
 
 use super::{audio_embedding::AudioEmbedding, image_embedding::ImageEmbedding, Phi4MMConfig};
@@ -71,6 +74,8 @@ impl Phi4MMImageAudioEmbedding {
         audio_embed_sizes: Option<Vec<usize>>,
         audio_attention_mask: Option<&Tensor>,
         input_mode: InputMode,
+        image_hashes: &[u64],
+        encoder_cache: &Mutex<EncoderCacheManager>,
     ) -> Result<Tensor> {
         assert!(-MAX_INPUT_ID < self.image_input_id);
 
@@ -82,6 +87,8 @@ impl Phi4MMImageAudioEmbedding {
                 input_image_embeds.expect("input_image_embeds"),
                 image_attention_mask,
                 image_sizes,
+                image_hashes,
+                encoder_cache,
             )?),
             _ => None,
         };
