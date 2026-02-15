@@ -182,8 +182,12 @@ fn stretch_shift_to_terminal(sigmas: &mut [f64], shift_terminal: f64) {
     if sigmas.is_empty() {
         return;
     }
+    let denominator = 1.0 - shift_terminal;
+    if denominator.abs() < f64::EPSILON {
+        return;
+    }
     let one_minus_last = 1.0 - sigmas[sigmas.len() - 1];
-    let scale_factor = one_minus_last / (1.0 - shift_terminal);
+    let scale_factor = one_minus_last / denominator;
     for s in sigmas.iter_mut() {
         let one_minus = 1.0 - *s;
         *s = 1.0 - (one_minus / scale_factor);

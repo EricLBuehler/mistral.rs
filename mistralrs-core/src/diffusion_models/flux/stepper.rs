@@ -462,15 +462,17 @@ impl FluxStepper {
             packed_latents.push(packed.squeeze(0)?);
 
             let (_, _, h, w) = normalized.dims4()?;
-            let t_ids = Tensor::full(
-                scale + scale * u32::try_from(idx).expect("idx too large"),
-                (h, w),
-                dev,
-            )?;
-            let h_ids = Tensor::arange(0u32, u32::try_from(h).expect("h too large"), dev)?
+            let idx_u32 = u32::try_from(idx)
+                .map_err(|_| candle_core::Error::Msg(format!("image index {idx} too large for u32")))?;
+            let h_u32 = u32::try_from(h)
+                .map_err(|_| candle_core::Error::Msg(format!("image height {h} too large for u32")))?;
+            let w_u32 = u32::try_from(w)
+                .map_err(|_| candle_core::Error::Msg(format!("image width {w} too large for u32")))?;
+            let t_ids = Tensor::full(scale + scale * idx_u32, (h, w), dev)?;
+            let h_ids = Tensor::arange(0u32, h_u32, dev)?
                 .reshape(((), 1))?
                 .broadcast_as((h, w))?;
-            let w_ids = Tensor::arange(0u32, u32::try_from(w).expect("w too large"), dev)?
+            let w_ids = Tensor::arange(0u32, w_u32, dev)?
                 .reshape((1, ()))?
                 .broadcast_as((h, w))?;
             let l_ids = Tensor::full(0u32, (h, w), dev)?;
@@ -671,14 +673,12 @@ impl DiffusionModel for FluxStepper {
             flux::sampling::State::new_flux2(&text_embed, &img, self.rope_axes)?
         } else {
             // FLUX.1 requires CLIP embeddings
-            let clip_tok = self
-                .clip_tok
-                .as_ref()
-                .expect("CLIP tokenizer required for FLUX.1");
-            let clip_text = self
-                .clip_text
-                .as_ref()
-                .expect("CLIP model required for FLUX.1");
+            let Some(clip_tok) = self.clip_tok.as_ref() else {
+                candle_core::bail!("CLIP tokenizer required for FLUX.1 but not loaded");
+            };
+            let Some(clip_text) = self.clip_text.as_ref() else {
+                candle_core::bail!("CLIP model required for FLUX.1 but not loaded");
+            };
             let clip_input_ids = get_tokenization(clip_tok, prompts.clone(), &self.device)?;
             let clip_embed = clip_text.forward(&clip_input_ids)?.to_dtype(self.dtype)?;
             flux::sampling::State::new(&text_embed, &clip_embed, &img, self.rope_axes)?
@@ -854,7 +854,7 @@ impl DiffusionModel for FluxStepper {
 
     fn max_seq_len(&self) -> usize {
         if self.is_guidance {
-            usize::MAX
+            4096
         } else if self.is_flux2 {
             self.flux2_max_seq_len
         } else {
@@ -890,15 +890,15 @@ impl FluxStepper {
         let mut images = Vec::new();
         for b_img in img.chunk(img.dim(0)?, 0)? {
             let flattened = b_img.squeeze(0)?.permute((1, 2, 0))?.flatten_all()?;
+            let w_u32 = u32::try_from(w)
+                .map_err(|_| candle_core::Error::Msg(format!("image width {w} too large for u32")))?;
+            let h_u32 = u32::try_from(h)
+                .map_err(|_| candle_core::Error::Msg(format!("image height {h} too large for u32")))?;
             images.push(DynamicImage::ImageRgb8(
-                RgbImage::from_raw(
-                    u32::try_from(w).expect("w too large"),
-                    u32::try_from(h).expect("h too large"),
-                    flattened.to_vec1::<u8>()?,
-                )
-                .ok_or(candle_core::Error::Msg(
-                    "RgbImage has invalid capacity.".to_string(),
-                ))?,
+                RgbImage::from_raw(w_u32, h_u32, flattened.to_vec1::<u8>()?)
+                    .ok_or(candle_core::Error::Msg(
+                        "RgbImage has invalid capacity.".to_string(),
+                    ))?,
             ));
         }
         Ok(images)

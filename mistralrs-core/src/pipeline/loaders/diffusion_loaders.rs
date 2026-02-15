@@ -64,7 +64,7 @@ pub trait DiffusionModelLoader: Send + Sync {
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
 #[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq)]
-/// The architecture to load the vision model as.
+/// The architecture to load the diffusion model as.
 pub enum DiffusionLoaderType {
     #[serde(rename = "flux")]
     Flux,
@@ -79,7 +79,7 @@ impl FromStr for DiffusionLoaderType {
             "flux" => Ok(Self::Flux),
             "flux-offloaded" => Ok(Self::FluxOffloaded),
             a => Err(format!(
-                "Unknown architecture `{a}`. Possible architectures: `flux`."
+                "Unknown architecture `{a}`. Possible architectures: `flux`, `flux-offloaded`."
             )),
         }
     }
@@ -96,7 +96,9 @@ impl DiffusionLoaderType {
     }
 
     fn matches_flux(files: &[String]) -> bool {
-        let flux_regex = Regex::new(r"^flux\\d+-(schnell|dev)\\.safetensors$");
+        // Match FLUX model files: flux1-schnell.safetensors, flux1-dev.safetensors,
+        // flux-2-klein-9b.safetensors, etc.
+        let flux_regex = Regex::new(r"^flux[-.]?\d+[-_][\w-]+\.safetensors$");
         let Ok(flux_regex) = flux_regex else {
             return false;
         };
@@ -108,7 +110,7 @@ impl DiffusionLoaderType {
             flux_regex.is_match(name)
         });
 
-        has_transformer && has_vae && has_ae && has_flux
+        has_transformer && (has_ae || has_vae) && has_flux
     }
 }
 
@@ -170,7 +172,7 @@ impl DiffusionModelLoader for FluxLoader {
         let regex = Regex::new(r"^flux[-.]?\d+[-_][\w-]+\.safetensors$")?;
         let flux_name = api_dir_list!(api, model_id, true)
             .filter(|x| regex.is_match(x))
-            .nth(0)
+            .next()
             .with_context(|| "Expected at least 1 .safetensors file matching the FLUX regex, please raise an issue.")?;
         let flux_file = api_get_file!(api, &flux_name, model_id);
 

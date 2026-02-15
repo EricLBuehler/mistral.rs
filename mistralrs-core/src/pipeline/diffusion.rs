@@ -40,7 +40,7 @@ pub struct DiffusionPipeline {
     dummy_cache: EitherCache,
 }
 
-/// A loader for a vision (non-quantized) model.
+/// A loader for a diffusion (non-quantized) model.
 pub struct DiffusionLoader {
     inner: Box<dyn DiffusionModelLoader>,
     model_id: String,
@@ -48,7 +48,7 @@ pub struct DiffusionLoader {
 }
 
 #[derive(Default)]
-/// A builder for a loader for a vision (non-quantized) model.
+/// A builder for a loader for a diffusion (non-quantized) model.
 pub struct DiffusionLoaderBuilder {
     model_id: Option<String>,
     kind: ModelKind,
@@ -63,7 +63,10 @@ impl DiffusionLoaderBuilder {
     }
 
     pub fn build(self, loader: DiffusionLoaderType) -> Box<dyn Loader> {
-        let model_id = self.model_id.clone().unwrap();
+        let model_id = self
+            .model_id
+            .clone()
+            .expect("model_id is required for DiffusionLoaderBuilder");
         let loader: Box<dyn DiffusionModelLoader> = match loader {
             DiffusionLoaderType::Flux => Box::new(FluxLoader {
                 offload: false,
@@ -142,7 +145,7 @@ impl Loader for DiffusionLoader {
             .as_ref()
             .as_any()
             .downcast_ref::<DiffusionModelPaths>()
-            .expect("Path downcast failed.")
+            .expect("DiffusionModelPaths downcast failed: wrong path type passed to DiffusionLoader")
             .0;
 
         if matches!(mapper, DeviceMapSetting::Map(_)) {
@@ -230,7 +233,7 @@ impl Loader for DiffusionLoader {
                     silent,
                 )?
             }
-            _ => unreachable!(),
+            _ => unreachable!("Diffusion models only support ModelKind::Normal"),
         };
 
         let max_seq_len = model.max_seq_len();
@@ -329,13 +332,17 @@ impl Pipeline for DiffusionPipeline {
         inputs: Box<dyn Any>,
         return_raw_logits: bool,
     ) -> candle_core::Result<ForwardInputsResult> {
-        assert!(!return_raw_logits);
+        if return_raw_logits {
+            candle_core::bail!("Diffusion models do not support returning raw logits");
+        }
 
         let ModelInputs {
             prompts,
             params,
             images,
-        } = *inputs.downcast().expect("Downcast failed.");
+        } = *inputs
+            .downcast()
+            .map_err(|_| candle_core::Error::Msg("ModelInputs downcast failed: wrong input type passed to DiffusionPipeline".to_string()))?;
         let img = self
             .model
             .forward(prompts, params, images)?

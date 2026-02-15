@@ -2,7 +2,7 @@
 //!
 //! FLUX.2 uses a Qwen3ForCausalLM model as its text encoder.
 //! Unlike FLUX.1 which uses T5-XXL (4096 dim output), FLUX.2 extracts hidden states
-//! from layers 10, 20, 30 and concatenates them to produce a 12288-dim embedding.
+//! from layers 8, 17, 26 (0-indexed) and concatenates them to produce a 12288-dim embedding.
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
