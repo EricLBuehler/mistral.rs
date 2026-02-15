@@ -366,7 +366,7 @@ mod tests {
     /// A feature is only "fully cached" when `offset + length <= prefix_len`.
     #[test]
     fn test_mm_feature_fully_within_prefix() {
-        let features = vec![
+        let features = [
             MultiModalFeature {
                 identifier: "img_a".to_string(),
                 offset: 0,

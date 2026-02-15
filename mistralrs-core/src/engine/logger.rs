@@ -132,9 +132,7 @@ impl IntervalLogger {
     /// Return cumulative encoder cache (hits, misses), or `None` if no encoder cache exists.
     pub fn encoder_cache_stats(&self) -> Option<(usize, usize)> {
         match (&self.encoder_cache_hits, &self.encoder_cache_misses) {
-            (Some(h), Some(m)) => {
-                Some((h.load(Ordering::Relaxed), m.load(Ordering::Relaxed)))
-            }
+            (Some(h), Some(m)) => Some((h.load(Ordering::Relaxed), m.load(Ordering::Relaxed))),
             _ => None,
         }
     }

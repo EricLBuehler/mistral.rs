@@ -144,7 +144,7 @@ impl Qwen3VLMoEModel {
                     .iter()
                     .map(|row| row[0] as usize * row[1] as usize * row[2] as usize)
                     .collect();
-                let merge = self.spatial_merge_size as usize;
+                let merge = self.spatial_merge_size;
                 let output_tokens_per_image: Vec<usize> = grid_data
                     .iter()
                     .map(|row| {

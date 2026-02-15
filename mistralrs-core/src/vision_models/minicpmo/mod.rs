@@ -102,8 +102,7 @@ impl MiniCpmOModel {
             let mut all_tgt_sizes_raw = Vec::new();
             let mut img_cnts = Vec::new();
             {
-                let mut tgt_idx = 0;
-                for pixel_values in &pixel_values_all {
+                for (tgt_idx, pixel_values) in pixel_values_all.iter().enumerate() {
                     img_cnts.push(pixel_values.len());
                     let tgt = &tgt_sizes_all[tgt_idx];
                     let tgt_rows = tgt.dim(0)?;
@@ -111,9 +110,7 @@ impl MiniCpmOModel {
                         all_pixel_values_raw.push(pv.clone());
                         all_tgt_sizes_raw.push(tgt.get(j)?);
                     }
-                    // Advance tgt_idx: tgt_sizes_all is one tensor per batch element
                     let _ = tgt_rows;
-                    tgt_idx += 1;
                 }
             }
             let n_total_images = all_pixel_values_raw.len();

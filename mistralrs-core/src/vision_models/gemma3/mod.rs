@@ -96,6 +96,7 @@ impl Gemma3Model {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         input_ids: &Tensor,

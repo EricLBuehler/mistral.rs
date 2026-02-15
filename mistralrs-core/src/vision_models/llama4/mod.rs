@@ -95,6 +95,7 @@ impl Llama4Model {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         input_ids: &Tensor,
