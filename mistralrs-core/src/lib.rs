@@ -825,6 +825,9 @@ impl MistralRs {
                     warn!("Dummy run failed!");
                 }
             });
+
+            // Reset logger counters so the dummy run doesn't pollute stats
+            engine_instance.logger.reset();
         }
 
         // Create engines map with the first engine
