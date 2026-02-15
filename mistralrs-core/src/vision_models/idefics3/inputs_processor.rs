@@ -207,7 +207,9 @@ impl InputsProcessor for Idefics3ImageProcessor {
                             // Each image is wrapped in FAKE_IMAGE_TOKEN pairs.
                             // Find all FAKE_IMAGE_TOKEN...FAKE_IMAGE_TOKEN ranges.
                             let ranges = find_image_delimited_ranges(&ids, fake_id, fake_id);
-                            seq.set_mm_features(build_mm_features_from_ranges(&ranges, &hashes));
+                            seq.set_mm_features(build_mm_features_from_ranges(
+                                &ranges, &hashes, "img",
+                            ));
                         }
                     }
 

@@ -341,7 +341,21 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                             seq.get_toks(),
                             IMAGE_SPECIAL_TOKEN_ID as u32,
                         );
-                        seq.set_mm_features(build_mm_features_from_ranges(&ranges, &hashes));
+                        seq.set_mm_features(build_mm_features_from_ranges(&ranges, &hashes, "img"));
+                    }
+                }
+                // Also include audio features in mm_features for prefix cache hashing
+                if let Some(audio_hashes) = seq.audio_hashes().map(|h| h.to_vec()) {
+                    if !audio_hashes.is_empty() {
+                        let audio_ranges = find_image_placeholder_ranges(
+                            seq.get_toks(),
+                            AUDIO_SPECIAL_TOKEN_ID as u32,
+                        );
+                        let audio_features =
+                            build_mm_features_from_ranges(&audio_ranges, &audio_hashes, "audio");
+                        let mut features = seq.mm_features().to_vec();
+                        features.extend(audio_features);
+                        seq.set_mm_features(features);
                     }
                 }
                 seq.multimodal.has_changed_prompt = true;

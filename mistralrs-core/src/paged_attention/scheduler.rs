@@ -179,10 +179,8 @@ impl PagedAttentionScheduler {
     pub fn schedule(&mut self, logger: &IntervalLogger) -> PagedAttentionSchedulerOutput {
         let mut scheduled: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
         let mut for_waiting_again: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
-        let mut did_ignore = false;
-
         while !self.waiting.is_empty() {
-            did_ignore = false;
+            let mut did_ignore = false;
             let seq = self.waiting.front().unwrap().clone();
 
             if self.running.len() >= self.config.max_num_seqs {
@@ -292,14 +290,23 @@ impl PagedAttentionScheduler {
             }
 
             let seq = self.waiting.pop_front().unwrap();
-            self.running.push_back(seq.clone());
-            if !did_ignore {
-                scheduled.push_back(seq);
+            if did_ignore {
+                // Sequence is terminal (FinishedIgnored) — do NOT add to running queue.
+                // Clean up associated state and free any allocated blocks.
+                let seq_id = *get_mut_arcmutex!(seq).id();
+                self.waiting_counts.remove(&seq_id);
+                self.seq_block_hashes.remove(&seq_id);
+                let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
+                kv_mgr.free(seq_id);
+                drop(kv_mgr);
+                continue;
             }
+            self.running.push_back(seq.clone());
+            scheduled.push_back(seq);
         }
         self.waiting.extend(for_waiting_again);
 
-        if !scheduled.is_empty() || did_ignore {
+        if !scheduled.is_empty() {
             // Bucket scheduled prompts by sequence length to ensure all sequences in a batch
             // have the same length (required for correct flash attention varlen operation).
             let scheduled = self.bucket_and_preempt_sequences(scheduled);
@@ -382,6 +389,31 @@ impl PagedAttentionScheduler {
             TERMINATE_ALL_NEXT_STEP.store(false, Ordering::SeqCst);
         }
 
+        // Eagerly cache any newly-full blocks so other requests can hit the prefix cache
+        // sooner, rather than waiting until finish/preempt. cache_blocks is idempotent.
+        if self.prefix_caching_enabled {
+            // Collect sequence info first to avoid borrow conflict with self.ensure_block_hashes
+            let seq_infos: Vec<(usize, Vec<u32>, Vec<MultiModalFeature>)> = self
+                .running
+                .iter()
+                .map(|seq| {
+                    let seq_guard = get_mut_arcmutex!(seq);
+                    let seq_id = *seq_guard.id();
+                    let tokens = seq_guard.get_toks().to_vec();
+                    let mm_features = seq_guard.mm_features().to_vec();
+                    (seq_id, tokens, mm_features)
+                })
+                .collect();
+
+            for (seq_id, tokens, mm_features) in &seq_infos {
+                self.ensure_block_hashes(*seq_id, tokens, mm_features);
+                if let Some(block_hashes) = self.seq_block_hashes.get(seq_id).cloned() {
+                    let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
+                    kv_mgr.cache_blocks(*seq_id, &block_hashes, tokens.len());
+                }
+            }
+        }
+
         logger.set_num_running(self.running.len());
         logger.set_num_waiting(self.waiting.len());
 
@@ -430,8 +462,13 @@ impl PagedAttentionScheduler {
 
 impl PagedAttentionScheduler {
     fn _preempt(&mut self, seq: Arc<Mutex<Sequence>>) {
-        let seq_guard = get_mut_arcmutex!(seq);
+        let mut seq_guard = get_mut_arcmutex!(seq);
+        // Don't resurrect sequences that are already in a terminal state
+        if seq_guard.is_finished_paged_attn() {
+            return;
+        }
         seq_guard.set_state(SequenceState::Waiting);
+        seq_guard.set_prefix_cache_len(0);
         let seq_id = *seq_guard.id();
         let tokens = seq_guard.get_toks().to_vec();
         let mm_features = seq_guard.mm_features().to_vec();

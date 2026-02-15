@@ -340,7 +340,9 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                             tokenizer.token_to_id(Qwen2_5VLProcessor::IMAGE_PAD),
                         ) {
                             let ranges = find_image_placeholder_ranges(&ids, img_pad_id);
-                            seq.set_mm_features(build_mm_features_from_ranges(&ranges, &hashes));
+                            seq.set_mm_features(build_mm_features_from_ranges(
+                                &ranges, &hashes, "img",
+                            ));
                         }
                     }
 

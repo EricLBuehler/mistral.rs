@@ -109,6 +109,11 @@ pub fn hash_block_tokens(
 ///
 /// Each feature is hashed individually (not as a set), so adding a new image at the end
 /// of a conversation doesn't change the hashes of blocks containing earlier images.
+/// Maximum number of multimodal extra hash keys per block. A pathological input
+/// with many tiny multimodal features overlapping one block would otherwise produce
+/// an unbounded key vector.
+const MAX_MM_EXTRA_KEYS_PER_BLOCK: usize = 32;
+
 pub fn generate_mm_extra_keys(
     block_start_token: usize,
     block_size: usize,
@@ -122,6 +127,14 @@ pub fn generate_mm_extra_keys(
         // Check if this feature's token range overlaps with the block's range
         if feature.offset < block_end_token && feature_end > block_start_token {
             extra_keys.push(ExtraHashKey::MultiModalHash(feature.identifier.clone()));
+            if extra_keys.len() >= MAX_MM_EXTRA_KEYS_PER_BLOCK {
+                tracing::warn!(
+                    "Block at token offset {block_start_token} has more than \
+                     {MAX_MM_EXTRA_KEYS_PER_BLOCK} overlapping multimodal features; \
+                     capping extra keys"
+                );
+                break;
+            }
         }
     }
 

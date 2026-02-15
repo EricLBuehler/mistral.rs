@@ -75,6 +75,10 @@ impl IntervalLogger {
                             String::new()
                         };
 
+                    // Throughput = tokens processed during this interval / interval duration.
+                    // Combines both prefill and decode tokens. The counter is atomically
+                    // swapped to 0 each interval, so the metric reflects only the current
+                    // window and is not cumulative.
                     info!(
                         "Throughput (T/s) {:.2}, Prefix cache hitrate {:.2}%{enc_cache_info}, {num_running} running, {num_waiting} waiting",
                         tokens_processed as f64 / interval.as_secs_f64(),

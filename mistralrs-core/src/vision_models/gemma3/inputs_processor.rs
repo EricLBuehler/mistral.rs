@@ -185,7 +185,9 @@ impl InputsProcessor for Gemma3ImageProcessor {
                             tokenizer.token_to_id(IMAGE_TOKEN),
                         ) {
                             let ranges = find_image_placeholder_ranges(&ids, img_tok_id);
-                            seq.set_mm_features(build_mm_features_from_ranges(&ranges, &hashes));
+                            seq.set_mm_features(build_mm_features_from_ranges(
+                                &ranges, &hashes, "img",
+                            ));
                         }
                     }
 

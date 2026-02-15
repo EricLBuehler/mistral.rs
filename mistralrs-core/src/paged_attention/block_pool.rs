@@ -240,7 +240,11 @@ impl BlockHashToBlockMap {
             }
             CachedBlocks::Multiple(mut map) => {
                 let result = map.remove(&block_id);
-                if !map.is_empty() {
+                if map.len() == 1 {
+                    // Compact back to Single variant
+                    let single_id = *map.values().next().unwrap();
+                    self.cache.insert(*key, CachedBlocks::Single(single_id));
+                } else if !map.is_empty() {
                     self.cache.insert(*key, CachedBlocks::Multiple(map));
                 }
                 result
@@ -396,7 +400,11 @@ impl BlockPool {
     pub fn free_blocks(&mut self, ordered_block_ids: &[usize]) {
         // First pass: decrement ref_cnt
         for &block_id in ordered_block_ids {
-            self.blocks[block_id].ref_cnt -= 1;
+            debug_assert!(
+                self.blocks[block_id].ref_cnt > 0,
+                "Block {block_id} ref_cnt underflow: attempting to free block with ref_cnt=0"
+            );
+            self.blocks[block_id].ref_cnt = self.blocks[block_id].ref_cnt.saturating_sub(1);
         }
 
         // Second pass: add newly-free blocks to the free list

@@ -359,27 +359,29 @@ __launch_bounds__(BR *WARP_SIZE) __global__
 
   const int q_row = q_tile_idx * BR + warp_id;
 
-  // Early exit for padding rows
-  if (q_row >= my_q_len) {
-    // Still need to participate in __syncthreads below if other warps are active
-    // but we can skip all computation. For simplicity, just return early since
-    // the block-level loop won't execute for out-of-bounds blocks anyway.
-    return;
-  }
+  // Out-of-bounds warps must NOT return early: they participate in cooperative
+  // K/V loads and __syncthreads barriers inside the tile loop. Returning early
+  // causes barrier divergence (undefined behavior / hangs on partially-filled
+  // tiles). Instead, we guard per-warp score computation with
+  // `if (q_row < my_q_len)` inside the loop, matching the non-varlen kernel.
+  const bool q_row_valid = (q_row < my_q_len);
 
-  // Bottom-right aligned causal offset
+  // Bottom-right aligned causal offset (safe even for out-of-bounds q_row;
+  // only used inside the q_row_valid guard)
   const int kv_offset = my_kv_len - my_q_len;
 
   // Q offset: padded [B, H, max_q_len, D]
+  // For out-of-bounds q_row this may index into padding but q_reg will be
+  // zero-masked below, so no correctness issue.
   const int q_offset =
       ((batch_idx * num_heads + head_idx) * max_q_len + q_row) * HEAD_DIM;
 
-  // Load Q row into registers (pre-scaled)
+  // Load Q row into registers (pre-scaled); out-of-bounds rows get zeros
   float q_reg[EPT];
 #pragma unroll
   for (int i = 0; i < EPT; i++) {
     const int d = i * WARP_SIZE + lane_id;
-    q_reg[i] = (d < HEAD_DIM) ? to_float(Q[q_offset + d]) * scale : 0.0f;
+    q_reg[i] = (q_row_valid && d < HEAD_DIM) ? to_float(Q[q_offset + d]) * scale : 0.0f;
   }
 
   float o_acc[EPT];
@@ -390,7 +392,7 @@ __launch_bounds__(BR *WARP_SIZE) __global__
   float m_i = -FLT_MAX;
   float l_i = 0.0f;
 
-  // Block-level KV bounds
+  // Block-level KV bounds (shared across all warps in the block)
   const int block_q_start = q_tile_idx * BR;
   const int block_q_end = min(block_q_start + BR, my_q_len);
   const int block_kv_start =
@@ -398,7 +400,7 @@ __launch_bounds__(BR *WARP_SIZE) __global__
                         : 0;
   const int block_kv_end = min(my_kv_len, block_q_end + kv_offset);
 
-  // Per-warp causal bounds
+  // Per-warp causal bounds (only meaningful when q_row_valid)
   const int my_kv_start_w =
       (window_size > 0) ? max(0, q_row + kv_offset - window_size + 1) : 0;
   const int my_kv_end = q_row + kv_offset + 1;
@@ -438,60 +440,66 @@ __launch_bounds__(BR *WARP_SIZE) __global__
     }
     __syncthreads();
 
-    // --- Pass 1: Compute scores ---
-    float tile_max = -FLT_MAX;
-
-    for (int j = 0; j < tile_len; j++) {
-      const int kv_pos = tile_start + j;
-
-      if (kv_pos >= my_kv_end) {
-        for (int jj = j; jj < tile_len; jj++)
-          scores[jj] = -FLT_MAX;
-        break;
-      }
-
-      if (kv_pos < my_kv_start_w) {
-        scores[j] = -FLT_MAX;
-        continue;
-      }
-
-      float dot = 0.0f;
-#pragma unroll
-      for (int i = 0; i < EPT; i++) {
-        dot += q_reg[i] * k_smem[j * D_PAD + i * WARP_SIZE + lane_id];
-      }
-      dot = warp_reduce_sum(dot);
-
-      scores[j] = dot;
-      tile_max = fmaxf(tile_max, dot);
-    }
-
-    // --- Pass 2: Online softmax update + V accumulation ---
-    if (tile_max > -FLT_MAX) {
-      const float m_new = fmaxf(m_i, tile_max);
-      const float rescale = expf(m_i - m_new);
-
-#pragma unroll
-      for (int i = 0; i < EPT; i++)
-        o_acc[i] *= rescale;
-      l_i *= rescale;
-      m_i = m_new;
+    if (q_row_valid) {
+      // --- Pass 1: Compute scores ---
+      float tile_max = -FLT_MAX;
 
       for (int j = 0; j < tile_len; j++) {
-        if (scores[j] <= -FLT_MAX)
+        const int kv_pos = tile_start + j;
+
+        if (kv_pos >= my_kv_end) {
+          for (int jj = j; jj < tile_len; jj++)
+            scores[jj] = -FLT_MAX;
+          break;
+        }
+
+        if (kv_pos < my_kv_start_w) {
+          scores[j] = -FLT_MAX;
           continue;
+        }
 
-        const float p = expf(scores[j] - m_i);
-        l_i += p;
-
+        float dot = 0.0f;
 #pragma unroll
         for (int i = 0; i < EPT; i++) {
-          o_acc[i] += p * v_smem[j * D_PAD + i * WARP_SIZE + lane_id];
+          dot += q_reg[i] * k_smem[j * D_PAD + i * WARP_SIZE + lane_id];
+        }
+        dot = warp_reduce_sum(dot);
+
+        scores[j] = dot;
+        tile_max = fmaxf(tile_max, dot);
+      }
+
+      // --- Pass 2: Online softmax update + V accumulation ---
+      if (tile_max > -FLT_MAX) {
+        const float m_new = fmaxf(m_i, tile_max);
+        const float rescale = expf(m_i - m_new);
+
+#pragma unroll
+        for (int i = 0; i < EPT; i++)
+          o_acc[i] *= rescale;
+        l_i *= rescale;
+        m_i = m_new;
+
+        for (int j = 0; j < tile_len; j++) {
+          if (scores[j] <= -FLT_MAX)
+            continue;
+
+          const float p = expf(scores[j] - m_i);
+          l_i += p;
+
+#pragma unroll
+          for (int i = 0; i < EPT; i++) {
+            o_acc[i] += p * v_smem[j * D_PAD + i * WARP_SIZE + lane_id];
+          }
         }
       }
     }
     __syncthreads();
   }
+
+  // Out-of-bounds warps exit after participating in all barriers
+  if (!q_row_valid)
+    return;
 
   // Integrate sinks
   if (sinks != nullptr) {

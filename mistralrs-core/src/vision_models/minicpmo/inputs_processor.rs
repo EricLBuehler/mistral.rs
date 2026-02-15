@@ -242,7 +242,9 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                                 .unwrap()
                                 .get_ids()[0];
                             let ranges = find_image_delimited_ranges(&input_ids, im_start, im_end);
-                            seq.set_mm_features(build_mm_features_from_ranges(&ranges, &hashes));
+                            seq.set_mm_features(build_mm_features_from_ranges(
+                                &ranges, &hashes, "img",
+                            ));
                         }
                     }
 

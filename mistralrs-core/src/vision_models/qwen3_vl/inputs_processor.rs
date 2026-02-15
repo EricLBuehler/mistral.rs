@@ -348,7 +348,7 @@ impl InputsProcessor for Qwen3VLImageProcessor {
                             {
                                 let ranges = find_image_placeholder_ranges(&ids, img_tok_id);
                                 seq.set_mm_features(build_mm_features_from_ranges(
-                                    &ranges, &hashes,
+                                    &ranges, &hashes, "img",
                                 ));
                             }
                         }

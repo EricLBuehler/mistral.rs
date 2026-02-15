@@ -284,7 +284,9 @@ impl InputsProcessor for Llama4ImageProcessor {
                             tokenizer.token_to_id(IMAGE_END),
                         ) {
                             let ranges = find_image_delimited_ranges(&ids, start_id, end_id);
-                            seq.set_mm_features(build_mm_features_from_ranges(&ranges, &hashes));
+                            seq.set_mm_features(build_mm_features_from_ranges(
+                                &ranges, &hashes, "img",
+                            ));
                         }
                     }
 

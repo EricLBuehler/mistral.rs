@@ -379,12 +379,13 @@ pub fn find_image_delimited_ranges(
 pub fn build_mm_features_from_ranges(
     ranges: &[(usize, usize)],
     hashes: &[u64],
+    kind: &str,
 ) -> Vec<MultiModalFeature> {
     ranges
         .iter()
         .zip(hashes.iter())
         .map(|(&(offset, length), hash)| MultiModalFeature {
-            identifier: format!("img:{hash}"),
+            identifier: format!("{kind}:{hash}"),
             offset,
             length,
         })
@@ -707,7 +708,11 @@ impl Sequence {
             let num_tokens = self.tokens.len();
             let mut kv_mgr = get_mut_arcmutex!(metadata.kv_cache_manager);
             kv_mgr.free(seq_id);
-            kv_mgr.allocate_slots(seq_id, num_tokens, &[]);
+            if kv_mgr.allocate_slots(seq_id, num_tokens, &[]).is_none() {
+                tracing::warn!(
+                    "Failed to reallocate KV cache slots for sequence {seq_id} ({num_tokens} tokens)"
+                );
+            }
         }
     }
 

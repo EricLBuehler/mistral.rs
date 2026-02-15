@@ -274,7 +274,23 @@ impl InputsProcessor for Gemma3nImageProcessor {
                     if seq.mm_features().is_empty() {
                         if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
                             let ranges = find_image_placeholder_ranges(&ids, IMAGE_TOKEN_ID);
-                            seq.set_mm_features(build_mm_features_from_ranges(&ranges, &hashes));
+                            seq.set_mm_features(build_mm_features_from_ranges(
+                                &ranges, &hashes, "img",
+                            ));
+                        }
+                    }
+                    // Also include audio features in mm_features for prefix cache hashing
+                    if let Some(audio_hashes) = seq.audio_hashes().map(|h| h.to_vec()) {
+                        if !audio_hashes.is_empty() {
+                            let audio_ranges = find_image_placeholder_ranges(&ids, AUDIO_TOKEN_ID);
+                            let audio_features = build_mm_features_from_ranges(
+                                &audio_ranges,
+                                &audio_hashes,
+                                "audio",
+                            );
+                            let mut features = seq.mm_features().to_vec();
+                            features.extend(audio_features);
+                            seq.set_mm_features(features);
                         }
                     }
 

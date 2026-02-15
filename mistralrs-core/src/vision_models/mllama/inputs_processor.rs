@@ -315,7 +315,7 @@ impl InputsProcessor for MLlamaImageProcessor {
                         let img_tok_id =
                             tokenizer.encode_fast(IMAGE_TOKEN, false).unwrap().get_ids()[0];
                         let ranges = find_image_placeholder_ranges(seq.get_toks(), img_tok_id);
-                        seq.set_mm_features(build_mm_features_from_ranges(&ranges, &hashes));
+                        seq.set_mm_features(build_mm_features_from_ranges(&ranges, &hashes, "img"));
                     }
                 }
 

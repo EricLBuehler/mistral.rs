@@ -74,26 +74,6 @@ impl KVCacheManager {
         }
     }
 
-    /// Create a KV cache manager that shares a block pool with another manager.
-    ///
-    /// This is used for models with multiple KV cache types (e.g., full attention
-    /// + sliding window) that need separate block tracking but share the same physical blocks.
-    #[allow(dead_code)]
-    pub fn new_shared(
-        block_pool: BlockPool,
-        block_size: usize,
-        enable_caching: bool,
-        kv_cache_group_ids: Vec<u32>,
-    ) -> Self {
-        Self {
-            block_pool,
-            block_size,
-            enable_caching,
-            kv_cache_group_ids,
-            req_to_blocks: HashMap::new(),
-        }
-    }
-
     /// Get a reference to the block pool.
     pub fn block_pool(&self) -> &BlockPool {
         &self.block_pool
@@ -166,7 +146,14 @@ impl KVCacheManager {
                 .get_cached_block(block_hash, &self.kv_cache_group_ids)
             {
                 // For simplicity, take the first group's block.
-                // Multi-group support would return all IDs.
+                // Multi-group support would need to return all group block IDs
+                // to construct separate block tables per group.
+                debug_assert_eq!(
+                    ids.len(),
+                    1,
+                    "Multi-group prefix cache lookup not yet implemented: found {} groups",
+                    ids.len()
+                );
                 cached_block_ids.push(ids[0]);
             } else {
                 // Chain is broken — no further blocks can match

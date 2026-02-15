@@ -311,7 +311,11 @@ impl InputsProcessor for Phi3InputsProcessor {
                 // Build mm_features for position-aware prefix cache hashing
                 if seq.mm_features().is_empty() {
                     if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
-                        seq.set_mm_features(build_mm_features_from_ranges(&img_ranges, &hashes));
+                        seq.set_mm_features(build_mm_features_from_ranges(
+                            &img_ranges,
+                            &hashes,
+                            "img",
+                        ));
                     }
                 }
 
