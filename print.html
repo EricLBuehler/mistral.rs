@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-70d5e0d5.js";
+            window.path_to_searchindex_js = "searchindex-4e33210d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cf64f8f3.js"></script>
@@ -2637,9 +2637,9 @@ Enable it with <code>--mcp-port &lt;port&gt;</code> and see <a href="#mcp-protoc
 </ul>
 <p><strong>Examples:</strong></p>
 <ul>
-<li>✅ Request with <code>"model": "meta-llama/Llama-3.2-3B-Instruct"</code> when <code>meta-llama/Llama-3.2-3B-Instruct</code> is loaded → <strong>succeeds</strong></li>
-<li>❌ Request with <code>"model": "gpt-4"</code> when <code>mistral-7b-instruct</code> is loaded → <strong>fails</strong></li>
-<li>✅ Request with <code>"model": "default"</code> regardless of loaded model → <strong>always succeeds</strong></li>
+<li>✅ Request with <code>"model": "meta-llama/Llama-3.2-3B-Instruct"</code> when <code>meta-llama/Llama-3.2-3B-Instruct</code> is loaded -&gt; <strong>succeeds</strong></li>
+<li>❌ Request with <code>"model": "gpt-4"</code> when <code>mistral-7b-instruct</code> is loaded -&gt; <strong>fails</strong></li>
+<li>✅ Request with <code>"model": "default"</code> regardless of loaded model -&gt; <strong>always succeeds</strong></li>
 </ul>
 <p><strong>Usage:</strong> Use <code>"default"</code> in the model field when you need to satisfy API clients that require a model parameter but don’t need to specify a particular model. This is demonstrated in all the examples below.</p>
 <h2 id="post-v1chatcompletions"><a class="header" href="#post-v1chatcompletions"><code>POST</code>: <code>/v1/chat/completions</code></a></h2>
@@ -6570,7 +6570,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
 <h2 id="audio-input"><a class="header" href="#audio-input">Audio input</a></h2>
-<p>Alongside vision, Phi 4 Multimodal in <code>mistral.rs</code> can accept <strong>audio</strong> as an additional modality.  This unlocks fully-local pipelines such as <strong>text + speech + vision → text</strong> where the model can reason jointly over what it <em>hears</em> and what it <em>sees</em>.</p>
+<p>Alongside vision, Phi 4 Multimodal in <code>mistral.rs</code> can accept <strong>audio</strong> as an additional modality.  This unlocks fully-local pipelines such as <strong>text + speech + vision -&gt; text</strong> where the model can reason jointly over what it <em>hears</em> and what it <em>sees</em>.</p>
 <p><code>mistral.rs</code> automatically decodes the supplied audio (WAV/MP3/FLAC/OGG/… – anything <a href="https://github.com/pdeljanov/Symphonia">Symphonia</a> can handle) into 16-bit PCM.</p>
 <h3 id="openai-http-api-1"><a class="header" href="#openai-http-api-1">OpenAI HTTP API</a></h3>
 <p>Audio is delivered with the <code>audio_url</code> content-type that mirrors OpenAIʼs official specification:</p>
@@ -10619,7 +10619,7 @@ print(res.choices[0].message.content)
 <tr><th>Tool</th><th>Minimum <code>input</code> -&gt; <code>output</code> modalities</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>chat</code></td><td><code>Text</code> → <code>Text</code></td><td>Wraps the OpenAI <code>/v1/chat/completions</code> endpoint</td></tr>
+<tr><td><code>chat</code></td><td><code>Text</code> -&gt; <code>Text</code></td><td>Wraps the OpenAI <code>/v1/chat/completions</code> endpoint</td></tr>
 </tbody>
 </table>
 </div>
@@ -10983,12 +10983,12 @@ async fn main() -&gt; Result&lt;()&gt; {
 <h3 id="without-prefix"><a class="header" href="#without-prefix">Without Prefix</a></h3>
 <p>Tools are registered with their original names:</p>
 <ul>
-<li>MCP tool: <code>search</code> → Registered as: <code>search</code></li>
+<li>MCP tool: <code>search</code> -&gt; Registered as: <code>search</code></li>
 </ul>
 <h3 id="with-prefix"><a class="header" href="#with-prefix">With Prefix</a></h3>
 <p>When <code>tool_prefix</code> is set, all tools from that server get prefixed:</p>
 <ul>
-<li>MCP tool: <code>search</code> with prefix <code>web</code> → Registered as: <code>web_search</code></li>
+<li>MCP tool: <code>search</code> with prefix <code>web</code> -&gt; Registered as: <code>web_search</code></li>
 </ul>
 <p>This prevents conflicts when multiple servers provide tools with the same name.</p>
 <h2 id="resource-patterns"><a class="header" href="#resource-patterns">Resource Patterns</a></h2>

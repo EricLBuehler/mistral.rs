@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-70d5e0d5.js";
+            window.path_to_searchindex_js = "searchindex-4e33210d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-cf64f8f3.js"></script>
@@ -345,7 +345,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
 <h2 id="audio-input"><a class="header" href="#audio-input">Audio input</a></h2>
-<p>Alongside vision, Phi 4 Multimodal in <code>mistral.rs</code> can accept <strong>audio</strong> as an additional modality.  This unlocks fully-local pipelines such as <strong>text + speech + vision → text</strong> where the model can reason jointly over what it <em>hears</em> and what it <em>sees</em>.</p>
+<p>Alongside vision, Phi 4 Multimodal in <code>mistral.rs</code> can accept <strong>audio</strong> as an additional modality.  This unlocks fully-local pipelines such as <strong>text + speech + vision -&gt; text</strong> where the model can reason jointly over what it <em>hears</em> and what it <em>sees</em>.</p>
 <p><code>mistral.rs</code> automatically decodes the supplied audio (WAV/MP3/FLAC/OGG/… – anything <a href="https://github.com/pdeljanov/Symphonia">Symphonia</a> can handle) into 16-bit PCM.</p>
 <h3 id="openai-http-api"><a class="header" href="#openai-http-api">OpenAI HTTP API</a></h3>
 <p>Audio is delivered with the <code>audio_url</code> content-type that mirrors OpenAIʼs official specification:</p>
