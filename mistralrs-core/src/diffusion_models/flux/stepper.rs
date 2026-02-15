@@ -462,12 +462,15 @@ impl FluxStepper {
             packed_latents.push(packed.squeeze(0)?);
 
             let (_, _, h, w) = normalized.dims4()?;
-            let idx_u32 = u32::try_from(idx)
-                .map_err(|_| candle_core::Error::Msg(format!("image index {idx} too large for u32")))?;
-            let h_u32 = u32::try_from(h)
-                .map_err(|_| candle_core::Error::Msg(format!("image height {h} too large for u32")))?;
-            let w_u32 = u32::try_from(w)
-                .map_err(|_| candle_core::Error::Msg(format!("image width {w} too large for u32")))?;
+            let idx_u32 = u32::try_from(idx).map_err(|_| {
+                candle_core::Error::Msg(format!("image index {idx} too large for u32"))
+            })?;
+            let h_u32 = u32::try_from(h).map_err(|_| {
+                candle_core::Error::Msg(format!("image height {h} too large for u32"))
+            })?;
+            let w_u32 = u32::try_from(w).map_err(|_| {
+                candle_core::Error::Msg(format!("image width {w} too large for u32"))
+            })?;
             let t_ids = Tensor::full(scale + scale * idx_u32, (h, w), dev)?;
             let h_ids = Tensor::arange(0u32, h_u32, dev)?
                 .reshape(((), 1))?
@@ -890,15 +893,16 @@ impl FluxStepper {
         let mut images = Vec::new();
         for b_img in img.chunk(img.dim(0)?, 0)? {
             let flattened = b_img.squeeze(0)?.permute((1, 2, 0))?.flatten_all()?;
-            let w_u32 = u32::try_from(w)
-                .map_err(|_| candle_core::Error::Msg(format!("image width {w} too large for u32")))?;
-            let h_u32 = u32::try_from(h)
-                .map_err(|_| candle_core::Error::Msg(format!("image height {h} too large for u32")))?;
+            let w_u32 = u32::try_from(w).map_err(|_| {
+                candle_core::Error::Msg(format!("image width {w} too large for u32"))
+            })?;
+            let h_u32 = u32::try_from(h).map_err(|_| {
+                candle_core::Error::Msg(format!("image height {h} too large for u32"))
+            })?;
             images.push(DynamicImage::ImageRgb8(
-                RgbImage::from_raw(w_u32, h_u32, flattened.to_vec1::<u8>()?)
-                    .ok_or(candle_core::Error::Msg(
-                        "RgbImage has invalid capacity.".to_string(),
-                    ))?,
+                RgbImage::from_raw(w_u32, h_u32, flattened.to_vec1::<u8>()?).ok_or(
+                    candle_core::Error::Msg("RgbImage has invalid capacity.".to_string()),
+                )?,
             ));
         }
         Ok(images)

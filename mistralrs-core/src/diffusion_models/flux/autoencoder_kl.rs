@@ -381,11 +381,9 @@ impl Decoder {
             padding: 1,
             ..Default::default()
         };
-        let block_in = cfg
-            .block_out_channels
-            .last()
-            .copied()
-            .ok_or_else(|| candle_core::Error::Msg("block_out_channels must not be empty".into()))?;
+        let block_in = cfg.block_out_channels.last().copied().ok_or_else(|| {
+            candle_core::Error::Msg("block_out_channels must not be empty".into())
+        })?;
         let conv_in = conv2d(cfg.latent_channels, block_in, 3, conv_cfg, vb.pp("conv_in"))?;
 
         let mid_block = MidBlock::new(block_in, vb.pp("mid_block"), cfg)?;

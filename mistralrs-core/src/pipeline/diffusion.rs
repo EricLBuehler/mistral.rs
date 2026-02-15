@@ -145,7 +145,9 @@ impl Loader for DiffusionLoader {
             .as_ref()
             .as_any()
             .downcast_ref::<DiffusionModelPaths>()
-            .expect("DiffusionModelPaths downcast failed: wrong path type passed to DiffusionLoader")
+            .expect(
+                "DiffusionModelPaths downcast failed: wrong path type passed to DiffusionLoader",
+            )
             .0;
 
         if matches!(mapper, DeviceMapSetting::Map(_)) {
@@ -340,9 +342,12 @@ impl Pipeline for DiffusionPipeline {
             prompts,
             params,
             images,
-        } = *inputs
-            .downcast()
-            .map_err(|_| candle_core::Error::Msg("ModelInputs downcast failed: wrong input type passed to DiffusionPipeline".to_string()))?;
+        } = *inputs.downcast().map_err(|_| {
+            candle_core::Error::Msg(
+                "ModelInputs downcast failed: wrong input type passed to DiffusionPipeline"
+                    .to_string(),
+            )
+        })?;
         let img = self
             .model
             .forward(prompts, params, images)?
