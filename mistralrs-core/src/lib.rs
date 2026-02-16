@@ -34,6 +34,18 @@ pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISI
     None => "unknown",
 };
 
+#[cfg(not(feature = "mcp"))]
+fn warn_if_mcp_config_ignored(mcp_client_config: &Option<McpClientConfig>) -> bool {
+    if mcp_client_config.is_some() {
+        warn!(
+            "MCP client config provided but `mistralrs-core` was compiled without `mcp` support. Rebuild with `--features mcp` to enable MCP."
+        );
+        true
+    } else {
+        false
+    }
+}
+
 mod cuda;
 mod device_map;
 mod engine;
@@ -765,9 +777,7 @@ impl MistralRs {
         }
 
         #[cfg(not(feature = "mcp"))]
-        if mcp_client_config.is_some() {
-            warn!("MCP client config provided but `mistralrs-core` was compiled without `mcp` support. Rebuild with `--features mcp` to enable MCP.");
-        }
+        let _ = warn_if_mcp_config_ignored(&mcp_client_config);
 
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
@@ -1871,5 +1881,18 @@ impl MistralRs {
         }
 
         Ok(result)
+    }
+}
+
+#[cfg(all(test, not(feature = "mcp")))]
+mod tests {
+    use super::{warn_if_mcp_config_ignored, McpClient, McpClientConfig};
+
+    #[test]
+    fn no_mcp_stubs_compile_and_warning_path_is_reachable() {
+        let cfg = McpClientConfig::default();
+        let _client = McpClient::new(cfg.clone());
+        assert!(!warn_if_mcp_config_ignored(&None));
+        assert!(warn_if_mcp_config_ignored(&Some(cfg)));
     }
 }

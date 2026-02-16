@@ -529,3 +529,40 @@ impl Loader for AutoLoader {
             .unwrap_or(ModelKind::Normal)
     }
 }
+
+#[cfg(all(test, not(feature = "audio")))]
+mod tests {
+    use super::{AutoLoader, ConfigArtifacts};
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    #[test]
+    fn speech_arch_is_not_auto_detected_when_audio_disabled() {
+        let loader = AutoLoader {
+            model_id: "dummy/model".to_string(),
+            normal_builder: Mutex::new(None),
+            vision_builder: Mutex::new(None),
+            embedding_builder: Mutex::new(None),
+            loader: Mutex::new(None),
+            hf_cache_path: Some(PathBuf::from(".")),
+        };
+        let artifacts = ConfigArtifacts {
+            contents: Some("{\"architectures\":[\"DiaForConditionalGeneration\"]}".to_string()),
+            sentence_transformers_present: false,
+            repo_files: vec![],
+            remote_access_issue: None,
+        };
+
+        let err = match loader.detect(&artifacts) {
+            Ok(_) => {
+                panic!("speech auto-detection must be absent when audio feature is disabled")
+            }
+            Err(err) => err,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("DiaForConditionalGeneration"),
+            "unexpected error: {msg}"
+        );
+    }
+}
