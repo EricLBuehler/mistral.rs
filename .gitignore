@@ -1,11 +1,1 @@
-/target
-.ruff_cache
-.vscode
-*.a
-.DS_Store
-.idea
-mistral.rs/
-mistralrs-web-chat/cache
-
-# mdbook output
-docs/book/
+scripts/__pycache__/
