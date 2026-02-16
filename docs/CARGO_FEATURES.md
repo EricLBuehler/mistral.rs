@@ -286,6 +286,33 @@ These features are primarily for library development and are not typically used 
 
 ---
 
+## Modular Core Features (`mistralrs-core`)
+
+`mistralrs-core` now exposes feature flags for optional subsystems. These are **default-on** so existing users see no behavior change.
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `audio` | on | Audio input utilities + speech models + audio-capable multimodal models |
+| `mcp` | on | MCP (Model Context Protocol) integration |
+
+### Minimal in-process builds
+
+Disable default subsystems and enable only what you need:
+
+```toml
+[dependencies]
+mistralrs-core = { version = "*", default-features = false, features = ["metal"] }
+```
+
+Useful commands for verifying what you pulled in:
+
+```bash
+cargo tree -p mistralrs-core --no-default-features
+cargo check -p mistralrs-core --no-default-features
+```
+
+---
+
 ## Python Package Features
 
 The Python SDK is distributed as separate packages with features pre-configured:
