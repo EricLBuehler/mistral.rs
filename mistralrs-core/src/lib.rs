@@ -692,10 +692,15 @@ impl MistralRs {
             search_embedding_model,
             search_callback,
             tool_callbacks,
-            mut tool_callbacks_with_tools,
+            tool_callbacks_with_tools: tool_callbacks_with_tools_in,
             mcp_client_config,
             loader_config,
         } = config;
+
+        #[cfg(feature = "mcp")]
+        let mut tool_callbacks_with_tools = tool_callbacks_with_tools_in;
+        #[cfg(not(feature = "mcp"))]
+        let tool_callbacks_with_tools = tool_callbacks_with_tools_in;
 
         mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
             get_mut_arcmutex!(pipeline).device(),
