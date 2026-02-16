@@ -295,6 +295,54 @@ impl std::fmt::Display for VisionLoaderType {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    #[cfg(not(feature = "audio"))]
+    use super::VisionLoaderType;
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn phi4mm_requires_audio_in_arch_string() {
+        let err = "phi4mm".parse::<VisionLoaderType>().unwrap_err();
+        assert!(
+            err.contains("requires audio support"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn gemma3n_requires_audio_in_arch_string() {
+        let err = "gemma3n".parse::<VisionLoaderType>().unwrap_err();
+        assert!(
+            err.contains("requires audio support"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn phi4mm_requires_audio_in_hf_arch_name() {
+        let err = VisionLoaderType::from_causal_lm_name("Phi4MMForCausalLM")
+            .expect_err("audio-disabled build should reject Phi4MM architecture");
+        assert!(
+            err.to_string().contains("requires audio support"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn gemma3n_requires_audio_in_hf_arch_name() {
+        let err = VisionLoaderType::from_causal_lm_name("Gemma3nForConditionalGeneration")
+            .expect_err("audio-disabled build should reject Gemma3n architecture");
+        assert!(
+            err.to_string().contains("requires audio support"),
+            "unexpected error: {err}"
+        );
+    }
+}
+
 #[derive(Deserialize)]
 struct AutoVisionLoaderConfig {
     architectures: Vec<String>,
