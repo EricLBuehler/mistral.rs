@@ -72,6 +72,7 @@ pub fn parse_request(
                 height: oairequest.height,
                 width: oairequest.width,
             },
+            save_path: None,
         },
         sampling_params: SamplingParams::deterministic(),
         response: tx,

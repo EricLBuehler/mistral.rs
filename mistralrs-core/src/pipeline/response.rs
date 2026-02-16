@@ -28,7 +28,10 @@ pub async fn send_image_responses(
             .unwrap_or(ImageGenerationResponseFormat::Url)
         {
             ImageGenerationResponseFormat::Url => {
-                let saved_path = format!("image-generation-{}.png", Uuid::new_v4());
+                let saved_path = match seq.image_gen_save_path() {
+                    Some(path) => path.to_string_lossy().into_owned(),
+                    None => format!("image-generation-{}.png", Uuid::new_v4()),
+                };
                 image
                     .save_with_format(&saved_path, image::ImageFormat::Png)
                     .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
