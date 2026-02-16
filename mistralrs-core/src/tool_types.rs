@@ -50,3 +50,44 @@ pub struct CalledFunction {
     pub arguments: String,
 }
 
+#[cfg(all(test, feature = "mcp"))]
+mod tests {
+    use super as local;
+
+    #[test]
+    fn tool_types_match_mcp_shapes() {
+        let local_tool = local::Tool {
+            tp: local::ToolType::Function,
+            function: local::Function {
+                description: Some("d".to_string()),
+                name: "n".to_string(),
+                parameters: None,
+            },
+        };
+        let mcp_tool = mistralrs_mcp::Tool {
+            tp: mistralrs_mcp::ToolType::Function,
+            function: mistralrs_mcp::Function {
+                description: Some("d".to_string()),
+                name: "n".to_string(),
+                parameters: None,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(local_tool).unwrap(),
+            serde_json::to_value(mcp_tool).unwrap()
+        );
+
+        let local_called = local::CalledFunction {
+            name: "n".to_string(),
+            arguments: "{}".to_string(),
+        };
+        let mcp_called = mistralrs_mcp::CalledFunction {
+            name: "n".to_string(),
+            arguments: "{}".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(local_called).unwrap(),
+            serde_json::to_value(mcp_called).unwrap()
+        );
+    }
+}

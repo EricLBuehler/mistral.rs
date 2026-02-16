@@ -209,12 +209,20 @@ impl VisionLoaderType {
             "MiniCPMO" => Ok(Self::MiniCpmO),
             #[cfg(feature = "audio")]
             "Phi4MMForCausalLM" => Ok(Self::Phi4MM),
+            #[cfg(not(feature = "audio"))]
+            "Phi4MMForCausalLM" => anyhow::bail!(
+                "Model architecture `Phi4MMForCausalLM` requires audio support. Rebuild with `--features audio`."
+            ),
             "Qwen2_5_VLForConditionalGeneration" => Ok(Self::Qwen2_5VL),
             "Gemma3ForConditionalGeneration" | "Gemma3ForCausalLM" => Ok(Self::Gemma3),
             "Mistral3ForConditionalGeneration" => Ok(Self::Mistral3),
             "Llama4ForConditionalGeneration" => Ok(Self::Llama4),
             #[cfg(feature = "audio")]
             "Gemma3nForConditionalGeneration" => Ok(Self::Gemma3n),
+            #[cfg(not(feature = "audio"))]
+            "Gemma3nForConditionalGeneration" => anyhow::bail!(
+                "Model architecture `Gemma3nForConditionalGeneration` requires audio support. Rebuild with `--features audio`."
+            ),
             "Qwen3VLForConditionalGeneration" => Ok(Self::Qwen3VL),
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
             other => anyhow::bail!(
@@ -238,12 +246,22 @@ impl FromStr for VisionLoaderType {
             "minicpmo" => Ok(Self::MiniCpmO),
             #[cfg(feature = "audio")]
             "phi4mm" => Ok(Self::Phi4MM),
+            #[cfg(not(feature = "audio"))]
+            "phi4mm" => Err(
+                "Architecture `phi4mm` requires audio support. Rebuild with `--features audio`."
+                    .to_string(),
+            ),
             "qwen2_5vl" => Ok(Self::Qwen2_5VL),
             "gemma3" => Ok(Self::Gemma3),
             "mistral3" => Ok(Self::Mistral3),
             "llama4" => Ok(Self::Llama4),
             #[cfg(feature = "audio")]
             "gemma3n" => Ok(Self::Gemma3n),
+            #[cfg(not(feature = "audio"))]
+            "gemma3n" => Err(
+                "Architecture `gemma3n` requires audio support. Rebuild with `--features audio`."
+                    .to_string(),
+            ),
             "qwen3vl" => Ok(Self::Qwen3VL),
             "qwen3vlmoe" => Ok(Self::Qwen3VLMoE),
             a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `qwen3vl`, `qwen3vlmoe`.")),
