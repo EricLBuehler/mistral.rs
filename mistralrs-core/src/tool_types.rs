@@ -52,13 +52,13 @@ pub struct CalledFunction {
 
 #[cfg(all(test, feature = "mcp"))]
 mod tests {
-    use super as local;
+    use super::*;
 
     #[test]
     fn tool_types_match_mcp_shapes() {
-        let local_tool = local::Tool {
-            tp: local::ToolType::Function,
-            function: local::Function {
+        let local_tool = Tool {
+            tp: ToolType::Function,
+            function: Function {
                 description: Some("d".to_string()),
                 name: "n".to_string(),
                 parameters: None,
@@ -77,7 +77,7 @@ mod tests {
             serde_json::to_value(mcp_tool).unwrap()
         );
 
-        let local_called = local::CalledFunction {
+        let local_called = CalledFunction {
             name: "n".to_string(),
             arguments: "{}".to_string(),
         };
