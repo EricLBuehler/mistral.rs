@@ -3,13 +3,13 @@ use std::sync::Arc;
 use candle_core::{DType, Result, Tensor};
 use rand_isaac::Isaac64Rng;
 
+use crate::CalledFunction;
 use crate::{
     prefix_cacher::PrefixCacheManagerV2,
     sampler::Logprobs,
     sequence::{Sequence, SequenceRecognizer, SequenceState, StopReason},
     tools::{parse_text_tools, ToolCallResponse, ToolCallType},
 };
-use crate::CalledFunction;
 
 use super::Pipeline;
 

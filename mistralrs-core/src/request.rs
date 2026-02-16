@@ -1,6 +1,6 @@
+use crate::AudioInput;
 use either::Either;
 use indexmap::IndexMap;
-use crate::AudioInput;
 use mistralrs_quant::IsqType;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

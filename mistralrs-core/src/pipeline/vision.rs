@@ -4,13 +4,13 @@ use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoVisionLoader,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
-    ModelKind, ModelPaths, MultimodalPromptPrefixer, PreProcessingMixin, Processor,
-    Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, TokenSource, VLlama4Loader, VLlamaLoader,
-    VisionModel, VisionModelLoader,
+    ModelKind, ModelPaths, MultimodalPromptPrefixer, PreProcessingMixin, Processor, Qwen2VLLoader,
+    Qwen3VLLoader, Qwen3VLMoELoader, TokenSource, VLlama4Loader, VLlamaLoader, VisionModel,
+    VisionModelLoader,
 };
 use super::{
-    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader,
-    Phi3VLoader, Qwen2_5VLLoader, VisionLoaderType,
+    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader, Phi3VLoader,
+    Qwen2_5VLLoader, VisionLoaderType,
 };
 
 #[cfg(feature = "audio")]

@@ -77,12 +77,13 @@ mod sequence;
 mod speech_models;
 pub mod think_tags;
 mod toml_selector;
+#[cfg(not(feature = "mcp"))]
+mod tool_types;
 mod tools;
 mod topology;
 mod utils;
 mod vision_models;
 mod xlora_models;
-mod tool_types;
 
 pub use diagnostics::{
     check_hf_gated_access, collect_system_info, run_doctor, BuildInfo, CpuInfo, DeviceInfo,
@@ -110,12 +111,18 @@ pub struct AudioInput {
 }
 
 #[cfg(feature = "mcp")]
-pub use mistralrs_mcp::{CalledFunction, Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType};
+pub use mistralrs_mcp::{
+    CalledFunction, Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType,
+};
 #[cfg(not(feature = "mcp"))]
-pub use tool_types::{CalledFunction, Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType};
+pub use tool_types::{
+    CalledFunction, Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType,
+};
 
 #[cfg(feature = "mcp")]
-pub use mistralrs_mcp::{McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo};
+pub use mistralrs_mcp::{
+    McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
+};
 #[cfg(not(feature = "mcp"))]
 #[derive(Clone, Debug, Default)]
 pub struct McpClientConfig {
@@ -158,9 +165,9 @@ pub use pipeline::{
     Loader, LocalModelPaths, LoraAdapterPaths, MistralLoader, MixtralLoader, Modalities, ModelKind,
     ModelPaths, MultimodalPromptPrefixer, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
     NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
-    SpeculativeLoader, SpeculativePipeline, Starcoder2Loader,
-    SupportedModality, TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType,
-    VisionSpecificConfig, UQFF_MULTI_FILE_DELIMITER,
+    SpeculativeLoader, SpeculativePipeline, Starcoder2Loader, SupportedModality, TokenSource,
+    VisionLoader, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    UQFF_MULTI_FILE_DELIMITER,
 };
 
 #[cfg(feature = "audio")]
