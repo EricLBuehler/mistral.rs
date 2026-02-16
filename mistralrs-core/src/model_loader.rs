@@ -207,8 +207,9 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
             max_image_shape: (*max_image_length, *max_image_length),
             max_num_images: *max_num_images,
         }),
-        ModelSelected::DiffusionPlain { .. }
-        | ModelSelected::Embedding { .. } => Ok(AutoDeviceMapParams::default_text()),
+        ModelSelected::DiffusionPlain { .. } | ModelSelected::Embedding { .. } => {
+            Ok(AutoDeviceMapParams::default_text())
+        }
         #[cfg(feature = "audio")]
         ModelSelected::Speech { .. } => Ok(AutoDeviceMapParams::default_text()),
         ModelSelected::Toml { file } => {

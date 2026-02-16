@@ -2,8 +2,7 @@ use super::hf::{hf_access_error, remote_issue_from_api_error, RemoteAccessIssue}
 use super::{
     DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoaderBuilder, EmbeddingLoaderType,
     EmbeddingSpecificConfig, Loader, ModelKind, ModelPaths, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, TokenSource, VisionLoaderBuilder, VisionLoaderType,
-    VisionSpecificConfig,
+    NormalSpecificConfig, TokenSource, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
 };
 use crate::utils::{progress::ProgressScopeGuard, tokens::get_token};
 use crate::Ordering;
@@ -347,7 +346,8 @@ impl AutoLoader {
 
         #[cfg(feature = "audio")]
         if let Some(ref config) = artifacts.contents {
-            if let Some(tp) = crate::speech_models::SpeechLoaderType::auto_detect_from_config(config)
+            if let Some(tp) =
+                crate::speech_models::SpeechLoaderType::auto_detect_from_config(config)
             {
                 return Ok(Detected::Speech(tp));
             }
