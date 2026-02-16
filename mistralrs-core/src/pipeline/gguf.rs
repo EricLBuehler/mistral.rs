@@ -283,8 +283,6 @@ impl Loader for GGUFLoader {
             silent
         );
 
-        info!("About to load!");
-
         self.load_model_from_path(
             &paths?,
             dtype,
