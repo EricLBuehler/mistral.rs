@@ -9,7 +9,7 @@ use crate::{
     sequence::{Sequence, SequenceRecognizer, SequenceState, StopReason},
     tools::{parse_text_tools, ToolCallResponse, ToolCallType},
 };
-use mistralrs_mcp::CalledFunction;
+use crate::CalledFunction;
 
 use super::Pipeline;
 

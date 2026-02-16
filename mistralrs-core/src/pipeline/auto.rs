@@ -2,7 +2,7 @@ use super::hf::{hf_access_error, remote_issue_from_api_error, RemoteAccessIssue}
 use super::{
     DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoaderBuilder, EmbeddingLoaderType,
     EmbeddingSpecificConfig, Loader, ModelKind, ModelPaths, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, SpeechLoader, TokenSource, VisionLoaderBuilder, VisionLoaderType,
+    NormalSpecificConfig, TokenSource, VisionLoaderBuilder, VisionLoaderType,
     VisionSpecificConfig,
 };
 use crate::utils::{progress::ProgressScopeGuard, tokens::get_token};
@@ -189,6 +189,7 @@ enum Detected {
     Vision(VisionLoaderType),
     Embedding(Option<EmbeddingLoaderType>),
     Diffusion(DiffusionLoaderType),
+    #[cfg(feature = "audio")]
     Speech(crate::speech_models::SpeechLoaderType),
 }
 
@@ -344,9 +345,9 @@ impl AutoLoader {
             return Ok(Detected::Diffusion(tp));
         }
 
+        #[cfg(feature = "audio")]
         if let Some(ref config) = artifacts.contents {
-            if let Some(tp) =
-                crate::speech_models::SpeechLoaderType::auto_detect_from_config(config)
+            if let Some(tp) = crate::speech_models::SpeechLoaderType::auto_detect_from_config(config)
             {
                 return Ok(Detected::Speech(tp));
             }
@@ -436,7 +437,9 @@ impl AutoLoader {
                 let loader = DiffusionLoaderBuilder::new(Some(self.model_id.clone())).build(tp);
                 *guard = Some(loader);
             }
+            #[cfg(feature = "audio")]
             Detected::Speech(tp) => {
+                use super::SpeechLoader;
                 let loader: Box<dyn Loader> = Box::new(SpeechLoader {
                     model_id: self.model_id.clone(),
                     dac_model_id: None,

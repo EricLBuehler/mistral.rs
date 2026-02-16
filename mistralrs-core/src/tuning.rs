@@ -209,6 +209,7 @@ fn model_id_from_selected(model: &ModelSelected) -> String {
             quantized_model_id, ..
         } => quantized_model_id.clone(),
         ModelSelected::DiffusionPlain { model_id, .. } => model_id.clone(),
+        #[cfg(feature = "audio")]
         ModelSelected::Speech { model_id, .. } => model_id.clone(),
         ModelSelected::Toml { file } => file.clone(),
         ModelSelected::MultiModel { .. } => "multi-model".to_string(),
@@ -483,7 +484,11 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
         | ModelSelected::XLoraGGML { .. } => {
             anyhow::bail!("Auto-tuning is not supported for pre-quantized GGUF/GGML models.");
         }
-        ModelSelected::DiffusionPlain { .. } | ModelSelected::Speech { .. } => {
+        ModelSelected::DiffusionPlain { .. } => {
+            anyhow::bail!("Auto-tuning is not supported for diffusion or speech models.");
+        }
+        #[cfg(feature = "audio")]
+        ModelSelected::Speech { .. } => {
             anyhow::bail!("Auto-tuning is not supported for diffusion or speech models.");
         }
         _ => {}

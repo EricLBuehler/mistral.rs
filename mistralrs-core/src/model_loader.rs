@@ -15,9 +15,12 @@ use crate::{
     },
     toml_selector::get_toml_selected_model_device_map_params,
     AutoDeviceMapParams, EmbeddingLoaderBuilder, EmbeddingSpecificConfig, Loader, ModelDType,
-    ModelSelected, SpeechLoader, TomlLoaderArgs, TomlSelector, Topology, GGUF_MULTI_FILE_DELIMITER,
+    ModelSelected, TomlLoaderArgs, TomlSelector, Topology, GGUF_MULTI_FILE_DELIMITER,
     UQFF_MULTI_FILE_DELIMITER,
 };
+
+#[cfg(feature = "audio")]
+use crate::SpeechLoader;
 
 /// A builder for a loader using the selected model.
 pub struct LoaderBuilder {
@@ -67,8 +70,9 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
         | ModelSelected::Toml { .. }
         | ModelSelected::VisionPlain { .. }
         | ModelSelected::DiffusionPlain { .. }
-        | ModelSelected::Speech { .. }
         | ModelSelected::Embedding { .. } => None,
+        #[cfg(feature = "audio")]
+        ModelSelected::Speech { .. } => None,
         ModelSelected::XLora {
             tgt_non_granular_index,
             ..
@@ -101,8 +105,9 @@ pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
         | ModelSelected::LoraGGUF { dtype, .. }
         | ModelSelected::LoraGGML { dtype, .. }
         | ModelSelected::Run { dtype, .. }
-        | ModelSelected::Speech { dtype, .. }
         | ModelSelected::Embedding { dtype, .. } => Ok(*dtype),
+        #[cfg(feature = "audio")]
+        ModelSelected::Speech { dtype, .. } => Ok(*dtype),
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
                 &fs::read_to_string(file.clone())
@@ -203,8 +208,9 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
             max_num_images: *max_num_images,
         }),
         ModelSelected::DiffusionPlain { .. }
-        | ModelSelected::Speech { .. }
         | ModelSelected::Embedding { .. } => Ok(AutoDeviceMapParams::default_text()),
+        #[cfg(feature = "audio")]
+        ModelSelected::Speech { .. } => Ok(AutoDeviceMapParams::default_text()),
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
                 &fs::read_to_string(file.clone())
@@ -397,6 +403,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             arch,
             dtype: _,
         } => DiffusionLoaderBuilder::new(Some(model_id)).build(arch),
+        #[cfg(feature = "audio")]
         ModelSelected::Speech {
             model_id,
             dac_model_id,

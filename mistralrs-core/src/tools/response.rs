@@ -14,7 +14,7 @@ impl std::fmt::Display for ToolCallType {
     }
 }
 
-use mistralrs_mcp::CalledFunction;
+use crate::CalledFunction;
 
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]

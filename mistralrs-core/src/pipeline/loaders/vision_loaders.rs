@@ -37,12 +37,15 @@ use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::vision_models::clip::ClipConfig;
 use crate::vision_models::gemma3::config::Gemma3Config;
 use crate::vision_models::gemma3::{Gemma3Model, Gemma3Processor};
+#[cfg(feature = "audio")]
 use crate::vision_models::gemma3n::config::{Gemma3nConfig, IntermediateSize};
+#[cfg(feature = "audio")]
 use crate::vision_models::gemma3n::{Gemma3nModel, Gemma3nProcessor};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::idefics3::{Idefics3Config, Idefics3Model, Idefics3Processor};
 use crate::vision_models::image_processor::ImagePreProcessor;
+#[cfg(feature = "audio")]
 use crate::vision_models::inputs_processor::Phi4MMProcessor;
 use crate::vision_models::llama4::{
     self, Llama4Config, Llama4ImageProcessor, Llama4Model, Llama4Processor,
@@ -56,6 +59,7 @@ use crate::vision_models::mistral3::{Mistral3Config, Mistral3Model, Mistral3Proc
 use crate::vision_models::mllama::{MLlamaConfig, MLlamaModel, MLlamaProcessor};
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3, PHI3V_CLIP_CONFIG};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
+#[cfg(feature = "audio")]
 use crate::vision_models::phi4::{Phi4MMConfig, Phi4MMModel, PHI4_MM_VISION_CFG};
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
@@ -67,7 +71,9 @@ use crate::vision_models::qwen3_vl::{Config as Qwen3VLConfig, Qwen3VLModel, Qwen
 use crate::vision_models::qwen3_vl_moe::{
     Config as Qwen3VLMoEConfig, Qwen3VLMoEModel, Qwen3VLMoEProcessor,
 };
-use crate::vision_models::{minicpmo, phi4};
+use crate::vision_models::minicpmo;
+#[cfg(feature = "audio")]
+use crate::vision_models::phi4;
 
 pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     // pixel_values and pixel_attention_mask only specified for prompt seqs
@@ -169,6 +175,7 @@ pub enum VisionLoaderType {
     Idefics3,
     #[serde(rename = "minicpmo")]
     MiniCpmO,
+    #[cfg(feature = "audio")]
     #[serde(rename = "phi4mm")]
     Phi4MM,
     #[serde(rename = "qwen2_5vl")]
@@ -179,6 +186,7 @@ pub enum VisionLoaderType {
     Mistral3,
     #[serde(rename = "llama4")]
     Llama4,
+    #[cfg(feature = "audio")]
     #[serde(rename = "gemma3n")]
     Gemma3n,
     #[serde(rename = "qwen3vl")]
@@ -199,11 +207,13 @@ impl VisionLoaderType {
             "Qwen2VLForConditionalGeneration" => Ok(Self::Qwen2VL),
             "Idefics3ForConditionalGeneration" => Ok(Self::Idefics3),
             "MiniCPMO" => Ok(Self::MiniCpmO),
+            #[cfg(feature = "audio")]
             "Phi4MMForCausalLM" => Ok(Self::Phi4MM),
             "Qwen2_5_VLForConditionalGeneration" => Ok(Self::Qwen2_5VL),
             "Gemma3ForConditionalGeneration" | "Gemma3ForCausalLM" => Ok(Self::Gemma3),
             "Mistral3ForConditionalGeneration" => Ok(Self::Mistral3),
             "Llama4ForConditionalGeneration" => Ok(Self::Llama4),
+            #[cfg(feature = "audio")]
             "Gemma3nForConditionalGeneration" => Ok(Self::Gemma3n),
             "Qwen3VLForConditionalGeneration" => Ok(Self::Qwen3VL),
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
@@ -226,11 +236,13 @@ impl FromStr for VisionLoaderType {
             "qwen2vl" => Ok(Self::Qwen2VL),
             "idefics3" => Ok(Self::Idefics3),
             "minicpmo" => Ok(Self::MiniCpmO),
+            #[cfg(feature = "audio")]
             "phi4mm" => Ok(Self::Phi4MM),
             "qwen2_5vl" => Ok(Self::Qwen2_5VL),
             "gemma3" => Ok(Self::Gemma3),
             "mistral3" => Ok(Self::Mistral3),
             "llama4" => Ok(Self::Llama4),
+            #[cfg(feature = "audio")]
             "gemma3n" => Ok(Self::Gemma3n),
             "qwen3vl" => Ok(Self::Qwen3VL),
             "qwen3vlmoe" => Ok(Self::Qwen3VLMoE),
@@ -250,11 +262,13 @@ impl std::fmt::Display for VisionLoaderType {
             VisionLoaderType::Qwen2VL => "qwen2vl",
             VisionLoaderType::Idefics3 => "idefics3",
             VisionLoaderType::MiniCpmO => "minicpmo",
+            #[cfg(feature = "audio")]
             VisionLoaderType::Phi4MM => "phi4mm",
             VisionLoaderType::Qwen2_5VL => "qwen2_5vl",
             VisionLoaderType::Gemma3 => "gemma3",
             VisionLoaderType::Mistral3 => "mistral3",
             VisionLoaderType::Llama4 => "llama4",
+            #[cfg(feature = "audio")]
             VisionLoaderType::Gemma3n => "gemma3n",
             VisionLoaderType::Qwen3VL => "qwen3vl",
             VisionLoaderType::Qwen3VLMoE => "qwen3vlmoe",
@@ -293,11 +307,13 @@ impl AutoVisionLoader {
             VisionLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
             VisionLoaderType::Idefics3 => Box::new(Idefics3Loader),
             VisionLoaderType::MiniCpmO => Box::new(MiniCpmOLoader),
+            #[cfg(feature = "audio")]
             VisionLoaderType::Phi4MM => Box::new(Phi4MMLoader),
             VisionLoaderType::Qwen2_5VL => Box::new(Qwen2_5VLLoader),
             VisionLoaderType::Gemma3 => Box::new(Gemma3Loader),
             VisionLoaderType::Mistral3 => Box::new(Mistral3Loader),
             VisionLoaderType::Llama4 => Box::new(VLlama4Loader),
+            #[cfg(feature = "audio")]
             VisionLoaderType::Gemma3n => Box::new(Gemma3nLoader),
             VisionLoaderType::Qwen3VL => Box::new(Qwen3VLLoader),
             VisionLoaderType::Qwen3VLMoE => Box::new(Qwen3VLMoELoader),
@@ -2943,6 +2959,7 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
 /// [`VisionLoader`] for a Phi 4MM Vision model.
 ///
 /// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+#[cfg(feature = "audio")]
 pub struct Phi4MMLoader;
 
 pub struct Phi4MMPrefixer;
@@ -2972,6 +2989,7 @@ impl MultimodalPromptPrefixer for Phi4MMPrefixer {
     }
 }
 
+#[cfg(feature = "audio")]
 impl VisionModelLoader for Phi4MMLoader {
     fn load(
         &self,
@@ -3026,6 +3044,7 @@ impl VisionModelLoader for Phi4MMLoader {
     }
 }
 
+#[cfg(feature = "audio")]
 impl IsqModelLoader for Phi4MMLoader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
@@ -3043,6 +3062,7 @@ impl IsqModelLoader for Phi4MMLoader {
     }
 }
 
+#[cfg(feature = "audio")]
 impl DeviceMappedModelLoader for Phi4MMLoader {
     fn mapped_max_act_size_elems(
         &self,
@@ -4655,6 +4675,7 @@ impl DeviceMappedModelLoader for VLlama4Loader {
 /// [`VisionLoader`] for an Gemma 3n model.
 ///
 /// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+#[cfg(feature = "audio")]
 pub struct Gemma3nLoader;
 
 #[allow(dead_code)]
@@ -4666,6 +4687,7 @@ impl MultimodalPromptPrefixer for Gemma3nPrefixer {
     }
 }
 
+#[cfg(feature = "audio")]
 impl VisionModelLoader for Gemma3nLoader {
     fn load(
         &self,
@@ -4724,6 +4746,7 @@ impl VisionModelLoader for Gemma3nLoader {
     }
 }
 
+#[cfg(feature = "audio")]
 impl IsqModelLoader for Gemma3nLoader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
@@ -4821,6 +4844,7 @@ impl IsqModelLoader for Gemma3nLoader {
     }
 }
 
+#[cfg(feature = "audio")]
 impl DeviceMappedModelLoader for Gemma3nLoader {
     fn mapped_max_act_size_elems(
         &self,

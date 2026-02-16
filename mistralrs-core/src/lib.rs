@@ -73,6 +73,7 @@ mod response;
 mod sampler;
 mod scheduler;
 mod sequence;
+#[cfg(feature = "audio")]
 mod speech_models;
 pub mod think_tags;
 mod toml_selector;
@@ -81,6 +82,7 @@ mod topology;
 mod utils;
 mod vision_models;
 mod xlora_models;
+mod tool_types;
 
 pub use diagnostics::{
     check_hf_gated_access, collect_system_info, run_doctor, BuildInfo, CpuInfo, DeviceInfo,
@@ -96,13 +98,53 @@ pub use device_map::{
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, LayerDeviceMapper,
 };
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
+
+#[cfg(feature = "audio")]
 pub use mistralrs_audio::AudioInput;
-pub use mistralrs_mcp::{
-    CalledFunction, Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType,
-};
-pub use mistralrs_mcp::{
-    McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
-};
+#[cfg(not(feature = "audio"))]
+#[derive(Clone, Debug, Default)]
+pub struct AudioInput {
+    pub samples: Vec<f32>,
+    pub sample_rate: u32,
+    pub channels: u16,
+}
+
+#[cfg(feature = "mcp")]
+pub use mistralrs_mcp::{CalledFunction, Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType};
+#[cfg(not(feature = "mcp"))]
+pub use tool_types::{CalledFunction, Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType};
+
+#[cfg(feature = "mcp")]
+pub use mistralrs_mcp::{McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo};
+#[cfg(not(feature = "mcp"))]
+#[derive(Clone, Debug, Default)]
+pub struct McpClientConfig {
+    _private: (),
+}
+#[cfg(not(feature = "mcp"))]
+#[derive(Clone, Debug)]
+pub struct McpClient;
+#[cfg(not(feature = "mcp"))]
+impl McpClient {
+    pub fn new(_config: McpClientConfig) -> Self {
+        Self
+    }
+}
+#[cfg(not(feature = "mcp"))]
+#[derive(Clone, Debug, Default)]
+pub struct McpServerConfig {
+    _private: (),
+}
+#[cfg(not(feature = "mcp"))]
+#[derive(Clone, Debug, Default)]
+pub struct McpServerSource {
+    _private: (),
+}
+#[cfg(not(feature = "mcp"))]
+#[derive(Clone, Debug, Default)]
+pub struct McpToolInfo {
+    _private: (),
+}
 pub use mistralrs_quant::{IsqType, MULTI_LORA_DELIMITER};
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
 pub use pipeline::hf::{hf_home_dir, hf_hub_cache_dir, hf_token_path};
@@ -116,10 +158,13 @@ pub use pipeline::{
     Loader, LocalModelPaths, LoraAdapterPaths, MistralLoader, MixtralLoader, Modalities, ModelKind,
     ModelPaths, MultimodalPromptPrefixer, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
     NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
-    SpeculativeLoader, SpeculativePipeline, SpeechLoader, SpeechPipeline, Starcoder2Loader,
+    SpeculativeLoader, SpeculativePipeline, Starcoder2Loader,
     SupportedModality, TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType,
     VisionSpecificConfig, UQFF_MULTI_FILE_DELIMITER,
 };
+
+#[cfg(feature = "audio")]
+pub use pipeline::{SpeechLoader, SpeechPipeline};
 pub use request::{
     ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
     LlguidanceGrammar, MessageContent, NormalRequest, ReasoningEffort, Request, RequestMessage,
@@ -132,6 +177,7 @@ pub use sampler::{
 pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
 use serde::Serialize;
+#[cfg(feature = "audio")]
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
@@ -669,6 +715,7 @@ impl MistralRs {
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
 
         // Initialize MCP client if configured
+        #[cfg(feature = "mcp")]
         if let Some(config) = &mcp_client_config {
             let mut mcp_client = McpClient::new(config.clone());
             let total_servers = config.servers.len();
@@ -703,6 +750,11 @@ impl MistralRs {
                     warn!("Continuing without MCP functionality. Check your MCP configuration and server availability.");
                 }
             }
+        }
+
+        #[cfg(not(feature = "mcp"))]
+        if mcp_client_config.is_some() {
+            warn!("MCP client config provided but `mistralrs-core` was compiled without `mcp` support. Rebuild with `--features mcp` to enable MCP.");
         }
 
         let reboot_state = RebootState {

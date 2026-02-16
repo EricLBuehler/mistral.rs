@@ -4,14 +4,17 @@ use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoVisionLoader,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
-    ModelKind, ModelPaths, MultimodalPromptPrefixer, Phi4MMLoader, PreProcessingMixin, Processor,
+    ModelKind, ModelPaths, MultimodalPromptPrefixer, PreProcessingMixin, Processor,
     Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, TokenSource, VLlama4Loader, VLlamaLoader,
     VisionModel, VisionModelLoader,
 };
 use super::{
-    Gemma3nLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader,
+    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader,
     Phi3VLoader, Qwen2_5VLLoader, VisionLoaderType,
 };
+
+#[cfg(feature = "audio")]
+use super::{Gemma3nLoader, Phi4MMLoader};
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
@@ -174,11 +177,13 @@ impl VisionLoaderBuilder {
             Some(VisionLoaderType::Qwen2VL) => Box::new(Qwen2VLLoader),
             Some(VisionLoaderType::Idefics3) => Box::new(Idefics3Loader),
             Some(VisionLoaderType::MiniCpmO) => Box::new(MiniCpmOLoader),
+            #[cfg(feature = "audio")]
             Some(VisionLoaderType::Phi4MM) => Box::new(Phi4MMLoader),
             Some(VisionLoaderType::Qwen2_5VL) => Box::new(Qwen2_5VLLoader),
             Some(VisionLoaderType::Gemma3) => Box::new(Gemma3Loader),
             Some(VisionLoaderType::Mistral3) => Box::new(Mistral3Loader),
             Some(VisionLoaderType::Llama4) => Box::new(VLlama4Loader),
+            #[cfg(feature = "audio")]
             Some(VisionLoaderType::Gemma3n) => Box::new(Gemma3nLoader),
             Some(VisionLoaderType::Qwen3VL) => Box::new(Qwen3VLLoader),
             Some(VisionLoaderType::Qwen3VLMoE) => Box::new(Qwen3VLMoELoader),

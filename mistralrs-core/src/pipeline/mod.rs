@@ -17,6 +17,7 @@ mod processing;
 mod response;
 mod sampling;
 mod speculative;
+#[cfg(feature = "audio")]
 mod speech;
 mod vision;
 
@@ -44,16 +45,19 @@ pub use loaders::{
     DiffusionModel, DiffusionModelLoader, EmbeddingGemmaLoader, EmbeddingLoaderType,
     EmbeddingModel, EmbeddingModelLoader, EmbeddingModelPaths, EmbeddingModule,
     EmbeddingModulePaths, EmbeddingModuleType, FluxLoader, GLM4Loader, GLM4MoeLiteLoader,
-    GLM4MoeLoader, Gemma2Loader, Gemma3Loader, Gemma3nLoader, GemmaLoader, GptOssLoader,
+    GLM4MoeLoader, Gemma2Loader, Gemma3Loader, GemmaLoader, GptOssLoader,
     GraniteMoeHybridLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader,
     LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader, Mistral3Loader, MistralLoader,
     MixtralLoader, ModelKind, ModelPaths, NormalLoaderType, NormalLoadingMetadata, NormalModel,
-    NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader,
+    NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader,
     PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader,
     Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3VLLoader,
     Qwen3VLMoELoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
     VisionLoaderType, VisionModel, VisionModelLoader,
 };
+
+#[cfg(feature = "audio")]
+pub use loaders::{Gemma3nLoader, Phi4MMLoader};
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(
     loader: &dyn loaders::DeviceMappedModelLoader,
@@ -89,6 +93,7 @@ pub(crate) use processing::{
 };
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
+#[cfg(feature = "audio")]
 pub use speech::{SpeechLoader, SpeechPipeline};
 use std::any::Any;
 use std::fmt::Debug;

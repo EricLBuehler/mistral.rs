@@ -95,14 +95,13 @@ ahash.workspace = true
 num-traits.workspace = true
 libc.workspace = true
 bm25.workspace = true
-rubato.workspace = true
-rustfft.workspace = true
-hound.workspace = true
-apodize.workspace = true
-symphonia.workspace = true
-mistralrs-audio.workspace = true
-rust-mcp-schema.workspace = true
-mistralrs-mcp = { workspace = true, features = ["utoipa"] }
+rubato = { workspace = true, optional = true }
+rustfft = { workspace = true, optional = true }
+hound = { workspace = true, optional = true }
+apodize = { workspace = true, optional = true }
+symphonia = { workspace = true, optional = true }
+mistralrs-audio = { workspace = true, optional = true }
+mistralrs-mcp = { workspace = true, optional = true, features = ["utoipa"] }
 statrs.workspace = true
 openai-harmony = "0.0.8"
 
@@ -112,7 +111,22 @@ objc2-metal = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
 
 [features]
-pyo3_macros = ["pyo3", "mistralrs-mcp/pyo3_macros"]
+default = ["audio", "mcp"]
+
+# Audio input processing + speech models + audio-capable multimodal models.
+audio = [
+    "dep:mistralrs-audio",
+    "dep:symphonia",
+    "dep:rubato",
+    "dep:rustfft",
+    "dep:hound",
+    "dep:apodize",
+]
+
+# MCP (Model Context Protocol) integration (client + types).
+mcp = ["dep:mistralrs-mcp"]
+
+pyo3_macros = ["pyo3", "mcp", "mistralrs-mcp/pyo3_macros"]
 cuda = [
     "candle-core/cuda",
     "candle-nn/cuda",

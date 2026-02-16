@@ -3566,7 +3566,6 @@ dependencies = [
  "regex-automata",
  "reqwest 0.13.1",
  "rubato",
- "rust-mcp-schema",
  "rustc-hash 2.1.1",
  "rustfft",
  "safetensors 0.7.0",
