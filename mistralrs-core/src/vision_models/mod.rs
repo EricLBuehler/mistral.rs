@@ -3,6 +3,7 @@ use std::any::Any;
 use candle_core::Tensor;
 
 pub(crate) mod clip;
+#[cfg(feature = "audio")]
 pub(crate) mod conformer;
 pub(crate) mod idefics2;
 pub(crate) use idefics2::idefics2_input_processor;

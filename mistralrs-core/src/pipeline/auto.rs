@@ -193,6 +193,16 @@ enum Detected {
 }
 
 impl AutoLoader {
+    #[cfg(not(feature = "audio"))]
+    fn disabled_audio_message_for_architecture(name: &str) -> Option<String> {
+        match name {
+            "DiaForConditionalGeneration" => Some(format!(
+                "Architecture `{name}` is a speech model, but this build disables audio processing. Rebuild with `--features audio` for speech support."
+            )),
+            _ => None,
+        }
+    }
+
     fn try_get_file(
         api: &ApiRepo,
         model_id: &Path,
@@ -390,6 +400,10 @@ impl AutoLoader {
             anyhow::bail!("Expected exactly one architecture in config");
         }
         let name = &cfg.architectures[0];
+        #[cfg(not(feature = "audio"))]
+        if let Some(message) = Self::disabled_audio_message_for_architecture(name) {
+            anyhow::bail!(message);
+        }
         if let Ok(tp) = VisionLoaderType::from_causal_lm_name(name) {
             return Ok(Detected::Vision(tp));
         }
@@ -537,7 +551,7 @@ mod tests {
     use std::sync::Mutex;
 
     #[test]
-    fn speech_arch_is_not_auto_detected_when_audio_disabled() {
+    fn speech_arch_reports_audio_feature_requirement_when_audio_disabled() {
         let loader = AutoLoader {
             model_id: "dummy/model".to_string(),
             normal_builder: Mutex::new(None),
@@ -561,7 +575,9 @@ mod tests {
         };
         let msg = err.to_string();
         assert!(
-            msg.contains("DiaForConditionalGeneration"),
+            msg.contains("DiaForConditionalGeneration")
+                && msg.contains("disables audio processing")
+                && msg.contains("--features audio"),
             "unexpected error: {msg}"
         );
     }

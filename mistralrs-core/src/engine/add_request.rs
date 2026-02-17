@@ -175,7 +175,7 @@ impl Engine {
             | RequestMessage::VisionChat {
                 images: _,
                 #[cfg(feature = "audio")]
-                audios: _,
+                    audios: _,
                 messages,
                 enable_thinking,
                 reasoning_effort,

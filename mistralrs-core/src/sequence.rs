@@ -88,11 +88,13 @@ pub struct SequenceImages {
 }
 
 #[derive(Clone)]
+#[cfg_attr(not(feature = "audio"), allow(dead_code))]
 pub struct SequenceAudios {
     audios: Vec<AudioInput>,
     hashes: Vec<u64>,
 }
 
+#[cfg(feature = "audio")]
 impl SequenceAudios {
     fn new(input_audios: Vec<AudioInput>) -> Self {
         let hashes = input_audios.iter().map(|a| {
@@ -240,7 +242,12 @@ impl MultimodalData {
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         diffusion_params: Option<DiffusionGenerationParams>,
     ) -> Self {
-        Self::new_inner(input_images, None, image_gen_response_format, diffusion_params)
+        Self::new_inner(
+            input_images,
+            None,
+            image_gen_response_format,
+            diffusion_params,
+        )
     }
 
     pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {
@@ -300,8 +307,14 @@ impl MultimodalData {
         self.input_audios.as_ref().map(|a| a.audios())
     }
 
+    #[cfg(feature = "audio")]
     pub fn audio_hashes(&self) -> Option<&[u64]> {
         self.input_audios.as_ref().map(|a| a.hashes())
+    }
+
+    #[cfg(not(feature = "audio"))]
+    pub fn audio_hashes(&self) -> Option<&[u64]> {
+        None
     }
 
     pub fn has_audios(&self) -> bool {
@@ -317,11 +330,15 @@ impl MultimodalData {
         }
     }
 
+    #[cfg(feature = "audio")]
     pub fn keep_num_audios(&mut self, audios_to_keep: usize) {
         if let Some(auds) = self.input_audios.as_mut() {
             auds.keep_num_audios(audios_to_keep)
         }
     }
+
+    #[cfg(not(feature = "audio"))]
+    pub fn keep_num_audios(&mut self, _audios_to_keep: usize) {}
 
     pub fn keep_num_images(&mut self, images_to_keep: usize) {
         if let Some(imgs) = self.input_images.as_mut() {
@@ -526,8 +543,7 @@ impl Sequence {
         suffix: Option<String>,
         prefix: Option<String>,
         input_images: Option<Vec<image::DynamicImage>>,
-        #[cfg(feature = "audio")]
-        input_audios: Option<Vec<AudioInput>>,
+        #[cfg(feature = "audio")] input_audios: Option<Vec<AudioInput>>,
         // Paged attention
         block_size: Option<usize>,
         //

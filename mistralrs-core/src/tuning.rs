@@ -689,3 +689,55 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
         notes,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{auto_tune, AutoTuneRequest, TuneProfile};
+    use crate::{DiffusionLoaderType, ModelDType, ModelSelected, TokenSource};
+
+    #[test]
+    fn auto_tune_returns_diffusion_specific_error() {
+        let request = AutoTuneRequest {
+            model: ModelSelected::DiffusionPlain {
+                model_id: "dummy/model".to_string(),
+                arch: DiffusionLoaderType::Flux,
+                dtype: ModelDType::Auto,
+            },
+            token_source: TokenSource::None,
+            hf_revision: None,
+            force_cpu: true,
+            profile: TuneProfile::Balanced,
+            requested_isq: None,
+        };
+
+        let err = auto_tune(request).expect_err("diffusion auto-tune should be rejected");
+        assert_eq!(
+            err.to_string(),
+            "Auto-tuning is not supported for diffusion models."
+        );
+    }
+
+    #[cfg(feature = "audio")]
+    #[test]
+    fn auto_tune_returns_speech_specific_error() {
+        let request = AutoTuneRequest {
+            model: ModelSelected::Speech {
+                model_id: "dummy/model".to_string(),
+                dac_model_id: None,
+                arch: crate::SpeechLoaderType::Dia,
+                dtype: ModelDType::Auto,
+            },
+            token_source: TokenSource::None,
+            hf_revision: None,
+            force_cpu: true,
+            profile: TuneProfile::Balanced,
+            requested_isq: None,
+        };
+
+        let err = auto_tune(request).expect_err("speech auto-tune should be rejected");
+        assert_eq!(
+            err.to_string(),
+            "Auto-tuning is not supported for speech models."
+        );
+    }
+}

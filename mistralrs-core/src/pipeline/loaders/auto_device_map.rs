@@ -31,6 +31,7 @@ fn device_cap(avail_bytes: usize, dev: &Device) -> usize {
 #[derive(Clone, Debug)]
 pub(crate) enum NonMappedSubModel {
     Vision,
+    #[cfg(feature = "audio")]
     Audio,
 }
 
@@ -38,6 +39,7 @@ impl Display for NonMappedSubModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             NonMappedSubModel::Vision => write!(f, "vision"),
+            #[cfg(feature = "audio")]
             NonMappedSubModel::Audio => write!(f, "audio"),
         }
     }

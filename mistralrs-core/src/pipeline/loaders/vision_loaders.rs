@@ -271,6 +271,8 @@ impl std::fmt::Display for VisionLoaderType {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(feature = "audio"))]
+    use super::AutoVisionLoader;
     use super::VisionLoaderType;
 
     #[test]
@@ -296,6 +298,40 @@ mod tests {
         let parsed =
             VisionLoaderType::from_causal_lm_name("Gemma3nForConditionalGeneration").unwrap();
         assert_eq!(parsed, VisionLoaderType::Gemma3n);
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn phi4mm_loader_reports_audio_feature_requirement_when_audio_disabled() {
+        let err = match AutoVisionLoader::get_loader(r#"{"architectures":["Phi4MMForCausalLM"]}"#) {
+            Ok(_) => panic!("phi4mm should require audio feature"),
+            Err(err) => err,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Architecture `phi4mm`")
+                && msg.contains("disables audio processing")
+                && msg.contains("--features audio"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn gemma3n_loader_reports_audio_feature_requirement_when_audio_disabled() {
+        let err = match AutoVisionLoader::get_loader(
+            r#"{"architectures":["Gemma3nForConditionalGeneration"]}"#,
+        ) {
+            Ok(_) => panic!("gemma3n should require audio feature"),
+            Err(err) => err,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Architecture `gemma3n`")
+                && msg.contains("disables audio processing")
+                && msg.contains("--features audio"),
+            "unexpected error: {msg}"
+        );
     }
 }
 
@@ -2992,8 +3028,10 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
 #[cfg(feature = "audio")]
 pub struct Phi4MMLoader;
 
+#[cfg(feature = "audio")]
 pub struct Phi4MMPrefixer;
 
+#[cfg(feature = "audio")]
 impl MultimodalPromptPrefixer for Phi4MMPrefixer {
     fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
         // Image indexing starts at 0.
