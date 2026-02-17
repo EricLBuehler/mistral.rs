@@ -93,6 +93,7 @@ float8 = "0.7.0"
 regex = "1.12.2"
 objc2-metal = "0.3.2"
 objc2-foundation = "0.3.2"
+dispatch2 = { version = "0.3.0", default-features = false, features = ["block2"] }
 safetensors = "0.7.0"
 toml = "0.9.11"
 hf-hub = { version = "0.4.3", default-features = false, features = [
