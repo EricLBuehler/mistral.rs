@@ -1523,6 +1523,7 @@ impl Runner {
         height = 720,
         width = 1280,
         model_id = None,
+        save_file = None,
     ))]
     fn generate_image(
         &self,
@@ -1531,6 +1532,7 @@ impl Runner {
         height: usize,
         width: usize,
         model_id: Option<String>,
+        save_file: Option<PathBuf>,
     ) -> PyApiResult<ImageGenerationResponse> {
         let (tx, mut rx) = channel(1);
 
@@ -1540,6 +1542,7 @@ impl Runner {
                 prompt: prompt.to_string(),
                 format: response_format,
                 generation_params: DiffusionGenerationParams { height, width },
+                save_file,
             },
             sampling_params: SamplingParams::deterministic(),
             response: tx,

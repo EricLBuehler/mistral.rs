@@ -23,6 +23,7 @@ async fn main() -> Result<()> {
             "A vibrant sunset in the mountains, 4k, high quality.".to_string(),
             ImageGenerationResponseFormat::Url,
             DiffusionGenerationParams::default(),
+            None,
         )
         .await?;
 
