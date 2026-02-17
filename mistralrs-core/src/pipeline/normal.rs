@@ -790,10 +790,10 @@ impl Loader for NormalLoader {
                 calibration_file.display(),
                 tokens.len()
             );
-            let bos_toks = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
-            let bos_tok_id = tokenizer
-                .token_to_id(&bos_toks[0])
-                .expect("Somehow the bos token is not present.");
+            let bos_tok_id = chat_template
+                .bos_tok()
+                .as_deref()
+                .and_then(|tok| tokenizer.token_to_id(tok));
 
             match self.config.organization {
                 IsqOrganization::Default => model.begin_track_stats()?,
@@ -804,7 +804,10 @@ impl Loader for NormalLoader {
             let n_chunks = tokens.len().div_ceil(CHUNK_SIZE);
             let start = Instant::now();
             for (i, chunk) in tokens.chunks(CHUNK_SIZE).enumerate() {
-                let chunk = [vec![bos_tok_id], chunk.to_vec()].concat();
+                let mut chunk = chunk.to_vec();
+                if let Some(bos_tok_id) = bos_tok_id {
+                    chunk.insert(0, bos_tok_id);
+                }
                 let chunk_len = chunk.len();
 
                 let start = Instant::now();

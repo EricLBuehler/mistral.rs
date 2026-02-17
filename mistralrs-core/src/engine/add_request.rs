@@ -164,6 +164,11 @@ impl Engine {
             } => Some(generation_params.clone()),
             _ => None,
         };
+
+        let image_gen_save_file = match &request.messages {
+            RequestMessage::ImageGeneration { save_file, .. } => save_file.clone(),
+            _ => None,
+        };
         let mut added_seq = false;
 
         let (mut prompt_tokens, prompt_text) = match request.messages {
@@ -554,6 +559,7 @@ impl Engine {
                 image_generation_format,
                 seq_step_type,
                 diffusion_params.clone(),
+                image_gen_save_file.clone(),
                 seq_preallocated_cache,
                 request.return_raw_logits,
                 eos_toks,

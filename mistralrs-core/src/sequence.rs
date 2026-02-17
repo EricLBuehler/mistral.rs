@@ -19,6 +19,7 @@ use candle_core::Tensor;
 use std::{
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
+    path::PathBuf,
     sync::{Arc, RwLock},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -192,6 +193,7 @@ pub struct MultimodalData {
     pub has_changed_prompt: bool,
     pub image_gen_response_format: Option<ImageGenerationResponseFormat>,
     pub diffusion_params: Option<DiffusionGenerationParams>,
+    pub image_gen_save_file: Option<PathBuf>,
     /// Per-item multimodal feature positions for prefix caching block hashing.
     /// Each entry records which token range a multimodal item (image/audio) occupies,
     /// so that only blocks overlapping with that item include its content hash.
@@ -205,6 +207,7 @@ impl MultimodalData {
         input_audios: Option<SequenceAudios>,
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         diffusion_params: Option<DiffusionGenerationParams>,
+        image_gen_save_file: Option<PathBuf>,
     ) -> Self {
         MultimodalData {
             input_images: input_images.map(SequenceImages::new),
@@ -217,6 +220,7 @@ impl MultimodalData {
             has_changed_prompt: false,
             image_gen_response_format,
             diffusion_params,
+            image_gen_save_file,
             mm_features: Vec::new(),
         }
     }
@@ -227,12 +231,14 @@ impl MultimodalData {
         input_audios: Option<Vec<AudioInput>>,
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         diffusion_params: Option<DiffusionGenerationParams>,
+        image_gen_save_file: Option<PathBuf>,
     ) -> Self {
         Self::new_inner(
             input_images,
             input_audios.map(SequenceAudios::new),
             image_gen_response_format,
             diffusion_params,
+            image_gen_save_file,
         )
     }
 
@@ -241,12 +247,14 @@ impl MultimodalData {
         input_images: Option<Vec<image::DynamicImage>>,
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         diffusion_params: Option<DiffusionGenerationParams>,
+        image_gen_save_file: Option<PathBuf>,
     ) -> Self {
         Self::new_inner(
             input_images,
             None,
             image_gen_response_format,
             diffusion_params,
+            image_gen_save_file,
         )
     }
 
@@ -353,6 +361,10 @@ impl MultimodalData {
 
     pub fn image_gen_response_format(&self) -> Option<ImageGenerationResponseFormat> {
         self.image_gen_response_format
+    }
+
+    pub fn image_gen_save_file(&self) -> Option<&PathBuf> {
+        self.image_gen_save_file.as_ref()
     }
 
     pub fn diffusion_params(&self) -> Option<DiffusionGenerationParams> {
@@ -551,6 +563,7 @@ impl Sequence {
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         sequence_stepping_type: SeqStepType,
         diffusion_params: Option<DiffusionGenerationParams>,
+        image_gen_save_file: Option<PathBuf>,
         // Preallocated KV cache (k,v)
         seq_preallocated_cache: Option<(Tensor, Tensor)>,
         //
@@ -612,11 +625,17 @@ impl Sequence {
                         input_audios,
                         image_gen_response_format,
                         diffusion_params,
+                        image_gen_save_file,
                     )
                 }
                 #[cfg(not(feature = "audio"))]
                 {
-                    MultimodalData::new(input_images, image_gen_response_format, diffusion_params)
+                    MultimodalData::new(
+                        input_images,
+                        image_gen_response_format,
+                        diffusion_params,
+                        image_gen_save_file,
+                    )
                 }
             },
             tools,
@@ -1144,6 +1163,10 @@ impl Sequence {
 
     pub fn image_gen_response_format(&self) -> Option<ImageGenerationResponseFormat> {
         self.multimodal.image_gen_response_format()
+    }
+
+    pub fn image_gen_save_file(&self) -> Option<&PathBuf> {
+        self.multimodal.image_gen_save_file()
     }
 
     /// Per-item multimodal feature positions for prefix caching block hashing.

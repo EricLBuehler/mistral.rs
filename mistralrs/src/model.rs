@@ -3,7 +3,7 @@ use candle_core::{Device, Result, Tensor};
 use either::Either;
 use futures::future::join_all;
 use mistralrs_core::*;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 use tokio::sync::mpsc::{channel, Receiver};
 
 use crate::{EmbeddingRequest, EmbeddingRequestBuilder, RequestLike, TextMessages};
@@ -244,8 +244,9 @@ impl Model {
         prompt: impl ToString,
         response_format: ImageGenerationResponseFormat,
         generation_params: DiffusionGenerationParams,
+        save_file: Option<PathBuf>,
     ) -> anyhow::Result<ImageGenerationResponse> {
-        self.generate_image_with_model(prompt, response_format, generation_params, None)
+        self.generate_image_with_model(prompt, response_format, generation_params, None, save_file)
             .await
     }
 
@@ -257,6 +258,7 @@ impl Model {
         response_format: ImageGenerationResponseFormat,
         generation_params: DiffusionGenerationParams,
         model_id: Option<&str>,
+        save_file: Option<PathBuf>,
     ) -> anyhow::Result<ImageGenerationResponse> {
         let (tx, mut rx) = channel(1);
 
@@ -266,6 +268,7 @@ impl Model {
                 prompt: prompt.to_string(),
                 format: response_format,
                 generation_params,
+                save_file,
             },
             sampling_params: SamplingParams::deterministic(),
             response: tx,
