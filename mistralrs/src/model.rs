@@ -62,6 +62,27 @@ impl Stream<'_> {
     }
 }
 
+pub struct ImageStream<'a> {
+    _server: &'a Model,
+    rx: Receiver<Response>,
+}
+
+impl ImageStream<'_> {
+    pub async fn next(&mut self) -> Option<anyhow::Result<ImageGenerationResponse>> {
+        let resp = self.rx.recv().await?;
+        match resp {
+            Response::ImageGeneration(res) => Some(Ok(res)),
+            Response::InternalError(e) => Some(Err(anyhow::Error::msg(e))),
+            Response::ValidationError(e) => Some(Err(anyhow::Error::msg(e))),
+            Response::ModelError(msg, _) => Some(Err(anyhow::Error::msg(msg))),
+            Response::CompletionModelError(msg, _) => Some(Err(anyhow::Error::msg(msg))),
+            _ => Some(Err(anyhow::Error::msg(
+                "Unexpected response type while streaming image generation",
+            ))),
+        }
+    }
+}
+
 impl Model {
     pub fn new(runner: Arc<MistralRs>) -> Self {
         Self { runner }
@@ -245,8 +266,14 @@ impl Model {
         response_format: ImageGenerationResponseFormat,
         generation_params: DiffusionGenerationParams,
     ) -> anyhow::Result<ImageGenerationResponse> {
-        self.generate_image_with_model(prompt, response_format, generation_params, None)
-            .await
+        self.generate_image_with_model_and_references(
+            prompt,
+            response_format,
+            generation_params,
+            None,
+            None,
+        )
+        .await
     }
 
     /// Generate an image using a specific model.
@@ -258,6 +285,43 @@ impl Model {
         generation_params: DiffusionGenerationParams,
         model_id: Option<&str>,
     ) -> anyhow::Result<ImageGenerationResponse> {
+        self.generate_image_with_model_and_references(
+            prompt,
+            response_format,
+            generation_params,
+            model_id,
+            None,
+        )
+        .await
+    }
+
+    /// Generate an image with optional reference images for image-to-image generation (FLUX.2).
+    pub async fn generate_image_with_references(
+        &self,
+        prompt: impl ToString,
+        response_format: ImageGenerationResponseFormat,
+        generation_params: DiffusionGenerationParams,
+        reference_images: Option<Vec<image::DynamicImage>>,
+    ) -> anyhow::Result<ImageGenerationResponse> {
+        self.generate_image_with_model_and_references(
+            prompt,
+            response_format,
+            generation_params,
+            None,
+            reference_images,
+        )
+        .await
+    }
+
+    /// Generate an image with optional model routing and reference images.
+    pub async fn generate_image_with_model_and_references(
+        &self,
+        prompt: impl ToString,
+        response_format: ImageGenerationResponseFormat,
+        generation_params: DiffusionGenerationParams,
+        model_id: Option<&str>,
+        reference_images: Option<Vec<image::DynamicImage>>,
+    ) -> anyhow::Result<ImageGenerationResponse> {
         let (tx, mut rx) = channel(1);
 
         let request = Request::Normal(Box::new(NormalRequest {
@@ -266,6 +330,7 @@ impl Model {
                 prompt: prompt.to_string(),
                 format: response_format,
                 generation_params,
+                reference_images,
             },
             sampling_params: SamplingParams::deterministic(),
             response: tx,
@@ -294,6 +359,98 @@ impl Model {
         };
 
         Ok(response)
+    }
+
+    pub async fn stream_image(
+        &self,
+        prompt: impl ToString,
+        response_format: ImageGenerationResponseFormat,
+        generation_params: DiffusionGenerationParams,
+    ) -> anyhow::Result<ImageStream<'_>> {
+        self.stream_image_with_model_and_references(
+            prompt,
+            response_format,
+            generation_params,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Stream image generation using a specific model.
+    /// If `model_id` is `None`, the request is sent to the default model.
+    pub async fn stream_image_with_model(
+        &self,
+        prompt: impl ToString,
+        response_format: ImageGenerationResponseFormat,
+        generation_params: DiffusionGenerationParams,
+        model_id: Option<&str>,
+    ) -> anyhow::Result<ImageStream<'_>> {
+        self.stream_image_with_model_and_references(
+            prompt,
+            response_format,
+            generation_params,
+            model_id,
+            None,
+        )
+        .await
+    }
+
+    /// Stream image generation with optional reference images for image-to-image generation (FLUX.2).
+    pub async fn stream_image_with_references(
+        &self,
+        prompt: impl ToString,
+        response_format: ImageGenerationResponseFormat,
+        generation_params: DiffusionGenerationParams,
+        reference_images: Option<Vec<image::DynamicImage>>,
+    ) -> anyhow::Result<ImageStream<'_>> {
+        self.stream_image_with_model_and_references(
+            prompt,
+            response_format,
+            generation_params,
+            None,
+            reference_images,
+        )
+        .await
+    }
+
+    /// Stream image generation with optional model routing and reference images.
+    pub async fn stream_image_with_model_and_references(
+        &self,
+        prompt: impl ToString,
+        response_format: ImageGenerationResponseFormat,
+        generation_params: DiffusionGenerationParams,
+        model_id: Option<&str>,
+        reference_images: Option<Vec<image::DynamicImage>>,
+    ) -> anyhow::Result<ImageStream<'_>> {
+        let (tx, rx) = channel(8);
+
+        let request = Request::Normal(Box::new(NormalRequest {
+            id: 0,
+            messages: RequestMessage::ImageGeneration {
+                prompt: prompt.to_string(),
+                format: response_format,
+                generation_params,
+                reference_images,
+            },
+            sampling_params: SamplingParams::deterministic(),
+            response: tx,
+            return_logprobs: false,
+            is_streaming: true,
+            suffix: None,
+            constraint: Constraint::None,
+            tool_choice: None,
+            tools: None,
+            logits_processors: None,
+            return_raw_logits: false,
+            web_search_options: None,
+            model_id: model_id.map(|s| s.to_string()),
+            truncate_sequence: false,
+        }));
+
+        self.runner.get_sender(model_id)?.send(request).await?;
+
+        Ok(ImageStream { _server: self, rx })
     }
 
     // ========================================================================

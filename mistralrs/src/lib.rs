@@ -163,7 +163,7 @@ pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
 pub use mistralrs_core::{SearchCallback, SearchResult, ToolCallback};
-pub use model::{best_device, Model};
+pub use model::{best_device, ImageStream, Model};
 pub use model_builder_trait::{AnyModelBuilder, MultiModelBuilder};
 pub use speculative::TextSpeculativeBuilder;
 pub use speech_model::SpeechModelBuilder;
@@ -243,6 +243,9 @@ pub use mistralrs_core::{IntervalLogger, MistralRs, RequestMessage, ResponseOk};
 
 // ========== Utilities ==========
 pub use mistralrs_core::{initialize_logging, paged_attn_supported, parse_isq_value};
+
+// ========== Loading Progress ==========
+pub use mistralrs_core::{set_loading_progress_callback, LoadingProgress, LoadingProgressGuard};
 
 // ========== llguidance ==========
 pub use mistralrs_core::llguidance;

@@ -260,7 +260,10 @@ trait LoadTensors {
         // Take the filtered list of tensors to load, store with derived lookup key:
         let mut loaded_tensors = HashMap::new();
         if !iter.is_empty() {
-            for (load_name, key_name) in iter.into_iter().with_progress(is_silent) {
+            for (load_name, key_name) in iter
+                .into_iter()
+                .with_progress_reporting("Loading tensors", is_silent)
+            {
                 if !make_dummy_predicate(&load_name) {
                     let dev = match get_device_for_tensor(load_name.clone()) {
                         DeviceForLoadTensor::Base => base_device,

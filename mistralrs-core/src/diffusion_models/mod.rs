@@ -21,6 +21,18 @@ macro_rules! generate_repr {
 pub struct DiffusionGenerationParams {
     pub height: usize,
     pub width: usize,
+    /// Number of denoising steps. If None, uses model default.
+    #[serde(default)]
+    pub num_steps: Option<usize>,
+    /// Guidance scale (CFG). If None, uses model default.
+    #[serde(default)]
+    pub guidance_scale: Option<f64>,
+    /// Negative prompt for CFG (Flux2 only). If None, uses empty string.
+    #[serde(default)]
+    pub negative_prompt: Option<String>,
+    /// Emit preview images every N steps when streaming image generation.
+    #[serde(default)]
+    pub preview_interval: Option<usize>,
 }
 
 generate_repr!(DiffusionGenerationParams);
@@ -31,6 +43,10 @@ impl Default for DiffusionGenerationParams {
         Self {
             height: 720,
             width: 1280,
+            num_steps: None,
+            guidance_scale: None,
+            negative_prompt: None,
+            preview_interval: None,
         }
     }
 }

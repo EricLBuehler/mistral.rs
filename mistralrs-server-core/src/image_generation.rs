@@ -71,7 +71,12 @@ pub fn parse_request(
             generation_params: DiffusionGenerationParams {
                 height: oairequest.height,
                 width: oairequest.width,
+                num_steps: None,
+                guidance_scale: None,
+                negative_prompt: None,
+                preview_interval: None,
             },
+            reference_images: None,
         },
         sampling_params: SamplingParams::deterministic(),
         response: tx,

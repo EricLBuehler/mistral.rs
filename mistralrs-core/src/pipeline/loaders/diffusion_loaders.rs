@@ -15,6 +15,9 @@ use pyo3::pyclass;
 use regex::Regex;
 use serde::Deserialize;
 
+use tokio::sync::mpsc::UnboundedSender;
+use tracing::info;
+
 use super::{ModelPaths, NormalLoadingMetadata};
 use crate::{
     api_dir_list, api_get_file,
@@ -35,7 +38,9 @@ pub trait DiffusionModel {
         &mut self,
         prompts: Vec<String>,
         params: DiffusionGenerationParams,
+        images: Option<Vec<image::DynamicImage>>,
     ) -> candle_core::Result<Tensor>;
+    fn set_preview_sender(&mut self, _sender: Option<UnboundedSender<Vec<image::DynamicImage>>>) {}
     fn device(&self) -> &Device;
     fn max_seq_len(&self) -> usize;
 }
@@ -59,7 +64,7 @@ pub trait DiffusionModelLoader: Send + Sync {
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
 #[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq)]
-/// The architecture to load the vision model as.
+/// The architecture to load the diffusion model as.
 pub enum DiffusionLoaderType {
     #[serde(rename = "flux")]
     Flux,
@@ -74,7 +79,7 @@ impl FromStr for DiffusionLoaderType {
             "flux" => Ok(Self::Flux),
             "flux-offloaded" => Ok(Self::FluxOffloaded),
             a => Err(format!(
-                "Unknown architecture `{a}`. Possible architectures: `flux`."
+                "Unknown architecture `{a}`. Possible architectures: `flux`, `flux-offloaded`."
             )),
         }
     }
@@ -91,7 +96,9 @@ impl DiffusionLoaderType {
     }
 
     fn matches_flux(files: &[String]) -> bool {
-        let flux_regex = Regex::new(r"^flux\\d+-(schnell|dev)\\.safetensors$");
+        // Match FLUX model files: flux1-schnell.safetensors, flux1-dev.safetensors,
+        // flux-2-klein-9b.safetensors, etc.
+        let flux_regex = Regex::new(r"^flux[-.]?\d+[-_][\w-]+\.safetensors$");
         let Ok(flux_regex) = flux_regex else {
             return false;
         };
@@ -103,7 +110,7 @@ impl DiffusionLoaderType {
             flux_regex.is_match(name)
         });
 
-        has_transformer && has_vae && has_ae && has_flux
+        has_transformer && (has_ae || has_vae) && has_flux
     }
 }
 
@@ -156,17 +163,61 @@ impl ModelPaths for DiffusionModelPaths {
 /// [`DiffusionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.DiffusionLoader.html
 pub struct FluxLoader {
     pub(crate) offload: bool,
+    pub(crate) model_id: String,
 }
 
 impl DiffusionModelLoader for FluxLoader {
     fn get_model_paths(&self, api: &ApiRepo, model_id: &Path) -> Result<Vec<PathBuf>> {
-        let regex = Regex::new(r"^flux\d+-(schnell|dev)\.safetensors$")?;
+        // Match FLUX model files: flux1-schnell.safetensors, flux1-dev.safetensors, flux-2-klein-9b.safetensors, etc.
+        let regex = Regex::new(r"^flux[-.]?\d+[-_][\w-]+\.safetensors$")?;
         let flux_name = api_dir_list!(api, model_id, true)
             .filter(|x| regex.is_match(x))
-            .nth(0)
+            .next()
             .with_context(|| "Expected at least 1 .safetensors file matching the FLUX regex, please raise an issue.")?;
         let flux_file = api_get_file!(api, &flux_name, model_id);
-        let ae_file = api_get_file!(api, "ae.safetensors", model_id);
+
+        // Try ae.safetensors first (FLUX.1 format), fall back to vae/diffusion_pytorch_model.safetensors (FLUX.2 diffusers format)
+        let ae_file = if std::path::Path::new(model_id).exists() {
+            // Local path
+            let ae_path = model_id.join("ae.safetensors");
+            let vae_path = model_id.join("vae/diffusion_pytorch_model.safetensors");
+            if ae_path.exists() {
+                info!(
+                    "Loading `ae.safetensors` locally at `{}`",
+                    ae_path.display()
+                );
+                ae_path
+            } else if vae_path.exists() {
+                info!(
+                    "Loading `vae/diffusion_pytorch_model.safetensors` locally at `{}`",
+                    vae_path.display()
+                );
+                vae_path
+            } else {
+                anyhow::bail!("Could not find ae.safetensors or vae/diffusion_pytorch_model.safetensors at {:?}", model_id);
+            }
+        } else {
+            // HuggingFace API
+            let dir_list: Vec<String> = api_dir_list!(api, model_id, false).collect();
+            if dir_list.contains(&"ae.safetensors".to_string()) {
+                api.get("ae.safetensors")
+                    .with_context(|| "Could not get ae.safetensors from API")?
+            } else if dir_list.contains(&"vae/diffusion_pytorch_model.safetensors".to_string())
+                || dir_list.iter().any(|f| f.starts_with("vae/"))
+            {
+                // FLUX.2 diffusers format - VAE is in subdirectory
+                api.get("vae/diffusion_pytorch_model.safetensors")
+                    .with_context(|| {
+                        "Could not get vae/diffusion_pytorch_model.safetensors from API"
+                    })?
+            } else {
+                anyhow::bail!(
+                    "Could not find ae.safetensors or vae/diffusion_pytorch_model.safetensors in model {:?}. Available files: {:?}",
+                    model_id,
+                    dir_list
+                );
+            }
+        };
 
         // NOTE(EricLBuehler): disgusting way of doing this but the 0th path is the flux, 1 is ae
         Ok(vec![flux_file, ae_file])
@@ -207,6 +258,7 @@ impl DiffusionModelLoader for FluxLoader {
             FluxStepperConfig::default_for_guidance(flux_cfg.guidance_embeds),
             (flux_vb, &flux_cfg),
             (vae_vb, &vae_cfg),
+            &self.model_id,
             flux_dtype,
             &normal_loading_metadata.real_device,
             silent,

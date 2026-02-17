@@ -1,26 +1,99 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{Device, IndexOp, Result, Tensor, D};
 use candle_nn::{LayerNorm, Linear, RmsNorm};
 use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 
-use crate::layers::{self, MatMul};
+use crate::attention::{Sdpa, SdpaParams};
+use crate::layers;
 
-const MLP_RATIO: f64 = 4.;
-const HIDDEN_SIZE: usize = 3072;
-const AXES_DIM: &[usize] = &[16, 56, 56];
-const THETA: usize = 10000;
+use super::common;
+
+// FLUX.1 defaults
+const DEFAULT_MLP_RATIO: f64 = 4.;
+const DEFAULT_HIDDEN_SIZE: usize = 3072;
+const DEFAULT_AXES_DIM: &[usize] = &[16, 56, 56];
+const DEFAULT_THETA: usize = 10000;
+const DEFAULT_POOLED_PROJECTION_DIM: usize = 768;
+
+fn default_mlp_ratio() -> f64 {
+    DEFAULT_MLP_RATIO
+}
+
+fn default_pooled_projection_dim() -> usize {
+    DEFAULT_POOLED_PROJECTION_DIM
+}
+
+fn default_rope_theta() -> usize {
+    DEFAULT_THETA
+}
+
+fn default_axes_dims_rope() -> Vec<usize> {
+    DEFAULT_AXES_DIM.to_vec()
+}
+
+fn default_attention_head_dim() -> Option<usize> {
+    None
+}
+
+fn default_use_bias() -> bool {
+    true // FLUX.1 uses biases, FLUX.2 doesn't
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub in_channels: usize,
+    /// Pooled projection dimension for CLIP embeddings. FLUX.2 doesn't use this.
+    #[serde(default = "default_pooled_projection_dim")]
     pub pooled_projection_dim: usize,
     pub joint_attention_dim: usize,
     pub num_attention_heads: usize,
     pub num_layers: usize,
     pub num_single_layers: usize,
     pub guidance_embeds: bool,
+    /// MLP expansion ratio. FLUX.1 uses 4.0, FLUX.2 uses 3.0.
+    #[serde(default = "default_mlp_ratio")]
+    pub mlp_ratio: f64,
+    /// RoPE theta value. FLUX.1 uses 10000, FLUX.2 uses 2000.
+    #[serde(default = "default_rope_theta")]
+    pub rope_theta: usize,
+    /// Axis dimensions for RoPE. FLUX.1 uses [16, 56, 56], FLUX.2 uses [32, 32, 32, 32].
+    #[serde(default = "default_axes_dims_rope")]
+    pub axes_dims_rope: Vec<usize>,
+    /// Attention head dimension. If set, hidden_size = attention_head_dim * num_attention_heads.
+    /// Otherwise, falls back to default hidden size.
+    #[serde(default = "default_attention_head_dim")]
+    pub attention_head_dim: Option<usize>,
+    /// Whether to use biases in linear layers. FLUX.1 uses biases (true), FLUX.2 doesn't (false).
+    #[serde(default = "default_use_bias")]
+    pub use_bias: bool,
+}
+
+impl Config {
+    /// Get the hidden size for this model configuration.
+    pub fn hidden_size(&self) -> usize {
+        self.attention_head_dim
+            .map(|dim| dim * self.num_attention_heads)
+            .unwrap_or(DEFAULT_HIDDEN_SIZE)
+    }
+
+    /// Check if this is a FLUX.2 style model (detected by attention_head_dim being set)
+    pub fn is_flux2(&self) -> bool {
+        self.attention_head_dim.is_some()
+    }
+
+    /// Get whether to use biases in linear layers.
+    /// FLUX.1 uses biases, FLUX.2 doesn't.
+    /// Auto-detects based on attention_head_dim presence if use_bias is default.
+    pub fn should_use_bias(&self) -> bool {
+        // If attention_head_dim is set, this is FLUX.2 and shouldn't use bias
+        if self.is_flux2() {
+            false
+        } else {
+            self.use_bias
+        }
+    }
 }
 
 fn layer_norm(dim: usize, vb: ShardedVarBuilder) -> Result<LayerNorm> {
@@ -28,41 +101,18 @@ fn layer_norm(dim: usize, vb: ShardedVarBuilder) -> Result<LayerNorm> {
     Ok(LayerNorm::new_no_bias(ws, 1e-6))
 }
 
-fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
-    let dim = q.dim(D::Minus1)?;
-    let scale_factor = 1.0 / (dim as f64).sqrt();
-    let mut batch_dims = q.dims().to_vec();
-    batch_dims.pop();
-    batch_dims.pop();
-    let q = q.flatten_to(batch_dims.len() - 1)?;
-    let k = k.flatten_to(batch_dims.len() - 1)?;
-    let v = v.flatten_to(batch_dims.len() - 1)?;
-    let attn_weights = (MatMul.matmul(&q, &k.t()?)? * scale_factor)?;
-    let attn_scores = MatMul.matmul(&candle_nn::ops::softmax_last_dim(&attn_weights)?, &v)?;
-    batch_dims.push(attn_scores.dim(D::Minus2)?);
-    batch_dims.push(attn_scores.dim(D::Minus1)?);
-    attn_scores.reshape(batch_dims)
-}
-
-fn rope(pos: &Tensor, dim: usize, theta: usize) -> Result<Tensor> {
-    if dim % 2 == 1 {
-        candle_core::bail!("dim {dim} is odd")
+/// Create a linear layer with or without bias based on config
+fn linear_maybe_bias(
+    in_dim: usize,
+    out_dim: usize,
+    use_bias: bool,
+    vb: ShardedVarBuilder,
+) -> Result<Linear> {
+    if use_bias {
+        layers::linear(in_dim, out_dim, vb)
+    } else {
+        layers::linear_no_bias(in_dim, out_dim, vb)
     }
-    let dev = pos.device();
-    let theta = theta as f64;
-    let inv_freq: Vec<_> = (0..dim)
-        .step_by(2)
-        .map(|i| 1f32 / theta.powf(i as f64 / dim as f64) as f32)
-        .collect();
-    let inv_freq_len = inv_freq.len();
-    let inv_freq = Tensor::from_vec(inv_freq, (1, 1, inv_freq_len), dev)?;
-    let inv_freq = inv_freq.to_dtype(pos.dtype())?;
-    let freqs = pos.unsqueeze(2)?.broadcast_mul(&inv_freq)?;
-    let cos = freqs.cos()?;
-    let sin = freqs.sin()?;
-    let out = Tensor::stack(&[&cos, &sin.neg()?, &sin, &cos], 3)?;
-    let (b, n, d, _ij) = out.dims4()?;
-    out.reshape((b, n, d, 2, 2))
 }
 
 fn apply_rope(x: &Tensor, freq_cis: &Tensor) -> Result<Tensor> {
@@ -79,44 +129,39 @@ fn apply_rope(x: &Tensor, freq_cis: &Tensor) -> Result<Tensor> {
 fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Result<Tensor> {
     let q = apply_rope(q, pe)?.contiguous()?;
     let k = apply_rope(k, pe)?.contiguous()?;
-    let x = scaled_dot_product_attention(&q, &k, v)?;
-    x.transpose(1, 2)?.flatten_from(2)
-}
+    let v = v.contiguous()?;
 
-fn timestep_embedding(t: &Tensor, dim: usize, dtype: DType) -> Result<Tensor> {
-    const TIME_FACTOR: f64 = 1000.;
-    const MAX_PERIOD: f64 = 10000.;
-    if dim % 2 == 1 {
-        candle_core::bail!("{dim} is odd")
-    }
-    let dev = t.device();
-    let half = dim / 2;
-    let t = (t * TIME_FACTOR)?;
-    let arange = Tensor::arange(0, half as u32, dev)?.to_dtype(candle_core::DType::F32)?;
-    let freqs = (arange * (-MAX_PERIOD.ln() / half as f64))?.exp()?;
-    let args = t
-        .unsqueeze(1)?
-        .to_dtype(candle_core::DType::F32)?
-        .broadcast_mul(&freqs.unsqueeze(0)?)?;
-    let emb = Tensor::cat(&[args.cos()?, args.sin()?], D::Minus1)?.to_dtype(dtype)?;
-    Ok(emb)
+    let head_dim = q.dim(D::Minus1)?;
+    let sdpa_params = SdpaParams {
+        n_kv_groups: 1,
+        softcap: None,
+        softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+        sliding_window: None,
+        sinks: None,
+    };
+    let x = Sdpa.run_attention(
+        &q,
+        &k,
+        &v,
+        None,
+        Some(&common::DIFFUSION_FLASH_PARAMS),
+        &sdpa_params,
+    )?;
+    x.transpose(1, 2)?.flatten_from(2)
 }
 
 #[derive(Debug, Clone)]
 pub struct EmbedNd {
-    #[allow(unused)]
-    dim: usize,
-    theta: usize,
-    axes_dim: Vec<usize>,
+    inv_freqs: Vec<Tensor>,
 }
 
 impl EmbedNd {
-    fn new(dim: usize, theta: usize, axes_dim: Vec<usize>) -> Self {
-        Self {
-            dim,
-            theta,
-            axes_dim,
-        }
+    fn new(theta: usize, axes_dim: Vec<usize>, device: &Device) -> Result<Self> {
+        let inv_freqs = axes_dim
+            .iter()
+            .map(|&dim| common::precompute_inv_freq(dim, theta, device))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { inv_freqs })
     }
 }
 
@@ -125,11 +170,8 @@ impl candle_core::Module for EmbedNd {
         let n_axes = ids.dim(D::Minus1)?;
         let mut emb = Vec::with_capacity(n_axes);
         for idx in 0..n_axes {
-            let r = rope(
-                &ids.get_on_dim(D::Minus1, idx)?,
-                self.axes_dim[idx],
-                self.theta,
-            )?;
+            let r =
+                common::rope_with_inv_freq(&ids.get_on_dim(D::Minus1, idx)?, &self.inv_freqs[idx])?;
             emb.push(r)
         }
         let emb = Tensor::cat(&emb, 2)?;
@@ -384,8 +426,8 @@ pub struct DoubleStreamBlock {
 
 impl DoubleStreamBlock {
     fn new(cfg: &Config, vb: ShardedVarBuilder) -> Result<Self> {
-        let h_sz = HIDDEN_SIZE;
-        let mlp_sz = (h_sz as f64 * MLP_RATIO) as usize;
+        let h_sz = cfg.hidden_size();
+        let mlp_sz = (h_sz as f64 * cfg.mlp_ratio) as usize;
         let img_mod = Modulation2::new(h_sz, vb.pp("img_mod"))?;
         let img_norm1 = layer_norm(h_sz, vb.pp("img_norm1"))?;
         let img_attn = SelfAttention::new(h_sz, cfg.num_attention_heads, true, vb.pp("img_attn"))?;
@@ -497,8 +539,8 @@ pub struct SingleStreamBlock {
 
 impl SingleStreamBlock {
     fn new(cfg: &Config, vb: ShardedVarBuilder) -> Result<Self> {
-        let h_sz = HIDDEN_SIZE;
-        let mlp_sz = (h_sz as f64 * MLP_RATIO) as usize;
+        let h_sz = cfg.hidden_size();
+        let mlp_sz = (h_sz as f64 * cfg.mlp_ratio) as usize;
         let head_dim = h_sz / cfg.num_attention_heads;
         let linear1 = layers::linear(h_sz, h_sz * 3 + mlp_sz, vb.pp("linear1"))?;
         let linear2 = layers::linear(h_sz + mlp_sz, h_sz, vb.pp("linear2"))?;
@@ -614,6 +656,7 @@ pub struct Flux {
     vector_in: MlpEmbedder,
     guidance_in: Option<MlpEmbedder>,
     pe_embedder: EmbedNd,
+    timestep_freqs: common::TimestepFreqs,
     double_blocks: Vec<DoubleStreamBlock>,
     single_blocks: Vec<SingleStreamBlock>,
     final_layer: LastLayer,
@@ -628,14 +671,18 @@ impl Flux {
         device: Device,
         offloaded: bool,
     ) -> Result<Self> {
-        let img_in = layers::linear(
+        let hidden_size = cfg.hidden_size();
+        let use_bias = cfg.should_use_bias();
+        let img_in = linear_maybe_bias(
             cfg.in_channels,
-            HIDDEN_SIZE,
+            hidden_size,
+            use_bias,
             vb.pp("img_in").set_device(device.clone()),
         )?;
-        let txt_in = layers::linear(
+        let txt_in = linear_maybe_bias(
             cfg.joint_attention_dim,
-            HIDDEN_SIZE,
+            hidden_size,
+            use_bias,
             vb.pp("txt_in").set_device(device.clone()),
         )?;
         let mut double_blocks = Vec::with_capacity(cfg.num_layers);
@@ -652,18 +699,18 @@ impl Flux {
         }
         let time_in = MlpEmbedder::new(
             256,
-            HIDDEN_SIZE,
+            hidden_size,
             vb.pp("time_in").set_device(device.clone()),
         )?;
         let vector_in = MlpEmbedder::new(
             cfg.pooled_projection_dim,
-            HIDDEN_SIZE,
+            hidden_size,
             vb.pp("vector_in").set_device(device.clone()),
         )?;
         let guidance_in = if cfg.guidance_embeds {
             let mlp = MlpEmbedder::new(
                 256,
-                HIDDEN_SIZE,
+                hidden_size,
                 vb.pp("guidance_in").set_device(device.clone()),
             )?;
             Some(mlp)
@@ -671,13 +718,13 @@ impl Flux {
             None
         };
         let final_layer = LastLayer::new(
-            HIDDEN_SIZE,
+            hidden_size,
             1,
             cfg.in_channels,
             vb.pp("final_layer").set_device(device.clone()),
         )?;
-        let pe_dim = HIDDEN_SIZE / cfg.num_attention_heads;
-        let pe_embedder = EmbedNd::new(pe_dim, THETA, AXES_DIM.to_vec());
+        let pe_embedder = EmbedNd::new(cfg.rope_theta, cfg.axes_dims_rope.clone(), &device)?;
+        let timestep_freqs = common::TimestepFreqs::new(256, &device)?;
         Ok(Self {
             img_in,
             txt_in,
@@ -685,12 +732,20 @@ impl Flux {
             vector_in,
             guidance_in,
             pe_embedder,
+            timestep_freqs,
             double_blocks,
             single_blocks,
             final_layer,
             device: device.clone(),
             offloaded,
         })
+    }
+
+    /// Precompute positional embeddings from txt_ids and img_ids.
+    /// Call once before the denoising loop; pass the result to each forward() call.
+    pub fn compute_pe(&self, txt_ids: &Tensor, img_ids: &Tensor) -> Result<Tensor> {
+        let ids = Tensor::cat(&[txt_ids, img_ids], 1)?;
+        ids.apply(&self.pe_embedder)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -703,6 +758,7 @@ impl Flux {
         timesteps: &Tensor,
         y: &Tensor,
         guidance: Option<&Tensor>,
+        pe: Option<&Tensor>,
     ) -> Result<Tensor> {
         if txt.rank() != 3 {
             candle_core::bail!("unexpected shape for txt {:?}", txt.shape())
@@ -711,16 +767,19 @@ impl Flux {
             candle_core::bail!("unexpected shape for img {:?}", img.shape())
         }
         let dtype = img.dtype();
-        let pe = {
-            let ids = Tensor::cat(&[txt_ids, img_ids], 1)?;
-            ids.apply(&self.pe_embedder)?
+        let pe = match pe {
+            Some(pe) => pe.clone(),
+            None => self.compute_pe(txt_ids, img_ids)?,
         };
         let mut txt = txt.apply(&self.txt_in)?;
         let mut img = img.apply(&self.img_in)?;
-        let vec_ = timestep_embedding(timesteps, 256, dtype)?.apply(&self.time_in)?;
+        let vec_ = self
+            .timestep_freqs
+            .embed(timesteps, dtype)?
+            .apply(&self.time_in)?;
         let vec_ = match (self.guidance_in.as_ref(), guidance) {
             (Some(g_in), Some(guidance)) => {
-                (vec_ + timestep_embedding(guidance, 256, dtype)?.apply(g_in))?
+                (vec_ + self.timestep_freqs.embed(guidance, dtype)?.apply(g_in))?
             }
             _ => vec_,
         };
