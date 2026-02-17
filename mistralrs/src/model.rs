@@ -244,9 +244,9 @@ impl Model {
         prompt: impl ToString,
         response_format: ImageGenerationResponseFormat,
         generation_params: DiffusionGenerationParams,
-        save_path: Option<PathBuf>,
+        save_file: Option<PathBuf>,
     ) -> anyhow::Result<ImageGenerationResponse> {
-        self.generate_image_with_model(prompt, response_format, generation_params, None, save_path)
+        self.generate_image_with_model(prompt, response_format, generation_params, None, save_file)
             .await
     }
 
@@ -258,7 +258,7 @@ impl Model {
         response_format: ImageGenerationResponseFormat,
         generation_params: DiffusionGenerationParams,
         model_id: Option<&str>,
-        save_path: Option<PathBuf>,
+        save_file: Option<PathBuf>,
     ) -> anyhow::Result<ImageGenerationResponse> {
         let (tx, mut rx) = channel(1);
 
@@ -268,7 +268,7 @@ impl Model {
                 prompt: prompt.to_string(),
                 format: response_format,
                 generation_params,
-                save_path,
+                save_file,
             },
             sampling_params: SamplingParams::deterministic(),
             response: tx,

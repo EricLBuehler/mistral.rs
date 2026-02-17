@@ -91,7 +91,7 @@ pub enum RequestMessage {
         prompt: String,
         format: ImageGenerationResponseFormat,
         generation_params: DiffusionGenerationParams,
-        save_path: Option<PathBuf>,
+        save_file: Option<PathBuf>,
     },
     SpeechGeneration {
         prompt: String,

@@ -162,8 +162,8 @@ impl Engine {
             _ => None,
         };
 
-        let image_gen_save_path = match &request.messages {
-            RequestMessage::ImageGeneration { save_path, .. } => save_path.clone(),
+        let image_gen_save_file = match &request.messages {
+            RequestMessage::ImageGeneration { save_file, .. } => save_file.clone(),
             _ => None,
         };
         let mut added_seq = false;
@@ -554,7 +554,7 @@ impl Engine {
                 image_generation_format,
                 seq_step_type,
                 diffusion_params.clone(),
-                image_gen_save_path.clone(),
+                image_gen_save_file.clone(),
                 seq_preallocated_cache,
                 request.return_raw_logits,
                 eos_toks,
