@@ -313,6 +313,24 @@ cargo check -p mistralrs-core --no-default-features
 
 ---
 
+## Top-level Rust SDK Features (`mistralrs`)
+
+The top-level `mistralrs` crate forwards modular subsystem flags into `mistralrs-core`.
+
+| Feature | Default | Forwards to |
+|---------|---------|-------------|
+| `audio` | on | `mistralrs-core/audio` |
+| `mcp` | on | `mistralrs-core/mcp` |
+
+Minimal SDK build example:
+
+```toml
+[dependencies]
+mistralrs = { version = "*", default-features = false, features = ["metal"] }
+```
+
+---
+
 ## Python Package Features
 
 The Python SDK is distributed as separate packages with features pre-configured:

@@ -485,11 +485,11 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
             anyhow::bail!("Auto-tuning is not supported for pre-quantized GGUF/GGML models.");
         }
         ModelSelected::DiffusionPlain { .. } => {
-            anyhow::bail!("Auto-tuning is not supported for diffusion or speech models.");
+            anyhow::bail!("Auto-tuning is not supported for diffusion models.");
         }
         #[cfg(feature = "audio")]
         ModelSelected::Speech { .. } => {
-            anyhow::bail!("Auto-tuning is not supported for diffusion or speech models.");
+            anyhow::bail!("Auto-tuning is not supported for speech models.");
         }
         _ => {}
     }

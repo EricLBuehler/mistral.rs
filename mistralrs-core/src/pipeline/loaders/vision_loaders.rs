@@ -175,7 +175,6 @@ pub enum VisionLoaderType {
     Idefics3,
     #[serde(rename = "minicpmo")]
     MiniCpmO,
-    #[cfg(feature = "audio")]
     #[serde(rename = "phi4mm")]
     Phi4MM,
     #[serde(rename = "qwen2_5vl")]
@@ -186,7 +185,6 @@ pub enum VisionLoaderType {
     Mistral3,
     #[serde(rename = "llama4")]
     Llama4,
-    #[cfg(feature = "audio")]
     #[serde(rename = "gemma3n")]
     Gemma3n,
     #[serde(rename = "qwen3vl")]
@@ -207,22 +205,12 @@ impl VisionLoaderType {
             "Qwen2VLForConditionalGeneration" => Ok(Self::Qwen2VL),
             "Idefics3ForConditionalGeneration" => Ok(Self::Idefics3),
             "MiniCPMO" => Ok(Self::MiniCpmO),
-            #[cfg(feature = "audio")]
             "Phi4MMForCausalLM" => Ok(Self::Phi4MM),
-            #[cfg(not(feature = "audio"))]
-            "Phi4MMForCausalLM" => anyhow::bail!(
-                "Model architecture `Phi4MMForCausalLM` requires audio support. Rebuild with `--features audio`."
-            ),
             "Qwen2_5_VLForConditionalGeneration" => Ok(Self::Qwen2_5VL),
             "Gemma3ForConditionalGeneration" | "Gemma3ForCausalLM" => Ok(Self::Gemma3),
             "Mistral3ForConditionalGeneration" => Ok(Self::Mistral3),
             "Llama4ForConditionalGeneration" => Ok(Self::Llama4),
-            #[cfg(feature = "audio")]
             "Gemma3nForConditionalGeneration" => Ok(Self::Gemma3n),
-            #[cfg(not(feature = "audio"))]
-            "Gemma3nForConditionalGeneration" => anyhow::bail!(
-                "Model architecture `Gemma3nForConditionalGeneration` requires audio support. Rebuild with `--features audio`."
-            ),
             "Qwen3VLForConditionalGeneration" => Ok(Self::Qwen3VL),
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
             other => anyhow::bail!(
@@ -244,24 +232,12 @@ impl FromStr for VisionLoaderType {
             "qwen2vl" => Ok(Self::Qwen2VL),
             "idefics3" => Ok(Self::Idefics3),
             "minicpmo" => Ok(Self::MiniCpmO),
-            #[cfg(feature = "audio")]
             "phi4mm" => Ok(Self::Phi4MM),
-            #[cfg(not(feature = "audio"))]
-            "phi4mm" => Err(
-                "Architecture `phi4mm` requires audio support. Rebuild with `--features audio`."
-                    .to_string(),
-            ),
             "qwen2_5vl" => Ok(Self::Qwen2_5VL),
             "gemma3" => Ok(Self::Gemma3),
             "mistral3" => Ok(Self::Mistral3),
             "llama4" => Ok(Self::Llama4),
-            #[cfg(feature = "audio")]
             "gemma3n" => Ok(Self::Gemma3n),
-            #[cfg(not(feature = "audio"))]
-            "gemma3n" => Err(
-                "Architecture `gemma3n` requires audio support. Rebuild with `--features audio`."
-                    .to_string(),
-            ),
             "qwen3vl" => Ok(Self::Qwen3VL),
             "qwen3vlmoe" => Ok(Self::Qwen3VLMoE),
             a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `qwen3vl`, `qwen3vlmoe`.")),
@@ -280,13 +256,11 @@ impl std::fmt::Display for VisionLoaderType {
             VisionLoaderType::Qwen2VL => "qwen2vl",
             VisionLoaderType::Idefics3 => "idefics3",
             VisionLoaderType::MiniCpmO => "minicpmo",
-            #[cfg(feature = "audio")]
             VisionLoaderType::Phi4MM => "phi4mm",
             VisionLoaderType::Qwen2_5VL => "qwen2_5vl",
             VisionLoaderType::Gemma3 => "gemma3",
             VisionLoaderType::Mistral3 => "mistral3",
             VisionLoaderType::Llama4 => "llama4",
-            #[cfg(feature = "audio")]
             VisionLoaderType::Gemma3n => "gemma3n",
             VisionLoaderType::Qwen3VL => "qwen3vl",
             VisionLoaderType::Qwen3VLMoE => "qwen3vlmoe",
@@ -297,49 +271,31 @@ impl std::fmt::Display for VisionLoaderType {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(not(feature = "audio"))]
     use super::VisionLoaderType;
 
-    #[cfg(not(feature = "audio"))]
     #[test]
-    fn phi4mm_requires_audio_in_arch_string() {
-        let err = "phi4mm".parse::<VisionLoaderType>().unwrap_err();
-        assert!(
-            err.contains("requires audio support"),
-            "unexpected error: {err}"
-        );
+    fn phi4mm_arch_string_parses() {
+        let parsed = "phi4mm".parse::<VisionLoaderType>().unwrap();
+        assert_eq!(parsed, VisionLoaderType::Phi4MM);
     }
 
-    #[cfg(not(feature = "audio"))]
     #[test]
-    fn gemma3n_requires_audio_in_arch_string() {
-        let err = "gemma3n".parse::<VisionLoaderType>().unwrap_err();
-        assert!(
-            err.contains("requires audio support"),
-            "unexpected error: {err}"
-        );
+    fn gemma3n_arch_string_parses() {
+        let parsed = "gemma3n".parse::<VisionLoaderType>().unwrap();
+        assert_eq!(parsed, VisionLoaderType::Gemma3n);
     }
 
-    #[cfg(not(feature = "audio"))]
     #[test]
-    fn phi4mm_requires_audio_in_hf_arch_name() {
-        let err = VisionLoaderType::from_causal_lm_name("Phi4MMForCausalLM")
-            .expect_err("audio-disabled build should reject Phi4MM architecture");
-        assert!(
-            err.to_string().contains("requires audio support"),
-            "unexpected error: {err}"
-        );
+    fn phi4mm_hf_arch_parses() {
+        let parsed = VisionLoaderType::from_causal_lm_name("Phi4MMForCausalLM").unwrap();
+        assert_eq!(parsed, VisionLoaderType::Phi4MM);
     }
 
-    #[cfg(not(feature = "audio"))]
     #[test]
-    fn gemma3n_requires_audio_in_hf_arch_name() {
-        let err = VisionLoaderType::from_causal_lm_name("Gemma3nForConditionalGeneration")
-            .expect_err("audio-disabled build should reject Gemma3n architecture");
-        assert!(
-            err.to_string().contains("requires audio support"),
-            "unexpected error: {err}"
-        );
+    fn gemma3n_hf_arch_parses() {
+        let parsed =
+            VisionLoaderType::from_causal_lm_name("Gemma3nForConditionalGeneration").unwrap();
+        assert_eq!(parsed, VisionLoaderType::Gemma3n);
     }
 }
 
@@ -375,12 +331,20 @@ impl AutoVisionLoader {
             VisionLoaderType::MiniCpmO => Box::new(MiniCpmOLoader),
             #[cfg(feature = "audio")]
             VisionLoaderType::Phi4MM => Box::new(Phi4MMLoader),
+            #[cfg(not(feature = "audio"))]
+            VisionLoaderType::Phi4MM => anyhow::bail!(
+                "Architecture `phi4mm` is available, but this build disables audio processing. Rebuild with `--features audio` for full support."
+            ),
             VisionLoaderType::Qwen2_5VL => Box::new(Qwen2_5VLLoader),
             VisionLoaderType::Gemma3 => Box::new(Gemma3Loader),
             VisionLoaderType::Mistral3 => Box::new(Mistral3Loader),
             VisionLoaderType::Llama4 => Box::new(VLlama4Loader),
             #[cfg(feature = "audio")]
             VisionLoaderType::Gemma3n => Box::new(Gemma3nLoader),
+            #[cfg(not(feature = "audio"))]
+            VisionLoaderType::Gemma3n => anyhow::bail!(
+                "Architecture `gemma3n` is available, but this build disables audio processing. Rebuild with `--features audio` for full support."
+            ),
             VisionLoaderType::Qwen3VL => Box::new(Qwen3VLLoader),
             VisionLoaderType::Qwen3VLMoE => Box::new(Qwen3VLMoELoader),
         })

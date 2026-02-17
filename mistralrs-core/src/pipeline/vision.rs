@@ -179,12 +179,16 @@ impl VisionLoaderBuilder {
             Some(VisionLoaderType::MiniCpmO) => Box::new(MiniCpmOLoader),
             #[cfg(feature = "audio")]
             Some(VisionLoaderType::Phi4MM) => Box::new(Phi4MMLoader),
+            #[cfg(not(feature = "audio"))]
+            Some(VisionLoaderType::Phi4MM) => Box::new(AutoVisionLoader),
             Some(VisionLoaderType::Qwen2_5VL) => Box::new(Qwen2_5VLLoader),
             Some(VisionLoaderType::Gemma3) => Box::new(Gemma3Loader),
             Some(VisionLoaderType::Mistral3) => Box::new(Mistral3Loader),
             Some(VisionLoaderType::Llama4) => Box::new(VLlama4Loader),
             #[cfg(feature = "audio")]
             Some(VisionLoaderType::Gemma3n) => Box::new(Gemma3nLoader),
+            #[cfg(not(feature = "audio"))]
+            Some(VisionLoaderType::Gemma3n) => Box::new(AutoVisionLoader),
             Some(VisionLoaderType::Qwen3VL) => Box::new(Qwen3VLLoader),
             Some(VisionLoaderType::Qwen3VLMoE) => Box::new(Qwen3VLMoELoader),
             None => Box::new(AutoVisionLoader),

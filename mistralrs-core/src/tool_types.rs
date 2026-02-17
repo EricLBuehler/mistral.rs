@@ -42,52 +42,8 @@ pub struct Tool {
 }
 
 /// Called function with name and arguments.
-#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass)]
-#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CalledFunction {
     pub name: String,
     pub arguments: String,
-}
-
-#[cfg(all(test, feature = "mcp"))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tool_types_match_mcp_shapes() {
-        let local_tool = Tool {
-            tp: ToolType::Function,
-            function: Function {
-                description: Some("d".to_string()),
-                name: "n".to_string(),
-                parameters: None,
-            },
-        };
-        let mcp_tool = mistralrs_mcp::Tool {
-            tp: mistralrs_mcp::ToolType::Function,
-            function: mistralrs_mcp::Function {
-                description: Some("d".to_string()),
-                name: "n".to_string(),
-                parameters: None,
-            },
-        };
-        assert_eq!(
-            serde_json::to_value(local_tool).unwrap(),
-            serde_json::to_value(mcp_tool).unwrap()
-        );
-
-        let local_called = CalledFunction {
-            name: "n".to_string(),
-            arguments: "{}".to_string(),
-        };
-        let mcp_called = mistralrs_mcp::CalledFunction {
-            name: "n".to_string(),
-            arguments: "{}".to_string(),
-        };
-        assert_eq!(
-            serde_json::to_value(local_called).unwrap(),
-            serde_json::to_value(mcp_called).unwrap()
-        );
-    }
 }

@@ -179,6 +179,7 @@ impl MultiModelBuilder {
             );
         }
 
+        #[cfg(feature = "mcp")]
         if let Some(mcp_config) = add_model_config.mcp_client_config.clone() {
             runner_builder = runner_builder.with_mcp_client(mcp_config);
         }
@@ -272,6 +273,7 @@ pub async fn build_model_from_pipeline(
         );
     }
 
+    #[cfg(feature = "mcp")]
     if let Some(mcp_config) = add_model_config.mcp_client_config.clone() {
         runner_builder = runner_builder.with_mcp_client(mcp_config);
     }
@@ -440,6 +442,7 @@ pub async fn build_text_pipeline(
 
     let add_model_config = AddModelConfig {
         engine_config,
+        #[cfg(feature = "mcp")]
         mcp_client_config: builder.mcp_client_config.clone(),
         loader_config: Some(loader_config),
     };
@@ -602,6 +605,7 @@ pub async fn build_vision_pipeline(
 
     let add_model_config = AddModelConfig {
         engine_config,
+        #[cfg(feature = "mcp")]
         mcp_client_config: None,
         loader_config: Some(loader_config),
     };
@@ -732,6 +736,7 @@ pub async fn build_gguf_pipeline(
 
     let add_model_config = AddModelConfig {
         engine_config,
+        #[cfg(feature = "mcp")]
         mcp_client_config: None,
         loader_config: Some(loader_config),
     };
@@ -794,6 +799,7 @@ pub async fn build_diffusion_pipeline(
 
     let add_model_config = AddModelConfig {
         engine_config,
+        #[cfg(feature = "mcp")]
         mcp_client_config: None,
         loader_config: Some(loader_config),
     };
@@ -861,6 +867,7 @@ pub async fn build_speech_pipeline(
 
     let add_model_config = AddModelConfig {
         engine_config,
+        #[cfg(feature = "mcp")]
         mcp_client_config: None,
         loader_config: Some(loader_config),
     };
@@ -964,6 +971,7 @@ pub async fn build_embedding_pipeline(
 
     let add_model_config = AddModelConfig {
         engine_config,
+        #[cfg(feature = "mcp")]
         mcp_client_config: None,
         loader_config: Some(loader_config),
     };

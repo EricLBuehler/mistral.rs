@@ -34,18 +34,6 @@ pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISI
     None => "unknown",
 };
 
-#[cfg(not(feature = "mcp"))]
-fn warn_if_mcp_config_ignored(mcp_client_config: &Option<McpClientConfig>) -> bool {
-    if mcp_client_config.is_some() {
-        warn!(
-            "MCP client config provided but `mistralrs-core` was compiled without `mcp` support. Rebuild with `--features mcp` to enable MCP."
-        );
-        true
-    } else {
-        false
-    }
-}
-
 mod cuda;
 mod device_map;
 mod engine;
@@ -135,35 +123,6 @@ pub use tool_types::{
 pub use mistralrs_mcp::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
-#[cfg(not(feature = "mcp"))]
-#[derive(Clone, Debug, Default)]
-pub struct McpClientConfig {
-    _private: (),
-}
-#[cfg(not(feature = "mcp"))]
-#[derive(Clone, Debug)]
-pub struct McpClient;
-#[cfg(not(feature = "mcp"))]
-impl McpClient {
-    pub fn new(_config: McpClientConfig) -> Self {
-        Self
-    }
-}
-#[cfg(not(feature = "mcp"))]
-#[derive(Clone, Debug, Default)]
-pub struct McpServerConfig {
-    _private: (),
-}
-#[cfg(not(feature = "mcp"))]
-#[derive(Clone, Debug, Default)]
-pub struct McpServerSource {
-    _private: (),
-}
-#[cfg(not(feature = "mcp"))]
-#[derive(Clone, Debug, Default)]
-pub struct McpToolInfo {
-    _private: (),
-}
 pub use mistralrs_quant::{IsqType, MULTI_LORA_DELIMITER};
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
 pub use pipeline::hf::{hf_home_dir, hf_hub_cache_dir, hf_token_path};
@@ -248,6 +207,7 @@ impl Default for EngineConfig {
 #[derive(Clone)]
 pub struct AddModelConfig {
     pub engine_config: EngineConfig,
+    #[cfg(feature = "mcp")]
     pub mcp_client_config: Option<McpClientConfig>,
     /// Optional loader config for enabling model unload/reload support.
     /// Without this, models cannot be unloaded and reloaded.
@@ -258,11 +218,13 @@ impl AddModelConfig {
     pub fn new(engine_config: EngineConfig) -> Self {
         Self {
             engine_config,
+            #[cfg(feature = "mcp")]
             mcp_client_config: None,
             loader_config: None,
         }
     }
 
+    #[cfg(feature = "mcp")]
     pub fn with_mcp_config(mut self, mcp_config: McpClientConfig) -> Self {
         self.mcp_client_config = Some(mcp_config);
         self
@@ -324,6 +286,7 @@ pub struct UnloadedModelState {
     /// Engine configuration
     pub engine_config: EngineConfig,
     /// MCP client configuration
+    #[cfg(feature = "mcp")]
     pub mcp_client_config: Option<McpClientConfig>,
     /// Model category (Text, Vision, etc.)
     pub category: ModelCategory,
@@ -385,6 +348,7 @@ struct RebootState {
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+    #[cfg(feature = "mcp")]
     mcp_client_config: Option<McpClientConfig>,
     /// Optional loader config for reloading after unload
     loader_config: Option<ModelLoaderConfig>,
@@ -458,6 +422,7 @@ pub struct MistralRsBuilder {
     search_callback: Option<Arc<SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+    #[cfg(feature = "mcp")]
     mcp_client_config: Option<McpClientConfig>,
     loader_config: Option<ModelLoaderConfig>,
 }
@@ -486,6 +451,7 @@ impl MistralRsBuilder {
             search_callback: None,
             tool_callbacks: HashMap::new(),
             tool_callbacks_with_tools: HashMap::new(),
+            #[cfg(feature = "mcp")]
             mcp_client_config: None,
             loader_config: None,
         }
@@ -563,6 +529,7 @@ impl MistralRsBuilder {
         self
     }
 
+    #[cfg(feature = "mcp")]
     /// Configure MCP client to connect to external MCP servers.
     pub fn with_mcp_client(mut self, config: McpClientConfig) -> Self {
         self.mcp_client_config = Some(config);
@@ -705,6 +672,7 @@ impl MistralRs {
             search_callback,
             tool_callbacks,
             tool_callbacks_with_tools: tool_callbacks_with_tools_in,
+            #[cfg(feature = "mcp")]
             mcp_client_config,
             loader_config,
         } = config;
@@ -776,9 +744,6 @@ impl MistralRs {
             }
         }
 
-        #[cfg(not(feature = "mcp"))]
-        let _ = warn_if_mcp_config_ignored(&mcp_client_config);
-
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
             method: method.clone(),
@@ -791,6 +756,7 @@ impl MistralRs {
             search_callback: search_callback.clone(),
             tool_callbacks: tool_callbacks.clone(),
             tool_callbacks_with_tools: tool_callbacks_with_tools.clone(),
+            #[cfg(feature = "mcp")]
             mcp_client_config: mcp_client_config.clone(),
             loader_config,
         };
@@ -1311,6 +1277,7 @@ impl MistralRs {
             search_callback: config.engine_config.search_callback.clone(),
             tool_callbacks: config.engine_config.tool_callbacks.clone(),
             tool_callbacks_with_tools: config.engine_config.tool_callbacks_with_tools.clone(),
+            #[cfg(feature = "mcp")]
             mcp_client_config: config.mcp_client_config.clone(),
             loader_config: config.loader_config.clone(),
         };
@@ -1507,7 +1474,15 @@ impl MistralRs {
             .read()
             .map_err(|_| "Failed to acquire read lock on engines")?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
-            Ok(engine_instance.reboot_state.mcp_client_config.is_some())
+            #[cfg(feature = "mcp")]
+            {
+                Ok(engine_instance.reboot_state.mcp_client_config.is_some())
+            }
+            #[cfg(not(feature = "mcp"))]
+            {
+                let _ = engine_instance;
+                Ok(false)
+            }
         } else {
             Err(format!("Model {resolved_model_id} not found"))
         }
@@ -1586,6 +1561,7 @@ impl MistralRs {
                     .tool_callbacks_with_tools
                     .clone(),
             },
+            #[cfg(feature = "mcp")]
             mcp_client_config: engine_instance.reboot_state.mcp_client_config.clone(),
             category: engine_instance.category.clone(),
             mistralrs_config: engine_instance.config.clone(),
@@ -1725,6 +1701,7 @@ impl MistralRs {
                 .engine_config
                 .tool_callbacks_with_tools
                 .clone(),
+            #[cfg(feature = "mcp")]
             mcp_client_config: unloaded_state.mcp_client_config.clone(),
             loader_config: Some(unloaded_state.loader_config.clone()),
         };
@@ -1881,18 +1858,5 @@ impl MistralRs {
         }
 
         Ok(result)
-    }
-}
-
-#[cfg(all(test, not(feature = "mcp")))]
-mod tests {
-    use super::{warn_if_mcp_config_ignored, McpClient, McpClientConfig};
-
-    #[test]
-    fn no_mcp_stubs_compile_and_warning_path_is_reachable() {
-        let cfg = McpClientConfig::default();
-        let _client = McpClient::new(cfg.clone());
-        assert!(!warn_if_mcp_config_ignored(&None));
-        assert!(warn_if_mcp_config_ignored(&Some(cfg)));
     }
 }

@@ -139,6 +139,7 @@ mod messages;
 mod model;
 pub mod model_builder_trait;
 mod speculative;
+#[cfg(feature = "audio")]
 mod speech_model;
 mod text_model;
 mod vision_model;
@@ -159,6 +160,7 @@ pub use messages::{
     EmbeddingRequest, EmbeddingRequestBuilder, EmbeddingRequestInput, RequestBuilder, RequestLike,
     TextMessageRole, TextMessages, VisionMessages,
 };
+#[cfg(feature = "mcp")]
 pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
@@ -166,6 +168,7 @@ pub use mistralrs_core::{SearchCallback, SearchResult, ToolCallback};
 pub use model::{best_device, Model};
 pub use model_builder_trait::{AnyModelBuilder, MultiModelBuilder};
 pub use speculative::TextSpeculativeBuilder;
+#[cfg(feature = "audio")]
 pub use speech_model::SpeechModelBuilder;
 pub use text_model::{PagedAttentionMetaBuilder, TextModelBuilder, UqffTextModelBuilder};
 pub use vision_model::{UqffVisionModelBuilder, VisionModelBuilder};
@@ -204,6 +207,7 @@ pub use mistralrs_core::{
 };
 
 // ========== Audio Types ==========
+#[cfg(feature = "audio")]
 pub use mistralrs_core::AudioInput;
 
 // ========== Custom Logits ==========
@@ -216,6 +220,7 @@ pub use mistralrs_core::ModelCategory;
 pub use mistralrs_core::{SearchEmbeddingModel, SearchFunctionParameters};
 
 // ========== Speech Types ==========
+#[cfg(feature = "audio")]
 pub use mistralrs_core::{speech_utils, SpeechLoaderType};
 
 // ========== AnyMoe Types ==========
