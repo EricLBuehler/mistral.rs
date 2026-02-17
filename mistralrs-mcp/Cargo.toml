@@ -26,10 +26,11 @@ http.workspace = true
 pyo3 = { workspace = true, optional = true }
 utoipa = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
+mistralrs-tool-types.workspace = true
 
 [features]
-pyo3_macros = ["pyo3"]
-utoipa = ["dep:utoipa"]
+pyo3_macros = ["pyo3", "mistralrs-tool-types/pyo3_macros"]
+utoipa = ["dep:utoipa", "mistralrs-tool-types/utoipa"]
 
 [dev-dependencies]
 tokio-test = "0.4"

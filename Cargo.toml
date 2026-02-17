@@ -13,6 +13,7 @@ members = [
     "mistralrs-web-chat",
     "mistralrs-audio",
     "mistralrs-mcp",
+    "mistralrs-tool-types",
     "mistralrs-macros",
 ]
 resolver = "2"
@@ -188,6 +189,7 @@ mistralrs-server-core = { path = "mistralrs-server-core", version = "0.7.1-alpha
 mistralrs = { path = "mistralrs", version = "0.7.1-alpha.1" }
 mistralrs-audio = { path = "mistralrs-audio", version = "0.7.1-alpha.1" }
 mistralrs-mcp = { path = "mistralrs-mcp", version = "0.7.1-alpha.1" }
+mistralrs-tool-types = { path = "mistralrs-tool-types", version = "0.7.1-alpha.1" }
 mistralrs-macros = { path = "mistralrs-macros", version = "0.7.1-alpha.1" }
 
 [profile.release-with-debug]

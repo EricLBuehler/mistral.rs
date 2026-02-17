@@ -10,6 +10,7 @@ pub enum AnyModelBuilder {
     Vision(crate::VisionModelBuilder),
     Gguf(crate::GgufModelBuilder),
     Diffusion(crate::DiffusionModelBuilder),
+    #[cfg(feature = "audio")]
     Speech(crate::SpeechModelBuilder),
     Embedding(crate::EmbeddingModelBuilder),
 }
@@ -22,6 +23,7 @@ impl AnyModelBuilder {
             AnyModelBuilder::Vision(b) => b.model_id.clone(),
             AnyModelBuilder::Gguf(b) => b.model_id.clone(),
             AnyModelBuilder::Diffusion(b) => b.model_id.clone(),
+            #[cfg(feature = "audio")]
             AnyModelBuilder::Speech(b) => b.model_id.clone(),
             AnyModelBuilder::Embedding(b) => b.model_id.clone(),
         }
@@ -36,6 +38,7 @@ impl AnyModelBuilder {
             AnyModelBuilder::Vision(b) => build_vision_pipeline(b).await,
             AnyModelBuilder::Gguf(b) => build_gguf_pipeline(b).await,
             AnyModelBuilder::Diffusion(b) => build_diffusion_pipeline(b).await,
+            #[cfg(feature = "audio")]
             AnyModelBuilder::Speech(b) => build_speech_pipeline(b).await,
             AnyModelBuilder::Embedding(b) => build_embedding_pipeline(b).await,
         }
@@ -67,6 +70,7 @@ impl From<crate::DiffusionModelBuilder> for AnyModelBuilder {
     }
 }
 
+#[cfg(feature = "audio")]
 impl From<crate::SpeechModelBuilder> for AnyModelBuilder {
     fn from(b: crate::SpeechModelBuilder) -> Self {
         AnyModelBuilder::Speech(b)
@@ -807,6 +811,7 @@ pub async fn build_diffusion_pipeline(
     Ok((pipeline, scheduler_config, add_model_config))
 }
 
+#[cfg(feature = "audio")]
 /// Build a speech model pipeline from a SpeechModelBuilder.
 /// Returns the pipeline, scheduler config, and AddModelConfig needed for Model creation.
 pub async fn build_speech_pipeline(

@@ -102,6 +102,7 @@ apodize = { workspace = true, optional = true }
 symphonia = { workspace = true, optional = true }
 mistralrs-audio = { workspace = true, optional = true }
 mistralrs-mcp = { workspace = true, optional = true, features = ["utoipa"] }
+mistralrs-tool-types = { workspace = true }
 statrs.workspace = true
 openai-harmony = "0.0.8"
 
@@ -151,7 +152,7 @@ flash-attn-v3 = ["cuda", "dep:candle-flash-attn-v3"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "mistralrs-quant/accelerate"]
 mkl = ["candle-core/mkl", "candle-nn/mkl"]
 nccl = ["cuda", "mistralrs-quant/nccl"]
-utoipa = ["dep:utoipa"]
+utoipa = ["dep:utoipa", "mistralrs-tool-types/utoipa"]
 ring = ["mistralrs-quant/ring"]
 
 [build-dependencies]

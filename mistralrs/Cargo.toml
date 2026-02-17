@@ -13,7 +13,7 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-mistralrs-core.workspace = true
+mistralrs-core = { path = "../mistralrs-core", version = "0.7.1-alpha.1", default-features = false }
 mistralrs-macros.workspace = true
 anyhow.workspace = true
 tokio.workspace = true

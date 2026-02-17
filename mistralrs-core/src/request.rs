@@ -1,3 +1,4 @@
+#[cfg(feature = "audio")]
 use crate::AudioInput;
 use either::Either;
 use indexmap::IndexMap;
@@ -80,6 +81,7 @@ pub enum RequestMessage {
     VisionChat {
         #[serde(skip)] // TODO
         images: Vec<image::DynamicImage>,
+        #[cfg(feature = "audio")]
         #[serde(skip)] // TODO
         audios: Vec<AudioInput>,
         messages: Vec<IndexMap<String, MessageContent>>,

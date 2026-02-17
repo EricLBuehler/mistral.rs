@@ -3549,6 +3549,7 @@ dependencies = [
  "mistralrs-mcp",
  "mistralrs-paged-attn",
  "mistralrs-quant",
+ "mistralrs-tool-types",
  "mistralrs-vision",
  "num-traits",
  "objc",
@@ -3615,6 +3616,7 @@ dependencies = [
  "async-trait",
  "futures-util",
  "http",
+ "mistralrs-tool-types",
  "pyo3",
  "reqwest 0.13.1",
  "rust-mcp-schema",
@@ -3747,6 +3749,17 @@ dependencies = [
  "utoipa",
  "utoipa-swagger-ui",
  "uuid 1.19.0",
+]
+
+[[package]]
+name = "mistralrs-tool-types"
+version = "0.7.1-alpha.1"
+dependencies = [
+ "anyhow",
+ "pyo3",
+ "serde",
+ "serde_json",
+ "utoipa",
 ]
 
 [[package]]

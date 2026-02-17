@@ -132,10 +132,13 @@ impl Engine {
             _ => None,
         };
 
+        #[cfg(feature = "audio")]
         let audios = match request.messages {
             RequestMessage::VisionChat { ref audios, .. } => Some(audios.clone()),
             _ => None,
         };
+        #[cfg(not(feature = "audio"))]
+        let audios: Option<Vec<()>> = None;
 
         let matcher = Arc::new(handle_seq_error!(
             ToolCallingMatcher::new(request.tool_choice.unwrap_or(ToolChoice::Auto),),
@@ -171,6 +174,7 @@ impl Engine {
             }
             | RequestMessage::VisionChat {
                 images: _,
+                #[cfg(feature = "audio")]
                 audios: _,
                 messages,
                 enable_thinking,
@@ -543,6 +547,7 @@ impl Engine {
                     None
                 },
                 images.clone(),
+                #[cfg(feature = "audio")]
                 audios.clone(),
                 block_size,
                 Some(matcher.clone()),

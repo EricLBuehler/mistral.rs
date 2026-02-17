@@ -103,8 +103,8 @@ pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
 #[cfg(feature = "audio")]
 pub use mistralrs_audio::AudioInput;
 #[cfg(not(feature = "audio"))]
-#[derive(Clone, Debug, Default)]
-pub struct AudioInput {
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct AudioInput {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
     pub channels: u16,

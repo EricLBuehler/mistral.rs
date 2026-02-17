@@ -147,6 +147,7 @@ impl RequestLike for TextMessages {
 pub struct VisionMessages {
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,
+    #[cfg(feature = "audio")]
     audios: Vec<AudioInput>,
     enable_thinking: Option<bool>,
 }
@@ -162,6 +163,7 @@ impl VisionMessages {
         Self {
             images: Vec::new(),
             messages: Vec::new(),
+            #[cfg(feature = "audio")]
             audios: Vec::new(),
             enable_thinking: None,
         }
@@ -182,9 +184,17 @@ impl VisionMessages {
         images: Vec<DynamicImage>,
         model: &Model,
     ) -> anyhow::Result<Self> {
-        self.add_multimodal_message(role, text, images, vec![], model)
+        #[cfg(feature = "audio")]
+        {
+            self.add_multimodal_message(role, text, images, vec![], model)
+        }
+        #[cfg(not(feature = "audio"))]
+        {
+            self.add_multimodal_message(role, text, images, model)
+        }
     }
 
+    #[cfg(feature = "audio")]
     pub fn add_audio_message(
         self,
         role: TextMessageRole,
@@ -200,7 +210,7 @@ impl VisionMessages {
         role: TextMessageRole,
         text: impl ToString,
         images: Vec<DynamicImage>,
-        audios: Vec<AudioInput>,
+        #[cfg(feature = "audio")] audios: Vec<AudioInput>,
         model: &Model,
     ) -> anyhow::Result<Self> {
         let config = model.config().unwrap();
@@ -218,9 +228,14 @@ impl VisionMessages {
         self.images.extend(images);
 
         // Audios
+        #[cfg(feature = "audio")]
         let n_added_audios = audios.len();
+        #[cfg(not(feature = "audio"))]
+        let n_added_audios = 0;
+        #[cfg(feature = "audio")]
         let audio_indexes: Vec<usize> =
             (self.audios.len()..self.audios.len() + n_added_audios).collect();
+        #[cfg(feature = "audio")]
         self.audios.extend(audios);
 
         if n_added_images > 0 || n_added_audios > 0 {
@@ -232,6 +247,7 @@ impl VisionMessages {
                     Value::String("image".to_string()),
                 )]));
             }
+            #[cfg(feature = "audio")]
             for _ in 0..n_added_audios {
                 content_vec.push(IndexMap::from([(
                     "type".to_string(),
@@ -243,6 +259,7 @@ impl VisionMessages {
             if !image_indexes.is_empty() {
                 prefixed_text = prefixer.prefix_image(image_indexes, &prefixed_text);
             }
+            #[cfg(feature = "audio")]
             if !audio_indexes.is_empty() {
                 prefixed_text = prefixer.prefix_audio(audio_indexes, &prefixed_text);
             }
@@ -268,6 +285,7 @@ impl VisionMessages {
     pub fn clear(mut self) -> Self {
         self.messages.clear();
         self.images.clear();
+        #[cfg(feature = "audio")]
         self.audios.clear();
 
         self
@@ -291,11 +309,14 @@ impl RequestLike for VisionMessages {
         std::mem::swap(&mut other_messages, &mut self.messages);
         let mut other_images = Vec::new();
         std::mem::swap(&mut other_images, &mut self.images);
+        #[cfg(feature = "audio")]
         let mut other_audios = Vec::new();
+        #[cfg(feature = "audio")]
         std::mem::swap(&mut other_audios, &mut self.audios);
         RequestMessage::VisionChat {
             images: other_images,
             messages: other_messages,
+            #[cfg(feature = "audio")]
             audios: other_audios,
             enable_thinking: self.enable_thinking,
             reasoning_effort: None,
@@ -340,6 +361,7 @@ impl RequestLike for VisionMessages {
 pub struct RequestBuilder {
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,
+    #[cfg(feature = "audio")]
     audios: Vec<AudioInput>,
     logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
     adapters: Vec<String>,
@@ -364,6 +386,7 @@ impl From<TextMessages> for RequestBuilder {
         Self {
             messages: value.messages,
             images: Vec::new(),
+            #[cfg(feature = "audio")]
             audios: Vec::new(),
             logits_processors: Vec::new(),
             adapters: Vec::new(),
@@ -384,6 +407,7 @@ impl From<VisionMessages> for RequestBuilder {
         Self {
             messages: value.messages,
             images: value.images,
+            #[cfg(feature = "audio")]
             audios: value.audios,
             logits_processors: Vec::new(),
             adapters: Vec::new(),
@@ -404,6 +428,7 @@ impl RequestBuilder {
         Self {
             messages: Vec::new(),
             images: Vec::new(),
+            #[cfg(feature = "audio")]
             audios: Vec::new(),
             logits_processors: Vec::new(),
             adapters: Vec::new(),
@@ -491,9 +516,17 @@ impl RequestBuilder {
         images: Vec<DynamicImage>,
         model: &Model,
     ) -> anyhow::Result<Self> {
-        self.add_multimodal_message(role, text, images, vec![], model)
+        #[cfg(feature = "audio")]
+        {
+            self.add_multimodal_message(role, text, images, vec![], model)
+        }
+        #[cfg(not(feature = "audio"))]
+        {
+            self.add_multimodal_message(role, text, images, model)
+        }
     }
 
+    #[cfg(feature = "audio")]
     pub fn add_audio_message(
         self,
         role: TextMessageRole,
@@ -510,7 +543,7 @@ impl RequestBuilder {
         role: TextMessageRole,
         text: impl ToString,
         images: Vec<DynamicImage>,
-        audios: Vec<AudioInput>,
+        #[cfg(feature = "audio")] audios: Vec<AudioInput>,
         model: &Model,
     ) -> anyhow::Result<Self> {
         let config = model.config().unwrap();
@@ -528,9 +561,14 @@ impl RequestBuilder {
         self.images.extend(images);
 
         // Audios
+        #[cfg(feature = "audio")]
         let n_added_audios = audios.len();
+        #[cfg(not(feature = "audio"))]
+        let n_added_audios = 0;
+        #[cfg(feature = "audio")]
         let audio_indexes: Vec<usize> =
             (self.audios.len()..self.audios.len() + n_added_audios).collect();
+        #[cfg(feature = "audio")]
         self.audios.extend(audios);
 
         if n_added_images > 0 || n_added_audios > 0 {
@@ -542,6 +580,7 @@ impl RequestBuilder {
                     Value::String("image".to_string()),
                 )]));
             }
+            #[cfg(feature = "audio")]
             for _ in 0..n_added_audios {
                 content_vec.push(IndexMap::from([(
                     "type".to_string(),
@@ -553,6 +592,7 @@ impl RequestBuilder {
             if !image_indexes.is_empty() {
                 prefixed_text = prefixer.prefix_image(image_indexes, &prefixed_text);
             }
+            #[cfg(feature = "audio")]
             if !audio_indexes.is_empty() {
                 prefixed_text = prefixer.prefix_audio(audio_indexes, &prefixed_text);
             }
@@ -704,6 +744,7 @@ impl RequestLike for RequestBuilder {
     }
 
     fn take_messages(&mut self) -> RequestMessage {
+        #[cfg(feature = "audio")]
         if self.images.is_empty() && self.audios.is_empty() {
             let mut other = Vec::new();
             std::mem::swap(&mut other, &mut self.messages);
@@ -723,6 +764,27 @@ impl RequestLike for RequestBuilder {
                 images: other_images,
                 messages: other_messages,
                 audios: other_audios,
+                enable_thinking: self.enable_thinking,
+                reasoning_effort: None,
+            }
+        }
+        #[cfg(not(feature = "audio"))]
+        if self.images.is_empty() {
+            let mut other = Vec::new();
+            std::mem::swap(&mut other, &mut self.messages);
+            RequestMessage::Chat {
+                messages: other,
+                enable_thinking: self.enable_thinking,
+                reasoning_effort: None,
+            }
+        } else {
+            let mut other_messages = Vec::new();
+            std::mem::swap(&mut other_messages, &mut self.messages);
+            let mut other_images = Vec::new();
+            std::mem::swap(&mut other_images, &mut self.images);
+            RequestMessage::VisionChat {
+                images: other_images,
+                messages: other_messages,
                 enable_thinking: self.enable_thinking,
                 reasoning_effort: None,
             }

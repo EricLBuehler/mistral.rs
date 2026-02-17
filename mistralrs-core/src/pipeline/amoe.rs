@@ -583,6 +583,7 @@ fn new_dummy_seq(
         None,
         None,
         images,
+        #[cfg(feature = "audio")]
         None,
         None, // TODO incorrect for PagedAttention
         None,
