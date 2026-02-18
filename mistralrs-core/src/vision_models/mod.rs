@@ -3,7 +3,6 @@ use std::any::Any;
 use candle_core::Tensor;
 
 pub(crate) mod clip;
-#[cfg(feature = "audio")]
 pub(crate) mod conformer;
 pub(crate) mod idefics2;
 pub(crate) use idefics2::idefics2_input_processor;
@@ -22,12 +21,9 @@ pub(crate) use llava::llava_next;
 pub(crate) use llava::llava_next_inputs_processor;
 pub(crate) mod idefics3;
 pub(crate) mod minicpmo;
-#[cfg(feature = "audio")]
 pub(crate) mod phi4;
-#[cfg(feature = "audio")]
 pub(crate) use phi4::inputs_processor;
 pub(crate) mod gemma3;
-#[cfg(feature = "audio")]
 pub(crate) mod gemma3n;
 pub(crate) mod llama4;
 pub(crate) mod mistral3;

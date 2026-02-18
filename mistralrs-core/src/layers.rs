@@ -34,7 +34,6 @@ use crate::{
     },
 };
 
-#[cfg(feature = "audio")]
 use crate::vision_models::{gemma3n::config::Gemma3nTextConfig, phi4::Phi4MMConfig};
 
 pub use mistralrs_quant::MatMul;
@@ -1631,7 +1630,6 @@ impl DeepSeekV2RotaryEmbedding {
     }
 }
 
-#[cfg(feature = "audio")]
 #[derive(Debug, Clone)]
 pub struct Phi4MMRotaryEmbedding {
     short_sin: Tensor,
@@ -1641,7 +1639,6 @@ pub struct Phi4MMRotaryEmbedding {
     original_max_position_embeddings: usize,
 }
 
-#[cfg(feature = "audio")]
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Phi4MMScaledRopeType {
@@ -1651,7 +1648,6 @@ pub enum Phi4MMScaledRopeType {
     Default,
 }
 
-#[cfg(feature = "audio")]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Phi4MMRopeScalingConfig {
     short_factor: Option<Vec<f64>>,
@@ -1660,7 +1656,6 @@ pub struct Phi4MMRopeScalingConfig {
     scaling_type: Phi4MMScaledRopeType,
 }
 
-#[cfg(feature = "audio")]
 impl Phi4MMRotaryEmbedding {
     fn new_unscaled(cfg: &Phi4MMConfig, dtype: DType, dev: &Device) -> Result<Self> {
         let max_seq_len = cfg.max_position_embeddings;
@@ -1704,7 +1699,7 @@ impl Phi4MMRotaryEmbedding {
         let scaling_factor = if scale <= 1.0 {
             1.0
         } else {
-            (1.0 + scale.ln() / (cfg.original_max_position_embeddings as f64).ln()).sqrt()
+            (1.0_f64 + scale.ln() / (cfg.original_max_position_embeddings as f64).ln()).sqrt()
         };
 
         // Short cos/sin
@@ -1831,11 +1826,9 @@ impl Phi4MMRotaryEmbedding {
     }
 }
 
-#[cfg(feature = "audio")]
 #[derive(Debug, Clone)]
 pub struct Gemma3nRotaryEmbedding(RotaryEmbedding);
 
-#[cfg(feature = "audio")]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Gemma3nScaledRopeType {
@@ -1843,14 +1836,12 @@ pub enum Gemma3nScaledRopeType {
     Linear,
 }
 
-#[cfg(feature = "audio")]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Gemma3nRopeScalingConfig {
     factor: f64,
     rope_type: Gemma3nScaledRopeType,
 }
 
-#[cfg(feature = "audio")]
 impl Gemma3nRotaryEmbedding {
     fn new_linear(
         cfg: &Gemma3nTextConfig,

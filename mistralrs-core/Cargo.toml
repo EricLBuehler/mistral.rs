@@ -95,10 +95,10 @@ ahash.workspace = true
 num-traits.workspace = true
 libc.workspace = true
 bm25.workspace = true
-rubato = { workspace = true, optional = true }
-rustfft = { workspace = true, optional = true }
+rubato.workspace = true
+rustfft.workspace = true
 hound = { workspace = true, optional = true }
-apodize = { workspace = true, optional = true }
+apodize.workspace = true
 symphonia = { workspace = true, optional = true }
 mistralrs-audio = { workspace = true, optional = true }
 mistralrs-mcp = { workspace = true, optional = true, features = ["utoipa"] }
@@ -118,10 +118,7 @@ default = ["audio", "mcp"]
 audio = [
     "dep:mistralrs-audio",
     "dep:symphonia",
-    "dep:rubato",
-    "dep:rustfft",
     "dep:hound",
-    "dep:apodize",
 ]
 
 # MCP (Model Context Protocol) integration (client + types).

@@ -1132,6 +1132,10 @@ impl Sequence {
     pub fn take_audios(&mut self) -> Option<Vec<AudioInput>> {
         self.multimodal.take_audios()
     }
+    #[cfg(not(feature = "audio"))]
+    pub(crate) fn take_audios(&mut self) -> Option<Vec<AudioInput>> {
+        None
+    }
 
     #[cfg(feature = "audio")]
     pub fn clone_audios(&self) -> Option<Vec<AudioInput>> {

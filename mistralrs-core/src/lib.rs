@@ -110,6 +110,23 @@ pub(crate) struct AudioInput {
     pub channels: u16,
 }
 
+#[cfg(not(feature = "audio"))]
+impl AudioInput {
+    pub fn to_mono(&self) -> Vec<f32> {
+        if self.channels <= 1 {
+            return self.samples.clone();
+        }
+        let mut mono = vec![0.0; self.samples.len() / self.channels as usize];
+        for (i, sample) in self.samples.iter().enumerate() {
+            mono[i / self.channels as usize] += *sample;
+        }
+        for s in &mut mono {
+            *s /= self.channels as f32;
+        }
+        mono
+    }
+}
+
 #[cfg(feature = "mcp")]
 pub use mistralrs_mcp::{
     CalledFunction, Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType,

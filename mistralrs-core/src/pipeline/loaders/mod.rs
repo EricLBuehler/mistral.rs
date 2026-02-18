@@ -29,14 +29,11 @@ pub use normal_loaders::{
 };
 
 pub use vision_loaders::{
-    AutoVisionLoader, Gemma3Loader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader,
-    MiniCpmOLoader, Mistral3Loader, Phi3VLoader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3VLLoader,
-    Qwen3VLMoELoader, VLlama4Loader, VLlamaLoader, VisionLoaderType, VisionModel,
-    VisionModelLoader,
+    AutoVisionLoader, Gemma3Loader, Gemma3nLoader, Idefics2Loader, Idefics3Loader, LLaVALoader,
+    LLaVANextLoader, MiniCpmOLoader, Mistral3Loader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader,
+    Qwen2_5VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, VLlama4Loader, VLlamaLoader,
+    VisionLoaderType, VisionModel, VisionModelLoader,
 };
-
-#[cfg(feature = "audio")]
-pub use vision_loaders::{Gemma3nLoader, Phi4MMLoader};
 
 pub use embedding_loaders::{
     AutoEmbeddingLoader, EmbeddingGemmaLoader, EmbeddingLoaderType, EmbeddingModel,

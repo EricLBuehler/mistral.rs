@@ -37,15 +37,12 @@ use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::vision_models::clip::ClipConfig;
 use crate::vision_models::gemma3::config::Gemma3Config;
 use crate::vision_models::gemma3::{Gemma3Model, Gemma3Processor};
-#[cfg(feature = "audio")]
 use crate::vision_models::gemma3n::config::{Gemma3nConfig, IntermediateSize};
-#[cfg(feature = "audio")]
 use crate::vision_models::gemma3n::{Gemma3nModel, Gemma3nProcessor};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::idefics3::{Idefics3Config, Idefics3Model, Idefics3Processor};
 use crate::vision_models::image_processor::ImagePreProcessor;
-#[cfg(feature = "audio")]
 use crate::vision_models::inputs_processor::Phi4MMProcessor;
 use crate::vision_models::llama4::{
     self, Llama4Config, Llama4ImageProcessor, Llama4Model, Llama4Processor,
@@ -60,9 +57,7 @@ use crate::vision_models::mistral3::{Mistral3Config, Mistral3Model, Mistral3Proc
 use crate::vision_models::mllama::{MLlamaConfig, MLlamaModel, MLlamaProcessor};
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3, PHI3V_CLIP_CONFIG};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
-#[cfg(feature = "audio")]
 use crate::vision_models::phi4;
-#[cfg(feature = "audio")]
 use crate::vision_models::phi4::{Phi4MMConfig, Phi4MMModel, PHI4_MM_VISION_CFG};
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
@@ -302,36 +297,16 @@ mod tests {
 
     #[cfg(not(feature = "audio"))]
     #[test]
-    fn phi4mm_loader_reports_audio_feature_requirement_when_audio_disabled() {
-        let err = match AutoVisionLoader::get_loader(r#"{"architectures":["Phi4MMForCausalLM"]}"#) {
-            Ok(_) => panic!("phi4mm should require audio feature"),
-            Err(err) => err,
-        };
-        let msg = err.to_string();
-        assert!(
-            msg.contains("Architecture `phi4mm`")
-                && msg.contains("disables audio processing")
-                && msg.contains("--features audio"),
-            "unexpected error: {msg}"
-        );
+    fn phi4mm_loader_selects_without_audio_feature() {
+        AutoVisionLoader::get_loader(r#"{"architectures":["Phi4MMForCausalLM"]}"#)
+            .expect("phi4mm loader should be selectable without audio feature");
     }
 
     #[cfg(not(feature = "audio"))]
     #[test]
-    fn gemma3n_loader_reports_audio_feature_requirement_when_audio_disabled() {
-        let err = match AutoVisionLoader::get_loader(
-            r#"{"architectures":["Gemma3nForConditionalGeneration"]}"#,
-        ) {
-            Ok(_) => panic!("gemma3n should require audio feature"),
-            Err(err) => err,
-        };
-        let msg = err.to_string();
-        assert!(
-            msg.contains("Architecture `gemma3n`")
-                && msg.contains("disables audio processing")
-                && msg.contains("--features audio"),
-            "unexpected error: {msg}"
-        );
+    fn gemma3n_loader_selects_without_audio_feature() {
+        AutoVisionLoader::get_loader(r#"{"architectures":["Gemma3nForConditionalGeneration"]}"#)
+            .expect("gemma3n loader should be selectable without audio feature");
     }
 }
 
@@ -365,22 +340,12 @@ impl AutoVisionLoader {
             VisionLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
             VisionLoaderType::Idefics3 => Box::new(Idefics3Loader),
             VisionLoaderType::MiniCpmO => Box::new(MiniCpmOLoader),
-            #[cfg(feature = "audio")]
             VisionLoaderType::Phi4MM => Box::new(Phi4MMLoader),
-            #[cfg(not(feature = "audio"))]
-            VisionLoaderType::Phi4MM => anyhow::bail!(
-                "Architecture `phi4mm` is available, but this build disables audio processing. Rebuild with `--features audio` for full support."
-            ),
             VisionLoaderType::Qwen2_5VL => Box::new(Qwen2_5VLLoader),
             VisionLoaderType::Gemma3 => Box::new(Gemma3Loader),
             VisionLoaderType::Mistral3 => Box::new(Mistral3Loader),
             VisionLoaderType::Llama4 => Box::new(VLlama4Loader),
-            #[cfg(feature = "audio")]
             VisionLoaderType::Gemma3n => Box::new(Gemma3nLoader),
-            #[cfg(not(feature = "audio"))]
-            VisionLoaderType::Gemma3n => anyhow::bail!(
-                "Architecture `gemma3n` is available, but this build disables audio processing. Rebuild with `--features audio` for full support."
-            ),
             VisionLoaderType::Qwen3VL => Box::new(Qwen3VLLoader),
             VisionLoaderType::Qwen3VLMoE => Box::new(Qwen3VLMoELoader),
         })
@@ -3025,13 +2990,10 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
 /// [`VisionLoader`] for a Phi 4MM Vision model.
 ///
 /// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
-#[cfg(feature = "audio")]
 pub struct Phi4MMLoader;
 
-#[cfg(feature = "audio")]
 pub struct Phi4MMPrefixer;
 
-#[cfg(feature = "audio")]
 impl MultimodalPromptPrefixer for Phi4MMPrefixer {
     fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
         // Image indexing starts at 0.
@@ -3057,7 +3019,6 @@ impl MultimodalPromptPrefixer for Phi4MMPrefixer {
     }
 }
 
-#[cfg(feature = "audio")]
 impl VisionModelLoader for Phi4MMLoader {
     fn load(
         &self,
@@ -3112,7 +3073,6 @@ impl VisionModelLoader for Phi4MMLoader {
     }
 }
 
-#[cfg(feature = "audio")]
 impl IsqModelLoader for Phi4MMLoader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
@@ -3130,7 +3090,6 @@ impl IsqModelLoader for Phi4MMLoader {
     }
 }
 
-#[cfg(feature = "audio")]
 impl DeviceMappedModelLoader for Phi4MMLoader {
     fn mapped_max_act_size_elems(
         &self,
@@ -4743,7 +4702,6 @@ impl DeviceMappedModelLoader for VLlama4Loader {
 /// [`VisionLoader`] for an Gemma 3n model.
 ///
 /// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
-#[cfg(feature = "audio")]
 pub struct Gemma3nLoader;
 
 #[allow(dead_code)]
@@ -4755,7 +4713,6 @@ impl MultimodalPromptPrefixer for Gemma3nPrefixer {
     }
 }
 
-#[cfg(feature = "audio")]
 impl VisionModelLoader for Gemma3nLoader {
     fn load(
         &self,
@@ -4814,7 +4771,6 @@ impl VisionModelLoader for Gemma3nLoader {
     }
 }
 
-#[cfg(feature = "audio")]
 impl IsqModelLoader for Gemma3nLoader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
@@ -4912,7 +4868,6 @@ impl IsqModelLoader for Gemma3nLoader {
     }
 }
 
-#[cfg(feature = "audio")]
 impl DeviceMappedModelLoader for Gemma3nLoader {
     fn mapped_max_act_size_elems(
         &self,
