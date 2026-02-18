@@ -1,3 +1,5 @@
+//! Error types and conversions for the mistralrs SDK.
+
 use thiserror::Error;
 
 /// Error type for the mistralrs SDK.
@@ -23,6 +25,7 @@ pub enum Error {
     /// An error from the model itself during generation.
     #[error("model error: {message}")]
     ModelError {
+        /// Human-readable description of the model error.
         message: String,
         /// The partial / incomplete response that was produced before the error.
         partial_response: Option<Box<mistralrs_core::ChatCompletionResponse>>,
@@ -43,25 +46,31 @@ pub enum Error {
 
     /// An unexpected response type was received.
     #[error("unexpected response type: expected {expected}")]
-    UnexpectedResponse { expected: &'static str },
+    UnexpectedResponse {
+        /// Description of the response type that was expected.
+        expected: &'static str,
+    },
 }
 
 /// Convenience type alias for `std::result::Result<T, Error>`.
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl From<anyhow::Error> for Error {
+    /// Convert from `anyhow::Error` (mapped to [`Error::Inference`]).
     fn from(e: anyhow::Error) -> Self {
         Error::Inference(e.into())
     }
 }
 
 impl From<tokio::sync::mpsc::error::SendError<mistralrs_core::Request>> for Error {
+    /// Convert from a channel send error (mapped to [`Error::Channel`]).
     fn from(e: tokio::sync::mpsc::error::SendError<mistralrs_core::Request>) -> Self {
         Error::Channel(e.to_string())
     }
 }
 
 impl From<Box<mistralrs_core::ResponseErr>> for Error {
+    /// Convert from a boxed engine response error.
     fn from(e: Box<mistralrs_core::ResponseErr>) -> Self {
         match *e {
             mistralrs_core::ResponseErr::InternalError(inner) => Error::Inference(inner),

@@ -1,17 +1,26 @@
+//! Multi-model builder and pipeline construction utilities.
+
 use mistralrs_core::{AddModelConfig, Pipeline, SchedulerConfig};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::Model;
 
-/// Enum representing all possible model builders that can be used with MultiModelBuilder.
+/// Enum representing all possible model builders that can be used with [`MultiModelBuilder`].
 pub enum AnyModelBuilder {
+    /// A text model builder.
     Text(crate::TextModelBuilder),
+    /// A vision model builder.
     Vision(crate::VisionModelBuilder),
+    /// An auto-detecting model builder.
     Auto(crate::ModelBuilder),
+    /// A GGUF model builder.
     Gguf(crate::GgufModelBuilder),
+    /// A diffusion (image generation) model builder.
     Diffusion(crate::DiffusionModelBuilder),
+    /// A speech synthesis model builder.
     Speech(crate::SpeechModelBuilder),
+    /// An embedding model builder.
     Embedding(crate::EmbeddingModelBuilder),
 }
 

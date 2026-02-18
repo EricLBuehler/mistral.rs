@@ -7,18 +7,32 @@ use indexmap::IndexMap;
 use serde_json::{json, Value};
 
 /// A type which can be used as a chat request.
+///
+/// Implemented by [`TextMessages`], [`VisionMessages`], and [`RequestBuilder`].
 pub trait RequestLike {
+    /// Borrow the current list of chat messages.
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>];
+    /// Borrow the current list of images (empty for text-only requests).
     fn images_ref(&self) -> &[DynamicImage];
+    /// Take ownership of the messages, converting them into a [`RequestMessage`].
     fn take_messages(&mut self) -> RequestMessage;
+    /// Take any custom logits processors, if configured.
     fn take_logits_processors(&mut self) -> Option<Vec<Arc<dyn CustomLogitsProcessor>>>;
+    /// Take any active adapter names (LoRA / X-LoRA), if configured.
     fn take_adapters(&mut self) -> Option<Vec<String>>;
+    /// Whether log-probabilities should be returned.
     fn return_logprobs(&self) -> bool;
+    /// Whether web search should be enabled for this request.
     fn enable_search(&self) -> Option<bool>;
+    /// Take the generation constraint (regex, JSON schema, grammar, or none).
     fn take_constraint(&mut self) -> Constraint;
+    /// Take the tools and tool-choice policy, if any.
     fn take_tools(&mut self) -> Option<(Vec<Tool>, ToolChoice)>;
+    /// Take the sampling parameters.
     fn take_sampling_params(&mut self) -> SamplingParams;
+    /// Take web search options, if configured.
     fn take_web_search_options(&mut self) -> Option<WebSearchOptions>;
+    /// Whether to silently truncate prompts that exceed the model's context length.
     fn truncate_sequence(&self) -> bool {
         false
     }
@@ -44,10 +58,15 @@ impl From<TextMessages> for Vec<IndexMap<String, MessageContent>> {
 #[derive(Debug, Clone, PartialEq)]
 /// A chat message role.
 pub enum TextMessageRole {
+    /// The human user.
     User,
+    /// The model / assistant.
     Assistant,
+    /// System prompt providing instructions to the model.
     System,
+    /// Output from a tool call.
     Tool,
+    /// A custom role string.
     Custom(String),
 }
 
@@ -849,7 +868,9 @@ impl EmbeddingRequestInput {
 #[derive(Clone, Debug)]
 /// A validated embedding request constructed via [`EmbeddingRequestBuilder`].
 pub struct EmbeddingRequest {
+    /// The embedding inputs (text prompts or pre-tokenized sequences).
     pub inputs: Vec<EmbeddingRequestInput>,
+    /// Whether to truncate inputs that exceed the model's maximum context length.
     pub truncate_sequence: bool,
 }
 
