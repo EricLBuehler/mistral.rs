@@ -55,6 +55,43 @@ pub enum Error {
 /// Convenience type alias for `std::result::Result<T, Error>`.
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl Error {
+    /// Returns a reference to the underlying source error for the
+    /// [`ModelLoad`](Self::ModelLoad) and [`Inference`](Self::Inference) variants.
+    ///
+    /// Returns `None` for all other variants.
+    pub fn source_inner(&self) -> Option<&(dyn std::error::Error + Send + Sync)> {
+        match self {
+            Self::ModelLoad(e) | Self::Inference(e) => Some(e.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// Attempt to downcast the boxed inner error of [`ModelLoad`](Self::ModelLoad) or
+    /// [`Inference`](Self::Inference) to a concrete type `T`.
+    ///
+    /// Returns `None` for other variants or if `T` does not match the inner error type.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use mistralrs::error::Error;
+    /// # fn example(err: Error) {
+    /// if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
+    ///     eprintln!("I/O error: {io_err}");
+    /// }
+    /// # }
+    /// ```
+    pub fn downcast_ref<T: std::error::Error + 'static>(&self) -> Option<&T> {
+        match self {
+            Self::ModelLoad(e) | Self::Inference(e) => {
+                let err_ref: &(dyn std::error::Error + 'static) = e.as_ref();
+                err_ref.downcast_ref::<T>()
+            }
+            _ => None,
+        }
+    }
+}
+
 impl From<anyhow::Error> for Error {
     /// Convert from `anyhow::Error` (mapped to [`Error::Inference`]).
     fn from(e: anyhow::Error) -> Self {

@@ -36,6 +36,11 @@ pub trait RequestLike {
     fn truncate_sequence(&self) -> bool {
         false
     }
+    /// Apply any deferred model-specific media prefixes.
+    ///
+    /// Called automatically by [`Model`](crate::Model) before sending the request.
+    /// The default implementation is a no-op.
+    fn resolve_pending_prefixes(&mut self, _category: &ModelCategory) {}
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -161,6 +166,30 @@ impl RequestLike for TextMessages {
     }
 }
 
+impl From<TextMessages> for VisionMessages {
+    fn from(text: TextMessages) -> Self {
+        Self {
+            messages: text.messages,
+            images: Vec::new(),
+            audios: Vec::new(),
+            enable_thinking: text.enable_thinking,
+            pending_prefixes: Vec::new(),
+        }
+    }
+}
+
+/// Tracks a message whose text has not yet been prefixed with model-specific
+/// media tokens. Resolved automatically at send-time.
+#[derive(Debug, Clone, PartialEq)]
+struct PendingMediaPrefix {
+    /// Index into the owning struct's `messages` vec.
+    message_index: usize,
+    /// Global image indices that belong to this message.
+    image_indices: Vec<usize>,
+    /// Global audio indices that belong to this message.
+    audio_indices: Vec<usize>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 /// Text (chat) messages with images and/or audios.
 ///
@@ -172,6 +201,7 @@ pub struct VisionMessages {
     images: Vec<DynamicImage>,
     audios: Vec<AudioInput>,
     enable_thinking: Option<bool>,
+    pending_prefixes: Vec<PendingMediaPrefix>,
 }
 
 impl Default for VisionMessages {
@@ -188,6 +218,7 @@ impl VisionMessages {
             messages: Vec::new(),
             audios: Vec::new(),
             enable_thinking: None,
+            pending_prefixes: Vec::new(),
         }
     }
 
@@ -201,6 +232,10 @@ impl VisionMessages {
     }
 
     /// Append a message containing an image. The image is a `DynamicImage` from the `image` crate.
+    ///
+    /// The model reference is used to apply model-specific media prefix tokens
+    /// immediately. For a version that defers prefixing until send-time, see
+    /// [`add_image_message_deferred`](Self::add_image_message_deferred).
     pub fn add_image_message(
         self,
         role: TextMessageRole,
@@ -212,6 +247,10 @@ impl VisionMessages {
     }
 
     /// Append a message containing audio input.
+    ///
+    /// The model reference is used to apply model-specific media prefix tokens
+    /// immediately. For a version that defers prefixing until send-time, see
+    /// [`add_audio_message_deferred`](Self::add_audio_message_deferred).
     pub fn add_audio_message(
         self,
         role: TextMessageRole,
@@ -223,6 +262,10 @@ impl VisionMessages {
     }
 
     /// Append a message containing a mix of text, images, and/or audio.
+    ///
+    /// The model reference is used to apply model-specific media prefix tokens
+    /// immediately. For a version that defers prefixing until send-time, see
+    /// [`add_multimodal_message_deferred`](Self::add_multimodal_message_deferred).
     pub fn add_multimodal_message(
         mut self,
         role: TextMessageRole,
@@ -293,12 +336,106 @@ impl VisionMessages {
         Ok(self)
     }
 
+    /// Append a message containing images **without** requiring a model reference.
+    ///
+    /// Model-specific prefix tokens will be applied automatically when the
+    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
+    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
+    ///
+    /// This allows you to construct vision messages before a model is loaded.
+    pub fn add_image_message_deferred(
+        self,
+        role: TextMessageRole,
+        text: impl ToString,
+        images: Vec<DynamicImage>,
+    ) -> Self {
+        self.add_multimodal_message_deferred(role, text, images, vec![])
+    }
+
+    /// Append a message containing audio **without** requiring a model reference.
+    ///
+    /// Model-specific prefix tokens will be applied automatically when the
+    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
+    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
+    pub fn add_audio_message_deferred(
+        self,
+        role: TextMessageRole,
+        text: impl ToString,
+        audios: Vec<AudioInput>,
+    ) -> Self {
+        self.add_multimodal_message_deferred(role, text, vec![], audios)
+    }
+
+    /// Append a multimodal message **without** requiring a model reference.
+    ///
+    /// Model-specific prefix tokens will be applied automatically when the
+    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
+    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
+    pub fn add_multimodal_message_deferred(
+        mut self,
+        role: TextMessageRole,
+        text: impl ToString,
+        images: Vec<DynamicImage>,
+        audios: Vec<AudioInput>,
+    ) -> Self {
+        // Images
+        let n_added_images = images.len();
+        let image_indices: Vec<usize> =
+            (self.images.len()..self.images.len() + n_added_images).collect();
+        self.images.extend(images);
+
+        // Audios
+        let n_added_audios = audios.len();
+        let audio_indices: Vec<usize> =
+            (self.audios.len()..self.audios.len() + n_added_audios).collect();
+        self.audios.extend(audios);
+
+        if n_added_images > 0 || n_added_audios > 0 {
+            let mut content_vec: Vec<IndexMap<String, Value>> = Vec::new();
+            for _ in 0..n_added_images {
+                content_vec.push(IndexMap::from([(
+                    "type".to_string(),
+                    Value::String("image".to_string()),
+                )]));
+            }
+            for _ in 0..n_added_audios {
+                content_vec.push(IndexMap::from([(
+                    "type".to_string(),
+                    Value::String("audio".to_string()),
+                )]));
+            }
+            // Store raw (unprefixed) text — prefixing happens at send-time
+            content_vec.push(IndexMap::from([
+                ("type".to_string(), Value::String("text".to_string())),
+                ("text".to_string(), Value::String(text.to_string())),
+            ]));
+
+            let message_index = self.messages.len();
+            self.messages.push(IndexMap::from([
+                ("role".to_string(), Either::Left(role.to_string())),
+                ("content".to_string(), Either::Right(content_vec)),
+            ]));
+
+            self.pending_prefixes.push(PendingMediaPrefix {
+                message_index,
+                image_indices,
+                audio_indices,
+            });
+        } else {
+            self.messages.push(IndexMap::from([
+                ("role".to_string(), Either::Left(role.to_string())),
+                ("content".to_string(), Either::Left(text.to_string())),
+            ]));
+        }
+        self
+    }
+
     /// Remove all messages, images, and audio.
     pub fn clear(mut self) -> Self {
         self.messages.clear();
         self.images.clear();
         self.audios.clear();
-
+        self.pending_prefixes.clear();
         self
     }
 
@@ -315,6 +452,9 @@ impl RequestLike for VisionMessages {
     }
     fn images_ref(&self) -> &[DynamicImage] {
         &self.images
+    }
+    fn resolve_pending_prefixes(&mut self, category: &ModelCategory) {
+        resolve_pending(category, &mut self.messages, &mut self.pending_prefixes);
     }
     fn take_messages(&mut self) -> RequestMessage {
         let mut other_messages = Vec::new();
@@ -381,6 +521,7 @@ pub struct RequestBuilder {
     web_search_options: Option<WebSearchOptions>,
     enable_thinking: Option<bool>,
     truncate_sequence: bool,
+    pending_prefixes: Vec<PendingMediaPrefix>,
 }
 
 impl Default for RequestBuilder {
@@ -405,6 +546,7 @@ impl From<TextMessages> for RequestBuilder {
             web_search_options: None,
             enable_thinking: None,
             truncate_sequence: false,
+            pending_prefixes: Vec::new(),
         }
     }
 }
@@ -425,6 +567,7 @@ impl From<VisionMessages> for RequestBuilder {
             web_search_options: None,
             enable_thinking: None,
             truncate_sequence: false,
+            pending_prefixes: value.pending_prefixes,
         }
     }
 }
@@ -446,6 +589,7 @@ impl RequestBuilder {
             web_search_options: None,
             enable_thinking: None,
             truncate_sequence: false,
+            pending_prefixes: Vec::new(),
         }
     }
 
@@ -611,6 +755,98 @@ impl RequestBuilder {
         Ok(self)
     }
 
+    /// Append a message containing images **without** requiring a model reference.
+    ///
+    /// Model-specific prefix tokens will be applied automatically when the
+    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
+    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
+    pub fn add_image_message_deferred(
+        self,
+        role: TextMessageRole,
+        text: impl ToString,
+        images: Vec<DynamicImage>,
+    ) -> Self {
+        self.add_multimodal_message_deferred(role, text, images, vec![])
+    }
+
+    /// Append a message containing audio **without** requiring a model reference.
+    ///
+    /// Model-specific prefix tokens will be applied automatically when the
+    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
+    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
+    pub fn add_audio_message_deferred(
+        self,
+        role: TextMessageRole,
+        text: impl ToString,
+        audios: Vec<AudioInput>,
+    ) -> Self {
+        self.add_multimodal_message_deferred(role, text, vec![], audios)
+    }
+
+    /// Append a multimodal message **without** requiring a model reference.
+    ///
+    /// Model-specific prefix tokens will be applied automatically when the
+    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
+    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
+    pub fn add_multimodal_message_deferred(
+        mut self,
+        role: TextMessageRole,
+        text: impl ToString,
+        images: Vec<DynamicImage>,
+        audios: Vec<AudioInput>,
+    ) -> Self {
+        // Images
+        let n_added_images = images.len();
+        let image_indices: Vec<usize> =
+            (self.images.len()..self.images.len() + n_added_images).collect();
+        self.images.extend(images);
+
+        // Audios
+        let n_added_audios = audios.len();
+        let audio_indices: Vec<usize> =
+            (self.audios.len()..self.audios.len() + n_added_audios).collect();
+        self.audios.extend(audios);
+
+        if n_added_images > 0 || n_added_audios > 0 {
+            let mut content_vec: Vec<IndexMap<String, Value>> = Vec::new();
+            for _ in 0..n_added_images {
+                content_vec.push(IndexMap::from([(
+                    "type".to_string(),
+                    Value::String("image".to_string()),
+                )]));
+            }
+            for _ in 0..n_added_audios {
+                content_vec.push(IndexMap::from([(
+                    "type".to_string(),
+                    Value::String("audio".to_string()),
+                )]));
+            }
+            // Store raw (unprefixed) text — prefixing happens at send-time
+            content_vec.push(IndexMap::from([
+                ("type".to_string(), Value::String("text".to_string())),
+                ("text".to_string(), Value::String(text.to_string())),
+            ]));
+
+            let message_index = self.messages.len();
+            self.messages.push(IndexMap::from([
+                ("role".to_string(), Either::Left(role.to_string())),
+                ("content".to_string(), Either::Right(content_vec)),
+            ]));
+
+            self.pending_prefixes.push(PendingMediaPrefix {
+                message_index,
+                image_indices,
+                audio_indices,
+            });
+        } else {
+            self.messages.push(IndexMap::from([
+                ("role".to_string(), Either::Left(role.to_string())),
+                ("content".to_string(), Either::Left(text.to_string())),
+            ]));
+        }
+        self
+    }
+
     /// Add a custom logits processor applied during token sampling.
     pub fn add_logits_processor(mut self, processor: Arc<dyn CustomLogitsProcessor>) -> Self {
         self.logits_processors.push(processor);
@@ -757,6 +993,10 @@ impl RequestLike for RequestBuilder {
         &self.images
     }
 
+    fn resolve_pending_prefixes(&mut self, category: &ModelCategory) {
+        resolve_pending(category, &mut self.messages, &mut self.pending_prefixes);
+    }
+
     fn take_messages(&mut self) -> RequestMessage {
         if self.images.is_empty() && self.audios.is_empty() {
             let mut other = Vec::new();
@@ -843,6 +1083,49 @@ impl RequestLike for RequestBuilder {
 
     fn truncate_sequence(&self) -> bool {
         self.truncate_sequence
+    }
+}
+
+/// Shared implementation: apply a model-specific prefixer to all pending messages.
+fn resolve_pending(
+    category: &ModelCategory,
+    messages: &mut [IndexMap<String, MessageContent>],
+    pending: &mut Vec<PendingMediaPrefix>,
+) {
+    let prefixer = match category {
+        ModelCategory::Vision { prefixer } => prefixer,
+        _ => {
+            // Not a vision model — nothing to prefix.
+            pending.clear();
+            return;
+        }
+    };
+
+    for entry in pending.drain(..) {
+        let Some(msg) = messages.get_mut(entry.message_index) else {
+            continue;
+        };
+        let Some(Either::Right(content_vec)) = msg.get_mut("content") else {
+            continue;
+        };
+        // Find the text part and apply prefixing
+        for part in content_vec.iter_mut() {
+            let is_text = part
+                .get("type")
+                .is_some_and(|v| v == &Value::String("text".to_string()));
+            if !is_text {
+                continue;
+            }
+            if let Some(Value::String(text)) = part.get_mut("text") {
+                if !entry.image_indices.is_empty() {
+                    *text = prefixer.prefix_image(entry.image_indices.clone(), text);
+                }
+                if !entry.audio_indices.is_empty() {
+                    *text = prefixer.prefix_audio(entry.audio_indices.clone(), text);
+                }
+            }
+            break;
+        }
     }
 }
 

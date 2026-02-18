@@ -119,6 +119,9 @@ impl Model {
     ) -> crate::error::Result<Stream<'_>> {
         let (tx, rx) = channel(1);
 
+        if let Ok(config) = self.config_with_model(model_id) {
+            request.resolve_pending_prefixes(&config.category);
+        }
         let truncate_sequence = request.truncate_sequence();
         let (tools, tool_choice) = if let Some((a, b)) = request.take_tools() {
             (Some(a), Some(b))
@@ -167,6 +170,9 @@ impl Model {
     ) -> crate::error::Result<ChatCompletionResponse> {
         let (tx, mut rx) = channel(1);
 
+        if let Ok(config) = self.config_with_model(model_id) {
+            request.resolve_pending_prefixes(&config.category);
+        }
         let truncate_sequence = request.truncate_sequence();
         let (tools, tool_choice) = if let Some((a, b)) = request.take_tools() {
             (Some(a), Some(b))
@@ -224,6 +230,9 @@ impl Model {
     ) -> crate::error::Result<(Vec<Tensor>, Vec<u32>)> {
         let (tx, mut rx) = channel(1);
 
+        if let Ok(config) = self.config_with_model(model_id) {
+            request.resolve_pending_prefixes(&config.category);
+        }
         let truncate_sequence = request.truncate_sequence();
         let (tools, tool_choice) = if let Some((a, b)) = request.take_tools() {
             (Some(a), Some(b))
