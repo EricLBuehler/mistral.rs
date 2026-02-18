@@ -292,7 +292,7 @@ These features are primarily for library development and are not typically used 
 
 | Feature | Default | Description |
 |---------|---------|-------------|
-| `audio` | on | Audio input utilities + speech models + audio-capable multimodal models |
+| `audio` | on | Audio input decode/processing + speech models. Some multimodal models remain loadable without this feature for non-audio inputs, but audio request payload support requires it. |
 | `mcp` | on | MCP (Model Context Protocol) integration |
 
 ### Minimal in-process builds

@@ -114,7 +114,9 @@ candle-metal-kernels = { workspace = true, optional = true }
 [features]
 default = ["audio", "mcp"]
 
-# Audio input processing + speech models + audio-capable multimodal models.
+# Audio input decoding/processing + speech models.
+# Some multimodal architectures remain loadable without this feature
+# (for non-audio inputs), but audio request payload support requires `audio`.
 audio = [
     "dep:mistralrs-audio",
     "dep:symphonia",
