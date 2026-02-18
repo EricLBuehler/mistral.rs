@@ -18,7 +18,7 @@ async fn main() -> Result<()> {
     )
     .with_chat_template("chat_templates/mistral.json")
     .with_logging()
-    .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+    .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
     .build()
     .await?;
 

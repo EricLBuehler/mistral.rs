@@ -50,7 +50,7 @@
 //! let model = ModelBuilder::new("Qwen/Qwen3-4B")
 //!     .with_auto_isq(IsqBits::Four)            // In-situ quantization (auto-selects best type)
 //!     .with_logging()                        // Enable logging
-//!     .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+//!     .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
 //!     .build()
 //!     .await?;
 //! # Ok(())
@@ -201,6 +201,8 @@
 //!     └── send_*_with_model()       (multi-model dispatch)
 //! ```
 
+#[macro_use]
+mod builder_macros;
 mod agent;
 mod anymoe;
 mod auto_model;

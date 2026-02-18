@@ -15,7 +15,7 @@ async fn main() -> Result<()> {
     )
     .into_inner()
     .with_logging()
-    .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+    .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
     .build()
     .await?;
 

@@ -208,6 +208,10 @@ name = "anymoe_lora"
 path = "examples/advanced/anymoe_lora/main.rs"
 
 [[example]]
+name = "error_handling"
+path = "examples/advanced/error_handling/main.rs"
+
+[[example]]
 name = "perplexity"
 path = "examples/advanced/perplexity/main.rs"
 

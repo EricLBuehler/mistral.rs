@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
     let text_builder = TextModelBuilder::new("mistralai/Mistral-7B-Instruct-v0.1")
         .with_auto_isq(IsqBits::Eight)
         .with_logging()
-        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?;
+        .with_paged_attn(PagedAttentionMetaBuilder::default().build()?);
 
     let model = AnyMoeModelBuilder::from_text_builder(
         text_builder,

@@ -181,16 +181,11 @@ impl GgufModelBuilder {
     /// If PagedAttention is not supported (query with [`paged_attn_supported`]), this will do nothing.
     ///
     /// [`PagedAttentionMetaBuilder`]: crate::PagedAttentionMetaBuilder
-    pub fn with_paged_attn(
-        mut self,
-        paged_attn_cfg: impl FnOnce() -> anyhow::Result<PagedAttentionConfig>,
-    ) -> anyhow::Result<Self> {
+    pub fn with_paged_attn(mut self, paged_attn_cfg: PagedAttentionConfig) -> Self {
         if paged_attn_supported() {
-            self.paged_attn_cfg = Some(paged_attn_cfg()?);
-        } else {
-            self.paged_attn_cfg = None;
+            self.paged_attn_cfg = Some(paged_attn_cfg);
         }
-        Ok(self)
+        self
     }
 
     /// Set the maximum number of sequences which can be run at once.

@@ -11,7 +11,7 @@ async fn main() -> Result<()> {
         .with_auto_isq(IsqBits::Four)
         .with_calibration_file("calibration_data/calibration_datav3_small.txt".into())
         .with_logging()
-        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+        .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
         .build()
         .await?;
 

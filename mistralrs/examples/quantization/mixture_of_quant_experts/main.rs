@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
         .with_auto_isq(IsqBits::Four)
         .with_mixture_qexperts_isq()
         .with_logging()
-        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+        .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
         .build()
         .await?;
 

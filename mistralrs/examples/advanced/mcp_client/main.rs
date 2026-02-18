@@ -122,11 +122,11 @@ async fn main() -> Result<()> {
     let model = ModelBuilder::new("google/gemma-3-4b-it".to_string())
         .with_auto_isq(IsqBits::Eight) // Use 8-bit quantization for efficiency
         .with_logging()
-        .with_paged_attn(|| {
+        .with_paged_attn(
             PagedAttentionMetaBuilder::default()
                 .with_gpu_memory(MemoryGpuConfig::ContextSize(8192))
-                .build()
-        })?
+                .build()?,
+        )
         .with_mcp_client(mcp_config) // This automatically connects to MCP servers and registers tools
         .build()
         .await?;

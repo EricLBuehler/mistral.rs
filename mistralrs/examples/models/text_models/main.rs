@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
     let model = ModelBuilder::new(MODEL_ID)
         .with_auto_isq(IsqBits::Four)
         .with_logging()
-        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+        .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
         .build()
         .await?;
 
