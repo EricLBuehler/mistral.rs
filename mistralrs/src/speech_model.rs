@@ -84,6 +84,7 @@ impl SpeechModelBuilder {
         self
     }
 
+    /// Load the speech model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         let (pipeline, scheduler_config, add_model_config) = build_speech_pipeline(self).await?;
         Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)

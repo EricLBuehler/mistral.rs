@@ -6,6 +6,7 @@ use mistralrs_core::{
 
 use crate::{best_device, resolve_isq, Model, TextModelBuilder};
 
+/// Configure and build an AnyMoE (Mixture of Experts) model on top of a text model.
 pub struct AnyMoeModelBuilder {
     base: TextModelBuilder,
     config: AnyMoeConfig,
@@ -17,6 +18,8 @@ pub struct AnyMoeModelBuilder {
 }
 
 impl AnyMoeModelBuilder {
+    /// Create from a base [`TextModelBuilder`] with AnyMoE config, gating model path, prefix,
+    /// MLP name, expert model IDs, and target layers.
     pub fn from_text_builder(
         base: TextModelBuilder,
         config: AnyMoeConfig,
@@ -40,6 +43,7 @@ impl AnyMoeModelBuilder {
         }
     }
 
+    /// Load the AnyMoE model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = NormalSpecificConfig {
             topology: self.base.topology,

@@ -9,6 +9,7 @@ pub struct LoraModelBuilder {
 }
 
 impl LoraModelBuilder {
+    /// Create a LoRA builder from a [`TextModelBuilder`] and LoRA adapter IDs.
     pub fn from_text_model_builder(
         text_model: TextModelBuilder,
         lora_adapter_ids: impl IntoIterator<Item = impl ToString>,
@@ -22,6 +23,7 @@ impl LoraModelBuilder {
         }
     }
 
+    /// Load the LoRA model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = NormalSpecificConfig {
             topology: self.text_model.topology,

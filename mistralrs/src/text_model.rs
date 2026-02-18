@@ -196,6 +196,7 @@ impl TextModelBuilder {
         self
     }
 
+    /// Load the text model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         let (pipeline, scheduler_config, add_model_config) = build_text_pipeline(self).await?;
         Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)
@@ -208,7 +209,7 @@ impl TextModelBuilder {
 pub struct UqffTextModelBuilder(TextModelBuilder);
 
 impl UqffTextModelBuilder {
-    /// A few defaults are applied here:
+    /// Create a UQFF text model builder. A few defaults are applied here:
     /// - MoQE ISQ organization
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
@@ -224,11 +225,12 @@ impl UqffTextModelBuilder {
         Self(inner)
     }
 
+    /// Load the UQFF text model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         self.0.build().await
     }
 
-    /// This wraps the VisionModelBuilder, so users should take care to not call UQFF-related methods.
+    /// Unwrap into the inner [`TextModelBuilder`]. Take care not to call UQFF-related methods on it.
     pub fn into_inner(self) -> TextModelBuilder {
         self.0
     }

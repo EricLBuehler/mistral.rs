@@ -86,6 +86,7 @@ impl GgufModelBuilder {
         self
     }
 
+    /// Register a callback for a specific tool name.
     pub fn with_tool_callback(
         mut self,
         name: impl Into<String>,
@@ -224,6 +225,7 @@ impl GgufModelBuilder {
         self
     }
 
+    /// Load the GGUF model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         let (pipeline, scheduler_config, add_model_config) = build_gguf_pipeline(self).await?;
         Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)

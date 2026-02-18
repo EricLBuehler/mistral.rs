@@ -130,6 +130,7 @@ impl VisionModelBuilder {
         self
     }
 
+    /// Load the vision model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         let (pipeline, scheduler_config, add_model_config) = build_vision_pipeline(self).await?;
         Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)
@@ -156,11 +157,12 @@ impl UqffVisionModelBuilder {
         Self(inner)
     }
 
+    /// Load the UQFF vision model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         self.0.build().await
     }
 
-    /// This wraps the VisionModelBuilder, so users should take care to not call UQFF-related methods.
+    /// Unwrap into the inner [`VisionModelBuilder`]. Take care not to call UQFF-related methods on it.
     pub fn into_inner(self) -> VisionModelBuilder {
         self.0
     }

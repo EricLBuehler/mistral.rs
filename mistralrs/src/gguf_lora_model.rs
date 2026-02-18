@@ -10,6 +10,7 @@ pub struct GgufLoraModelBuilder {
 }
 
 impl GgufLoraModelBuilder {
+    /// Create a GGUF LoRA builder from a [`GgufModelBuilder`], LoRA model ID, and ordering.
     pub fn from_gguf_model_builder(
         gguf_model: GgufModelBuilder,
         lora_model_id: impl ToString,
@@ -22,6 +23,7 @@ impl GgufLoraModelBuilder {
         }
     }
 
+    /// Load the GGUF LoRA model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = GGUFSpecificConfig {
             topology: self.gguf_model.topology,

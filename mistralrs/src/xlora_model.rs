@@ -11,6 +11,7 @@ pub struct XLoraModelBuilder {
 }
 
 impl XLoraModelBuilder {
+    /// Create an X-LoRA builder from a [`TextModelBuilder`], X-LoRA model ID, and ordering.
     pub fn from_text_model_builder(
         text_model: TextModelBuilder,
         xlora_model_id: impl ToString,
@@ -24,11 +25,13 @@ impl XLoraModelBuilder {
         }
     }
 
+    /// Set the target non-granular index for X-LoRA scaling.
     pub fn tgt_non_granular_index(mut self, tgt_non_granular_idx: usize) -> Self {
         self.tgt_non_granular_index = Some(tgt_non_granular_idx);
         self
     }
 
+    /// Load the X-LoRA model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = NormalSpecificConfig {
             topology: self.text_model.topology,

@@ -411,6 +411,7 @@ impl From<VisionMessages> for RequestBuilder {
 }
 
 impl RequestBuilder {
+    /// Create an empty request builder with deterministic sampling defaults.
     pub fn new() -> Self {
         Self {
             messages: Vec::new(),
@@ -836,6 +837,7 @@ pub enum EmbeddingRequestInput {
 }
 
 impl EmbeddingRequestInput {
+    /// Convert this input into a [`RequestMessage`] suitable for the engine.
     pub fn into_request_message(self) -> RequestMessage {
         match self {
             Self::Prompt(prompt) => RequestMessage::Embedding { prompt },
@@ -915,6 +917,7 @@ impl EmbeddingRequestBuilder {
         self
     }
 
+    /// Validate and build the [`EmbeddingRequest`]. Returns an error if no inputs were added.
     pub fn build(self) -> anyhow::Result<EmbeddingRequest> {
         if self.inputs.is_empty() {
             anyhow::bail!("Embedding request must contain at least one input.");

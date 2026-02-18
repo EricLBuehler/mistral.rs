@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 
 use crate::{best_device, resolve_isq, Model, TextModelBuilder};
 
+/// Configure speculative decoding with a target and draft text model.
 pub struct TextSpeculativeBuilder {
     target: TextModelBuilder,
     draft: TextModelBuilder,
@@ -88,6 +89,7 @@ impl TextSpeculativeBuilder {
         Ok(pipeline)
     }
 
+    /// Build target and draft pipelines and return a speculative-decoding [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         let target = Self::build_pipeline(self.target.clone())?;
         let draft = Self::build_pipeline(self.draft.clone())?;

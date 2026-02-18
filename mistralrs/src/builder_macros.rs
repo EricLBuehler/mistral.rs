@@ -146,7 +146,7 @@ macro_rules! common_builder_methods {
         /// the configuration is silently ignored.
         ///
         /// Configure with a [`PagedAttentionConfig`] object, which can be created with
-        /// sensible defaults via [`PagedAttentionMetaBuilder`]:
+        /// sensible defaults via [`crate::PagedAttentionMetaBuilder`]:
         ///
         /// ```no_run
         /// # use mistralrs::*;

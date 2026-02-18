@@ -72,6 +72,7 @@ pub struct Stream<'a> {
 }
 
 impl Stream<'_> {
+    /// Receive the next response chunk, or `None` when the stream is exhausted.
     pub async fn next(&mut self) -> Option<Response> {
         self.rx.recv().await
     }
