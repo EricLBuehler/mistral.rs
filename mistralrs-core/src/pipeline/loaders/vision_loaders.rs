@@ -67,6 +67,8 @@ use crate::vision_models::qwen3_vl::{Config as Qwen3VLConfig, Qwen3VLModel, Qwen
 use crate::vision_models::qwen3_vl_moe::{
     Config as Qwen3VLMoEConfig, Qwen3VLMoEModel, Qwen3VLMoEProcessor,
 };
+use crate::vision_models::voxtral::config::VoxtralConfig;
+use crate::vision_models::voxtral::{VoxtralModel, VoxtralProcessor};
 use crate::vision_models::{minicpmo, phi4};
 
 pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
@@ -120,6 +122,19 @@ pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
     }
     fn modalities(&self, config: &str) -> Result<Modalities>;
     fn prefixer(&self, config: &str) -> Arc<dyn MultimodalPromptPrefixer>;
+    /// Return a default chat template (Jinja string) for models that don't ship a
+    /// `tokenizer_config.json` or `chat_template.jinja`. Returns `None` by default.
+    /// The `config` parameter is the raw model config JSON, used by `AutoVisionLoader`
+    /// to delegate to the correct concrete loader.
+    fn default_chat_template(&self, _config: &str) -> Option<String> {
+        None
+    }
+    /// Return default (bos_token, eos_token) strings for models that don't ship a
+    /// `tokenizer_config.json`. Used to populate the chat template context and
+    /// EOS token detection. Returns `None` by default.
+    fn default_bos_eos(&self, _config: &str) -> Option<(String, String)> {
+        None
+    }
     fn get_device_for_tensor(
         &self,
         config: &str,
@@ -185,6 +200,8 @@ pub enum VisionLoaderType {
     Qwen3VL,
     #[serde(rename = "qwen3vlmoe")]
     Qwen3VLMoE,
+    #[serde(rename = "voxtral")]
+    Voxtral,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -207,6 +224,8 @@ impl VisionLoaderType {
             "Gemma3nForConditionalGeneration" => Ok(Self::Gemma3n),
             "Qwen3VLForConditionalGeneration" => Ok(Self::Qwen3VL),
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
+            "VoxtralForConditionalGeneration"
+            | "VoxtralRealtimeForConditionalGeneration" => Ok(Self::Voxtral),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
@@ -234,7 +253,8 @@ impl FromStr for VisionLoaderType {
             "gemma3n" => Ok(Self::Gemma3n),
             "qwen3vl" => Ok(Self::Qwen3VL),
             "qwen3vlmoe" => Ok(Self::Qwen3VLMoE),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `qwen3vl`, `qwen3vlmoe`.")),
+            "voxtral" => Ok(Self::Voxtral),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `qwen3vl`, `qwen3vlmoe`, `voxtral`.")),
         }
     }
 }
@@ -258,6 +278,7 @@ impl std::fmt::Display for VisionLoaderType {
             VisionLoaderType::Gemma3n => "gemma3n",
             VisionLoaderType::Qwen3VL => "qwen3vl",
             VisionLoaderType::Qwen3VLMoE => "qwen3vlmoe",
+            VisionLoaderType::Voxtral => "voxtral",
         };
         write!(f, "{name}")
     }
@@ -265,7 +286,11 @@ impl std::fmt::Display for VisionLoaderType {
 
 #[derive(Deserialize)]
 struct AutoVisionLoaderConfig {
+    #[serde(default)]
     architectures: Vec<String>,
+    /// Voxtral params.json uses a `multimodal` key instead of `architectures`.
+    #[serde(default)]
+    multimodal: Option<serde_json::Value>,
 }
 
 /// Automatically selects a VisionModelLoader implementation based on the JSON `architectures` field.
@@ -274,6 +299,13 @@ pub struct AutoVisionLoader;
 impl AutoVisionLoader {
     fn get_loader(config: &str) -> Result<Box<dyn VisionModelLoader>> {
         let auto_cfg: AutoVisionLoaderConfig = serde_json::from_str(config)?;
+
+        // Voxtral: params.json has `multimodal` but no `architectures`
+        if auto_cfg.multimodal.is_some() && auto_cfg.architectures.is_empty() {
+            once_log_info("Automatic loader type determined to be `voxtral`");
+            return Ok(Box::new(VoxtralLoader));
+        }
+
         if auto_cfg.architectures.len() != 1 {
             anyhow::bail!("Expected exactly one architecture in config");
         }
@@ -301,6 +333,7 @@ impl AutoVisionLoader {
             VisionLoaderType::Gemma3n => Box::new(Gemma3nLoader),
             VisionLoaderType::Qwen3VL => Box::new(Qwen3VLLoader),
             VisionLoaderType::Qwen3VLMoE => Box::new(Qwen3VLMoELoader),
+            VisionLoaderType::Voxtral => Box::new(VoxtralLoader),
         })
     }
 }
@@ -358,6 +391,16 @@ impl VisionModelLoader for AutoVisionLoader {
         Self::get_loader(config)
             .expect("AutoVisionLoader")
             .prefixer(config)
+    }
+
+    fn default_chat_template(&self, config: &str) -> Option<String> {
+        Self::get_loader(config)
+            .ok()?
+            .default_chat_template(config)
+    }
+
+    fn default_bos_eos(&self, config: &str) -> Option<(String, String)> {
+        Self::get_loader(config).ok()?.default_bos_eos(config)
     }
 
     fn get_device_for_tensor(
@@ -6224,5 +6267,239 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
         Some(vec![NonMappedSubModel::Vision])
+    }
+}
+
+// ─── Voxtral ────────────────────────────────────────────────────────────────
+
+/// [`VisionLoader`] for a Voxtral model.
+///
+/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+pub struct VoxtralLoader;
+
+pub struct VoxtralPrefixer;
+
+impl MultimodalPromptPrefixer for VoxtralPrefixer {
+    fn prefix_image(&self, _image_indexes: Vec<usize>, prompt: &str) -> String {
+        prompt.to_string()
+    }
+}
+
+impl VisionModelLoader for VoxtralLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        let cfg: VoxtralConfig = serde_json::from_str(config)?;
+        Ok(Box::new(VoxtralModel::new(
+            &cfg,
+            vb,
+            self.is_gptx(config),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self, _config: &str) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: VoxtralConfig = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
+    }
+    fn get_processor(
+        &self,
+        model_config: &str,
+        _processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        let cfg: VoxtralConfig =
+            serde_json::from_str(model_config).expect("Failed to parse VoxtralConfig");
+        Arc::new(VoxtralProcessor::new(&cfg))
+    }
+    fn supports_paged_attention(&self, _config: &str) -> bool {
+        false
+    }
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
+        false
+    }
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
+        Arc::new(VoxtralPrefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Audio],
+            output: vec![SupportedModality::Text],
+        })
+    }
+    fn default_chat_template(&self, _config: &str) -> Option<String> {
+        // Mistral v7 instruct format using [INST]/[/INST] tokens
+        Some("{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token + ' ' }}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}".to_string())
+    }
+    fn default_bos_eos(&self, _config: &str) -> Option<(String, String)> {
+        // Mistral tekken tokenizer: <s> = ID 1, </s> = ID 2
+        Some(("<s>".to_string(), "</s>".to_string()))
+    }
+}
+
+impl IsqModelLoader for VoxtralLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            // Output / lm_head (tied with tok_embeddings)
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Decoder attention (Mistral-native naming)
+            Regex::new(r"layers\.(\d+)\.attention\.wq\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.attention\.wk\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.attention\.wv\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.attention\.wo\.(weight|bias)$")?,
+            // Decoder MLP (Mistral-native naming)
+            Regex::new(r"layers\.(\d+)\.feed_forward\.w1\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.w3\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.w2\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"tok_embeddings\.(weight|bias)$")?,
+            // Decoder attention
+            Regex::new(r"layers\.(\d+)\.attention\.wq\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.attention\.wk\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.attention\.wv\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.attention\.wo\.(weight|bias)$")?,
+            // Decoder MLP
+            Regex::new(r"layers\.(\d+)\.feed_forward\.w1\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.w3\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.w2\.(weight|bias)$")?,
+        ])
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+impl DeviceMappedModelLoader for VoxtralLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Vision {
+            max_seq_len,
+            max_batch_size,
+            ..
+        } = params
+        else {
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: VoxtralConfig = serde_json::from_str(config)?;
+
+        // Audio tokens are prepended: max audio len + text seq len
+        // Audio: ~30s at 16kHz = 480k samples, /160 hop = 3000 frames, /2 conv stride = 1500, /4 adapter = 375 tokens
+        let max_audio_tokens = 375;
+        let total_seq = max_audio_tokens + *max_seq_len.min(&ATTENTION_CHUNK_SIZE);
+        Ok(max_batch_size * cfg.n_heads * total_seq * total_seq)
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Vision { max_batch_size, .. } = params else {
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: VoxtralConfig = serde_json::from_str(config)?;
+        let enc = &cfg.multimodal.whisper_model_args.encoder_args;
+        // Encoder max activation: attention matrix
+        // ~3000 mel frames, encoder has 32 heads, seq_len^2
+        let max_enc_seq = 3000usize;
+        Ok(max_batch_size * enc.n_heads * max_enc_seq * max_enc_seq)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        _weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: VoxtralConfig = serde_json::from_str(config)?;
+        let enc = &cfg.multimodal.whisper_model_args.encoder_args;
+        let ds = &cfg.multimodal.whisper_model_args.downsample_args;
+
+        let elem = dtype.size_in_bytes();
+
+        // Encoder conv layers
+        let conv1 = enc.dim * enc.audio_encoding_args.num_mel_bins * 3 + enc.dim; // weight + bias
+        let conv2 = enc.dim * enc.dim * 3 + enc.dim;
+
+        // Encoder layers
+        let enc_attn_per_layer = 4 * enc.dim * enc.dim; // wq, wk, wv, wo (full heads)
+        let enc_mlp_per_layer = 3 * enc.dim * enc.hidden_dim; // w1, w2, w3
+        let enc_norm_per_layer = 2 * enc.dim; // attention_norm, ffn_norm
+        let enc_layers =
+            enc.n_layers * (enc_attn_per_layer + enc_mlp_per_layer + enc_norm_per_layer);
+        let enc_final_norm = enc.dim;
+
+        // Adapter
+        let adapter_in_features = enc.dim * ds.downsample_factor;
+        let adapter = adapter_in_features * cfg.dim + cfg.dim + cfg.dim * cfg.dim + cfg.dim;
+
+        let total_encoder = conv1 + conv2 + enc_layers + enc_final_norm + adapter;
+
+        // Decoder embeddings
+        let embeddings = cfg.vocab_size * cfg.dim;
+
+        Ok((total_encoder + embeddings) * elem)
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: VoxtralConfig = serde_json::from_str(config)?;
+        let elem = dtype.size_in_bytes();
+
+        let attn = (cfg.dim * cfg.n_heads * cfg.head_dim
+            + cfg.dim * cfg.n_kv_heads * cfg.head_dim
+            + cfg.dim * cfg.n_kv_heads * cfg.head_dim
+            + cfg.n_heads * cfg.head_dim * cfg.dim)
+            / weight_pack_factor;
+        let mlp = (cfg.dim * cfg.hidden_dim + cfg.hidden_dim * cfg.dim + cfg.dim * cfg.hidden_dim)
+            / weight_pack_factor;
+        let norms = 2 * cfg.dim; // attention_norm + ffn_norm
+
+        let per_layer = (attn + mlp + norms) * elem;
+
+        Ok(vec![per_layer; cfg.n_layers])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: VoxtralConfig = serde_json::from_str(config)?;
+        Ok(cfg.n_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: VoxtralConfig = serde_json::from_str(config)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.model_max_length,
+            num_layers: cfg.n_layers,
+            hidden_size: cfg.dim,
+            num_kv_heads: cfg.n_kv_heads,
+            num_attn_heads: cfg.n_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: cfg.head_dim,
+            v_head_dim: cfg.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+
+        Ok(Box::new(cfg))
     }
 }

@@ -47,6 +47,7 @@ Complete reference for model support in mistral.rs.
 
 ### Speech Models
 
+- Voxtral (ASR/speech-to-text)
 - Dia
 
 ### Image Generation Models
@@ -108,6 +109,7 @@ Complete reference for model support in mistral.rs.
 |Qwen 3|✅| |✅|
 |SmolLM3| | |✅|
 |Dia 1.6b| | |✅|
+|Voxtral| | |✅|
 |Gemma 3n| | |✅|
 |Qwen 3 VL| | |✅|
 |Granite 4.0| | |✅|
@@ -155,6 +157,7 @@ Complete reference for model support in mistral.rs.
 |Qwen 3| | | |
 |SmolLM3|✅| | |
 |Gemma 3n| | | |
+|Voxtral| | | |
 |Qwen 3 VL| | | |
 |Granite 4.0| | | |
 |GPT-OSS| | | |
@@ -192,6 +195,7 @@ Complete reference for model support in mistral.rs.
 |Qwen 3| |
 |SmolLM3|✅|
 |Gemma 3n| |
+|Voxtral| |
 |Qwen 3 VL| |
 |Granite 4.0| |
 |GPT-OSS| |

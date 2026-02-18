@@ -136,7 +136,6 @@ impl Engine {
             RequestMessage::VisionChat { ref audios, .. } => Some(audios.clone()),
             _ => None,
         };
-
         let matcher = Arc::new(handle_seq_error!(
             ToolCallingMatcher::new(request.tool_choice.unwrap_or(ToolChoice::Auto),),
             request.response
