@@ -79,6 +79,7 @@ as-any.workspace = true
 float8.workspace = true
 llguidance.workspace = true
 toktrie_hf_tokenizers.workspace = true
+toktrie.workspace = true
 candle-flash-attn-v3 = { workspace = true, optional = true }
 safetensors.workspace = true
 serde-big-array.workspace = true

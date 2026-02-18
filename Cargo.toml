@@ -139,6 +139,7 @@ serde_plain = "1.0.2"
 as-any = "0.3.2"
 llguidance = { version = "1.2.0", default-features = false, features = ["lark"] }
 toktrie_hf_tokenizers = "1.2.0"
+toktrie = "1.4.0"
 objc = { version = "0.2.7" }
 serde-big-array = "0.5.1"
 interprocess = "2.2.3"

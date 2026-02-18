@@ -136,6 +136,7 @@ impl Engine {
             RequestMessage::VisionChat { ref audios, .. } => Some(audios.clone()),
             _ => None,
         };
+        let has_tools = request.tools.as_ref().is_some_and(|t| !t.is_empty());
         let matcher = Arc::new(handle_seq_error!(
             ToolCallingMatcher::new(request.tool_choice.unwrap_or(ToolChoice::Auto),),
             request.response
@@ -544,7 +545,7 @@ impl Engine {
                 images.clone(),
                 audios.clone(),
                 block_size,
-                Some(matcher.clone()),
+                if has_tools { Some(matcher.clone()) } else { None },
                 image_generation_format,
                 seq_step_type,
                 diffusion_params.clone(),
