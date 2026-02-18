@@ -142,7 +142,7 @@ where
             let _ = socket
                 .send(Message::Text(format!("Error: {e}").into()))
                 .await;
-            Err(e)
+            Err(e.into())
         }
     }
 }
