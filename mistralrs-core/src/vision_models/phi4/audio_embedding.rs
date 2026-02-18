@@ -144,7 +144,7 @@ impl AudioEmbedding {
 
         let audio_set_tensor = if positions.dim(0)? > 0 {
             // Convert to target device/dtype if needed
-            let input_embeds = if input_embeds.device().same_device(&target_device)
+            let input_embeds = if !input_embeds.device().same_device(&target_device)
                 || input_embeds.dtype() != target_dtype
             {
                 input_embeds

@@ -269,6 +269,10 @@ mod tests {
     #[cfg(not(feature = "audio"))]
     use super::AutoVisionLoader;
     use super::VisionLoaderType;
+    #[cfg(not(feature = "audio"))]
+    use crate::vision_models::preprocessor_config::PreProcessorConfig;
+    #[cfg(not(feature = "audio"))]
+    use crate::vision_models::processor_config::ProcessorConfig;
 
     #[test]
     fn phi4mm_arch_string_parses() {
@@ -307,6 +311,48 @@ mod tests {
     fn gemma3n_loader_selects_without_audio_feature() {
         AutoVisionLoader::get_loader(r#"{"architectures":["Gemma3nForConditionalGeneration"]}"#)
             .expect("gemma3n loader should be selectable without audio feature");
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn phi4mm_no_audio_smoke_paths() {
+        let config = r#"{"architectures":["Phi4MMForCausalLM"]}"#;
+        let loader = AutoVisionLoader::get_loader(config)
+            .expect("phi4mm loader should be selectable without audio feature");
+
+        loader
+            .modalities(config)
+            .expect("phi4mm modalities should be available without audio feature");
+        let preproc_cfg = PreProcessorConfig {
+            audio_compression_rate: Some(8),
+            audio_downsample_rate: Some(8),
+            audio_feat_stride: Some(2),
+            ..Default::default()
+        };
+        let _ = loader.get_processor(
+            config,
+            Some(ProcessorConfig::default()),
+            preproc_cfg,
+            None,
+        );
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn gemma3n_no_audio_smoke_paths() {
+        let config = r#"{"architectures":["Gemma3nForConditionalGeneration"]}"#;
+        let loader = AutoVisionLoader::get_loader(config)
+            .expect("gemma3n loader should be selectable without audio feature");
+
+        loader
+            .modalities(config)
+            .expect("gemma3n modalities should be available without audio feature");
+        let _ = loader.get_processor(
+            config,
+            Some(ProcessorConfig::default()),
+            PreProcessorConfig::default(),
+            None,
+        );
     }
 }
 
