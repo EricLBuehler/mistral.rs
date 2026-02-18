@@ -41,8 +41,8 @@ name = "simple"
 path = "examples/getting_started/simple/main.rs"
 
 [[example]]
-name = "simple_stream"
-path = "examples/getting_started/simple_stream/main.rs"
+name = "streaming"
+path = "examples/getting_started/streaming/main.rs"
 
 [[example]]
 name = "vision"
@@ -59,10 +59,6 @@ path = "examples/getting_started/gguf_locally/main.rs"
 [[example]]
 name = "embedding"
 path = "examples/getting_started/embedding/main.rs"
-
-[[example]]
-name = "async"
-path = "examples/getting_started/async/main.rs"
 
 # ========== Models ==========
 
@@ -139,12 +135,12 @@ name = "web_search"
 path = "examples/advanced/web_search/main.rs"
 
 [[example]]
-name = "custom_search"
-path = "examples/advanced/custom_search/main.rs"
+name = "search_callback"
+path = "examples/advanced/search_callback/main.rs"
 
 [[example]]
-name = "custom_tool_call"
-path = "examples/advanced/custom_tool_call/main.rs"
+name = "tool_callback"
+path = "examples/advanced/tool_callback/main.rs"
 
 [[example]]
 name = "mcp_client"
@@ -163,12 +159,12 @@ name = "llguidance"
 path = "examples/advanced/llguidance/main.rs"
 
 [[example]]
-name = "custom_logits_processor"
-path = "examples/advanced/custom_logits_processor/main.rs"
+name = "logits_processor"
+path = "examples/advanced/logits_processor/main.rs"
 
 [[example]]
-name = "custom_logging"
-path = "examples/advanced/custom_logging/main.rs"
+name = "file_logging"
+path = "examples/advanced/file_logging/main.rs"
 
 [[example]]
 name = "batching"
