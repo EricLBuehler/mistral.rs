@@ -43,8 +43,6 @@ impl VoxtralProcessor {
     }
 }
 
-/// [STREAMING_WORD] token ID (rank 33 in tekken special tokens).
-const STREAMING_WORD_TOKEN_ID: u32 = 33;
 /// Audio output tokens per mel frame: conv stride (2) × adapter downsample (4).
 const AUDIO_LENGTH_PER_TOK: usize = 8;
 /// Number of right-pad silence tokens added to audio (from audio_processing.rs).
@@ -64,10 +62,6 @@ impl Processor for VoxtralProcessor {
 
     fn template_action(&self) -> MessagesAction {
         MessagesAction::FlattenOnlyText
-    }
-
-    fn suppress_completion_token_ids(&self) -> Vec<u32> {
-        vec![STREAMING_PAD_TOKEN_ID, STREAMING_WORD_TOKEN_ID]
     }
 }
 

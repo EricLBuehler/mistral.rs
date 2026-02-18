@@ -398,7 +398,6 @@ impl Loader for GGMLLoader {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Text],
                 },
-                suppress_completion_token_ids: Vec::new(),
             }),
         })))
     }

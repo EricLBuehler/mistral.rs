@@ -1008,7 +1008,6 @@ impl Loader for NormalLoader {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Text],
                 },
-                suppress_completion_token_ids: Vec::new(),
             }),
             topology: self.config.topology.clone(),
             silent,

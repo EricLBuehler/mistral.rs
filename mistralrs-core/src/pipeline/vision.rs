@@ -884,7 +884,6 @@ impl Loader for VisionLoader {
                 cache_engine,
                 model_metadata: Some(model_metadata),
                 modalities: self.inner.modalities(&config)?,
-                suppress_completion_token_ids: processor.suppress_completion_token_ids(),
             }),
             processor,
             prefixer: self.inner.prefixer(&config),

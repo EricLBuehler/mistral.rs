@@ -637,7 +637,6 @@ impl Loader for EmbeddingLoader {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Embedding],
                 },
-                suppress_completion_token_ids: Vec::new(),
             }),
             topology: self.config.topology.clone(),
             silent,
