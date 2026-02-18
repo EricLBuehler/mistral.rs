@@ -164,7 +164,7 @@ impl EmbeddingModelBuilder {
     }
 
     #[deprecated(
-        note = "Use `UqffTextModelBuilder` to load a UQFF model instead of the generic `from_uqff`"
+        note = "Use `UqffEmbeddingModelBuilder` to load a UQFF model instead of the generic `from_uqff`"
     )]
     /// Path to read a `.uqff` file from. Other necessary configuration files must be present at this location.
     ///

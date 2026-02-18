@@ -28,31 +28,44 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
     }
 }
 
-/// The object used to interact with the model. This can be used with many varietes of models, \
+/// The object used to interact with the model. This can be used with many varieties of models, \
 /// and as such may be created with one of:
+/// - [`ModelBuilder`] (auto-detecting)
 /// - [`TextModelBuilder`]
+/// - [`VisionModelBuilder`]
+/// - [`GgufModelBuilder`]
+/// - [`EmbeddingModelBuilder`]
+/// - [`DiffusionModelBuilder`]
+/// - [`SpeechModelBuilder`]
 /// - [`LoraModelBuilder`]
 /// - [`XLoraModelBuilder`]
-/// - [`GgufModelBuilder`]
 /// - [`GgufLoraModelBuilder`]
 /// - [`GgufXLoraModelBuilder`]
-/// - [`VisionModelBuilder`]
 /// - [`AnyMoeModelBuilder`]
+/// - [`TextSpeculativeBuilder`]
 ///
+/// [`ModelBuilder`]: crate::ModelBuilder
 /// [`TextModelBuilder`]: crate::TextModelBuilder
+/// [`VisionModelBuilder`]: crate::VisionModelBuilder
+/// [`GgufModelBuilder`]: crate::GgufModelBuilder
+/// [`EmbeddingModelBuilder`]: crate::EmbeddingModelBuilder
+/// [`DiffusionModelBuilder`]: crate::DiffusionModelBuilder
+/// [`SpeechModelBuilder`]: crate::SpeechModelBuilder
 /// [`LoraModelBuilder`]: crate::LoraModelBuilder
 /// [`XLoraModelBuilder`]: crate::XLoraModelBuilder
-/// [`GgufModelBuilder`]: crate::GgufModelBuilder
-/// [`GgufModelBuilder`]: crate::GgufModelBuilder
 /// [`GgufLoraModelBuilder`]: crate::GgufLoraModelBuilder
 /// [`GgufXLoraModelBuilder`]: crate::GgufXLoraModelBuilder
-/// [`VisionModelBuilder`]: crate::VisionModelBuilder
 /// [`AnyMoeModelBuilder`]: crate::AnyMoeModelBuilder
+/// [`TextSpeculativeBuilder`]: crate::TextSpeculativeBuilder
 ///
 pub struct Model {
     pub(crate) runner: Arc<MistralRs>,
 }
 
+/// Token-by-token stream returned by [`Model::stream_chat_request`].
+///
+/// Implements [`futures::Stream`], so you can use `StreamExt` combinators
+/// (e.g., `stream.next().await`).
 pub struct Stream<'a> {
     _server: &'a Model,
     rx: Receiver<Response>,
@@ -78,6 +91,8 @@ impl futures::Stream for Stream<'_> {
 }
 
 impl Model {
+    /// Wrap an existing [`MistralRs`] engine instance.
+    /// Prefer using a builder (e.g., [`ModelBuilder`](crate::ModelBuilder)) instead.
     pub fn new(runner: Arc<MistralRs>) -> Self {
         Self { runner }
     }

@@ -1,13 +1,15 @@
-// Example demonstrating MCP (Model Context Protocol) client usage with mistral.rs
-//
-// This example shows how to:
-// - Configure MCP servers with different transport protocols (HTTP, WebSocket, Process)
-// - Set up Bearer token authentication for secure connections
-// - Use automatic tool discovery and registration
-// - Integrate MCP tools with model tool calling
-//
-// The MCP client automatically discovers tools from connected servers and makes them
-// available for the model to use during conversations.
+//! MCP (Model Context Protocol) client usage with mistral.rs.
+//!
+//! This example shows how to:
+//! - Configure MCP servers with different transport protocols (HTTP, WebSocket, Process)
+//! - Set up Bearer token authentication for secure connections
+//! - Use automatic tool discovery and registration
+//! - Integrate MCP tools with model tool calling
+//!
+//! The MCP client automatically discovers tools from connected servers and makes them
+//! available for the model to use during conversations.
+//!
+//! Run with: `cargo run --release --example mcp_client -p mistralrs`
 
 use anyhow::Result;
 use mistralrs::{

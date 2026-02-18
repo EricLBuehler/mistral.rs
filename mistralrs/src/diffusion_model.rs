@@ -3,7 +3,7 @@ use mistralrs_core::*;
 use crate::model_builder_trait::{build_diffusion_pipeline, build_model_from_pipeline};
 use crate::Model;
 
-/// Configure a text model with the various parameters for loading, running, and other inference behaviors.
+/// Configure a diffusion model (image generation) with the various parameters for loading, running, and other inference behaviors.
 pub struct DiffusionModelBuilder {
     // Loading model
     pub(crate) model_id: String,

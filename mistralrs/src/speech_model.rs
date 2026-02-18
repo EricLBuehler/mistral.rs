@@ -3,7 +3,7 @@ use mistralrs_core::*;
 use crate::model_builder_trait::{build_model_from_pipeline, build_speech_pipeline};
 use crate::Model;
 
-/// Configure a text model with the various parameters for loading, running, and other inference behaviors.
+/// Configure a speech model (text-to-speech) with the various parameters for loading, running, and other inference behaviors.
 pub struct SpeechModelBuilder {
     // Loading model
     pub(crate) model_id: String,

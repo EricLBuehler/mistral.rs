@@ -70,6 +70,7 @@ impl Default for TextMessages {
 }
 
 impl TextMessages {
+    /// Create an empty text message list.
     pub fn new() -> Self {
         Self {
             messages: Vec::new(),
@@ -77,6 +78,7 @@ impl TextMessages {
         }
     }
 
+    /// Append a message with the given role and text content.
     pub fn add_message(mut self, role: TextMessageRole, text: impl ToString) -> Self {
         self.messages.push(IndexMap::from([
             ("role".to_string(), Either::Left(role.to_string())),
@@ -85,11 +87,13 @@ impl TextMessages {
         self
     }
 
+    /// Remove all messages.
     pub fn clear(mut self) -> Self {
         self.messages.clear();
         self
     }
 
+    /// Enable extended thinking (chain-of-thought) for models that support it.
     pub fn enable_thinking(mut self, enable_thinking: bool) -> Self {
         self.enable_thinking = Some(enable_thinking);
         self
@@ -158,6 +162,7 @@ impl Default for VisionMessages {
 }
 
 impl VisionMessages {
+    /// Create an empty vision message list.
     pub fn new() -> Self {
         Self {
             images: Vec::new(),
@@ -167,6 +172,7 @@ impl VisionMessages {
         }
     }
 
+    /// Append a text-only message with the given role and content.
     pub fn add_message(mut self, role: TextMessageRole, text: impl ToString) -> Self {
         self.messages.push(IndexMap::from([
             ("role".to_string(), Either::Left(role.to_string())),
@@ -175,6 +181,7 @@ impl VisionMessages {
         self
     }
 
+    /// Append a message containing an image. The image is a `DynamicImage` from the `image` crate.
     pub fn add_image_message(
         self,
         role: TextMessageRole,
@@ -185,6 +192,7 @@ impl VisionMessages {
         self.add_multimodal_message(role, text, images, vec![], model)
     }
 
+    /// Append a message containing audio input.
     pub fn add_audio_message(
         self,
         role: TextMessageRole,
@@ -195,6 +203,7 @@ impl VisionMessages {
         self.add_multimodal_message(role, text, vec![], audios, model)
     }
 
+    /// Append a message containing a mix of text, images, and/or audio.
     pub fn add_multimodal_message(
         mut self,
         role: TextMessageRole,
@@ -265,6 +274,7 @@ impl VisionMessages {
         Ok(self)
     }
 
+    /// Remove all messages, images, and audio.
     pub fn clear(mut self) -> Self {
         self.messages.clear();
         self.images.clear();
@@ -273,6 +283,7 @@ impl VisionMessages {
         self
     }
 
+    /// Enable extended thinking (chain-of-thought) for models that support it.
     pub fn enable_thinking(mut self, enable_thinking: bool) -> Self {
         self.enable_thinking = Some(enable_thinking);
         self
@@ -418,6 +429,7 @@ impl RequestBuilder {
         }
     }
 
+    /// Enable web search with the given options.
     pub fn with_web_search_options(mut self, web_search_options: WebSearchOptions) -> Self {
         self.web_search_options = Some(web_search_options);
         self
@@ -454,6 +466,7 @@ impl RequestBuilder {
         self
     }
 
+    /// Append an assistant message that includes tool call results.
     pub fn add_message_with_tool_call(
         mut self,
         role: TextMessageRole,
@@ -484,6 +497,7 @@ impl RequestBuilder {
         self
     }
 
+    /// Append a message containing an image.
     pub fn add_image_message(
         self,
         role: TextMessageRole,
@@ -494,6 +508,7 @@ impl RequestBuilder {
         self.add_multimodal_message(role, text, images, vec![], model)
     }
 
+    /// Append a message containing audio input.
     pub fn add_audio_message(
         self,
         role: TextMessageRole,
@@ -504,6 +519,7 @@ impl RequestBuilder {
         self.add_multimodal_message(role, text, vec![], audios, model)
     }
 
+    /// Append a message containing a mix of text, images, and/or audio.
     /// By convention, all images are added before all audios.
     pub fn add_multimodal_message(
         mut self,
@@ -575,11 +591,13 @@ impl RequestBuilder {
         Ok(self)
     }
 
+    /// Add a custom logits processor applied during token sampling.
     pub fn add_logits_processor(mut self, processor: Arc<dyn CustomLogitsProcessor>) -> Self {
         self.logits_processors.push(processor);
         self
     }
 
+    /// Activate the given LoRA/X-LoRA adapter layers by name.
     pub fn set_adapters(mut self, adapters: Vec<String>) -> Self {
         self.adapters = adapters;
         self
@@ -591,16 +609,19 @@ impl RequestBuilder {
         self
     }
 
+    /// Control how the model selects tools (auto, required, none, or a specific tool).
     pub fn set_tool_choice(mut self, tool_choice: ToolChoice) -> Self {
         self.tool_choice = tool_choice;
         self
     }
 
+    /// Request log-probabilities for each generated token.
     pub fn return_logprobs(mut self, return_logprobs: bool) -> Self {
         self.return_logprobs = return_logprobs;
         self
     }
 
+    /// Apply a generation constraint (regex, JSON schema, or grammar).
     pub fn set_constraint(mut self, constraint: Constraint) -> Self {
         self.constraint = constraint;
         self
@@ -622,66 +643,79 @@ impl RequestBuilder {
         self
     }
 
+    /// Set the sampling temperature. Higher values increase randomness.
     pub fn set_sampler_temperature(mut self, temperature: f64) -> Self {
         self.sampling_params.temperature = Some(temperature);
         self
     }
 
+    /// Limit sampling to the top-k most probable tokens.
     pub fn set_sampler_topk(mut self, topk: usize) -> Self {
         self.sampling_params.top_k = Some(topk);
         self
     }
 
+    /// Nucleus sampling: only consider tokens whose cumulative probability exceeds this threshold.
     pub fn set_sampler_topp(mut self, topp: f64) -> Self {
         self.sampling_params.top_p = Some(topp);
         self
     }
 
+    /// Min-p sampling: filter tokens below this fraction of the top token's probability.
     pub fn set_sampler_minp(mut self, minp: f64) -> Self {
         self.sampling_params.min_p = Some(minp);
         self
     }
 
+    /// Return the top-n log-probabilities per token position.
     pub fn set_sampler_topn_logprobs(mut self, top_n_logprobs: usize) -> Self {
         self.sampling_params.top_n_logprobs = top_n_logprobs;
         self
     }
 
+    /// Penalize tokens proportionally to how often they have appeared so far.
     pub fn set_sampler_frequency_penalty(mut self, frequency_penalty: f32) -> Self {
         self.sampling_params.frequency_penalty = Some(frequency_penalty);
         self
     }
 
+    /// Penalize tokens that have appeared at all, regardless of frequency.
     pub fn set_sampler_presence_penalty(mut self, presence_penalty: f32) -> Self {
         self.sampling_params.presence_penalty = Some(presence_penalty);
         self
     }
 
+    /// Set stop tokens that terminate generation when produced.
     pub fn set_sampler_stop_toks(mut self, stop_toks: StopTokens) -> Self {
         self.sampling_params.stop_toks = Some(stop_toks);
         self
     }
 
+    /// Set the maximum number of tokens to generate.
     pub fn set_sampler_max_len(mut self, max_len: usize) -> Self {
         self.sampling_params.max_len = Some(max_len);
         self
     }
 
+    /// Apply a bias to specific token IDs during sampling.
     pub fn set_sampler_logits_bias(mut self, logits_bias: HashMap<u32, f32>) -> Self {
         self.sampling_params.logits_bias = Some(logits_bias);
         self
     }
 
+    /// Generate multiple independent completions for the same prompt.
     pub fn set_sampler_n_choices(mut self, n_choices: usize) -> Self {
         self.sampling_params.n_choices = n_choices;
         self
     }
 
+    /// Configure DRY (Don't Repeat Yourself) sampling parameters.
     pub fn set_sampler_dry_params(mut self, dry_params: DrySamplingParams) -> Self {
         self.sampling_params.dry_params = Some(dry_params);
         self
     }
 
+    /// Enable extended thinking (chain-of-thought) for models that support it.
     pub fn enable_thinking(mut self, enable_thinking: bool) -> Self {
         self.enable_thinking = Some(enable_thinking);
         self

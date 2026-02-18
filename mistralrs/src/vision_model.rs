@@ -109,7 +109,7 @@ impl VisionModelBuilder {
     }
 
     #[deprecated(
-        note = "Use `UqffTextModelBuilder` to load a UQFF model instead of the generic `from_uqff`"
+        note = "Use `UqffVisionModelBuilder` to load a UQFF model instead of the generic `from_uqff`"
     )]
     /// Path to read a `.uqff` file from. Other necessary configuration files must be present at this location.
     ///
@@ -137,7 +137,7 @@ impl VisionModelBuilder {
 }
 
 #[derive(Clone)]
-/// Configure a UQFF text model with the various parameters for loading, running, and other inference behaviors.
+/// Configure a UQFF vision model with the various parameters for loading, running, and other inference behaviors.
 /// This wraps and implements `DerefMut` for the VisionModelBuilder, so users should take care to not call UQFF-related methods.
 pub struct UqffVisionModelBuilder(VisionModelBuilder);
 

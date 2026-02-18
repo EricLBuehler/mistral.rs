@@ -130,7 +130,7 @@
 //!
 //! ```no_run
 //! use mistralrs::blocking::BlockingModel;
-//! use mistralrs::ModelBuilder;
+//! use mistralrs::{IsqBits, ModelBuilder};
 //!
 //! fn main() -> mistralrs::error::Result<()> {
 //!     let model = BlockingModel::from_builder(
@@ -318,6 +318,9 @@ pub use mistralrs_core::{AutoDeviceMapParams, DeviceMapSetting};
 
 // ========== Topology ==========
 pub use mistralrs_core::{LayerTopology, Topology};
+
+// ========== Loader Types ==========
+pub use mistralrs_core::{NormalLoaderType, VisionLoaderType};
 
 // ========== Token Source ==========
 pub use mistralrs_core::TokenSource;
