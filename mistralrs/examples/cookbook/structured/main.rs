@@ -5,7 +5,7 @@
 ///
 /// Run with: `cargo run --release --example cookbook_structured -p mistralrs`
 use anyhow::Result;
-use mistralrs::{IsqBits, TextMessageRole, TextMessages, TextModelBuilder};
+use mistralrs::{IsqBits, TextMessageRole, TextMessages, ModelBuilder};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -35,7 +35,7 @@ struct Invoice {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+    let model = ModelBuilder::new("google/gemma-3-4b-it")
         .with_auto_isq(IsqBits::Four)
         .with_logging()
         .build()

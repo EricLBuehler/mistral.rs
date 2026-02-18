@@ -1,11 +1,11 @@
 use anyhow::Result;
 use mistralrs::{
-    IsqBits, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
+    IsqBits, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, ModelBuilder,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("meta-llama/Llama-3.2-3B-Instruct")
+    let model = ModelBuilder::new("google/gemma-3-4b-it")
         .with_auto_isq(IsqBits::Four)
         .with_calibration_file("calibration_data/calibration_datav3_small.txt".into())
         .with_logging()

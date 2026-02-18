@@ -6,11 +6,11 @@
 //! ## Quick Start
 //!
 //! ```no_run
-//! use mistralrs::{IsqBits, TextModelBuilder, TextMessages, TextMessageRole};
+//! use mistralrs::{IsqBits, ModelBuilder, TextMessages, TextMessageRole};
 //!
 //! #[tokio::main]
 //! async fn main() -> mistralrs::error::Result<()> {
-//!     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+//!     let model = ModelBuilder::new("Qwen/Qwen3-4B")
 //!         .with_auto_isq(IsqBits::Four)
 //!         .build()
 //!         .await?;
@@ -25,6 +25,7 @@
 //!
 //! | Capability | Builder | Example |
 //! |---|---|---|
+//! | Any model (auto-detect) | [`ModelBuilder`] | `examples/getting_started/text_generation/` |
 //! | Text generation | [`TextModelBuilder`] | `examples/getting_started/text_generation/` |
 //! | Vision (image+text) | [`VisionModelBuilder`] | `examples/getting_started/vision/` |
 //! | GGUF quantized models | [`GgufModelBuilder`] | `examples/getting_started/gguf/` |
@@ -46,7 +47,7 @@
 //! ```no_run
 //! # use mistralrs::*;
 //! # async fn example() -> error::Result<()> {
-//! let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+//! let model = ModelBuilder::new("Qwen/Qwen3-4B")
 //!     .with_auto_isq(IsqBits::Four)            // In-situ quantization (auto-selects best type)
 //!     .with_logging()                        // Enable logging
 //!     .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
@@ -118,11 +119,11 @@
 //!
 //! ```no_run
 //! use mistralrs::blocking::BlockingModel;
-//! use mistralrs::TextModelBuilder;
+//! use mistralrs::ModelBuilder;
 //!
 //! fn main() -> mistralrs::error::Result<()> {
 //!     let model = BlockingModel::from_builder(
-//!         TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+//!         ModelBuilder::new("Qwen/Qwen3-4B")
 //!             .with_auto_isq(IsqBits::Four),
 //!     )?;
 //!     let answer = model.chat("What is 2+2?")?;
@@ -151,7 +152,7 @@
 //!     max_concurrent_calls: Some(5),
 //! };
 //!
-//! let model = TextModelBuilder::new("path/to/model")
+//! let model = ModelBuilder::new("path/to/model")
 //!     .with_auto_isq(IsqBits::Eight)
 //!     .with_mcp_client(mcp_config)
 //!     .build()
@@ -178,7 +179,7 @@
 //! ## Architecture
 //!
 //! ```text
-//! TextModelBuilder / VisionModelBuilder / GgufModelBuilder / ...
+//! ModelBuilder / TextModelBuilder / VisionModelBuilder / GgufModelBuilder / ...
 //!     │
 //!     ▼
 //!   Model ──── send_chat_request() ──► Engine ──► Pipeline ──► Output
@@ -191,6 +192,7 @@
 
 mod agent;
 mod anymoe;
+mod auto_model;
 pub mod blocking;
 mod diffusion_model;
 mod embedding_model;
@@ -217,6 +219,7 @@ pub use agent::{
     AgentStream, AsyncToolCallback, ToolCallbackType, ToolResult,
 };
 pub use anymoe::AnyMoeModelBuilder;
+pub use auto_model::ModelBuilder;
 pub use diffusion_model::DiffusionModelBuilder;
 pub use embedding_model::{EmbeddingModelBuilder, UqffEmbeddingModelBuilder};
 pub use gguf::GgufModelBuilder;

@@ -14,7 +14,7 @@
 use anyhow::Result;
 use mistralrs::{
     tool, AgentBuilder, AgentEvent, AgentStopReason, IsqBits, PagedAttentionMetaBuilder,
-    TextModelBuilder,
+    ModelBuilder,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -96,7 +96,7 @@ async fn web_search(
 async fn main() -> Result<()> {
     // Build the model
     // Using a model that supports tool calling (e.g., Llama 3.1, Qwen, Mistral)
-    let model = TextModelBuilder::new("../hf_models/qwen3_4b")
+    let model = ModelBuilder::new("google/gemma-3-4b-it")
         .with_auto_isq(IsqBits::Four)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?

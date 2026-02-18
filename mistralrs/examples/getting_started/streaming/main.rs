@@ -1,13 +1,13 @@
 use anyhow::Result;
 use mistralrs::{
-    ChatCompletionChunkResponse, ChunkChoice, Delta, IsqBits, PagedAttentionMetaBuilder,
-    RequestBuilder, Response, TextMessageRole, TextMessages, TextModelBuilder,
+    ChatCompletionChunkResponse, ChunkChoice, Delta, IsqBits, ModelBuilder,
+    PagedAttentionMetaBuilder, RequestBuilder, Response, TextMessageRole, TextMessages,
 };
 use std::io::Write;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+    let model = ModelBuilder::new("google/gemma-3-4b-it")
         .with_auto_isq(IsqBits::Eight)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?

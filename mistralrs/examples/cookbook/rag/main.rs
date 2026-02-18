@@ -9,7 +9,7 @@
 use anyhow::Result;
 use mistralrs::{
     EmbeddingModelBuilder, EmbeddingRequest, IsqBits, TextMessageRole, TextMessages,
-    TextModelBuilder,
+    ModelBuilder,
 };
 
 /// Cosine similarity between two vectors.
@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
     );
 
     // ---- Step 4: Send context + query to a text model ----
-    let text_model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+    let text_model = ModelBuilder::new("Qwen/Qwen3-4B")
         .with_auto_isq(IsqBits::Four)
         .with_logging()
         .build()

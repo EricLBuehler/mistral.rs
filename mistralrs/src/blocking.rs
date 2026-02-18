@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use crate::error::Error as SdkError;
 use crate::model::Stream;
-use crate::{ChatCompletionResponse, Model, RequestLike, Response, TextModelBuilder};
+use crate::{ChatCompletionResponse, Model, ModelBuilder, RequestLike, Response, TextModelBuilder};
 
 /// A synchronous wrapper around [`Model`].
 ///
@@ -47,6 +47,24 @@ impl BlockingModel {
     /// This creates a dedicated tokio runtime for the model. Panics if called
     /// from within an existing tokio runtime.
     pub fn from_builder(builder: TextModelBuilder) -> crate::error::Result<Self> {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| SdkError::Inference(e.into()))?;
+        let inner = rt
+            .block_on(builder.build())
+            .map_err(|e| SdkError::ModelLoad(e.into()))?;
+        Ok(Self {
+            inner,
+            rt: Arc::new(rt),
+        })
+    }
+
+    /// Build a model from a [`ModelBuilder`] (auto-detecting) synchronously.
+    ///
+    /// This creates a dedicated tokio runtime for the model. Panics if called
+    /// from within an existing tokio runtime.
+    pub fn from_auto_builder(builder: ModelBuilder) -> crate::error::Result<Self> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()

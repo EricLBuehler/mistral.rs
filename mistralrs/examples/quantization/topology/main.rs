@@ -1,12 +1,12 @@
 use anyhow::Result;
 use mistralrs::{
     IsqBits, IsqType, LayerTopology, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
-    TextModelBuilder, Topology,
+    ModelBuilder, Topology,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+    let model = ModelBuilder::new("google/gemma-3-4b-it")
         .with_auto_isq(IsqBits::Eight)
         .with_topology(
             Topology::empty()

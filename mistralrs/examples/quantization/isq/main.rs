@@ -1,11 +1,11 @@
 use anyhow::Result;
 use mistralrs::{
-    IsqBits, IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
+    IsqBits, IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, ModelBuilder,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+    let model = ModelBuilder::new("Qwen/Qwen3-4B")
         .with_auto_isq(IsqBits::Eight)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?

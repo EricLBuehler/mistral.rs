@@ -1,6 +1,6 @@
 use anyhow::Result;
 use mistralrs::{
-    IsqBits, RequestBuilder, SearchResult, TextMessageRole, TextMessages, TextModelBuilder,
+    IsqBits, RequestBuilder, SearchResult, TextMessageRole, TextMessages, ModelBuilder,
     WebSearchOptions,
 };
 
@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
 
     // The EmbeddingGemma reranker is **not** required even when using a custom callback – it is
     // used inside the retrieval pipeline to cluster / rank the results that our callback returns.
-    let model = TextModelBuilder::new("NousResearch/Hermes-3-Llama-3.1-8B")
+    let model = ModelBuilder::new("Qwen/Qwen3-4B")
         .with_auto_isq(IsqBits::Four)
         .with_logging()
         .with_search_callback(Arc::new(|params: &mistralrs::SearchFunctionParameters| {

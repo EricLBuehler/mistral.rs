@@ -5,7 +5,7 @@ use clap::Parser;
 use either::Either;
 use mistralrs::{
     cross_entropy_loss, parse_isq_value, Constraint, DType, Device, MistralRs, NormalRequest,
-    Request, ResponseOk, SamplingParams, Tensor, TextModelBuilder,
+    Request, ResponseOk, SamplingParams, Tensor, ModelBuilder,
 };
 use tokio::sync::mpsc::channel;
 
@@ -13,7 +13,7 @@ use tokio::sync::mpsc::channel;
 #[derive(Parser)]
 struct Args {
     /// The model to run.
-    #[arg(short, long, default_value = "meta-llama/Llama-3.1-8B-Instruct")]
+    #[arg(short, long, default_value = "google/gemma-3-4b-it")]
     model_id: String,
 
     /// Filename to text to run the model on. This is recommended to be the Wikitext 2 dataset:
@@ -82,7 +82,7 @@ async fn main() -> Result<()> {
     };
 
     let prompt_chunksize = 1024;
-    let mut model_builder = TextModelBuilder::new(&args.model_id).with_logging();
+    let mut model_builder = ModelBuilder::new(&args.model_id).with_logging();
     if let Some(quant) = quant {
         model_builder = model_builder.with_isq(quant);
     }

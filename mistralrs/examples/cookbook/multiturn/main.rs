@@ -9,13 +9,13 @@
 use anyhow::Result;
 use mistralrs::{
     ChatCompletionChunkResponse, ChunkChoice, Delta, IsqBits, Response, TextMessageRole,
-    TextMessages, TextModelBuilder,
+    TextMessages, ModelBuilder,
 };
 use std::io::{self, BufRead, Write};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+    let model = ModelBuilder::new("google/gemma-3-4b-it")
         .with_auto_isq(IsqBits::Four)
         .with_logging()
         .build()

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use mistralrs::{
     CalledFunction, IsqBits, RequestBuilder, SearchResult, TextMessageRole, TextMessages,
-    TextModelBuilder, Tool, ToolChoice, ToolType,
+    ModelBuilder, Tool, ToolChoice, ToolType,
 };
 use std::fs;
 use std::sync::Arc;
@@ -33,7 +33,7 @@ fn local_search(query: &str) -> Result<Vec<SearchResult>> {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Build the model and register the *tool callback*.
-    let model = TextModelBuilder::new("NousResearch/Hermes-3-Llama-3.1-8B")
+    let model = ModelBuilder::new("google/gemma-3-4b-it")
         .with_auto_isq(IsqBits::Four)
         .with_logging()
         .with_tool_callback(

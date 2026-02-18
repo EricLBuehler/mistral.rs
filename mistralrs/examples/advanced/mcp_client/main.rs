@@ -12,7 +12,7 @@
 use anyhow::Result;
 use mistralrs::{
     IsqBits, McpClientConfig, McpServerConfig, McpServerSource, MemoryGpuConfig,
-    PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
+    PagedAttentionMetaBuilder, TextMessageRole, TextMessages, ModelBuilder,
 };
 // use std::collections::HashMap; // Uncomment if using manual headers in examples below
 
@@ -119,7 +119,7 @@ async fn main() -> Result<()> {
 
     // Build the model with MCP client configuration
     // The MCP client will automatically connect to configured servers and discover available tools
-    let model = TextModelBuilder::new("Qwen/Qwen3-4B".to_string())
+    let model = ModelBuilder::new("google/gemma-3-4b-it".to_string())
         .with_auto_isq(IsqBits::Eight) // Use 8-bit quantization for efficiency
         .with_logging()
         .with_paged_attn(|| {

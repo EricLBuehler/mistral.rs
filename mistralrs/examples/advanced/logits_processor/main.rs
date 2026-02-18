@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use mistralrs::{
     CustomLogitsProcessor, IsqBits, PagedAttentionMetaBuilder, RequestBuilder, Tensor,
-    TextMessageRole, TextModelBuilder,
+    TextMessageRole, ModelBuilder,
 };
 use rand::Rng;
 
@@ -21,7 +21,7 @@ impl CustomLogitsProcessor for ThresholdLogitsProcessor {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+    let model = ModelBuilder::new("Qwen/Qwen3-4B")
         .with_auto_isq(IsqBits::Four)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
