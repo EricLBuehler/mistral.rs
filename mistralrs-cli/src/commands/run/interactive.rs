@@ -180,12 +180,12 @@ fn handle_sampling_command(prompt: &str, sampling_params: &mut SamplingParams) -
         let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
         if let [_, value] = parts.as_slice() {
             match value.trim().parse::<f64>() {
-                Ok(v) if v > 0.0 && v <= 2.0 => {
-                    sampling_params.temperature = Some(v);
+                Ok(v) if (0.0..=2.0).contains(&v) => {
+                    sampling_params.temperature = if v == 0.0 { None } else { Some(v) };
                     info!("Set temperature to {v}");
                 }
                 Ok(_) => {
-                    println!("Error: temperature must be in (0.0, 2.0]");
+                    println!("Error: temperature must be in [0.0, 2.0]");
                 }
                 Err(_) => println!("Error: format is `{TEMPERATURE_CMD} <float>`"),
             }
