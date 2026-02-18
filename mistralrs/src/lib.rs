@@ -21,19 +21,6 @@
 //! }
 //! ```
 //!
-//! ## One-Liner
-//!
-//! For scripts and quick prototyping, [`generate()`] loads a model and returns the reply in one call:
-//!
-//! ```no_run
-//! #[tokio::main]
-//! async fn main() -> mistralrs::error::Result<()> {
-//!     let answer = mistralrs::generate("microsoft/Phi-3.5-mini-instruct", "What is 2+2?").await?;
-//!     println!("{answer}");
-//!     Ok(())
-//! }
-//! ```
-//!
 //! ## Capabilities
 //!
 //! | Capability | Builder | Example |
@@ -204,10 +191,9 @@
 mod agent;
 mod anymoe;
 pub mod blocking;
-mod convenience;
 mod diffusion_model;
-pub mod error;
 mod embedding_model;
+pub mod error;
 mod gguf;
 mod gguf_lora_model;
 mod gguf_xlora_model;
@@ -226,7 +212,6 @@ pub use agent::{
     AgentStream, AsyncToolCallback, ToolCallbackType, ToolResult,
 };
 pub use anymoe::AnyMoeModelBuilder;
-pub use convenience::generate;
 pub use diffusion_model::DiffusionModelBuilder;
 pub use embedding_model::{EmbeddingModelBuilder, UqffEmbeddingModelBuilder};
 pub use gguf::GgufModelBuilder;

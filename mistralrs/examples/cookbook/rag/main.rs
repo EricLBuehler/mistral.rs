@@ -42,9 +42,7 @@ async fn main() -> Result<()> {
     let mut doc_embeddings = Vec::new();
     for doc in &documents {
         let emb = embed_model
-            .generate_embeddings(
-                EmbeddingRequest::builder().add_prompt(format!("passage: {doc}")),
-            )
+            .generate_embeddings(EmbeddingRequest::builder().add_prompt(format!("passage: {doc}")))
             .await?;
         doc_embeddings.push(emb.first().unwrap().clone());
     }
@@ -52,9 +50,7 @@ async fn main() -> Result<()> {
     // ---- Step 3: Embed the query and find the best match ----
     let query = "What is mistral.rs?";
     let query_emb = embed_model
-        .generate_embeddings(
-            EmbeddingRequest::builder().add_prompt(format!("query: {query}")),
-        )
+        .generate_embeddings(EmbeddingRequest::builder().add_prompt(format!("query: {query}")))
         .await?;
     let query_vec = query_emb.first().unwrap();
 
@@ -83,8 +79,7 @@ async fn main() -> Result<()> {
         documents[best_idx], query
     );
 
-    let messages =
-        TextMessages::new().add_message(TextMessageRole::User, prompt);
+    let messages = TextMessages::new().add_message(TextMessageRole::User, prompt);
 
     let response = text_model.send_chat_request(messages).await?;
     println!(

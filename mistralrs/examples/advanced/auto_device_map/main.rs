@@ -6,8 +6,7 @@
 /// Run with: `cargo run --release --example auto_device_map -p mistralrs`
 use anyhow::Result;
 use mistralrs::{
-    AutoDeviceMapParams, DeviceMapSetting, IsqType, TextMessageRole, TextMessages,
-    TextModelBuilder,
+    AutoDeviceMapParams, DeviceMapSetting, IsqType, TextMessageRole, TextMessages, TextModelBuilder,
 };
 
 #[tokio::main]

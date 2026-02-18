@@ -258,8 +258,7 @@ impl Model {
     /// For more control (system prompt, sampling, tools, etc.), use
     /// [`send_chat_request`](Self::send_chat_request) with a [`RequestBuilder`](crate::RequestBuilder).
     pub async fn chat(&self, message: impl ToString) -> crate::error::Result<String> {
-        let messages =
-            TextMessages::new().add_message(crate::TextMessageRole::User, message);
+        let messages = TextMessages::new().add_message(crate::TextMessageRole::User, message);
         let response = self.send_chat_request(messages).await?;
         response
             .choices
@@ -326,9 +325,7 @@ impl Model {
         let schema_value = serde_json::to_value(schemars::schema_for!(T))?;
         let request: crate::RequestBuilder = messages.into();
         let request = request.set_constraint(Constraint::JsonSchema(schema_value));
-        let response = self
-            .send_chat_request_with_model(request, model_id)
-            .await?;
+        let response = self.send_chat_request_with_model(request, model_id).await?;
         let content = response
             .choices
             .into_iter()
@@ -464,9 +461,7 @@ impl Model {
             .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
             .as_result()?
         else {
-            return Err(SdkError::UnexpectedResponse {
-                expected: "Speech",
-            });
+            return Err(SdkError::UnexpectedResponse { expected: "Speech" });
         };
 
         Ok((pcm, rate, channels))
@@ -557,7 +552,10 @@ impl Model {
     }
 
     /// Convenience wrapper for generating a single embedding.
-    pub async fn generate_embedding(&self, prompt: impl ToString) -> crate::error::Result<Vec<f32>> {
+    pub async fn generate_embedding(
+        &self,
+        prompt: impl ToString,
+    ) -> crate::error::Result<Vec<f32>> {
         self.generate_embedding_with_model(prompt, None).await
     }
 
@@ -784,9 +782,7 @@ impl Model {
     }
 
     /// List all models with their status (Loaded, Unloaded, Reloading).
-    pub fn list_models_with_status(
-        &self,
-    ) -> crate::error::Result<Vec<(String, ModelStatus)>> {
+    pub fn list_models_with_status(&self) -> crate::error::Result<Vec<(String, ModelStatus)>> {
         Ok(self.runner.list_models_with_status()?)
     }
 

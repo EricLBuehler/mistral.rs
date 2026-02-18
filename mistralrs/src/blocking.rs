@@ -85,8 +85,7 @@ impl BlockingModel {
         &self,
         request: R,
     ) -> crate::error::Result<BlockingStream> {
-        let stream: Stream<'_> =
-            self.rt.block_on(self.inner.stream_chat_request(request))?;
+        let stream: Stream<'_> = self.rt.block_on(self.inner.stream_chat_request(request))?;
         Ok(BlockingStream {
             rx: stream.into_receiver(),
             rt: self.rt.clone(),
