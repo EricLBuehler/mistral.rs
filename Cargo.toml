@@ -23,8 +23,8 @@ edition = "2021"
 description = "Fast, flexible LLM inference."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
 repository = "https://github.com/EricLBuehler/mistral.rs"
-keywords = ["machine-learning"]
-categories = ["science"]
+keywords = ["llm", "inference", "machine-learning", "ai", "transformers"]
+categories = ["science", "api-bindings"]
 license = "MIT"
 rust-version = "1.88"
 

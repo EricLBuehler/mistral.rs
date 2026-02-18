@@ -1,135 +1,212 @@
-//! This crate is the Rust SDK for `mistral.rs`, providing an asynchronous interface for LLM inference.
+//! # mistralrs — Blazing-Fast LLM Inference in Rust
 //!
-//! To get started loading a model, check out the following builders:
-//! - [`TextModelBuilder`]
-//! - [`LoraModelBuilder`]
-//! - [`XLoraModelBuilder`]
-//! - [`GgufModelBuilder`]
-//! - [`GgufLoraModelBuilder`]
-//! - [`GgufXLoraModelBuilder`]
-//! - [`VisionModelBuilder`]
-//! - [`AnyMoeModelBuilder`]
+//! The Rust SDK for [mistral.rs](https://github.com/EricLBuehler/mistral.rs), a high-performance
+//! LLM inference engine supporting text, vision, speech, image generation, and embedding models.
 //!
-//! For loading multiple models simultaneously, use [`MultiModelBuilder`].
-//! The returned [`Model`] supports `_with_model` method variants and runtime
-//! model management (unload/reload).
+//! ## Quick Start
 //!
-//! ## Example
 //! ```no_run
-//! use anyhow::Result;
-//! use mistralrs::{
-//!     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
+//! use mistralrs::{TextModelBuilder, IsqType, TextMessages, TextMessageRole};
+//!
+//! #[tokio::main]
+//! async fn main() -> mistralrs::error::Result<()> {
+//!     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+//!         .with_isq(IsqType::Q4K)
+//!         .build()
+//!         .await?;
+//!
+//!     let response = model.chat("What is Rust's ownership model?").await?;
+//!     println!("{response}");
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## One-Liner
+//!
+//! For scripts and quick prototyping, [`generate()`] loads a model and returns the reply in one call:
+//!
+//! ```no_run
+//! #[tokio::main]
+//! async fn main() -> mistralrs::error::Result<()> {
+//!     let answer = mistralrs::generate("microsoft/Phi-3.5-mini-instruct", "What is 2+2?").await?;
+//!     println!("{answer}");
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Capabilities
+//!
+//! | Capability | Builder | Example |
+//! |---|---|---|
+//! | Text generation | [`TextModelBuilder`] | `examples/getting_started/simple/` |
+//! | Vision (image+text) | [`VisionModelBuilder`] | `examples/getting_started/vision/` |
+//! | GGUF quantized models | [`GgufModelBuilder`] | `examples/getting_started/gguf/` |
+//! | Image generation | [`DiffusionModelBuilder`] | `examples/models/diffusion/` |
+//! | Speech synthesis | [`SpeechModelBuilder`] | `examples/models/speech/` |
+//! | Embeddings | [`EmbeddingModelBuilder`] | `examples/getting_started/embedding/` |
+//! | Structured output | [`Model::generate_structured`] | `examples/advanced/json_schema/` |
+//! | Tool calling | [`Tool`], [`ToolChoice`] | `examples/advanced/tools/` |
+//! | Agents | [`AgentBuilder`] | `examples/advanced/agent/` |
+//! | Multi-model | [`MultiModelBuilder`] | `examples/advanced/multi_model/` |
+//! | LoRA / X-LoRA | [`LoraModelBuilder`], [`XLoraModelBuilder`] | `examples/advanced/lora/` |
+//! | AnyMoE | [`AnyMoeModelBuilder`] | `examples/advanced/anymoe/` |
+//! | MCP client | [`McpClientConfig`] | `examples/advanced/mcp_client/` |
+//!
+//! ## Model Loading
+//!
+//! All models are created through builder structs that follow a consistent pattern:
+//!
+//! ```no_run
+//! # use mistralrs::*;
+//! # async fn example() -> error::Result<()> {
+//! let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+//!     .with_isq(IsqType::Q4K)              // In-situ quantization
+//!     .with_logging()                        // Enable logging
+//!     .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Quantization options via [`IsqType`]: `Q4_0`, `Q4_1`, `Q4K`, `Q5_0`, `Q5_1`, `Q5K`,
+//! `Q6K`, `Q8_0`, `Q8_1`, `HQQ4`, `HQQ8`, and more.
+//!
+//! ## Streaming
+//!
+//! The stream returned by [`Model::stream_chat_request`] implements
+//! [`futures::Stream`], so you can use `StreamExt` combinators:
+//!
+//! ```no_run
+//! use futures::StreamExt;
+//! use mistralrs::*;
+//!
+//! # async fn example(model: Model) -> error::Result<()> {
+//! let messages = TextMessages::new()
+//!     .add_message(TextMessageRole::User, "Tell me a joke.");
+//!
+//! let mut stream = model.stream_chat_request(messages).await?;
+//! while let Some(chunk) = stream.next().await {
+//!     if let Response::Chunk(c) = chunk {
+//!         if let Some(text) = c.choices.first().and_then(|ch| ch.delta.content.as_ref()) {
+//!             print!("{text}");
+//!         }
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Structured Output
+//!
+//! Derive [`schemars::JsonSchema`] on your type and the model will be constrained to
+//! produce valid JSON matching the schema:
+//!
+//! ```no_run
+//! use mistralrs::*;
+//! use schemars::JsonSchema;
+//! use serde::Deserialize;
+//!
+//! #[derive(Deserialize, JsonSchema)]
+//! struct City {
+//!     name: String,
+//!     country: String,
+//!     population: u64,
+//! }
+//!
+//! # async fn example(model: Model) -> error::Result<()> {
+//! let messages = TextMessages::new()
+//!     .add_message(TextMessageRole::User, "Give me info about Paris.");
+//!
+//! let city: City = model.generate_structured::<City>(messages).await?;
+//! println!("{}: pop. {}", city.name, city.population);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Blocking API
+//!
+//! For non-async applications, use [`blocking::BlockingModel`]:
+//!
+//! ```no_run
+//! use mistralrs::blocking::BlockingModel;
+//! use mistralrs::{TextModelBuilder, IsqType};
+//!
+//! fn main() -> mistralrs::error::Result<()> {
+//!     let model = BlockingModel::from_builder(
+//!         TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+//!             .with_isq(IsqType::Q4K),
+//!     )?;
+//!     let answer = model.chat("What is 2+2?")?;
+//!     println!("{answer}");
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Error Handling
+//!
+//! All public methods return [`error::Result<T>`](error::Result) with a structured
+//! [`error::Error`] enum. Variants include [`ModelLoad`](error::Error::ModelLoad),
+//! [`Inference`](error::Error::Inference), [`RequestValidation`](error::Error::RequestValidation),
+//! and more. The error type implements `std::error::Error`, so it works seamlessly with
+//! `anyhow` and `eyre`.
+//!
+//! ## MCP (Model Context Protocol)
+//!
+//! ```no_run
+//! # use mistralrs::*;
+//! # async fn example() -> error::Result<()> {
+//! let mcp_config = McpClientConfig {
+//!     servers: vec![/* your server configs */],
+//!     auto_register_tools: true,
+//!     tool_timeout_secs: Some(30),
+//!     max_concurrent_calls: Some(5),
 //! };
 //!
-//! #[tokio::main]
-//! async fn main() -> Result<()> {
-//!     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct".to_string())
-//!         .with_isq(IsqType::Q8_0)
-//!         .with_logging()
-//!         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
-//!         .build()
-//!         .await?;
-//!
-//!     let messages = TextMessages::new()
-//!         .add_message(
-//!             TextMessageRole::System,
-//!             "You are an AI agent with a specialty in programming.",
-//!         )
-//!         .add_message(
-//!             TextMessageRole::User,
-//!             "Hello! How are you? Please write generic binary search function in Rust.",
-//!         );
-//!
-//!     let response = model.send_chat_request(messages).await?;
-//!
-//!     println!("{}", response.choices[0].message.content.as_ref().unwrap());
-//!     dbg!(
-//!         response.usage.avg_prompt_tok_per_sec,
-//!         response.usage.avg_compl_tok_per_sec
-//!     );
-//!
-//!     Ok(())
-//! }
+//! let model = TextModelBuilder::new("path/to/model")
+//!     .with_isq(IsqType::Q8_0)
+//!     .with_mcp_client(mcp_config)
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! ## Streaming example
-//! ```no_run
-//!    use anyhow::Result;
-//!    use mistralrs::{
-//!        ChatCompletionChunkResponse, ChunkChoice, Delta, IsqType, PagedAttentionMetaBuilder,
-//!        Response, TextMessageRole, TextMessages, TextModelBuilder,
-//!    };
+//! ## Feature Flags
 //!
-//!    #[tokio::main]
-//!    async fn main() -> Result<()> {
-//!        let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct".to_string())
-//!            .with_isq(IsqType::Q8_0)
-//!            .with_logging()
-//!            .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
-//!            .build()
-//!            .await?;
+//! | Flag | Effect |
+//! |---|---|
+//! | `cuda` | CUDA GPU support |
+//! | `flash-attn` | Flash Attention 2 kernels (requires `cuda`) |
+//! | `cudnn` | cuDNN acceleration (requires `cuda`) |
+//! | `nccl` | Multi-GPU via NCCL (requires `cuda`) |
+//! | `metal` | Apple Metal GPU support |
+//! | `accelerate` | Apple Accelerate framework |
+//! | `mkl` | Intel MKL acceleration |
 //!
-//!        let messages = TextMessages::new()
-//!            .add_message(
-//!                TextMessageRole::System,
-//!                "You are an AI agent with a specialty in programming.",
-//!            )
-//!            .add_message(
-//!                TextMessageRole::User,
-//!                "Hello! How are you? Please write generic binary search function in Rust.",
-//!            );
+//! The default feature set (no flags) builds with pure Rust — no C compiler or system
+//! libraries required.
 //!
-//!        let mut stream = model.stream_chat_request(messages).await?;
-
-//!        while let Some(chunk) = stream.next().await {
-//!            if let Response::Chunk(ChatCompletionChunkResponse { choices, .. }) = chunk {
-//!                if let Some(ChunkChoice {
-//!                    delta:
-//!                        Delta {
-//!                            content: Some(content),
-//!                            ..
-//!                        },
-//!                    ..
-//!                }) = choices.first()
-//!                {
-//!                    print!("{}", content);
-//!                };
-//!            }
-//!        }
-//!        Ok(())
-//!    }
-//! ```
+//! ## Architecture
 //!
-//! ## MCP example
-//!
-//! The MCP client integrates seamlessly with mistral.rs model builders:
-//!
-//! ```rust,no_run
-//! use mistralrs::{TextModelBuilder, IsqType, McpClientConfig, McpServerConfig, McpServerSource};
-//!
-//! #[tokio::main]
-//! async fn main() -> anyhow::Result<()> {
-//!     let mcp_config = McpClientConfig {
-//!         servers: vec![/* your server configs */],
-//!         auto_register_tools: true,
-//!         tool_timeout_secs: Some(30),
-//!         max_concurrent_calls: Some(5),
-//!     };
-//!     
-//!     let model = TextModelBuilder::new("path/to/model".to_string())
-//!         .with_isq(IsqType::Q8_0)
-//!         .with_mcp_client(mcp_config)  // MCP tools automatically registered
-//!         .build()
-//!         .await?;
-//!     
-//!     // MCP tools are now available for automatic tool calling
-//!     Ok(())
-//! }
+//! ```text
+//! TextModelBuilder / VisionModelBuilder / GgufModelBuilder / ...
+//!     │
+//!     ▼
+//!   Model ──── send_chat_request() ──► Engine ──► Pipeline ──► Output
+//!     │                                  │
+//!     ├── chat()                    Scheduler + PagedAttention
+//!     ├── stream_chat_request()
+//!     ├── generate_structured()
+//!     └── send_*_with_model()       (multi-model dispatch)
 //! ```
 
 mod agent;
 mod anymoe;
+pub mod blocking;
+mod convenience;
 mod diffusion_model;
+pub mod error;
 mod embedding_model;
 mod gguf;
 mod gguf_lora_model;
@@ -149,6 +226,7 @@ pub use agent::{
     AgentStream, AsyncToolCallback, ToolCallbackType, ToolResult,
 };
 pub use anymoe::AnyMoeModelBuilder;
+pub use convenience::generate;
 pub use diffusion_model::DiffusionModelBuilder;
 pub use embedding_model::{EmbeddingModelBuilder, UqffEmbeddingModelBuilder};
 pub use gguf::GgufModelBuilder;

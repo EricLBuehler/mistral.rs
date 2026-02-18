@@ -113,7 +113,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-This example lives [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/embedding_gemma/main.rs), and can be run with:
+This example lives [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/getting_started/embedding/main.rs), and can be run with:
 
 ```bash
 cargo run --package mistralrs --example embedding_gemma
