@@ -329,12 +329,7 @@ mod tests {
             audio_feat_stride: Some(2),
             ..Default::default()
         };
-        let _ = loader.get_processor(
-            config,
-            Some(ProcessorConfig::default()),
-            preproc_cfg,
-            None,
-        );
+        let _ = loader.get_processor(config, Some(ProcessorConfig::default()), preproc_cfg, None);
     }
 
     #[cfg(not(feature = "audio"))]
