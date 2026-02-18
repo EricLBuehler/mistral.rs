@@ -94,4 +94,4 @@ async fn main() -> Result<()> {
 }
 ```
 
-You can find the full example at [`mistralrs/examples/qwen3_embedding/main.rs`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/qwen3_embedding/main.rs).
+You can find the full example at [`mistralrs/examples/advanced/embeddings/main.rs`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/embeddings/main.rs).

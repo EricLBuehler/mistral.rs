@@ -5,7 +5,7 @@
 /// - Building an agent that can call the tool
 /// - Running the agent loop for a code review task
 ///
-/// Run with: `cargo run --release --example cookbook_code_review -p mistralrs`
+/// Run with: `cargo run --release --example cookbook_agent -p mistralrs`
 use anyhow::Result;
 use mistralrs::{tool, AgentBuilder, IsqType, PagedAttentionMetaBuilder, TextModelBuilder};
 use schemars::JsonSchema;

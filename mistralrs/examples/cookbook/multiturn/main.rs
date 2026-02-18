@@ -5,7 +5,7 @@
 /// - Accumulating messages across turns
 /// - Streaming responses token-by-token
 ///
-/// Run with: `cargo run --release --example cookbook_chatbot -p mistralrs`
+/// Run with: `cargo run --release --example cookbook_multiturn -p mistralrs`
 use anyhow::Result;
 use mistralrs::{
     ChatCompletionChunkResponse, ChunkChoice, Delta, IsqType, Response, TextMessageRole,

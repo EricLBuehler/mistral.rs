@@ -38,7 +38,7 @@
 //!
 //! | Capability | Builder | Example |
 //! |---|---|---|
-//! | Text generation | [`TextModelBuilder`] | `examples/getting_started/simple/` |
+//! | Text generation | [`TextModelBuilder`] | `examples/getting_started/text_generation/` |
 //! | Vision (image+text) | [`VisionModelBuilder`] | `examples/getting_started/vision/` |
 //! | GGUF quantized models | [`GgufModelBuilder`] | `examples/getting_started/gguf/` |
 //! | Image generation | [`DiffusionModelBuilder`] | `examples/models/diffusion/` |

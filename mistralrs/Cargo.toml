@@ -37,8 +37,8 @@ tracing-subscriber.workspace = true
 # ========== Getting Started ==========
 
 [[example]]
-name = "simple"
-path = "examples/getting_started/simple/main.rs"
+name = "text_generation"
+path = "examples/getting_started/text_generation/main.rs"
 
 [[example]]
 name = "streaming"
@@ -211,8 +211,8 @@ name = "perplexity"
 path = "examples/advanced/perplexity/main.rs"
 
 [[example]]
-name = "qwen3_embedding"
-path = "examples/advanced/qwen3_embedding/main.rs"
+name = "embeddings"
+path = "examples/advanced/embeddings/main.rs"
 
 # ========== Cookbook ==========
 
@@ -225,12 +225,12 @@ name = "cookbook_structured"
 path = "examples/cookbook/structured/main.rs"
 
 [[example]]
-name = "cookbook_chatbot"
-path = "examples/cookbook/chatbot/main.rs"
+name = "cookbook_multiturn"
+path = "examples/cookbook/multiturn/main.rs"
 
 [[example]]
-name = "cookbook_code_review"
-path = "examples/cookbook/code_review/main.rs"
+name = "cookbook_agent"
+path = "examples/cookbook/agent/main.rs"
 
 [features]
 cuda = ["mistralrs-core/cuda"]
