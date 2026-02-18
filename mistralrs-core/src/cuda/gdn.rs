@@ -29,41 +29,47 @@ pub fn gated_delta_rule_recurrence_cuda(
 
     let dev = q.device().as_cuda_device()?;
 
-    let (q_s, _) = q.storage_and_layout();
+    let (q_s, q_l) = q.storage_and_layout();
     let q_s = match &*q_s {
         candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
         _ => candle::bail!("q must be a cuda tensor"),
     };
+    let q_offset = q_l.start_offset();
 
-    let (k_s, _) = k.storage_and_layout();
+    let (k_s, k_l) = k.storage_and_layout();
     let k_s = match &*k_s {
         candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
         _ => candle::bail!("k must be a cuda tensor"),
     };
+    let k_offset = k_l.start_offset();
 
-    let (v_s, _) = v.storage_and_layout();
+    let (v_s, v_l) = v.storage_and_layout();
     let v_s = match &*v_s {
         candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
         _ => candle::bail!("v must be a cuda tensor"),
     };
+    let v_offset = v_l.start_offset();
 
-    let (g_s, _) = g.storage_and_layout();
+    let (g_s, g_l) = g.storage_and_layout();
     let g_s = match &*g_s {
         candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
         _ => candle::bail!("g must be a cuda tensor"),
     };
+    let g_offset = g_l.start_offset();
 
-    let (beta_s, _) = beta.storage_and_layout();
+    let (beta_s, beta_l) = beta.storage_and_layout();
     let beta_s = match &*beta_s {
         candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
         _ => candle::bail!("beta must be a cuda tensor"),
     };
+    let beta_offset = beta_l.start_offset();
 
-    let (state_s, _) = state.storage_and_layout();
+    let (state_s, state_l) = state.storage_and_layout();
     let state_s = match &*state_s {
         candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
         _ => candle::bail!("state must be a cuda tensor"),
     };
+    let state_offset = state_l.start_offset();
 
     let output_buf = unsafe { dev.alloc::<f32>(bh * seq_len * v_dim) }?;
 
@@ -71,12 +77,12 @@ pub fn gated_delta_rule_recurrence_cuda(
 
     unsafe {
         crate::cuda::ffi::gated_delta_rule_recurrence(
-            q_s.device_ptr(q_s.stream()).0 as *const f32,
-            k_s.device_ptr(k_s.stream()).0 as *const f32,
-            v_s.device_ptr(v_s.stream()).0 as *const f32,
-            g_s.device_ptr(g_s.stream()).0 as *const f32,
-            beta_s.device_ptr(beta_s.stream()).0 as *const f32,
-            state_s.device_ptr(state_s.stream()).0 as *mut f32,
+            q_s.slice(q_offset..).device_ptr(q_s.stream()).0 as *const f32,
+            k_s.slice(k_offset..).device_ptr(k_s.stream()).0 as *const f32,
+            v_s.slice(v_offset..).device_ptr(v_s.stream()).0 as *const f32,
+            g_s.slice(g_offset..).device_ptr(g_s.stream()).0 as *const f32,
+            beta_s.slice(beta_offset..).device_ptr(beta_s.stream()).0 as *const f32,
+            state_s.slice(state_offset..).device_ptr(state_s.stream()).0 as *mut f32,
             output_buf.device_ptr(output_buf.stream()).0 as *mut f32,
             bh as i32,
             seq_len as i32,
@@ -143,17 +149,19 @@ pub fn causal_conv1d_cuda(
         let dev = x.device().as_cuda_device()?;
         let (batch_size, conv_dim, seq_len) = x.dims3()?;
 
-        let (x_s, _) = x.storage_and_layout();
+        let (x_s, x_l) = x.storage_and_layout();
         let x_s = match &*x_s {
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("x must be a cuda tensor"),
         };
+        let x_offset = x_l.start_offset();
 
-        let (w_s, _) = weight.storage_and_layout();
+        let (w_s, w_l) = weight.storage_and_layout();
         let w_s = match &*w_s {
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("weight must be a cuda tensor"),
         };
+        let w_offset = w_l.start_offset();
 
         let stream = dev.cuda_stream().cu_stream() as i64;
 
@@ -165,17 +173,18 @@ pub fn causal_conv1d_cuda(
 
             // Scope the borrow of conv_state_new so we can move it later
             {
-                let (cs_s, _) = conv_state_new.storage_and_layout();
+                let (cs_s, cs_l) = conv_state_new.storage_and_layout();
                 let cs_s = match &*cs_s {
                     candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
                     _ => candle::bail!("conv_state must be a cuda tensor"),
                 };
+                let cs_offset = cs_l.start_offset();
 
                 unsafe {
                     crate::cuda::ffi::causal_conv1d_update(
-                        x_s.device_ptr(x_s.stream()).0 as *const c_void,
-                        w_s.device_ptr(w_s.stream()).0 as *const c_void,
-                        cs_s.device_ptr(cs_s.stream()).0 as *mut c_void,
+                        x_s.slice(x_offset..).device_ptr(x_s.stream()).0 as *const c_void,
+                        w_s.slice(w_offset..).device_ptr(w_s.stream()).0 as *const c_void,
+                        cs_s.slice(cs_offset..).device_ptr(cs_s.stream()).0 as *mut c_void,
                         output_buf.device_ptr(output_buf.stream()).0 as *mut c_void,
                         batch_size as i32,
                         conv_dim as i32,
@@ -200,8 +209,8 @@ pub fn causal_conv1d_cuda(
 
             unsafe {
                 crate::cuda::ffi::causal_conv1d_full(
-                    x_s.device_ptr(x_s.stream()).0 as *const c_void,
-                    w_s.device_ptr(w_s.stream()).0 as *const c_void,
+                    x_s.slice(x_offset..).device_ptr(x_s.stream()).0 as *const c_void,
+                    w_s.slice(w_offset..).device_ptr(w_s.stream()).0 as *const c_void,
                     cs_buf.device_ptr(cs_buf.stream()).0 as *mut c_void,
                     output_buf.device_ptr(output_buf.stream()).0 as *mut c_void,
                     batch_size as i32,
@@ -281,29 +290,33 @@ pub fn fused_gdn_gating_cuda(
         let shape = b.shape().clone();
         let dev = b.device().as_cuda_device()?;
 
-        let (b_s, _) = b.storage_and_layout();
+        let (b_s, b_l) = b.storage_and_layout();
         let b_s = match &*b_s {
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("b must be a cuda tensor"),
         };
+        let b_offset = b_l.start_offset();
 
-        let (a_s, _) = a.storage_and_layout();
+        let (a_s, a_l) = a.storage_and_layout();
         let a_s = match &*a_s {
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("a must be a cuda tensor"),
         };
+        let a_offset = a_l.start_offset();
 
-        let (alog_s, _) = a_log.storage_and_layout();
+        let (alog_s, alog_l) = a_log.storage_and_layout();
         let alog_s = match &*alog_s {
             candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
             _ => candle::bail!("a_log must be a cuda tensor"),
         };
+        let alog_offset = alog_l.start_offset();
 
-        let (dtb_s, _) = dt_bias.storage_and_layout();
+        let (dtb_s, dtb_l) = dt_bias.storage_and_layout();
         let dtb_s = match &*dtb_s {
             candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
             _ => candle::bail!("dt_bias must be a cuda tensor"),
         };
+        let dtb_offset = dtb_l.start_offset();
 
         let beta_buf = unsafe { dev.alloc::<T>(total_elements) }?;
         let g_buf = unsafe { dev.alloc::<T>(total_elements) }?;
@@ -312,10 +325,10 @@ pub fn fused_gdn_gating_cuda(
 
         unsafe {
             crate::cuda::ffi::fused_gdn_gating(
-                b_s.device_ptr(b_s.stream()).0 as *const c_void,
-                a_s.device_ptr(a_s.stream()).0 as *const c_void,
-                alog_s.device_ptr(alog_s.stream()).0 as *const f32,
-                dtb_s.device_ptr(dtb_s.stream()).0 as *const f32,
+                b_s.slice(b_offset..).device_ptr(b_s.stream()).0 as *const c_void,
+                a_s.slice(a_offset..).device_ptr(a_s.stream()).0 as *const c_void,
+                alog_s.slice(alog_offset..).device_ptr(alog_s.stream()).0 as *const f32,
+                dtb_s.slice(dtb_offset..).device_ptr(dtb_s.stream()).0 as *const f32,
                 beta_buf.device_ptr(beta_buf.stream()).0 as *mut c_void,
                 g_buf.device_ptr(g_buf.stream()).0 as *mut c_void,
                 total_elements as i32,
