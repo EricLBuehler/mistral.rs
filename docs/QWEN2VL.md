@@ -160,8 +160,7 @@ async fn main() -> Result<()> {
         TextMessageRole::User,
         "What type of flower is this? Give some fun facts.",
         image,
-        &model
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 

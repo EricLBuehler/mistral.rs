@@ -231,147 +231,40 @@ impl VisionMessages {
         self
     }
 
-    /// Append a message containing an image. The image is a `DynamicImage` from the `image` crate.
+    /// Append a message containing images.
     ///
-    /// The model reference is used to apply model-specific media prefix tokens
-    /// immediately. For a version that defers prefixing until send-time, see
-    /// [`add_image_message_deferred`](Self::add_image_message_deferred).
+    /// Model-specific prefix tokens are applied automatically when the
+    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
+    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
     pub fn add_image_message(
         self,
         role: TextMessageRole,
         text: impl ToString,
         images: Vec<DynamicImage>,
-        model: &Model,
-    ) -> anyhow::Result<Self> {
-        self.add_multimodal_message(role, text, images, vec![], model)
+    ) -> Self {
+        self.add_multimodal_message(role, text, images, vec![])
     }
 
-    /// Append a message containing audio input.
+    /// Append a message containing audio.
     ///
-    /// The model reference is used to apply model-specific media prefix tokens
-    /// immediately. For a version that defers prefixing until send-time, see
-    /// [`add_audio_message_deferred`](Self::add_audio_message_deferred).
+    /// Model-specific prefix tokens are applied automatically when the
+    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
+    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
     pub fn add_audio_message(
         self,
         role: TextMessageRole,
         text: impl ToString,
         audios: Vec<AudioInput>,
-        model: &Model,
-    ) -> anyhow::Result<Self> {
-        self.add_multimodal_message(role, text, vec![], audios, model)
+    ) -> Self {
+        self.add_multimodal_message(role, text, vec![], audios)
     }
 
     /// Append a message containing a mix of text, images, and/or audio.
     ///
-    /// The model reference is used to apply model-specific media prefix tokens
-    /// immediately. For a version that defers prefixing until send-time, see
-    /// [`add_multimodal_message_deferred`](Self::add_multimodal_message_deferred).
+    /// Model-specific prefix tokens are applied automatically when the
+    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
+    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
     pub fn add_multimodal_message(
-        mut self,
-        role: TextMessageRole,
-        text: impl ToString,
-        images: Vec<DynamicImage>,
-        audios: Vec<AudioInput>,
-        model: &Model,
-    ) -> anyhow::Result<Self> {
-        let config = model.config().unwrap();
-        let prefixer = match &config.category {
-            ModelCategory::Vision { prefixer } => prefixer,
-            _ => {
-                anyhow::bail!("`add_image_message` expects a vision model.")
-            }
-        };
-
-        // Images
-        let n_added_images = images.len();
-        let image_indexes: Vec<usize> =
-            (self.images.len()..self.images.len() + n_added_images).collect();
-        self.images.extend(images);
-
-        // Audios
-        let n_added_audios = audios.len();
-        let audio_indexes: Vec<usize> =
-            (self.audios.len()..self.audios.len() + n_added_audios).collect();
-        self.audios.extend(audios);
-
-        if n_added_images > 0 || n_added_audios > 0 {
-            // Build mixed content parts
-            let mut content_vec: Vec<IndexMap<String, Value>> = Vec::new();
-            for _ in 0..n_added_images {
-                content_vec.push(IndexMap::from([(
-                    "type".to_string(),
-                    Value::String("image".to_string()),
-                )]));
-            }
-            for _ in 0..n_added_audios {
-                content_vec.push(IndexMap::from([(
-                    "type".to_string(),
-                    Value::String("audio".to_string()),
-                )]));
-            }
-            // Prefix the text with any media context
-            let mut prefixed_text = text.to_string();
-            if !image_indexes.is_empty() {
-                prefixed_text = prefixer.prefix_image(image_indexes, &prefixed_text);
-            }
-            if !audio_indexes.is_empty() {
-                prefixed_text = prefixer.prefix_audio(audio_indexes, &prefixed_text);
-            }
-            // Add the final text part
-            content_vec.push(IndexMap::from([
-                ("type".to_string(), Value::String("text".to_string())),
-                ("text".to_string(), Value::String(prefixed_text)),
-            ]));
-
-            self.messages.push(IndexMap::from([
-                ("role".to_string(), Either::Left(role.to_string())),
-                ("content".to_string(), Either::Right(content_vec)),
-            ]));
-        } else {
-            self.messages.push(IndexMap::from([
-                ("role".to_string(), Either::Left(role.to_string())),
-                ("content".to_string(), Either::Left(text.to_string())),
-            ]));
-        }
-        Ok(self)
-    }
-
-    /// Append a message containing images **without** requiring a model reference.
-    ///
-    /// Model-specific prefix tokens will be applied automatically when the
-    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
-    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
-    ///
-    /// This allows you to construct vision messages before a model is loaded.
-    pub fn add_image_message_deferred(
-        self,
-        role: TextMessageRole,
-        text: impl ToString,
-        images: Vec<DynamicImage>,
-    ) -> Self {
-        self.add_multimodal_message_deferred(role, text, images, vec![])
-    }
-
-    /// Append a message containing audio **without** requiring a model reference.
-    ///
-    /// Model-specific prefix tokens will be applied automatically when the
-    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
-    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
-    pub fn add_audio_message_deferred(
-        self,
-        role: TextMessageRole,
-        text: impl ToString,
-        audios: Vec<AudioInput>,
-    ) -> Self {
-        self.add_multimodal_message_deferred(role, text, vec![], audios)
-    }
-
-    /// Append a multimodal message **without** requiring a model reference.
-    ///
-    /// Model-specific prefix tokens will be applied automatically when the
-    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
-    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
-    pub fn add_multimodal_message_deferred(
         mut self,
         role: TextMessageRole,
         text: impl ToString,
@@ -661,134 +554,40 @@ impl RequestBuilder {
         self
     }
 
-    /// Append a message containing an image.
+    /// Append a message containing images.
+    ///
+    /// Model-specific prefix tokens are applied automatically when the
+    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
+    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
     pub fn add_image_message(
         self,
         role: TextMessageRole,
         text: impl ToString,
         images: Vec<DynamicImage>,
-        model: &Model,
-    ) -> anyhow::Result<Self> {
-        self.add_multimodal_message(role, text, images, vec![], model)
+    ) -> Self {
+        self.add_multimodal_message(role, text, images, vec![])
     }
 
-    /// Append a message containing audio input.
+    /// Append a message containing audio.
+    ///
+    /// Model-specific prefix tokens are applied automatically when the
+    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
+    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
     pub fn add_audio_message(
         self,
         role: TextMessageRole,
         text: impl ToString,
         audios: Vec<AudioInput>,
-        model: &Model,
-    ) -> anyhow::Result<Self> {
-        self.add_multimodal_message(role, text, vec![], audios, model)
+    ) -> Self {
+        self.add_multimodal_message(role, text, vec![], audios)
     }
 
     /// Append a message containing a mix of text, images, and/or audio.
-    /// By convention, all images are added before all audios.
+    ///
+    /// Model-specific prefix tokens are applied automatically when the
+    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
+    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
     pub fn add_multimodal_message(
-        mut self,
-        role: TextMessageRole,
-        text: impl ToString,
-        images: Vec<DynamicImage>,
-        audios: Vec<AudioInput>,
-        model: &Model,
-    ) -> anyhow::Result<Self> {
-        let config = model.config().unwrap();
-        let prefixer = match &config.category {
-            ModelCategory::Vision { prefixer } => prefixer,
-            _ => {
-                anyhow::bail!("`add_image_message` expects a vision model.")
-            }
-        };
-
-        // Images
-        let n_added_images = images.len();
-        let image_indexes: Vec<usize> =
-            (self.images.len()..self.images.len() + n_added_images).collect();
-        self.images.extend(images);
-
-        // Audios
-        let n_added_audios = audios.len();
-        let audio_indexes: Vec<usize> =
-            (self.audios.len()..self.audios.len() + n_added_audios).collect();
-        self.audios.extend(audios);
-
-        if n_added_images > 0 || n_added_audios > 0 {
-            // Build mixed content parts
-            let mut content_vec: Vec<IndexMap<String, Value>> = Vec::new();
-            for _ in 0..n_added_images {
-                content_vec.push(IndexMap::from([(
-                    "type".to_string(),
-                    Value::String("image".to_string()),
-                )]));
-            }
-            for _ in 0..n_added_audios {
-                content_vec.push(IndexMap::from([(
-                    "type".to_string(),
-                    Value::String("audio".to_string()),
-                )]));
-            }
-            // Prefix the text with any media context
-            let mut prefixed_text = text.to_string();
-            if !image_indexes.is_empty() {
-                prefixed_text = prefixer.prefix_image(image_indexes, &prefixed_text);
-            }
-            if !audio_indexes.is_empty() {
-                prefixed_text = prefixer.prefix_audio(audio_indexes, &prefixed_text);
-            }
-            // Add the final text part
-            content_vec.push(IndexMap::from([
-                ("type".to_string(), Value::String("text".to_string())),
-                ("text".to_string(), Value::String(prefixed_text)),
-            ]));
-
-            self.messages.push(IndexMap::from([
-                ("role".to_string(), Either::Left(role.to_string())),
-                ("content".to_string(), Either::Right(content_vec)),
-            ]));
-        } else {
-            self.messages.push(IndexMap::from([
-                ("role".to_string(), Either::Left(role.to_string())),
-                ("content".to_string(), Either::Left(text.to_string())),
-            ]));
-        }
-        Ok(self)
-    }
-
-    /// Append a message containing images **without** requiring a model reference.
-    ///
-    /// Model-specific prefix tokens will be applied automatically when the
-    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
-    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
-    pub fn add_image_message_deferred(
-        self,
-        role: TextMessageRole,
-        text: impl ToString,
-        images: Vec<DynamicImage>,
-    ) -> Self {
-        self.add_multimodal_message_deferred(role, text, images, vec![])
-    }
-
-    /// Append a message containing audio **without** requiring a model reference.
-    ///
-    /// Model-specific prefix tokens will be applied automatically when the
-    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
-    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
-    pub fn add_audio_message_deferred(
-        self,
-        role: TextMessageRole,
-        text: impl ToString,
-        audios: Vec<AudioInput>,
-    ) -> Self {
-        self.add_multimodal_message_deferred(role, text, vec![], audios)
-    }
-
-    /// Append a multimodal message **without** requiring a model reference.
-    ///
-    /// Model-specific prefix tokens will be applied automatically when the
-    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
-    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
-    pub fn add_multimodal_message_deferred(
         mut self,
         role: TextMessageRole,
         text: impl ToString,

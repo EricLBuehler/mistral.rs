@@ -114,8 +114,7 @@ async fn main() -> Result<()> {
         TextMessageRole::User,
         "What is this?",
         vec![image],
-        &model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 

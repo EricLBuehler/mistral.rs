@@ -15,13 +15,11 @@ async fn main() -> Result<()> {
     let audio_bytes = std::fs::read("sample_speech.wav")?;
     let audio = AudioInput::from_bytes(&audio_bytes)?;
 
-    let messages = VisionMessages::new().add_multimodal_message(
+    let messages = VisionMessages::new().add_audio_message(
         TextMessageRole::User,
         "What is being said?",
-        vec![],
         vec![audio],
-        &model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 

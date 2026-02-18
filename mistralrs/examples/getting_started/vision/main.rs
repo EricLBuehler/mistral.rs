@@ -27,8 +27,7 @@ async fn main() -> Result<()> {
         TextMessageRole::User,
         "What is this flower?",
         vec![image],
-        &model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
     println!("{}", response.choices[0].message.content.as_ref().unwrap());
