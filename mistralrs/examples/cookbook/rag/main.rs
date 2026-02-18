@@ -8,8 +8,7 @@
 /// Run with: `cargo run --release --example cookbook_rag -p mistralrs`
 use anyhow::Result;
 use mistralrs::{
-    EmbeddingModelBuilder, EmbeddingRequest, IsqBits, TextMessageRole, TextMessages,
-    ModelBuilder,
+    EmbeddingModelBuilder, EmbeddingRequest, IsqBits, ModelBuilder, TextMessageRole, TextMessages,
 };
 
 /// Cosine similarity between two vectors.

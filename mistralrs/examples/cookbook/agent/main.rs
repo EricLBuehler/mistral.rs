@@ -7,7 +7,7 @@
 ///
 /// Run with: `cargo run --release --example cookbook_agent -p mistralrs`
 use anyhow::Result;
-use mistralrs::{tool, AgentBuilder, IsqBits, PagedAttentionMetaBuilder, ModelBuilder};
+use mistralrs::{tool, AgentBuilder, IsqBits, ModelBuilder, PagedAttentionMetaBuilder};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

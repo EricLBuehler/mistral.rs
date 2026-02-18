@@ -110,6 +110,7 @@ impl VisionModelBuilder {
         self
     }
 
+    /// Register a callback for a specific tool name.
     pub fn with_tool_callback(
         mut self,
         name: impl Into<String>,
@@ -230,7 +231,7 @@ impl VisionModelBuilder {
         self
     }
 
-    /// Utilise this calibration_file file during ISQ
+    /// Utilise this calibration file to collect an imatrix. Incompatible with specifying an imatrix file.
     pub fn with_calibration_file(mut self, path: PathBuf) -> Self {
         self.calibration_file = Some(path);
         self
@@ -293,7 +294,7 @@ impl VisionModelBuilder {
 
     /// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
     /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
-    pub fn from_max_edge(mut self, max_edge: u32) -> Self {
+    pub fn with_max_edge(mut self, max_edge: u32) -> Self {
         self.max_edge = Some(max_edge);
         self
     }
@@ -314,7 +315,7 @@ impl VisionModelBuilder {
     }
 
     /// Cache path for Hugging Face models downloaded locally
-    pub fn from_hf_cache_pathf(mut self, hf_cache_path: PathBuf) -> Self {
+    pub fn from_hf_cache_path(mut self, hf_cache_path: PathBuf) -> Self {
         self.hf_cache_path = Some(hf_cache_path);
         self
     }

@@ -57,6 +57,17 @@ pub struct TextModelBuilder {
 }
 
 /// Builder for PagedAttention metadata.
+///
+/// # Example
+///
+/// ```no_run
+/// # use mistralrs::*;
+/// let config = PagedAttentionMetaBuilder::default()
+///     .with_block_size(32)
+///     .with_gpu_memory(MemoryGpuConfig::ContextSize(8192))
+///     .build()
+///     .unwrap();
+/// ```
 pub struct PagedAttentionMetaBuilder {
     block_size: Option<usize>,
     mem_gpu: MemoryGpuConfig,
@@ -74,21 +85,25 @@ impl Default for PagedAttentionMetaBuilder {
 }
 
 impl PagedAttentionMetaBuilder {
+    /// Set the block size for paged attention. If not specified, a default is chosen automatically.
     pub fn with_block_size(mut self, block_size: usize) -> Self {
         self.block_size = Some(block_size);
         self
     }
 
+    /// Set the GPU memory configuration for the KV cache. Defaults to `MemoryGpuConfig::ContextSize(4096)`.
     pub fn with_gpu_memory(mut self, mem_gpu: MemoryGpuConfig) -> Self {
         self.mem_gpu = mem_gpu;
         self
     }
 
+    /// Set the paged cache data type. Defaults to `PagedCacheType::Auto`.
     pub fn with_paged_cache_type(mut self, cache_type: PagedCacheType) -> Self {
         self.cache_type = cache_type;
         self
     }
 
+    /// Build the [`PagedAttentionConfig`]. Returns an error if the configuration is invalid.
     pub fn build(self) -> anyhow::Result<PagedAttentionConfig> {
         PagedAttentionConfig::new(self.block_size, self.mem_gpu, self.cache_type)
     }
@@ -286,7 +301,7 @@ impl TextModelBuilder {
         self
     }
 
-    /// Utilise this calibration file to collcet an imatrix. Incompatible with specifying a calibration file.
+    /// Utilise this calibration file to collect an imatrix. Incompatible with specifying an imatrix file.
     pub fn with_calibration_file(mut self, path: PathBuf) -> Self {
         self.calibration_file = Some(path);
         self
@@ -372,7 +387,7 @@ impl TextModelBuilder {
     }
 
     /// Cache path for Hugging Face models downloaded locally
-    pub fn from_hf_cache_pathf(mut self, hf_cache_path: PathBuf) -> Self {
+    pub fn from_hf_cache_path(mut self, hf_cache_path: PathBuf) -> Self {
         self.hf_cache_path = Some(hf_cache_path);
         self
     }

@@ -1,3 +1,7 @@
+//! Load and run a model with a LoRA adapter.
+//!
+//! Run with: `cargo run --release --example lora -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{LoraModelBuilder, TextMessageRole, TextMessages, TextModelBuilder};
 

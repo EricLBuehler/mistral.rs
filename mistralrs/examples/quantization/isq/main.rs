@@ -1,6 +1,10 @@
+//! In-situ quantization (ISQ) with explicit and automatic type selection.
+//!
+//! Run with: `cargo run --release --example isq -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
-    IsqBits, IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, ModelBuilder,
+    IsqBits, IsqType, ModelBuilder, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
 };
 
 #[tokio::main]

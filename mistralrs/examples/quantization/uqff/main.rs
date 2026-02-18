@@ -1,3 +1,7 @@
+//! Load a pre-quantized UQFF text model.
+//!
+//! Run with: `cargo run --release --example uqff -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
     PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, TextMessages, UqffTextModelBuilder,

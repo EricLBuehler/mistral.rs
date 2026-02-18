@@ -8,8 +8,8 @@
 /// Run with: `cargo run --release --example cookbook_multiturn -p mistralrs`
 use anyhow::Result;
 use mistralrs::{
-    ChatCompletionChunkResponse, ChunkChoice, Delta, IsqBits, Response, TextMessageRole,
-    TextMessages, ModelBuilder,
+    ChatCompletionChunkResponse, ChunkChoice, Delta, IsqBits, ModelBuilder, Response,
+    TextMessageRole, TextMessages,
 };
 use std::io::{self, BufRead, Write};
 

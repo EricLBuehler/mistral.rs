@@ -1,3 +1,7 @@
+//! Load and run a GGUF model from a local file path.
+//!
+//! Run with: `cargo run --release --example gguf_locally -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
     GgufModelBuilder, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, TextMessages,

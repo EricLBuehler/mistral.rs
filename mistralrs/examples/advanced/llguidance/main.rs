@@ -1,7 +1,11 @@
+//! Constrained generation using an llguidance grammar.
+//!
+//! Run with: `cargo run --release --example llguidance -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
-    llguidance::api::GrammarWithLexer, IsqBits, LlguidanceGrammar, PagedAttentionMetaBuilder,
-    RequestBuilder, TextMessageRole, ModelBuilder,
+    llguidance::api::GrammarWithLexer, IsqBits, LlguidanceGrammar, ModelBuilder,
+    PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole,
 };
 use serde_json::json;
 

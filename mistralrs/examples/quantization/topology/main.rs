@@ -1,7 +1,11 @@
+//! Per-layer quantization control using a Topology.
+//!
+//! Run with: `cargo run --release --example topology -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
-    IsqBits, IsqType, LayerTopology, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
-    ModelBuilder, Topology,
+    IsqBits, IsqType, LayerTopology, ModelBuilder, PagedAttentionMetaBuilder, TextMessageRole,
+    TextMessages, Topology,
 };
 
 #[tokio::main]

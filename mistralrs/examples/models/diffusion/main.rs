@@ -1,3 +1,7 @@
+//! Image generation using a diffusion model.
+//!
+//! Run with: `cargo run --release --example diffusion -p mistralrs`
+
 use std::time::Instant;
 
 use anyhow::Result;

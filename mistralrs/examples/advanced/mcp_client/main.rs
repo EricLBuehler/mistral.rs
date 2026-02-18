@@ -11,8 +11,8 @@
 
 use anyhow::Result;
 use mistralrs::{
-    IsqBits, McpClientConfig, McpServerConfig, McpServerSource, MemoryGpuConfig,
-    PagedAttentionMetaBuilder, TextMessageRole, TextMessages, ModelBuilder,
+    IsqBits, McpClientConfig, McpServerConfig, McpServerSource, MemoryGpuConfig, ModelBuilder,
+    PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
 };
 // use std::collections::HashMap; // Uncomment if using manual headers in examples below
 

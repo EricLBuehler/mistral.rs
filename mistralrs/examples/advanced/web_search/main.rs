@@ -1,6 +1,10 @@
+//! Web-search-augmented generation using OpenAI-compatible web_search_options.
+//!
+//! Run with: `cargo run --release --example web_search -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
-    IsqBits, RequestBuilder, SearchEmbeddingModel, TextMessageRole, TextMessages, ModelBuilder,
+    IsqBits, ModelBuilder, RequestBuilder, SearchEmbeddingModel, TextMessageRole, TextMessages,
     WebSearchOptions,
 };
 

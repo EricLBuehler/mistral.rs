@@ -1,3 +1,7 @@
+//! MoQE: quantize only MoE expert layers at a different precision.
+//!
+//! Run with: `cargo run --release --example mixture_of_quant_experts -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
     IsqBits, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,

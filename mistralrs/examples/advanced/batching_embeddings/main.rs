@@ -1,3 +1,7 @@
+//! Batch multiple embedding requests for efficient parallel encoding.
+//!
+//! Run with: `cargo run --release --example batching_embeddings -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{EmbeddingModelBuilder, EmbeddingRequest};
 

@@ -13,8 +13,8 @@
 
 use anyhow::Result;
 use mistralrs::{
-    tool, AgentBuilder, AgentEvent, AgentStopReason, IsqBits, PagedAttentionMetaBuilder,
-    ModelBuilder,
+    tool, AgentBuilder, AgentEvent, AgentStopReason, IsqBits, ModelBuilder,
+    PagedAttentionMetaBuilder,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

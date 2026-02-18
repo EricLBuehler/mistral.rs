@@ -1,3 +1,7 @@
+//! Compute and compare text embeddings with cosine similarity.
+//!
+//! Run with: `cargo run --release --example embeddings -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{Device, EmbeddingModelBuilder, EmbeddingRequest, Tensor};
 

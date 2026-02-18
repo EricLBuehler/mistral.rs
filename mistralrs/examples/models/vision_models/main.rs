@@ -25,7 +25,7 @@
 ///
 /// Run with: `cargo run --release --example vision_models -p mistralrs`
 use anyhow::Result;
-use mistralrs::{IsqBits, TextMessageRole, VisionMessages, ModelBuilder};
+use mistralrs::{IsqBits, ModelBuilder, TextMessageRole, VisionMessages};
 
 const MODEL_ID: &str = "google/gemma-3-4b-it";
 

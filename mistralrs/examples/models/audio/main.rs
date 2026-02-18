@@ -1,3 +1,7 @@
+//! Audio input processing with a multimodal model.
+//!
+//! Run with: `cargo run --release --example audio -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{AudioInput, TextMessageRole, VisionMessages, VisionModelBuilder};
 

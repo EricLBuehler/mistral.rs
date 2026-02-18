@@ -1,7 +1,11 @@
+//! Concurrent request batching by sending multiple requests in parallel.
+//!
+//! Run with: `cargo run --release --example batching -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
-    ChatCompletionResponse, IsqBits, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
-    ModelBuilder, Usage,
+    ChatCompletionResponse, IsqBits, ModelBuilder, PagedAttentionMetaBuilder, TextMessageRole,
+    TextMessages, Usage,
 };
 
 const N_REQUESTS: usize = 10;

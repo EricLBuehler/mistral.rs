@@ -1,3 +1,7 @@
+//! AnyMoE: create a Mixture-of-Experts model from fine-tuned adapters.
+//!
+//! Run with: `cargo run --release --example anymoe -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
     AnyMoeConfig, AnyMoeExpertType, AnyMoeModelBuilder, IsqBits, PagedAttentionMetaBuilder,

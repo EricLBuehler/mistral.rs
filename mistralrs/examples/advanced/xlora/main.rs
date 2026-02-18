@@ -1,3 +1,7 @@
+//! X-LoRA: load a model with X-LoRA adapter mixing.
+//!
+//! Run with: `cargo run --release --example xlora -p mistralrs`
+
 use std::fs::File;
 
 use anyhow::Result;

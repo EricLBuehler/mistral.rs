@@ -1,6 +1,10 @@
+//! JSON schema-constrained generation for typed structured output.
+//!
+//! Run with: `cargo run --release --example json_schema -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
-    IsqBits, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, ModelBuilder,
+    IsqBits, ModelBuilder, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole,
 };
 use serde_json::json;
 

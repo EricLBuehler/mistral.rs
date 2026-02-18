@@ -5,7 +5,7 @@
 ///
 /// Run with: `cargo run --release --example cookbook_structured -p mistralrs`
 use anyhow::Result;
-use mistralrs::{IsqBits, TextMessageRole, TextMessages, ModelBuilder};
+use mistralrs::{IsqBits, ModelBuilder, TextMessageRole, TextMessages};
 use schemars::JsonSchema;
 use serde::Deserialize;
 

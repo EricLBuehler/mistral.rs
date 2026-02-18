@@ -57,9 +57,20 @@
 //! # }
 //! ```
 //!
-//! Use [`TextModelBuilder::with_auto_isq`] for automatic platform-optimal quantization (e.g., `with_auto_isq(4)`),
-//! or [`TextModelBuilder::with_isq`] with a specific [`IsqType`]: `Q4_0`, `Q4_1`, `Q4K`, `Q5_0`, `Q5_1`, `Q5K`,
+//! Use [`ModelBuilder::with_auto_isq`] for automatic platform-optimal quantization (e.g., `with_auto_isq(IsqBits::Four)`),
+//! or [`ModelBuilder::with_isq`] with a specific [`IsqType`]: `Q4_0`, `Q4_1`, `Q4K`, `Q5_0`, `Q5_1`, `Q5K`,
 //! `Q6K`, `Q8_0`, `Q8_1`, `HQQ4`, `HQQ8`, and more.
+//!
+//! ## Choosing a Request Type
+//!
+//! | Type | Use When | Sampling |
+//! |---|---|---|
+//! | [`TextMessages`] | Simple text-only chat, no special settings needed | Deterministic |
+//! | [`VisionMessages`] | Your prompt includes images or audio | Deterministic |
+//! | [`RequestBuilder`] | You need tools, logprobs, custom sampling, constraints, adapters, or web search | Configurable |
+//!
+//! `TextMessages` and `VisionMessages` can be converted into a [`RequestBuilder`] via
+//! `Into<RequestBuilder>` if you start simple and later need more control.
 //!
 //! ## Streaming
 //!
@@ -271,7 +282,7 @@ pub use mistralrs_core::{
 // ========== Config Types ==========
 pub use mistralrs_core::{
     DefaultSchedulerMethod, IsqType, MemoryGpuConfig, ModelDType, PagedAttentionConfig,
-    SchedulerConfig, WebSearchOptions,
+    PagedCacheType, SchedulerConfig, WebSearchOptions,
 };
 
 // ========== Audio Types ==========

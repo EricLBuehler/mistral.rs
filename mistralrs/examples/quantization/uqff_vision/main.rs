@@ -1,3 +1,7 @@
+//! Load a pre-quantized UQFF vision model.
+//!
+//! Run with: `cargo run --release --example uqff_vision -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{IsqBits, TextMessageRole, UqffVisionModelBuilder, VisionMessages};
 

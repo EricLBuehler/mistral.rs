@@ -1,7 +1,11 @@
+//! Tool callbacks for automatic server-side tool execution.
+//!
+//! Run with: `cargo run --release --example tool_callback -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
-    CalledFunction, IsqBits, RequestBuilder, SearchResult, TextMessageRole, TextMessages,
-    ModelBuilder, Tool, ToolChoice, ToolType,
+    CalledFunction, IsqBits, ModelBuilder, RequestBuilder, SearchResult, TextMessageRole,
+    TextMessages, Tool, ToolChoice, ToolType,
 };
 use std::fs;
 use std::sync::Arc;

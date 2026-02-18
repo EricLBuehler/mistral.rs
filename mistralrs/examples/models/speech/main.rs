@@ -1,3 +1,7 @@
+//! Text-to-speech synthesis using a speech model.
+//!
+//! Run with: `cargo run --release --example speech -p mistralrs`
+
 use std::time::Instant;
 
 use anyhow::Result;

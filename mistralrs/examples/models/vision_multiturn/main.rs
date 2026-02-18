@@ -1,5 +1,9 @@
+//! Multi-turn conversation with a vision model across turns.
+//!
+//! Run with: `cargo run --release --example vision_multiturn -p mistralrs`
+
 use anyhow::Result;
-use mistralrs::{RequestBuilder, TextMessageRole, VisionMessages, ModelBuilder};
+use mistralrs::{ModelBuilder, RequestBuilder, TextMessageRole, VisionMessages};
 
 const MODEL_ID: &str = "Qwen/Qwen3-VL-4B-Instruct";
 

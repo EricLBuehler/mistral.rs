@@ -1,6 +1,10 @@
+//! Custom search callback to override the default web search function.
+//!
+//! Run with: `cargo run --release --example search_callback -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
-    IsqBits, RequestBuilder, SearchResult, TextMessageRole, TextMessages, ModelBuilder,
+    IsqBits, ModelBuilder, RequestBuilder, SearchResult, TextMessageRole, TextMessages,
     WebSearchOptions,
 };
 

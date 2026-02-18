@@ -1,5 +1,9 @@
+//! Log model output to a file using the tracing framework.
+//!
+//! Run with: `cargo run --release --example file_logging -p mistralrs`
+
 use anyhow::Result;
-use mistralrs::{IsqBits, TextMessageRole, TextMessages, ModelBuilder};
+use mistralrs::{IsqBits, ModelBuilder, TextMessageRole, TextMessages};
 use std::fs;
 use std::fs::OpenOptions;
 use tracing::info;

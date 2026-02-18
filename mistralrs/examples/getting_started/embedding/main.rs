@@ -1,3 +1,7 @@
+//! Generate text embeddings using an embedding model.
+//!
+//! Run with: `cargo run --release --example embedding -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{EmbeddingModelBuilder, EmbeddingRequest};
 

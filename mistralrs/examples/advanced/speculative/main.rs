@@ -1,3 +1,7 @@
+//! Speculative decoding using a smaller draft model for faster generation.
+//!
+//! Run with: `cargo run --release --example speculative -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
     IsqBits, RequestBuilder, SpeculativeConfig, TextMessageRole, TextMessages, TextModelBuilder,

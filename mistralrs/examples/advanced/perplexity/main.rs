@@ -1,11 +1,15 @@
+//! Compute perplexity of a text file using a loaded model.
+//!
+//! Run with: `cargo run --release --example perplexity -p mistralrs`
+
 use std::{fs::read_to_string, path::PathBuf, time::Instant};
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use either::Either;
 use mistralrs::{
-    cross_entropy_loss, parse_isq_value, Constraint, DType, Device, MistralRs, NormalRequest,
-    Request, ResponseOk, SamplingParams, Tensor, ModelBuilder,
+    cross_entropy_loss, parse_isq_value, Constraint, DType, Device, MistralRs, ModelBuilder,
+    NormalRequest, Request, ResponseOk, SamplingParams, Tensor,
 };
 use tokio::sync::mpsc::channel;
 

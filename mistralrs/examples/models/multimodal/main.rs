@@ -1,3 +1,7 @@
+//! Multimodal streaming with combined image and audio inputs.
+//!
+//! Run with: `cargo run --release --example multimodal -p mistralrs`
+
 use std::io::Write;
 
 use anyhow::Result;

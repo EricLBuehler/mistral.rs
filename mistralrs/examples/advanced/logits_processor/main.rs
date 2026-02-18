@@ -1,9 +1,13 @@
+//! Custom logits processor that modifies token probabilities during generation.
+//!
+//! Run with: `cargo run --release --example logits_processor -p mistralrs`
+
 use std::sync::Arc;
 
 use anyhow::Result;
 use mistralrs::{
-    CustomLogitsProcessor, IsqBits, PagedAttentionMetaBuilder, RequestBuilder, Tensor,
-    TextMessageRole, ModelBuilder,
+    CustomLogitsProcessor, IsqBits, ModelBuilder, PagedAttentionMetaBuilder, RequestBuilder,
+    Tensor, TextMessageRole,
 };
 use rand::Rng;
 

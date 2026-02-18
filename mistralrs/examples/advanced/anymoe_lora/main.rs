@@ -1,3 +1,7 @@
+//! AnyMoE with LoRA adapters for expert specialization.
+//!
+//! Run with: `cargo run --release --example anymoe_lora -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
     AnyMoeConfig, AnyMoeExpertType, AnyMoeModelBuilder, IsqBits, PagedAttentionMetaBuilder,

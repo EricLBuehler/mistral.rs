@@ -1,3 +1,7 @@
+//! Streaming text generation with token-by-token output.
+//!
+//! Run with: `cargo run --release --example streaming -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
     ChatCompletionChunkResponse, ChunkChoice, Delta, IsqBits, ModelBuilder,

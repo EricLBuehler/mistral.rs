@@ -1,3 +1,7 @@
+//! Load and dispatch requests across multiple models simultaneously.
+//!
+//! Run with: `cargo run --release --example multi_model -p mistralrs`
+
 use anyhow::{anyhow, Result};
 use mistralrs::{
     IsqBits, MultiModelBuilder, TextMessageRole, TextMessages, TextModelBuilder, VisionModelBuilder,

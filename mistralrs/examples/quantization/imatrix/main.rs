@@ -1,7 +1,9 @@
+//! ISQ quantization using a calibration file for importance-matrix collection.
+//!
+//! Run with: `cargo run --release --example imatrix -p mistralrs`
+
 use anyhow::Result;
-use mistralrs::{
-    IsqBits, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, ModelBuilder,
-};
+use mistralrs::{IsqBits, ModelBuilder, PagedAttentionMetaBuilder, TextMessageRole, TextMessages};
 
 #[tokio::main]
 async fn main() -> Result<()> {

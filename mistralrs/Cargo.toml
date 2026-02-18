@@ -11,6 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 license.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/mistralrs"
 
 [dependencies]
 mistralrs-core.workspace = true
@@ -232,12 +233,23 @@ path = "examples/cookbook/multiturn/main.rs"
 name = "cookbook_agent"
 path = "examples/cookbook/agent/main.rs"
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
+# NVIDIA CUDA GPU support
 cuda = ["mistralrs-core/cuda"]
+# cuDNN acceleration (requires cuda)
 cudnn = ["mistralrs-core/cudnn"]
+# Apple Metal GPU support (macOS/iOS)
 metal = ["mistralrs-core/metal"]
+# Flash Attention 2 kernels (requires cuda)
 flash-attn = ["cuda", "mistralrs-core/flash-attn"]
+# Apple Accelerate framework for BLAS operations
 accelerate = ["mistralrs-core/accelerate"]
+# Intel MKL acceleration for BLAS operations
 mkl = ["mistralrs-core/mkl"]
+# Multi-GPU support via NCCL (requires cuda)
 nccl = ["mistralrs-core/nccl"]
+# Use ring instead of aws-lc-rs for TLS
 ring = ["mistralrs-core/ring"]

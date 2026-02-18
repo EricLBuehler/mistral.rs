@@ -1,3 +1,7 @@
+//! Basic text generation with ISQ quantization and chat.
+//!
+//! Run with: `cargo run --release --example text_generation -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
     IsqBits, ModelBuilder, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, TextMessages,

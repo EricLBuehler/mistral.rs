@@ -1,7 +1,11 @@
+//! Enable PagedAttention for efficient KV-cache memory management.
+//!
+//! Run with: `cargo run --release --example paged_attn -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
-    IsqBits, MemoryGpuConfig, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
-    ModelBuilder,
+    IsqBits, MemoryGpuConfig, ModelBuilder, PagedAttentionMetaBuilder, TextMessageRole,
+    TextMessages,
 };
 
 #[tokio::main]

@@ -12,7 +12,7 @@
 
 use anyhow::Result;
 use mistralrs::{
-    tool, AgentBuilder, AgentStopReason, IsqBits, PagedAttentionMetaBuilder, ModelBuilder,
+    tool, AgentBuilder, AgentStopReason, IsqBits, ModelBuilder, PagedAttentionMetaBuilder,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

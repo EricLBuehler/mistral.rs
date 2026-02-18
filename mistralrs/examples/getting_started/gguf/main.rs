@@ -1,3 +1,7 @@
+//! Load and run a GGUF-quantized model from Hugging Face.
+//!
+//! Run with: `cargo run --release --example gguf -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{GgufModelBuilder, TextMessageRole, TextMessages};
 

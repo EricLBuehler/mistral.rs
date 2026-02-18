@@ -1,9 +1,12 @@
+//! Tool calling (function calling) with manual tool definitions.
+//!
+//! Run with: `cargo run --release --example tools -p mistralrs`
+
 use std::collections::HashMap;
 
 use anyhow::Result;
 use mistralrs::{
-    Function, IsqBits, RequestBuilder, TextMessageRole, ModelBuilder, Tool, ToolChoice,
-    ToolType,
+    Function, IsqBits, ModelBuilder, RequestBuilder, TextMessageRole, Tool, ToolChoice, ToolType,
 };
 use serde_json::{json, Value};
 

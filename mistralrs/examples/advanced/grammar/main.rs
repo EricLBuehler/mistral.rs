@@ -1,6 +1,10 @@
+//! Constrained generation using a GBNF grammar.
+//!
+//! Run with: `cargo run --release --example grammar -p mistralrs`
+
 use anyhow::Result;
 use mistralrs::{
-    IsqBits, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, ModelBuilder,
+    IsqBits, ModelBuilder, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole,
 };
 
 #[tokio::main]

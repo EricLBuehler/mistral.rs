@@ -18,9 +18,7 @@
 ///
 /// Run with: `cargo run --release --example text_models -p mistralrs`
 use anyhow::Result;
-use mistralrs::{
-    IsqBits, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, ModelBuilder,
-};
+use mistralrs::{IsqBits, ModelBuilder, PagedAttentionMetaBuilder, TextMessageRole, TextMessages};
 
 const MODEL_ID: &str = "Qwen/Qwen3-4B";
 
