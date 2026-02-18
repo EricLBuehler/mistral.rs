@@ -13,7 +13,7 @@
 
 use anyhow::Result;
 use mistralrs::{
-    tool, AgentBuilder, AgentEvent, AgentStopReason, IsqType, PagedAttentionMetaBuilder,
+    tool, AgentBuilder, AgentEvent, AgentStopReason, IsqBits, PagedAttentionMetaBuilder,
     TextModelBuilder,
 };
 use schemars::JsonSchema;
@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
     // Build the model
     // Using a model that supports tool calling (e.g., Llama 3.1, Qwen, Mistral)
     let model = TextModelBuilder::new("../hf_models/qwen3_4b")
-        .with_isq(IsqType::Q4K)
+        .with_auto_isq(IsqBits::Four)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
         .build()

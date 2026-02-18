@@ -1,5 +1,5 @@
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, UqffVisionModelBuilder, VisionMessages};
+use mistralrs::{IsqBits, TextMessageRole, UqffVisionModelBuilder, VisionMessages};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -8,7 +8,7 @@ async fn main() -> Result<()> {
         vec!["phi3.5-vision-instruct-q8_0.uqff".into()],
     )
     .into_inner()
-    .with_isq(IsqType::Q4K)
+    .with_auto_isq(IsqBits::Four)
     .with_logging()
     .build()
     .await?;

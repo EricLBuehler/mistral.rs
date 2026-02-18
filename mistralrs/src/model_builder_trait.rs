@@ -322,20 +322,27 @@ pub async fn build_text_pipeline(
     )
     .build(builder.loader_type.clone())?;
 
+    let device = builder
+        .device
+        .clone()
+        .unwrap_or(best_device(builder.force_cpu)?);
+    let isq_type: Option<IsqType> = builder
+        .isq
+        .as_ref()
+        .map(|s| crate::resolve_isq(s, &device))
+        .transpose()?;
+
     let pipeline = loader.load_model_from_hf(
         builder.hf_revision.clone(),
         builder.token_source.clone(),
         &builder.dtype,
-        &builder
-            .device
-            .clone()
-            .unwrap_or(best_device(builder.force_cpu).unwrap()),
+        &device,
         !builder.with_logging,
         builder
             .device_mapping
             .clone()
             .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
-        builder.isq,
+        isq_type,
         builder.paged_attn_cfg,
     )?;
 
@@ -390,10 +397,6 @@ pub async fn build_text_pipeline(
     };
 
     // Create loader config for unload/reload support
-    let device = builder
-        .device
-        .clone()
-        .unwrap_or(best_device(builder.force_cpu).unwrap());
     let device_map_setting = builder
         .device_mapping
         .clone()
@@ -431,7 +434,7 @@ pub async fn build_text_pipeline(
         dtype: builder.dtype,
         device,
         device_map_setting,
-        isq: builder.isq,
+        isq: isq_type,
         paged_attn_config: builder.paged_attn_cfg,
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
@@ -481,20 +484,27 @@ pub async fn build_vision_pipeline(
     )
     .build(builder.loader_type.clone());
 
+    let device = builder
+        .device
+        .clone()
+        .unwrap_or(best_device(builder.force_cpu)?);
+    let isq_type: Option<IsqType> = builder
+        .isq
+        .as_ref()
+        .map(|s| crate::resolve_isq(s, &device))
+        .transpose()?;
+
     let pipeline = loader.load_model_from_hf(
         builder.hf_revision.clone(),
         builder.token_source.clone(),
         &builder.dtype,
-        &builder
-            .device
-            .clone()
-            .unwrap_or(best_device(builder.force_cpu).unwrap()),
+        &device,
         !builder.with_logging,
         builder
             .device_mapping
             .clone()
             .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_vision())),
-        builder.isq,
+        isq_type,
         builder.paged_attn_cfg,
     )?;
 
@@ -549,10 +559,6 @@ pub async fn build_vision_pipeline(
     };
 
     // Create loader config for unload/reload support
-    let device = builder
-        .device
-        .clone()
-        .unwrap_or(best_device(builder.force_cpu).unwrap());
     let device_map_setting = builder
         .device_mapping
         .clone()
@@ -593,7 +599,7 @@ pub async fn build_vision_pipeline(
         dtype: builder.dtype,
         device,
         device_map_setting,
-        isq: builder.isq,
+        isq: isq_type,
         paged_attn_config: builder.paged_attn_cfg,
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
@@ -894,20 +900,27 @@ pub async fn build_embedding_pipeline(
     )
     .build(builder.loader_type.clone());
 
+    let device = builder
+        .device
+        .clone()
+        .unwrap_or(best_device(builder.force_cpu)?);
+    let isq_type: Option<IsqType> = builder
+        .isq
+        .as_ref()
+        .map(|s| crate::resolve_isq(s, &device))
+        .transpose()?;
+
     let pipeline = loader.load_model_from_hf(
         builder.hf_revision.clone(),
         builder.token_source.clone(),
         &builder.dtype,
-        &builder
-            .device
-            .clone()
-            .unwrap_or(best_device(builder.force_cpu).unwrap()),
+        &device,
         !builder.with_logging,
         builder
             .device_mapping
             .clone()
             .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
-        builder.isq,
+        isq_type,
         None,
     )?;
 
@@ -921,10 +934,6 @@ pub async fn build_embedding_pipeline(
     };
 
     // Create loader config for unload/reload support
-    let device = builder
-        .device
-        .clone()
-        .unwrap_or(best_device(builder.force_cpu).unwrap());
     let device_map_setting = builder
         .device_mapping
         .clone()
@@ -955,7 +964,7 @@ pub async fn build_embedding_pipeline(
         dtype: builder.dtype,
         device,
         device_map_setting,
-        isq: builder.isq,
+        isq: isq_type,
         paged_attn_config: None,
         silent: !builder.with_logging,
         chat_template: None,

@@ -6,7 +6,7 @@
 /// Run with: `cargo run --release --example auto_device_map -p mistralrs`
 use anyhow::Result;
 use mistralrs::{
-    AutoDeviceMapParams, DeviceMapSetting, IsqType, TextMessageRole, TextMessages, TextModelBuilder,
+    AutoDeviceMapParams, DeviceMapSetting, IsqBits, TextMessageRole, TextMessages, TextModelBuilder,
 };
 
 #[tokio::main]
@@ -17,7 +17,7 @@ async fn main() -> Result<()> {
     };
 
     let model = TextModelBuilder::new("meta-llama/Llama-3.3-70B-Instruct")
-        .with_isq(IsqType::Q8_0)
+        .with_auto_isq(IsqBits::Eight)
         .with_logging()
         .with_device_mapping(DeviceMapSetting::Auto(auto_map_params))
         .build()
@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
     // use mistralrs::{VisionModelBuilder, VisionMessages};
     //
     // let model = VisionModelBuilder::new("lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k")
-    //     .with_isq(IsqType::Q4K)
+    //     .with_auto_isq(IsqBits::Four)
     //     .with_device_mapping(DeviceMapSetting::Auto(AutoDeviceMapParams::Text {
     //         max_seq_len: 4096,
     //         max_batch_size: 2,

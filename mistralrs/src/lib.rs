@@ -6,12 +6,12 @@
 //! ## Quick Start
 //!
 //! ```no_run
-//! use mistralrs::{TextModelBuilder, IsqType, TextMessages, TextMessageRole};
+//! use mistralrs::{IsqBits, TextModelBuilder, TextMessages, TextMessageRole};
 //!
 //! #[tokio::main]
 //! async fn main() -> mistralrs::error::Result<()> {
 //!     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
-//!         .with_isq(IsqType::Q4K)
+//!         .with_auto_isq(IsqBits::Four)
 //!         .build()
 //!         .await?;
 //!
@@ -47,7 +47,7 @@
 //! # use mistralrs::*;
 //! # async fn example() -> error::Result<()> {
 //! let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
-//!     .with_isq(IsqType::Q4K)              // In-situ quantization
+//!     .with_auto_isq(IsqBits::Four)            // In-situ quantization (auto-selects best type)
 //!     .with_logging()                        // Enable logging
 //!     .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
 //!     .build()
@@ -56,7 +56,8 @@
 //! # }
 //! ```
 //!
-//! Quantization options via [`IsqType`]: `Q4_0`, `Q4_1`, `Q4K`, `Q5_0`, `Q5_1`, `Q5K`,
+//! Use [`TextModelBuilder::with_auto_isq`] for automatic platform-optimal quantization (e.g., `with_auto_isq(4)`),
+//! or [`TextModelBuilder::with_isq`] with a specific [`IsqType`]: `Q4_0`, `Q4_1`, `Q4K`, `Q5_0`, `Q5_1`, `Q5K`,
 //! `Q6K`, `Q8_0`, `Q8_1`, `HQQ4`, `HQQ8`, and more.
 //!
 //! ## Streaming
@@ -117,12 +118,12 @@
 //!
 //! ```no_run
 //! use mistralrs::blocking::BlockingModel;
-//! use mistralrs::{TextModelBuilder, IsqType};
+//! use mistralrs::TextModelBuilder;
 //!
 //! fn main() -> mistralrs::error::Result<()> {
 //!     let model = BlockingModel::from_builder(
 //!         TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
-//!             .with_isq(IsqType::Q4K),
+//!             .with_auto_isq(IsqBits::Four),
 //!     )?;
 //!     let answer = model.chat("What is 2+2?")?;
 //!     println!("{answer}");
@@ -151,7 +152,7 @@
 //! };
 //!
 //! let model = TextModelBuilder::new("path/to/model")
-//!     .with_isq(IsqType::Q8_0)
+//!     .with_auto_isq(IsqBits::Eight)
 //!     .with_mcp_client(mcp_config)
 //!     .build()
 //!     .await?;
@@ -197,6 +198,7 @@ pub mod error;
 mod gguf;
 mod gguf_lora_model;
 mod gguf_xlora_model;
+mod isq_setting;
 mod lora_model;
 mod messages;
 mod model;
@@ -206,6 +208,9 @@ mod speech_model;
 mod text_model;
 mod vision_model;
 mod xlora_model;
+
+pub(crate) use isq_setting::resolve_isq;
+pub use isq_setting::{IsqBits, IsqSetting};
 
 pub use agent::{
     Agent, AgentBuilder, AgentConfig, AgentEvent, AgentResponse, AgentStep, AgentStopReason,

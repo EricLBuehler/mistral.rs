@@ -1,6 +1,6 @@
 use anyhow::Result;
 use mistralrs::{
-    IsqType, RequestBuilder, SpeculativeConfig, TextMessageRole, TextMessages, TextModelBuilder,
+    IsqBits, RequestBuilder, SpeculativeConfig, TextMessageRole, TextMessages, TextModelBuilder,
     TextSpeculativeBuilder,
 };
 
@@ -9,7 +9,7 @@ async fn main() -> Result<()> {
     let target = TextModelBuilder::new("meta-llama/Llama-3.1-8B-Instruct").with_logging();
     let draft = TextModelBuilder::new("meta-llama/Llama-3.2-1B-Instruct")
         .with_logging()
-        .with_isq(IsqType::Q8_0);
+        .with_auto_isq(IsqBits::Eight);
     let spec_cfg = SpeculativeConfig { gamma: 16 };
     let model = TextSpeculativeBuilder::new(target, draft, spec_cfg)?
         .build()

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use mistralrs::{
-    llguidance::api::GrammarWithLexer, IsqType, LlguidanceGrammar, PagedAttentionMetaBuilder,
+    llguidance::api::GrammarWithLexer, IsqBits, LlguidanceGrammar, PagedAttentionMetaBuilder,
     RequestBuilder, TextMessageRole, TextModelBuilder,
 };
 use serde_json::json;
@@ -8,7 +8,7 @@ use serde_json::json;
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
-        .with_isq(IsqType::Q4K)
+        .with_auto_isq(IsqBits::Four)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
         .build()

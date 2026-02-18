@@ -8,7 +8,7 @@
 /// Run with: `cargo run --release --example cookbook_multiturn -p mistralrs`
 use anyhow::Result;
 use mistralrs::{
-    ChatCompletionChunkResponse, ChunkChoice, Delta, IsqType, Response, TextMessageRole,
+    ChatCompletionChunkResponse, ChunkChoice, Delta, IsqBits, Response, TextMessageRole,
     TextMessages, TextModelBuilder,
 };
 use std::io::{self, BufRead, Write};
@@ -16,7 +16,7 @@ use std::io::{self, BufRead, Write};
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
-        .with_isq(IsqType::Q4K)
+        .with_auto_isq(IsqBits::Four)
         .with_logging()
         .build()
         .await?;

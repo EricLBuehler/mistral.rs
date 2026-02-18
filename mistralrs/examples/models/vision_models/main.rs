@@ -25,7 +25,7 @@
 ///
 /// Run with: `cargo run --release --example vision_models -p mistralrs`
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqBits, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 const MODEL_ID: &str = "google/gemma-3-4b-it";
 
@@ -35,7 +35,7 @@ const MODEL_ID: &str = "google/gemma-3-4b-it";
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = VisionModelBuilder::new(MODEL_ID)
-        .with_isq(IsqType::Q4K)
+        .with_auto_isq(IsqBits::Four)
         .with_logging()
         // Uncomment for LLaVA 1.5:
         // .with_chat_template("chat_templates/vicuna.json")

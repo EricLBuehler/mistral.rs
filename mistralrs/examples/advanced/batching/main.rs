@@ -1,6 +1,6 @@
 use anyhow::Result;
 use mistralrs::{
-    ChatCompletionResponse, IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
+    ChatCompletionResponse, IsqBits, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
     TextModelBuilder, Usage,
 };
 
@@ -9,7 +9,7 @@ const N_REQUESTS: usize = 10;
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
-        .with_isq(IsqType::Q8_0)
+        .with_auto_isq(IsqBits::Eight)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
         .build()

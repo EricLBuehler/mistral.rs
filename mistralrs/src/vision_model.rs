@@ -1,6 +1,8 @@
 use candle_core::Device;
 use mistralrs_core::*;
 use mistralrs_core::{SearchCallback, Tool, ToolCallback};
+
+use crate::{IsqBits, IsqSetting};
 use std::collections::HashMap;
 use std::{
     ops::{Deref, DerefMut},
@@ -43,7 +45,7 @@ pub struct VisionModelBuilder {
     pub(crate) loader_type: Option<VisionLoaderType>,
     pub(crate) dtype: ModelDType,
     pub(crate) force_cpu: bool,
-    pub(crate) isq: Option<IsqType>,
+    pub(crate) isq: Option<IsqSetting>,
     pub(crate) throughput_logging: bool,
 
     // Other things
@@ -206,7 +208,19 @@ impl VisionModelBuilder {
 
     /// Use ISQ of a certain type. If there is an overlap, the topology type is used over the ISQ type.
     pub fn with_isq(mut self, isq: IsqType) -> Self {
-        self.isq = Some(isq);
+        self.isq = Some(IsqSetting::Specific(isq));
+        self
+    }
+
+    /// Automatically select the best ISQ quantization type for the given bit
+    /// width based on the target platform.
+    ///
+    /// On Metal, this selects AFQ variants (e.g., AFQ4 for 4-bit).
+    /// On CUDA and CPU, this selects Q*K variants (e.g., Q4K for 4-bit).
+    ///
+    /// The resolution happens at build time when the device is known.
+    pub fn with_auto_isq(mut self, bits: IsqBits) -> Self {
+        self.isq = Some(IsqSetting::Auto(bits));
         self
     }
 

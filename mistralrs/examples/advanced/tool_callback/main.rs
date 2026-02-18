@@ -1,6 +1,6 @@
 use anyhow::Result;
 use mistralrs::{
-    CalledFunction, IsqType, RequestBuilder, SearchResult, TextMessageRole, TextMessages,
+    CalledFunction, IsqBits, RequestBuilder, SearchResult, TextMessageRole, TextMessages,
     TextModelBuilder, Tool, ToolChoice, ToolType,
 };
 use std::fs;
@@ -34,7 +34,7 @@ fn local_search(query: &str) -> Result<Vec<SearchResult>> {
 async fn main() -> Result<()> {
     // Build the model and register the *tool callback*.
     let model = TextModelBuilder::new("NousResearch/Hermes-3-Llama-3.1-8B")
-        .with_isq(IsqType::Q4K)
+        .with_auto_isq(IsqBits::Four)
         .with_logging()
         .with_tool_callback(
             "local_search",

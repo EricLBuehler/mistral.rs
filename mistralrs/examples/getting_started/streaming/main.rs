@@ -1,6 +1,6 @@
 use anyhow::Result;
 use mistralrs::{
-    ChatCompletionChunkResponse, ChunkChoice, Delta, IsqType, PagedAttentionMetaBuilder,
+    ChatCompletionChunkResponse, ChunkChoice, Delta, IsqBits, PagedAttentionMetaBuilder,
     RequestBuilder, Response, TextMessageRole, TextMessages, TextModelBuilder,
 };
 use std::io::Write;
@@ -8,7 +8,7 @@ use std::io::Write;
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
-        .with_isq(IsqType::Q8_0)
+        .with_auto_isq(IsqBits::Eight)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
         .build()

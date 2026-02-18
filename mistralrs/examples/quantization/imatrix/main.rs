@@ -1,12 +1,12 @@
 use anyhow::Result;
 use mistralrs::{
-    IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
+    IsqBits, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = TextModelBuilder::new("meta-llama/Llama-3.2-3B-Instruct")
-        .with_isq(IsqType::Q4K)
+        .with_auto_isq(IsqBits::Four)
         .with_calibration_file("calibration_data/calibration_datav3_small.txt".into())
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?

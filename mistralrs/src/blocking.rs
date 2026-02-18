@@ -9,12 +9,12 @@
 //! # Example
 //! ```no_run
 //! use mistralrs::blocking::BlockingModel;
-//! use mistralrs::{TextModelBuilder, TextMessages, TextMessageRole, IsqType};
+//! use mistralrs::{IsqBits, TextModelBuilder, TextMessages, TextMessageRole};
 //!
 //! fn main() -> mistralrs::error::Result<()> {
 //!     let model = BlockingModel::from_builder(
 //!         TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
-//!             .with_isq(IsqType::Q4K),
+//!             .with_auto_isq(IsqBits::Four),
 //!     )?;
 //!
 //!     let messages = TextMessages::new()

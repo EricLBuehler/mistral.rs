@@ -5,12 +5,12 @@
 ///
 /// Run with: `cargo run --release --example vision -p mistralrs`
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqBits, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = VisionModelBuilder::new("google/gemma-3-4b-it")
-        .with_isq(IsqType::Q4K)
+        .with_auto_isq(IsqBits::Four)
         .with_logging()
         .build()
         .await?;

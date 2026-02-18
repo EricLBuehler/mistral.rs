@@ -1,10 +1,10 @@
 use mistralrs_core::{
     initialize_logging, AnyMoeConfig, AnyMoeLoader, AutoDeviceMapParams, DefaultSchedulerMethod,
-    DeviceMapSetting, Loader, MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig,
+    DeviceMapSetting, IsqType, Loader, MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig,
     SchedulerConfig,
 };
 
-use crate::{best_device, Model, TextModelBuilder};
+use crate::{best_device, resolve_isq, Model, TextModelBuilder};
 
 pub struct AnyMoeModelBuilder {
     base: TextModelBuilder,
@@ -78,16 +78,24 @@ impl AnyMoeModelBuilder {
         });
 
         // Load, into a Pipeline
+        let device = best_device(self.base.force_cpu)?;
+        let isq_type: Option<IsqType> = self
+            .base
+            .isq
+            .as_ref()
+            .map(|s| resolve_isq(s, &device))
+            .transpose()?;
+
         let pipeline = loader.load_model_from_hf(
             self.base.hf_revision,
             self.base.token_source,
             &self.base.dtype,
-            &best_device(self.base.force_cpu)?,
+            &device,
             !self.base.with_logging,
             self.base
                 .device_mapping
                 .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
-            self.base.isq,
+            isq_type,
             self.base.paged_attn_cfg,
         )?;
 

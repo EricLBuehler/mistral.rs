@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use mistralrs_core::{
-    initialize_logging, AutoDeviceMapParams, DefaultSchedulerMethod, DeviceMapSetting,
+    initialize_logging, AutoDeviceMapParams, DefaultSchedulerMethod, DeviceMapSetting, IsqType,
     MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig, Pipeline, SchedulerConfig,
     SpeculativeConfig, SpeculativePipeline,
 };
 use tokio::sync::Mutex;
 
-use crate::{best_device, Model, TextModelBuilder};
+use crate::{best_device, resolve_isq, Model, TextModelBuilder};
 
 pub struct TextSpeculativeBuilder {
     target: TextModelBuilder,
@@ -66,16 +66,23 @@ impl TextSpeculativeBuilder {
         .build(builder.loader_type)?;
 
         // Load, into a Pipeline
+        let device = best_device(builder.force_cpu)?;
+        let isq_type: Option<IsqType> = builder
+            .isq
+            .as_ref()
+            .map(|s| resolve_isq(s, &device))
+            .transpose()?;
+
         let pipeline = loader.load_model_from_hf(
             builder.hf_revision,
             builder.token_source,
             &builder.dtype,
-            &best_device(builder.force_cpu)?,
+            &device,
             !builder.with_logging,
             builder
                 .device_mapping
                 .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
-            builder.isq,
+            isq_type,
             builder.paged_attn_cfg,
         )?;
         Ok(pipeline)

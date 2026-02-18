@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use mistralrs::{
-    IsqType, MultiModelBuilder, TextMessageRole, TextMessages, TextModelBuilder, VisionModelBuilder,
+    IsqBits, MultiModelBuilder, TextMessageRole, TextMessages, TextModelBuilder, VisionModelBuilder,
 };
 
 // Model IDs - these are the actual HuggingFace model paths
@@ -18,12 +18,12 @@ async fn main() -> Result<()> {
         .add_model_with_alias(
             GEMMA_ALIAS,
             VisionModelBuilder::new(GEMMA_MODEL_ID)
-                .with_isq(IsqType::Q4K)
+                .with_auto_isq(IsqBits::Four)
                 .with_logging(),
         )
         .add_model_with_alias(
             QWEN_ALIAS,
-            TextModelBuilder::new(QWEN_MODEL_ID).with_isq(IsqType::Q4K),
+            TextModelBuilder::new(QWEN_MODEL_ID).with_auto_isq(IsqBits::Four),
         )
         .with_default_model(GEMMA_ALIAS)
         .build()

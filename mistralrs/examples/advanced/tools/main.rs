@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use mistralrs::{
-    Function, IsqType, RequestBuilder, TextMessageRole, TextModelBuilder, Tool, ToolChoice,
+    Function, IsqBits, RequestBuilder, TextMessageRole, TextModelBuilder, Tool, ToolChoice,
     ToolType,
 };
 use serde_json::{json, Value};
@@ -20,7 +20,7 @@ fn get_weather(input: GetWeatherInput) -> String {
 async fn main() -> Result<()> {
     let model = TextModelBuilder::new("meta-llama/Meta-Llama-3.1-8B-Instruct")
         .with_logging()
-        .with_isq(IsqType::Q8_0)
+        .with_auto_isq(IsqBits::Eight)
         .build()
         .await?;
 

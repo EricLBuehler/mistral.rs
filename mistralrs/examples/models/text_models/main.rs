@@ -19,7 +19,7 @@
 /// Run with: `cargo run --release --example text_models -p mistralrs`
 use anyhow::Result;
 use mistralrs::{
-    IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
+    IsqBits, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
 };
 
 const MODEL_ID: &str = "microsoft/Phi-3.5-mini-instruct";
@@ -27,7 +27,7 @@ const MODEL_ID: &str = "microsoft/Phi-3.5-mini-instruct";
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = TextModelBuilder::new(MODEL_ID)
-        .with_isq(IsqType::Q4K)
+        .with_auto_isq(IsqBits::Four)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
         .build()

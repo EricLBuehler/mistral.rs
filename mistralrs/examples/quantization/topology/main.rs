@@ -1,13 +1,13 @@
 use anyhow::Result;
 use mistralrs::{
-    IsqType, LayerTopology, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
+    IsqBits, IsqType, LayerTopology, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
     TextModelBuilder, Topology,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
-        .with_isq(IsqType::Q8_0)
+        .with_auto_isq(IsqBits::Eight)
         .with_topology(
             Topology::empty()
                 .with_range(

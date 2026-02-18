@@ -1,13 +1,13 @@
 use anyhow::Result;
 use mistralrs::{
-    IsqType, RequestBuilder, SearchEmbeddingModel, TextMessageRole, TextMessages, TextModelBuilder,
+    IsqBits, RequestBuilder, SearchEmbeddingModel, TextMessageRole, TextMessages, TextModelBuilder,
     WebSearchOptions,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = TextModelBuilder::new("NousResearch/Hermes-3-Llama-3.1-8B")
-        .with_isq(IsqType::Q4K)
+        .with_auto_isq(IsqBits::Four)
         .with_logging()
         .with_search(SearchEmbeddingModel::default())
         .build()

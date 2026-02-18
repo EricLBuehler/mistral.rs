@@ -1,13 +1,13 @@
 use anyhow::Result;
 use mistralrs::{
-    AnyMoeConfig, AnyMoeExpertType, AnyMoeModelBuilder, IsqType, PagedAttentionMetaBuilder,
+    AnyMoeConfig, AnyMoeExpertType, AnyMoeModelBuilder, IsqBits, PagedAttentionMetaBuilder,
     TextMessageRole, TextMessages, TextModelBuilder,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let text_builder = TextModelBuilder::new("mistralai/Mistral-7B-Instruct-v0.1")
-        .with_isq(IsqType::Q8_0)
+        .with_auto_isq(IsqBits::Eight)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?;
 

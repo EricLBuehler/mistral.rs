@@ -8,7 +8,7 @@
 /// Run with: `cargo run --release --example cookbook_rag -p mistralrs`
 use anyhow::Result;
 use mistralrs::{
-    EmbeddingModelBuilder, EmbeddingRequest, IsqType, TextMessageRole, TextMessages,
+    EmbeddingModelBuilder, EmbeddingRequest, IsqBits, TextMessageRole, TextMessages,
     TextModelBuilder,
 };
 
@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
 
     // ---- Step 4: Send context + query to a text model ----
     let text_model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
-        .with_isq(IsqType::Q4K)
+        .with_auto_isq(IsqBits::Four)
         .with_logging()
         .build()
         .await?;
