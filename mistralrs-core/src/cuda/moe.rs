@@ -81,7 +81,10 @@ pub fn moe_gemm(
                 _ => candle::bail!("topk_weights must be a cuda tensor"),
             };
             let tw_offset = tw_l.start_offset();
-            let topk_w_ptr = topk_weights.slice(tw_offset..).device_ptr(topk_weights.stream()).0 as *const f32;
+            let topk_w_ptr = topk_weights
+                .slice(tw_offset..)
+                .device_ptr(topk_weights.stream())
+                .0 as *const f32;
             topk_w_ptr
         } else {
             std::ptr::null()
@@ -116,9 +119,18 @@ pub fn moe_gemm(
         unsafe {
             moe_func(
                 input.slice(input_offset..).device_ptr(input.stream()).0 as *const c_void, // [size_m, size_k]
-                weights.slice(weights_offset..).device_ptr(weights.stream()).0 as *const c_void, // [num_experts, size_n, size_k]
-                sorted_token_ids.slice(sti_offset..).device_ptr(sorted_token_ids.stream()).0 as *const i32,
-                experts_ids.slice(ei_offset..).device_ptr(experts_ids.stream()).0 as *const i32,
+                weights
+                    .slice(weights_offset..)
+                    .device_ptr(weights.stream())
+                    .0 as *const c_void, // [num_experts, size_n, size_k]
+                sorted_token_ids
+                    .slice(sti_offset..)
+                    .device_ptr(sorted_token_ids.stream())
+                    .0 as *const i32,
+                experts_ids
+                    .slice(ei_offset..)
+                    .device_ptr(experts_ids.stream())
+                    .0 as *const i32,
                 topk_weights_ptr,
                 output.device_ptr(output.stream()).0 as *mut c_void, // [size_m, size_n]
                 num_experts_i32,
@@ -261,7 +273,10 @@ pub fn moe_gemm_transposed(
                 _ => candle::bail!("topk_weights must be a cuda tensor"),
             };
             let tw_offset = tw_l.start_offset();
-            let topk_w_ptr = topk_weights.slice(tw_offset..).device_ptr(topk_weights.stream()).0 as *const f32;
+            let topk_w_ptr = topk_weights
+                .slice(tw_offset..)
+                .device_ptr(topk_weights.stream())
+                .0 as *const f32;
             topk_w_ptr
         } else {
             std::ptr::null()
@@ -296,9 +311,18 @@ pub fn moe_gemm_transposed(
         unsafe {
             moe_func(
                 input.slice(input_offset..).device_ptr(input.stream()).0 as *const c_void, // [size_m, size_k]
-                weights.slice(weights_offset..).device_ptr(weights.stream()).0 as *const c_void, // [num_experts, size_k, size_n]
-                sorted_token_ids.slice(sti_offset..).device_ptr(sorted_token_ids.stream()).0 as *const i32,
-                experts_ids.slice(ei_offset..).device_ptr(experts_ids.stream()).0 as *const i32,
+                weights
+                    .slice(weights_offset..)
+                    .device_ptr(weights.stream())
+                    .0 as *const c_void, // [num_experts, size_k, size_n]
+                sorted_token_ids
+                    .slice(sti_offset..)
+                    .device_ptr(sorted_token_ids.stream())
+                    .0 as *const i32,
+                experts_ids
+                    .slice(ei_offset..)
+                    .device_ptr(experts_ids.stream())
+                    .0 as *const i32,
                 topk_weights_ptr,
                 output.device_ptr(output.stream()).0 as *mut c_void, // [size_m, size_n]
                 num_experts_i32,
