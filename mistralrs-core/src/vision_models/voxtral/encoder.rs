@@ -232,7 +232,9 @@ impl VoxtralEncoder {
         // (Matches HF VoxtralRealtimeCausalConv1d.)
         let vb_c1 = vb.pp("conv_layers").pp("0").pp("conv");
         let conv1 = candle_nn::Conv1d::new(
-            vb_c1.get((cfg.dim, n_mels, 3), "weight")?.to_dtype(DType::F32)?,
+            vb_c1
+                .get((cfg.dim, n_mels, 3), "weight")?
+                .to_dtype(DType::F32)?,
             Some(vb_c1.get(cfg.dim, "bias")?.to_dtype(DType::F32)?),
             candle_nn::Conv1dConfig {
                 padding: 0,
@@ -242,7 +244,9 @@ impl VoxtralEncoder {
         );
         let vb_c2 = vb.pp("conv_layers").pp("1").pp("conv");
         let conv2 = candle_nn::Conv1d::new(
-            vb_c2.get((cfg.dim, cfg.dim, 3), "weight")?.to_dtype(DType::F32)?,
+            vb_c2
+                .get((cfg.dim, cfg.dim, 3), "weight")?
+                .to_dtype(DType::F32)?,
             Some(vb_c2.get(cfg.dim, "bias")?.to_dtype(DType::F32)?),
             candle_nn::Conv1dConfig {
                 padding: 0,

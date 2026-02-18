@@ -531,6 +531,7 @@ async fn vision_interactive_mode(
             CLEAR_CMD => {
                 messages.clear();
                 images.clear();
+                audios.clear();
                 info!("Cleared chat history.");
                 continue;
             }
@@ -570,7 +571,8 @@ async fn vision_interactive_mode(
                             }
                         }
                     }
-                    // Load audios
+                    // Load audios (clear previous turn's audio — transcription is per-turn)
+                    audios.clear();
                     let mut audio_indexes = Vec::new();
                     for url in &urls_audio {
                         match util::parse_audio_url(url).await {

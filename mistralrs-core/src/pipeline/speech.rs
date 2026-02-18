@@ -322,6 +322,7 @@ impl Loader for SpeechLoader {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Audio],
                 },
+                suppress_completion_token_ids: Vec::new(),
             }),
             dummy_cache: EitherCache::Full(Cache::new(0, false)),
             cfg: self

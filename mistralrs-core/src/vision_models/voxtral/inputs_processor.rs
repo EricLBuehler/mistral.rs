@@ -43,6 +43,14 @@ impl VoxtralProcessor {
     }
 }
 
+/// [STREAMING_WORD] token ID (rank 33 in tekken special tokens).
+const STREAMING_WORD_TOKEN_ID: u32 = 33;
+/// Audio output tokens per mel frame: conv stride (2) × adapter downsample (4).
+const AUDIO_LENGTH_PER_TOK: usize = 8;
+/// Number of right-pad silence tokens added to audio (from audio_processing.rs).
+/// Subtracting from the generation cap prevents generating into silence region.
+const N_RIGHT_PAD_TOKENS: usize = 17;
+
 impl Processor for VoxtralProcessor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         Arc::new(VoxtralInputsProcessor {
@@ -56,6 +64,10 @@ impl Processor for VoxtralProcessor {
 
     fn template_action(&self) -> MessagesAction {
         MessagesAction::FlattenOnlyText
+    }
+
+    fn suppress_completion_token_ids(&self) -> Vec<u32> {
+        vec![STREAMING_PAD_TOKEN_ID, STREAMING_WORD_TOKEN_ID]
     }
 }
 
@@ -120,12 +132,8 @@ impl InputsProcessor for VoxtralInputsProcessor {
                         let n_pad = N_LEFT_PAD_TOKENS + N_DELAY_TOKENS;
                         let mut prompt_tokens = Vec::with_capacity(1 + n_pad);
                         prompt_tokens.push(BOS_TOKEN_ID);
-                        prompt_tokens
-                            .extend(std::iter::repeat_n(STREAMING_PAD_TOKEN_ID, n_pad));
-                        seq.set_toks_and_reallocate(
-                            prompt_tokens,
-                            paged_attn_metadata.as_mut(),
-                        );
+                        prompt_tokens.extend(std::iter::repeat_n(STREAMING_PAD_TOKEN_ID, n_pad));
+                        seq.set_toks_and_reallocate(prompt_tokens, paged_attn_metadata.as_mut());
                         seq.multimodal.has_changed_prompt = true;
                     }
                 } else {
@@ -136,14 +144,21 @@ impl InputsProcessor for VoxtralInputsProcessor {
                                 .audio_processor
                                 .process_audio(audio, device)
                                 .expect("Audio processing failed");
+                            // Cap generation at num_audio_tokens matching HF behavior.
+                            // num_audio_tokens = ceil(mel_frames / audio_length_per_tok)
+                            // Subtract right-pad silence tokens to stop at speech boundary.
+                            let mel_frames = mel.dims()[1];
+                            let num_audio_tokens = mel_frames
+                                .div_ceil(AUDIO_LENGTH_PER_TOK)
+                                .saturating_sub(N_RIGHT_PAD_TOKENS);
+                            seq.set_max_len(num_audio_tokens);
                             mel_accum.push(mel);
                         }
                     }
                 }
             }
             if !mel_accum.is_empty() {
-                let t =
-                    candle_core::Tensor::cat(&mel_accum, 1).map_err(anyhow::Error::from)?;
+                let t = candle_core::Tensor::cat(&mel_accum, 1).map_err(anyhow::Error::from)?;
                 Some(t)
             } else {
                 None

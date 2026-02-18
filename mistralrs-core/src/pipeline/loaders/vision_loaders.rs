@@ -96,6 +96,9 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     fn encoder_cache_counters(&self) -> Option<(Arc<AtomicUsize>, Arc<AtomicUsize>)> {
         None
     }
+    /// Reset model-specific state (e.g. cached audio embeddings) between requests.
+    /// Called when the pipeline's non-granular state is reset.
+    fn reset_model_specific_state(&self) {}
 }
 
 pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {
@@ -394,9 +397,7 @@ impl VisionModelLoader for AutoVisionLoader {
     }
 
     fn default_chat_template(&self, config: &str) -> Option<String> {
-        Self::get_loader(config)
-            .ok()?
-            .default_chat_template(config)
+        Self::get_loader(config).ok()?.default_chat_template(config)
     }
 
     fn default_bos_eos(&self, config: &str) -> Option<(String, String)> {

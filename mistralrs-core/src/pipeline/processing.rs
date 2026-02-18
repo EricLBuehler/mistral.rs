@@ -74,6 +74,12 @@ pub trait Processor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor>;
     fn get_special_tokens(&self) -> &[&'static str];
     fn template_action(&self) -> MessagesAction;
+    /// Token IDs whose decoded bytes should be suppressed from completion output.
+    /// Override for models that generate control tokens (e.g. streaming markers)
+    /// that should not appear in the final text.
+    fn suppress_completion_token_ids(&self) -> Vec<u32> {
+        Vec::new()
+    }
 }
 
 /// Helper function to extract token string from BeginEndUnkPadTok

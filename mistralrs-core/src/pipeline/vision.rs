@@ -687,12 +687,10 @@ impl Loader for VisionLoader {
         // which has no tokenizer_config.json).
         if let Some((bos, eos)) = self.inner.default_bos_eos(&config) {
             if chat_template.bos_token.is_none() {
-                chat_template.bos_token =
-                    Some(BeginEndUnkPadTok(Either::Left(bos)));
+                chat_template.bos_token = Some(BeginEndUnkPadTok(Either::Left(bos)));
             }
             if chat_template.eos_token.is_none() {
-                chat_template.eos_token =
-                    Some(BeginEndUnkPadTok(Either::Left(eos)));
+                chat_template.eos_token = Some(BeginEndUnkPadTok(Either::Left(eos)));
             }
         }
 
@@ -886,6 +884,7 @@ impl Loader for VisionLoader {
                 cache_engine,
                 model_metadata: Some(model_metadata),
                 modalities: self.inner.modalities(&config)?,
+                suppress_completion_token_ids: processor.suppress_completion_token_ids(),
             }),
             processor,
             prefixer: self.inner.prefixer(&config),
@@ -986,6 +985,11 @@ impl CacheManagerMixin for VisionPipeline {
                 load_preallocated_cache,
             );
         }
+        // Always clear model-specific state (e.g. Voxtral audio_embeds_cache)
+        // for new prompts. set_none_cache is "Only called for prompt seqs",
+        // so this is always appropriate. Default impl is a no-op.
+        self.model.reset_model_specific_state();
+
         if reset_non_granular {
             self.reset_non_granular_state()
         }
@@ -1005,7 +1009,9 @@ impl MetadataMixin for VisionPipeline {
     fn name(&self) -> String {
         self.model_id.clone()
     }
-    fn reset_non_granular_state(&self) {}
+    fn reset_non_granular_state(&self) {
+        self.model.reset_model_specific_state();
+    }
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
         Some(self.tokenizer.clone())
     }

@@ -154,6 +154,10 @@ pub struct GeneralMetadata {
     pub cache_engine: Option<CacheEngine>,
     pub model_metadata: Option<Arc<dyn ModelConfigLike + Send + Sync>>,
     pub modalities: Modalities,
+    /// Token IDs whose decoded bytes should be suppressed from completion output.
+    /// The tokens are still generated and tracked for correct model behavior,
+    /// but their text representation is hidden (e.g. [STREAMING_PAD] in Voxtral).
+    pub suppress_completion_token_ids: Vec<u32>,
 }
 
 impl GeneralMetadata {

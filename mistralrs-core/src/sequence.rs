@@ -693,6 +693,15 @@ impl Sequence {
         self.prefix_cache_len = len;
     }
 
+    /// Override the maximum generation length.
+    /// If a max_len was already set, keeps the minimum of old and new values.
+    pub fn set_max_len(&mut self, max_len: usize) {
+        self.max_len = Some(
+            self.max_len
+                .map_or(max_len, |existing| existing.min(max_len)),
+        );
+    }
+
     /// This will also set prompt_len
     pub(crate) fn set_toks_and_reallocate(
         &mut self,

@@ -34,18 +34,23 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     use_prefix_cacher: bool,
 ) -> Result<()> {
     let mut is_done = seq.is_done(logprobs.token, eos_tok, this.get_metadata().max_seq_len);
-    seq.add_token(
-        logprobs.clone(),
-        this.get_metadata()
+    let metadata = this.get_metadata();
+    let completion_bytes = if metadata
+        .suppress_completion_token_ids
+        .contains(&logprobs.token)
+    {
+        Vec::new()
+    } else {
+        metadata
             .tok_env()
             .ok_or(candle_core::Error::Msg(
                 "`finish_or_add_toks_to_seq` requires the pipeline to have a token trie"
                     .to_string(),
             ))?
             .tok_trie()
-            .decode(&[logprobs.token]),
-        &is_done,
-    );
+            .decode(&[logprobs.token])
+    };
+    seq.add_token(logprobs.clone(), completion_bytes, &is_done);
 
     // If we can have a tool and we got a tool, stop the sequence early.
     // Doesn't conflict with the logic below because it does the same thing anyway.

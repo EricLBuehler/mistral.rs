@@ -788,6 +788,14 @@ impl VisionModel for VoxtralModel {
         Box::new(VoxtralSpecificArgs::default())
     }
 
+    fn reset_model_specific_state(&self) {
+        *self
+            .audio_embeds_cache
+            .lock()
+            .expect("audio_embeds_cache lock") = None;
+        self.encoder.reset_cache();
+    }
+
     fn cache(&self) -> &EitherCache {
         &self.cache
     }
