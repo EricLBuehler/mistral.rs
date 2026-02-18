@@ -15,11 +15,11 @@ use crate::{
 
 use super::config::WhisperEncoderArgs;
 
-struct EncoderAttention {
-    wq: Arc<dyn QuantMethod>,
-    wk: Arc<dyn QuantMethod>,
-    wv: Arc<dyn QuantMethod>,
-    wo: Arc<dyn QuantMethod>,
+pub(super) struct EncoderAttention {
+    pub(super) wq: Arc<dyn QuantMethod>,
+    pub(super) wk: Arc<dyn QuantMethod>,
+    pub(super) wv: Arc<dyn QuantMethod>,
+    pub(super) wo: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -122,10 +122,10 @@ impl EncoderAttention {
     }
 }
 
-struct EncoderMlp {
-    w1: Arc<dyn QuantMethod>, // gate
-    w2: Arc<dyn QuantMethod>, // down
-    w3: Arc<dyn QuantMethod>, // up
+pub(super) struct EncoderMlp {
+    pub(super) w1: Arc<dyn QuantMethod>, // gate
+    pub(super) w2: Arc<dyn QuantMethod>, // down
+    pub(super) w3: Arc<dyn QuantMethod>, // up
 }
 
 impl EncoderMlp {
@@ -153,8 +153,8 @@ impl EncoderMlp {
 }
 
 pub(super) struct EncoderLayer {
-    attention: EncoderAttention,
-    feed_forward: EncoderMlp,
+    pub(super) attention: EncoderAttention,
+    pub(super) feed_forward: EncoderMlp,
     pub(super) attention_norm: RmsNorm,
     pub(super) ffn_norm: RmsNorm,
 }
@@ -225,11 +225,8 @@ impl VoxtralEncoder {
         let dtype = vb.dtype();
         let n_mels = cfg.audio_encoding_args.num_mel_bins;
 
-        // Causal Conv1d layers to project mel features to encoder dim.
-        // Weights stored as F32 because CUDA Conv1d does not support BF16.
-        // Causal convolution: left-pad only, padding=0 in the Conv1d itself.
-        // Causal padding = (kernel_size - 1) * dilation = 2 for both.
-        // (Matches HF VoxtralRealtimeCausalConv1d.)
+        // Conv1d weights stored as F32 (CUDA Conv1d does not support BF16).
+        // Causal padding: left-pad by (kernel_size - 1) * dilation, padding=0 in Conv1d.
         let vb_c1 = vb.pp("conv_layers").pp("0").pp("conv");
         let conv1 = candle_nn::Conv1d::new(
             vb_c1
@@ -300,7 +297,6 @@ impl VoxtralEncoder {
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_sz, _t, _mel) = xs.dims3()?;
 
-        // Conv1d is computed in F32 (CUDA Conv1d does not support BF16).
         let xs = xs.to_dtype(DType::F32)?;
 
         // Transpose [B, T, mel] -> [B, mel, T] for Conv1d
@@ -350,10 +346,8 @@ impl VoxtralEncoder {
 
     /// Reset the encoder KV cache (call between different audio inputs).
     pub fn reset_cache(&self) {
-        *self.cache.lock().expect("Encoder cache lock poisoned") =
-            NormalCache::new_sliding(self.n_layers, 1_000_000, self.sliding_window)
-                .lock()
-                .expect("New cache lock poisoned")
-                .clone();
+        let fresh = NormalCache::new_sliding(self.n_layers, 1_000_000, self.sliding_window);
+        let inner = fresh.lock().expect("New cache lock poisoned").clone();
+        *self.cache.lock().expect("Encoder cache lock poisoned") = inner;
     }
 }

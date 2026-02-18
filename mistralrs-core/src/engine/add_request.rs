@@ -545,7 +545,11 @@ impl Engine {
                 images.clone(),
                 audios.clone(),
                 block_size,
-                if has_tools { Some(matcher.clone()) } else { None },
+                if has_tools {
+                    Some(matcher.clone())
+                } else {
+                    None
+                },
                 image_generation_format,
                 seq_step_type,
                 diffusion_params.clone(),

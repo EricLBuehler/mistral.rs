@@ -34,8 +34,6 @@ use adapter::VoxtralTemporalAdapter;
 use config::VoxtralConfig;
 use encoder::VoxtralEncoder;
 
-// ─── Decoder components (Mistral-native naming) ─────────────────────────────
-
 struct DecoderAttention {
     wq: Arc<dyn QuantMethod>,
     wk: Arc<dyn QuantMethod>,
@@ -350,8 +348,6 @@ impl DecoderLayer {
     }
 }
 
-// ─── VoxtralModel ────────────────────────────────────────────────────────────
-
 #[derive(Default)]
 pub struct VoxtralSpecificArgs {
     pub mel_features: Option<Tensor>,
@@ -659,8 +655,6 @@ impl VoxtralModel {
     }
 }
 
-// ─── IsqModel ────────────────────────────────────────────────────────────────
-
 impl IsqModel for VoxtralModel {
     fn get_layers(
         &mut self,
@@ -728,6 +722,15 @@ impl IsqModel for VoxtralModel {
             let uvb_l = uvb_enc.pp("transformer").pp("layers").pp(i);
             uvb_l.pp("attention_norm").add(&layer.attention_norm);
             uvb_l.pp("ffn_norm").add(&layer.ffn_norm);
+            let uvb_attn = uvb_l.pp("attention");
+            uvb_attn.pp("wq").add(&layer.attention.wq);
+            uvb_attn.pp("wk").add(&layer.attention.wk);
+            uvb_attn.pp("wv").add(&layer.attention.wv);
+            uvb_attn.pp("wo").add(&layer.attention.wo);
+            let uvb_ff = uvb_l.pp("feed_forward");
+            uvb_ff.pp("w1").add(&layer.feed_forward.w1);
+            uvb_ff.pp("w2").add(&layer.feed_forward.w2);
+            uvb_ff.pp("w3").add(&layer.feed_forward.w3);
         }
 
         // Adapter weights
@@ -755,8 +758,6 @@ impl IsqModel for VoxtralModel {
         Ok(names)
     }
 }
-
-// ─── VisionModel ─────────────────────────────────────────────────────────────
 
 impl VisionModel for VoxtralModel {
     fn forward(

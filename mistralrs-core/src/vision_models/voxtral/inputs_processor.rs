@@ -102,21 +102,9 @@ impl InputsProcessor for VoxtralInputsProcessor {
             ));
         };
 
-        // Process audio if present during prompt phase.
-        // Token replacement and audio processing are separated because the engine
-        // calls process_inputs twice for multimodal models:
-        //   1. Early call (add_request): replaces tokens for scheduler allocation,
-        //      return value is discarded.
-        //   2. Step call (pipeline.step): processes audio into mel features for the
-        //      model forward pass.
-        // Token replacement is guarded by `has_changed_prompt` (runs once in early call).
-        // Audio processing uses `take_audios` which is non-destructive when
-        // `has_changed_prompt` is false (early call) and destructive when true (step call),
-        // so mel features are only produced in the step call.
-        //
-        // The prompt is always [BOS, PAD*(N_LEFT_PAD + N_DELAY)] = 39 tokens.
-        // Audio embeddings (from the encoder+adapter) extend beyond the prompt into
-        // the generation region because the audio is left/right-padded with silence.
+        // Early call (add_request): replaces tokens for scheduler allocation.
+        // Step call (pipeline.step): processes audio into mel features for forward pass.
+        // Prompt is always [BOS, PAD*(N_LEFT_PAD + N_DELAY)] = 39 tokens.
         let mel_features = if is_prompt {
             let mut mel_accum = Vec::new();
             for seq in input_seqs.iter_mut() {
