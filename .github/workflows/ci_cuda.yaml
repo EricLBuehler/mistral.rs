@@ -6,16 +6,26 @@ on:
 
 jobs:
   test-cuda:
+    name: CI / cuda (${{ matrix.name }})
+
     # For security, only run automatically for:
     # - PRs from the same repo (not forks)
     # - manual workflow dispatch
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
 
     concurrency:
-      group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
+      group: ${{ github.workflow }}-${{ matrix.name }}-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
 
     runs-on: [self-hosted, Linux, ARM64, gpu, cuda]
+
+    strategy:
+      matrix:
+        include:
+          - name: cuda
+            features: cuda,nccl
+          # - name: cuda+nccl
+          #   features: cuda,nccl
 
     steps:
       - name: Checkout repository
@@ -34,8 +44,8 @@ jobs:
           nvidia-smi || true
           nvcc --version || true
 
-      - name: Clippy (cuda)
-        run: cargo clippy --features cuda
+      - name: Clippy
+        run: cargo clippy --features ${{ matrix.features }}
 
-      - name: Test (cuda)
-        run: cargo test --features cuda
+      - name: Test
+        run: cargo test --features ${{ matrix.features }}

@@ -8,8 +8,11 @@ use axum::{
     Router,
 };
 use tower_http::cors::{AllowOrigin, CorsLayer};
+#[cfg(feature = "swagger-ui")]
 use utoipa_swagger_ui::SwaggerUi;
 
+#[cfg(feature = "swagger-ui")]
+use crate::openapi_doc::get_openapi_doc;
 use crate::{
     chat_completion::chatcompletions,
     completions::completions,
@@ -19,7 +22,6 @@ use crate::{
         tune_model, unload_model,
     },
     image_generation::image_generation,
-    openapi_doc::get_openapi_doc,
     responses::{cancel_response, create_response, delete_response, get_response},
     speech_generation::speech_generation,
     types::SharedMistralRsState,
@@ -60,9 +62,13 @@ pub const DEFAULT_MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
 pub struct MistralRsServerRouterBuilder {
     /// The shared mistral.rs instance
     mistralrs: Option<SharedMistralRsState>,
-    /// Whether to include Swagger/OpenAPI documentation routes
+    /// Whether to include Swagger/OpenAPI documentation routes.
+    /// Only available when the `swagger-ui` feature is enabled.
+    #[cfg(feature = "swagger-ui")]
     include_swagger_routes: bool,
-    /// Optional base path prefix for all routes
+    /// Optional base path prefix for Swagger UI routes.
+    /// Only available when the `swagger-ui` feature is enabled.
+    #[cfg(feature = "swagger-ui")]
     base_path: Option<String>,
     /// Optional CORS allowed origins
     allowed_origins: Option<Vec<String>>,
@@ -75,7 +81,9 @@ impl Default for MistralRsServerRouterBuilder {
     fn default() -> Self {
         Self {
             mistralrs: None,
+            #[cfg(feature = "swagger-ui")]
             include_swagger_routes: true,
+            #[cfg(feature = "swagger-ui")]
             base_path: None,
             allowed_origins: None,
             max_body_limit: None,
@@ -110,15 +118,21 @@ impl MistralRsServerRouterBuilder {
     /// When enabled (default), the router will include routes for Swagger UI
     /// at `/docs` and the OpenAPI specification at `/api-doc/openapi.json`.
     /// These routes respect the configured base path if one is set.
+    ///
+    /// Only available when the `swagger-ui` feature is enabled.
+    #[cfg(feature = "swagger-ui")]
     pub fn with_include_swagger_routes(mut self, include_swagger_routes: bool) -> Self {
         self.include_swagger_routes = include_swagger_routes;
         self
     }
 
-    /// Sets a base path prefix for all routes.
+    /// Sets a base path prefix for Swagger UI routes.
     ///
-    /// When set, all routes will be prefixed with the given path. This is
+    /// When set, Swagger UI routes will be prefixed with the given path. This is
     /// useful when including the mistral.rs server instance in another axum project.
+    ///
+    /// Only available when the `swagger-ui` feature is enabled.
+    #[cfg(feature = "swagger-ui")]
     pub fn with_base_path(mut self, base_path: &str) -> Self {
         self.base_path = Some(base_path.to_owned());
         self
@@ -153,26 +167,29 @@ impl MistralRsServerRouterBuilder {
             anyhow::anyhow!("`mistralrs` instance must be set. Use `with_mistralrs`.")
         })?;
 
-        let mistralrs_server_router = init_router(
-            mistralrs,
-            self.include_swagger_routes,
-            self.base_path.as_deref(),
-            self.allowed_origins,
-            self.max_body_limit,
-        );
+        #[allow(unused_mut)]
+        let mut router = init_router(mistralrs, self.allowed_origins, self.max_body_limit)?;
 
-        mistralrs_server_router
+        #[cfg(feature = "swagger-ui")]
+        if self.include_swagger_routes {
+            let prefix = self.base_path.as_deref().unwrap_or("");
+            let doc = get_openapi_doc(None);
+            router = router.merge(
+                SwaggerUi::new(format!("{prefix}/docs"))
+                    .url(format!("{prefix}/api-doc/openapi.json"), doc),
+            );
+        }
+
+        Ok(router)
     }
 }
 
 /// Initializes and configures the underlying axum router with MistralRs API endpoints.
 ///
 /// This function creates a router with all the necessary API endpoints,
-/// CORS configuration, body size limits, and optional Swagger documentation.
+/// CORS configuration, and body size limits.
 fn init_router(
     state: SharedMistralRsState,
-    include_swagger_routes: bool,
-    base_path: Option<&str>,
     allowed_origins: Option<Vec<String>>,
     max_body_limit: Option<usize>,
 ) -> Result<Router> {
@@ -194,10 +211,7 @@ fn init_router(
         .allow_headers([http::header::CONTENT_TYPE, http::header::AUTHORIZATION])
         .allow_origin(allow_origin);
 
-    // Use the provided base path or default to ""
-    let prefix = base_path.unwrap_or("");
-
-    let mut router = Router::new()
+    let router = Router::new()
         .route("/v1/chat/completions", post(chatcompletions))
         .route("/v1/completions", post(completions))
         .route("/v1/embeddings", post(embeddings))
@@ -222,15 +236,6 @@ fn init_router(
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .with_state(state);
-
-    if include_swagger_routes {
-        let doc = get_openapi_doc(None);
-
-        router = router.merge(
-            SwaggerUi::new(format!("{prefix}/docs"))
-                .url(format!("{prefix}/api-doc/openapi.json"), doc),
-        );
-    }
 
     Ok(router)
 }
