@@ -1273,9 +1273,7 @@ impl Runner {
                 .map_err(PyApiErr::from)?;
 
             match send_recv_result {
-                either::Either::Right(rx) => {
-                    Ok(Either::Right(ChatCompletionStreamer::from_rx(rx)))
-                }
+                either::Either::Right(rx) => Ok(Either::Right(ChatCompletionStreamer::from_rx(rx))),
                 either::Either::Left(response) => match response {
                     Response::ValidationError(e) | Response::InternalError(e) => {
                         Err(PyApiErr::from(e.to_string()))
@@ -1327,41 +1325,40 @@ impl Runner {
 
                 let mut receivers = Vec::with_capacity(expected);
 
-                let mut enqueue =
-                    |message: RequestMessage| -> std::result::Result<(), String> {
-                        let (tx, rx) = channel(1);
-                        let request_id = {
-                            let l = NEXT_REQUEST_ID.lock().unwrap();
-                            let last = &mut *l.borrow_mut();
-                            let last_v = *last;
-                            *last += 1;
-                            last_v
-                        };
-
-                        let model_request = _Request::Normal(Box::new(NormalRequest {
-                            id: request_id,
-                            messages: message,
-                            sampling_params: SamplingParams::deterministic(),
-                            response: tx,
-                            return_logprobs: false,
-                            is_streaming: false,
-                            constraint: Constraint::None,
-                            suffix: None,
-                            tool_choice: None,
-                            tools: None,
-                            logits_processors: None,
-                            return_raw_logits: false,
-                            web_search_options: None,
-                            model_id: model_id.clone(),
-                            truncate_sequence,
-                        }));
-
-                        sender
-                            .blocking_send(model_request)
-                            .map_err(|e| e.to_string())?;
-                        receivers.push(rx);
-                        Ok(())
+                let mut enqueue = |message: RequestMessage| -> std::result::Result<(), String> {
+                    let (tx, rx) = channel(1);
+                    let request_id = {
+                        let l = NEXT_REQUEST_ID.lock().unwrap();
+                        let last = &mut *l.borrow_mut();
+                        let last_v = *last;
+                        *last += 1;
+                        last_v
                     };
+
+                    let model_request = _Request::Normal(Box::new(NormalRequest {
+                        id: request_id,
+                        messages: message,
+                        sampling_params: SamplingParams::deterministic(),
+                        response: tx,
+                        return_logprobs: false,
+                        is_streaming: false,
+                        constraint: Constraint::None,
+                        suffix: None,
+                        tool_choice: None,
+                        tools: None,
+                        logits_processors: None,
+                        return_raw_logits: false,
+                        web_search_options: None,
+                        model_id: model_id.clone(),
+                        truncate_sequence,
+                    }));
+
+                    sender
+                        .blocking_send(model_request)
+                        .map_err(|e| e.to_string())?;
+                    receivers.push(rx);
+                    Ok(())
+                };
 
                 match inputs {
                     PythonEmbeddingInputs::Prompts(prompts) => {
@@ -1379,16 +1376,12 @@ impl Runner {
                 let mut all_embeddings = Vec::with_capacity(receivers.len());
 
                 for mut rx in receivers {
-                    let response = rx
-                        .blocking_recv()
-                        .ok_or_else(|| {
-                            "Embedding response channel closed unexpectedly".to_string()
-                        })?;
+                    let response = rx.blocking_recv().ok_or_else(|| {
+                        "Embedding response channel closed unexpectedly".to_string()
+                    })?;
 
                     match response {
-                        Response::Embeddings { embeddings, .. } => {
-                            all_embeddings.push(embeddings)
-                        }
+                        Response::Embeddings { embeddings, .. } => all_embeddings.push(embeddings),
                         Response::ValidationError(e) | Response::InternalError(e) => {
                             return Err(e.to_string())
                         }
@@ -1579,9 +1572,7 @@ impl Runner {
                 let sender = runner
                     .get_sender(model_id.as_deref())
                     .map_err(|e| e.to_string())?;
-                sender
-                    .blocking_send(request)
-                    .map_err(|e| e.to_string())?;
+                sender.blocking_send(request).map_err(|e| e.to_string())?;
                 rx.blocking_recv()
                     .ok_or_else(|| "Channel was erroneously closed!".to_string())
             })
@@ -1631,9 +1622,7 @@ impl Runner {
                 let sender = runner
                     .get_sender(model_id.as_deref())
                     .map_err(|e| e.to_string())?;
-                sender
-                    .blocking_send(request)
-                    .map_err(|e| e.to_string())?;
+                sender.blocking_send(request).map_err(|e| e.to_string())?;
                 rx.blocking_recv()
                     .ok_or_else(|| "Channel was erroneously closed!".to_string())
             })
@@ -1658,7 +1647,12 @@ impl Runner {
     /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
     /// then nothing will happen.
     #[pyo3(signature = (dtype, model_id = None))]
-    fn send_re_isq(&self, py: Python<'_>, dtype: String, model_id: Option<String>) -> PyApiResult<()> {
+    fn send_re_isq(
+        &self,
+        py: Python<'_>,
+        dtype: String,
+        model_id: Option<String>,
+    ) -> PyApiResult<()> {
         let request = _Request::ReIsq(parse_isq_value(&dtype, None)?);
         let runner = self.runner.clone();
         py.allow_threads(move || {
@@ -1693,15 +1687,17 @@ impl Runner {
         });
 
         let runner = self.runner.clone();
-        py.allow_threads(move || -> std::result::Result<anyhow::Result<Vec<u32>>, String> {
-            runner
-                .get_sender(model_id.as_deref())
-                .map_err(|e| e.to_string())?
-                .blocking_send(request)
-                .map_err(|e| e.to_string())?;
-            rx.blocking_recv()
-                .ok_or_else(|| "Channel was erroneously closed!".to_string())
-        })
+        py.allow_threads(
+            move || -> std::result::Result<anyhow::Result<Vec<u32>>, String> {
+                runner
+                    .get_sender(model_id.as_deref())
+                    .map_err(|e| e.to_string())?
+                    .blocking_send(request)
+                    .map_err(|e| e.to_string())?;
+                rx.blocking_recv()
+                    .ok_or_else(|| "Channel was erroneously closed!".to_string())
+            },
+        )
         .map_err(PyApiErr::from)?
         .map_err(PyApiErr::from)
     }
@@ -1723,15 +1719,17 @@ impl Runner {
         });
 
         let runner = self.runner.clone();
-        py.allow_threads(move || -> std::result::Result<anyhow::Result<String>, String> {
-            runner
-                .get_sender(model_id.as_deref())
-                .map_err(|e| e.to_string())?
-                .blocking_send(request)
-                .map_err(|e| e.to_string())?;
-            rx.blocking_recv()
-                .ok_or_else(|| "Channel was erroneously closed!".to_string())
-        })
+        py.allow_threads(
+            move || -> std::result::Result<anyhow::Result<String>, String> {
+                runner
+                    .get_sender(model_id.as_deref())
+                    .map_err(|e| e.to_string())?
+                    .blocking_send(request)
+                    .map_err(|e| e.to_string())?;
+                rx.blocking_recv()
+                    .ok_or_else(|| "Channel was erroneously closed!".to_string())
+            },
+        )
         .map_err(PyApiErr::from)?
         .map_err(PyApiErr::from)
     }
@@ -2082,9 +2080,7 @@ impl Runner {
                 .map_err(PyApiErr::from)?;
 
             match send_recv_result {
-                either::Either::Right(rx) => {
-                    Ok(Either::Right(ChatCompletionStreamer::from_rx(rx)))
-                }
+                either::Either::Right(rx) => Ok(Either::Right(ChatCompletionStreamer::from_rx(rx))),
                 either::Either::Left(response) => match response {
                     Response::ValidationError(e) | Response::InternalError(e) => {
                         Err(PyApiErr::from(e.to_string()))
@@ -2234,8 +2230,12 @@ impl Runner {
     /// Manually reload a previously unloaded model.
     fn reload_model(&self, py: Python<'_>, model_id: String) -> PyApiResult<()> {
         let runner = self.runner.clone();
-        py.allow_threads(move || runner.reload_model_blocking(&model_id).map_err(|e| e.to_string()))
-            .map_err(PyApiErr::from)
+        py.allow_threads(move || {
+            runner
+                .reload_model_blocking(&model_id)
+                .map_err(|e| e.to_string())
+        })
+        .map_err(PyApiErr::from)
     }
 
     /// List all unloaded model IDs.
