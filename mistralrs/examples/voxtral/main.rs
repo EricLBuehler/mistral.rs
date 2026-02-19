@@ -8,7 +8,7 @@ async fn main() -> Result<()> {
         .build()
         .await?;
 
-    let audio_bytes = std::fs::read("audio.wav")?;
+    let audio_bytes = std::fs::read("sample_audio.wav")?;
     let audio = AudioInput::from_bytes(&audio_bytes)?;
 
     let messages = VisionMessages::new().add_multimodal_message(
