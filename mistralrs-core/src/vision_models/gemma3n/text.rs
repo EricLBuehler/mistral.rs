@@ -10,7 +10,7 @@ use statrs::distribution::{ContinuousCDF, Normal};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    device_map::{DeviceMapper, DeviceMappedMask},
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
         self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, MatMul, RmsNorm,
         RotaryEmbedding, ScaledEmbedding, Sdpa,

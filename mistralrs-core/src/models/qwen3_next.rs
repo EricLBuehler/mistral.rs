@@ -15,7 +15,7 @@ use std::{
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    device_map::{DeviceMapper, DeviceMappedMask},
+    device_map::{DeviceMappedMask, DeviceMapper},
     kv_cache::{HybridCache, HybridCacheConfig, HybridLayerType},
     layers::{
         embedding, linear_no_bias, CausalMasker, GemmaRmsNorm, MatMul, RotaryEmbedding, Sdpa,

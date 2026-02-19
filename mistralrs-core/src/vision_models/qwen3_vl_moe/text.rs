@@ -11,7 +11,7 @@ use mistralrs_quant::{
 use super::config::TextConfig;
 use crate::{
     attention::SdpaParams,
-    device_map::{DeviceMapper, DeviceMappedMask},
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{self, Activation, Qwen3VLRotaryEmbedding, RmsNorm, Sdpa},
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
