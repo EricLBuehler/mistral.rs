@@ -368,6 +368,7 @@ impl Engine {
                     if !scheduled.completion.is_empty() {
                         let current_completion_ids: Vec<usize> =
                             scheduled.completion.iter().map(|seq| *seq.id()).collect();
+
                         let res = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
                             let pre_op = if !self.no_kv_cache
