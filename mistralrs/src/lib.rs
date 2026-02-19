@@ -133,7 +133,7 @@
 //! use mistralrs::{IsqBits, ModelBuilder};
 //!
 //! fn main() -> mistralrs::error::Result<()> {
-//!     let model = BlockingModel::from_builder(
+//!     let model = BlockingModel::from_auto_builder(
 //!         ModelBuilder::new("Qwen/Qwen3-4B")
 //!             .with_auto_isq(IsqBits::Four),
 //!     )?;
