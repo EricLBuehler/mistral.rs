@@ -707,10 +707,10 @@ impl Loader for VisionLoader {
                 calibration_file.display(),
                 tokens.len()
             );
-            let bos_toks = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
-            let bos_tok_id = tokenizer
-                .token_to_id(&bos_toks[0])
-                .expect("Somehow the bos token is not present.");
+            let bos_tok_id = chat_template
+                .bos_tok()
+                .as_deref()
+                .and_then(|tok| tokenizer.token_to_id(tok));
 
             // NOTE: We ONLY calibrate the text bits of these models!!
             // So only those should be tracked!
@@ -723,7 +723,10 @@ impl Loader for VisionLoader {
             let n_chunks: usize = tokens.len().div_ceil(CHUNK_SIZE);
             let start = Instant::now();
             for (i, chunk) in tokens.chunks(CHUNK_SIZE).enumerate() {
-                let chunk = [vec![bos_tok_id], chunk.to_vec()].concat();
+                let mut chunk = chunk.to_vec();
+                if let Some(bos_tok_id) = bos_tok_id {
+                    chunk.insert(0, bos_tok_id);
+                }
                 let chunk_len = chunk.len();
 
                 let start = Instant::now();

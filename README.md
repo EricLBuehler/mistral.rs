@@ -242,7 +242,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-[Rust SDK](https://crates.io/crates/mistralrs) | [Examples](mistralrs/examples)
+[API Docs](https://docs.rs/mistralrs) | [Crate](https://crates.io/crates/mistralrs) | [Examples](mistralrs/examples)
 
 ## Docker
 

@@ -590,6 +590,7 @@ fn new_dummy_seq(
         SeqStepType::PromptAndDecode,
         None,
         None,
+        None,
         false,
         eos_toks,
     )

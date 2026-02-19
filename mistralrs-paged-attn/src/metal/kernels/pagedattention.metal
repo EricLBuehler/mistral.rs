@@ -1311,8 +1311,7 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES,
       const constant int &q_stride [[buffer(15)]],                             \
       const constant int &kv_block_stride [[buffer(16)]],                      \
       const constant int &kv_head_stride [[buffer(17)]],                       \
-      const device float *sinks                                                \
-      [[buffer(18), function_constant(use_sinks)]],                            \
+      const device float *sinks [[buffer(18), function_constant(use_sinks)]],  \
       threadgroup char *shared_mem [[threadgroup(0)]],                         \
       uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]],     \
       uint3 threadgroups_per_grid [[threadgroups_per_grid]],                   \
@@ -1333,8 +1332,7 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES,
       const device type *tmp_out [[buffer(3)]],                                \
       device uint32_t *context_lens [[buffer(4)]],                             \
       const constant int &max_num_partitions [[buffer(5)]],                    \
-      const device float *sinks                                                \
-      [[buffer(6), function_constant(use_sinks)]],                             \
+      const device float *sinks [[buffer(6), function_constant(use_sinks)]],   \
       threadgroup char *shared_mem [[threadgroup(0)]],                         \
       uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]],     \
       uint3 threadgroups_per_grid [[threadgroups_per_grid]],                   \

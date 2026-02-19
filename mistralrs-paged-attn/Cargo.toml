@@ -18,6 +18,7 @@ half.workspace = true
 float8.workspace = true
 objc2-metal = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }
+dispatch2 = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
 thiserror.workspace = true
 
@@ -27,4 +28,4 @@ anyhow.workspace = true
 
 [features]
 cuda = ["dep:cudaforge", "candle-core/cuda"]
-metal = ["dep:objc2-metal", "dep:objc2-foundation", "dep:candle-metal-kernels"]
+metal = ["dep:objc2-metal", "dep:objc2-foundation", "dep:dispatch2", "dep:candle-metal-kernels"]

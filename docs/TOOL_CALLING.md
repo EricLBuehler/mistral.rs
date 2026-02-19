@@ -58,7 +58,7 @@ runner = Runner(
 
 See [custom_search.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_search.py) for a full
 example. In Rust pass `.with_tool_callback(...)` to the builder as demonstrated
-in [custom_search/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/custom_search/main.rs).
+in [tool_callback/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/tool_callback/main.rs).
 
 ## Search callbacks
 

@@ -1,5 +1,7 @@
 use candle_core::Device;
 use mistralrs_core::*;
+
+use crate::{IsqBits, IsqSetting};
 use std::{
     ops::{Deref, DerefMut},
     path::PathBuf,
@@ -28,7 +30,7 @@ pub struct EmbeddingModelBuilder {
     pub(crate) loader_type: Option<EmbeddingLoaderType>,
     pub(crate) dtype: ModelDType,
     pub(crate) force_cpu: bool,
-    pub(crate) isq: Option<IsqType>,
+    pub(crate) isq: Option<IsqSetting>,
     pub(crate) throughput_logging: bool,
 
     // Other things
@@ -127,7 +129,19 @@ impl EmbeddingModelBuilder {
 
     /// Use ISQ of a certain type. If there is an overlap, the topology type is used over the ISQ type.
     pub fn with_isq(mut self, isq: IsqType) -> Self {
-        self.isq = Some(isq);
+        self.isq = Some(IsqSetting::Specific(isq));
+        self
+    }
+
+    /// Automatically select the best ISQ quantization type for the given bit
+    /// width based on the target platform.
+    ///
+    /// On Metal, this selects AFQ variants (e.g., AFQ4 for 4-bit).
+    /// On CUDA and CPU, this selects Q*K variants (e.g., Q4K for 4-bit).
+    ///
+    /// The resolution happens at build time when the device is known.
+    pub fn with_auto_isq(mut self, bits: IsqBits) -> Self {
+        self.isq = Some(IsqSetting::Auto(bits));
         self
     }
 
@@ -150,7 +164,7 @@ impl EmbeddingModelBuilder {
     }
 
     #[deprecated(
-        note = "Use `UqffTextModelBuilder` to load a UQFF model instead of the generic `from_uqff`"
+        note = "Use `UqffEmbeddingModelBuilder` to load a UQFF model instead of the generic `from_uqff`"
     )]
     /// Path to read a `.uqff` file from. Other necessary configuration files must be present at this location.
     ///
@@ -191,6 +205,7 @@ impl EmbeddingModelBuilder {
         self
     }
 
+    /// Load the embedding model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         let (pipeline, scheduler_config, add_model_config) = build_embedding_pipeline(self).await?;
         Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)
@@ -212,11 +227,12 @@ impl UqffEmbeddingModelBuilder {
         Self(inner)
     }
 
+    /// Load the UQFF embedding model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         self.0.build().await
     }
 
-    /// This wraps the EmbeddingModelBuilder, so users should take care to not call UQFF-related methods.
+    /// Unwrap into the inner [`EmbeddingModelBuilder`]. Take care not to call UQFF-related methods on it.
     pub fn into_inner(self) -> EmbeddingModelBuilder {
         self.0
     }

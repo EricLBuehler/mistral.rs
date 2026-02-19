@@ -88,7 +88,7 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/qwen3_vl/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -114,8 +114,7 @@ async fn main() -> Result<()> {
         TextMessageRole::User,
         "What is this?",
         vec![image],
-        &model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 

@@ -12,6 +12,7 @@
 
 # SDKs & APIs
 
+- [Rust SDK](RUST_SDK.md)
 - [Python SDK](PYTHON_SDK.md)
 - [Python Installation](PYTHON_INSTALLATION.md)
 - [HTTP Server](HTTP.md)

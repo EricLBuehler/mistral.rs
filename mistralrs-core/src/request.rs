@@ -9,7 +9,7 @@ use crate::{
     response::Response, sampler::SamplingParams, tools::ToolChoice, CustomLogitsProcessor,
     DiffusionGenerationParams, Tool,
 };
-use std::{fmt::Debug, sync::Arc};
+use std::{fmt::Debug, path::PathBuf, sync::Arc};
 use tokio::sync::mpsc::Sender;
 
 pub type LlguidanceGrammar = llguidance::api::TopLevelGrammar;
@@ -91,6 +91,7 @@ pub enum RequestMessage {
         prompt: String,
         format: ImageGenerationResponseFormat,
         generation_params: DiffusionGenerationParams,
+        save_file: Option<PathBuf>,
     },
     SpeechGeneration {
         prompt: String,

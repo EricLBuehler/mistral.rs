@@ -142,7 +142,7 @@ where
             let _ = socket
                 .send(Message::Text(format!("Error: {e}").into()))
                 .await;
-            Err(e)
+            Err(e.into())
         }
     }
 }
@@ -474,7 +474,7 @@ async fn handle_restore_message(
                                     content,
                                 );
                             }
-                            LoadedModel::Vision(model) => {
+                            LoadedModel::Vision(_model) => {
                                 let role_enum = if role == "assistant" {
                                     TextMessageRole::Assistant
                                 } else {
@@ -506,14 +506,11 @@ async fn handle_restore_message(
                                         }
                                     }
                                     // Restore as an image message
-                                    if let Ok(updated) = vision_msgs.clone().add_image_message(
+                                    *vision_msgs = vision_msgs.clone().add_image_message(
                                         role_enum,
                                         content,
                                         image_buffer.clone(),
-                                        model,
-                                    ) {
-                                        *vision_msgs = updated;
-                                    }
+                                    );
                                     // Clear buffer after use
                                     image_buffer.clear();
                                 } else {
@@ -598,7 +595,7 @@ async fn handle_vision_model(
     let streaming = &mut *params.streaming;
     let active_chat_id = params.active_chat_id;
     // Track the exact set of messages that will be sent *this* turn.
-    let mut msgs_for_stream: Option<VisionMessages> = None;
+    let msgs_for_stream: Option<VisionMessages>;
     // --- Vision input routing ---
     if let Ok(val) = serde_json::from_str::<Value>(user_msg) {
         // Case 1a: pure image payload => buffer it and wait for a prompt
@@ -698,60 +695,49 @@ async fn handle_vision_model(
             }
         } else {
             // Prepare multimodal message with images and/or audios
-            match vision_ctx.msgs.clone().add_multimodal_message(
+            let temp_msgs = vision_ctx.msgs.clone().add_multimodal_message(
                 TextMessageRole::User,
                 user_msg,
                 vision_ctx.image_buffer.clone(),
                 vision_ctx.audio_buffer.clone(),
-                model,
-            ) {
-                Ok(updated) => {
-                    // Keep the *text‑only* conversation in our long‑term state,
-                    // but build a one‑off request that includes images.
-                    let temp_msgs = updated;
-                    *vision_ctx.msgs = vision_ctx
-                        .msgs
-                        .clone()
-                        .add_message(TextMessageRole::User, user_msg);
-                    msgs_for_stream = Some(temp_msgs.clone());
-                    // ---- persist user message with images ----
-                    let mut imgs_b64 = Vec::new();
-                    for img in vision_ctx.image_buffer.iter() {
-                        let mut buf = Vec::new();
-                        if img
-                            .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
-                            .is_ok()
-                        {
-                            imgs_b64.push(format!("data:image/png;base64,{}", BASE64.encode(&buf)));
-                        }
-                    }
-                    if let Some(chat_id) = active_chat_id {
-                        if let Err(e) = append_chat_message(
-                            app,
-                            chat_id,
-                            "user",
-                            user_msg,
-                            if imgs_b64.is_empty() {
-                                None
-                            } else {
-                                Some(imgs_b64)
-                            },
-                        )
-                        .await
-                        {
-                            error!("chat save error: {}", e);
-                        }
-                    }
-                    vision_ctx.image_buffer.clear();
-                    vision_ctx.audio_buffer.clear();
-                }
-                Err(e) => {
-                    error!("image prompt error: {}", e);
-                    let _ = socket
-                        .send(Message::Text(format!("Error: {e}").into()))
-                        .await;
+            );
+            // Keep the *text‑only* conversation in our long‑term state,
+            // but build a one‑off request that includes images.
+            *vision_ctx.msgs = vision_ctx
+                .msgs
+                .clone()
+                .add_message(TextMessageRole::User, user_msg);
+            msgs_for_stream = Some(temp_msgs.clone());
+            // ---- persist user message with images ----
+            let mut imgs_b64 = Vec::new();
+            for img in vision_ctx.image_buffer.iter() {
+                let mut buf = Vec::new();
+                if img
+                    .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
+                    .is_ok()
+                {
+                    imgs_b64.push(format!("data:image/png;base64,{}", BASE64.encode(&buf)));
                 }
             }
+            if let Some(chat_id) = active_chat_id {
+                if let Err(e) = append_chat_message(
+                    app,
+                    chat_id,
+                    "user",
+                    user_msg,
+                    if imgs_b64.is_empty() {
+                        None
+                    } else {
+                        Some(imgs_b64)
+                    },
+                )
+                .await
+                {
+                    error!("chat save error: {}", e);
+                }
+            }
+            vision_ctx.image_buffer.clear();
+            vision_ctx.audio_buffer.clear();
         }
     }
 

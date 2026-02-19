@@ -147,7 +147,7 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/idefics3/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -175,8 +175,7 @@ async fn main() -> Result<()> {
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         image,
-        &model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 
