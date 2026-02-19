@@ -101,7 +101,7 @@ instantiate_fused_glu(half);
 // Always provide BF16 kernel entry point named "fused_glu_bfloat".
 // `bfloat16_t` maps to native `bfloat` where available and emulates BF16
 // otherwise, so this symbol exists regardless of selected Metal standard.
-template [[host_name("fused_glu_bfloat")]] [[kernel]] void fused_glu(
+template [[host_name("fused_glu_bfloat")]] [[kernel]] void fused_glu<bfloat16_t>(
     const device bfloat16_t *a [[buffer(0)]],
     const device bfloat16_t *b [[buffer(1)]],
     device bfloat16_t *output [[buffer(2)]],
