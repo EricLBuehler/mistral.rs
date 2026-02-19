@@ -208,13 +208,23 @@ fn main() -> Result<(), String> {
             }
 
             fn metal_std(&self) -> &str {
-                // Use Metal 3.1 unified standard for all platforms.
-                // This fixes Xcode 26+ where the default Metal standard may be too low.
+                // Explicitly set the Metal standard so Xcode 26+ doesn't fall
+                // back to a version that is too low for the features we need.
                 // https://github.com/EricLBuehler/mistral.rs/issues/1844
                 //
-                // Note: tvOS devices with A15+ (Apple TV 4K 3rd gen) support Metal 3.1.
+                // macOS: Metal 3.1 — M1/M2 (GPU Family 7/8) can run 3.1
+                //        metallibs; M3+ (Family 9) has native bfloat.
+                // iOS:   Metal 3.0 — A15/A16 (GPU Family 7/8, e.g. iPhone
+                //        14/15/16e) only support Metal 3.0. Using 3.1 causes
+                //        "Error while loading function" at runtime on these
+                //        GPUs. Native bfloat is unavailable but bf16.metal
+                //        provides a software emulation fallback. Shaders
+                //        already guard bfloat instantiation behind
+                //        `#if __METAL_VERSION__ >= 310`.
+                // tvOS:  Metal 3.0 — Apple TV 4K (3rd gen) uses A15 = Metal 3.0.
                 match self {
-                    Platform::MacOS | Platform::Ios | Platform::TvOS => "metal3.1",
+                    Platform::MacOS => "metal3.1",
+                    Platform::Ios | Platform::TvOS => "metal3.0",
                 }
             }
         }
