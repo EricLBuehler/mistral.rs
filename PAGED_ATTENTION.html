@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-1b54fdb4.js";
+            window.path_to_searchindex_js = "searchindex-601bc465.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-1401edcc.js"></script>
+        <script src="toc-84731ca8.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -311,7 +311,7 @@ the prefill phase.</p>
 <pre><code>mistralrs run --paged-attn on --pa-memory-mb 4096 --pa-block-size 32 --pa-cache-type f8e4m3 -m microsoft/Phi-3-mini-128k-instruct
 </code></pre>
 <h2 id="using-the-rust-sdk"><a class="header" href="#using-the-rust-sdk">Using the Rust SDK</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/paged_attn/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/paged_attn/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{
     IsqType, MemoryGpuConfig, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
@@ -323,12 +323,12 @@ async fn main() -&gt; Result&lt;()&gt; {
     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
         .with_isq(IsqType::Q8_0)
         .with_logging()
-        .with_paged_attn(|| {
+        .with_paged_attn(
             PagedAttentionMetaBuilder::default()
                 .with_block_size(32)
                 .with_gpu_memory(MemoryGpuConfig::ContextSize(1024))
-                .build()
-        })?
+                .build()?,
+        )
         .build()
         .await?;
 
@@ -364,13 +364,13 @@ async fn main() -&gt; Result&lt;()&gt; {
     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
         .with_isq(IsqType::Q8_0)
         .with_logging()
-        .with_paged_attn(|| {
+        .with_paged_attn(
             PagedAttentionMetaBuilder::default()
                 .with_block_size(32)
                 .with_gpu_memory(MemoryGpuConfig::ContextSize(1024))
                 .with_cache_type(PagedCacheType::F8E4M3)
-                .build()
-        })?
+                .build()?,
+        )
         .build()
         .await?;
 

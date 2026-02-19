@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-1b54fdb4.js";
+            window.path_to_searchindex_js = "searchindex-601bc465.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-1401edcc.js"></script>
+        <script src="toc-84731ca8.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -3344,6 +3344,7 @@ curl http://localhost:1234/v1/responses \
 <li>DeepSeek V3</li>
 <li>GPT-OSS</li>
 <li>DeepSeek V2</li>
+<li>Qwen 3 Next</li>
 <li>Qwen 3 MoE</li>
 <li>Phi 3.5 MoE</li>
 <li>Qwen 3</li>
@@ -3363,6 +3364,7 @@ curl http://localhost:1234/v1/responses \
 <h3 id="vision-models"><a class="header" href="#vision-models">Vision Models</a></h3>
 <ul>
 <li>Qwen 3-VL</li>
+<li>Qwen 3-VL MoE</li>
 <li>Gemma 3n</li>
 <li>Llama 4</li>
 <li>Gemma 3</li>
@@ -3380,6 +3382,7 @@ curl http://localhost:1234/v1/responses \
 </ul>
 <h3 id="speech-models"><a class="header" href="#speech-models">Speech Models</a></h3>
 <ul>
+<li>Voxtral (ASR/speech-to-text)</li>
 <li>Dia</li>
 </ul>
 <h3 id="image-generation-models"><a class="header" href="#image-generation-models">Image Generation Models</a></h3>
@@ -3444,8 +3447,12 @@ curl http://localhost:1234/v1/responses \
 <tr><td>Qwen 3</td><td>✅</td><td></td><td>✅</td></tr>
 <tr><td>SmolLM3</td><td></td><td></td><td>✅</td></tr>
 <tr><td>Dia 1.6b</td><td></td><td></td><td>✅</td></tr>
+<tr><td>Voxtral</td><td></td><td></td><td>✅</td></tr>
 <tr><td>Gemma 3n</td><td></td><td></td><td>✅</td></tr>
 <tr><td>Qwen 3 VL</td><td></td><td></td><td>✅</td></tr>
+<tr><td>Qwen 3-VL MoE</td><td></td><td></td><td>✅</td></tr>
+<tr><td>Qwen 3 Next</td><td></td><td></td><td>✅</td></tr>
+<tr><td>Phi 4 Multimodal</td><td></td><td></td><td>✅</td></tr>
 <tr><td>Granite 4.0</td><td></td><td></td><td>✅</td></tr>
 <tr><td>GPT-OSS</td><td></td><td></td><td>✅</td></tr>
 </tbody>
@@ -3501,7 +3508,12 @@ curl http://localhost:1234/v1/responses \
 <tr><td>Qwen 3</td><td></td><td></td><td></td></tr>
 <tr><td>SmolLM3</td><td>✅</td><td></td><td></td></tr>
 <tr><td>Gemma 3n</td><td></td><td></td><td></td></tr>
+<tr><td>Voxtral</td><td></td><td></td><td></td></tr>
 <tr><td>Qwen 3 VL</td><td></td><td></td><td></td></tr>
+<tr><td>Qwen 3-VL MoE</td><td></td><td></td><td></td></tr>
+<tr><td>Qwen 3 Next</td><td></td><td></td><td></td></tr>
+<tr><td>Phi 4 Multimodal</td><td></td><td></td><td></td></tr>
+<tr><td>Llama 3.2 Vision</td><td></td><td></td><td></td></tr>
 <tr><td>Granite 4.0</td><td></td><td></td><td></td></tr>
 <tr><td>GPT-OSS</td><td></td><td></td><td></td></tr>
 </tbody>
@@ -3543,7 +3555,12 @@ curl http://localhost:1234/v1/responses \
 <tr><td>Qwen 3</td><td></td></tr>
 <tr><td>SmolLM3</td><td>✅</td></tr>
 <tr><td>Gemma 3n</td><td></td></tr>
+<tr><td>Voxtral</td><td></td></tr>
 <tr><td>Qwen 3 VL</td><td></td></tr>
+<tr><td>Qwen 3-VL MoE</td><td></td></tr>
+<tr><td>Qwen 3 Next</td><td></td></tr>
+<tr><td>Phi 4 Multimodal</td><td></td></tr>
+<tr><td>Dia 1.6b</td><td></td></tr>
 <tr><td>Granite 4.0</td><td></td></tr>
 <tr><td>GPT-OSS</td><td></td></tr>
 </tbody>
@@ -3588,6 +3605,12 @@ curl http://localhost:1234/v1/responses \
 <li>Qwen2-VL: <a href="#qwen-2-vision-model-qwen2-vl-collection">QWEN2VL.md</a></li>
 <li>Idefics 3 and Smol VLM: <a href="#idefics-3-vision-huggingfacem4idefics3-8b-llama3">IDEFICS3.md</a></li>
 <li>Phi 4 Multimodal: <a href="#phi-4-multimodal-model-microsoftphi-4-multimodal-instruct">PHI4MM.md</a></li>
+<li>Gemma 3: <a href="#gemma-3-model-googlegemma-3-4b-it">GEMMA3.md</a></li>
+<li>Gemma 3n: <a href="#gemma-3n-model-googlegemma-3n-e4b-it">GEMMA3N.md</a></li>
+<li>Mistral 3: <a href="#mistral-small-31-model-mistralaimistral-small-31-24b-instruct-2503">MISTRAL3.md</a></li>
+<li>Llama 4: <a href="#llama-4-series-meta-llamallama-4-scout-17b-16e-instruct">LLAMA4.md</a></li>
+<li>Qwen 3-VL: <a href="#qwen-3-vision-model-qwen3-vl-collection">QWEN3VL.md</a></li>
+<li>MiniCPM-O 2.6: <a href="#minicpm-o-26-model-openbmbminicpm-o-2_6">MINICPMO_2_6.md</a></li>
 </ul>
 <blockquote>
 <p>Note for the Python and HTTP APIs:
@@ -3599,6 +3622,14 @@ We follow the OpenAI specification for structuring the image messages and allow 
 <p>Please see docs for the following model types:</p>
 <ul>
 <li>FLUX.1 <a href="#flux1-model-black-forest-labsflux1-schnell">FLUX.md</a></li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="speech-model-support-in-mistralrs"><a class="header" href="#speech-model-support-in-mistralrs">Speech model support in mistral.rs</a></h1>
+<p>Mistral.rs supports various modalities of models, including speech models. Speech models handle audio-to-text (ASR) and text-to-speech (TTS) tasks.</p>
+<p>Please see docs for the following model types:</p>
+<ul>
+<li>Voxtral (ASR/speech-to-text): <a href="#voxtral-model-mistralaivoxtral-mini-4b-realtime-2602">VOXTRAL.md</a></li>
+<li>Dia (text-to-speech): <a href="#dia-16b-model-nari-labsdia-16b">DIA.md</a></li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="embeddings-overview"><a class="header" href="#embeddings-overview">Embeddings Overview</a></h1>
@@ -4004,7 +4035,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
-        image,
+        vec![image],
     );
 
     let response = model.send_chat_request(messages).await?;
@@ -4171,7 +4202,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "Describe this image briefly.",
-        image,
+        vec![image],
     );
 
     let response = model.send_chat_request(messages).await?;
@@ -4295,7 +4326,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "Please describe the image in detail.",
-        image,
+        vec![image],
     );
 
     let response = model.send_chat_request(messages).await?;
@@ -5310,7 +5341,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
-        image,
+        vec![image],
     );
 
     let response = model.send_chat_request(messages).await?;
@@ -5708,7 +5739,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
-        image,
+        vec![image],
     );
 
     let response = model.send_chat_request(messages).await?;
@@ -5909,7 +5940,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is this?",
-        image,
+        vec![image],
     );
 
     let response = model.send_chat_request(messages).await?;
@@ -6121,7 +6152,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
-        image,
+        vec![image],
     );
 
     let response = model.send_chat_request(messages).await?;
@@ -6299,7 +6330,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
-        image,
+        vec![image],
     );
 
     let response = model.send_chat_request(messages).await?;
@@ -6728,7 +6759,7 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust-10"><a class="header" href="#rust-10">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/phi3v/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Phi 4 Multimodal model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
@@ -6753,7 +6784,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
-        image,
+        vec![image],
     );
 
     let response = model.send_chat_request(messages).await?;
@@ -7025,7 +7056,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What type of flower is this? Give some fun facts.",
-        image,
+        vec![image],
     );
 
     let response = model.send_chat_request(messages).await?;
@@ -7352,6 +7383,126 @@ res = runner.generate_image(
 print(res.choices[0].url)
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="voxtral-model-mistralaivoxtral-mini-4b-realtime-2602"><a class="header" href="#voxtral-model-mistralaivoxtral-mini-4b-realtime-2602">Voxtral Model: <a href="https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602"><code>mistralai/Voxtral-Mini-4B-Realtime-2602</code></a></a></h1>
+<p>Voxtral Mini is a 4.4B parameter real-time automatic speech recognition (ASR) model created by Mistral AI. It features a causal Whisper-based audio encoder, a temporal adapter, and a Mistral decoder. The model accepts audio input and produces text output (speech-to-text).</p>
+<p>The Voxtral Model has support in the Rust, Python, and HTTP APIs. Additionally, the Voxtral Model supports ISQ for increased performance.</p>
+<blockquote>
+<p>Note: Voxtral uses Mistral’s native format (<code>params.json</code>, <code>consolidated.safetensors</code>, <code>tekken.json</code>), which mistral.rs handles automatically.</p>
+</blockquote>
+<h2 id="http-server-15"><a class="header" href="#http-server-15">HTTP server</a></h2>
+<p>We support an OpenAI compatible HTTP API for audio models.</p>
+<ol>
+<li>Start the server</li>
+</ol>
+<pre><code>mistralrs serve vision -m mistralai/Voxtral-Mini-4B-Realtime-2602
+</code></pre>
+<ol start="2">
+<li>Send a request</li>
+</ol>
+<pre><code class="language-py">import base64
+from openai import OpenAI
+
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
+
+# Load a local audio file
+with open("audio.wav", "rb") as f:
+    audio_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+completion = client.chat.completions.create(
+    model="ignore",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "audio_url",
+                    "audio_url": {
+                        "url": f"data:audio/wav;base64,{audio_b64}"
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "Transcribe this audio.",
+                },
+            ],
+        },
+    ],
+    max_tokens=256,
+    temperature=0,
+)
+resp = completion.choices[0].message.content
+print(resp)
+</code></pre>
+<h2 id="rust-13"><a class="header" href="#rust-13">Rust</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/asr/main.rs">here</a>.</p>
+<pre class="playground"><code class="language-rust">use anyhow::Result;
+use mistralrs::{AudioInput, TextMessageRole, VisionMessages, VisionModelBuilder};
+
+#[tokio::main]
+async fn main() -&gt; Result&lt;()&gt; {
+    let model = VisionModelBuilder::new("mistralai/Voxtral-Mini-4B-Realtime-2602")
+        .with_logging()
+        .build()
+        .await?;
+
+    let audio_bytes = std::fs::read("sample_audio.wav")?;
+    let audio = AudioInput::from_bytes(&amp;audio_bytes)?;
+
+    let messages = VisionMessages::new().add_multimodal_message(
+        TextMessageRole::User,
+        "Transcribe this audio.",
+        vec![],
+        vec![audio],
+    );
+
+    let response = model.send_chat_request(messages).await?;
+
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    dbg!(
+        response.usage.avg_prompt_tok_per_sec,
+        response.usage.avg_compl_tok_per_sec
+    );
+
+    Ok(())
+}</code></pre>
+<h2 id="python-13"><a class="header" href="#python-13">Python</a></h2>
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+
+runner = Runner(
+    which=Which.VisionPlain(
+        model_id="mistralai/Voxtral-Mini-4B-Realtime-2602",
+        arch=VisionArchitecture.Voxtral,
+    ),
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="ignore",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "audio_url",
+                        "audio_url": {
+                            "url": "path/to/audio.wav"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "Transcribe this audio.",
+                    },
+                ],
+            }
+        ],
+        max_tokens=256,
+        temperature=0.1,
+    )
+)
+print(res.choices[0].message.content)
+print(res.usage)
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="dia-16b-model-nari-labsdia-16b"><a class="header" href="#dia-16b-model-nari-labsdia-16b">Dia 1.6b Model: <a href="https://huggingface.co/nari-labs/Dia-1.6B"><code>nari-labs/Dia-1.6B</code></a></a></h1>
 <p>Dia is a 1.6B parameter text to speech model created by Nari Labs. You can condition the output on audio, enabling emotion and tone control. The model can also produce nonverbal communications like laughter, coughing, clearing throat, etc.</p>
 <ul>
@@ -7362,7 +7513,7 @@ print(res.choices[0].url)
 <blockquote>
 <p>Note: voice cloning support is coming!</p>
 </blockquote>
-<h2 id="http-server-15"><a class="header" href="#http-server-15">HTTP server</a></h2>
+<h2 id="http-server-16"><a class="header" href="#http-server-16">HTTP server</a></h2>
 <p>The OpenAI HTTP server provides a drop-in compatible way to easily use Dia locally!</p>
 <blockquote>
 <p>Note: we only support <code>pcm</code> and <code>wav</code> outputs.</p>
@@ -7481,7 +7632,7 @@ model via the OpenAI-compatible HTTP server, running it from Python, and embeddi
 </tbody>
 </table>
 </div>
-<h2 id="http-server-16"><a class="header" href="#http-server-16">HTTP server</a></h2>
+<h2 id="http-server-17"><a class="header" href="#http-server-17">HTTP server</a></h2>
 <p>Launch the server in embedding mode to expose an OpenAI-compatible <code>/v1/embeddings</code> endpoint:</p>
 <pre><code class="language-bash">mistralrs serve -p 1234 -m google/embeddinggemma-300m
 </code></pre>
@@ -7555,7 +7706,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 <h1 id="qwen3-embedding"><a class="header" href="#qwen3-embedding">Qwen3 Embedding</a></h1>
 <p>The Qwen3 Embedding model series is the latest proprietary model of the Qwen family, specifically designed for text embedding and ranking tasks.</p>
 <p>For a catalog of all embedding backends, see <a href="#embeddings-overview">EMBEDDINGS.md</a>.</p>
-<h2 id="http-server-17"><a class="header" href="#http-server-17">HTTP server</a></h2>
+<h2 id="http-server-18"><a class="header" href="#http-server-18">HTTP server</a></h2>
 <p>Serve the model with the OpenAI-compatible endpoint enabled:</p>
 <pre><code class="language-bash">mistralrs serve -p 1234 -m Qwen/Qwen3-Embedding-0.6B
 </code></pre>
@@ -7798,7 +7949,7 @@ python3 scripts/convert_to_gptq.py --src path/to/model --dst output/model/path -
 <p>Deferred ISQ loads the full unquantized model into CPU memory first, then quantizes all weights in parallel in a post-processing pass. This path is used when an imatrix file (<code>--imatrix</code>) or calibration file (<code>--calibration-file</code>) is provided, since these require access to the full model or a forward pass before quantization can begin. Peak CPU memory usage is higher than immediate ISQ because the entire unquantized model must fit in memory during the quantization pass.</p>
 <h2 id="accuracy"><a class="header" href="#accuracy">Accuracy</a></h2>
 <p>Accuracy of ISQ can be measured by the performance degradation versus the unquantized model.
-This is commonly measured with perplexity. Please see the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/perplexity/README.md">perplexity</a> example.</p>
+This is commonly measured with perplexity. Please see the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/perplexity/main.rs">perplexity</a> example.</p>
 <p>To improve the accuracy of a model with ISQ, use an imatrix file. These can be found online (for example, on Hugging Face), and should be passed with the <code>--imatrix</code> flag for <code>plain</code> models. This will increase the accuracy of the quantization significantly and bring the ISQ quantization up to par with the GGUF counterpart.</p>
 <p>Check out the <a href="#enhancing-isq-with-an-imatrix">imatrix docs</a>.</p>
 <h2 id="python-example-2"><a class="header" href="#python-example-2">Python Example</a></h2>
@@ -8390,7 +8541,7 @@ The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X
 <h2 id="adapter-model-dynamic-adapter-activation"><a class="header" href="#adapter-model-dynamic-adapter-activation">Adapter model dynamic adapter activation</a></h2>
 <p>We support dynamic adapter activation for LoRA models, allowing you to activate a set of adapters at runtime. There is a Python, Rust and HTTP API:</p>
 <ul>
-<li>Rust: <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/lora/main.rs">example</a></li>
+<li>Rust: <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/lora/main.rs">example</a></li>
 <li>Python: <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/lora_zephyr.py">example</a></li>
 <li>HTTP: <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/adapter_chat.py">example</a></li>
 </ul>
@@ -8428,7 +8579,7 @@ The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X
 <p>This can be enabled by passing <code>--tgt-non-granular-index</code> followed by $k$:</p>
 <pre><code class="language-bash">mistralrs serve -p 1234 --xlora lamm-mit/x-lora --xlora-order orderings/xlora-paper-ordering.json --tgt-non-granular-index 5
 </code></pre>
-<h3 id="python-13"><a class="header" href="#python-13">Python</a></h3>
+<h3 id="python-14"><a class="header" href="#python-14">Python</a></h3>
 <p>Set the <code>tgt_non_granular_index</code> attribute to a non-<code>None</code> value in the <code>Which</code> selection:</p>
 <pre><code class="language-py">from mistralrs import Runner, Which
 
@@ -8574,7 +8725,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
 <h2 id="rust-sdk-12"><a class="header" href="#rust-sdk-12">Rust SDK</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/anymoe/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/anymoe/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{
     AnyMoeConfig, AnyMoeExpertType, AnyMoeModelBuilder, IsqType, PagedAttentionMetaBuilder,
@@ -8586,7 +8737,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     let text_builder = TextModelBuilder::new("mistralai/Mistral-7B-Instruct-v0.1")
         .with_isq(IsqType::Q8_0)
         .with_logging()
-        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?;
+        .with_paged_attn(PagedAttentionMetaBuilder::default().build()?);
 
     let model = AnyMoeModelBuilder::from_text_builder(
         text_builder,
@@ -8644,7 +8795,7 @@ mistralrs run -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 </code></pre>
-<h3 id="python-14"><a class="header" href="#python-14">Python</a></h3>
+<h3 id="python-15"><a class="header" href="#python-15">Python</a></h3>
 <pre><code class="language-python">from mistralrs import Runner, Which, VisionArchitecture
 
 runner = Runner(
@@ -8656,7 +8807,7 @@ runner = Runner(
     ),
 )
 </code></pre>
-<h3 id="rust-13"><a class="header" href="#rust-13">Rust</a></h3>
+<h3 id="rust-14"><a class="header" href="#rust-14">Rust</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use mistralrs::VisionModelBuilder;
@@ -9056,7 +9207,7 @@ the prefill phase.</p>
 <pre><code>mistralrs run --paged-attn on --pa-memory-mb 4096 --pa-block-size 32 --pa-cache-type f8e4m3 -m microsoft/Phi-3-mini-128k-instruct
 </code></pre>
 <h2 id="using-the-rust-sdk"><a class="header" href="#using-the-rust-sdk">Using the Rust SDK</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/paged_attn/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/paged_attn/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{
     IsqType, MemoryGpuConfig, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
@@ -9068,12 +9219,12 @@ async fn main() -&gt; Result&lt;()&gt; {
     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
         .with_isq(IsqType::Q8_0)
         .with_logging()
-        .with_paged_attn(|| {
+        .with_paged_attn(
             PagedAttentionMetaBuilder::default()
                 .with_block_size(32)
                 .with_gpu_memory(MemoryGpuConfig::ContextSize(1024))
-                .build()
-        })?
+                .build()?,
+        )
         .build()
         .await?;
 
@@ -9109,13 +9260,13 @@ async fn main() -&gt; Result&lt;()&gt; {
     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
         .with_isq(IsqType::Q8_0)
         .with_logging()
-        .with_paged_attn(|| {
+        .with_paged_attn(
             PagedAttentionMetaBuilder::default()
                 .with_block_size(32)
                 .with_gpu_memory(MemoryGpuConfig::ContextSize(1024))
                 .with_cache_type(PagedCacheType::F8E4M3)
-                .build()
-        })?
+                .build()?,
+        )
         .build()
         .await?;
 
@@ -9281,7 +9432,7 @@ print(res.usage)
 </table>
 </div>
 <h2 id="using-the-rust-sdk-1"><a class="header" href="#using-the-rust-sdk-1">Using the Rust SDK</a></h2>
-<p>You can find this example at <code>mistralrs/examples/speculative/main.rs</code>.</p>
+<p>You can find this example at <code>mistralrs/examples/advanced/speculative/main.rs</code>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{
     IsqType, RequestBuilder, SpeculativeConfig, TextMessageRole, TextMessages,
@@ -9688,14 +9839,14 @@ cargo run --release --features ring -- ...
 <p>OpenAI docs: https://platform.openai.com/docs/api-reference/chat/create?lang=curl</p>
 </blockquote>
 <h2 id="rust-example-4"><a class="header" href="#rust-example-4">Rust example</a></h2>
-<p>Please see <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/tools/main.rs">our example here</a>.</p>
+<p>Please see <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/tools/main.rs">our example here</a>.</p>
 <h2 id="python-example-5"><a class="header" href="#python-example-5">Python example</a></h2>
 <p>Please see <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/tool_calling.ipynb">our notebook here</a>.</p>
 <h2 id="tool-callbacks"><a class="header" href="#tool-callbacks">Tool callbacks</a></h2>
 <p>You can override tool execution using a <strong>tool callback</strong>. The callback receives
 the tool name and a dictionary of arguments and must return the tool output as a
 string.</p>
-<h3 id="python-15"><a class="header" href="#python-15">Python</a></h3>
+<h3 id="python-16"><a class="header" href="#python-16">Python</a></h3>
 <pre><code class="language-py">def tool_cb(name: str, args: dict) -&gt; str:
     if name == "local_search":
         return json.dumps(local_search(args.get("query", "")))
@@ -9761,7 +9912,7 @@ runner = Runner(
     search_callback=search_callback,
 )
 </code></pre>
-<h2 id="http-server-18"><a class="header" href="#http-server-18">HTTP server</a></h2>
+<h2 id="http-server-19"><a class="header" href="#http-server-19">HTTP server</a></h2>
 <p><strong>Be sure to add <code>--enable-search</code>!</strong></p>
 <p>Here are some examples using various models. Note that this works for both streaming and completion requests, so interactive mode is featured here!</p>
 <pre><code class="language-bash">mistralrs run --enable-search --isq 4 -m Qwen/Qwen3-4B
@@ -10871,8 +11022,8 @@ print(res.choices[0].message.content)
 <li><a href="#check-if-its-working">Check if it’s working</a></li>
 <li><a href="#example-clients">Example clients</a>
 <ul>
-<li><a href="#python-16">Python</a></li>
-<li><a href="#rust-14">Rust</a></li>
+<li><a href="#python-17">Python</a></li>
+<li><a href="#rust-15">Rust</a></li>
 <li><a href="#http">HTTP</a></li>
 </ul>
 </li>
@@ -10900,7 +11051,7 @@ print(res.choices[0].message.content)
 }'      
 </code></pre>
 <h2 id="example-clients"><a class="header" href="#example-clients">Example clients</a></h2>
-<h3 id="python-16"><a class="header" href="#python-16">Python</a></h3>
+<h3 id="python-17"><a class="header" href="#python-17">Python</a></h3>
 <p>The <a href="https://pypi.org/project/mcp/">reference Python SDK</a> can be installed via:</p>
 <pre><code class="language-bash">pip install --upgrade mcp
 </code></pre>
@@ -10946,7 +11097,7 @@ async def main() -&gt; None:
 if __name__ == "__main__":
     asyncio.run(main())
 </code></pre>
-<h3 id="rust-14"><a class="header" href="#rust-14">Rust</a></h3>
+<h3 id="rust-15"><a class="header" href="#rust-15">Rust</a></h3>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use rust_mcp_sdk::{
     mcp_client::client_runtime,
