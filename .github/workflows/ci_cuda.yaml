@@ -23,9 +23,9 @@ jobs:
       matrix:
         include:
           - name: cuda
-            features: cuda
-          - name: cuda+nccl
             features: cuda,nccl
+          # - name: cuda+nccl
+          #   features: cuda,nccl
 
     steps:
       - name: Checkout repository
