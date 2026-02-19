@@ -330,11 +330,9 @@ impl Loader for GGUFLoader {
 
         // If auto, convert to Map
         let num_layers = model.get_metadata()[&format!("{arch}.block_count")].to_u32()? as usize;
-<<<<<<< mistral3-gguf
 
-=======
         let mut max_kv_tokens: Option<usize> = None;
->>>>>>> master
+
         if let DeviceMapSetting::Auto(params) = mapper.clone() {
             let devices = device_map::get_all_similar_devices(device)?;
             // Initial dtype

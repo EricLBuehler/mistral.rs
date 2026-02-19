@@ -149,6 +149,12 @@ impl ContentMetadata<'_> {
 
         Ok(())
     }
+
+    pub fn verify_arch_any(&self, expected_arch: &[&str]) -> Result<()> {
+        expected_arch
+            .iter()
+            .try_for_each(|arch| self.verify_arch(arch))
+    }
 }
 
 // These traits below are a workaround for converting candles GGUF `Value` enum type wrapper.
