@@ -112,7 +112,7 @@ async fn main() -> Result<()> {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "Describe this image briefly.",
-        image,
+        vec![image],
     );
 
     let response = model.send_chat_request(messages).await?;
@@ -249,7 +249,7 @@ async fn main() -> Result<()> {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "Please describe the image in detail.",
-        image,
+        vec![image],
     );
 
     let response = model.send_chat_request(messages).await?;

@@ -86,7 +86,7 @@ Please see [this page](NON_GRANULAR.md) for more details and examples.
 
 We support dynamic adapter activation for LoRA models, allowing you to activate a set of adapters at runtime. There is a Python, Rust and HTTP API:
 
-- Rust: [example](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/lora/main.rs)
+- Rust: [example](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/lora/main.rs)
 - Python: [example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/lora_zephyr.py)
 - HTTP: [example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/adapter_chat.py)
 

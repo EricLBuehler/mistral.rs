@@ -55,7 +55,7 @@ print(resp)
 ```
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/voxtral/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/asr/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -76,8 +76,7 @@ async fn main() -> Result<()> {
         "Transcribe this audio.",
         vec![],
         vec![audio],
-        &model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 

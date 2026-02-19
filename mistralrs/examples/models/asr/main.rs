@@ -16,8 +16,7 @@ async fn main() -> Result<()> {
         "Transcribe this audio.",
         vec![],
         vec![audio],
-        &model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 

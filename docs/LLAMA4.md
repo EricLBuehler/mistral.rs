@@ -142,7 +142,7 @@ async fn main() -> Result<()> {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is this?",
-        image,
+        vec![image],
     );
 
     let response = model.send_chat_request(messages).await?;

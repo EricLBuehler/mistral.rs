@@ -31,7 +31,7 @@ Please see [our example here](https://github.com/EricLBuehler/mistral.rs/blob/ma
 > OpenAI docs: https://platform.openai.com/docs/api-reference/chat/create?lang=curl
 
 ## Rust example
-Please see [our example here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/tools/main.rs).
+Please see [our example here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/tools/main.rs).
 
 ## Python example
 Please see [our notebook here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/tool_calling.ipynb).

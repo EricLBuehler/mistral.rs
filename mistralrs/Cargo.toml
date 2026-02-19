@@ -91,6 +91,10 @@ path = "examples/models/diffusion/main.rs"
 name = "speech"
 path = "examples/models/speech/main.rs"
 
+[[example]]
+name = "asr"
+path = "examples/models/asr/main.rs"
+
 # ========== Quantization ==========
 
 [[example]]
