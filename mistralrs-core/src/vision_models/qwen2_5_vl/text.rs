@@ -461,8 +461,7 @@ impl Qwen2_5VLTextModel {
             .rotary_emb
             .compute_cos_sin(position_ids, xs.dtype())?;
 
-        let attention_mask =
-            DeviceMappedMask::new(attention_mask.map(|m| m.clone()), &*self.mapper)?;
+        let attention_mask = DeviceMappedMask::new(attention_mask.cloned(), &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(

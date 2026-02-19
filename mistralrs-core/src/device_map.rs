@@ -605,8 +605,8 @@ impl DeviceMappedMask {
         let mut masks = HashMap::new();
         for device in mapper.get_unique_devices() {
             let loc = device.location();
-            if !masks.contains_key(&loc) {
-                masks.insert(loc, mask.to_device(&device)?);
+            if let std::collections::hash_map::Entry::Vacant(e) = masks.entry(loc) {
+                e.insert(mask.to_device(&device)?);
             }
         }
         Ok(Some(Self { masks }))
