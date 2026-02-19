@@ -30,6 +30,7 @@ pub enum Architecture {
     SmolLm3,
     GraniteMoeHybrid,
     GptOss,
+    Qwen3Next,
 }
 
 impl From<Architecture> for NormalLoaderType {
@@ -55,6 +56,7 @@ impl From<Architecture> for NormalLoaderType {
             Architecture::SmolLm3 => Self::SmolLm3,
             Architecture::GraniteMoeHybrid => Self::GraniteMoeHybrid,
             Architecture::GptOss => Self::GptOss,
+            Architecture::Qwen3Next => Self::Qwen3Next,
         }
     }
 }
@@ -93,6 +95,7 @@ pub enum VisionArchitecture {
     Llama4,
     Gemma3n,
     Qwen3VL,
+    Qwen3VLMoE,
     Voxtral,
 }
 
@@ -114,6 +117,7 @@ impl From<VisionArchitecture> for VisionLoaderType {
             VisionArchitecture::Llama4 => VisionLoaderType::Llama4,
             VisionArchitecture::Gemma3n => VisionLoaderType::Gemma3n,
             VisionArchitecture::Qwen3VL => VisionLoaderType::Qwen3VL,
+            VisionArchitecture::Qwen3VLMoE => VisionLoaderType::Qwen3VLMoE,
             VisionArchitecture::Voxtral => VisionLoaderType::Voxtral,
         }
     }

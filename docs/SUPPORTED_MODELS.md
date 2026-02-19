@@ -11,6 +11,7 @@ Complete reference for model support in mistral.rs.
 - DeepSeek V3
 - GPT-OSS
 - DeepSeek V2
+- Qwen 3 Next
 - Qwen 3 MoE
 - Phi 3.5 MoE
 - Qwen 3
@@ -30,6 +31,7 @@ Complete reference for model support in mistral.rs.
 ### Vision Models
 
 - Qwen 3-VL
+- Qwen 3-VL MoE
 - Gemma 3n
 - Llama 4
 - Gemma 3
@@ -112,6 +114,9 @@ Complete reference for model support in mistral.rs.
 |Voxtral| | |✅|
 |Gemma 3n| | |✅|
 |Qwen 3 VL| | |✅|
+|Qwen 3-VL MoE| | |✅|
+|Qwen 3 Next| | |✅|
+|Phi 4 Multimodal| | |✅|
 |Granite 4.0| | |✅|
 |GPT-OSS| | |✅|
 
@@ -159,6 +164,10 @@ Complete reference for model support in mistral.rs.
 |Gemma 3n| | | |
 |Voxtral| | | |
 |Qwen 3 VL| | | |
+|Qwen 3-VL MoE| | | |
+|Qwen 3 Next| | | |
+|Phi 4 Multimodal| | | |
+|Llama 3.2 Vision| | | |
 |Granite 4.0| | | |
 |GPT-OSS| | | |
 
@@ -197,6 +206,10 @@ Complete reference for model support in mistral.rs.
 |Gemma 3n| |
 |Voxtral| |
 |Qwen 3 VL| |
+|Qwen 3-VL MoE| |
+|Qwen 3 Next| |
+|Phi 4 Multimodal| |
+|Dia 1.6b| |
 |Granite 4.0| |
 |GPT-OSS| |
 

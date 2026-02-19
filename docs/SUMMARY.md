@@ -22,6 +22,7 @@
 - [Supported Models](SUPPORTED_MODELS.md)
 - [Vision Models](VISION_MODELS.md)
 - [Image Generation](IMAGEGEN_MODELS.md)
+- [Speech Models](SPEECH_MODELS.md)
 - [Embeddings](EMBEDDINGS.md)
 
 ## Text Model Guides
