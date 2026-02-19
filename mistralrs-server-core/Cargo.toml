@@ -34,13 +34,15 @@ tower-http = { workspace = true, features = ["cors"] }
 tracing.workspace = true
 url.workspace = true
 utoipa = { workspace = true, features = ["axum_extras"] }
-utoipa-swagger-ui = { workspace = true, features = ["axum"] }
+utoipa-swagger-ui = { workspace = true, features = ["axum"], optional = true }
 uuid.workspace = true
 
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 
 [features]
+default = ["swagger-ui"]
+swagger-ui = ["dep:utoipa-swagger-ui"]
 cuda = ["mistralrs-core/cuda"]
 cudnn = ["mistralrs-core/cudnn"]
 metal = ["mistralrs-core/metal"]
