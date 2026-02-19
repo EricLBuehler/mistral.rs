@@ -514,6 +514,7 @@ impl Convolution {
     }
 }
 
+/// In-situ quantization type specifying the format to apply to model weights.
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Eq, Serialize, Deserialize)]
 pub enum IsqType {
     Q4_0,

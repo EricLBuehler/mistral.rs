@@ -42,15 +42,15 @@ __global__ void gather_kv_cache_kernel(
                                              //  head_size/x, block_size, x]
     const cache_t *__restrict__ value_cache, // [num_blocks, kv_heads,
                                              //  head_size, block_size]
-    out_t *__restrict__ k_out,               // [num_tokens, kv_heads, head_size]
-    out_t *__restrict__ v_out,               // [num_tokens, kv_heads, head_size]
-    const float *__restrict__ k_scale,       // scalar or nullptr
-    const float *__restrict__ v_scale,       // scalar or nullptr
+    out_t *__restrict__ k_out,         // [num_tokens, kv_heads, head_size]
+    out_t *__restrict__ v_out,         // [num_tokens, kv_heads, head_size]
+    const float *__restrict__ k_scale, // scalar or nullptr
+    const float *__restrict__ v_scale, // scalar or nullptr
     const int32_t *__restrict__ block_table, // [batch, max_blocks]
     const int32_t *__restrict__ cu_seq_lens, // [batch + 1]
-    const int32_t num_tokens, const int32_t num_seqs,
-    const int32_t block_size, const int32_t block_table_stride,
-    const int32_t num_kv_heads, const int32_t head_size, const int32_t x) {
+    const int32_t num_tokens, const int32_t num_seqs, const int32_t block_size,
+    const int32_t block_table_stride, const int32_t num_kv_heads,
+    const int32_t head_size, const int32_t x) {
   const int32_t token_id = blockIdx.x;
   if (token_id >= num_tokens) {
     return;
@@ -87,8 +87,7 @@ __global__ void gather_kv_cache_kernel(
       static_cast<int64_t>(head_size / x) * block_size * x;
   const int64_t v_block_stride =
       static_cast<int64_t>(num_kv_heads) * head_size * block_size;
-  const int64_t v_head_stride =
-      static_cast<int64_t>(head_size) * block_size;
+  const int64_t v_head_stride = static_cast<int64_t>(head_size) * block_size;
 
   for (int i = threadIdx.x; i < n; i += blockDim.x) {
     const int head_idx = i / head_size;
@@ -109,12 +108,10 @@ __global__ void gather_kv_cache_kernel(
       k_out[out_base + i] = key_cache[k_src_idx];
       v_out[out_base + i] = value_cache[v_src_idx];
     } else {
-      k_out[out_base + i] =
-          fp8::scaled_convert<out_t, cache_t, kv_dt>(key_cache[k_src_idx],
-                                                     *k_scale);
-      v_out[out_base + i] =
-          fp8::scaled_convert<out_t, cache_t, kv_dt>(value_cache[v_src_idx],
-                                                     *v_scale);
+      k_out[out_base + i] = fp8::scaled_convert<out_t, cache_t, kv_dt>(
+          key_cache[k_src_idx], *k_scale);
+      v_out[out_base + i] = fp8::scaled_convert<out_t, cache_t, kv_dt>(
+          value_cache[v_src_idx], *v_scale);
     }
   }
 }
@@ -126,12 +123,11 @@ __global__ void gather_kv_cache_kernel(
       <<<grid, block, 0, stream>>>(                                            \
           reinterpret_cast<CACHE_T *>(key_cache),                              \
           reinterpret_cast<CACHE_T *>(value_cache),                            \
-          reinterpret_cast<OUT_T *>(k_out),                                    \
-          reinterpret_cast<OUT_T *>(v_out),                                    \
+          reinterpret_cast<OUT_T *>(k_out), reinterpret_cast<OUT_T *>(v_out),  \
           reinterpret_cast<const float *>(k_scale),                            \
-          reinterpret_cast<const float *>(v_scale),                            \
-          block_table, cu_seq_lens, num_tokens, num_seqs, block_size,          \
-          block_table_stride, num_kv_heads, head_size, x);
+          reinterpret_cast<const float *>(v_scale), block_table, cu_seq_lens,  \
+          num_tokens, num_seqs, block_size, block_table_stride, num_kv_heads,  \
+          head_size, x);
 
 extern "C" void gather_kv_cache(
     void *key_cache,   // [num_blocks, kv_heads, head_size/x, block_size, x]
@@ -140,13 +136,13 @@ extern "C" void gather_kv_cache(
     void *v_out,       // [num_tokens, kv_heads, head_size]
     void *k_scale,     // scalar or nullptr
     void *v_scale,     // scalar or nullptr
-    const int32_t *block_table,  // [batch, max_blocks]
-    const int32_t *cu_seq_lens,  // [batch + 1]
+    const int32_t *block_table, // [batch, max_blocks]
+    const int32_t *cu_seq_lens, // [batch + 1]
     int32_t num_tokens, int32_t num_seqs, int32_t block_size,
     int32_t block_table_stride, int32_t num_kv_heads, int32_t head_size,
     int32_t x, cudaStream_t stream,
-    uint32_t out_dtype,   // 0 => f16; 1 => bf16; 2 => f32
-    uint32_t cache_dtype  // 0 => f16; 1 => bf16; 2 => f32; 3 => fp8_e4m3
+    uint32_t out_dtype,  // 0 => f16; 1 => bf16; 2 => f32
+    uint32_t cache_dtype // 0 => f16; 1 => bf16; 2 => f32; 3 => fp8_e4m3
 ) {
   if (num_tokens <= 0) {
     return;
@@ -163,14 +159,12 @@ extern "C" void gather_kv_cache(
       CALL_GATHER_KV_CACHE(__nv_bfloat16, uint8_t,
                            vllm::Fp8KVCacheDataType::kFp8E4M3);
     } else if (out_dtype == 2) {
-      CALL_GATHER_KV_CACHE(float, uint8_t,
-                           vllm::Fp8KVCacheDataType::kFp8E4M3);
+      CALL_GATHER_KV_CACHE(float, uint8_t, vllm::Fp8KVCacheDataType::kFp8E4M3);
     }
   } else {
     // Non-FP8 cache: cache_t == out_t
     if (out_dtype == 0) {
-      CALL_GATHER_KV_CACHE(uint16_t, uint16_t,
-                           vllm::Fp8KVCacheDataType::kAuto);
+      CALL_GATHER_KV_CACHE(uint16_t, uint16_t, vllm::Fp8KVCacheDataType::kAuto);
     } else if (out_dtype == 1) {
       CALL_GATHER_KV_CACHE(__nv_bfloat16, __nv_bfloat16,
                            vllm::Fp8KVCacheDataType::kAuto);

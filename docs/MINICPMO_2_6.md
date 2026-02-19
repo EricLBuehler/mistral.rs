@@ -133,7 +133,7 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/minicpmo_2_6/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
 
 ```rust
 use anyhow::Result;

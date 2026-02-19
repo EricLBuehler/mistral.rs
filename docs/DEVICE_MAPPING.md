@@ -32,8 +32,8 @@ On integrated GPU systems (e.g. Apple Silicon, NVIDIA Grace Blackwell, Jetson) w
     - Text models [text_auto_device_map.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/text_auto_device_map.py)
     - Vision models [vision_auto_device_map.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/vision_auto_device_map.py)
 - Rust
-    - Text models [text_auto_device_map/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/text_auto_device_map/main.rs)
-    - Vision models [vision_auto_device_map/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/vision_auto_device_map/main.rs)
+    - Text models [text_auto_device_map/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs)
+    - Vision models [vision_auto_device_map/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs)
 - Server
     - Text models:
     ```bash

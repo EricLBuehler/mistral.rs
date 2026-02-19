@@ -118,8 +118,7 @@ async fn main() -> Result<()> {
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         image,
-        &model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -244,8 +243,7 @@ async fn main() -> Result<()> {
             "Describe in detail what is happening.",
             vec![image],
             vec![audio],
-            &model,
-        )?;
+        );
 
     let response = model.send_chat_request(messages).await?;
 
