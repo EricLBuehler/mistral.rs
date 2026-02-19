@@ -161,8 +161,8 @@ fn interactive_sample_parameters() -> SamplingParams {
         top_p: Some(0.1),
         min_p: Some(0.05),
         top_n_logprobs: 0,
-        frequency_penalty: Some(0.1),
-        presence_penalty: Some(0.1),
+        frequency_penalty: None,
+        presence_penalty: None,
         repetition_penalty: None,
         max_len: None,
         stop_toks: None,
@@ -180,12 +180,12 @@ fn handle_sampling_command(prompt: &str, sampling_params: &mut SamplingParams) -
         let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
         if let [_, value] = parts.as_slice() {
             match value.trim().parse::<f64>() {
-                Ok(v) if v > 0.0 && v <= 2.0 => {
-                    sampling_params.temperature = Some(v);
+                Ok(v) if (0.0..=2.0).contains(&v) => {
+                    sampling_params.temperature = if v == 0.0 { None } else { Some(v) };
                     info!("Set temperature to {v}");
                 }
                 Ok(_) => {
-                    println!("Error: temperature must be in (0.0, 2.0]");
+                    println!("Error: temperature must be in [0.0, 2.0]");
                 }
                 Err(_) => println!("Error: format is `{TEMPERATURE_CMD} <float>`"),
             }
@@ -531,6 +531,7 @@ async fn vision_interactive_mode(
             CLEAR_CMD => {
                 messages.clear();
                 images.clear();
+                audios.clear();
                 info!("Cleared chat history.");
                 continue;
             }
@@ -570,7 +571,8 @@ async fn vision_interactive_mode(
                             }
                         }
                     }
-                    // Load audios
+                    // Load audios (clear previous turn's audio — transcription is per-turn)
+                    audios.clear();
                     let mut audio_indexes = Vec::new();
                     for url in &urls_audio {
                         match util::parse_audio_url(url).await {

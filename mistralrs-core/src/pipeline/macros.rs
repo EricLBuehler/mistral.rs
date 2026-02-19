@@ -49,15 +49,36 @@ macro_rules! get_paths {
             revision.clone(),
         ));
         let model_id = std::path::Path::new(&$this.model_id);
+        let dir_list = $crate::api_dir_list!(api, model_id, false).collect::<Vec<_>>();
         let tokenizer_filename = if let Some(ref p) = $this.tokenizer_json {
             info!("Using tokenizer.json at `{p}`");
             PathBuf::from_str(p)?
+        } else if dir_list.contains(&"tokenizer.json".to_string()) {
+            info!("Loading `tokenizer.json` at `{}`", $this.model_id);
+            $crate::api_get_file!(api, "tokenizer.json", model_id)
+        } else if dir_list.contains(&"tekken.json".to_string()) {
+            info!(
+                "Loading `tekken.json` (Mistral tokenizer) at `{}`",
+                $this.model_id
+            );
+            $crate::api_get_file!(api, "tekken.json", model_id)
         } else {
             info!("Loading `tokenizer.json` at `{}`", $this.model_id);
             $crate::api_get_file!(api, "tokenizer.json", model_id)
         };
-        info!("Loading `config.json` at `{}`", $this.model_id);
-        let config_filename = $crate::api_get_file!(api, "config.json", model_id);
+        let config_filename = if dir_list.contains(&"config.json".to_string()) {
+            info!("Loading `config.json` at `{}`", $this.model_id);
+            $crate::api_get_file!(api, "config.json", model_id)
+        } else if dir_list.contains(&"params.json".to_string()) {
+            info!(
+                "Loading `params.json` (Mistral config) at `{}`",
+                $this.model_id
+            );
+            $crate::api_get_file!(api, "params.json", model_id)
+        } else {
+            info!("Loading `config.json` at `{}`", $this.model_id);
+            $crate::api_get_file!(api, "config.json", model_id)
+        };
         let filenames = get_model_paths(
             revision.clone(),
             &$token_source,
@@ -75,7 +96,6 @@ macro_rules! get_paths {
             revision.clone(),
             $this.xlora_order.as_ref(),
         )?;
-        let dir_list = $crate::api_dir_list!(api, model_id, false).collect::<Vec<_>>();
 
         let gen_conf = if dir_list.contains(&"generation_config.json".to_string()) {
             info!("Loading `generation_config.json` at `{}`", $this.model_id);
@@ -113,13 +133,19 @@ macro_rules! get_paths {
         } else if dir_list.contains(&"chat_template.jinja".to_string()) {
             info!("Loading `chat_template.jinja` at `{}`", $this.model_id);
             Some($crate::api_get_file!(api, "chat_template.jinja", model_id))
-        } else {
+        } else if dir_list.contains(&"tokenizer_config.json".to_string()) {
             info!("Loading `tokenizer_config.json` at `{}`", $this.model_id);
             Some($crate::api_get_file!(
                 api,
                 "tokenizer_config.json",
                 model_id
             ))
+        } else {
+            info!(
+                "No chat template or `tokenizer_config.json` found at `{}`",
+                $this.model_id
+            );
+            None
         };
         let chat_template_json_filename = if dir_list.contains(&"chat_template.json".to_string()) {
             info!("Loading `chat_template.json` at `{}`", $this.model_id);
@@ -172,15 +198,36 @@ macro_rules! get_embedding_paths {
             revision.clone(),
         ));
         let model_id = std::path::Path::new(&$this.model_id);
+        let emb_dir_list = $crate::api_dir_list!(api, model_id, false).collect::<Vec<_>>();
         let tokenizer_filename = if let Some(ref p) = $this.tokenizer_json {
             info!("Using tokenizer.json at `{p}`");
             PathBuf::from_str(p)?
+        } else if emb_dir_list.contains(&"tokenizer.json".to_string()) {
+            info!("Loading `tokenizer.json` at `{}`", $this.model_id);
+            $crate::api_get_file!(api, "tokenizer.json", model_id)
+        } else if emb_dir_list.contains(&"tekken.json".to_string()) {
+            info!(
+                "Loading `tekken.json` (Mistral tokenizer) at `{}`",
+                $this.model_id
+            );
+            $crate::api_get_file!(api, "tekken.json", model_id)
         } else {
             info!("Loading `tokenizer.json` at `{}`", $this.model_id);
             $crate::api_get_file!(api, "tokenizer.json", model_id)
         };
-        info!("Loading `config.json` at `{}`", $this.model_id);
-        let config_filename = $crate::api_get_file!(api, "config.json", model_id);
+        let config_filename = if emb_dir_list.contains(&"config.json".to_string()) {
+            info!("Loading `config.json` at `{}`", $this.model_id);
+            $crate::api_get_file!(api, "config.json", model_id)
+        } else if emb_dir_list.contains(&"params.json".to_string()) {
+            info!(
+                "Loading `params.json` (Mistral config) at `{}`",
+                $this.model_id
+            );
+            $crate::api_get_file!(api, "params.json", model_id)
+        } else {
+            info!("Loading `config.json` at `{}`", $this.model_id);
+            $crate::api_get_file!(api, "config.json", model_id)
+        };
         let filenames = get_model_paths(
             revision.clone(),
             &$token_source,
@@ -382,7 +429,7 @@ macro_rules! get_paths_gguf {
                     "chat_template.jinja",
                     model_id
                 ))
-            } else {
+            } else if dir_list.contains(&"tokenizer_config.json".to_string()) {
                 info!("Loading `tokenizer_config.json` at `{}` because no chat template file was specified.", this_model_id);
                 let res = $crate::api_get_file!(
                     api,
@@ -390,6 +437,9 @@ macro_rules! get_paths_gguf {
                     model_id
                 );
                 Some(res)
+            } else {
+                info!("No chat template or `tokenizer_config.json` found at `{}`", this_model_id);
+                None
             }
         };
 

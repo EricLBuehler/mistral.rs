@@ -132,7 +132,7 @@ mistralrs run --paged-attn on --pa-memory-mb 4096 --pa-block-size 32 --pa-cache-
 ```
 
 ## Using the Rust SDK
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/paged_attn/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/paged_attn/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -146,12 +146,12 @@ async fn main() -> Result<()> {
     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
         .with_isq(IsqType::Q8_0)
         .with_logging()
-        .with_paged_attn(|| {
+        .with_paged_attn(
             PagedAttentionMetaBuilder::default()
                 .with_block_size(32)
                 .with_gpu_memory(MemoryGpuConfig::ContextSize(1024))
-                .build()
-        })?
+                .build()?,
+        )
         .build()
         .await?;
 
@@ -190,13 +190,13 @@ async fn main() -> Result<()> {
     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
         .with_isq(IsqType::Q8_0)
         .with_logging()
-        .with_paged_attn(|| {
+        .with_paged_attn(
             PagedAttentionMetaBuilder::default()
                 .with_block_size(32)
                 .with_gpu_memory(MemoryGpuConfig::ContextSize(1024))
                 .with_cache_type(PagedCacheType::F8E4M3)
-                .build()
-        })?
+                .build()?,
+        )
         .build()
         .await?;
 
