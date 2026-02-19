@@ -16,7 +16,10 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 use stream::ChatCompletionStreamer;
-use tokio::{runtime::Runtime, sync::mpsc::channel};
+use tokio::{
+    runtime::Runtime,
+    sync::mpsc::{channel, Receiver},
+};
 use util::{PyApiErr, PyApiResult};
 
 use candle_core::{Device, Result};
@@ -1244,16 +1247,36 @@ impl Runner {
                 truncate_sequence: request.truncate_sequence,
             }));
 
-            MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
-            let sender = self.runner.get_sender(model_id.as_deref())?;
-            sender.blocking_send(model_request).unwrap();
+            let is_streaming = request.stream;
+            let debug_repr = format!("{request:?}");
+            drop(request);
 
-            if request.stream {
-                Ok(Either::Right(ChatCompletionStreamer::from_rx(rx)))
-            } else {
-                let response = rx.blocking_recv().unwrap();
+            let runner = self.runner.clone();
+            let send_recv_result = py
+                .allow_threads(move || -> std::result::Result<either::Either<Response, Receiver<Response>>, String> {
+                    MistralRs::maybe_log_request(runner.clone(), debug_repr);
+                    let sender = runner
+                        .get_sender(model_id.as_deref())
+                        .map_err(|e| e.to_string())?;
+                    sender
+                        .blocking_send(model_request)
+                        .map_err(|e| e.to_string())?;
+                    if is_streaming {
+                        Ok(either::Either::Right(rx))
+                    } else {
+                        let response = rx
+                            .blocking_recv()
+                            .ok_or_else(|| "Response channel closed unexpectedly".to_string())?;
+                        Ok(either::Either::Left(response))
+                    }
+                })
+                .map_err(PyApiErr::from)?;
 
-                match response {
+            match send_recv_result {
+                either::Either::Right(rx) => {
+                    Ok(Either::Right(ChatCompletionStreamer::from_rx(rx)))
+                }
+                either::Either::Left(response) => match response {
                     Response::ValidationError(e) | Response::InternalError(e) => {
                         Err(PyApiErr::from(e.to_string()))
                     }
@@ -1267,7 +1290,7 @@ impl Runner {
                     Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
                     Response::Embeddings { .. } => unreachable!(),
-                }
+                },
             }
         })
     }
@@ -1290,121 +1313,98 @@ impl Runner {
                 )
             };
 
-            MistralRs::maybe_log_request(self.runner.clone(), debug_repr);
-            let sender = self.runner.get_sender(model_id.as_deref())?;
+            let runner = self.runner.clone();
+            py.allow_threads(move || -> std::result::Result<Vec<Vec<f32>>, String> {
+                MistralRs::maybe_log_request(runner.clone(), debug_repr);
+                let sender = runner
+                    .get_sender(model_id.as_deref())
+                    .map_err(|e| e.to_string())?;
 
-            let expected = match &inputs {
-                PythonEmbeddingInputs::Prompts(prompts) => prompts.len(),
-                PythonEmbeddingInputs::Tokens(batches) => batches.len(),
-            };
-
-            let mut receivers = Vec::with_capacity(expected);
-
-            let mut enqueue = |message: RequestMessage| -> PyApiResult<()> {
-                let (tx, rx) = channel(1);
-                let request_id = {
-                    let l = NEXT_REQUEST_ID.lock().unwrap();
-                    let last = &mut *l.borrow_mut();
-                    let last_v = *last;
-                    *last += 1;
-                    last_v
+                let expected = match &inputs {
+                    PythonEmbeddingInputs::Prompts(prompts) => prompts.len(),
+                    PythonEmbeddingInputs::Tokens(batches) => batches.len(),
                 };
 
-                let model_request = _Request::Normal(Box::new(NormalRequest {
-                    id: request_id,
-                    messages: message,
-                    sampling_params: SamplingParams::deterministic(),
-                    response: tx,
-                    return_logprobs: false,
-                    is_streaming: false,
-                    constraint: Constraint::None,
-                    suffix: None,
-                    tool_choice: None,
-                    tools: None,
-                    logits_processors: None,
-                    return_raw_logits: false,
-                    web_search_options: None,
-                    model_id: model_id.clone(),
-                    truncate_sequence,
-                }));
+                let mut receivers = Vec::with_capacity(expected);
 
-                sender
-                    .blocking_send(model_request)
-                    .map_err(|e| PyApiErr::from(e.to_string()))?;
-                receivers.push(rx);
-                Ok(())
-            };
+                let mut enqueue =
+                    |message: RequestMessage| -> std::result::Result<(), String> {
+                        let (tx, rx) = channel(1);
+                        let request_id = {
+                            let l = NEXT_REQUEST_ID.lock().unwrap();
+                            let last = &mut *l.borrow_mut();
+                            let last_v = *last;
+                            *last += 1;
+                            last_v
+                        };
 
-            match inputs {
-                PythonEmbeddingInputs::Prompts(prompts) => {
-                    for prompt in prompts {
-                        enqueue(RequestMessage::Embedding { prompt })?;
+                        let model_request = _Request::Normal(Box::new(NormalRequest {
+                            id: request_id,
+                            messages: message,
+                            sampling_params: SamplingParams::deterministic(),
+                            response: tx,
+                            return_logprobs: false,
+                            is_streaming: false,
+                            constraint: Constraint::None,
+                            suffix: None,
+                            tool_choice: None,
+                            tools: None,
+                            logits_processors: None,
+                            return_raw_logits: false,
+                            web_search_options: None,
+                            model_id: model_id.clone(),
+                            truncate_sequence,
+                        }));
+
+                        sender
+                            .blocking_send(model_request)
+                            .map_err(|e| e.to_string())?;
+                        receivers.push(rx);
+                        Ok(())
+                    };
+
+                match inputs {
+                    PythonEmbeddingInputs::Prompts(prompts) => {
+                        for prompt in prompts {
+                            enqueue(RequestMessage::Embedding { prompt })?;
+                        }
+                    }
+                    PythonEmbeddingInputs::Tokens(batches) => {
+                        for tokens in batches {
+                            enqueue(RequestMessage::EmbeddingTokens { prompt: tokens })?;
+                        }
                     }
                 }
-                PythonEmbeddingInputs::Tokens(batches) => {
-                    for tokens in batches {
-                        enqueue(RequestMessage::EmbeddingTokens { prompt: tokens })?;
+
+                let mut all_embeddings = Vec::with_capacity(receivers.len());
+
+                for mut rx in receivers {
+                    let response = rx
+                        .blocking_recv()
+                        .ok_or_else(|| {
+                            "Embedding response channel closed unexpectedly".to_string()
+                        })?;
+
+                    match response {
+                        Response::Embeddings { embeddings, .. } => {
+                            all_embeddings.push(embeddings)
+                        }
+                        Response::ValidationError(e) | Response::InternalError(e) => {
+                            return Err(e.to_string())
+                        }
+                        Response::ModelError(msg, _) => return Err(msg.to_string()),
+                        _ => {
+                            return Err(
+                                "Received unexpected response type from embeddings request."
+                                    .to_string(),
+                            )
+                        }
                     }
                 }
-            }
 
-            let mut all_embeddings = Vec::with_capacity(receivers.len());
-
-            for mut rx in receivers {
-                let response = rx.blocking_recv().ok_or_else(|| {
-                    PyApiErr::from("Embedding response channel closed unexpectedly")
-                })?;
-
-                match response {
-                    Response::Embeddings { embeddings, .. } => all_embeddings.push(embeddings),
-                    Response::ValidationError(e) | Response::InternalError(e) => {
-                        return Err(PyApiErr::from(e.to_string()))
-                    }
-                    Response::ModelError(msg, _) => return Err(PyApiErr::from(msg.to_string())),
-                    Response::Done(_) => {
-                        return Err(PyApiErr::from(
-                            "Received chat completion response from embeddings request.",
-                        ))
-                    }
-                    Response::Chunk(_) => {
-                        return Err(PyApiErr::from(
-                            "Received chat completion chunk from embeddings request.",
-                        ))
-                    }
-                    Response::CompletionDone(_) => {
-                        return Err(PyApiErr::from(
-                            "Received completion response from embeddings request.",
-                        ))
-                    }
-                    Response::CompletionChunk(_) => {
-                        return Err(PyApiErr::from(
-                            "Received completion chunk from embeddings request.",
-                        ))
-                    }
-                    Response::CompletionModelError(_, _) => {
-                        return Err(PyApiErr::from(
-                            "Received completion model error from embeddings request.",
-                        ))
-                    }
-                    Response::ImageGeneration(_) => {
-                        return Err(PyApiErr::from(
-                            "Received image generation response from embeddings request.",
-                        ))
-                    }
-                    Response::Speech { .. } => {
-                        return Err(PyApiErr::from(
-                            "Received speech response from embeddings request.",
-                        ))
-                    }
-                    Response::Raw { .. } => {
-                        return Err(PyApiErr::from(
-                            "Received raw logits response from embeddings request.",
-                        ))
-                    }
-                }
-            }
-
-            Ok(all_embeddings)
+                Ok(all_embeddings)
+            })
+            .map_err(PyApiErr::from)
         })
     }
 
@@ -1493,10 +1493,23 @@ impl Runner {
                 truncate_sequence: request.truncate_sequence,
             }));
 
-            MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
-            let sender = self.runner.get_sender(model_id.as_deref())?;
-            sender.blocking_send(model_request).unwrap();
-            let response = rx.blocking_recv().unwrap();
+            let debug_repr = format!("{request:?}");
+            drop(request);
+
+            let runner = self.runner.clone();
+            let response = py
+                .allow_threads(move || -> std::result::Result<Response, String> {
+                    MistralRs::maybe_log_request(runner.clone(), debug_repr);
+                    let sender = runner
+                        .get_sender(model_id.as_deref())
+                        .map_err(|e| e.to_string())?;
+                    sender
+                        .blocking_send(model_request)
+                        .map_err(|e| e.to_string())?;
+                    rx.blocking_recv()
+                        .ok_or_else(|| "Response channel closed unexpectedly".to_string())
+                })
+                .map_err(PyApiErr::from)?;
 
             match response {
                 Response::ValidationError(e) | Response::InternalError(e) => {
@@ -1527,6 +1540,7 @@ impl Runner {
     ))]
     fn generate_image(
         &self,
+        py: Python<'_>,
         prompt: String,
         response_format: ImageGenerationResponseFormat,
         height: usize,
@@ -1559,14 +1573,21 @@ impl Runner {
             truncate_sequence: false,
         }));
 
-        let sender = self.runner.get_sender(model_id.as_deref())?;
-        sender.blocking_send(request).unwrap();
+        let runner = self.runner.clone();
+        let response = py
+            .allow_threads(move || -> std::result::Result<Response, String> {
+                let sender = runner
+                    .get_sender(model_id.as_deref())
+                    .map_err(|e| e.to_string())?;
+                sender
+                    .blocking_send(request)
+                    .map_err(|e| e.to_string())?;
+                rx.blocking_recv()
+                    .ok_or_else(|| "Channel was erroneously closed!".to_string())
+            })
+            .map_err(PyApiErr::from)?;
 
-        let ResponseOk::ImageGeneration(response) = rx
-            .blocking_recv()
-            .context("Channel was erroneously closed!")?
-            .as_result()?
-        else {
+        let ResponseOk::ImageGeneration(response) = response.as_result()? else {
             return Err(PyApiErr::from("Got unexpected response type."));
         };
 
@@ -1580,6 +1601,7 @@ impl Runner {
     ))]
     fn generate_audio(
         &self,
+        py: Python<'_>,
         prompt: String,
         model_id: Option<String>,
     ) -> PyApiResult<SpeechGenerationResponse> {
@@ -1603,17 +1625,25 @@ impl Runner {
             truncate_sequence: false,
         }));
 
-        let sender = self.runner.get_sender(model_id.as_deref())?;
-        sender.blocking_send(request).unwrap();
+        let runner = self.runner.clone();
+        let response = py
+            .allow_threads(move || -> std::result::Result<Response, String> {
+                let sender = runner
+                    .get_sender(model_id.as_deref())
+                    .map_err(|e| e.to_string())?;
+                sender
+                    .blocking_send(request)
+                    .map_err(|e| e.to_string())?;
+                rx.blocking_recv()
+                    .ok_or_else(|| "Channel was erroneously closed!".to_string())
+            })
+            .map_err(PyApiErr::from)?;
 
         let ResponseOk::Speech {
             pcm,
             rate,
             channels,
-        } = rx
-            .blocking_recv()
-            .context("Channel was erroneously closed!")?
-            .as_result()?
+        } = response.as_result()?
         else {
             return Err(PyApiErr::from("Got unexpected response type."));
         };
@@ -1628,19 +1658,24 @@ impl Runner {
     /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
     /// then nothing will happen.
     #[pyo3(signature = (dtype, model_id = None))]
-    fn send_re_isq(&self, dtype: String, model_id: Option<String>) -> PyApiResult<()> {
+    fn send_re_isq(&self, py: Python<'_>, dtype: String, model_id: Option<String>) -> PyApiResult<()> {
         let request = _Request::ReIsq(parse_isq_value(&dtype, None)?);
-        self.runner
-            .get_sender(model_id.as_deref())?
-            .blocking_send(request)
-            .unwrap();
-        Ok(())
+        let runner = self.runner.clone();
+        py.allow_threads(move || {
+            runner
+                .get_sender(model_id.as_deref())
+                .map_err(|e| e.to_string())?
+                .blocking_send(request)
+                .map_err(|e| e.to_string())
+        })
+        .map_err(PyApiErr::from)
     }
 
     /// Tokenize some text, returning raw tokens.
     #[pyo3(signature = (text, add_special_tokens, enable_thinking, model_id = None))]
     fn tokenize_text(
         &self,
+        py: Python<'_>,
         text: String,
         add_special_tokens: bool,
         enable_thinking: Option<bool>,
@@ -1657,20 +1692,25 @@ impl Runner {
             reasoning_effort: None,
         });
 
-        self.runner
-            .get_sender(model_id.as_deref())?
-            .blocking_send(request)
-            .unwrap();
-
-        rx.blocking_recv()
-            .context("Channel was erroneously closed!")?
-            .map_err(PyApiErr::from)
+        let runner = self.runner.clone();
+        py.allow_threads(move || -> std::result::Result<anyhow::Result<Vec<u32>>, String> {
+            runner
+                .get_sender(model_id.as_deref())
+                .map_err(|e| e.to_string())?
+                .blocking_send(request)
+                .map_err(|e| e.to_string())?;
+            rx.blocking_recv()
+                .ok_or_else(|| "Channel was erroneously closed!".to_string())
+        })
+        .map_err(PyApiErr::from)?
+        .map_err(PyApiErr::from)
     }
 
     /// Detokenize some tokens, returning text.
     #[pyo3(signature = (tokens, skip_special_tokens, model_id = None))]
     fn detokenize_text(
         &self,
+        py: Python<'_>,
         tokens: Vec<u32>,
         skip_special_tokens: bool,
         model_id: Option<String>,
@@ -1682,14 +1722,18 @@ impl Runner {
             response: tx,
         });
 
-        self.runner
-            .get_sender(model_id.as_deref())?
-            .blocking_send(request)
-            .unwrap();
-
-        rx.blocking_recv()
-            .context("Channel was erroneously closed!")?
-            .map_err(PyApiErr::from)
+        let runner = self.runner.clone();
+        py.allow_threads(move || -> std::result::Result<anyhow::Result<String>, String> {
+            runner
+                .get_sender(model_id.as_deref())
+                .map_err(|e| e.to_string())?
+                .blocking_send(request)
+                .map_err(|e| e.to_string())?;
+            rx.blocking_recv()
+                .ok_or_else(|| "Channel was erroneously closed!".to_string())
+        })
+        .map_err(PyApiErr::from)?
+        .map_err(PyApiErr::from)
     }
 
     /// List all available model IDs in multi-model mode (aliases if configured).
@@ -2012,16 +2056,36 @@ impl Runner {
                 truncate_sequence: request.truncate_sequence,
             }));
 
-            MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
-            let sender = self.runner.get_sender(Some(&model_id))?;
-            sender.blocking_send(model_request).unwrap();
+            let is_streaming = request.stream;
+            let debug_repr = format!("{request:?}");
+            drop(request);
 
-            if request.stream {
-                Ok(Either::Right(ChatCompletionStreamer::from_rx(rx)))
-            } else {
-                let response = rx.blocking_recv().unwrap();
+            let runner = self.runner.clone();
+            let send_recv_result = py
+                .allow_threads(move || -> std::result::Result<either::Either<Response, Receiver<Response>>, String> {
+                    MistralRs::maybe_log_request(runner.clone(), debug_repr);
+                    let sender = runner
+                        .get_sender(Some(&model_id))
+                        .map_err(|e| e.to_string())?;
+                    sender
+                        .blocking_send(model_request)
+                        .map_err(|e| e.to_string())?;
+                    if is_streaming {
+                        Ok(either::Either::Right(rx))
+                    } else {
+                        let response = rx
+                            .blocking_recv()
+                            .ok_or_else(|| "Response channel closed unexpectedly".to_string())?;
+                        Ok(either::Either::Left(response))
+                    }
+                })
+                .map_err(PyApiErr::from)?;
 
-                match response {
+            match send_recv_result {
+                either::Either::Right(rx) => {
+                    Ok(Either::Right(ChatCompletionStreamer::from_rx(rx)))
+                }
+                either::Either::Left(response) => match response {
                     Response::ValidationError(e) | Response::InternalError(e) => {
                         Err(PyApiErr::from(e.to_string()))
                     }
@@ -2035,7 +2099,7 @@ impl Runner {
                     Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
                     Response::Embeddings { .. } => unreachable!(),
-                }
+                },
             }
         })
     }
@@ -2124,10 +2188,23 @@ impl Runner {
                 truncate_sequence: request.truncate_sequence,
             }));
 
-            MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
-            let sender = self.runner.get_sender(Some(&model_id))?;
-            sender.blocking_send(model_request).unwrap();
-            let response = rx.blocking_recv().unwrap();
+            let debug_repr = format!("{request:?}");
+            drop(request);
+
+            let runner = self.runner.clone();
+            let response = py
+                .allow_threads(move || -> std::result::Result<Response, String> {
+                    MistralRs::maybe_log_request(runner.clone(), debug_repr);
+                    let sender = runner
+                        .get_sender(Some(&model_id))
+                        .map_err(|e| e.to_string())?;
+                    sender
+                        .blocking_send(model_request)
+                        .map_err(|e| e.to_string())?;
+                    rx.blocking_recv()
+                        .ok_or_else(|| "Response channel closed unexpectedly".to_string())
+                })
+                .map_err(PyApiErr::from)?;
 
             match response {
                 Response::ValidationError(e) | Response::InternalError(e) => {
@@ -2155,9 +2232,9 @@ impl Runner {
     }
 
     /// Manually reload a previously unloaded model.
-    fn reload_model(&self, model_id: String) -> PyApiResult<()> {
-        self.runner
-            .reload_model_blocking(&model_id)
+    fn reload_model(&self, py: Python<'_>, model_id: String) -> PyApiResult<()> {
+        let runner = self.runner.clone();
+        py.allow_threads(move || runner.reload_model_blocking(&model_id).map_err(|e| e.to_string()))
             .map_err(PyApiErr::from)
     }
 
