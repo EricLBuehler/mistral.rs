@@ -12,7 +12,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
         self, embedding, CausalMasker, GptOssRotaryEmbedding, MatMul, RmsNorm, RotaryEmbedding,
         Sdpa,
@@ -794,6 +794,8 @@ impl Model {
             .unwrap_or(true);
         let causal_mask = if should_use_mask { causal_mask } else { None };
         let sliding_mask = if should_use_mask { sliding_mask } else { None };
+        let causal_mask = DeviceMappedMask::new(causal_mask, &*self.mapper)?;
+        let sliding_mask = DeviceMappedMask::new(sliding_mask, &*self.mapper)?;
 
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
@@ -806,9 +808,7 @@ impl Model {
 
             xs = layer.forward(
                 &xs,
-                layer_mask
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                layer_mask.map(|m| m.get(xs.device())),
                 seqlen_offsets,
                 &mut cache[i],
                 metadata.as_ref().map(|(kv, m)| (kv[i].clone(), *m)),

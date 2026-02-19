@@ -10,7 +10,7 @@ use mistralrs_quant::{
 
 use crate::{
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{embedding, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
@@ -696,16 +696,18 @@ impl MLlamaTextModel {
             self.cfg.num_attn_heads,
         )?;
 
+        let self_mask = DeviceMappedMask::new(self_mask, &*self.mapper)?;
+        let cross_attention_mask =
+            DeviceMappedMask::new(cross_attention_mask.cloned(), &*self.mapper)?;
+        let full_text_row_masked_out_mask =
+            DeviceMappedMask::new(full_text_row_masked_out_mask.cloned(), &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             hidden_states = self.mapper.map(hidden_states, i)?;
             match layer {
                 MLlamaDecoderLayer::SelfAttn(attn) => {
                     hidden_states = attn.forward(
                         &hidden_states,
-                        self_mask
-                            .as_ref()
-                            .map(|m| m.to_device(hidden_states.device()).unwrap())
-                            .as_ref(),
+                        self_mask.as_ref().map(|m| m.get(hidden_states.device())),
                         seqlen_offsets,
                         &mut cache[i],
                     )?;
@@ -725,12 +727,10 @@ impl MLlamaTextModel {
                             .as_ref(),
                         cross_attention_mask
                             .as_ref()
-                            .map(|m| m.to_device(hidden_states.device()).unwrap())
-                            .as_ref(),
+                            .map(|m| m.get(hidden_states.device())),
                         full_text_row_masked_out_mask
                             .as_ref()
-                            .map(|m| m.to_device(hidden_states.device()).unwrap())
-                            .as_ref(),
+                            .map(|m| m.get(hidden_states.device())),
                     )?;
                 }
             }

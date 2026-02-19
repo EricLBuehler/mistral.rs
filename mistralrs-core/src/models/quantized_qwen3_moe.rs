@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::attention::SdpaParams;
-use crate::device_map::DeviceMapper;
+use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
 use crate::layers::{CausalMasker, MatMul, QRmsNorm, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
@@ -523,6 +523,11 @@ impl ModelWeights {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+        let mask = if let Some(ref mapper) = self.mapper {
+            DeviceMappedMask::new(mask, &**mapper)?
+        } else {
+            DeviceMappedMask::from_single(mask)
+        };
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
@@ -532,9 +537,7 @@ impl ModelWeights {
             let x = layer.attention_norm.forward(&x)?;
             let attn = layer.forward_attn(
                 &x,
-                mask.as_ref()
-                    .map(|m| m.to_device(x.device()).unwrap())
-                    .as_ref(),
+                mask.as_ref().map(|m| m.get(x.device())),
                 start_offsets,
                 &mut cache[i],
                 metadata

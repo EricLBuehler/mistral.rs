@@ -10,7 +10,7 @@ use statrs::distribution::{ContinuousCDF, Normal};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
         self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, MatMul, RmsNorm,
         RotaryEmbedding, ScaledEmbedding, Sdpa,
@@ -1367,20 +1367,16 @@ impl TextModel {
         }
         xs = Tensor::stack(&temp_hidden_states, 0)?;
 
+        let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
+        let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             let per_layer_input = per_layer_inputs.i((.., .., i, ..))?;
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
                 &per_layer_input.to_device(xs.device())?,
-                attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
-                sliding_attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                attention_mask.as_ref().map(|m| m.get(xs.device())),
+                sliding_attention_mask.as_ref().map(|m| m.get(xs.device())),
                 seqlen_offsets,
                 &mut *cache,
                 flash_params,
