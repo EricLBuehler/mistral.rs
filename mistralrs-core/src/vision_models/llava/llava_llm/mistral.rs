@@ -222,6 +222,7 @@ impl Attention {
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: cfg.sliding_window,
+                sinks: None,
             },
         })
     }
@@ -535,6 +536,7 @@ impl Model {
                 sliding_window: cfg.sliding_window,
                 k_head_dim: cfg.head_dim(),
                 v_head_dim: cfg.head_dim(),
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
         })
@@ -608,10 +610,11 @@ impl Model {
         }
         xs = xs.to_device(&self.device)?;
         xs = xs.apply(&self.norm)?;
+        let mut xs = extract_logits(&xs, context_lens)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
+        MatMul.qmethod_matmul(&xs, &*self.lm_head)
     }
 }
 

@@ -3,11 +3,12 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
 use mistralrs_quant::{Convolution, QuantMethod, ShardedVarBuilder};
-use std::{ops::Mul, sync::Arc};
+use std::{collections::HashMap, ops::Mul, sync::Arc};
 
 use crate::{
     attention::SdpaParams,
     layers::{conv2d, embedding, layer_norm, Activation, CausalMasker, Sdpa},
+    pipeline::text_models_inputs_processor::FlashParams,
     serde_default_fn,
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -88,7 +89,7 @@ fn bucketize_right(xs: &[f32], boundaries: &[f32], device: &Device) -> Result<Te
             // For robust handling of NaNs, you might need a custom comparison.
             val.partial_cmp(&x).unwrap_or(Ordering::Less)
         }) {
-            Ok(i) => i,
+            Ok(i) => i + 1, // right=True: insert after equal elements
             Err(i) => i,
         };
 
@@ -214,7 +215,10 @@ impl VisionEmbeddings {
         }
         let position_ids = Tensor::stack(&new_position_ids, 0)?;
         let position_ids = position_ids.to_device(self.position_embedding.embeddings().device())?;
-        embeddings.broadcast_add(&self.position_embedding.forward(&position_ids)?)
+
+        let pos_emb = self.position_embedding.forward(&position_ids)?;
+        let combined = embeddings.broadcast_add(&pos_emb)?;
+        Ok(combined)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
@@ -279,18 +283,34 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
 
+        // Vision encoders use bidirectional (non-causal) self-attention.
+        // Use flash attention with causal=false for both correctness and numerical
+        // compatibility with HuggingFace's PyTorch implementation.
+        let sdpa_params = SdpaParams {
+            n_kv_groups: 1,
+            sliding_window: None,
+            softcap: None,
+            softmax_scale: self.scale,
+            sinks: None,
+        };
+
+        // Build FlashParams with causal=false for bidirectional vision attention.
+        // Empty cumulative_seqlens: flash backend uses the non-varlen path with causal=false.
+        let flash_params = FlashParams {
+            max_q: 0,
+            max_k: 0,
+            cumulative_seqlens_q: HashMap::new(),
+            cumulative_seqlens_k: HashMap::new(),
+            causal: false,
+        };
+
         let attn_weights = Sdpa.run_attention(
             &q,
             &k,
             &v,
             attention_mask,
-            None,
-            &SdpaParams {
-                n_kv_groups: 1,
-                sliding_window: None,
-                softcap: None,
-                softmax_scale: self.scale,
-            },
+            Some(&flash_params),
+            &sdpa_params,
         )?;
 
         self.o_proj.forward(&attn_weights.transpose(1, 2)?.reshape((

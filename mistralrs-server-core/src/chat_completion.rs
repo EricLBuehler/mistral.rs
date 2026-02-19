@@ -15,8 +15,8 @@ use either::Either;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use mistralrs_core::{
-    ChatCompletionChunkResponse, ChatCompletionResponse, Constraint, MistralRs, NormalRequest,
-    Request, RequestMessage, Response, SamplingParams,
+    ChatCompletionChunkResponse, ChatCompletionResponse, Constraint, MistralRs, ModelCategory,
+    NormalRequest, ReasoningEffort, Request, RequestMessage, Response, SamplingParams,
 };
 use serde_json::Value;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -126,11 +126,15 @@ impl futures::Stream for ChatCompletionStreamer {
                     self.done_state = DoneState::SendingDone;
                     Poll::Ready(Some(Ok(Event::default().data(msg))))
                 }
-                Response::ValidationError(e) => Poll::Ready(Some(Ok(
-                    Event::default().data(sanitize_error_message(e.as_ref()))
-                ))),
+                Response::ValidationError(e) => {
+                    self.done_state = DoneState::SendingDone;
+                    Poll::Ready(Some(Ok(
+                        Event::default().data(sanitize_error_message(e.as_ref()))
+                    )))
+                }
                 Response::InternalError(e) => {
                     MistralRs::maybe_log_error(self.state.clone(), &*e);
+                    self.done_state = DoneState::SendingDone;
                     Poll::Ready(Some(Ok(
                         Event::default().data(sanitize_error_message(e.as_ref()))
                     )))
@@ -195,6 +199,18 @@ impl IntoResponse for ChatCompletionResponder {
     }
 }
 
+/// Parse reasoning_effort string to ReasoningEffort enum
+fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
+    effort
+        .as_ref()
+        .and_then(|e| match e.to_lowercase().as_str() {
+            "low" => Some(ReasoningEffort::Low),
+            "medium" => Some(ReasoningEffort::Medium),
+            "high" => Some(ReasoningEffort::High),
+            _ => None,
+        })
+}
+
 /// Parses and validates a chat completion request.
 ///
 /// This function transforms an OpenAI-compatible chat completion request into the
@@ -209,6 +225,9 @@ pub async fn parse_request(
 
     // Validate that the requested model matches the loaded model
     validate_model_name(&oairequest.model, state.clone())?;
+
+    // Parse reasoning effort for Harmony-format models
+    let reasoning_effort = parse_reasoning_effort(&oairequest.reasoning_effort);
 
     let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
 
@@ -242,8 +261,57 @@ pub async fn parse_request(
                             String,
                             Either<String, Vec<IndexMap<String, Value>>>,
                         > = IndexMap::new();
-                        message_map.insert("role".to_string(), Either::Left(message.role));
+                        message_map.insert("role".to_string(), Either::Left(message.role.clone()));
                         message_map.insert("content".to_string(), Either::Left(content.clone()));
+
+                        // Add tool_calls for assistant messages that have them
+                        if let Some(ref tool_calls) = message.tool_calls {
+                            // Convert tool_calls to Vec<IndexMap<String, Value>> for Jinja template
+                            let tool_calls_vec: Vec<IndexMap<String, Value>> = tool_calls
+                                .iter()
+                                .map(|tc| {
+                                    let mut tc_map = IndexMap::new();
+                                    // Use provided ID or fallback to function name
+                                    let id =
+                                        tc.id.clone().unwrap_or_else(|| tc.function.name.clone());
+                                    tc_map.insert("id".to_string(), Value::String(id));
+                                    tc_map.insert(
+                                        "type".to_string(),
+                                        Value::String("function".to_string()),
+                                    );
+                                    let mut function_map = serde_json::Map::new();
+                                    function_map.insert(
+                                        "name".to_string(),
+                                        Value::String(tc.function.name.clone()),
+                                    );
+                                    function_map.insert(
+                                        "arguments".to_string(),
+                                        Value::String(tc.function.arguments.clone()),
+                                    );
+                                    tc_map.insert(
+                                        "function".to_string(),
+                                        Value::Object(function_map),
+                                    );
+                                    tc_map
+                                })
+                                .collect();
+                            message_map
+                                .insert("tool_calls".to_string(), Either::Right(tool_calls_vec));
+                        }
+
+                        // Add tool_call_id for tool messages
+                        if let Some(ref tool_call_id) = message.tool_call_id {
+                            message_map.insert(
+                                "tool_call_id".to_string(),
+                                Either::Left(tool_call_id.clone()),
+                            );
+                        }
+
+                        // Add name for tool messages
+                        if let Some(ref name) = message.name {
+                            message_map.insert("name".to_string(), Either::Left(name.clone()));
+                        }
+
                         messages.push(message_map);
                     }
                     Either::Right(image_messages) => {
@@ -346,6 +414,40 @@ pub async fn parse_request(
                             })
                             .collect::<Vec<_>>();
 
+                        // Apply prefixer to text content if this is a vision model with images/audio
+                        // This matches the behavior of interactive mode which auto-inserts media tokens
+                        let text_content = if !image_urls_iter.is_empty()
+                            || !audio_urls_iter.is_empty()
+                        {
+                            if let Ok(ModelCategory::Vision { prefixer }) =
+                                state.get_model_category(None)
+                            {
+                                let mut prefixed = text_content;
+
+                                // Apply image prefixer
+                                if !image_urls_iter.is_empty() {
+                                    let start_idx = image_urls.len();
+                                    let image_indices: Vec<usize> =
+                                        (start_idx..start_idx + image_urls_iter.len()).collect();
+                                    prefixed = prefixer.prefix_image(image_indices, &prefixed);
+                                }
+
+                                // Apply audio prefixer
+                                if !audio_urls_iter.is_empty() {
+                                    let start_idx = audio_urls.len();
+                                    let audio_indices: Vec<usize> =
+                                        (start_idx..start_idx + audio_urls_iter.len()).collect();
+                                    prefixed = prefixer.prefix_audio(audio_indices, &prefixed);
+                                }
+
+                                prefixed
+                            } else {
+                                text_content
+                            }
+                        } else {
+                            text_content
+                        };
+
                         let mut message_map: IndexMap<
                             String,
                             Either<String, Vec<IndexMap<String, Value>>>,
@@ -405,11 +507,13 @@ pub async fn parse_request(
                     images,
                     audios,
                     enable_thinking: oairequest.enable_thinking,
+                    reasoning_effort,
                 }
             } else {
                 RequestMessage::Chat {
                     messages,
                     enable_thinking: oairequest.enable_thinking,
+                    reasoning_effort,
                 }
             }
         }
@@ -423,6 +527,7 @@ pub async fn parse_request(
             RequestMessage::Chat {
                 messages,
                 enable_thinking: oairequest.enable_thinking,
+                reasoning_effort,
             }
         }
     };

@@ -1,8 +1,11 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{any::Any, sync::Arc};
+use std::{
+    any::Any,
+    sync::{Arc, Mutex},
+};
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use text::Qwen3VLMoETextModel;
 
@@ -10,8 +13,10 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     layers::CausalMasker,
-    layers_masker::{masked_fill, PastKvLenCache},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    layers_masker::PastKvLenCache,
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
@@ -34,6 +39,7 @@ pub struct Qwen3VLMoEModel {
     video_token_id: u32,
     vision_start_token_id: u32,
     vision_end_token_id: u32,
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
 impl Qwen3VLMoEModel {
@@ -44,11 +50,15 @@ impl Qwen3VLMoEModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        // Support both original HuggingFace naming (model.visual.*) and MLX naming (vision_tower.*)
+        let vision_vb = if vb.contains_tensor("vision_tower.patch_embed.proj.weight") {
+            vb.pp("vision_tower")
+        } else {
+            vb.pp("model").pp("visual")
+        };
         let vision = Qwen3VLVisionModel::new(
             &cfg.vision_config,
-            vb.pp("model")
-                .pp("visual")
-                .set_device(normal_loading_metadata.real_device.clone()),
+            vision_vb.set_device(normal_loading_metadata.real_device.clone()),
         )?;
         // Use top-level quantization_config if present, otherwise fall back to text_config's
         let mut text_config = cfg.text_config.clone();
@@ -70,314 +80,8 @@ impl Qwen3VLMoEModel {
             video_token_id: cfg.video_token_id,
             vision_start_token_id: cfg.vision_start_token_id,
             vision_end_token_id: cfg.vision_end_token_id,
+            encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    /// (position_ids, mrope_position_deltas)
-    fn get_rope_index(
-        &self,
-        input_ids: &Tensor,
-        image_grid_thw: Option<&Tensor>,
-        video_grid_thw: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
-    ) -> Result<(Tensor, Tensor)> {
-        if image_grid_thw.is_some() || video_grid_thw.is_some() {
-            let batch = input_ids.dim(0)?;
-            let seq_len = input_ids.dim(1)?;
-            let device = input_ids.device().clone();
-
-            let attention_mask_tensor = match attention_mask {
-                Some(mask) => mask.clone(),
-                None => Tensor::ones((batch, seq_len), DType::F32, &device)?,
-            };
-            let attention_mask_vec = attention_mask_tensor.to_vec2::<f32>()?;
-            let input_ids_vec = input_ids.to_vec2::<u32>()?;
-
-            let image_grid_data = if let Some(grid) = image_grid_thw {
-                let raw = grid.to_vec2::<u32>()?;
-                let mut data = Vec::with_capacity(raw.len());
-                for row in raw {
-                    if row.len() != 3 {
-                        candle_core::bail!("image_grid_thw entries must have length 3");
-                    }
-                    data.push([row[0], row[1], row[2]]);
-                }
-                Some(data)
-            } else {
-                None
-            };
-
-            let video_grid_data = if let Some(grid) = video_grid_thw {
-                let raw = grid.to_vec2::<u32>()?;
-                let mut repeated = Vec::new();
-                for row in raw {
-                    if row.len() != 3 {
-                        candle_core::bail!("video_grid_thw entries must have length 3");
-                    }
-                    let repeat = row[0] as usize;
-                    for _ in 0..repeat {
-                        repeated.push([1, row[1], row[2]]);
-                    }
-                }
-                Some(repeated)
-            } else {
-                None
-            };
-
-            let mut image_index = 0usize;
-            let mut video_index = 0usize;
-            let merge_size = self.spatial_merge_size as u32;
-
-            let mut position_ids_data = vec![vec![vec![1i64; seq_len]; batch]; 3];
-            let mut mrope_position_deltas = Vec::with_capacity(batch);
-
-            for batch_idx in 0..batch {
-                let mask_row = &attention_mask_vec[batch_idx];
-                let input_row = &input_ids_vec[batch_idx];
-
-                let mut valid_indices = Vec::new();
-                let mut filtered_tokens = Vec::new();
-                for (idx, (&token, &mask_val)) in input_row.iter().zip(mask_row.iter()).enumerate()
-                {
-                    if mask_val != 0.0 {
-                        valid_indices.push(idx);
-                        filtered_tokens.push(token);
-                    }
-                }
-
-                let mut positions_for_valid: Vec<[i64; 3]> =
-                    Vec::with_capacity(valid_indices.len());
-                let mut max_position_value: Option<i64> = None;
-
-                let mut spans = Vec::new();
-                let mut span_idx = 0usize;
-                while span_idx < filtered_tokens.len() {
-                    if filtered_tokens[span_idx] == self.vision_start_token_id {
-                        let mut end_idx = span_idx + 1;
-                        while end_idx < filtered_tokens.len()
-                            && filtered_tokens[end_idx] != self.vision_end_token_id
-                        {
-                            end_idx += 1;
-                        }
-                        if end_idx == filtered_tokens.len() {
-                            candle_core::bail!(
-                                "vision_start_token_id without matching vision_end_token_id"
-                            );
-                        }
-                        spans.push((span_idx, end_idx));
-                        span_idx = end_idx + 1;
-                    } else {
-                        span_idx += 1;
-                    }
-                }
-
-                let mut max_last_llm_pos_ids: Option<i64> = None;
-                let mut cursor = 0usize;
-
-                for (start_idx, end_idx) in spans {
-                    if start_idx + 1 > end_idx {
-                        continue;
-                    }
-
-                    let placeholder_start = filtered_tokens[start_idx + 1..end_idx]
-                        .iter()
-                        .enumerate()
-                        .find_map(|(offset, &tok)| {
-                            (tok == self.image_token_id || tok == self.video_token_id)
-                                .then_some(offset + start_idx + 1)
-                        });
-                    let placeholder_start = match placeholder_start {
-                        Some(pos) => pos,
-                        None => {
-                            candle_core::bail!(
-                                "vision span missing image/video placeholder tokens"
-                            );
-                        }
-                    };
-
-                    let text_len = placeholder_start.saturating_sub(cursor);
-                    let st_idx = max_last_llm_pos_ids.unwrap_or(0);
-                    for offset in 0..text_len {
-                        let pos_val = st_idx + offset as i64;
-                        positions_for_valid.push([pos_val, pos_val, pos_val]);
-                        max_position_value = Some(match max_position_value {
-                            Some(current) => current.max(pos_val),
-                            None => pos_val,
-                        });
-                    }
-
-                    let placeholder_token_id = filtered_tokens[placeholder_start];
-                    let placeholder_slice = &filtered_tokens[placeholder_start..end_idx];
-                    if placeholder_slice.is_empty() {
-                        candle_core::bail!("vision span placeholder slice is empty");
-                    }
-                    if !placeholder_slice
-                        .iter()
-                        .all(|&tok| tok == placeholder_token_id)
-                    {
-                        candle_core::bail!("Mixed placeholder tokens found within a vision span");
-                    }
-                    let placeholder_len = placeholder_slice.len();
-
-                    let (grid_t, grid_h, grid_w) = match placeholder_token_id {
-                        id if id == self.image_token_id => {
-                            let Some(ref img_grid) = image_grid_data else {
-                                candle_core::bail!(
-                                    "image_grid_thw required for image placeholders"
-                                );
-                            };
-                            if image_index >= img_grid.len() {
-                                candle_core::bail!(
-                                    "Not enough image_grid_thw entries for placeholders"
-                                );
-                            }
-                            let grid = img_grid[image_index];
-                            image_index += 1;
-                            if merge_size == 0
-                                || grid[1] % merge_size != 0
-                                || grid[2] % merge_size != 0
-                            {
-                                candle_core::bail!(
-                                    "image grid dimensions must be divisible by spatial_merge_size"
-                                );
-                            }
-                            (
-                                grid[0] as usize,
-                                (grid[1] / merge_size) as usize,
-                                (grid[2] / merge_size) as usize,
-                            )
-                        }
-                        id if id == self.video_token_id => {
-                            let Some(ref vid_grid) = video_grid_data else {
-                                candle_core::bail!(
-                                    "video_grid_thw required for video placeholders"
-                                );
-                            };
-                            if video_index >= vid_grid.len() {
-                                candle_core::bail!(
-                                    "Not enough video_grid_thw entries for placeholders"
-                                );
-                            }
-                            let grid = vid_grid[video_index];
-                            video_index += 1;
-                            if merge_size == 0
-                                || grid[1] % merge_size != 0
-                                || grid[2] % merge_size != 0
-                            {
-                                candle_core::bail!(
-                                    "video grid dimensions must be divisible by spatial_merge_size"
-                                );
-                            }
-                            (
-                                grid[0] as usize,
-                                (grid[1] / merge_size) as usize,
-                                (grid[2] / merge_size) as usize,
-                            )
-                        }
-                        other => {
-                            candle_core::bail!("Unexpected placeholder token id {other}");
-                        }
-                    };
-
-                    if grid_t == 0 || grid_h == 0 || grid_w == 0 {
-                        candle_core::bail!("Zero-sized grid encountered in vision span");
-                    }
-
-                    let expected_len = grid_t * grid_h * grid_w;
-                    if placeholder_len != expected_len {
-                        candle_core::bail!(
-                            "Placeholder token count {placeholder_len} does not match expected {expected_len}"
-                        );
-                    }
-
-                    let base_offset = st_idx + text_len as i64;
-                    for t in 0..grid_t {
-                        for h in 0..grid_h {
-                            for w in 0..grid_w {
-                                let t_pos = base_offset + t as i64;
-                                let h_pos = base_offset + h as i64;
-                                let w_pos = base_offset + w as i64;
-                                positions_for_valid.push([t_pos, h_pos, w_pos]);
-                                max_position_value = Some(match max_position_value {
-                                    Some(current) => current.max(t_pos).max(h_pos).max(w_pos),
-                                    None => t_pos.max(h_pos).max(w_pos),
-                                });
-                            }
-                        }
-                    }
-
-                    let max_dim = std::cmp::max(grid_t, std::cmp::max(grid_h, grid_w)) as i64;
-                    max_last_llm_pos_ids = Some(base_offset + max_dim);
-                    cursor = placeholder_start + placeholder_len;
-                }
-
-                if cursor < filtered_tokens.len() {
-                    let text_len = filtered_tokens.len() - cursor;
-                    let st_idx = max_last_llm_pos_ids.unwrap_or(0);
-                    for offset in 0..text_len {
-                        let pos_val = st_idx + offset as i64;
-                        positions_for_valid.push([pos_val, pos_val, pos_val]);
-                        max_position_value = Some(match max_position_value {
-                            Some(current) => current.max(pos_val),
-                            None => pos_val,
-                        });
-                    }
-                }
-
-                if positions_for_valid.len() != valid_indices.len() {
-                    candle_core::bail!(
-                        "Mismatch between computed positions ({}) and valid tokens ({})",
-                        positions_for_valid.len(),
-                        valid_indices.len()
-                    );
-                }
-
-                for (pos_idx, &seq_idx) in valid_indices.iter().enumerate() {
-                    let [p0, p1, p2] = positions_for_valid[pos_idx];
-                    position_ids_data[0][batch_idx][seq_idx] = p0;
-                    position_ids_data[1][batch_idx][seq_idx] = p1;
-                    position_ids_data[2][batch_idx][seq_idx] = p2;
-                }
-
-                let seq_total_len = input_row.len() as i64;
-                let max_position_value = max_position_value.unwrap_or(0);
-                mrope_position_deltas.push(max_position_value + 1 - seq_total_len);
-            }
-
-            let mut flat_positions = Vec::with_capacity(3 * batch * seq_len);
-            for plane in position_ids_data.iter().take(3) {
-                for row in plane.iter().take(batch) {
-                    flat_positions.extend_from_slice(row);
-                }
-            }
-            let position_ids = Tensor::from_vec(flat_positions, (3, batch, seq_len), &device)?;
-            let mrope_position_deltas =
-                Tensor::from_vec(mrope_position_deltas, (batch, 1), &device)?;
-
-            Ok((position_ids, mrope_position_deltas))
-        } else if let Some(attention_mask) = attention_mask {
-            let position_ids = (attention_mask.to_dtype(DType::F32)?.cumsum(D::Minus1)? - 1f64)?;
-            let position_ids = masked_fill(&position_ids, &attention_mask.eq(0f64)?, 1i64)?;
-            let position_ids = position_ids.unsqueeze(0)?.repeat((3, 1, 1))?;
-
-            let max_position_ids = position_ids.max(0)?.max_keepdim(D::Minus1)?;
-            let mrope_position_deltas =
-                ((max_position_ids + 1.)? - attention_mask.dim(D::Minus1)? as f64)?;
-
-            Ok((
-                position_ids.to_dtype(DType::I64)?,
-                mrope_position_deltas.to_dtype(DType::I64)?,
-            ))
-        } else {
-            let position_ids = Tensor::arange(0i64, input_ids.dim(1)? as i64, input_ids.device())?
-                .reshape((1, 1, ()))?
-                .repeat((3, input_ids.dim(0)?, 1))?;
-            let mrope_position_deltas =
-                Tensor::zeros((input_ids.dim(0)?, 1), DType::I64, input_ids.device())?;
-
-            Ok((position_ids, mrope_position_deltas))
-        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -389,11 +93,14 @@ impl Qwen3VLMoEModel {
         pixel_values_videos: Option<Tensor>,
         image_grid_thw: Option<Tensor>,
         video_grid_thw: Option<Tensor>,
+        rope_img_grid_thw: Option<Tensor>,
+        rope_vid_grid_thw: Option<Tensor>,
         seqlens: Vec<usize>,
         continuous_img_pad: Vec<Vec<(usize, usize)>>,
         continuous_vid_pad: Vec<Vec<(usize, usize)>>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
+        image_hashes: &[u64],
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -424,12 +131,127 @@ impl Qwen3VLMoEModel {
                 candle_core::bail!("pixel_values require image_grid_thw");
             };
             let mut pixel_values = pixel_values.clone();
-            let dims = pixel_values.dims();
-            if dims.len() == 3 {
-                pixel_values = pixel_values.reshape((dims[0] * dims[1], dims[2]))?;
+            let ndim = pixel_values.dims().len();
+            if ndim > 2 {
+                let last_dim = pixel_values.dim(ndim - 1)?;
+                pixel_values = pixel_values.reshape(((), last_dim))?;
             }
-            let (image_embeds, deepstack_image_embeds) =
-                self.vision.forward(&pixel_values, image_grid_thw_ref)?;
+
+            let (image_embeds, deepstack_image_embeds) = if !image_hashes.is_empty() {
+                let n_images = image_hashes.len();
+                let grid_data = image_grid_thw_ref.to_vec2::<u32>()?;
+                let patches_per_image: Vec<usize> = grid_data
+                    .iter()
+                    .map(|row| row[0] as usize * row[1] as usize * row[2] as usize)
+                    .collect();
+                let merge = self.spatial_merge_size;
+                let output_tokens_per_image: Vec<usize> = grid_data
+                    .iter()
+                    .map(|row| {
+                        (row[0] as usize) * (row[1] as usize / merge) * (row[2] as usize / merge)
+                    })
+                    .collect();
+
+                // per_image[i] = Some(vec![image_embeds_i, ds_0_i, ds_1_i, ...])
+                let mut per_image: Vec<Option<Vec<Tensor>>> = vec![None; n_images];
+                let mut miss_indices = Vec::new();
+                {
+                    let mut guard = self
+                        .encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned");
+                    for (i, &hash) in image_hashes.iter().enumerate() {
+                        if let Some(cached) = guard.get(hash) {
+                            per_image[i] = Some(cached);
+                        } else {
+                            miss_indices.push(i);
+                        }
+                    }
+                }
+
+                if miss_indices.is_empty() {
+                    // All cached - reassemble
+                    let main_parts: Vec<Tensor> = per_image
+                        .iter()
+                        .map(|o| o.as_ref().unwrap()[0].clone())
+                        .collect();
+                    let image_embeds = Tensor::cat(&main_parts, 0)?;
+                    let n_ds_layers = per_image[0].as_ref().unwrap().len() - 1;
+                    let mut deepstack_layers = Vec::with_capacity(n_ds_layers);
+                    for layer_idx in 0..n_ds_layers {
+                        let layer_parts: Vec<Tensor> = per_image
+                            .iter()
+                            .map(|o| o.as_ref().unwrap()[1 + layer_idx].clone())
+                            .collect();
+                        deepstack_layers.push(Tensor::cat(&layer_parts, 0)?);
+                    }
+                    (image_embeds, deepstack_layers)
+                } else {
+                    // Collect miss pixel slices and grid rows
+                    let mut miss_pixel_slices = Vec::new();
+                    let mut miss_grid_rows = Vec::new();
+                    let mut pv_offset = 0usize;
+                    for (i, &n_patches) in patches_per_image.iter().enumerate() {
+                        if miss_indices.contains(&i) {
+                            miss_pixel_slices.push(pixel_values.narrow(0, pv_offset, n_patches)?);
+                            miss_grid_rows.push(image_grid_thw_ref.i(i)?);
+                        }
+                        pv_offset += n_patches;
+                    }
+                    let miss_pixels = Tensor::cat(&miss_pixel_slices, 0)?;
+                    let miss_grid = Tensor::stack(&miss_grid_rows, 0)?;
+
+                    let (encoded_main, encoded_ds) =
+                        self.vision.forward(&miss_pixels, &miss_grid)?;
+
+                    // Compute output tokens per miss image
+                    let miss_output_tokens: Vec<usize> = miss_indices
+                        .iter()
+                        .map(|&i| output_tokens_per_image[i])
+                        .collect();
+
+                    // Split and cache per-image
+                    let mut enc_offset = 0usize;
+                    {
+                        let mut guard = self
+                            .encoder_cache
+                            .lock()
+                            .expect("encoder cache lock poisoned");
+                        for (j, &orig_idx) in miss_indices.iter().enumerate() {
+                            let n_out = miss_output_tokens[j];
+                            let single_main = encoded_main.narrow(0, enc_offset, n_out)?;
+                            let mut cache_entry = vec![single_main.clone()];
+                            for ds_layer in &encoded_ds {
+                                let single_ds = ds_layer.narrow(0, enc_offset, n_out)?;
+                                cache_entry.push(single_ds.clone());
+                            }
+                            enc_offset += n_out;
+                            guard.insert(image_hashes[orig_idx], cache_entry.clone());
+                            per_image[orig_idx] = Some(cache_entry);
+                        }
+                    }
+
+                    // Reassemble all images
+                    let main_parts: Vec<Tensor> = per_image
+                        .iter()
+                        .map(|o| o.as_ref().unwrap()[0].clone())
+                        .collect();
+                    let image_embeds = Tensor::cat(&main_parts, 0)?;
+                    let n_ds_layers = per_image[0].as_ref().unwrap().len() - 1;
+                    let mut deepstack_layers = Vec::with_capacity(n_ds_layers);
+                    for layer_idx in 0..n_ds_layers {
+                        let layer_parts: Vec<Tensor> = per_image
+                            .iter()
+                            .map(|o| o.as_ref().unwrap()[1 + layer_idx].clone())
+                            .collect();
+                        deepstack_layers.push(Tensor::cat(&layer_parts, 0)?);
+                    }
+                    (image_embeds, deepstack_layers)
+                }
+            } else {
+                self.vision.forward(&pixel_values, image_grid_thw_ref)?
+            };
+
             let image_embeds = image_embeds.to_device(&device)?.to_dtype(self.text.dtype)?;
             let deepstack_image_embeds = deepstack_image_embeds
                 .into_iter()
@@ -473,9 +295,10 @@ impl Qwen3VLMoEModel {
                 candle_core::bail!("pixel_values_videos require video_grid_thw");
             };
             let mut pixel_values = pixel_values_videos.clone();
-            let dims = pixel_values.dims();
-            if dims.len() == 3 {
-                pixel_values = pixel_values.reshape((dims[0] * dims[1], dims[2]))?;
+            let ndim = pixel_values.dims().len();
+            if ndim > 2 {
+                let last_dim = pixel_values.dim(ndim - 1)?;
+                pixel_values = pixel_values.reshape(((), last_dim))?;
             }
             let (video_embeds, deepstack_video_embeds) =
                 self.vision.forward(&pixel_values, video_grid_thw_ref)?;
@@ -595,27 +418,33 @@ impl Qwen3VLMoEModel {
             input_ids_full
         };
 
+        let (position_ids, mrope_position_deltas) = super::qwen3_vl::get_rope_index(
+            ropeidx_input_ids,
+            rope_img_grid_thw.as_ref(),
+            rope_vid_grid_thw.as_ref(),
+            Some(&ropeidx_attn_mask),
+            self.spatial_merge_size,
+            self.image_token_id,
+            self.video_token_id,
+            self.vision_start_token_id,
+            self.vision_end_token_id,
+        )?;
         let position_ids = if attention_mask.is_some() {
-            self.get_rope_index(
-                ropeidx_input_ids,
-                image_grid_thw.as_ref(),
-                video_grid_thw.as_ref(),
-                Some(&ropeidx_attn_mask),
-            )?
-            .0
+            position_ids
         } else {
-            Tensor::new(
+            let mut position_ids = Tensor::new(
                 seqlen_offsets.iter().map(|x| *x as i64).collect::<Vec<_>>(),
                 input_ids.device(),
             )?
             .reshape((1, (), 1))?
-            .repeat((3, 1, 1))?
+            .repeat((3, 1, 1))?;
+            position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
+            position_ids
         };
 
         let out = self.text.forward_embeds(
             input_embeds,
             attention_mask.as_ref(),
-            seqlen_offsets,
             &position_ids,
             context_lens,
             metadata,
@@ -643,9 +472,12 @@ impl VisionModel for Qwen3VLMoEModel {
             input_ids_full,
             image_grid_thw,
             video_grid_thw,
+            rope_img_grid_thw,
+            rope_vid_grid_thw,
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
+            image_hashes,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Qwen3VLVisionSpecificArgs`");
@@ -657,6 +489,8 @@ impl VisionModel for Qwen3VLMoEModel {
                 candle_core::bail!("Images and videos cannot be provided together.")
             }
         };
+        let rope_img = rope_img_grid_thw.or(image_grid_thw.clone());
+        let rope_vid = rope_vid_grid_thw.or(video_grid_thw.clone());
         self.forward(
             input_ids,
             &input_ids_full,
@@ -664,11 +498,14 @@ impl VisionModel for Qwen3VLMoEModel {
             pixel_values_video,
             image_grid_thw,
             video_grid_thw,
+            rope_img,
+            rope_vid,
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
             seqlen_offsets,
             context_lens,
+            &image_hashes,
             metadata,
             flash_params,
         )
@@ -694,10 +531,26 @@ impl VisionModel for Qwen3VLMoEModel {
             input_ids_full: input_ids.clone(),
             image_grid_thw: None,
             video_grid_thw: None,
+            rope_img_grid_thw: None,
+            rope_vid_grid_thw: None,
             seqlens: vec![input_ids.dims()[1]],
             continuous_img_pad: vec![],
             continuous_vid_pad: vec![],
+            image_hashes: vec![],
         })
+    }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
     }
 }
 

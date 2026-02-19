@@ -5,8 +5,9 @@ use super::{
     IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
     PreProcessingMixin, Processor, TokenSource,
 };
-use crate::device_map::DeviceMapper;
+use crate::device_map::{self, DeviceMapper};
 use crate::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
+use crate::distributed::{self, WorkerTransferData};
 use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::{ChatTemplate, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
@@ -26,8 +27,8 @@ use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
-use std::io;
 use std::sync::Arc;
+use std::{env, io};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -165,8 +166,19 @@ impl Loader for DiffusionLoader {
         if let Device::Cuda(dev) = &device {
             unsafe { dev.disable_event_tracking() };
         }
+        let use_nccl = mistralrs_quant::distributed::use_nccl();
+        let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
+            let payload: WorkerTransferData = serde_json::from_str(&payload)?;
+            let WorkerTransferData::Init { id: _, worker_rank } = payload;
+            vec![candle_core::Device::new_cuda(worker_rank + 1)?]
+        } else if use_nccl {
+            vec![candle_core::Device::new_cuda(0)?]
+        } else {
+            device_map::get_all_similar_devices(device)?
+        };
 
-        let mapper = DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None)?;
+        let mapper =
+            DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None, &available_devices)?;
         let dtype = mapper.get_min_dtype(dtype)?;
 
         let attention_mechanism = if paged_attn_config.is_some() {

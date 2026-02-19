@@ -36,8 +36,8 @@ impl Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let w1 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w1)?;
         let w3 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w3)?;
-        let y = &(candle_nn::ops::silu(&w1)? * w3)?;
-        MatMul.qmethod_matmul(y, &*self.feed_forward_w2)
+        let y = crate::ops::mul_and_act(&w1, &w3, crate::layers::Activation::Silu)?;
+        MatMul.qmethod_matmul(&y, &*self.feed_forward_w2)
     }
 }
 
@@ -301,6 +301,7 @@ impl ModelConfig::FromGGML for ModelWeights {
                     softcap: None,
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,
+                    sinks: None,
                 },
                 dtype,
             })
@@ -635,6 +636,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     softcap: None,
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,
+                    sinks: None,
                 },
                 dtype,
             })
@@ -711,9 +713,7 @@ impl ModelWeights {
         }
         let layer_in = layer_in.to_device(&self.device)?;
         let x = self.norm.forward(&layer_in)?;
-        extract_logits(
-            &MatMul.qmethod_matmul(&x.contiguous()?, &*self.output)?,
-            context_lens,
-        )
+        let x = extract_logits(&x, context_lens)?;
+        MatMul.qmethod_matmul(&x.contiguous()?, &*self.output)
     }
 }

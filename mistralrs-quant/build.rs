@@ -20,6 +20,7 @@ fn cuda_version_from_build_system() -> (usize, usize) {
     let version_number = release_section.split(' ').nth(1).unwrap();
 
     match version_number {
+        "13.1" => (13, 1),
         "13.0" => (13, 0),
         "12.9" => (12, 9),
         "12.8" => (12, 8),
@@ -40,189 +41,24 @@ fn cuda_version_from_build_system() -> (usize, usize) {
 }
 
 fn main() -> Result<(), String> {
+    // Declare expected cfg values for check-cfg lint
+    println!("cargo::rustc-check-cfg=cfg(has_marlin_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_blockwise_fp8_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_scalar_fp8_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_vector_fp8_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_mxfp4_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_mxfp4_wmma_kernels)");
+
     #[cfg(feature = "cuda")]
     {
-        use std::{fs::read_to_string, path::PathBuf, process::Command, vec};
-        const MARLIN_FFI_PATH: &str = "src/gptq/marlin_ffi.rs";
-        const BLOCKWISE_FP8_FFI_PATH: &str = "src/blockwise_fp8/ffi.rs";
-        const SCALAR_FP8_FFI_PATH: &str = "src/scalar_fp8/ffi.rs";
-        const VECTOR_FP8_FFI_PATH: &str = "src/vector_fp8/ffi.rs";
+        use std::{path::PathBuf, vec};
         const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
         println!("cargo:rerun-if-changed=build.rs");
-
-        // Try CUDA_COMPUTE_CAP then nvidia-smi
-        let compute_cap = {
-            if let Ok(var) = std::env::var("CUDA_COMPUTE_CAP") {
-                var.parse::<usize>().unwrap() * 10
-            } else {
-                let mut cmd = Command::new("nvidia-smi");
-                match cmd
-                    .args(["--query-gpu=compute_cap", "--format=csv"])
-                    .output()
-                {
-                    Ok(out) => {
-                        let output = String::from_utf8(out.stdout)
-                            .expect("Output of nvidia-smi was not utf8.");
-                        (output
-                            .split('\n')
-                            .nth(1)
-                            .unwrap()
-                            .trim()
-                            .parse::<f32>()
-                            .unwrap()
-                            * 100.) as usize
-                    }
-                    Err(_) => {
-                        panic!("`CUDA_COMPUTE_CAP` env var not specified and `nvidia-smi` was not found.");
-                    }
-                }
-            }
-        };
-
-        // ======== Handle optional marlin kernel compilation
-        let cc_over_800 = compute_cap >= 800;
-        let cc_is_over_800 = match cc_over_800 {
-            true => "true",
-            false => "false",
-        };
-
-        let mut marlin_ffi_ct = read_to_string(MARLIN_FFI_PATH).unwrap();
-        if marlin_ffi_ct.contains("pub(crate) const HAVE_MARLIN_KERNELS: bool = true;") {
-            marlin_ffi_ct = marlin_ffi_ct.replace(
-                "pub(crate) const HAVE_MARLIN_KERNELS: bool = true;",
-                &format!("pub(crate) const HAVE_MARLIN_KERNELS: bool = {cc_is_over_800};"),
-            );
-        } else {
-            marlin_ffi_ct = marlin_ffi_ct.replace(
-                "pub(crate) const HAVE_MARLIN_KERNELS: bool = false;",
-                &format!("pub(crate) const HAVE_MARLIN_KERNELS: bool = {cc_is_over_800};"),
-            );
-        }
-        std::fs::write(MARLIN_FFI_PATH, marlin_ffi_ct).unwrap();
-
-        let mut blockwise_fp8_ffi_ct = read_to_string(BLOCKWISE_FP8_FFI_PATH).unwrap();
-        if blockwise_fp8_ffi_ct
-            .contains("pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = true;")
-        {
-            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = true;",
-                &format!(
-                    "pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = {cc_is_over_800};"
-                ),
-            );
-        } else {
-            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = false;",
-                &format!(
-                    "pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = {cc_is_over_800};"
-                ),
-            );
-        }
-
-        if blockwise_fp8_ffi_ct
-            .contains("pub(crate) const HAVE_BLOCKWISE_QUANT_KERNELS: bool = true;")
-        {
-            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_BLOCKWISE_QUANT_KERNELS: bool = true;",
-                &format!("pub(crate) const HAVE_BLOCKWISE_QUANT_KERNELS: bool = {cc_is_over_800};"),
-            );
-        } else {
-            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_BLOCKWISE_QUANT_KERNELS: bool = false;",
-                &format!("pub(crate) const HAVE_BLOCKWISE_QUANT_KERNELS: bool = {cc_is_over_800};"),
-            );
-        }
-
-        if blockwise_fp8_ffi_ct
-            .contains("pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = true;")
-        {
-            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = true;",
-                &format!("pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = {cc_is_over_800};"),
-            );
-        } else {
-            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = false;",
-                &format!("pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = {cc_is_over_800};"),
-            );
-        }
-
-        std::fs::write(BLOCKWISE_FP8_FFI_PATH, blockwise_fp8_ffi_ct).unwrap();
-
-        let mut scalar_fp8_ffi_ct = read_to_string(SCALAR_FP8_FFI_PATH).unwrap();
-        if scalar_fp8_ffi_ct.contains("pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = true;") {
-            scalar_fp8_ffi_ct = scalar_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = true;",
-                &format!("pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = {cc_is_over_800};"),
-            );
-        } else {
-            scalar_fp8_ffi_ct = scalar_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = false;",
-                &format!("pub(crate) const HAVE_SCALAR_FP8_KERNELS: bool = {cc_is_over_800};"),
-            );
-        }
-        std::fs::write(SCALAR_FP8_FFI_PATH, scalar_fp8_ffi_ct).unwrap();
-
-        let mut vector_fp8_ffi_ct = read_to_string(VECTOR_FP8_FFI_PATH).unwrap();
-        if vector_fp8_ffi_ct.contains("pub(crate) const HAVE_VECTOR_DEQUANT_KERNELS: bool = true;")
-        {
-            vector_fp8_ffi_ct = vector_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_VECTOR_DEQUANT_KERNELS: bool = true;",
-                &format!("pub(crate) const HAVE_VECTOR_DEQUANT_KERNELS: bool = {cc_is_over_800};"),
-            );
-        } else {
-            vector_fp8_ffi_ct = vector_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_VECTOR_DEQUANT_KERNELS: bool = false;",
-                &format!("pub(crate) const HAVE_VECTOR_DEQUANT_KERNELS: bool = {cc_is_over_800};"),
-            );
-        }
-
-        if vector_fp8_ffi_ct.contains("pub(crate) const HAVE_VECTOR_QUANT_KERNELS: bool = true;") {
-            vector_fp8_ffi_ct = vector_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_VECTOR_QUANT_KERNELS: bool = true;",
-                &format!("pub(crate) const HAVE_VECTOR_QUANT_KERNELS: bool = {cc_is_over_800};"),
-            );
-        } else {
-            vector_fp8_ffi_ct = vector_fp8_ffi_ct.replace(
-                "pub(crate) const HAVE_VECTOR_QUANT_KERNELS: bool = false;",
-                &format!("pub(crate) const HAVE_VECTOR_QUANT_KERNELS: bool = {cc_is_over_800};"),
-            );
-        }
-        std::fs::write(VECTOR_FP8_FFI_PATH, vector_fp8_ffi_ct).unwrap();
-        // ========
-
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-        let mut lib_files = vec![
-            "kernels/gptq/q_gemm.cu",
-            "kernels/hqq/hqq.cu",
-            "kernels/hqq/hqq_bitpack.cu",
-            "kernels/ops/ops.cu",
-            "kernels/bitsandbytes/dequant.cu",
-            "kernels/rotary/rotary.cu",
-        ];
-        if cc_over_800 {
-            lib_files.push("kernels/marlin/marlin_matmul_f16.cu");
-            lib_files.push("kernels/marlin/marlin_matmul_bf16.cu");
-            lib_files.push("kernels/marlin/marlin_matmul_awq_f16.cu");
-            lib_files.push("kernels/marlin/marlin_matmul_awq_bf16.cu");
-            lib_files.push("kernels/marlin/marlin_repack.cu");
-            lib_files.push("kernels/blockwise_fp8/blockwise_fp8.cu");
-            lib_files.push("kernels/blockwise_fp8/blockwise_fp8_gemm.cu");
-            lib_files.push("kernels/scalar_fp8/scalar_fp8.cu");
-            lib_files.push("kernels/vector_fp8/vector_fp8.cu");
-        } else {
-            lib_files.push("kernels/marlin/dummy_marlin_kernel.cu");
-            lib_files.push("kernels/blockwise_fp8/blockwise_fp8_dummy.cu");
-            lib_files.push("kernels/blockwise_fp8/blockwise_fp8_gemm_dummy.cu");
-            lib_files.push("kernels/scalar_fp8/scalar_fp8_dummy.cu");
-            lib_files.push("kernels/vector_fp8/vector_fp8_dummy.cu");
-        }
-        for lib_file in lib_files.iter() {
-            println!("cargo:rerun-if-changed={lib_file}");
-        }
-        let mut builder = bindgen_cuda::Builder::default()
-            .kernel_paths(lib_files)
+
+        let mut builder = cudaforge::KernelBuilder::new()
+            .source_glob("kernels/*/*.cu")
             .out_dir(build_dir.clone())
             .arg("-std=c++17")
             .arg("-O3")
@@ -236,6 +72,28 @@ fn main() -> Result<(), String> {
             .arg("--verbose")
             .arg("--compiler-options")
             .arg("-fPIC");
+
+        let compute_cap = builder.get_compute_cap().unwrap_or(80);
+        // ======== Handle optional kernel compilation via rustc-cfg flags
+        let cc_over_80 = compute_cap >= 80;
+
+        if cc_over_80 {
+            println!("cargo:rustc-cfg=has_marlin_kernels");
+            println!("cargo:rustc-cfg=has_blockwise_fp8_kernels");
+            println!("cargo:rustc-cfg=has_scalar_fp8_kernels");
+            println!("cargo:rustc-cfg=has_vector_fp8_kernels");
+            // WMMA tensor core MXFP4 kernel (FP16/BF16 WMMA requires SM >= 80)
+            println!("cargo:rustc-cfg=has_mxfp4_wmma_kernels");
+        }
+        // MXFP4 is always enabled with CUDA (uses LUT-based dequantization)
+        println!("cargo:rustc-cfg=has_mxfp4_kernels");
+
+        let excluded_files = if cc_over_80 {
+            vec!["dummy_*.cu", "*_dummy.cu"]
+        } else {
+            vec!["marlin_*.cu", "*_fp8.cu", "*_fp8_gemm.cu", "*_wmma.cu"]
+        };
+        builder = builder.exclude(&excluded_files);
 
         // https://github.com/EricLBuehler/mistral.rs/issues/286
         if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
@@ -252,7 +110,9 @@ fn main() -> Result<(), String> {
         } else {
             build_dir.join("libmistralrsquant.a")
         };
-        builder.build_lib(out_file);
+        builder
+            .build_lib(out_file)
+            .expect("Build mistral quant lib failed!");
         println!("cargo:rustc-link-search={}", build_dir.display());
         println!("cargo:rustc-link-lib=mistralrsquant");
         println!("cargo:rustc-link-lib=dylib=cudart");
@@ -282,14 +142,20 @@ fn main() -> Result<(), String> {
         use std::process::Command;
         use std::{env, str};
 
-        const METAL_SOURCES: [&str; 9] = [
+        const METAL_SOURCES: [&str; 15] = [
             "bitwise",
             "blockwise_fp8",
             "bnb_dequantize",
+            "f8q8",
+            "fused_glu",
             "hqq_dequantize",
             "hqq_bitpack",
+            "mxfp4",
             "quantized",
+            "scalar_fp8",
             "scan",
+            "sdpa_with_sinks",
+            "softmax_with_sinks",
             "sort",
             "copy",
         ];
@@ -322,12 +188,14 @@ fn main() -> Result<(), String> {
             let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
             std::fs::write(out_dir.join("mistralrs_quant.metallib"), []).unwrap();
             std::fs::write(out_dir.join("mistralrs_quant_ios.metallib"), []).unwrap();
+            std::fs::write(out_dir.join("mistralrs_quant_tvos.metallib"), []).unwrap();
             return Ok(());
         }
 
         enum Platform {
             MacOS,
             Ios,
+            TvOS,
         }
 
         impl Platform {
@@ -335,6 +203,18 @@ fn main() -> Result<(), String> {
                 match self {
                     Platform::MacOS => "macosx",
                     Platform::Ios => "iphoneos",
+                    Platform::TvOS => "appletvos",
+                }
+            }
+
+            fn metal_std(&self) -> &str {
+                // Use Metal 3.1 unified standard for all platforms.
+                // This fixes Xcode 26+ where the default Metal standard may be too low.
+                // https://github.com/EricLBuehler/mistral.rs/issues/1844
+                //
+                // Note: tvOS devices with A15+ (Apple TV 4K 3rd gen) support Metal 3.1.
+                match self {
+                    Platform::MacOS | Platform::Ios | Platform::TvOS => "metal3.1",
                 }
             }
         }
@@ -351,6 +231,7 @@ fn main() -> Result<(), String> {
                 .arg("--sdk")
                 .arg(platform.sdk())
                 .arg("metal")
+                .arg(format!("-std={}", platform.metal_std()))
                 .arg(format!("-working-directory={working_directory}"))
                 .arg("-Wall")
                 .arg("-Wextra")
@@ -392,6 +273,7 @@ fn main() -> Result<(), String> {
             let lib_name = match platform {
                 Platform::MacOS => "mistralrs_quant.metallib",
                 Platform::Ios => "mistralrs_quant_ios.metallib",
+                Platform::TvOS => "mistralrs_quant_tvos.metallib",
             };
             let metallib = out_dir.join(lib_name);
             let mut compile_metallib_cmd = Command::new("xcrun");
@@ -430,6 +312,7 @@ fn main() -> Result<(), String> {
 
         compile(Platform::MacOS)?;
         compile(Platform::Ios)?;
+        compile(Platform::TvOS)?;
 
         Ok(())
     }

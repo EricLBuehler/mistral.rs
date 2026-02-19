@@ -17,7 +17,7 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::Sequence,
+    sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::{PreProcessorConfig, ToFilter},
@@ -148,9 +148,6 @@ impl InputsProcessor for Gemma3ImageProcessor {
 
                 let num_crops = num_crops.unwrap();
 
-                // Deliberately no .unsqueeze here
-                pixel_values_accum.push(pixel_values.clone());
-
                 let mut prompt = tokenizer
                     .decode(seq.get_toks(), false)
                     .expect("Detokenization failed!");
@@ -180,12 +177,42 @@ impl InputsProcessor for Gemma3ImageProcessor {
                         .expect("Detokenization failed!");
 
                     let ids = toks.get_ids().to_vec();
+
+                    // Build mm_features for position-aware prefix cache hashing
+                    if seq.mm_features().is_empty() {
+                        if let (Some(hashes), Some(img_tok_id)) = (
+                            seq.image_hashes().map(|h| h.to_vec()),
+                            tokenizer.token_to_id(IMAGE_TOKEN),
+                        ) {
+                            let ranges = find_image_placeholder_ranges(&ids, img_tok_id);
+                            seq.set_mm_features(build_mm_features_from_ranges(
+                                &ranges, &hashes, "img",
+                            ));
+                        }
+                    }
+
                     seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
                     seq.multimodal.has_changed_prompt = true;
                 }
+
+                // Per-sequence prefix cache trimming of pixel_values
+                let cached = seq.count_prefix_cached_mm_items();
+                let n_images = pixel_values.dim(0).unwrap_or(0);
+                if cached < n_images {
+                    if cached > 0 {
+                        pixel_values_accum
+                            .push(pixel_values.narrow(0, cached, n_images - cached).unwrap());
+                    } else {
+                        pixel_values_accum.push(pixel_values.clone());
+                    }
+                }
             }
 
-            Some(Tensor::cat(&pixel_values_accum, 0).unwrap())
+            if pixel_values_accum.is_empty() {
+                None
+            } else {
+                Some(Tensor::cat(&pixel_values_accum, 0).unwrap())
+            }
         } else {
             None
         };
@@ -232,13 +259,35 @@ impl InputsProcessor for Gemma3ImageProcessor {
             .unwrap()
         };
 
+        let pixel_values = if is_prompt { pixel_values } else { None };
+
+        let image_hashes: Vec<u64> = if is_prompt {
+            input_seqs
+                .iter()
+                .flat_map(|seq| {
+                    seq.image_hashes()
+                        .map(|h| {
+                            let cached = seq.count_prefix_cached_mm_items();
+                            if cached < h.len() {
+                                h[cached..].to_vec()
+                            } else {
+                                vec![]
+                            }
+                        })
+                        .unwrap_or_default()
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
             context_lens,
             position_ids,
             pixel_values,
-            model_specific_args: Box::new(Gemma3SpecificArgs),
+            model_specific_args: Box::new(Gemma3SpecificArgs { image_hashes }),
             paged_attn_meta,
             flash_meta,
         });
@@ -275,7 +324,7 @@ impl Gemma3ImageProcessor {
 
             (num_crops_w, 1)
         } else {
-            if (width as f64 / height as f64) < pan_and_scan_min_ratio_to_activate {
+            if (height as f64 / width as f64) < pan_and_scan_min_ratio_to_activate {
                 return vec![];
             }
 
@@ -370,7 +419,7 @@ impl ImagePreProcessor for Gemma3ImageProcessor {
         let image_mean = config.image_mean.unwrap_or(Self::DEFAULT_MEAN);
         let image_std = config.image_std.unwrap_or(Self::DEFAULT_STD);
         let do_convert_rgb = config.do_convert_rgb.unwrap_or(true);
-        let do_pan_and_scan = config.do_pan_and_scan.unwrap_or(do_convert_rgb);
+        let do_pan_and_scan = config.do_pan_and_scan.unwrap_or(false);
         // https://github.com/huggingface/transformers/blob/ea219ed164bead55a5513e8cfaa17a25d5613b9e/src/transformers/models/gemma3/processing_gemma3.py#L42
         let pan_and_scan_min_crop_size = config.pan_and_scan_min_crop_size.unwrap_or(256);
         let pan_and_scan_max_num_crops = config.pan_and_scan_max_num_crops.unwrap_or(4);

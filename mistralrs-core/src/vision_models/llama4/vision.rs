@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{LayerNorm, LayerNormConfig, Linear, Module};
@@ -11,7 +11,7 @@ use crate::{
     attention::SdpaParams,
     layers::{layer_norm, linear_no_bias, Activation, Sdpa},
     ops::RepeatInterleaveOp,
-    pipeline::IsqModel,
+    pipeline::{text_models_inputs_processor::FlashParams, IsqModel},
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
@@ -153,6 +153,7 @@ impl Llama4VisionAttention {
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
+                sinks: None,
             },
             head_dim,
             freqs,
@@ -197,8 +198,23 @@ impl Llama4VisionAttention {
             k = candle_nn::rotary_emb::rope_i(&k, &self.freqs.cos, &self.freqs.sin)?;
         }
 
+        let flash_params = FlashParams {
+            max_q: 0,
+            max_k: 0,
+            cumulative_seqlens_q: HashMap::new(),
+            cumulative_seqlens_k: HashMap::new(),
+            causal: false,
+        };
+
         let mut attn_output = Sdpa
-            .run_attention(&q, &k, &v, attention_mask, None, &self.sdpa_params)?
+            .run_attention(
+                &q,
+                &k,
+                &v,
+                attention_mask,
+                Some(&flash_params),
+                &self.sdpa_params,
+            )?
             .transpose(1, 2)?
             .contiguous()?
             .reshape((bs, q_sq, ()))?

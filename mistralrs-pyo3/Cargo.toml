@@ -1,5 +1,6 @@
 [package]
 name = "mistralrs-pyo3"
+publish = false
 authors = ["Eric Buehler"]
 version.workspace = true
 edition.workspace = true

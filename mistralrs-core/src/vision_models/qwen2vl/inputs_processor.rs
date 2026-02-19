@@ -16,7 +16,7 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::Sequence,
+    sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::{PreProcessorConfig, ToFilter},
@@ -190,10 +190,10 @@ impl InputsProcessor for Qwen2VLImageProcessor {
         let (
             new_input,
             pixel_values,
-            image_grid_thw,
-            video_grid_thw,
-            continuous_img_pad,
-            continuous_vid_pad,
+            mut image_grid_thw,
+            mut video_grid_thw,
+            mut continuous_img_pad,
+            mut continuous_vid_pad,
             input_ids_searching,
             image_nums,
             video_nums,
@@ -257,6 +257,19 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
                 image_grid_thw_accum.push(image_grid_thw); //.map(|img| img.unsqueeze(0).unwrap()));
                 video_grid_thw_accum.push(video_grid_thw); //.map(|vid| vid.unsqueeze(0).unwrap()));
+            }
+
+            // Cache the complete grid_thw for MRoPE position computation.
+            // Set once during the first inputs processor call when ALL images are present.
+            // Unlike cached_img_thw, this is never cleared by keep_num_images, so it
+            // remains valid even after prefix caching trims the image set.
+            for (idx, seq) in input_seqs.iter_mut().enumerate() {
+                if seq.multimodal.rope_img_grid_thw.is_none() {
+                    seq.multimodal.rope_img_grid_thw = image_grid_thw_accum[idx].clone();
+                }
+                if seq.multimodal.rope_vid_grid_thw.is_none() {
+                    seq.multimodal.rope_vid_grid_thw = video_grid_thw_accum[idx].clone();
+                }
             }
 
             let image_grid_thw_accum = if image_grid_thw_accum.iter().any(|img| img.is_none()) {
@@ -359,6 +372,19 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 if !seq.multimodal.has_changed_prompt {
                     seq.set_initial_prompt(detok.clone());
 
+                    // Build mm_features for position-aware prefix cache hashing
+                    if seq.mm_features().is_empty() {
+                        if let (Some(hashes), Some(img_pad_id)) = (
+                            seq.image_hashes().map(|h| h.to_vec()),
+                            tokenizer.token_to_id(Qwen2VLProcessor::IMAGE_PAD),
+                        ) {
+                            let ranges = find_image_placeholder_ranges(&ids, img_pad_id);
+                            seq.set_mm_features(build_mm_features_from_ranges(
+                                &ranges, &hashes, "img",
+                            ));
+                        }
+                    }
+
                     seq.set_toks_and_reallocate(ids.clone(), paged_attn_metadata.as_mut());
                     seq.multimodal.has_changed_prompt = true;
                 }
@@ -443,14 +469,152 @@ impl InputsProcessor for Qwen2VLImageProcessor {
         };
 
         let (input, input_ids_full) = match (new_input, is_prompt) {
-            (Some(new_input), true) => (new_input.clone(), new_input),
+            (Some(new_input), true) => (input, new_input),
             (Some(new_input), false) => (input, new_input),
             (None, _) => (input.clone(), input.clone()),
         };
 
-        let pixel_values = if is_prompt { pixel_values } else { None };
+        let mut pixel_values = if is_prompt { pixel_values } else { None };
+
+        // Adjust continuous pad ranges for prefix caching: drop cached ranges, shift new ones.
+        // Also trim pixel_values and grid_thw to exclude cached images/videos so the vision
+        // encoder only produces embeddings for the non-cached ones.
+        let mut per_seq_cached_images: Vec<usize> = vec![0; input_seqs.len()];
+        if is_prompt {
+            let mut total_cached_images = 0usize;
+            let mut total_cached_videos = 0usize;
+            for (seq_idx, (seq, (img_pads, vid_pads))) in input_seqs
+                .iter()
+                .zip(
+                    continuous_img_pad
+                        .iter_mut()
+                        .zip(continuous_vid_pad.iter_mut()),
+                )
+                .enumerate()
+            {
+                let prefix_len = seq.prefix_cache_len();
+                if prefix_len > 0 {
+                    let img_before = img_pads.len();
+                    img_pads.retain(|(start, _)| *start >= prefix_len);
+                    let cached = img_before - img_pads.len();
+                    total_cached_images += cached;
+                    per_seq_cached_images[seq_idx] = cached;
+                    for (start, end) in img_pads.iter_mut() {
+                        *start -= prefix_len;
+                        *end -= prefix_len;
+                    }
+                    let vid_before = vid_pads.len();
+                    vid_pads.retain(|(start, _)| *start >= prefix_len);
+                    total_cached_videos += vid_before - vid_pads.len();
+                    for (start, end) in vid_pads.iter_mut() {
+                        *start -= prefix_len;
+                        *end -= prefix_len;
+                    }
+                }
+            }
+            if total_cached_images > 0 {
+                let n_seqs = input_seqs.len().max(1);
+                let per_seq_cached = total_cached_images / n_seqs;
+                if let Some(ref grid) = image_grid_thw {
+                    let total_grid = grid.dim(0).unwrap();
+                    let grid_per_seq = total_grid / n_seqs;
+                    let remaining_per_seq = grid_per_seq.saturating_sub(per_seq_cached);
+                    if remaining_per_seq > 0 {
+                        let trimmed: Vec<Tensor> = (0..n_seqs)
+                            .map(|i| {
+                                grid.narrow(0, i * grid_per_seq + per_seq_cached, remaining_per_seq)
+                                    .unwrap()
+                            })
+                            .collect();
+                        image_grid_thw = Some(Tensor::cat(&trimmed, 0).unwrap());
+                    } else {
+                        image_grid_thw = None;
+                    }
+                }
+                if let Some(ref pv) = pixel_values {
+                    let n_imgs = pv.dim(1).unwrap();
+                    let remaining = n_imgs.saturating_sub(per_seq_cached);
+                    if remaining > 0 {
+                        pixel_values = Some(pv.narrow(1, per_seq_cached, remaining).unwrap());
+                    } else {
+                        pixel_values = None;
+                    }
+                }
+            }
+            if total_cached_videos > 0 {
+                let n_seqs = input_seqs.len().max(1);
+                let per_seq_cached_vids = total_cached_videos / n_seqs;
+                if let Some(ref grid) = video_grid_thw {
+                    let total_grid = grid.dim(0).unwrap();
+                    let grid_per_seq = total_grid / n_seqs;
+                    let remaining_per_seq = grid_per_seq.saturating_sub(per_seq_cached_vids);
+                    if remaining_per_seq > 0 {
+                        let trimmed: Vec<Tensor> = (0..n_seqs)
+                            .map(|i| {
+                                grid.narrow(
+                                    0,
+                                    i * grid_per_seq + per_seq_cached_vids,
+                                    remaining_per_seq,
+                                )
+                                .unwrap()
+                            })
+                            .collect();
+                        video_grid_thw = Some(Tensor::cat(&trimmed, 0).unwrap());
+                    } else {
+                        video_grid_thw = None;
+                    }
+                }
+            }
+        }
 
         let seqlens = input_seqs.iter().map(|seq| seq.len()).collect::<Vec<_>>();
+
+        // Collect the complete rope grids from per-sequence cached values.
+        // These cover ALL images/videos in the full sequence (including prefix-cached ones)
+        // and are used for MRoPE position computation in get_rope_index.
+        let rope_img_grid_thw = {
+            let grids: Vec<_> = input_seqs
+                .iter()
+                .filter_map(|seq| seq.multimodal.rope_img_grid_thw.clone())
+                .collect();
+            if grids.is_empty() {
+                None
+            } else {
+                Some(Tensor::cat(&grids, 0).unwrap())
+            }
+        };
+        let rope_vid_grid_thw = {
+            let grids: Vec<_> = input_seqs
+                .iter()
+                .filter_map(|seq| seq.multimodal.rope_vid_grid_thw.clone())
+                .collect();
+            if grids.is_empty() {
+                None
+            } else {
+                Some(Tensor::cat(&grids, 0).unwrap())
+            }
+        };
+
+        let image_hashes: Vec<u64> = if is_prompt {
+            input_seqs
+                .iter()
+                .enumerate()
+                .flat_map(|(seq_idx, seq)| {
+                    seq.image_hashes()
+                        .map(|h| {
+                            let cached = per_seq_cached_images[seq_idx];
+                            if cached < h.len() {
+                                h[cached..].to_vec()
+                            } else {
+                                vec![]
+                            }
+                        })
+                        .unwrap_or_default()
+                })
+                .collect()
+        } else {
+            vec![]
+        };
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
@@ -462,12 +626,15 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 input_ids_full,
                 image_grid_thw,
                 video_grid_thw,
+                rope_img_grid_thw,
+                rope_vid_grid_thw,
                 seqlens,
                 continuous_img_pad,
                 continuous_vid_pad,
                 input_ids_searching,
                 image_nums,
                 video_nums,
+                image_hashes,
             }),
             paged_attn_meta,
             flash_meta,

@@ -1,13 +1,14 @@
 use crate::{
     get_mut_arcmutex, get_mut_group,
-    paged_attention::PhysicalTokenBlock,
+    harmony::HarmonyContext,
+    paged_attention::block_hash::MultiModalFeature,
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
+    think_tags::ThinkTagContext,
     AudioInput, ChatCompletionResponse, Usage,
 };
 use crate::{
-    paged_attention::{BlockEngineSequence, LogicalTokenBlock},
     pipeline::{DiffusionGenerationParams, KvCache},
     response::CompletionChoice,
     tools::ToolCallingMatcher,
@@ -18,8 +19,9 @@ use candle_core::Tensor;
 use std::{
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
+    path::PathBuf,
     sync::{Arc, RwLock},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{
     mpsc::{error::SendError, Sender},
@@ -73,98 +75,6 @@ pub enum SequenceState {
 pub enum SequenceRecognizer {
     Llguidance(Box<llguidance::Matcher>),
     None,
-}
-
-enum SequenceCustomMetadata {
-    PagedAttention {
-        logical_token_blocks: Vec<LogicalTokenBlock>,
-        physical_blocks_prefill: Option<Vec<Arc<PhysicalTokenBlock>>>,
-        block_size: usize,
-    },
-    None,
-}
-
-macro_rules! blocks_to_add_new_tok {
-    ($logical_token_blocks:expr) => {{
-        let last = $logical_token_blocks.last();
-        if !last.is_some_and(|last| last.is_full() || last.is_empty()) {
-            // If we have space
-            0
-        } else {
-            1
-        }
-    }};
-}
-
-pub(crate) fn util_append_token_to_blocks(
-    tok: usize,
-    logical_token_blocks: &mut Vec<LogicalTokenBlock>,
-    block_size: usize,
-) {
-    let last = logical_token_blocks.last_mut();
-    match last {
-        Some(last) => {
-            last.append_token_id(tok);
-        }
-        None => {
-            logical_token_blocks.push(LogicalTokenBlock::new(block_size));
-            // SAFETY: We just pushed a block, so last_mut() will return Some
-            logical_token_blocks
-                .last_mut()
-                .expect("just pushed a block, vector cannot be empty")
-                .append_token_id(tok);
-        }
-    }
-    // SAFETY: At this point, we either had a block or just created one above,
-    // so the vector is guaranteed to be non-empty.
-    if logical_token_blocks
-        .last()
-        .expect("logical_token_blocks should not be empty after appending")
-        .is_full()
-    {
-        logical_token_blocks.push(LogicalTokenBlock::new(block_size));
-    }
-}
-
-impl SequenceCustomMetadata {
-    fn append_token_to_blocks(&mut self, tok: usize) {
-        match self {
-            Self::PagedAttention {
-                logical_token_blocks,
-                physical_blocks_prefill: _,
-                block_size,
-            } => {
-                util_append_token_to_blocks(tok, logical_token_blocks, *block_size);
-            }
-            Self::None => (),
-        }
-    }
-
-    fn pop_token_from_blocks(&mut self) {
-        match self {
-            Self::PagedAttention {
-                logical_token_blocks,
-                physical_blocks_prefill: _,
-                block_size: _,
-            } => {
-                let last = logical_token_blocks.last_mut().unwrap();
-                last.pop_token();
-            }
-            Self::None => (),
-        }
-    }
-
-    fn append_tokens_to_blocks(&mut self, toks: Vec<usize>) {
-        for tok in toks {
-            self.append_token_to_blocks(tok);
-        }
-    }
-
-    fn remove_tokens_from_blocks(&mut self, n: usize) {
-        for _ in 0..n {
-            self.pop_token_from_blocks();
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -272,9 +182,21 @@ pub struct MultimodalData {
     pub cached_pixel_values: Option<Tensor>,
     pub cached_img_thw: Option<Tensor>,
     pub cached_vid_thw: Option<Tensor>,
+    /// Complete image grid THW covering ALL images in the sequence (including prefix-cached ones).
+    /// Used by Qwen VL models for MRoPE position computation in `get_rope_index`.
+    /// Unlike `cached_img_thw`, this is never cleared by `keep_num_images`.
+    pub rope_img_grid_thw: Option<Tensor>,
+    /// Complete video grid THW covering ALL videos in the sequence (including prefix-cached ones).
+    pub rope_vid_grid_thw: Option<Tensor>,
     pub has_changed_prompt: bool,
     pub image_gen_response_format: Option<ImageGenerationResponseFormat>,
     pub diffusion_params: Option<DiffusionGenerationParams>,
+    pub image_gen_save_file: Option<PathBuf>,
+    /// Per-item multimodal feature positions for prefix caching block hashing.
+    /// Each entry records which token range a multimodal item (image/audio) occupies,
+    /// so that only blocks overlapping with that item include its content hash.
+    /// Set once during the first `process_inputs()` call and never modified thereafter.
+    mm_features: Vec<MultiModalFeature>,
 }
 
 impl MultimodalData {
@@ -283,6 +205,7 @@ impl MultimodalData {
         input_audios: Option<Vec<AudioInput>>,
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         diffusion_params: Option<DiffusionGenerationParams>,
+        image_gen_save_file: Option<PathBuf>,
     ) -> Self {
         MultimodalData {
             input_images: input_images.map(SequenceImages::new),
@@ -290,9 +213,13 @@ impl MultimodalData {
             cached_pixel_values: None,
             cached_img_thw: None,
             cached_vid_thw: None,
+            rope_img_grid_thw: None,
+            rope_vid_grid_thw: None,
             has_changed_prompt: false,
             image_gen_response_format,
             diffusion_params,
+            image_gen_save_file,
+            mm_features: Vec::new(),
         }
     }
 
@@ -368,17 +295,109 @@ impl MultimodalData {
 
     pub fn keep_num_images(&mut self, images_to_keep: usize) {
         if let Some(imgs) = self.input_images.as_mut() {
-            imgs.keep_num_images(images_to_keep)
+            imgs.keep_num_images(images_to_keep);
         }
+        // Invalidate preprocessed pixel value cache — the trimmed image set
+        // no longer matches the cached tensor dimensions (used by Qwen VL models).
+        self.cached_pixel_values = None;
+        self.cached_img_thw = None;
+        self.cached_vid_thw = None;
     }
 
     pub fn image_gen_response_format(&self) -> Option<ImageGenerationResponseFormat> {
         self.image_gen_response_format
     }
 
+    pub fn image_gen_save_file(&self) -> Option<&PathBuf> {
+        self.image_gen_save_file.as_ref()
+    }
+
     pub fn diffusion_params(&self) -> Option<DiffusionGenerationParams> {
         self.diffusion_params.clone()
     }
+
+    /// Per-item multimodal feature positions for prefix caching block hashing.
+    pub fn mm_features(&self) -> &[MultiModalFeature] {
+        &self.mm_features
+    }
+
+    /// Set per-item multimodal feature positions. Should be called once during the
+    /// first `process_inputs()` call when all images/audios are available.
+    pub fn set_mm_features(&mut self, features: Vec<MultiModalFeature>) {
+        self.mm_features = features;
+    }
+}
+
+/// Scan a token sequence for contiguous runs of a placeholder token ID.
+/// Returns `(offset, length)` pairs for each run, in order of appearance.
+///
+/// Used by vision model input processors to find where each image's placeholder
+/// tokens are in the expanded token sequence, so that `MultiModalFeature` entries
+/// can be built for position-aware prefix cache block hashing.
+pub fn find_image_placeholder_ranges(tokens: &[u32], placeholder_id: u32) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i] == placeholder_id {
+            let start = i;
+            while i < tokens.len() && tokens[i] == placeholder_id {
+                i += 1;
+            }
+            ranges.push((start, i - start));
+        } else {
+            i += 1;
+        }
+    }
+    ranges
+}
+
+/// Scan a token sequence for ranges delimited by start and end token IDs (inclusive).
+/// Returns `(offset, length)` pairs for each range found.
+///
+/// Useful for models like Llama4 that wrap each image in `<|image_start|>...<|image_end|>`.
+pub fn find_image_delimited_ranges(
+    tokens: &[u32],
+    start_id: u32,
+    end_id: u32,
+) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i] == start_id {
+            let start = i;
+            // Find matching end token
+            while i < tokens.len() && tokens[i] != end_id {
+                i += 1;
+            }
+            if i < tokens.len() {
+                // Include the end token
+                ranges.push((start, i - start + 1));
+            }
+        }
+        i += 1;
+    }
+    ranges
+}
+
+/// Build `MultiModalFeature` entries from placeholder token ranges and image hashes.
+///
+/// Pairs each contiguous run of placeholder tokens (found by `find_image_placeholder_ranges`)
+/// with the corresponding image content hash. If there are more images than placeholder ranges
+/// (or vice versa), only the overlapping pairs are included.
+pub fn build_mm_features_from_ranges(
+    ranges: &[(usize, usize)],
+    hashes: &[u64],
+    kind: &str,
+) -> Vec<MultiModalFeature> {
+    ranges
+        .iter()
+        .zip(hashes.iter())
+        .map(|(&(offset, length), hash)| MultiModalFeature {
+            identifier: format!("{kind}:{hash}"),
+            offset,
+            length,
+        })
+        .collect()
 }
 
 pub struct Sequence {
@@ -440,78 +459,23 @@ pub struct Sequence {
     stream_idx: usize,
     pub recognizer: SequenceRecognizer,
     scheduling_urgency: usize, // The number of passes since scheduling
-    waitlisted_count: usize, // Used in PagedAttention to alert the user when a sequence repeatedly cannot be scheduled
 
     // GPU things
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
     pub total_prompt_time: Option<u128>,
+    pub step_start_instant: Option<Instant>,
     group: Arc<Mutex<SequenceGroup>>,
     state: RwLock<SequenceState>,
 
-    // Custom backend metadata
-    custom_metadata: SequenceCustomMetadata,
-
     // Tool calls
     pub tools: Option<Arc<ToolCallingMatcher>>,
-}
 
-impl BlockEngineSequence for Sequence {
-    fn blocks_to_add_new_tok(&self) -> usize {
-        match &self.custom_metadata {
-            SequenceCustomMetadata::PagedAttention {
-                logical_token_blocks,
-                physical_blocks_prefill: _,
-                block_size: _,
-            } => {
-                blocks_to_add_new_tok!(logical_token_blocks)
-            }
-            SequenceCustomMetadata::None => unreachable!(),
-        }
-    }
+    // Harmony format parsing context (for GPT-OSS models)
+    harmony_context: Option<HarmonyContext>,
 
-    fn get_id(&self) -> usize {
-        self.id
-    }
-
-    fn logical_token_blocks(&self) -> &[LogicalTokenBlock] {
-        match &self.custom_metadata {
-            SequenceCustomMetadata::PagedAttention {
-                logical_token_blocks,
-                physical_blocks_prefill: _,
-                block_size: _,
-            } => logical_token_blocks,
-            SequenceCustomMetadata::None => unreachable!(),
-        }
-    }
-
-    fn take_physical_blocks_prefill(&mut self) -> Option<Vec<Arc<PhysicalTokenBlock>>> {
-        match &mut self.custom_metadata {
-            SequenceCustomMetadata::PagedAttention {
-                logical_token_blocks: _,
-                physical_blocks_prefill,
-                block_size: _,
-            } => physical_blocks_prefill.take(),
-            SequenceCustomMetadata::None => None,
-        }
-    }
-
-    fn increment_waitlist_count(&mut self) -> usize {
-        let prev = self.waitlisted_count;
-        self.waitlisted_count += 1;
-        prev
-    }
-
-    fn set_prefix_cache_len(&mut self, len: usize) {
-        self.prefix_cache_len = len;
-    }
-
-    fn block_size(&self) -> usize {
-        match &self.custom_metadata {
-            SequenceCustomMetadata::PagedAttention { block_size, .. } => *block_size,
-            SequenceCustomMetadata::None => unreachable!(),
-        }
-    }
+    // Think tag parsing context (for models using <think>...</think> tags)
+    think_tag_context: Option<ThinkTagContext>,
 }
 
 impl Sequence {
@@ -544,6 +508,7 @@ impl Sequence {
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         sequence_stepping_type: SeqStepType,
         diffusion_params: Option<DiffusionGenerationParams>,
+        image_gen_save_file: Option<PathBuf>,
         // Preallocated KV cache (k,v)
         seq_preallocated_cache: Option<(Tensor, Tensor)>,
         //
@@ -551,17 +516,7 @@ impl Sequence {
         eos_tokens: Vec<u32>,
     ) -> Self {
         let prompt_len = tokens.len();
-        let mut custom_metadata = if let Some(block_size) = block_size {
-            SequenceCustomMetadata::PagedAttention {
-                logical_token_blocks: Vec::new(),
-                physical_blocks_prefill: None,
-                block_size,
-            }
-        } else {
-            SequenceCustomMetadata::None
-        };
-        custom_metadata
-            .append_tokens_to_blocks(tokens.iter().map(|x| *x as usize).collect::<Vec<_>>());
+        let _ = block_size; // Block management handled by KVCacheManager
         Self {
             tokens,
             prompt,
@@ -612,15 +567,17 @@ impl Sequence {
                 input_audios,
                 image_gen_response_format,
                 diffusion_params,
+                image_gen_save_file,
             ),
-            custom_metadata,
             tools,
             sequence_stepping_type,
             return_raw_logits,
             token_offset: 0,
             eos_tokens,
             total_prompt_time: None,
-            waitlisted_count: 0,
+            step_start_instant: None,
+            harmony_context: None,
+            think_tag_context: None,
         }
     }
 
@@ -652,30 +609,6 @@ impl Sequence {
         self.prefill_prompt_toks = Some(toks);
         self.set_state(SequenceState::RunningPrefillPrompt);
         self.token_offset = offset;
-        self
-    }
-
-    pub fn prefill_v2_paged(
-        mut self,
-        logical_blocks: Vec<LogicalTokenBlock>,
-        physical_blocks: Vec<Arc<PhysicalTokenBlock>>,
-        toks: Vec<u32>,
-        offset: usize,
-    ) -> Self {
-        self.prefill_prompt_toks = Some(toks);
-        self.set_state(SequenceState::RunningPrefillPrompt);
-        self.token_offset = offset;
-
-        if let SequenceCustomMetadata::PagedAttention {
-            logical_token_blocks,
-            physical_blocks_prefill,
-            block_size: _,
-        } = &mut self.custom_metadata
-        {
-            *logical_token_blocks = logical_blocks;
-            *physical_blocks_prefill = Some(physical_blocks);
-        }
-
         self
     }
 
@@ -778,24 +711,18 @@ impl Sequence {
     ) {
         self.tokens.clone_from(&toks);
         self.prompt_len = self.tokens.len();
-        // Handle possible block engine
-        match &mut self.custom_metadata {
-            SequenceCustomMetadata::PagedAttention {
-                logical_token_blocks,
-                physical_blocks_prefill: _,
-                block_size: _,
-            } => {
-                logical_token_blocks.clear();
-            }
-            SequenceCustomMetadata::None => (),
-        }
-        self.custom_metadata
-            .append_tokens_to_blocks(toks.iter().map(|x| *x as usize).collect::<Vec<_>>());
 
         if let Some(metadata) = paged_attn_metadata {
-            // Free and then reallocate as appropriate
-            get_mut_arcmutex!(metadata.block_engine).free_sequence(*self.id());
-            get_mut_arcmutex!(metadata.block_engine).allocate(self);
+            // Free and then reallocate with the new token count
+            let seq_id = *self.id();
+            let num_tokens = self.tokens.len();
+            let mut kv_mgr = get_mut_arcmutex!(metadata.kv_cache_manager);
+            kv_mgr.free(seq_id);
+            if kv_mgr.allocate_slots(seq_id, num_tokens, &[]).is_none() {
+                tracing::warn!(
+                    "Failed to reallocate KV cache slots for sequence {seq_id} ({num_tokens} tokens)"
+                );
+            }
         }
     }
 
@@ -861,16 +788,12 @@ impl Sequence {
     pub(crate) fn add_tmp_tok(&mut self, tok: u32) {
         self.is_tmp = true;
         self.tokens.push(tok);
-        // Handle possible block engine
-        self.custom_metadata.append_token_to_blocks(tok as usize);
     }
 
     /// Internal api to remove n raw tokens.
     pub(crate) fn remove_tmp_tok(&mut self, n: usize) {
         self.is_tmp = false;
         self.tokens.truncate(self.tokens.len() - n);
-        // Handle possible block engine
-        self.custom_metadata.remove_tokens_from_blocks(n);
     }
 
     pub fn add_token(
@@ -893,8 +816,18 @@ impl Sequence {
         self.last_logprob = tok.logprob;
         self.last_is_done = *is_done;
 
-        self.custom_metadata
-            .append_token_to_blocks(tok.token as usize);
+        // Process token through Harmony parser if in Harmony mode
+        if let Some(ref mut harmony_ctx) = self.harmony_context {
+            let _ = harmony_ctx.process_token(tok.token);
+        }
+
+        // Process token through think tag parser if in think tag mode
+        if let Some(ref mut think_ctx) = self.think_tag_context {
+            if !stopped_by_token {
+                // Use process_bytes to handle incomplete UTF-8 sequences (e.g., emojis split across tokens)
+                think_ctx.process_bytes(&completion_bytes);
+            }
+        }
 
         self.cumulative_logprob += tok.logprob;
         self.tokens.push(tok.token);
@@ -1017,15 +950,31 @@ impl Sequence {
         self.prompt_timestamp
     }
 
-    fn update_time_info(&self) {
+    /// Set the step start instant for accurate prompt timing measurement.
+    /// Call this right before step() is called.
+    pub fn set_step_start_instant(&mut self) {
+        self.step_start_instant = Some(Instant::now());
+    }
+
+    pub(crate) fn update_time_info(&self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!")
             .as_millis();
 
+        // Prefer the recorded prompt time so it doesn't grow during decode steps.
+        // Fall back to the in-flight Instant timing only while the prompt step is running.
+        let prompt_time_ms = if let Some(pt) = self.total_prompt_time {
+            pt
+        } else if let Some(start) = self.step_start_instant {
+            start.elapsed().as_millis()
+        } else {
+            0
+        };
+
         if let Some(ts) = self.prompt_timestamp {
             get_mut_group!(self).total_completion_time = now - ts;
-            get_mut_group!(self).total_prompt_time = self.total_prompt_time.unwrap();
+            get_mut_group!(self).total_prompt_time = prompt_time_ms;
         }
 
         get_mut_group!(self).total_time = now - self.timestamp;
@@ -1144,6 +1093,35 @@ impl Sequence {
         self.multimodal.image_gen_response_format()
     }
 
+    pub fn image_gen_save_file(&self) -> Option<&PathBuf> {
+        self.multimodal.image_gen_save_file()
+    }
+
+    /// Per-item multimodal feature positions for prefix caching block hashing.
+    pub fn mm_features(&self) -> &[MultiModalFeature] {
+        self.multimodal.mm_features()
+    }
+
+    /// Set per-item multimodal feature positions. Should be called once during the
+    /// first `process_inputs()` call when all images/audios are available.
+    pub fn set_mm_features(&mut self, features: Vec<MultiModalFeature>) {
+        self.multimodal.set_mm_features(features);
+    }
+
+    /// Count the number of multimodal items whose placeholder tokens fall entirely
+    /// within the prefix cache. Used by vision model inputs_processors to trim
+    /// pixel_values so they match only the non-cached image placeholder positions.
+    pub fn count_prefix_cached_mm_items(&self) -> usize {
+        let prefix_len = self.prefix_cache_len();
+        if prefix_len == 0 {
+            return 0;
+        }
+        self.mm_features()
+            .iter()
+            .filter(|f| f.offset + f.length <= prefix_len)
+            .count()
+    }
+
     pub fn sequence_stepping_type(&self) -> &SeqStepType {
         &self.sequence_stepping_type
     }
@@ -1154,6 +1132,155 @@ impl Sequence {
 
     pub fn eos_tokens(&self) -> &[u32] {
         &self.eos_tokens
+    }
+
+    // === Harmony Format Support ===
+
+    /// Enable Harmony format parsing for this sequence.
+    /// Should be called when the model uses Harmony format (GPT-OSS models).
+    pub fn enable_harmony_mode(&mut self) -> Result<(), anyhow::Error> {
+        if self.harmony_context.is_none() {
+            self.harmony_context = Some(HarmonyContext::new()?);
+        }
+        Ok(())
+    }
+
+    /// Check if this sequence is in Harmony mode
+    pub fn is_harmony_mode(&self) -> bool {
+        self.harmony_context.is_some()
+    }
+
+    /// Process a token through the Harmony parser (if enabled).
+    /// Returns the Harmony delta if in Harmony mode.
+    pub fn process_harmony_token(&mut self, token_id: u32) -> Option<crate::harmony::HarmonyDelta> {
+        self.harmony_context
+            .as_mut()
+            .map(|ctx| ctx.process_token(token_id))
+    }
+
+    /// Get the latest Harmony reasoning delta (for streaming).
+    /// Returns None if not in Harmony mode or no new reasoning content.
+    pub fn get_harmony_reasoning_delta(&mut self) -> Option<String> {
+        self.harmony_context
+            .as_mut()
+            .and_then(|ctx| ctx.get_reasoning_delta())
+    }
+
+    /// Get the latest Harmony final content delta (for streaming).
+    /// Returns None if not in Harmony mode or no new final content.
+    pub fn get_harmony_final_delta(&mut self) -> Option<String> {
+        self.harmony_context
+            .as_mut()
+            .and_then(|ctx| ctx.get_final_delta())
+    }
+
+    /// Get accumulated Harmony reasoning content (for non-streaming).
+    /// Returns None if not in Harmony mode or no reasoning content.
+    pub fn get_harmony_reasoning_content(&self) -> Option<String> {
+        self.harmony_context
+            .as_ref()
+            .and_then(|ctx| ctx.reasoning_content())
+    }
+
+    /// Get accumulated Harmony final content.
+    /// Returns None if not in Harmony mode or no final content.
+    pub fn get_harmony_final_content(&self) -> Option<String> {
+        self.harmony_context
+            .as_ref()
+            .and_then(|ctx| ctx.final_content())
+    }
+
+    /// Signal end of stream to the Harmony parser
+    pub fn harmony_process_eos(&mut self) {
+        if let Some(ref mut ctx) = self.harmony_context {
+            ctx.process_eos();
+        }
+    }
+
+    /// Check if Harmony mode has detected any tool calls
+    pub fn has_harmony_tool_calls(&self) -> bool {
+        self.harmony_context
+            .as_ref()
+            .is_some_and(|ctx| ctx.has_tool_call())
+    }
+
+    /// Get all Harmony tool calls (finalizes any pending tool call)
+    pub fn get_harmony_tool_calls(&mut self) -> Vec<crate::harmony::HarmonyToolCall> {
+        self.harmony_context
+            .as_mut()
+            .map(|ctx| ctx.finalize_tool_calls())
+            .unwrap_or_default()
+    }
+
+    // === Think Tag Format Support ===
+
+    /// Enable think tag parsing for this sequence.
+    /// Should be called when the model uses `<think>...</think>` tags.
+    ///
+    /// If the prompt ends with `<think>`, the context will start inside a think block
+    /// since the chat template hardcoded the opening tag.
+    pub fn enable_think_tag_mode(&mut self) {
+        if self.think_tag_context.is_none() {
+            // Check if the prompt ends with <think> (template hardcoded the opening tag)
+            let starts_in_think_block = self.prompt.trim_end().ends_with("<think>");
+            self.think_tag_context = Some(if starts_in_think_block {
+                ThinkTagContext::new_in_think_block()
+            } else {
+                ThinkTagContext::new()
+            });
+        }
+    }
+
+    /// Check if this sequence is in think tag mode
+    pub fn is_think_tag_mode(&self) -> bool {
+        self.think_tag_context.is_some()
+    }
+
+    /// Process text through the think tag parser (if enabled).
+    pub fn process_think_tag_text(&mut self, text: &str) {
+        if let Some(ref mut ctx) = self.think_tag_context {
+            ctx.process_text(text);
+        }
+    }
+
+    /// Get the latest think tag reasoning delta (for streaming).
+    /// Returns None if not in think tag mode or no new reasoning content.
+    pub fn get_think_tag_reasoning_delta(&mut self) -> Option<String> {
+        self.think_tag_context
+            .as_mut()
+            .and_then(|ctx| ctx.get_reasoning_delta())
+    }
+
+    /// Get the latest think tag content delta (for streaming).
+    /// Returns None if not in think tag mode or no new content.
+    pub fn get_think_tag_content_delta(&mut self) -> Option<String> {
+        self.think_tag_context
+            .as_mut()
+            .and_then(|ctx| ctx.get_content_delta())
+    }
+
+    /// Get accumulated think tag reasoning content (for non-streaming).
+    /// Returns None if not in think tag mode or no reasoning content.
+    pub fn get_think_tag_reasoning_content(&self) -> Option<String> {
+        self.think_tag_context
+            .as_ref()
+            .and_then(|ctx| ctx.reasoning_content())
+    }
+
+    /// Get accumulated think tag content (for non-streaming).
+    /// Returns None if not in think tag mode or no content.
+    pub fn get_think_tag_content(&self) -> Option<String> {
+        self.think_tag_context
+            .as_ref()
+            .and_then(|ctx| ctx.content())
+    }
+
+    /// Finalize think tag parsing at end of stream.
+    /// Handles unclosed `<think>` blocks.
+    pub fn think_tag_finalize(&mut self) {
+        if let Some(ref mut ctx) = self.think_tag_context {
+            ctx.finalize();
+        }
     }
 }
 
@@ -1239,12 +1366,23 @@ impl SequenceGroup {
             completion_tokens: self.total_toks.saturating_sub(self.total_prompt_toks),
             prompt_tokens: self.total_prompt_toks,
             total_tokens: self.total_toks,
-            avg_tok_per_sec: (self.total_toks as f32 / self.total_time as f32) * 1000.,
-            avg_prompt_tok_per_sec: (self.total_prompt_toks as f32 / self.total_prompt_time as f32)
-                * 1000.,
-            avg_compl_tok_per_sec: (self.total_toks.saturating_sub(self.total_prompt_toks) as f32
-                / self.total_completion_time as f32)
-                * 1000.,
+            avg_tok_per_sec: if self.total_time > 0 {
+                (self.total_toks as f32 / self.total_time as f32) * 1000.
+            } else {
+                0.0
+            },
+            avg_prompt_tok_per_sec: if self.total_prompt_time > 0 {
+                (self.total_prompt_toks as f32 / self.total_prompt_time as f32) * 1000.
+            } else {
+                0.0
+            },
+            avg_compl_tok_per_sec: if self.total_completion_time > 0 {
+                (self.total_toks.saturating_sub(self.total_prompt_toks) as f32
+                    / self.total_completion_time as f32)
+                    * 1000.
+            } else {
+                0.0
+            },
             total_time_sec: self.total_time as f32 / 1000.,
             total_completion_time_sec: self.total_completion_time as f32 / 1000.,
             total_prompt_time_sec: self.total_prompt_time as f32 / 1000.,
@@ -1347,7 +1485,7 @@ impl SequenceGroup {
                 .send(Response::Chunk(ChatCompletionChunkResponse {
                     id: seq.id.to_string(),
                     choices: swap_streaming_chunks,
-                    created: seq.timestamp,
+                    created: seq.creation_time() as u128,
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
@@ -1366,7 +1504,7 @@ impl SequenceGroup {
                 .send(Response::CompletionChunk(CompletionChunkResponse {
                     id: seq.id.to_string(),
                     choices: swap_streaming_chunks,
-                    created: seq.timestamp,
+                    created: seq.creation_time() as u128,
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "text_completion".to_string(),

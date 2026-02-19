@@ -30,7 +30,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, LazyLock,
     },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     select,
@@ -167,7 +167,7 @@ pub struct Engine {
     is_debug: bool,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
-    logger: IntervalLogger,
+    logger: Arc<IntervalLogger>,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
     pending_notify: Arc<Notify>,
 }
@@ -196,6 +196,7 @@ impl Engine {
         search_callback: Option<Arc<search::SearchCallback>>,
         tool_callbacks: tools::ToolCallbacks,
         tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+        logger: Arc<IntervalLogger>,
     ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
@@ -218,7 +219,7 @@ impl Engine {
         // This ensures PagedAttention prefix caching respects the same setting
         get_mut_arcmutex!(scheduler).set_prefix_caching_enabled(!no_prefix_cache);
 
-        let block_engine = get_mut_arcmutex!(scheduler).block_engine();
+        let has_paged_attention = get_mut_arcmutex!(scheduler).kv_cache_manager().is_some();
 
         Ok(Self {
             tx,
@@ -234,12 +235,12 @@ impl Engine {
             prefix_cacher: Arc::new(Mutex::new(PrefixCacheManagerV2::new(
                 prefix_cache_n,
                 no_prefix_cache,
-                block_engine,
+                has_paged_attention,
             ))),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
             throughput_logging_enabled,
-            logger: IntervalLogger::new(Duration::from_secs(5)),
+            logger,
             handles: Arc::new(Mutex::new(Vec::new())),
             pending_notify: Arc::new(Notify::new()),
         })
@@ -503,6 +504,7 @@ impl Engine {
                             seq.prompt_tok_per_sec = prompt_tok_per_sec;
                             seq.prompt_timestamp = Some(now);
                             seq.total_prompt_time = Some(prompt_exec_time.as_millis());
+                            seq.step_start_instant = None;
                         }
                         last_completion_ids = vec![];
                     }
@@ -538,6 +540,20 @@ impl Engine {
                     if !output.scheduled.is_empty() {
                         let is_prompt = get_mut_arcmutex!(output.scheduled[0]).is_prompt();
 
+                        // Record prompt timing BEFORE step() so it's available if response is sent inside step()
+                        if is_prompt {
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .expect("Time travel has occurred!")
+                                .as_millis();
+                            for seq in output.scheduled.iter() {
+                                let mut seq_guard = get_mut_arcmutex!(seq);
+                                seq_guard.prompt_timestamp = Some(now);
+                                // Start the timer using Instant for accurate duration measurement
+                                seq_guard.set_step_start_instant();
+                            }
+                        }
+
                         let mut guards = output
                             .scheduled
                             .iter_mut()
@@ -555,7 +571,7 @@ impl Engine {
                             let metadata = PagedAttentionMeta {
                                 block_size,
                                 sliding_window: pipeline.get_metadata().sliding_window,
-                                block_engine: scheduler.block_engine().unwrap(),
+                                kv_cache_manager: scheduler.kv_cache_manager().unwrap(),
                             };
 
                             let return_raw_logits = guards_mut[0].return_raw_logits;
@@ -574,10 +590,7 @@ impl Engine {
                                     &mut *get_mut_arcmutex!(self.prefix_cacher),
                                     self.disable_eos_stop,
                                     rng.clone(),
-                                    CacheBackendMetadata::PagedAttention {
-                                        metadata,
-                                        blocks_to_copy: output.blocks_to_copy,
-                                    },
+                                    CacheBackendMetadata::PagedAttention { metadata },
                                 )
                                 .await
                         };
@@ -629,17 +642,21 @@ impl Engine {
                         }
 
                         if is_prompt {
+                            #[allow(clippy::cast_precision_loss)]
                             for mut seq in guards {
+                                // Use Instant duration for accurate prompt timing
+                                if let Some(start) = seq.step_start_instant {
+                                    let duration = start.elapsed();
+                                    seq.prompt_tok_per_sec =
+                                        seq.len() as f32 / duration.as_secs_f32();
+                                    seq.total_prompt_time = Some(duration.as_millis());
+                                    seq.step_start_instant = None;
+                                }
                                 let now = SystemTime::now()
                                     .duration_since(UNIX_EPOCH)
                                     .expect("Time travel has occurred!")
                                     .as_millis();
-                                #[allow(clippy::cast_precision_loss)]
-                                let prompt_tok_per_sec =
-                                    seq.len() as f32 / (now - seq.timestamp()) as f32;
-                                seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
                                 seq.prompt_timestamp = Some(now);
-                                seq.total_prompt_time = Some(now - seq.timestamp());
                             }
                         }
                     }

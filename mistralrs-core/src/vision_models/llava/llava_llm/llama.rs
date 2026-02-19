@@ -220,6 +220,7 @@ impl CausalSelfAttention {
                 softcap: None,
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
                 sliding_window: None,
+                sinks: None,
             },
         })
     }
@@ -531,6 +532,7 @@ impl Llama {
                 sliding_window: None,
                 k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
                 v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
         })
@@ -612,13 +614,13 @@ impl LLaVALLM for Llama {
                 flash_params,
             )?;
         }
-        x = x.to_device(&self.device)?;
-        x = self.ln_f.forward(&x)?;
+        let x = x.to_device(&self.device)?;
+        let x = self.ln_f.forward(&x)?;
+        let mut x = extract_logits(&x, context_lens)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
             x = x.to_dtype(t)?;
         }
-        let xs = MatMul.qmethod_matmul(&x, &*self.lm_head)?;
-        extract_logits(&xs, context_lens)
+        MatMul.qmethod_matmul(&x, &*self.lm_head)
     }
 }
 

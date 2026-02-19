@@ -128,10 +128,38 @@ impl CustomOp1 for Fp8ToDtype {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        _input_s: &candle_core::MetalStorage,
-        _input_l: &candle_core::Layout,
+        input_s: &candle_core::MetalStorage,
+        input_l: &candle_core::Layout,
     ) -> Result<(candle_core::MetalStorage, candle_core::Shape)> {
-        candle_core::bail!("FP8 to dtype conversion not yet implemented for Metal");
+        use candle_core::backend::BackendStorage;
+
+        if input_l.start_offset() != 0 || !input_l.is_contiguous() {
+            candle_core::bail!("Expected input to have start offset 0, continuous");
+        }
+
+        let device = input_s.device();
+        let encoder = device.command_encoder()?;
+        encoder.set_label("fp8-to-dtype");
+
+        let num_elements = input_l.shape().elem_count();
+        let out_shape = input_l.shape().clone();
+
+        let output = device.new_buffer(num_elements, self.target_dtype, "fp8-to-dtype-output")?;
+
+        crate::metal_kernels::call_fp8_to_dtype(
+            device.device(),
+            &encoder,
+            &crate::metal_kernels::Kernels::new(),
+            self.target_dtype,
+            input_s.buffer(),
+            &output,
+            num_elements,
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        let newstorage =
+            candle_core::MetalStorage::new(output, device.clone(), num_elements, self.target_dtype);
+        Ok((newstorage, out_shape))
     }
 }
 
@@ -259,10 +287,38 @@ impl CustomOp1 for DtypeToFp8 {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        _input_s: &candle_core::MetalStorage,
-        _input_l: &candle_core::Layout,
+        input_s: &candle_core::MetalStorage,
+        input_l: &candle_core::Layout,
     ) -> Result<(candle_core::MetalStorage, candle_core::Shape)> {
-        candle_core::bail!("Dtype to FP8 conversion not yet implemented for Metal");
+        use candle_core::backend::BackendStorage;
+
+        if input_l.start_offset() != 0 || !input_l.is_contiguous() {
+            candle_core::bail!("Expected input to have start offset 0, continuous");
+        }
+
+        let device = input_s.device();
+        let encoder = device.command_encoder()?;
+        encoder.set_label("dtype-to-fp8");
+
+        let num_elements = input_l.shape().elem_count();
+        let out_shape = input_l.shape().clone();
+
+        let output = device.new_buffer(num_elements, DType::F8E4M3, "dtype-to-fp8-output")?;
+
+        crate::metal_kernels::call_dtype_to_fp8(
+            device.device(),
+            &encoder,
+            &crate::metal_kernels::Kernels::new(),
+            self.source_dtype,
+            input_s.buffer(),
+            &output,
+            num_elements,
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        let newstorage =
+            candle_core::MetalStorage::new(output, device.clone(), num_elements, DType::F8E4M3);
+        Ok((newstorage, out_shape))
     }
 }
 

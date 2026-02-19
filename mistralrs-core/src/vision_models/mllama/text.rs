@@ -142,6 +142,7 @@ impl MLlamaTextSelfAttention {
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
+                sinks: None,
             },
             rope,
             num_heads: cfg.num_attention_heads / comm.world_size(),
@@ -363,6 +364,7 @@ impl MLlamaTextCrossAttention {
                 softcap: None,
                 softmax_scale: 1.0 / (cfg.head_dim() as f32).sqrt(),
                 sliding_window: None,
+                sinks: None,
             },
         })
     }
@@ -662,6 +664,7 @@ impl MLlamaTextModel {
                 sliding_window: None,
                 k_head_dim: cfg.head_dim(),
                 v_head_dim: cfg.head_dim(),
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             cache: EitherCache::Normal(NormalCache::new(
                 cfg.num_hidden_layers,

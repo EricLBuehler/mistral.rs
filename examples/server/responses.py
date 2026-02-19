@@ -37,9 +37,12 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 
 # first turn
-resp1 = client.responses.create(model="default", input="Apples are delicious!")
+resp1 = client.responses.create(
+    model="default", input="What is graphene?", reasoning={"effort": "high"}
+)
 
 print(resp1.output_text)
+print(resp1.reasoning)
 
 # follow‑up: no need to resend the first question
 resp2 = client.responses.create(
@@ -47,3 +50,4 @@ resp2 = client.responses.create(
 )
 
 print(resp2.output_text)
+print(resp2.reasoning)

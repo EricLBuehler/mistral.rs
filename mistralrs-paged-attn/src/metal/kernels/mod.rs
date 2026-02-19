@@ -26,6 +26,11 @@ const KERNELS: &[u8] = include_bytes!(concat!(
     env!("OUT_DIR"),
     "/mistralrs_paged_attention_ios.metallib"
 ));
+#[cfg(target_os = "tvos")]
+const KERNELS: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/mistralrs_paged_attention_tvos.metallib"
+));
 
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
@@ -71,34 +76,25 @@ impl Kernels {
     /// Load the library from precompiled metallib, falling back to runtime compilation if needed.
     /// If this has been previously loaded it will just fetch it from cache.
     pub fn load_library(&self, device: &Device) -> Result<Library, MetalKernelError> {
-        use objc2_foundation::{NSString, NSURL};
-
         if let Some(lib) = LIBRARY.get() {
             Ok(lib.clone())
         } else {
             // Try to load precompiled metallib first (faster startup)
             let lib = if !KERNELS.is_empty() {
-                // Write precompiled metallib to a temp file and load via URL
-                // This avoids the complexity of creating DispatchData
-                let temp_dir = std::env::temp_dir();
-                let metallib_path = temp_dir.join("mistralrs_paged_attention.metallib");
-                std::fs::write(&metallib_path, KERNELS).map_err(|e| {
-                    MetalKernelError::CompilationError(format!(
-                        "Failed to write metallib to temp file: {e}"
-                    ))
-                })?;
+                // Load precompiled metallib directly from embedded bytes via DispatchData.
+                // This avoids writing to a temp file, which can fail in sandboxed
+                // environments (e.g. macOS apps distributed via TestFlight).
+                // https://github.com/EricLBuehler/mistral.rs/issues/1897
+                let data = dispatch2::DispatchData::from_static_bytes(KERNELS);
 
-                let url_string = format!("file://{}", metallib_path.display());
-                let ns_url_string = NSString::from_str(&url_string);
-                let url = NSURL::URLWithString(&ns_url_string).ok_or_else(|| {
-                    MetalKernelError::CompilationError("Failed to create NSURL".to_string())
-                })?;
-
-                let raw_lib = device.as_ref().newLibraryWithURL_error(&url).map_err(|e| {
-                    MetalKernelError::CompilationError(format!(
-                        "Failed to load precompiled metallib: {e}"
-                    ))
-                })?;
+                let raw_lib = device
+                    .as_ref()
+                    .newLibraryWithData_error(&data)
+                    .map_err(|e| {
+                        MetalKernelError::CompilationError(format!(
+                            "Failed to load precompiled metallib: {e}"
+                        ))
+                    })?;
                 Library::new(raw_lib)
             } else {
                 // Fall back to runtime compilation if precompiled lib is not available
@@ -123,6 +119,10 @@ impl Kernels {
         file_system.insert(
             "kv_scale_update.metal",
             include_str!("kv_scale_update.metal"),
+        );
+        file_system.insert(
+            "gather_kv_cache.metal",
+            include_str!("gather_kv_cache.metal"),
         );
         file_system.insert("utils.metal", include_str!("utils.metal"));
         file_system.insert("float8.metal", include_str!("float8.metal"));
@@ -240,6 +240,7 @@ impl Kernels {
             "pagedattention.metal",
             "reshape_and_cache.metal",
             "kv_scale_update.metal",
+            "gather_kv_cache.metal",
         ];
 
         for file in main_files {
@@ -344,7 +345,8 @@ pub fn call_copy_blocks(
     block_mapping: &Buffer,
     block_mapping_offset: usize,
     num_pairs: u64,
-    numel_per_block: u64,
+    numel_per_block_key: u64,
+    numel_per_block_value: u64,
 ) -> Result<(), MetalKernelError> {
     let name = match ty {
         DType::F32 => "copy_blocks_float",
@@ -362,13 +364,18 @@ pub fn call_copy_blocks(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
+    assert_eq!(
+        numel_per_block_key, numel_per_block_value,
+        "key and value blocks must be the same size"
+    );
     set_params!(
         encoder,
         (
             (key_cache, key_cache_offset),
             (value_cache, value_cache_offset),
             (block_mapping, block_mapping_offset),
-            numel_per_block
+            numel_per_block_key,
+            numel_per_block_value
         )
     );
 
@@ -378,7 +385,7 @@ pub fn call_copy_blocks(
         depth: 1,
     };
     let thread_group_size = MTLSize {
-        width: (numel_per_block.min(1024)) as usize,
+        width: (numel_per_block_key.min(1024)) as usize,
         height: 1,
         depth: 1,
     };
@@ -533,6 +540,7 @@ pub fn call_paged_attention_v1(
     q_stride: i32,
     kv_block_stride: i32,
     kv_head_stride: i32,
+    sinks: Option<(&Buffer, usize)>,
 ) -> Result<(), MetalKernelError> {
     const NUM_THREADS: usize = 256;
     const NUM_SIMD_LANES: usize = 32;
@@ -550,6 +558,7 @@ pub fn call_paged_attention_v1(
             Value::Bool(/* use_alibi */ alibi_storage_and_offset.is_some()),
         ),
         (30, Value::Bool(/* use_fp8_scales */ k_v_scale.is_some())),
+        (40, Value::Bool(/* use_sinks */ sinks.is_some())),
     ]));
 
     let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
@@ -612,6 +621,9 @@ pub fn call_paged_attention_v1(
         core::mem::size_of_val(&kv_head_stride),
         &kv_head_stride as *const _ as *const c_void,
     );
+    if let Some((sinks_buf, sinks_offset)) = sinks {
+        encoder.set_buffer(18, Some(sinks_buf), sinks_offset);
+    }
 
     let thread_groups_count = MTLSize {
         width: num_heads as usize,
@@ -662,6 +674,7 @@ pub fn call_paged_attention_v2(
     q_stride: i32,
     kv_block_stride: i32,
     kv_head_stride: i32,
+    sinks: Option<(&Buffer, usize)>,
 ) -> Result<(), MetalKernelError> {
     const NUM_THREADS: usize = 256;
     const PARTITION_SIZE: usize = 512;
@@ -684,6 +697,7 @@ pub fn call_paged_attention_v2(
                 Value::Bool(/* use_alibi */ alibi_storage_and_offset.is_some()),
             ),
             (30, Value::Bool(/* use_fp8_scales */ k_v_scale.is_some())),
+            (40, Value::Bool(/* use_sinks */ sinks.is_some())),
         ]));
 
         let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
@@ -750,6 +764,9 @@ pub fn call_paged_attention_v2(
             core::mem::size_of_val(&kv_head_stride),
             &kv_head_stride as *const _ as *const c_void,
         );
+        if let Some((sinks_buf, sinks_offset)) = sinks {
+            encoder.set_buffer(18, Some(sinks_buf), sinks_offset);
+        }
 
         let thread_groups_count = MTLSize {
             width: num_heads as usize,
@@ -783,7 +800,11 @@ pub fn call_paged_attention_v2(
         name.push_str(&format!("_nsl{NUM_SIMD_LANES}"));
         name.push_str(&format!("_ps{PARTITION_SIZE}"));
 
-        let pipeline = kernels.load_pipeline(device, name)?;
+        let reduce_constants = Some(ConstantValues::new(vec![(
+            40,
+            Value::Bool(/* use_sinks */ sinks.is_some()),
+        )]));
+        let pipeline = kernels.load_pipeline_with_constants(device, name, reduce_constants)?;
 
         let encoder = ep.encoder();
         let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -804,6 +825,9 @@ pub fn call_paged_attention_v2(
             core::mem::size_of_val(&max_num_partitions),
             &max_num_partitions as *const _ as *const c_void,
         );
+        if let Some((sinks_buf, sinks_offset)) = sinks {
+            encoder.set_buffer(6, Some(sinks_buf), sinks_offset);
+        }
 
         let thread_groups_count = MTLSize {
             width: num_heads as usize,
@@ -817,6 +841,110 @@ pub fn call_paged_attention_v2(
         };
         encoder.dispatch_thread_groups(thread_groups_count, thread_group_size);
     }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_gather_kv_cache(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    cache_ty: PagedAttentionDType,
+    out_ty: PagedAttentionDType,
+    key_cache: &Buffer,
+    key_cache_offset: usize,
+    value_cache: &Buffer,
+    value_cache_offset: usize,
+    k_out: &Buffer,
+    k_out_offset: usize,
+    v_out: &Buffer,
+    v_out_offset: usize,
+    k_v_scale: Option<(&Buffer, &Buffer)>,
+    block_table: &Buffer,
+    block_table_offset: usize,
+    cu_seq_lens: &Buffer,
+    cu_seq_lens_offset: usize,
+    num_tokens: i32,
+    num_seqs: i32,
+    block_size: i32,
+    block_table_stride: i32,
+    num_kv_heads: i32,
+    head_size: i32,
+    x: i32,
+) -> Result<(), MetalKernelError> {
+    let name = format!(
+        "gather_kv_cache_cache_{}_out_{}",
+        cache_ty.to_repr(),
+        out_ty.to_repr()
+    );
+
+    let constants = Some(ConstantValues::new(vec![(
+        10,
+        Value::Bool(/* use_fp8_scales */ k_v_scale.is_some()),
+    )]));
+
+    let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_buffer(0, Some(key_cache), key_cache_offset);
+    encoder.set_buffer(1, Some(value_cache), value_cache_offset);
+    encoder.set_buffer(2, Some(k_out), k_out_offset);
+    encoder.set_buffer(3, Some(v_out), v_out_offset);
+    if let Some((k_scale, v_scale)) = k_v_scale {
+        encoder.set_buffer(4, Some(k_scale), 0_usize);
+        encoder.set_buffer(5, Some(v_scale), 0_usize);
+    }
+    encoder.set_buffer(6, Some(block_table), block_table_offset);
+    encoder.set_buffer(7, Some(cu_seq_lens), cu_seq_lens_offset);
+    encoder.set_bytes_raw(
+        8,
+        core::mem::size_of_val(&num_tokens),
+        &num_tokens as *const _ as *const c_void,
+    );
+    encoder.set_bytes_raw(
+        9,
+        core::mem::size_of_val(&num_seqs),
+        &num_seqs as *const _ as *const c_void,
+    );
+    encoder.set_bytes_raw(
+        10,
+        core::mem::size_of_val(&block_size),
+        &block_size as *const _ as *const c_void,
+    );
+    encoder.set_bytes_raw(
+        11,
+        core::mem::size_of_val(&block_table_stride),
+        &block_table_stride as *const _ as *const c_void,
+    );
+    encoder.set_bytes_raw(
+        12,
+        core::mem::size_of_val(&num_kv_heads),
+        &num_kv_heads as *const _ as *const c_void,
+    );
+    encoder.set_bytes_raw(
+        13,
+        core::mem::size_of_val(&head_size),
+        &head_size as *const _ as *const c_void,
+    );
+    encoder.set_bytes_raw(
+        14,
+        core::mem::size_of_val(&x),
+        &x as *const _ as *const c_void,
+    );
+
+    let thread_groups_count = MTLSize {
+        width: num_tokens as usize,
+        height: 1,
+        depth: 1,
+    };
+    let threads_per_threadgroup = MTLSize {
+        width: (num_kv_heads * head_size).min(512) as usize,
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
     Ok(())
 }
 

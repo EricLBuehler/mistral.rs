@@ -4,6 +4,7 @@ use thiserror::Error;
 use anyhow::Result;
 use tracing::info;
 
+use crate::hf_token_path;
 use crate::pipeline::TokenSource;
 
 #[derive(Error, Debug)]
@@ -25,16 +26,20 @@ pub(crate) fn get_token(source: &TokenSource) -> Result<Option<String>> {
         TokenSource::EnvVar(envvar) => env::var(envvar).ok().or_else(|| skip_token(envvar)),
         TokenSource::Path(path) => fs::read_to_string(path).ok().or_else(|| skip_token(path)),
         TokenSource::CacheToken => {
-            let home = format!(
-                "{}/.cache/huggingface/token",
-                dirs::home_dir()
-                    .ok_or(TokenRetrievalError::HomeDirectoryMissing)?
-                    .display()
-            );
-
-            fs::read_to_string(home.clone())
+            // Respect HF_TOKEN / HF_HUB_TOKEN environment variables first.
+            let env_token = env::var("HF_TOKEN")
                 .ok()
-                .or_else(|| skip_token(&home))
+                .or_else(|| env::var("HF_HUB_TOKEN").ok());
+            if let Some(token) = env_token {
+                Some(token)
+            } else {
+                let token_path =
+                    hf_token_path().ok_or(TokenRetrievalError::HomeDirectoryMissing)?;
+                let token_path_str = token_path.display().to_string();
+                fs::read_to_string(token_path)
+                    .ok()
+                    .or_else(|| skip_token(&token_path_str))
+            }
         }
         TokenSource::None => None,
     };

@@ -43,6 +43,7 @@ impl QuantMethod for FP8Linear {
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Bnb { .. }
             | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::PerTensorFP8 { .. }
             | QuantMethodConfig::Afq { .. }
             | QuantMethodConfig::MXFP4 { .. } => unreachable!(),
             QuantMethodConfig::FP8 { lin, dtype } => {
@@ -69,7 +70,7 @@ impl QuantMethod for FP8Linear {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(x.device().clone());
 
-        match CUBLASLT_CONTROLLER.get() {
+        match CUBLASLT_CONTROLLER.get_for_device(x.device()) {
             Some(handle) => {
                 let n_dims = x.dims().len();
                 if n_dims < 3 {
@@ -149,13 +150,22 @@ impl QuantMethod for FP8Linear {
 
     fn apply_isq(
         self: Arc<Self>,
-        _dtype: Option<IsqType>,
-        _device: Device,
+        dtype: Option<IsqType>,
+        device: Device,
         _n_quantized: &AtomicUsize,
         _imatrix_weight: Option<Vec<f32>>,
-        _guard: QuantizeOntoGuard,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        todo!()
+        match dtype {
+            Some(IsqType::F8Q8) => {
+                let _acquired_quantize_guard = guard.acquire(&device);
+                let dequant = self.dequantize(DType::F32)?;
+                let w = dequant.weight().to_device(&device)?;
+                let b = dequant.bias().map(|b| b.to_device(&device)).transpose()?;
+                Ok(Arc::new(crate::F8Q8Linear::from_weight(&w, b)?))
+            }
+            _ => todo!(),
+        }
     }
 }
 

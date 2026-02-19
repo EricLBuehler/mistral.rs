@@ -42,7 +42,7 @@ pub fn copy_blocks(
 
     let num_pairs: u64 = (block_mapping_vec.len() / 2).try_into().unwrap();
 
-    let numel_per_block: u64 = key_caches
+    let numel_per_block_key: u64 = key_caches
         .first()
         .unwrap()
         .i(0)?
@@ -52,6 +52,25 @@ pub fn copy_blocks(
         .product::<usize>()
         .try_into()
         .unwrap();
+    let numel_per_block_value: u64 = value_caches
+        .first()
+        .unwrap()
+        .i(0)?
+        .shape()
+        .dims()
+        .iter()
+        .product::<usize>()
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        numel_per_block_key, numel_per_block_value,
+        "key and value blocks must be the same size"
+    );
+    if numel_per_block_key != numel_per_block_key {
+        candle_core::bail!(
+            "numel_per_block_key ({numel_per_block_key}) and numel_per_block_value ({numel_per_block_value}) must be the same",
+        );
+    }
 
     for (key_cache, value_cache) in zip(&key_caches, &value_caches) {
         key_cache.to_device(cache_dev)?;
@@ -82,7 +101,8 @@ pub fn copy_blocks(
             &block_mapping,
             0,
             num_pairs,
-            numel_per_block,
+            numel_per_block_key,
+            numel_per_block_value,
         )
         .map_err(candle_core::Error::wrap)?;
     }

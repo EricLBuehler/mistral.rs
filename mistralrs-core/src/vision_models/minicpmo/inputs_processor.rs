@@ -2,7 +2,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use candle_core::{Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use mistralrs_vision::{ApplyTransforms, Normalize, ToTensor, Transforms};
 use regex::Regex;
@@ -16,7 +16,7 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::Sequence,
+    sequence::{build_mm_features_from_ranges, find_image_delimited_ranges, Sequence},
     vision_models::ModelInputs,
 };
 
@@ -218,6 +218,36 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                 if !seq.multimodal.has_changed_prompt {
                     seq.set_initial_prompt(final_text.clone());
 
+                    // Build mm_features for position-aware prefix cache hashing
+                    if seq.mm_features().is_empty() {
+                        if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
+                            let im_start = tokenizer
+                                .encode_fast(
+                                    self.config
+                                        .im_start_token
+                                        .clone()
+                                        .unwrap_or(DEFAULT_IM_START_TOKEN.to_string()),
+                                    false,
+                                )
+                                .unwrap()
+                                .get_ids()[0];
+                            let im_end = tokenizer
+                                .encode_fast(
+                                    self.config
+                                        .im_end_token
+                                        .clone()
+                                        .unwrap_or(DEFAULT_IM_END_TOKEN.to_string()),
+                                    false,
+                                )
+                                .unwrap()
+                                .get_ids()[0];
+                            let ranges = find_image_delimited_ranges(&input_ids, im_start, im_end);
+                            seq.set_mm_features(build_mm_features_from_ranges(
+                                &ranges, &hashes, "img",
+                            ));
+                        }
+                    }
+
                     seq.set_toks_and_reallocate(input_ids.clone(), paged_attn_metadata.as_mut());
                     seq.multimodal.has_changed_prompt = true;
                 }
@@ -362,10 +392,91 @@ impl InputsProcessor for MiniCpmOImageProcessor {
             .unwrap()
         };
 
+        // Trim pixel_values_all, image_bound, and tgt_sizes to exclude slices
+        // already covered by the prefix cache.
+        let (mut pixel_values_all, mut image_bound, mut tgt_sizes) =
+            (pixel_values_all, image_bound, tgt_sizes);
+        if is_prompt {
+            if let (Some(ref mut pv_all), Some(ref mut ib_all), Some(ref mut ts_all)) =
+                (&mut pixel_values_all, &mut image_bound, &mut tgt_sizes)
+            {
+                let mut any_remaining = false;
+                for (seq_idx, seq) in input_seqs.iter().enumerate() {
+                    let prefix_len = seq.prefix_cache_len();
+                    if prefix_len == 0 {
+                        if !pv_all[seq_idx].is_empty() {
+                            any_remaining = true;
+                        }
+                        continue;
+                    }
+
+                    let bounds = ib_all[seq_idx].to_vec2::<u32>().unwrap();
+                    let cached_slices = bounds
+                        .iter()
+                        .filter(|row| (row[0] as usize) < prefix_len)
+                        .count();
+
+                    if cached_slices == 0 {
+                        if !pv_all[seq_idx].is_empty() {
+                            any_remaining = true;
+                        }
+                        continue;
+                    }
+
+                    let remaining = bounds.len() - cached_slices;
+                    // Trim pixel_values
+                    pv_all[seq_idx] = pv_all[seq_idx].split_off(cached_slices);
+
+                    if remaining > 0 {
+                        any_remaining = true;
+                        // Trim tgt_sizes
+                        ts_all[seq_idx] =
+                            ts_all[seq_idx].narrow(0, cached_slices, remaining).unwrap();
+                        // Adjust image_bound positions: subtract prefix_cache_len
+                        let adjusted: Vec<Vec<u32>> = bounds[cached_slices..]
+                            .iter()
+                            .map(|row| vec![row[0] - prefix_len as u32, row[1] - prefix_len as u32])
+                            .collect();
+                        ib_all[seq_idx] = Tensor::new(adjusted, device).unwrap();
+                    } else {
+                        // All slices cached for this sequence
+                        ts_all[seq_idx] = Tensor::zeros((0, 2), DType::U32, device).unwrap();
+                        ib_all[seq_idx] = Tensor::zeros((0, 2), DType::U32, device).unwrap();
+                    }
+                }
+                if !any_remaining {
+                    pixel_values_all = None;
+                    image_bound = None;
+                    tgt_sizes = None;
+                }
+            }
+        }
+
+        let image_hashes: Vec<u64> = if is_prompt {
+            input_seqs
+                .iter()
+                .flat_map(|seq| {
+                    seq.image_hashes()
+                        .map(|h| {
+                            let cached = seq.count_prefix_cached_mm_items();
+                            if cached < h.len() {
+                                h[cached..].to_vec()
+                            } else {
+                                vec![]
+                            }
+                        })
+                        .unwrap_or_default()
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
         let args = MiniCpmOSpecificArgs {
             pixel_values_all,
             tgt_sizes,
             image_bound,
+            image_hashes,
         };
 
         // Dummy pixel values - real ones are in model specific args

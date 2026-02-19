@@ -50,7 +50,7 @@ Each node connects to its right neighbor by IP and port, and the last node wraps
 
 Example for two processes:
 
-- [`ring_0.json`](../../ring_configs/ring_0.json):
+- [`ring_0.json`](https://github.com/EricLBuehler/mistral.rs/blob/master/ring_configs/ring_0.json):
   ```json
   {
     "master_ip": "0.0.0.0",
@@ -62,7 +62,7 @@ Example for two processes:
   }
   ```
 
-- [`ring_0.json`](../../ring_configs/ring_1.json):
+- [`ring_0.json`](https://github.com/EricLBuehler/mistral.rs/blob/master/ring_configs/ring_1.json):
   ```json
   {
     "master_ip": "0.0.0.0",

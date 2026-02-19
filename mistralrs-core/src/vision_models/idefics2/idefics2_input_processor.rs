@@ -17,6 +17,7 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
+    request::ReasoningEffort,
     sequence::Sequence,
     vision_models::ModelInputs,
     MessageContent, Pipeline, Tool,
@@ -65,6 +66,7 @@ impl Processor for Idefics2Processor {
         add_generation_prompt: bool,
         add_special_tokens: bool,
         enable_thinking: Option<bool>,
+        reasoning_effort: Option<ReasoningEffort>,
         tools: Vec<Tool>,
     ) -> anyhow::Result<(Vec<u32>, String)> {
         let mut prompt = apply_chat_template(
@@ -72,6 +74,7 @@ impl Processor for Idefics2Processor {
             messages,
             add_generation_prompt,
             enable_thinking,
+            reasoning_effort,
             self.template_action(),
             tools,
         )?;
@@ -241,13 +244,36 @@ impl InputsProcessor for Idefics2ImageProcessor {
             (None, None)
         };
 
+        let image_hashes: Vec<u64> = if is_prompt {
+            input_seqs
+                .iter()
+                .flat_map(|seq| {
+                    seq.image_hashes()
+                        .map(|h| {
+                            let cached = seq.count_prefix_cached_mm_items();
+                            if cached < h.len() {
+                                h[cached..].to_vec()
+                            } else {
+                                vec![]
+                            }
+                        })
+                        .unwrap_or_default()
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
             context_lens,
             position_ids,
             pixel_values,
-            model_specific_args: Box::new(pixel_attention_mask),
+            model_specific_args: Box::new(super::Idefics2SpecificArgs {
+                pixel_attention_mask,
+                image_hashes,
+            }),
             paged_attn_meta,
             flash_meta,
         });

@@ -33,6 +33,10 @@ pub struct ResponseMessage {
     pub content: Option<String>,
     pub role: String,
     pub tool_calls: Option<Vec<ToolCallResponse>>,
+    /// Reasoning/analysis content from Harmony format (separate from final content).
+    /// This contains chain-of-thought reasoning that is not intended for end users.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 generate_repr!(ResponseMessage);
@@ -45,6 +49,10 @@ pub struct Delta {
     pub content: Option<String>,
     pub role: String,
     pub tool_calls: Option<Vec<ToolCallResponse>>,
+    /// Reasoning/analysis content delta from Harmony format.
+    /// This contains incremental chain-of-thought reasoning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 generate_repr!(Delta);
@@ -169,7 +177,7 @@ pub struct CompletionChoice {
     pub finish_reason: String,
     pub index: usize,
     pub text: String,
-    pub logprobs: Option<()>,
+    pub logprobs: Option<Logprobs>,
 }
 
 generate_repr!(CompletionChoice);

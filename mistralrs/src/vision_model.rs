@@ -8,14 +8,8 @@ use std::{
     sync::Arc,
 };
 
-use crate::{best_device, Model};
-
-/// A tool callback with its associated Tool definition.
-#[derive(Clone)]
-pub struct ToolCallbackWithTool {
-    pub callback: Arc<ToolCallback>,
-    pub tool: Tool,
-}
+use crate::model_builder_trait::{build_model_from_pipeline, build_vision_pipeline};
+use crate::Model;
 
 #[derive(Clone)]
 /// Configure a vision model with the various parameters for loading, running, and other inference behaviors.
@@ -41,9 +35,11 @@ pub struct VisionModelBuilder {
     pub(crate) device: Option<Device>,
     pub(crate) matformer_config_path: Option<PathBuf>,
     pub(crate) matformer_slice_name: Option<String>,
+    pub(crate) organization: IsqOrganization,
 
     // Model running
     pub(crate) topology: Option<Topology>,
+    pub(crate) topology_path: Option<String>,
     pub(crate) loader_type: Option<VisionLoaderType>,
     pub(crate) dtype: ModelDType,
     pub(crate) force_cpu: bool,
@@ -67,6 +63,7 @@ impl VisionModelBuilder {
         Self {
             model_id: model_id.to_string(),
             topology: None,
+            topology_path: None,
             write_uqff: None,
             from_uqff: None,
             chat_template: None,
@@ -94,6 +91,7 @@ impl VisionModelBuilder {
             device: None,
             matformer_config_path: None,
             matformer_slice_name: None,
+            organization: IsqOrganization::Default,
             prefix_cache_n: None,
         }
     }
@@ -151,6 +149,18 @@ impl VisionModelBuilder {
         self
     }
 
+    /// Set the model topology from a path. This preserves the path for unload/reload support.
+    /// If there is an overlap, the topology type is used over the ISQ type.
+    pub fn with_topology_from_path<P: AsRef<std::path::Path>>(
+        mut self,
+        path: P,
+    ) -> anyhow::Result<Self> {
+        let path_str = path.as_ref().to_string_lossy().to_string();
+        self.topology = Some(Topology::from_path(&path)?);
+        self.topology_path = Some(path_str);
+        Ok(self)
+    }
+
     /// Literal Jinja chat template OR Path (ending in `.json`) to one.
     pub fn with_chat_template(mut self, chat_template: impl ToString) -> Self {
         self.chat_template = Some(chat_template.to_string());
@@ -197,6 +207,12 @@ impl VisionModelBuilder {
     /// Use ISQ of a certain type. If there is an overlap, the topology type is used over the ISQ type.
     pub fn with_isq(mut self, isq: IsqType) -> Self {
         self.isq = Some(isq);
+        self
+    }
+
+    /// Organize ISQ to enable MoQE (Mixture of Quantized Experts, <https://arxiv.org/abs/2310.02410>)
+    pub fn with_mixture_qexperts_isq(mut self) -> Self {
+        self.organization = IsqOrganization::MoeExpertsOnly;
         self
     }
 
@@ -308,98 +324,8 @@ impl VisionModelBuilder {
     }
 
     pub async fn build(self) -> anyhow::Result<Model> {
-        let config = VisionSpecificConfig {
-            topology: self.topology,
-            write_uqff: self.write_uqff,
-            from_uqff: self.from_uqff,
-            max_edge: self.max_edge,
-            calibration_file: self.calibration_file,
-            imatrix: self.imatrix,
-            hf_cache_path: self.hf_cache_path,
-            matformer_config_path: self.matformer_config_path,
-            matformer_slice_name: self.matformer_slice_name,
-        };
-
-        if self.with_logging {
-            initialize_logging();
-        }
-
-        let loader = VisionLoaderBuilder::new(
-            config,
-            self.chat_template,
-            self.tokenizer_json,
-            Some(self.model_id),
-            self.jinja_explicit,
-        )
-        .build(self.loader_type);
-
-        // Load, into a Pipeline
-        let pipeline = loader.load_model_from_hf(
-            self.hf_revision,
-            self.token_source,
-            &self.dtype,
-            &self.device.unwrap_or(best_device(self.force_cpu).unwrap()),
-            !self.with_logging,
-            self.device_mapping
-                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_vision())),
-            self.isq,
-            self.paged_attn_cfg,
-        )?;
-
-        let scheduler_method = match self.paged_attn_cfg {
-            Some(_) => {
-                let config = pipeline
-                    .lock()
-                    .await
-                    .get_metadata()
-                    .cache_config
-                    .as_ref()
-                    .cloned();
-
-                if let Some(config) = config {
-                    SchedulerConfig::PagedAttentionMeta {
-                        max_num_seqs: self.max_num_seqs,
-                        config,
-                    }
-                } else {
-                    SchedulerConfig::DefaultScheduler {
-                        method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
-                    }
-                }
-            }
-            None => SchedulerConfig::DefaultScheduler {
-                method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
-            },
-        };
-
-        let mut runner = MistralRsBuilder::new(
-            pipeline,
-            scheduler_method,
-            self.throughput_logging,
-            self.search_embedding_model,
-        );
-        if let Some(cb) = self.search_callback.clone() {
-            runner = runner.with_search_callback(cb);
-        }
-        for (name, cb) in &self.tool_callbacks {
-            runner = runner.with_tool_callback(name.clone(), cb.clone());
-        }
-        for (name, callback_with_tool) in &self.tool_callbacks_with_tools {
-            runner = runner.with_tool_callback_and_tool(
-                name.clone(),
-                callback_with_tool.callback.clone(),
-                callback_with_tool.tool.clone(),
-            );
-        }
-        let mut runner = runner
-            .with_no_kv_cache(false)
-            .with_no_prefix_cache(self.prefix_cache_n.is_none());
-
-        if let Some(n) = self.prefix_cache_n {
-            runner = runner.with_prefix_cache_n(n)
-        }
-
-        Ok(Model::new(runner.build().await))
+        let (pipeline, scheduler_config, add_model_config) = build_vision_pipeline(self).await?;
+        Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)
     }
 }
 
@@ -413,6 +339,10 @@ impl UqffVisionModelBuilder {
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    ///
+    /// For sharded UQFF models, you only need to specify the first shard file
+    /// (e.g., `q4k-0.uqff`). The remaining shards are auto-discovered from the
+    /// same directory or Hugging Face repository.
     pub fn new(model_id: impl ToString, uqff_file: Vec<PathBuf>) -> Self {
         let mut inner = VisionModelBuilder::new(model_id);
         inner.from_uqff = Some(uqff_file);

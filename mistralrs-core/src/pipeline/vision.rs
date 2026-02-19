@@ -74,6 +74,7 @@ pub struct VisionPipeline {
     silent: bool,
     prefixer: Arc<dyn MultimodalPromptPrefixer>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    organization: IsqOrganization,
 
     // For full UQFF serialization
     template_filename: Option<PathBuf>,
@@ -127,6 +128,7 @@ pub struct VisionSpecificConfig {
     pub hf_cache_path: Option<PathBuf>,
     pub matformer_config_path: Option<PathBuf>,
     pub matformer_slice_name: Option<String>,
+    pub organization: IsqOrganization,
 }
 
 impl VisionLoaderBuilder {
@@ -259,7 +261,7 @@ impl Loader for VisionLoader {
         device: &Device,
         silent: bool,
         mut mapper: DeviceMapSetting,
-        mut in_situ_quant: Option<IsqType>,
+        in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
@@ -276,9 +278,11 @@ impl Loader for VisionLoader {
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
             let WorkerTransferData::Init { id: _, worker_rank } = payload;
-            vec![candle_core::Device::new_cuda_with_stream(worker_rank + 1)?]
+            // Use new_cuda instead of new_cuda_with_stream for NCCL compatibility
+            // NCCL manages its own streams, so explicit stream creation can cause conflicts
+            vec![candle_core::Device::new_cuda(worker_rank + 1)?]
         } else if use_nccl {
-            vec![candle_core::Device::new_cuda_with_stream(0)?]
+            vec![candle_core::Device::new_cuda(0)?]
         } else {
             device_map::get_all_similar_devices(device)?
         };
@@ -316,6 +320,7 @@ impl Loader for VisionLoader {
         };
 
         // If auto, convert to Map if not using nccl
+        let mut max_kv_tokens: Option<usize> = None;
         if use_nccl {
             mapper = DeviceMapSetting::DummyNccl {
                 nm_device: available_devices[0].clone(),
@@ -323,14 +328,10 @@ impl Loader for VisionLoader {
         } else if let DeviceMapSetting::Auto(mut params) = mapper.clone() {
             // We can promote to vision params if we get text params
             params = params.maybe_promote_to_vision();
+            max_kv_tokens = Some(params.max_seq_len() * params.max_batch_size());
 
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
-
-            // Disable ISQ if we are loading a prequantized model.
-            if QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)? != 1 {
-                in_situ_quant = None;
-            }
 
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
@@ -362,6 +363,7 @@ impl Loader for VisionLoader {
                                     AfqLayer::get_isq_type_from_uqff(Cow::Borrowed(artifact))?
                                         .pack_factor(dtype)
                                 }
+                                QuantizedSerdeType::F8Q8 => IsqType::F8Q8.pack_factor(dtype),
                             };
                             total_pack_factors += pack_factor;
                         }
@@ -450,11 +452,13 @@ impl Loader for VisionLoader {
             self.inner.num_layers(&config)?,
             &device,
             self.config.topology.as_ref(),
+            &available_devices,
         )?;
         let mapper = mapper.into_mapper(
             self.inner.num_layers(&config)?,
             &device,
             self.config.topology.as_ref(),
+            &available_devices,
         )?;
         let mut layer_devices = Vec::new();
         for layer in 0..self.inner.num_layers(&config)? {
@@ -503,14 +507,18 @@ impl Loader for VisionLoader {
 
         let allow_immediate_cli = self.config.imatrix.is_none()
             && self.config.calibration_file.is_none()
-            && !device.is_cuda()
             && in_situ_quant.is_some();
 
         let mut immediate_ty = None;
         let mut immediate_predicates = Vec::new();
         if allow_immediate_cli {
             immediate_ty = in_situ_quant;
-            immediate_predicates = self.inner.immediate_isq_predicates(&config)?;
+            immediate_predicates =
+                if matches!(self.config.organization, IsqOrganization::MoeExpertsOnly) {
+                    self.inner.immediate_isq_predicates_moqe(&config)?
+                } else {
+                    self.inner.immediate_isq_predicates(&config)?
+                };
             info!("Applying ISQ to {in_situ_quant:?}");
             if immediate_predicates.is_empty() {
                 warn!("No predicates for this model and ISQ setting detected. ISQ will not be applied to any weights!");
@@ -519,10 +527,13 @@ impl Loader for VisionLoader {
 
         let use_immediate = allow_immediate_cli || has_override_isq;
         if use_immediate {
-            mistralrs_quant::set_immediate_isq_with_overrides(
+            let (pool, num_threads) = mistralrs_quant::create_isq_thread_pool(immediate_ty);
+            info!("Applying immediate ISQ in parallel on {num_threads} threads.");
+            mistralrs_quant::set_immediate_isq_with_pool(
                 immediate_ty,
                 immediate_predicates.clone(),
                 topology_overrides.clone(),
+                pool,
             );
         }
 
@@ -536,6 +547,7 @@ impl Loader for VisionLoader {
             loading_isq = true;
         }
         loading_isq |= topology_requires_post_quant;
+        loading_isq |= self.config.from_uqff.is_some();
 
         if self.config.imatrix.is_some() && self.config.calibration_file.is_some() {
             anyhow::bail!(
@@ -543,10 +555,18 @@ impl Loader for VisionLoader {
             );
         }
 
-        // Load onto the regular device if not using isq or if the calibration file is specified
+        // Load onto the regular device if not using isq or if the calibration file is specified.
+        // For immediate ISQ on discrete GPUs, load to CPU: the mapper will set the correct target
+        // device per-layer, and linear constructors will override to CPU for ISQ-targeted weights.
+        // On integrated/unified memory systems (e.g. Grace Blackwell), CPU and GPU share memory,
+        // so we load directly to the device.
         let load_device = if !loading_isq || self.config.calibration_file.is_some() {
             loading_isq = false;
-            device.clone()
+            if use_immediate && !crate::utils::normal::is_integrated_gpu(&device) {
+                Device::Cpu
+            } else {
+                device.clone()
+            }
         } else {
             Device::Cpu
         };
@@ -568,7 +588,7 @@ impl Loader for VisionLoader {
                 &config,
                 loading_isq,
                 self.config.from_uqff.is_some(),
-                IsqOrganization::Default,
+                self.config.organization,
                 &*self.inner,
                 paths.as_ref(),
             )?;
@@ -603,6 +623,7 @@ impl Loader for VisionLoader {
                     self.config.from_uqff.is_some(),
                     device.clone(),
                     attention_mechanism,
+                    matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress,
                     matformer_slicing_config.clone(),
                 ),
@@ -663,20 +684,26 @@ impl Loader for VisionLoader {
                 calibration_file.display(),
                 tokens.len()
             );
-            let bos_toks = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
-            let bos_tok_id = tokenizer
-                .token_to_id(&bos_toks[0])
-                .expect("Somehow the bos token is not present.");
+            let bos_tok_id = chat_template
+                .bos_tok()
+                .as_deref()
+                .and_then(|tok| tokenizer.token_to_id(tok));
 
             // NOTE: We ONLY calibrate the text bits of these models!!
             // So only those should be tracked!
-            model.begin_track_stats()?;
+            match self.config.organization {
+                IsqOrganization::Default => model.begin_track_stats()?,
+                IsqOrganization::MoeExpertsOnly => model.begin_track_stats_moe_experts_only()?,
+            }
 
             const CHUNK_SIZE: usize = 1024;
             let n_chunks: usize = tokens.len().div_ceil(CHUNK_SIZE);
             let start = Instant::now();
             for (i, chunk) in tokens.chunks(CHUNK_SIZE).enumerate() {
-                let chunk = [vec![bos_tok_id], chunk.to_vec()].concat();
+                let mut chunk = chunk.to_vec();
+                if let Some(bos_tok_id) = bos_tok_id {
+                    chunk.insert(0, bos_tok_id);
+                }
                 let chunk_len = chunk.len();
 
                 let start = Instant::now();
@@ -687,6 +714,7 @@ impl Loader for VisionLoader {
                     &load_device,
                     None,
                     false,
+                    None,
                     None,
                     None,
                 )?;
@@ -758,7 +786,7 @@ impl Loader for VisionLoader {
                 self.config.topology.as_ref(),
                 silent,
                 imatrix_source,
-                IsqOrganization::Default,
+                self.config.organization,
                 should_quantize_pass,
                 self.config.write_uqff.as_ref(),
                 UqffFullSer {
@@ -796,6 +824,8 @@ impl Loader for VisionLoader {
                 &device,
                 &layer_devices,
                 silent,
+                None,
+                max_kv_tokens,
             )?;
             let cache_engine =
                 CacheEngine::new(model.config(), &cache_config, dtype, &device, layer_devices)?;
@@ -840,6 +870,7 @@ impl Loader for VisionLoader {
             preprocessor_config: Arc::new(preprocessor_config),
             topology: self.config.topology.clone(),
             silent,
+            organization: self.config.organization,
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
             config,
@@ -881,7 +912,7 @@ impl IsqPipelineMixin for VisionPipeline {
                 self.topology.as_ref(),
                 self.silent,
                 self.imatrix.as_ref().map(ImatrixDataSource::File),
-                IsqOrganization::Default,
+                self.organization,
                 true,
                 None,
                 UqffFullSer {
@@ -1022,6 +1053,15 @@ impl Pipeline for VisionPipeline {
             prefixer: self.prefixer.clone(),
         }
     }
+
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        self.model.encoder_cache_counters()
+    }
 }
 
 impl AnyMoePipelineMixin for VisionPipeline {
@@ -1064,8 +1104,8 @@ impl AnyMoePipelineMixin for VisionPipeline {
                 let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
                     .with_token(get_token(token).map_err(candle_core::Error::msg)?);
-                if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                    api = api.with_cache_dir(x.into());
+                if let Some(cache_dir) = crate::hf_hub_cache_dir() {
+                    api = api.with_cache_dir(cache_dir);
                 }
                 api.build().map_err(candle_core::Error::msg)?
             };
@@ -1122,8 +1162,8 @@ impl AnyMoePipelineMixin for VisionPipeline {
                 let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
                     .with_token(get_token(token).map_err(candle_core::Error::msg)?);
-                if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                    api = api.with_cache_dir(x.into());
+                if let Some(cache_dir) = crate::hf_hub_cache_dir() {
+                    api = api.with_cache_dir(cache_dir);
                 }
                 api.build().map_err(candle_core::Error::msg)?
             };

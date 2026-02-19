@@ -8,7 +8,7 @@ Matformer allows you to dynamically resize transformer models at runtime, tradin
 
 ```bash
 # Run Gemma 3n with the E2.49B configuration (2.49B params instead of 3.98B)
-./mistralrs-server -i run -m google/gemma-3n-E4B-it \
+mistralrs run -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 ```
@@ -77,7 +77,7 @@ Config for E2.49B (block-level),35,2.49,54.50%,"[8192, 8192, ..., 16384, 16384, 
 Currently supported:
 - **Gemma 3n** (`google/gemma-3n-E4B-it`) - Multimodal model with vision and audio
 
-See [`matformer_configs/`](../matformer_configs/) for available configurations.
+See [`matformer_configs/`](https://github.com/EricLBuehler/mistral.rs/tree/master/matformer_configs/) for available configurations.
 
 ## Performance Guide
 
@@ -216,7 +216,7 @@ Which.VisionPlain(
 
 Enable logging to see Matformer details:
 ```bash
-RUST_LOG=mistralrs_core=info ./mistralrs-server ...
+RUST_LOG=mistralrs_core=info mistralrs ...
 ```
 
 This shows:
@@ -235,4 +235,4 @@ This shows:
 ## References
 
 - [Matryoshka Transformer Paper](https://arxiv.org/abs/2410.23265)
-- [Example Configurations](../matformer_configs/)
+- [Example Configurations](https://github.com/EricLBuehler/mistral.rs/tree/master/matformer_configs/)

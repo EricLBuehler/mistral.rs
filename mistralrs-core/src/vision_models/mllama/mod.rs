@@ -5,7 +5,11 @@ mod inputs_processor;
 mod text;
 mod vision;
 
-use std::{any::Any, collections::HashMap, sync::Arc};
+use std::{
+    any::Any,
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 pub(crate) use config::{MLlamaConfig, MLlamaRopeScaling, MLlamaRopeType, MLlamaTextConfig};
 use config::{MLlamaVisionConfig, VisionActivation};
@@ -23,7 +27,9 @@ use crate::{
     layers::{linear, GetFloatInfo},
     layers_masker::masked_fill,
     ops::RepeatInterleaveOp,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
@@ -77,6 +83,7 @@ pub(crate) struct MLlamaModel {
     multi_modal_projector: Linear,
     hidden_size: usize,
     dtype: DType,
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
 impl MLlamaModel {
@@ -109,6 +116,7 @@ impl MLlamaModel {
             )?,
             hidden_size: cfg.text_config.hidden_size,
             dtype: vb.dtype(),
+            encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
     }
 
@@ -120,6 +128,7 @@ impl MLlamaModel {
         aspect_ratio_mask: Option<&Tensor>,
         aspect_ratio_ids: Option<&Tensor>,
         cross_attn_mask: Option<&Tensor>,
+        image_hashes: &[u64],
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
@@ -130,15 +139,66 @@ impl MLlamaModel {
             let Some(aspect_ratio_ids) = aspect_ratio_ids else {
                 candle_core::bail!("`aspect_ratio_ids` must be specified if `pixel_values` is.");
             };
-            let vision_outputs =
-                self.vision_model
-                    .forward(pixel_values, aspect_ratio_ids, aspect_ratio_mask)?;
-            let cross_attention_states = self
-                .multi_modal_projector
-                .forward(&vision_outputs.flatten(0, 1)?)?
-                .reshape(((), vision_outputs.dim(D::Minus2)?, self.hidden_size))?
-                .to_dtype(self.dtype)?;
-            Some(cross_attention_states)
+
+            let n_images = image_hashes.len();
+            if n_images > 0 {
+                let mut per_image: Vec<Tensor> = Vec::with_capacity(n_images);
+                let mut miss_indices = Vec::new();
+                {
+                    let mut guard = self
+                        .encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned");
+                    for (i, &hash) in image_hashes.iter().enumerate() {
+                        if let Some(cached) = guard.get(hash) {
+                            per_image.push(cached[0].clone());
+                        } else {
+                            per_image.push(Tensor::zeros(
+                                1,
+                                candle_core::DType::F32,
+                                pixel_values.device(),
+                            )?);
+                            miss_indices.push(i);
+                        }
+                    }
+                }
+                if !miss_indices.is_empty() {
+                    for &idx in &miss_indices {
+                        let single_pv = pixel_values.get(idx)?.unsqueeze(0)?;
+                        let single_ar_mask = aspect_ratio_mask.get(idx)?.unsqueeze(0)?;
+                        let single_ar_ids = aspect_ratio_ids.get(idx)?.unsqueeze(0)?;
+                        let vision_outputs = self.vision_model.forward(
+                            &single_pv,
+                            &single_ar_ids,
+                            &single_ar_mask,
+                        )?;
+                        let feats = self
+                            .multi_modal_projector
+                            .forward(&vision_outputs.flatten(0, 1)?)?
+                            .reshape(((), vision_outputs.dim(D::Minus2)?, self.hidden_size))?
+                            .to_dtype(self.dtype)?;
+                        {
+                            let mut guard = self
+                                .encoder_cache
+                                .lock()
+                                .expect("encoder cache lock poisoned");
+                            guard.insert(image_hashes[idx], vec![feats.clone()]);
+                        }
+                        per_image[idx] = feats;
+                    }
+                }
+                Some(Tensor::cat(&per_image, 0)?)
+            } else {
+                let vision_outputs =
+                    self.vision_model
+                        .forward(pixel_values, aspect_ratio_ids, aspect_ratio_mask)?;
+                let cross_attention_states = self
+                    .multi_modal_projector
+                    .forward(&vision_outputs.flatten(0, 1)?)?
+                    .reshape(((), vision_outputs.dim(D::Minus2)?, self.hidden_size))?
+                    .to_dtype(self.dtype)?;
+                Some(cross_attention_states)
+            }
         } else {
             None
         };
@@ -172,6 +232,7 @@ pub(crate) struct MLlamaSpecificArgs {
     pub aspect_ratio_ids: Option<Tensor>,
     pub aspect_ratio_mask: Option<Tensor>,
     pub cross_attn_mask: Option<Tensor>,
+    pub image_hashes: Vec<u64>,
 }
 
 impl VisionModel for MLlamaModel {
@@ -205,6 +266,7 @@ impl VisionModel for MLlamaModel {
             aspect_ratio_ids,
             aspect_ratio_mask,
             cross_attn_mask,
+            image_hashes,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `MLlamaSpecificArgs`");
@@ -214,12 +276,26 @@ impl VisionModel for MLlamaModel {
             aspect_ratio_mask.as_ref(),
             aspect_ratio_ids.as_ref(),
             cross_attn_mask.as_ref(),
+            &image_hashes,
             seqlen_offsets,
             context_lens,
         )
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
         Box::new(MLlamaSpecificArgs::default())
+    }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
     }
 }
 

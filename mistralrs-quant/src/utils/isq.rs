@@ -3,7 +3,8 @@ use std::sync::{atomic::AtomicUsize, Arc};
 use candle_core::{quantized::GgmlDType, Device, Result, Tensor};
 
 use crate::{
-    get_immediate_isq, ImmediateIsqMatch, ImmediateIsqParams, QuantMethod, ShardedVarBuilder,
+    get_immediate_isq, pending_layer, ImmediateIsqMatch, ImmediateIsqParams, PendingIsqLayer,
+    QuantMethod, ShardedVarBuilder,
 };
 
 pub enum QuantizationBehavior {
@@ -21,13 +22,29 @@ pub fn apply_immediate_isq(
     let prefix = format!("{}.weight", vb.prefix());
     if let Some(ImmediateIsqMatch { ty, device }) = crate::resolve_immediate_isq(&params, &prefix) {
         let device = device.unwrap_or_else(|| vb.device().clone());
-        layer.clone().apply_isq(
-            Some(ty),
-            device,
-            &AtomicUsize::new(0),
-            None,
-            params.guard.clone(),
-        )
+
+        if let Some(pool) = &params.pool {
+            // Parallel path: spawn quantization on thread pool
+            let guard = params.guard.clone();
+            let (tx, rx) = pending_layer::pending_isq_channel();
+            pool.spawn(move || {
+                let result =
+                    layer
+                        .clone()
+                        .apply_isq(Some(ty), device, &AtomicUsize::new(0), None, guard);
+                let _ = tx.send(result);
+            });
+            Ok(Arc::new(PendingIsqLayer::new(rx)))
+        } else {
+            // Synchronous path (integrated GPU / Metal / single-thread)
+            layer.clone().apply_isq(
+                Some(ty),
+                device,
+                &AtomicUsize::new(0),
+                None,
+                params.guard.clone(),
+            )
+        }
     } else {
         Ok(layer)
     }
@@ -40,17 +57,33 @@ pub(crate) fn apply_immediate_isq_always(
     if let Some(ImmediateIsqParams {
         guard,
         ty: Some(immediate_isq),
-        predicates: _,
+        pool,
         ..
     }) = get_immediate_isq()
     {
-        layer.clone().apply_isq(
-            Some(immediate_isq),
-            device.clone(),
-            &AtomicUsize::new(0),
-            None,
-            guard,
-        )
+        if let Some(pool) = &pool {
+            let device = device.clone();
+            let (tx, rx) = pending_layer::pending_isq_channel();
+            pool.spawn(move || {
+                let result = layer.clone().apply_isq(
+                    Some(immediate_isq),
+                    device,
+                    &AtomicUsize::new(0),
+                    None,
+                    guard,
+                );
+                let _ = tx.send(result);
+            });
+            Ok(Arc::new(PendingIsqLayer::new(rx)))
+        } else {
+            layer.clone().apply_isq(
+                Some(immediate_isq),
+                device.clone(),
+                &AtomicUsize::new(0),
+                None,
+                guard,
+            )
+        }
     } else {
         Ok(layer)
     }
@@ -76,7 +109,7 @@ fn get_fallback(dtype: GgmlDType) -> QuantizationBehavior {
 fn can_quantize(tensor: &Tensor, dtype: GgmlDType) -> bool {
     let dims = tensor.shape().dims();
     // The tensor must not be empty and the last dimension must be a multiple of the block size.
-    !(dims.is_empty() || (dims[dims.len() - 1] % dtype.block_size() != 0))
+    !dims.is_empty() && dims[dims.len() - 1].is_multiple_of(dtype.block_size())
 }
 
 /// Check if we should quantize the tensor and if so, with which dtype.

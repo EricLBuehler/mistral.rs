@@ -5,7 +5,7 @@
 > [!NOTE]
 > Manual device mapping flags are deprecated in favor of automatic placement because it is easy to misconfigure them. Topology files remain the preferred way to express per-layer quantization, and you can still provide `device` overrides here when you truly need to. Those overrides win over the automatic mapper, so apply them sparingly. See the [device mapping documentation](DEVICE_MAPPING.md) for guidance.
 
-Use a simple model topology to configure ISQ and device mapping for *per-layer* with a single [YAML file](../topologies/isq_and_device.yml) (examples [here](../topologies))!
+Use a simple model topology to configure ISQ and device mapping for *per-layer* with a single [YAML file](https://github.com/EricLBuehler/mistral.rs/blob/master/topologies/isq_and_device.yml) (examples [here](https://github.com/EricLBuehler/mistral.rs/tree/master/topologies))!
 
 To support per-layer mix of ISQ, Mistral.rs supports loading a model topology YAML file. This YAML file is formatted as follows:
 
@@ -25,7 +25,25 @@ Note that:
 - Any layers which are not covered will have no topology mapping. They will inherit any other ISQ (e.g. with `--isq`/`in_situ_quant`) set.
 - Unless the layer is not covered by the topology, the topology value will override any other ISQ (e.g. with `--isq`/`in_situ_quant`).
 - The topology device mapping will override any other device mapping.
-- When using UQFF, only the device mapping is relevant.
+
+### Using topology with UQFF models
+
+When loading a [UQFF](UQFF.md) model, the quantization is already applied during UQFF creation. Therefore:
+- **ISQ settings in the topology are ignored** - the pre-quantized weights are used as-is
+- **Device mapping still applies** - you can split layers across GPUs or offload to CPU
+
+This is useful for deploying pre-quantized models across multiple devices without re-quantizing.
+
+Example topology for UQFF device mapping:
+```yaml
+# Only device mapping is used; isq would be ignored
+0-16:
+  device: cuda[0]
+16-32:
+  device: cuda[1]
+```
+
+See the [UQFF documentation](UQFF.md#using-topology-for-device-mapping-with-uqff) for complete examples.
 
 ### Regex selectors
 
@@ -59,24 +77,18 @@ Model topologies may be applied to all model types.
 
 ## CLI example
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --features ... -- -i plain -m microsoft/Phi-3-mini-128k-instruct --topology topologies/isq.yml   
+mistralrs run -m microsoft/Phi-3-mini-128k-instruct --topology topologies/isq.yml
 ```
 
 ## HTTP server example
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --features ... -- --port 1234 plain -m microsoft/Phi-3-mini-128k-instruct --topology topologies/isq.yml   
+mistralrs serve -p 1234 -m microsoft/Phi-3-mini-128k-instruct --topology topologies/isq.yml
 ```
 
 ## Rust example
-Example [here](../mistralrs/examples/topology/main.rs).
+Example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/topology/main.rs).
 
 ## Python example
-Example [here](../examples/python/topology.py).
+Example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/topology.py).

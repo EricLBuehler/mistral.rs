@@ -2,4 +2,4 @@
 
 Core crate that powers `mistral.rs server`.
 
-Documentation: https://ericlbuehler.github.io/mistral.rs/mistralrs_server_core/
+Documentation: https://docs.rs/mistralrs-server-core/

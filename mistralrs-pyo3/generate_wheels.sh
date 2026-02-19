@@ -1,63 +1,69 @@
-# MAC: Aarch64 Manylinux and OSX
+#!/bin/bash
+# Wheel generation commands for each target machine.
+# Uses scripts/build_wheels.py which auto-detects platform and builds appropriate wheels.
+#
+# Build method:
+# - Docker manylinux: ONLY for CPU-only builds on Linux (no features)
+# - Native maturin: For CUDA, MKL, Metal, Accelerate builds
 
-docker build -t wheelmaker:latest -f Dockerfile.manylinux .
-docker run --rm -v .:/io wheelmaker build --release -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.10
-docker run --rm -v .:/io wheelmaker build --release -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.11
-docker run --rm -v .:/io wheelmaker build --release -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.12
+###############################################################################
+# BOX 1: Linux aarch64 + CUDA
+###############################################################################
 
-maturin build -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.10
-maturin build -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.11
-maturin build -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.12
+# mistralrs: CPU-only, uses Docker manylinux with RUSTFLAGS="-C target-cpu=generic"
+# mistralrs-cuda: uses native maturin (not Docker)
+python scripts/build_wheels.py -p mistralrs mistralrs-cuda
 
-# Metal
+###############################################################################
+# BOX 2: Linux x86_64 + CUDA + MKL
+###############################################################################
 
-MACOSX_DEPLOYMENT_TARGET=15.0 maturin build -o wheels-metal -m mistralrs-pyo3/Cargo.toml --interpreter python3.10 --features metal
-MACOSX_DEPLOYMENT_TARGET=15.0 maturin build -o wheels-metal -m mistralrs-pyo3/Cargo.toml --interpreter python3.11 --features metal
-MACOSX_DEPLOYMENT_TARGET=15.0 maturin build -o wheels-metal -m mistralrs-pyo3/Cargo.toml --interpreter python3.12 --features metal
+# mistralrs: has MKL, uses native maturin (not Docker, because MKL feature)
+# mistralrs-cuda: uses native maturin
+# mistralrs-mkl: uses native maturin
+python scripts/build_wheels.py -p mistralrs mistralrs-cuda mistralrs-mkl
 
-# Accelerate
+###############################################################################
+# BOX 2: Windows x86_64 + CUDA + MKL
+###############################################################################
 
-maturin build -o wheels-accelerate -m mistralrs-pyo3/Cargo.toml --interpreter python3.10 --features accelerate
-maturin build -o wheels-accelerate -m mistralrs-pyo3/Cargo.toml --interpreter python3.11 --features accelerate
-maturin build -o wheels-accelerate -m mistralrs-pyo3/Cargo.toml --interpreter python3.12 --features accelerate
+# All use native maturin (no Docker on Windows)
+python scripts/build_wheels.py -p mistralrs mistralrs-cuda mistralrs-mkl
 
-# WINDOWS: x86_64 Manylinux, Windows
+###############################################################################
+# BOX 3: macOS aarch64 + Metal
+###############################################################################
 
-docker build -t wheelmaker:latest -f Dockerfile.manylinux .
-docker run -e RUSTFLAGS="-C target-cpu=generic" --rm -v .:/io wheelmaker build --release -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.10
-docker run -e RUSTFLAGS="-C target-cpu=generic" --rm -v .:/io wheelmaker build --release -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.11
-docker run -e RUSTFLAGS="-C target-cpu=generic" --rm -v .:/io wheelmaker build --release -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.12
+# All use native maturin with MACOSX_DEPLOYMENT_TARGET=15.0 for Metal
+python scripts/build_wheels.py --all
 
-maturin build -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.10
-maturin build -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.11
-maturin build -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.12
+###############################################################################
+# UPLOADING
+###############################################################################
 
-# CUDA
+# Collect all wheels from all boxes to a single directory, then:
 
-maturin build -o wheels-cuda -m mistralrs-pyo3/Cargo.toml --interpreter python3.10 --features cuda
-maturin build -o wheels-cuda -m mistralrs-pyo3/Cargo.toml --interpreter python3.11 --features cuda
-maturin build -o wheels-cuda -m mistralrs-pyo3/Cargo.toml --interpreter python3.12 --features cuda
+# Dry run to verify:
+# python scripts/upload_wheels.py ./all_wheels --dry-run
 
-# MKL
+# Upload to TestPyPI first:
+# python scripts/upload_wheels.py ./all_wheels --test --token $TESTPYPI_TOKEN
 
-maturin build -o wheels-mkl -m mistralrs-pyo3/Cargo.toml --interpreter python3.10 --features mkl
-maturin build -o wheels-mkl -m mistralrs-pyo3/Cargo.toml --interpreter python3.11 --features mkl
-maturin build -o wheels-mkl -m mistralrs-pyo3/Cargo.toml --interpreter python3.12 --features mkl
+# Upload to PyPI:
+# python scripts/upload_wheels.py ./all_wheels --token $PYPI_TOKEN
 
-### UPLOADING
-
-# ⚠️⚠️⚠️⚠️ Be sure to update the `project.name` field in `pyproject.toml`!! ⚠️⚠️⚠️⚠️
-# mistralrs, mistralrs-cuda, mistralrs-metal, mistralrs-mkl, mistralrs-accelerate
-
-## testpypi:
-# twine upload --repository pypi --password PASSWORD --username __token__ wheels-NAME/*.whl
-
-
-## pypi:
-# twine upload --repository pypi --password PASSWORD --username __token__ wheels-cuda/*.whl
-# twine upload --repository pypi --password PASSWORD --username __token__ wheels-mkl/*.whl
-# twine upload --repository pypi --password PASSWORD --username __token__ wheels-cuda/*.whl
-# twine upload --repository pypi --password PASSWORD --username __token__ wheels-metal/*.whl
-# ⚠️ Need both x86_64 and aarch64 builds before this! ⚠️
-# twine upload --repository pypi --password PASSWORD --username __token__ wheels-cpu/*.whl
-
+###############################################################################
+# PACKAGE SUMMARY
+###############################################################################
+#
+# Package              | Features    | Platforms                      | Build Method
+# ---------------------|-------------|--------------------------------|------------------
+# mistralrs            | (none)      | Linux aarch64                  | Docker manylinux
+# mistralrs            | mkl         | Linux/Windows x86_64           | Native maturin
+# mistralrs            | metal       | macOS aarch64                  | Native maturin
+# mistralrs-cuda       | cuda        | Linux + Windows (x86_64/arm64) | Native maturin
+# mistralrs-metal      | metal       | macOS aarch64                  | Native maturin
+# mistralrs-accelerate | accelerate  | macOS aarch64                  | Native maturin
+# mistralrs-mkl        | mkl         | Linux + Windows x86_64         | Native maturin
+#
+# Python version: 3.10 only (abi3 provides forward compatibility to 3.11+)

@@ -42,12 +42,18 @@ impl MoEExpertsBackend {
         loading_isq: bool,
         quantization_config: &Option<QuantizedConfig>,
     ) -> Self {
+        let has_immediate_isq = mistralrs_quant::get_immediate_isq().is_some();
         let use_fast = device.is_metal()
-            || (device.is_cuda() && (loading_isq || quantization_config.is_some()));
+            || (device.is_cuda()
+                && (loading_isq || quantization_config.is_some() || has_immediate_isq));
 
         if use_fast {
             Self::Fast
-        } else if quantization_config.is_none() && !loading_isq && device.is_cuda() {
+        } else if quantization_config.is_none()
+            && !loading_isq
+            && !has_immediate_isq
+            && device.is_cuda()
+        {
             Self::Fused
         } else {
             Self::Slow
@@ -335,18 +341,13 @@ impl MoEExperts {
     /// * `xs` - Input tensor of shape [batch, seq_len, hidden_dim]
     /// * `topk_weights` - Top-k routing weights of shape [num_tokens, num_experts_per_tok]
     /// * `topk_ids` - Top-k expert indices of shape [num_tokens, num_experts_per_tok]
-    /// * `is_prefill` - Whether this is a prefill (prompt processing) or decode step
     ///
     /// # Returns
     /// Output tensor of shape [batch, seq_len, hidden_dim]
-    pub fn forward(
-        &self,
-        xs: &Tensor,
-        topk_weights: Tensor,
-        topk_ids: &Tensor,
-        is_prefill: bool,
-    ) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor, topk_weights: Tensor, topk_ids: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
+        // Prefill = processing multiple tokens; Decode = single token generation
+        let is_prefill = seq_len > 1;
 
         let mut ys = match &self.backend {
             MoEExpertsBackendImpl::Fused(weights) => {

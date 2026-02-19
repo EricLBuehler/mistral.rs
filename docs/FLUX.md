@@ -20,7 +20,7 @@ The FLUX model itself is 12 billion parameters (~24GB), and the T5 XXL encoder m
 The OpenAI HTTP server provides a compatible way to easily use this implementation. As per the specification, output images can be returned as local paths to images or be encoded to base64.
 
 ```
-cargo run --features cuda --release -- --port 1234 diffusion-plain -m black-forest-labs/FLUX.1-schnell -a flux
+mistralrs serve diffusion -p 1234 -m black-forest-labs/FLUX.1-schnell -a flux
 ```
 
 After this, you can send requests via the HTTP server:
@@ -40,9 +40,8 @@ print(result.data[0].url)
 ## Rust example
 ```rust
 use std::time::Instant;
-
 use anyhow::Result;
-use mistralrs::{DiffusionLoaderType, DiffusionModelBuilder, ImageGenerationResponseFormat};
+use mistralrs::{DiffusionGenerationParams, DiffusionLoaderType, DiffusionModelBuilder, ImageGenerationResponseFormat};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -60,6 +59,7 @@ async fn main() -> Result<()> {
         .generate_image(
             "A vibrant sunset in the mountains, 4k, high quality.".to_string(),
             ImageGenerationResponseFormat::Url,
+            DiffusionGenerationParams::default(),
         )
         .await?;
 
@@ -87,7 +87,7 @@ from mistralrs import (
 
 runner = Runner(
     which=Which.DiffusionPlain(
-        model_id="mistralai/Mistral-7B-Instruct-v0.1",
+        model_id="black-forest-labs/FLUX.1-schnell",
         arch=DiffusionArchitecture.FluxOffloaded,
     ),
 )

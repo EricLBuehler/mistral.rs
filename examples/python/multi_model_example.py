@@ -2,10 +2,15 @@
 Example demonstrating multi-model usage with mistral.rs Python bindings.
 
 This example shows how to:
-1. Load multiple models
+1. Load a model using Runner
 2. List available models
-3. Switch between models for different requests
+3. Use model_id parameter to target specific models
 4. Manage default model selection
+5. Model loading/unloading operations
+
+Models used:
+- Vision: google/gemma-3-4b-it (VisionArchitecture.Gemma3)
+- Text: Qwen/Qwen3-4B (Architecture.Qwen3)
 """
 
 from mistralrs import (
@@ -13,61 +18,21 @@ from mistralrs import (
     Which,
     ChatCompletionRequest,
     Architecture,
-    MultiModelRunner,
+    VisionArchitecture,
 )
 
 
-# Example 1: Using MultiModelRunner wrapper for cleaner API
-def example_multi_model_runner():
-    """Demonstrate using the MultiModelRunner for managing multiple models."""
-
-    # First, create a regular runner with one model
-    runner = Runner(
-        which=Which.Plain(
-            model_id="microsoft/DialoGPT-small",
-            arch=Architecture.Gpt2,
-            num_device_layers=None,
-        )
-    )
-
-    # Convert to MultiModelRunner for multi-model operations
-    multi_runner = MultiModelRunner(runner)
-
-    # List available models (should show just the initial model)
-    print("Available models:", multi_runner.list_models())
-
-    # Send a request to a specific model
-    messages = [{"role": "user", "content": "Hello, how are you?"}]
-    request = ChatCompletionRequest(messages=messages)
-
-    # Use the specific model ID from list_models()
-    model_ids = multi_runner.list_models()
-    if model_ids:
-        response = multi_runner.send_chat_completion_request_to_model(
-            request=request,
-            model_id=model_ids[0],  # Use first available model
-        )
-        print(f"Response from {model_ids[0]}:", response.choices[0].message.content)
-
-    # Check and set default model
-    default = multi_runner.get_default_model_id()
-    print(f"Default model: {default}")
-
-    # Send request to default model (no model_id specified)
-    response = multi_runner.send_chat_completion_request(request=request)
-    print("Response from default model:", response.choices[0].message.content)
-
-
-# Example 2: Using regular Runner with model_id parameter
+# Example 1: Using Runner with model_id parameter for multi-model operations
 def example_runner_with_model_id():
-    """Demonstrate using regular Runner with model_id in requests."""
+    """Demonstrate using Runner with model_id in requests."""
 
-    # Create a runner (in a real multi-model setup, this would have multiple models loaded)
+    # Create a runner with Gemma 3 4B vision model
     runner = Runner(
-        which=Which.Plain(
-            model_id="microsoft/DialoGPT-small",
-            arch=Architecture.Gpt2,
-        )
+        which=Which.VisionPlain(
+            model_id="google/gemma-3-4b-it",
+            arch=VisionArchitecture.Gemma3,
+        ),
+        in_situ_quant="Q4K",
     )
 
     # List available models
@@ -79,7 +44,7 @@ def example_runner_with_model_id():
     print(f"Default model: {default_model}")
 
     # Send request with specific model_id
-    messages = [{"role": "user", "content": "Tell me a joke"}]
+    messages = [{"role": "user", "content": "Hello, how are you?"}]
     request = ChatCompletionRequest(messages=messages)
 
     if model_ids:
@@ -94,100 +59,93 @@ def example_runner_with_model_id():
         print("Response from default model:", response.choices[0].message.content)
 
 
-# Example 3: Working with different types of models
-def example_mixed_model_types():
-    """Example showing how different model types could be used in multi-model setup."""
-
-    # In a real scenario, you would load multiple models through configuration
-    # This example shows the API usage pattern
-
-    # Create a text generation model
-    text_runner = Runner(
-        which=Which.Plain(
-            model_id="gpt2",
-            arch=Architecture.Gpt2,
-        )
-    )
-
-    multi_runner = MultiModelRunner(text_runner)
-
-    # Different types of requests to different models
-    # Text generation request
-    text_messages = [{"role": "user", "content": "Write a short poem about AI"}]
-    text_request = ChatCompletionRequest(messages=text_messages)
-
-    model_ids = multi_runner.list_models()
-    if model_ids:
-        response = multi_runner.send_chat_completion_request_to_model(
-            request=text_request, model_id=model_ids[0]
-        )
-        print(f"Text model response:\n{response.choices[0].message.content}")
-
-    # In a real multi-model setup with vision models loaded, you could do:
-    # vision_messages = [{"role": "user", "content": [
-    #     {"type": "text", "text": "What's in this image?"},
-    #     {"type": "image_url", "image_url": {"url": "path/to/image.jpg"}}
-    # ]}]
-    # vision_request = ChatCompletionRequest(messages=vision_messages)
-    # response = multi_runner.send_chat_completion_request_to_model(
-    #     request=vision_request,
-    #     model_id="vision-model-id"
-    # )
-
-
-# Example 4: Model management operations
+# Example 2: Model management operations
 def example_model_management():
     """Demonstrate model management operations."""
 
     runner = Runner(
         which=Which.Plain(
-            model_id="gpt2",
-            arch=Architecture.Gpt2,
-        )
+            model_id="Qwen/Qwen3-4B",
+            arch=Architecture.Qwen3,
+        ),
+        in_situ_quant="Q4K",
     )
 
-    # List models
-    print("Initial models:", runner.list_models())
+    # List models with their status
+    print("Initial models with status:", runner.list_models_with_status())
 
-    # Get and set default model
+    # Get default model
     current_default = runner.get_default_model_id()
     print(f"Current default model: {current_default}")
 
-    # In a multi-model setup, you could change the default
+    # Check if a model is loaded
     model_ids = runner.list_models()
+    if model_ids:
+        is_loaded = runner.is_model_loaded(model_ids[0])
+        print(f"Is {model_ids[0]} loaded? {is_loaded}")
+
+    # In a multi-model setup, you could change the default
     if model_ids and len(model_ids) > 1:
-        # Set a different model as default
         runner.set_default_model_id(model_ids[1])
         print(f"Changed default model to: {model_ids[1]}")
 
-    # Remove a model (in multi-model setup)
-    # Note: Be careful not to remove all models or the currently active one
-    # if len(model_ids) > 1:
-    #     runner.remove_model(model_ids[0])
-    #     print(f"Removed model: {model_ids[0]}")
-    #     print("Remaining models:", runner.list_models())
+
+# Example 3: Model unloading and reloading
+def example_unload_reload():
+    """Demonstrate model unloading and reloading."""
+
+    runner = Runner(
+        which=Which.VisionPlain(
+            model_id="google/gemma-3-4b-it",
+            arch=VisionArchitecture.Gemma3,
+        ),
+        in_situ_quant="Q4K",
+    )
+
+    model_ids = runner.list_models()
+    if not model_ids:
+        print("No models loaded")
+        return
+
+    model_id = model_ids[0]
+    print(f"Initial status: {runner.list_models_with_status()}")
+
+    # Unload the model to free memory
+    # Note: This preserves the model configuration for later reload
+    print(f"Unloading model: {model_id}")
+    runner.unload_model(model_id)
+
+    # Check status after unload
+    print(f"Status after unload: {runner.list_models_with_status()}")
+    print(f"Is {model_id} loaded? {runner.is_model_loaded(model_id)}")
+
+    # Reload the model when needed
+    print(f"Reloading model: {model_id}")
+    runner.reload_model(model_id)
+
+    # Check status after reload
+    print(f"Status after reload: {runner.list_models_with_status()}")
 
 
-# Example 5: Streaming with specific models
+# Example 4: Streaming with specific models
 def example_streaming_with_models():
     """Demonstrate streaming responses from specific models."""
 
     runner = Runner(
         which=Which.Plain(
-            model_id="gpt2",
-            arch=Architecture.Gpt2,
-        )
+            model_id="Qwen/Qwen3-4B",
+            arch=Architecture.Qwen3,
+        ),
+        in_situ_quant="Q4K",
     )
 
-    multi_runner = MultiModelRunner(runner)
-
-    messages = [{"role": "user", "content": "Tell me a long story"}]
+    messages = [{"role": "user", "content": "Tell me a short story"}]
     request = ChatCompletionRequest(messages=messages, stream=True)
 
-    model_ids = multi_runner.list_models()
+    model_ids = runner.list_models()
     if model_ids:
         # Stream from specific model
-        stream = multi_runner.send_chat_completion_request_to_model(
+        stream = runner.send_chat_completion_request(
             request=request, model_id=model_ids[0]
         )
 
@@ -198,22 +156,60 @@ def example_streaming_with_models():
         print()  # New line after streaming
 
 
-if __name__ == "__main__":
-    print("=== Multi-Model Example 1: MultiModelRunner ===")
-    example_multi_model_runner()
-    print("\n" + "=" * 50 + "\n")
+# Example 5: Multi-model setup with vision and text models
+def example_multi_model_setup():
+    """
+    Example showing a real multi-model setup with vision and text models.
 
-    print("=== Multi-Model Example 2: Runner with model_id ===")
+    This example loads:
+    - Vision model: google/gemma-3-4b-it
+    - Text model: Qwen/Qwen3-4B
+    """
+    # Load a vision model first
+    runner = Runner(
+        which=Which.VisionPlain(
+            model_id="google/gemma-3-4b-it",
+            arch=VisionArchitecture.Gemma3,
+        ),
+        in_situ_quant="Q4K",
+    )
+
+    print("Initial models:", runner.list_models())
+
+    # Add a text model dynamically (if add_model is available)
+    # runner.add_model(
+    #     model_id="qwen",
+    #     which=Which.Plain(
+    #         model_id="Qwen/Qwen3-4B",
+    #         arch=Architecture.Qwen3,
+    #     ),
+    #     in_situ_quant="Q4K",
+    # )
+    # print("After add_model:", runner.list_models())
+
+    # Send a request to gemma
+    messages = [{"role": "user", "content": "What is 2 + 2?"}]
+    request = ChatCompletionRequest(messages=messages)
+    response = runner.send_chat_completion_request(request)
+    print(f"Gemma response: {response.choices[0].message.content}")
+
+
+if __name__ == "__main__":
+    print("=== Multi-Model Example 1: Runner with model_id ===")
     example_runner_with_model_id()
     print("\n" + "=" * 50 + "\n")
 
-    print("=== Multi-Model Example 3: Mixed Model Types ===")
-    example_mixed_model_types()
-    print("\n" + "=" * 50 + "\n")
-
-    print("=== Multi-Model Example 4: Model Management ===")
+    print("=== Multi-Model Example 2: Model Management ===")
     example_model_management()
     print("\n" + "=" * 50 + "\n")
 
-    print("=== Multi-Model Example 5: Streaming ===")
+    print("=== Multi-Model Example 3: Unload/Reload ===")
+    example_unload_reload()
+    print("\n" + "=" * 50 + "\n")
+
+    print("=== Multi-Model Example 4: Streaming ===")
     example_streaming_with_models()
+    print("\n" + "=" * 50 + "\n")
+
+    print("=== Multi-Model Example 5: Multi-Model Setup ===")
+    example_multi_model_setup()

@@ -41,6 +41,7 @@ impl QuantMethod for VectorFP8Linear {
             | QuantMethodConfig::Bnb { .. }
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::PerTensorFP8 { .. }
             | QuantMethodConfig::Afq { .. }
             | QuantMethodConfig::MXFP4 { .. } => unreachable!(),
         }
@@ -182,6 +183,20 @@ impl QuantMethod for VectorFP8Linear {
                     dtype: DType::F8E4M3,
                 })?))
             }
+            Some(IsqType::F8Q8) => {
+                let _acquired_quantize_guard = guard.acquire(&device);
+                if imatrix_weight.is_some() {
+                    candle_core::bail!("F8Q8 does not support imatrix.");
+                }
+
+                let w = weight.to_device(&device)?;
+                let b = if let Some(b) = &self.bias {
+                    Some(b.to_device(&device)?)
+                } else {
+                    None
+                };
+                Ok(Arc::new(crate::F8Q8Linear::from_weight(&w, b)?))
+            }
             None => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 // Ignore imatrix altogether
@@ -218,14 +233,14 @@ pub fn vector_fp8_linear_b(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     // Check that dimensions are divisible by VECTOR_SIZE
-    if in_dim % VECTOR_SIZE != 0 {
+    if !in_dim.is_multiple_of(VECTOR_SIZE) {
         candle_core::bail!(
             "Input dimension {} must be divisible by {} for vector FP8 quantization",
             in_dim,
             VECTOR_SIZE
         );
     }
-    if out_dim % VECTOR_SIZE != 0 {
+    if !out_dim.is_multiple_of(VECTOR_SIZE) {
         candle_core::bail!(
             "Output dimension {} must be divisible by {} for vector FP8 quantization",
             out_dim,

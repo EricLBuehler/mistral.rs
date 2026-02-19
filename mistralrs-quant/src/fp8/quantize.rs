@@ -101,13 +101,18 @@ mod tests {
         use crate::cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_CONTROLLER};
         let dev = Device::new_cuda(0)?;
 
-        let w = Tensor::rand(0., 1., (1, 16, 32), &dev)?.to_dtype(DType::F32)?;
-        let mut x = Tensor::rand(0., 1., (1, 16, 32), &dev)?.to_dtype(DType::F32)?;
+        // Use 128x128 matrices for FP8 tensor core compatibility across GPU architectures
+        let w = Tensor::rand(0., 1., (1, 128, 128), &dev)?
+            .to_dtype(DType::F32)?
+            .contiguous()?;
+        let mut x = Tensor::rand(0., 1., (1, 128, 128), &dev)?
+            .to_dtype(DType::F32)?
+            .contiguous()?;
 
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(x.device().clone());
 
-        let handle = CUBLASLT_CONTROLLER.get().unwrap();
+        let handle = CUBLASLT_CONTROLLER.get_for_device(x.device()).unwrap();
 
         let QuantizationResult {
             qw,

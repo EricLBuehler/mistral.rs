@@ -24,6 +24,7 @@ impl QuantMethod for GptqLayer {
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
             | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::PerTensorFP8 { .. }
             | QuantMethodConfig::Afq { .. }
             | QuantMethodConfig::MXFP4 { .. } => {
                 unreachable!()

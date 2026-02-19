@@ -1,6 +1,6 @@
 [package]
 name = "mistralrs-quant"
-readme = "README.md"
+readme = "../README.md"
 authors = ["Eric Buehler"]
 version.workspace = true
 edition.workspace = true
@@ -26,6 +26,7 @@ byteorder.workspace = true
 float8.workspace = true
 objc2-metal = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }
+dispatch2 = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
 thiserror.workspace = true
 yoke.workspace = true
@@ -39,7 +40,7 @@ tokio.workspace = true
 cuda = [
     "candle-core/cuda",
     "candle-nn/cuda",
-    "dep:bindgen_cuda"
+    "dep:cudaforge"
 ]
 nccl = ["cuda", "candle-core/nccl"]
 metal = [
@@ -47,9 +48,11 @@ metal = [
     "candle-nn/metal",
     "dep:objc2-metal",
     "dep:objc2-foundation",
+    "dep:dispatch2",
     "dep:candle-metal-kernels",
 ]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
+arm-nightly-feat = []
 ring = []
 
 cuda-11040 = []
@@ -69,4 +72,4 @@ cuda-12090 = []
 cuda-13000 = []
 
 [build-dependencies]
-bindgen_cuda = { workspace = true, optional = true }
+cudaforge = { workspace = true, optional = true }

@@ -332,6 +332,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     softcap: None,
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,
+                    sinks: None,
                 },
                 dtype,
             })
@@ -398,7 +399,10 @@ impl ModelWeights {
             let ys = layer.mlp.forward(&ys)?;
             xs = (ys + residual)?
         }
-        let xs = xs.apply(&self.output_norm)?.i((.., seq_len - 1, ..))?;
+        let xs = xs
+            .apply(&self.output_norm)?
+            .i((.., seq_len - 1, ..))?
+            .contiguous()?;
         MatMul.qmatmul(&xs, &self.output)
     }
 }

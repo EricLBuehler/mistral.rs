@@ -300,6 +300,7 @@ impl Attention {
                 softcap: None,
                 softmax_scale: 1.0,
                 sliding_window,
+                sinks: None,
             },
             q_norm,
             k_norm,
@@ -1221,6 +1222,7 @@ impl TextModel {
                 sliding_window: None,
                 k_head_dim: cfg.head_dim,
                 v_head_dim: cfg.head_dim,
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
             per_layer_input_scale: 1. / (2f64.sqrt()),
@@ -1416,6 +1418,7 @@ impl TextModel {
         xs = stacked_f32.mean(0)?.to_dtype(stacked.dtype())?;
 
         xs = xs.apply(&self.norm)?;
+        let mut xs = extract_logits(&xs, context_lens)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
@@ -1430,7 +1433,7 @@ impl TextModel {
             xs = (tanh_capped * final_logit_softcapping)?.to_dtype(xs.dtype())?;
         }
 
-        extract_logits(&xs, context_lens)
+        Ok(xs)
     }
 }
 

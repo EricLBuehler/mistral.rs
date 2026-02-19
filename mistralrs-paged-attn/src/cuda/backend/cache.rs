@@ -106,7 +106,17 @@ pub fn copy_blocks(
     let value_cache_ptr = value_cache_ptrs.as_mut_ptr() as *mut core::ffi::c_void;
     let block_mapping_ptr = block_mapping_vec.as_mut_ptr() as *const core::ffi::c_void;
 
-    let numel_per_block: u32 = key_caches
+    let numel_per_block_key: u32 = key_caches
+        .first()
+        .unwrap()
+        .i(0)?
+        .shape()
+        .dims()
+        .iter()
+        .product::<usize>()
+        .try_into()
+        .unwrap();
+    let numel_per_block_value: u32 = value_caches
         .first()
         .unwrap()
         .i(0)?
@@ -125,7 +135,8 @@ pub fn copy_blocks(
                 block_mapping_ptr,
                 num_layers as i32,
                 num_pairs as i32,
-                numel_per_block as i32,
+                numel_per_block_key as i32,
+                numel_per_block_value as i32,
                 dev.cuda_stream().cu_stream() as i64,
             );
         },
@@ -136,7 +147,8 @@ pub fn copy_blocks(
                 block_mapping_ptr,
                 num_layers as i32,
                 num_pairs as i32,
-                numel_per_block as i32,
+                numel_per_block_key as i32,
+                numel_per_block_value as i32,
                 dev.cuda_stream().cu_stream() as i64,
             );
         },
@@ -147,7 +159,8 @@ pub fn copy_blocks(
                 block_mapping_ptr,
                 num_layers as i32,
                 num_pairs as i32,
-                numel_per_block as i32,
+                numel_per_block_key as i32,
+                numel_per_block_value as i32,
                 dev.cuda_stream().cu_stream() as i64,
             );
         },

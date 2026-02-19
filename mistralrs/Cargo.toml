@@ -1,6 +1,6 @@
 [package]
 name = "mistralrs"
-readme = "README.md"
+readme = "../README.md"
 authors = ["Eric Buehler"]
 version.workspace = true
 edition.workspace = true
@@ -14,12 +14,14 @@ homepage.workspace = true
 
 [dependencies]
 mistralrs-core.workspace = true
+mistralrs-macros.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 candle-core.workspace = true
 candle-nn.workspace = true
 serde_json.workspace = true
 serde.workspace = true
+schemars.workspace = true
 image.workspace = true
 indexmap.workspace = true
 either.workspace = true

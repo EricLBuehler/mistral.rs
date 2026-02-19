@@ -1,17 +1,20 @@
 {
   "llama3-3b-text": {
+    "alias": "llama3-3b-text",
     "Plain": {
       "model_id": "meta-llama/Llama-3.2-3B-Instruct"
     },
     "in_situ_quant": "8"
   },
   "gemma3-4b-vision": {
+    "alias": "gemma3-4b-vision",
     "VisionPlain": {
       "model_id": "google/gemma-3-4b-it"
     },
     "in_situ_quant": "4"
   },
   "qwen3-4b-fast": {
+    "alias": "qwen3-4b-fast",
     "Plain": {
       "model_id": "Qwen/Qwen3-4B"
     },
@@ -19,6 +22,7 @@
     "num_device_layers": ["8"]
   },
   "llama3-gguf": {
+    "alias": "llama3-gguf",
     "Gguf": {
       "tok_model_id": "meta-llama/Llama-3.2-3B-Instruct",
       "quantized_model_id": "bartowski/Llama-3.2-3B-Instruct-GGUF",
@@ -26,6 +30,7 @@
     }
   },
   "embed-qwen3": {
+    "alias": "embed-qwen3",
     "Embedding": {
       "model_id": "Qwen/Qwen3-Embedding-0.6B",
       "arch": "qwen3embedding"

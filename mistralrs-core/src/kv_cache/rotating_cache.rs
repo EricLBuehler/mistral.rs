@@ -69,6 +69,18 @@ impl RotatingCache {
     }
 
     pub fn try_set_len(&self, len: usize) -> candle_core::Result<()> {
+        // If the buffer has wrapped, the circular data layout is incompatible
+        // with a rollback — positions no longer match their original linear
+        // indices. Reject so the prefix cacher falls back to full recomputation.
+        if self.current_seq_len > self.max_seq_len && len < self.current_seq_len {
+            candle_core::bail!(
+                "Rotating KV cache cannot roll back a wrapped buffer \
+                 (current_seq_len {} > max_seq_len {}, requested len {})",
+                self.current_seq_len,
+                self.max_seq_len,
+                len,
+            );
+        }
         // If trying to roll it back past the boundary of max_seq_len, fail early.
         if self.current_seq_len.saturating_sub(len) > self.max_seq_len {
             candle_core::bail!(

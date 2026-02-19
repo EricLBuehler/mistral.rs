@@ -1,3 +1,8 @@
+// Portions of this file are adapted from Apple's MLX framework
+// (https://github.com/ml-explore/mlx)
+// Licensed under the Apache License 2.0
+// Copyright © 2023 Apple Inc.
+
 use candle_core::{DType, MetalDevice};
 use candle_metal_kernels::metal::{
     Buffer, ComputeCommandEncoder, ComputePipeline, ConstantValues, Device, Function, Library,
@@ -23,6 +28,8 @@ type ComputePipelineState = ComputePipeline;
 const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mistralrs_quant.metallib"));
 #[cfg(target_os = "ios")]
 const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mistralrs_quant_ios.metallib"));
+#[cfg(target_os = "tvos")]
+const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mistralrs_quant_tvos.metallib"));
 
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
@@ -67,35 +74,27 @@ impl Kernels {
 
     /// Load the library from precompiled metallib, falling back to runtime compilation if needed.
     /// If this has been previously loaded it will just fetch it from cache.
+    #[allow(clippy::const_is_empty)] // KERNELS can be empty when MISTRALRS_METAL_PRECOMPILE=0
     pub fn load_library(&self, device: &Device) -> Result<Library, MetalKernelError> {
-        use objc2_foundation::{NSString, NSURL};
-
         if let Some(lib) = LIBRARY.get() {
             Ok(lib.clone())
         } else {
             // Try to load precompiled metallib first (faster startup)
             let lib = if !KERNELS.is_empty() {
-                // Write precompiled metallib to a temp file and load via URL
-                // This avoids the complexity of creating DispatchData
-                let temp_dir = std::env::temp_dir();
-                let metallib_path = temp_dir.join("mistralrs_quant.metallib");
-                std::fs::write(&metallib_path, KERNELS).map_err(|e| {
-                    MetalKernelError::CompilationError(format!(
-                        "Failed to write metallib to temp file: {e}"
-                    ))
-                })?;
+                // Load precompiled metallib directly from embedded bytes via DispatchData.
+                // This avoids writing to a temp file, which can fail in sandboxed
+                // environments (e.g. macOS apps distributed via TestFlight).
+                // https://github.com/EricLBuehler/mistral.rs/issues/1897
+                let data = dispatch2::DispatchData::from_static_bytes(KERNELS);
 
-                let url_string = format!("file://{}", metallib_path.display());
-                let ns_url_string = NSString::from_str(&url_string);
-                let url = NSURL::URLWithString(&ns_url_string).ok_or_else(|| {
-                    MetalKernelError::CompilationError("Failed to create NSURL".to_string())
-                })?;
-
-                let raw_lib = device.as_ref().newLibraryWithURL_error(&url).map_err(|e| {
-                    MetalKernelError::CompilationError(format!(
-                        "Failed to load precompiled metallib: {e}"
-                    ))
-                })?;
+                let raw_lib = device
+                    .as_ref()
+                    .newLibraryWithData_error(&data)
+                    .map_err(|e| {
+                        MetalKernelError::CompilationError(format!(
+                            "Failed to load precompiled metallib: {e}"
+                        ))
+                    })?;
                 Library::new(raw_lib)
             } else {
                 // Fall back to runtime compilation if precompiled lib is not available
@@ -114,7 +113,9 @@ impl Kernels {
         file_system.insert("bitwise.metal", include_str!("bitwise.metal"));
         file_system.insert("blockwise_fp8.metal", include_str!("blockwise_fp8.metal"));
         file_system.insert("bnb_dequantize.metal", include_str!("bnb_dequantize.metal"));
+        file_system.insert("fused_glu.metal", include_str!("fused_glu.metal"));
         file_system.insert("hqq_dequantize.metal", include_str!("hqq_dequantize.metal"));
+        file_system.insert("mxfp4.metal", include_str!("mxfp4.metal"));
         file_system.insert("quantized.metal", include_str!("quantized.metal"));
         file_system.insert("scan.metal", include_str!("scan.metal"));
         file_system.insert("sort.metal", include_str!("sort.metal"));
@@ -126,6 +127,15 @@ impl Kernels {
         file_system.insert("copy_impl.metal", include_str!("copy_impl.metal"));
         file_system.insert("float8.metal", include_str!("float8.metal"));
         file_system.insert("float4.metal", include_str!("float4.metal"));
+        file_system.insert("scalar_fp8.metal", include_str!("scalar_fp8.metal"));
+        file_system.insert(
+            "sdpa_with_sinks.metal",
+            include_str!("sdpa_with_sinks.metal"),
+        );
+        file_system.insert(
+            "softmax_with_sinks.metal",
+            include_str!("softmax_with_sinks.metal"),
+        );
 
         // Recursive include preprocessor
         fn preprocess_includes(
@@ -242,7 +252,9 @@ impl Kernels {
             "bitwise.metal",        // Bitwise operations
             "blockwise_fp8.metal",  // FP8 blockwise operations (includes float8.metal, utils.metal)
             "bnb_dequantize.metal", // BitsAndBytes dequantization (includes utils.metal)
+            "fused_glu.metal",      // Fused GLU operations (activation(a) * b)
             "hqq_dequantize.metal", // HQQ dequantization
+            "mxfp4.metal",          // MXFP4 kernels
             "quantized.metal",      // Quantization operations (includes utils.metal)
             "copy.metal",           // Copy operations (includes utils.metal, copy_impl.metal)
             "scan.metal",           // Scan operations (includes utils.metal, scan_impl.metal)
@@ -1197,6 +1209,162 @@ pub fn call_afq_qmm(
         );
     }
 
+    encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_mxfp4_matmul(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: (&Buffer, usize),
+    w: (&Buffer, usize),
+    scales: (&Buffer, usize),
+    bias: (&Buffer, usize),
+    out: &Buffer,
+    m: usize,
+    n: usize,
+    k: usize,
+    has_bias: bool,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F16 => "mxfp4_matmul_f16",
+        DType::BF16 => "mxfp4_matmul_bf16",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+
+    let pipeline = kernels.load_pipeline(device, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            x,
+            w,
+            scales,
+            bias,
+            out,
+            m as i32,
+            n as i32,
+            k as i32,
+            has_bias as i32
+        )
+    );
+
+    // 8 simdgroups * 32 = 256 threads. Grid.x tiles N in blocks of 8.
+    let group_dims = MTLSize {
+        width: 256,
+        height: 1,
+        depth: 1,
+    };
+    let grid_dims = MTLSize {
+        width: n.div_ceil(8),
+        height: m,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_mxfp4_moe_gemm(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: (&Buffer, usize),
+    w: (&Buffer, usize),
+    scales: (&Buffer, usize),
+    biases: (&Buffer, usize),
+    indices: (&Buffer, usize),
+    out: &Buffer,
+    num_tokens: usize,
+    topk: usize,
+    num_experts: usize,
+    n: usize,
+    k: usize,
+    has_bias: bool,
+    input_has_topk_dim: bool,
+    reuse_topk: bool,
+) -> Result<(), MetalKernelError> {
+    let name = match (reuse_topk, ty) {
+        (true, DType::F16) => "mxfp4_moe_gemm_reuse_f16",
+        (true, DType::BF16) => "mxfp4_moe_gemm_reuse_bf16",
+        (false, DType::F16) => "mxfp4_moe_gemm_split_f16",
+        (false, DType::BF16) => "mxfp4_moe_gemm_split_bf16",
+        (_, other) => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+
+    let pipeline = kernels.load_pipeline(device, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    if reuse_topk {
+        set_params!(
+            encoder,
+            (
+                x,
+                w,
+                scales,
+                biases,
+                indices,
+                out,
+                num_tokens as i32,
+                topk as i32,
+                num_experts as i32,
+                n as i32,
+                k as i32,
+                has_bias as i32
+            )
+        );
+    } else {
+        set_params!(
+            encoder,
+            (
+                x,
+                w,
+                scales,
+                biases,
+                indices,
+                out,
+                num_tokens as i32,
+                topk as i32,
+                num_experts as i32,
+                n as i32,
+                k as i32,
+                has_bias as i32,
+                input_has_topk_dim as i32
+            )
+        );
+    }
+
+    let group_dims = MTLSize {
+        width: 256,
+        height: 1,
+        depth: 1,
+    };
+    let grid_dims = MTLSize {
+        width: n.div_ceil(8),
+        height: num_tokens,
+        depth: if reuse_topk { 1 } else { topk },
+    };
     encoder.dispatch_thread_groups(grid_dims, group_dims);
     Ok(())
 }
@@ -2440,5 +2608,649 @@ pub fn call_hqq_pack_1bit(
     };
 
     encoder.dispatch_thread_groups(grid_size, threadgroup_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_fused_glu(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    a: &Buffer,
+    b: &Buffer,
+    a_offset: usize,
+    b_offset: usize,
+    n_elements: usize,
+    activation: i32,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "fused_glu_float",
+        DType::F16 => "fused_glu_half",
+        DType::BF16 => "fused_glu_bfloat",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            (a, a_offset),
+            (b, b_offset),
+            output,
+            n_elements as u32,
+            activation
+        )
+    );
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, n_elements);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+// ============================================================================
+// Softmax with sinks kernel
+// ============================================================================
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_softmax_with_sinks(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    logits: &Buffer,
+    logits_offset: usize,
+    sinks: &Buffer,
+    sinks_offset: usize,
+    output: &Buffer,
+    num_heads: u32,
+    q_len: u32,
+    k_len: u32,
+    total_rows: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "softmax_with_sinks_float",
+        DType::F16 => "softmax_with_sinks_half",
+        DType::BF16 => "softmax_with_sinks_bfloat",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    // Choose thread group size based on k_len
+    let threads_per_group: usize = if k_len <= 64 {
+        64
+    } else if k_len <= 128 {
+        128
+    } else if k_len <= 256 {
+        256
+    } else {
+        512
+    };
+
+    // Shared memory: s_max(1) + s_sum(1) + warp_scratch(threads_per_group / 32)
+    let num_simdgroups = (threads_per_group + 31) / 32;
+    let shared_mem_size = (2 + num_simdgroups) * std::mem::size_of::<f32>();
+    encoder.set_threadgroup_memory_length(0, shared_mem_size);
+
+    set_params!(
+        encoder,
+        (
+            (logits, logits_offset),
+            (sinks, sinks_offset),
+            output,
+            num_heads,
+            q_len,
+            k_len
+        )
+    );
+
+    let thread_groups_count = MTLSize {
+        width: total_rows,
+        height: 1,
+        depth: 1,
+    };
+    let thread_group_size = MTLSize {
+        width: threads_per_group,
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(thread_groups_count, thread_group_size);
+    Ok(())
+}
+
+// ============================================================================
+// SDPA with sinks (fused attention) kernels
+// ============================================================================
+
+fn sdpa_with_sinks_dtype_name(ty: DType) -> Result<&'static str, MetalKernelError> {
+    match ty {
+        DType::F32 => Ok("float"),
+        DType::F16 => Ok("half"),
+        DType::BF16 => Ok("bfloat16_t"),
+        other => Err(MetalKernelError::DTypeMismatch {
+            expected: vec![DType::F32, DType::F16, DType::BF16],
+            got: other,
+        }),
+    }
+}
+
+/// Fused SDPA with sinks for decode (q_len == 1, single-pass).
+/// Dispatches `sdpa_vector_with_sinks` Metal kernel.
+#[allow(clippy::too_many_arguments)]
+pub fn call_sdpa_vector_with_sinks(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    q_buffer: &Buffer,
+    q_offset: usize,
+    k_buffer: &Buffer,
+    k_offset: usize,
+    v_buffer: &Buffer,
+    v_offset: usize,
+    sinks_buffer: &Buffer,
+    sinks_offset: usize,
+    output: &Buffer,
+    head_dim: usize,
+    gqa_factor: i32,
+    n: i32, // k_len
+    k_stride: usize,
+    v_stride: usize,
+    scale: f32,
+    b: usize, // batch * num_heads
+) -> Result<(), MetalKernelError> {
+    let type_name = sdpa_with_sinks_dtype_name(ty)?;
+    let name = format!("sdpa_vector_with_sinks_{type_name}_{head_dim}");
+
+    let pipeline = kernels.load_pipeline(device, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    let k_stride = k_stride as u64;
+    let v_stride = v_stride as u64;
+
+    set_params!(
+        encoder,
+        (
+            (q_buffer, q_offset),
+            (k_buffer, k_offset),
+            (v_buffer, v_offset),
+            (sinks_buffer, sinks_offset),
+            output,
+            gqa_factor,
+            n,
+            k_stride,
+            v_stride,
+            scale
+        )
+    );
+
+    let grid_dims = MTLSize {
+        width: 1,
+        height: b,
+        depth: 1,
+    };
+    let group_dims = MTLSize {
+        width: 1024, // 32 simdgroups * 32 threads
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
+/// Fused SDPA with sinks for decode, two-pass variant (k_len >= 1024).
+#[allow(clippy::too_many_arguments)]
+pub fn call_sdpa_vector_with_sinks_2pass(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    q_buffer: &Buffer,
+    q_offset: usize,
+    k_buffer: &Buffer,
+    k_offset: usize,
+    v_buffer: &Buffer,
+    v_offset: usize,
+    sinks_buffer: &Buffer,
+    sinks_offset: usize,
+    output: &Buffer,
+    intermediate: &Buffer,
+    sums: &Buffer,
+    maxs: &Buffer,
+    head_dim: usize,
+    gqa_factor: i32,
+    n: i32, // k_len
+    k_stride: usize,
+    v_stride: usize,
+    scale: f32,
+    b: usize, // batch * num_heads
+) -> Result<(), MetalKernelError> {
+    let type_name = sdpa_with_sinks_dtype_name(ty)?;
+    let blocks: u64 = 32;
+
+    // Pass 1: compute partial outputs per block
+    {
+        let name = format!("sdpa_vector_with_sinks_2pass_1_{type_name}_{head_dim}");
+        let pipeline = kernels.load_pipeline(device, &name)?;
+
+        let encoder = ep.encoder();
+        let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+        encoder.set_compute_pipeline_state(&pipeline);
+
+        let k_stride = k_stride as u64;
+        let v_stride = v_stride as u64;
+
+        set_params!(
+            encoder,
+            (
+                (q_buffer, q_offset),
+                (k_buffer, k_offset),
+                (v_buffer, v_offset),
+                intermediate,
+                sums,
+                maxs,
+                gqa_factor,
+                n,
+                k_stride,
+                v_stride,
+                scale
+            )
+        );
+
+        let grid_dims = MTLSize {
+            width: 1,
+            height: b,
+            depth: blocks as usize,
+        };
+        let group_dims = MTLSize {
+            width: 8 * 32, // BN=8 simdgroups * 32 threads
+            height: 1,
+            depth: 1,
+        };
+        encoder.dispatch_thread_groups(grid_dims, group_dims);
+    }
+
+    // Pass 2: reduce across blocks, integrate sinks
+    {
+        let name = format!("sdpa_vector_with_sinks_2pass_2_{type_name}_{head_dim}");
+        let pipeline = kernels.load_pipeline(device, &name)?;
+
+        let encoder = ep.encoder();
+        let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+        encoder.set_compute_pipeline_state(&pipeline);
+
+        set_params!(
+            encoder,
+            (
+                intermediate,
+                sums,
+                maxs,
+                (sinks_buffer, sinks_offset),
+                output
+            )
+        );
+
+        let grid_dims = MTLSize {
+            width: 1,
+            height: b,
+            depth: 1,
+        };
+        let group_dims = MTLSize {
+            width: 1024, // 32 * 32
+            height: 1,
+            depth: 1,
+        };
+        encoder.dispatch_thread_groups(grid_dims, group_dims);
+    }
+
+    Ok(())
+}
+
+/// Fused flash attention with sinks for prefill (q_len > 1).
+/// Dispatches `flash_attn_sinks_kernel` Metal kernel.
+#[allow(clippy::too_many_arguments)]
+pub fn call_flash_attn_sinks_prefill(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    q_buffer: &Buffer,
+    q_offset: usize,
+    k_buffer: &Buffer,
+    k_offset: usize,
+    v_buffer: &Buffer,
+    v_offset: usize,
+    sinks_buffer: &Buffer,
+    sinks_offset: usize,
+    output: &Buffer,
+    scale: f32,
+    batch_size: usize,
+    q_len: usize,
+    k_len: usize,
+    num_heads: usize,
+    num_kv_heads: usize,
+    head_dim: usize,
+    window_size: usize,
+) -> Result<(), MetalKernelError> {
+    let type_name = sdpa_with_sinks_dtype_name(ty)?;
+
+    let br: usize = 8; // simdgroups per threadgroup
+    let bc: usize = match head_dim {
+        64 => 64,
+        80 | 96 | 112 | 128 => 32,
+        192 | 256 => 16,
+        _ => {
+            return Err(MetalKernelError::CompilationError(format!(
+                "flash_attn_sinks: unsupported head_dim={head_dim}"
+            )))
+        }
+    };
+
+    let name = format!("flash_attn_sinks_{type_name}_hd{head_dim}_br{br}_bc{bc}");
+    let pipeline = kernels.load_pipeline(device, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    // Shared memory: k_smem[BC * D_PAD] + v_smem[BC * D_PAD] in float32
+    let d_pad = ((head_dim + 31) / 32) * 32;
+    let shared_mem_size = 2 * bc * d_pad * std::mem::size_of::<f32>();
+    encoder.set_threadgroup_memory_length(0, shared_mem_size);
+
+    let q_len_i32 = q_len as i32;
+    let k_len_i32 = k_len as i32;
+    let num_heads_i32 = num_heads as i32;
+    let num_kv_heads_i32 = num_kv_heads as i32;
+    let window_size_i32 = window_size as i32;
+
+    set_params!(
+        encoder,
+        (
+            (q_buffer, q_offset),
+            (k_buffer, k_offset),
+            (v_buffer, v_offset),
+            (sinks_buffer, sinks_offset),
+            output,
+            scale,
+            q_len_i32,
+            k_len_i32,
+            num_heads_i32,
+            num_kv_heads_i32,
+            window_size_i32
+        )
+    );
+
+    let grid_dims = MTLSize {
+        width: num_heads,
+        height: batch_size,
+        depth: (q_len + br - 1) / br,
+    };
+    let group_dims = MTLSize {
+        width: br * 32,
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
+/// Dispatches `flash_attn_sinks_varlen_kernel` Metal kernel.
+#[allow(clippy::too_many_arguments)]
+pub fn call_flash_attn_sinks_varlen_prefill(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    q_buffer: &Buffer,
+    q_offset: usize,
+    k_buffer: &Buffer,
+    k_offset: usize,
+    v_buffer: &Buffer,
+    v_offset: usize,
+    sinks_buffer: &Buffer,
+    sinks_offset: usize,
+    output: &Buffer,
+    cu_seqlens_q_buffer: &Buffer,
+    cu_seqlens_q_offset: usize,
+    cu_seqlens_k_buffer: &Buffer,
+    cu_seqlens_k_offset: usize,
+    scale: f32,
+    batch_size: usize,
+    max_q_len: usize,
+    num_heads: usize,
+    num_kv_heads: usize,
+    head_dim: usize,
+    window_size: usize,
+) -> Result<(), MetalKernelError> {
+    let type_name = sdpa_with_sinks_dtype_name(ty)?;
+
+    let br: usize = 8;
+    let bc: usize = match head_dim {
+        64 => 64,
+        80 | 96 | 112 | 128 => 32,
+        192 | 256 => 16,
+        _ => {
+            return Err(MetalKernelError::CompilationError(format!(
+                "flash_attn_sinks_varlen: unsupported head_dim={head_dim}"
+            )))
+        }
+    };
+
+    let name = format!("flash_attn_sinks_varlen_{type_name}_hd{head_dim}_br{br}_bc{bc}");
+    let pipeline = kernels.load_pipeline(device, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    let d_pad = ((head_dim + 31) / 32) * 32;
+    let shared_mem_size = 2 * bc * d_pad * std::mem::size_of::<f32>();
+    encoder.set_threadgroup_memory_length(0, shared_mem_size);
+
+    let max_q_len_i32 = max_q_len as i32;
+    let num_heads_i32 = num_heads as i32;
+    let num_kv_heads_i32 = num_kv_heads as i32;
+    let window_size_i32 = window_size as i32;
+
+    set_params!(
+        encoder,
+        (
+            (q_buffer, q_offset),
+            (k_buffer, k_offset),
+            (v_buffer, v_offset),
+            (sinks_buffer, sinks_offset),
+            output,
+            (cu_seqlens_q_buffer, cu_seqlens_q_offset),
+            (cu_seqlens_k_buffer, cu_seqlens_k_offset),
+            scale,
+            max_q_len_i32,
+            num_heads_i32,
+            num_kv_heads_i32,
+            window_size_i32
+        )
+    );
+
+    let grid_dims = MTLSize {
+        width: num_heads,
+        height: batch_size,
+        depth: (max_q_len + br - 1) / br,
+    };
+    let group_dims = MTLSize {
+        width: br * 32,
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
+// ============================================================================
+// Scalar FP8 conversion kernels
+// ============================================================================
+
+/// Convert FP8 E4M3 tensor to another dtype (F32, F16, BF16)
+#[allow(clippy::too_many_arguments)]
+pub fn call_fp8_to_dtype(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    out_ty: DType,
+    input: &Buffer,
+    output: &Buffer,
+    num_elements: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match out_ty {
+        DType::F32 => "fp8_to_dtype_float",
+        DType::F16 => "fp8_to_dtype_half",
+        DType::BF16 => "fp8_to_dtype_bfloat16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (input, output, num_elements as u32));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, num_elements);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+/// Convert tensor (F32, F16, BF16) to FP8 E4M3 with clamping
+#[allow(clippy::too_many_arguments)]
+pub fn call_dtype_to_fp8(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    in_ty: DType,
+    input: &Buffer,
+    output: &Buffer,
+    num_elements: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match in_ty {
+        DType::F32 => "dtype_to_fp8_float",
+        DType::F16 => "dtype_to_fp8_half",
+        DType::BF16 => "dtype_to_fp8_bfloat16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (input, output, num_elements as u32));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, num_elements);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+/// Per-tensor FP8 dequantization: output = fp8_weight * scale_inv
+#[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
+pub fn call_fp8_pertensor_dequant(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    out_ty: DType,
+    weight: &Buffer,
+    scale_inv: &Buffer,
+    output: &Buffer,
+    num_elements: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match out_ty {
+        DType::F32 => "fp8_pertensor_dequant_float",
+        DType::F16 => "fp8_pertensor_dequant_half",
+        DType::BF16 => "fp8_pertensor_dequant_bfloat16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (weight, scale_inv, output, num_elements as u32));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, num_elements);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+/// Vector FP8 dequantization: output[i] = fp8_weight[i] * scale[i / 128]
+/// Each group of 128 elements shares one scale
+#[allow(clippy::too_many_arguments)]
+pub fn call_fp8_vector_dequant(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    out_ty: DType,
+    weight: &Buffer,
+    scale: &Buffer,
+    output: &Buffer,
+    num_elements: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match out_ty {
+        DType::F32 => "fp8_vector_dequant_float",
+        DType::F16 => "fp8_vector_dequant_half",
+        DType::BF16 => "fp8_vector_dequant_bfloat16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (weight, scale, output, num_elements as u32));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, num_elements);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }

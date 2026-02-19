@@ -21,7 +21,7 @@ Internally, we now use [google/embeddinggemma-300m](https://huggingface.co/googl
 
 - Rust: `with_search(SearchEmbeddingModel::EmbeddingGemma300M)` in the builder
 - Python: `search_embedding_model="embedding_gemma"` in the Runner
-- Server: `--search-embedding-model embedding_gemma` before the model type selector (`plain`/`vision-plain`)
+- Server: `--search-embedding-model embedding_gemma` flag
 
 ## Specifying a custom search callback
 
@@ -57,16 +57,16 @@ runner = Runner(
 
 Here are some examples using various models. Note that this works for both streaming and completion requests, so interactive mode is featured here!
 
-```
-./mistralrs-server --enable-search -i --isq 4 plain -m Qwen/Qwen3-4B
-```
-
-```
-./mistralrs-server --enable-search --port 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
+```bash
+mistralrs run --enable-search --isq 4 -m Qwen/Qwen3-4B
 ```
 
+```bash
+mistralrs serve --enable-search -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
 ```
-./mistralrs-server --enable-search -i --isq 4 plain -m NousResearch/Hermes-3-Llama-3.1-8B
+
+```bash
+mistralrs run --enable-search --isq 4 -m NousResearch/Hermes-3-Llama-3.1-8B
 ```
 
 ```py
@@ -99,7 +99,7 @@ if completion.choices[0].message.tool_calls is not None:
 ```
 
 
-## Python API
+## Python SDK
 ```py
 from mistralrs import (
     Runner,
@@ -116,7 +116,7 @@ def my_search_callback(query: str) -> list[dict[str, str]]:
         {
             "title": "Mistral.rs GitHub",
             "description": "Official mistral.rs repository",
-            "url": "https://github.com/huggingface/mistral.rs",
+            "url": "https://github.com/EricLBuehler/mistral.rs",
             "content": "mistral.rs is a Rust binding for Mistral models...",
         },
     ]
@@ -152,7 +152,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-## Rust API
+## Rust SDK
 ```rust
 use anyhow::Result;
 use mistralrs::{

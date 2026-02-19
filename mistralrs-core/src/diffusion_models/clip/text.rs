@@ -38,7 +38,7 @@ pub struct ClipConfig {
     pub text_config: ClipTextConfig,
 }
 
-// ClipTextEmbeddings mostly based on the existing implementation in the stable diffision model.
+// ClipTextEmbeddings mostly based on the existing implementation in the stable diffusion model.
 // TODO rewrite to be more similar to https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L142
 #[derive(Clone, Debug)]
 struct ClipTextEmbeddings {

@@ -2,7 +2,7 @@ use directories::ProjectDirs;
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    speech_utils, ChunkChoice, Constraint, Delta, DiffusionGenerationParams, DrySamplingParams,
+    speech_utils, Constraint, DiffusionGenerationParams, DrySamplingParams,
     ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory, NormalRequest,
     Request, RequestMessage, Response, ResponseOk, SamplingParams, WebSearchOptions,
     TERMINATE_ALL_NEXT_STEP,
@@ -314,6 +314,7 @@ async fn text_interactive_mode(
         let request_messages = RequestMessage::Chat {
             messages: messages.clone(),
             enable_thinking,
+            reasoning_effort: None,
         };
 
         let (tx, mut rx) = channel(10_000);
@@ -340,34 +341,43 @@ async fn text_interactive_mode(
 
         let mut assistant_output = String::new();
 
+        // ANSI escape codes for gray (muted) and reset
+        const GRAY: &str = "\x1b[90m";
+        const RESET: &str = "\x1b[0m";
+
         let mut last_usage = None;
         while let Some(resp) = rx.recv().await {
             match resp {
                 Response::Chunk(chunk) => {
                     last_usage = chunk.usage.clone();
-                    if let ChunkChoice {
-                        delta:
-                            Delta {
-                                content: Some(content),
-                                ..
-                            },
-                        finish_reason,
-                        ..
-                    } = &chunk.choices[0]
-                    {
-                        if first_token_duration.is_none() {
-                            let ttft = Instant::now().duration_since(start_ttft);
-                            first_token_duration = Some(ttft);
-                        }
+                    let choice = &chunk.choices[0];
+
+                    // Track first token timing
+                    let has_any_content =
+                        choice.delta.content.is_some() || choice.delta.reasoning_content.is_some();
+                    if has_any_content && first_token_duration.is_none() {
+                        let ttft = Instant::now().duration_since(start_ttft);
+                        first_token_duration = Some(ttft);
+                    }
+
+                    // Display reasoning content in gray (muted)
+                    if let Some(ref reasoning) = choice.delta.reasoning_content {
+                        print!("{GRAY}{reasoning}{RESET}");
+                        io::stdout().flush().unwrap();
+                    }
+
+                    // Display final content normally
+                    if let Some(ref content) = choice.delta.content {
                         assistant_output.push_str(content);
                         print!("{content}");
                         io::stdout().flush().unwrap();
-                        if finish_reason.is_some() {
-                            if matches!(finish_reason.as_ref().unwrap().as_str(), "length") {
-                                print!("...");
-                            }
-                            break;
+                    }
+
+                    if let Some(ref finish_reason) = choice.finish_reason {
+                        if matches!(finish_reason.as_str(), "length") {
+                            print!("...");
                         }
+                        break;
                     }
                 }
                 Response::InternalError(e) => {
@@ -618,6 +628,7 @@ async fn vision_interactive_mode(
             audios: audios.clone(),
             messages: messages.clone(),
             enable_thinking,
+            reasoning_effort: None,
         };
 
         let (tx, mut rx) = channel(10_000);
@@ -644,34 +655,43 @@ async fn vision_interactive_mode(
 
         let mut assistant_output = String::new();
 
+        // ANSI escape codes for gray (muted) and reset
+        const GRAY: &str = "\x1b[90m";
+        const RESET: &str = "\x1b[0m";
+
         let mut last_usage = None;
         while let Some(resp) = rx.recv().await {
             match resp {
                 Response::Chunk(chunk) => {
                     last_usage = chunk.usage.clone();
-                    if let ChunkChoice {
-                        delta:
-                            Delta {
-                                content: Some(content),
-                                ..
-                            },
-                        finish_reason,
-                        ..
-                    } = &chunk.choices[0]
-                    {
-                        if first_token_duration.is_none() {
-                            let ttft = Instant::now().duration_since(start_ttft);
-                            first_token_duration = Some(ttft);
-                        }
+                    let choice = &chunk.choices[0];
+
+                    // Track first token timing
+                    let has_any_content =
+                        choice.delta.content.is_some() || choice.delta.reasoning_content.is_some();
+                    if has_any_content && first_token_duration.is_none() {
+                        let ttft = Instant::now().duration_since(start_ttft);
+                        first_token_duration = Some(ttft);
+                    }
+
+                    // Display reasoning content in gray (muted)
+                    if let Some(ref reasoning) = choice.delta.reasoning_content {
+                        print!("{GRAY}{reasoning}{RESET}");
+                        io::stdout().flush().unwrap();
+                    }
+
+                    // Display final content normally
+                    if let Some(ref content) = choice.delta.content {
                         assistant_output.push_str(content);
                         print!("{content}");
                         io::stdout().flush().unwrap();
-                        if finish_reason.is_some() {
-                            if matches!(finish_reason.as_ref().unwrap().as_str(), "length") {
-                                print!("...");
-                            }
-                            break;
+                    }
+
+                    if let Some(ref finish_reason) = choice.finish_reason {
+                        if matches!(finish_reason.as_str(), "length") {
+                            print!("...");
                         }
+                        break;
                     }
                 }
                 Response::InternalError(e) => {
@@ -784,6 +804,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
                 prompt: prompt.to_string(),
                 format: ImageGenerationResponseFormat::Url,
                 generation_params: diffusion_params.clone(),
+                save_file: None,
             },
             sampling_params: SamplingParams::deterministic(),
             response: tx,

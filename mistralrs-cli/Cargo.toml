@@ -1,0 +1,64 @@
+[package]
+name = "mistralrs-cli"
+readme = "../README.md"
+authors = ["Eric Buehler"]
+version.workspace = true
+edition.workspace = true
+description = "Command-line interface for mistral.rs LLM inference"
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+rust-version.workspace = true
+default-run = "mistralrs"
+
+[[bin]]
+name = "mistralrs"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+mistralrs-core = { workspace = true }
+mistralrs-server-core = { workspace = true }
+mistralrs = { workspace = true }
+candle-core = { workspace = true }
+
+clap = { workspace = true }
+clap_complete = "4.5"
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+ctrlc = { workspace = true }
+rustyline = { workspace = true }
+directories = { workspace = true }
+axum = { workspace = true, features = ["multipart", "ws"] }
+either = { workspace = true }
+indexmap = { workspace = true }
+regex = { workspace = true }
+include_dir = { workspace = true }
+mime_guess = { workspace = true }
+tower-http = { workspace = true, features = ["fs"] }
+uuid = { workspace = true }
+chrono = { workspace = true }
+futures-util = { workspace = true }
+image = { workspace = true }
+comfy-table = "7"
+dirs = { workspace = true }
+walkdir = { workspace = true }
+
+[features]
+default = []
+cuda = ["mistralrs-core/cuda", "mistralrs-server-core/cuda"]
+nccl = ["mistralrs-core/nccl", "mistralrs-server-core/nccl"]
+cudnn = ["mistralrs-core/cudnn", "mistralrs-server-core/cudnn"]
+flash-attn = ["cuda", "mistralrs-core/flash-attn", "mistralrs-server-core/flash-attn"]
+flash-attn-v3 = ["cuda", "mistralrs-core/flash-attn-v3", "mistralrs-server-core/flash-attn-v3"]
+accelerate = ["mistralrs-core/accelerate", "mistralrs-server-core/accelerate"]
+metal = ["mistralrs-core/metal", "mistralrs-server-core/metal"]
+mkl = ["mistralrs-core/mkl", "mistralrs-server-core/mkl"]
+ring = ["mistralrs-core/ring", "mistralrs-server-core/ring"]

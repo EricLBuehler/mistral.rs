@@ -8,8 +8,8 @@ For the first $k$ generation steps, the scalings are calculated normally for eac
 ## How to use it
 ### Command line
 This can be enabled by passing `--tgt-non-granular-index` followed by $k$:
-```
-./mistralrs-server --port 1234 x-lora-plain -o orderings/xlora-paper-ordering.json -x lamm-mit/x-lora --tgt-non-granular-index 5
+```bash
+mistralrs serve -p 1234 --xlora lamm-mit/x-lora --xlora-order orderings/xlora-paper-ordering.json --tgt-non-granular-index 5
 ```
 
 ### Python

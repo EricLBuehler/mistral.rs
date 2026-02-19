@@ -8,19 +8,21 @@ use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
     parse_isq_value, AutoDeviceMapParams, DefaultSchedulerMethod, DeviceLayerMapMetadata,
     DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder, McpClientConfig, MemoryGpuConfig,
-    MistralRsBuilder, ModelSelected, PagedAttentionConfig, PagedCacheType, SchedulerConfig,
-    SearchCallback, SearchEmbeddingModel, TokenSource,
+    MistralRsBuilder, ModelLoaderConfig, ModelSelected, PagedAttentionConfig, PagedCacheType,
+    SchedulerConfig, SearchCallback, SearchEmbeddingModel, TokenSource,
 };
 use tracing::{info, warn};
 
 use crate::types::{LoadedPipeline, SharedMistralRsState};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Configuration for a single model in a multi-model setup
 #[derive(Clone, serde::Deserialize)]
 pub struct ModelConfig {
-    /// Model identifier (used in API requests)
+    /// Configuration key for this model (human-friendly label)
     pub model_id: String,
+    /// Optional alias used as the API model ID
+    pub alias: Option<String>,
     /// Model selector
     pub model: ModelSelected,
     /// Model-specific chat template
@@ -37,6 +39,7 @@ impl ModelConfig {
     pub fn new(model_id: String, model: ModelSelected) -> Self {
         Self {
             model_id,
+            alias: None,
             model,
             chat_template: None,
             jinja_explicit: None,
@@ -47,6 +50,11 @@ impl ModelConfig {
 
     pub fn with_chat_template(mut self, chat_template: String) -> Self {
         self.chat_template = Some(chat_template);
+        self
+    }
+
+    pub fn with_alias(mut self, alias: String) -> Self {
+        self.alias = Some(alias);
         self
     }
 
@@ -351,6 +359,18 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Add a model with a custom alias used for API requests.
+    pub fn add_model_with_alias(
+        mut self,
+        model_id: String,
+        alias: String,
+        model: ModelSelected,
+    ) -> Self {
+        self.models
+            .push(ModelConfig::new(model_id, model).with_alias(alias));
+        self
+    }
+
     /// Sets the maximum number of concurrent sequences.
     pub fn with_max_seqs(mut self, max_seqs: usize) -> Self {
         self.max_seqs = max_seqs;
@@ -598,8 +618,6 @@ impl MistralRsForServerBuilder {
             self.max_seqs = 1;
         }
 
-        let max_seq_len = auto_device_map_params.max_seq_len();
-
         let device = if let Some(device) = self.device {
             device
         } else {
@@ -616,8 +634,14 @@ impl MistralRsForServerBuilder {
             self.paged_ctxt_len,
             self.paged_cache_type,
             !paged_attn,
-            max_seq_len,
         )?;
+
+        // Clone values needed for loader config before they're moved
+        let model_for_config = model.clone();
+        let token_source_for_config = self.token_source.clone();
+        let mapper_for_config = mapper.clone();
+        let chat_template_for_config = self.chat_template.clone();
+        let jinja_explicit_for_config = self.jinja_explicit.clone();
 
         // Configure this last to prevent arg moves
         let loader: Box<dyn Loader> = LoaderBuilder::new(model)
@@ -650,6 +674,21 @@ impl MistralRsForServerBuilder {
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
 
+        // Create loader config for unload/reload support
+        let loader_config = ModelLoaderConfig {
+            model_selected: model_for_config,
+            token_source: token_source_for_config,
+            hf_revision: None,
+            dtype,
+            device: device.clone(),
+            device_map_setting: mapper_for_config,
+            isq,
+            paged_attn_config: cache_config,
+            silent: false,
+            chat_template: chat_template_for_config,
+            jinja_explicit: jinja_explicit_for_config,
+        };
+
         let mut builder = MistralRsBuilder::new(
             pipeline,
             scheduler_config,
@@ -658,7 +697,8 @@ impl MistralRsForServerBuilder {
         )
         .with_opt_log(self.log)
         .with_no_kv_cache(self.no_kv_cache)
-        .with_prefix_cache_n(self.prefix_cache_n);
+        .with_prefix_cache_n(self.prefix_cache_n)
+        .with_loader_config(loader_config);
 
         // Add MCP client configuration if provided
         if let Some(mcp_config) = self.mcp_client_config {
@@ -687,8 +727,6 @@ impl MistralRsForServerBuilder {
         if tgt_non_granular_index.is_some() {
             self.max_seqs = 1;
         }
-
-        let max_seq_len = auto_device_map_params.max_seq_len();
 
         let device = if let Some(device) = self.device {
             device
@@ -731,7 +769,6 @@ impl MistralRsForServerBuilder {
             self.paged_ctxt_len,
             self.paged_cache_type,
             !paged_attn,
-            max_seq_len,
         )?;
 
         let isq = first_model
@@ -740,7 +777,8 @@ impl MistralRsForServerBuilder {
             .or(self.in_situ_quant.as_ref())
             .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
 
-        let mut pipeline_names = Vec::new();
+        let mut loaded_model_ids = Vec::new();
+        let mut registered_ids = HashSet::new();
 
         let pipeline: LoadedPipeline = loader.load_model_from_hf(
             None,
@@ -753,11 +791,31 @@ impl MistralRsForServerBuilder {
             cache_config,
         )?;
         let first_pipeline_name = pipeline.lock().await.name();
-        info!(
-            "First model loaded: `{first_pipeline_name}` (from config key: {})",
-            first_model.model_id
-        );
-        pipeline_names.push(first_pipeline_name);
+        let first_primary_id = first_model
+            .alias
+            .clone()
+            .unwrap_or_else(|| first_pipeline_name.clone());
+
+        if !registered_ids.insert(first_primary_id.clone()) {
+            anyhow::bail!(
+                "Model ID conflict: '{}' is already registered (config key: {}).",
+                first_primary_id,
+                first_model.model_id
+            );
+        }
+
+        if first_primary_id == first_pipeline_name {
+            info!(
+                "First model loaded: `{}` (from config key: {})",
+                first_primary_id, first_model.model_id
+            );
+        } else {
+            info!(
+                "First model loaded: `{}` (pipeline: `{}`; config key: {})",
+                first_primary_id, first_pipeline_name, first_model.model_id
+            );
+        }
+        loaded_model_ids.push(first_primary_id.clone());
 
         let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
         let search_embedding_model =
@@ -773,6 +831,9 @@ impl MistralRsForServerBuilder {
         .with_opt_log(self.log.clone())
         .with_no_kv_cache(self.no_kv_cache)
         .with_prefix_cache_n(self.prefix_cache_n);
+        if first_primary_id != first_pipeline_name {
+            builder = builder.with_model_id(first_primary_id.clone());
+        }
 
         // Add MCP client configuration if provided
         if let Some(mcp_config) = self.mcp_client_config.clone() {
@@ -780,6 +841,14 @@ impl MistralRsForServerBuilder {
         }
 
         let mistralrs = builder.build().await;
+
+        if let Some(alias) = first_model.alias.as_ref() {
+            if alias != &first_pipeline_name {
+                mistralrs
+                    .register_model_alias(first_pipeline_name.clone(), &first_primary_id)
+                    .map_err(|e| anyhow::anyhow!(e))?;
+            }
+        }
 
         // Load additional models
         for model_config in self.models.iter().skip(1) {
@@ -833,14 +902,17 @@ impl MistralRsForServerBuilder {
                 cache_config,
             )?;
 
-            // Use the pipeline's name() as the model ID
+            // Use the pipeline's name() as the canonical ID, but allow an alias.
             let pipeline_name = pipeline.lock().await.name();
+            let primary_id = model_config
+                .alias
+                .clone()
+                .unwrap_or_else(|| pipeline_name.clone());
 
-            // Check for model ID conflicts
-            if pipeline_names.contains(&pipeline_name) {
+            if !registered_ids.insert(primary_id.clone()) {
                 anyhow::bail!(
-                    "Model ID conflict: '{}' is already registered. Models from config keys '{}' and previous models have the same pipeline identifier.",
-                    pipeline_name,
+                    "Model ID conflict: '{}' is already registered (config key: {}).",
+                    primary_id,
                     model_config.model_id
                 );
             }
@@ -865,19 +937,34 @@ impl MistralRsForServerBuilder {
 
             mistralrs
                 .add_model(
-                    pipeline_name.clone(),
+                    primary_id.clone(),
                     pipeline,
                     scheduler_config.clone(),
                     add_model_config,
                 )
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to add model {}: {}", pipeline_name, e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to add model {}: {}", primary_id, e))?;
 
-            info!(
-                "Model `{pipeline_name}` registered successfully (from config key: {})",
-                model_config.model_id
-            );
-            pipeline_names.push(pipeline_name);
+            if let Some(alias) = model_config.alias.as_ref() {
+                if alias != &pipeline_name {
+                    mistralrs
+                        .register_model_alias(pipeline_name.clone(), &primary_id)
+                        .map_err(|e| anyhow::anyhow!(e))?;
+                }
+            }
+
+            if primary_id == pipeline_name {
+                info!(
+                    "Model `{}` registered successfully (from config key: {})",
+                    primary_id, model_config.model_id
+                );
+            } else {
+                info!(
+                    "Model `{}` registered successfully (pipeline: `{}`; config key: {})",
+                    primary_id, pipeline_name, model_config.model_id
+                );
+            }
+            loaded_model_ids.push(primary_id);
         }
 
         // Set the default model if specified
@@ -888,7 +975,7 @@ impl MistralRsForServerBuilder {
         }
 
         // Log all models loaded
-        info!("All models loaded: `{}`", pipeline_names.join("`, `"));
+        info!("All models loaded: `{}`", loaded_model_ids.join("`, `"));
 
         // Log default model
         if let Some(ref default_id) = self.default_model_id {
@@ -896,7 +983,7 @@ impl MistralRsForServerBuilder {
         } else {
             info!(
                 "Default model: {} (first model, from config key: {})",
-                pipeline_names[0], self.models[0].model_id
+                loaded_model_ids[0], self.models[0].model_id
             );
         }
         Ok(mistralrs)
@@ -1010,7 +1097,6 @@ fn init_cache_config(
     paged_ctxt_len: Option<usize>,
     cache_type: PagedCacheType,
     no_paged_attn: bool,
-    max_seq_len: usize,
 ) -> Result<Option<PagedAttentionConfig>> {
     match (
         paged_attn_block_size,
@@ -1022,7 +1108,7 @@ fn init_cache_config(
     ) {
         (block_size, None, None, None, true, false) => Ok(Some(PagedAttentionConfig::new(
             block_size,
-            MemoryGpuConfig::ContextSize(max_seq_len),
+            MemoryGpuConfig::Utilization(0.9),
             cache_type,
         )?)),
         (block_size, None, None, Some(ctxt), true, false) => Ok(Some(PagedAttentionConfig::new(

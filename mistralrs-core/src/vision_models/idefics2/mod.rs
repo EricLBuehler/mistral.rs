@@ -6,7 +6,11 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
 use mistralrs_quant::{Convolution, ShardedVarBuilder};
 use serde::Deserialize;
-use std::{any::Any, ops::Mul};
+use std::{
+    any::Any,
+    ops::Mul,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
@@ -16,7 +20,9 @@ use crate::{
         MatMul, QLinear, RmsNorm,
     },
     models::mistral::Model as Mistral,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
@@ -187,6 +193,7 @@ impl From<TextConfig> for mistral::Config {
             max_position_embeddings: val.max_position_embeddings,
             rms_norm_eps: val.rms_norm_eps,
             rope_theta: val.rope_theta,
+            rope_parameters: None,
             sliding_window: val.sliding_window,
             head_dim: None,
             quantization_config: None,
@@ -236,7 +243,7 @@ fn bucketize_right(xs: &[f32], boundaries: &[f32], device: &Device) -> Result<Te
             // For robust handling of NaNs, you might need a custom comparison.
             val.partial_cmp(&x).unwrap_or(Ordering::Less)
         }) {
-            Ok(i) => i,
+            Ok(i) => i + 1,
             Err(i) => i,
         };
 
@@ -993,12 +1000,18 @@ impl Connector {
 
 // == START MODEL ==
 
+pub(crate) struct Idefics2SpecificArgs {
+    pub pixel_attention_mask: Option<Tensor>,
+    pub image_hashes: Vec<u64>,
+}
+
 pub struct Idefics2 {
     vision_model: VisionTransformer,
     connector: Connector,
     text_model: Mistral,
     dtype: DType,
     config: Config,
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
 impl Idefics2 {
@@ -1033,6 +1046,7 @@ impl Idefics2 {
             text_model,
             dtype: vb.dtype(),
             config: config.clone(),
+            encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
     }
 
@@ -1088,6 +1102,7 @@ impl Idefics2 {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         pixel_attention_mask: Option<Tensor>,
+        image_hashes: &[u64],
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -1163,16 +1178,55 @@ impl Idefics2 {
 
             let pixel_values = pixel_values.to_dtype(self.dtype)?;
 
-            // Get seq from vision encoder
-            let image_hidden_states = self
-                .vision_model
-                .forward(&pixel_values, Some(&patch_attention_mask))?;
-
-            // Modality proj and perceiver resampling
-            let image_hidden_states = self.connector.forward(
-                &image_hidden_states,
-                &patch_attention_mask.reshape((pixel_values.dim(0)?, ()))?,
-            )?;
+            // Get seq from vision encoder + connector, with per-image caching
+            let image_hidden_states = if !image_hashes.is_empty() {
+                let n = pixel_values.dim(0)?;
+                let mut per_image: Vec<Option<Tensor>> = vec![None; n];
+                let mut miss_indices: Vec<usize> = Vec::new();
+                {
+                    let mut guard = self
+                        .encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned");
+                    for (i, &hash) in image_hashes.iter().enumerate() {
+                        if let Some(cached) = guard.get(hash) {
+                            per_image[i] = Some(cached[0].clone());
+                        } else {
+                            miss_indices.push(i);
+                        }
+                    }
+                }
+                if !miss_indices.is_empty() {
+                    for &i in &miss_indices {
+                        let pv = pixel_values.get(i)?.unsqueeze(0)?;
+                        let mask = patch_attention_mask.get(i)?.unsqueeze(0)?;
+                        let hidden = self.vision_model.forward(&pv, Some(&mask))?;
+                        let hidden = self
+                            .connector
+                            .forward(&hidden, &mask.reshape((1_usize, ()))?)?;
+                        let result = hidden.squeeze(0)?;
+                        {
+                            let mut guard = self
+                                .encoder_cache
+                                .lock()
+                                .expect("encoder cache lock poisoned");
+                            guard.insert(image_hashes[i], vec![result.clone()]);
+                        }
+                        per_image[i] = Some(result);
+                    }
+                }
+                let slices: Vec<Tensor> = per_image.into_iter().map(|t| t.unwrap()).collect();
+                Tensor::stack(&slices, 0)?
+            } else {
+                // No caching: original path
+                let image_hidden_states = self
+                    .vision_model
+                    .forward(&pixel_values, Some(&patch_attention_mask))?;
+                self.connector.forward(
+                    &image_hidden_states,
+                    &patch_attention_mask.reshape((pixel_values.dim(0)?, ()))?,
+                )?
+            };
 
             self.inputs_merger(
                 input_ids,
@@ -1268,15 +1322,19 @@ impl VisionModel for Idefics2 {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
-        let pixel_attention_mask: Option<Tensor> = *model_specific_args
+        let Idefics2SpecificArgs {
+            pixel_attention_mask,
+            image_hashes,
+        } = *model_specific_args
             .downcast()
-            .expect("Cannot downcast into `Option<Tensor>`");
+            .expect("Cannot downcast into `Idefics2SpecificArgs`");
         self.forward_inner(
             input_ids,
             pixel_values,
             seqlen_offsets,
             context_lens,
             pixel_attention_mask,
+            &image_hashes,
             metadata,
             flash_params,
         )
@@ -1297,7 +1355,22 @@ impl VisionModel for Idefics2 {
         self.text_model.config()
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
-        let args: Option<Tensor> = None;
-        Box::new(args)
+        Box::new(Idefics2SpecificArgs {
+            pixel_attention_mask: None,
+            image_hashes: vec![],
+        })
+    }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
     }
 }

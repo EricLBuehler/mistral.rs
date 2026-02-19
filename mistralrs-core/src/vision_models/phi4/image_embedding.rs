@@ -1,6 +1,6 @@
 use std::{
     fmt::Debug,
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, Mutex},
 };
 
 use candle_core::{shape::ShapeWithOneHole, DType, Device, IndexOp, Result, Shape, Tensor, D};
@@ -9,6 +9,7 @@ use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 
 use crate::{
     layers::{AvgPool2d, ReflectionPad2d},
+    paged_attention::encoder_cache::EncoderCacheManager,
     utils::unvarbuilder::UnVarBuilder,
     vision_models::{
         phi4::config::Phi4MMImgProcessorConfig,
@@ -59,7 +60,7 @@ fn hole_size(el_count: usize, prod_d: usize, s: &dyn std::fmt::Debug) -> Result<
     if prod_d == 0 {
         candle_core::bail!("cannot reshape tensor of {el_count} elements to {s:?}")
     }
-    if el_count % prod_d != 0 {
+    if !el_count.is_multiple_of(prod_d) {
         candle_core::bail!("cannot reshape tensor with {el_count} elements to {s:?}")
     }
     Ok(el_count / prod_d)
@@ -134,7 +135,7 @@ impl ImageEmbedding {
         let (l, d) = pe_weight.dims2()?;
         let mut m = (l as f64).sqrt() as usize;
         assert_eq!(m.pow(2), l);
-        let img_processor_padding = if m % 2 != 0 {
+        let img_processor_padding = if !m.is_multiple_of(2) {
             m += 1;
             Some(ReflectionPad2d::new((0, 1, 0, 1)))
         } else {
@@ -384,6 +385,8 @@ impl ImageEmbedding {
         input_embeds: &Tensor,
         image_attention_mask: Option<&Tensor>,
         image_sizes: Option<Vec<(u32, u32)>>,
+        image_hashes: &[u64],
+        encoder_cache: &Mutex<EncoderCacheManager>,
     ) -> Result<Tensor> {
         let input_ids = input_ids.reshape(((), input_ids.dim(D::Minus1)?))?;
 
@@ -401,120 +404,147 @@ impl ImageEmbedding {
                 if let Some(image_sizes_ref) = image_sizes.as_ref() {
                     assert_eq!(input_embeds.dims().len(), 5);
                     let bs = input_embeds.dim(0)?;
-                    let img_features = match image_attention_mask {
-                        Some(attn_mask) => self.get_image_features(
-                            &input_embeds.flatten(0, 1)?,
-                            Some(&attn_mask.ne(0.)?.flatten(0, 1)?),
-                        )?,
-                        None => self.get_image_features(input_embeds, None)?,
+
+                    // Check encoder cache for all images
+                    let all_cached = if !image_hashes.is_empty() && image_hashes.len() == bs {
+                        let mut guard = encoder_cache.lock().expect("encoder cache lock poisoned");
+                        let mut cached_results = Vec::with_capacity(bs);
+                        let mut all_hit = true;
+                        for &hash in image_hashes {
+                            if let Some(cached) = guard.get(hash) {
+                                cached_results.push(cached[0].clone());
+                            } else {
+                                all_hit = false;
+                                break;
+                            }
+                        }
+                        if all_hit {
+                            Some(cached_results)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
                     };
 
-                    let base_feat_height_target = self.base_feat_height_target.unwrap();
-                    let base_resolution = self.crop_size;
-                    let base_feat_height_reduction = self.base_feat_height_reduction;
+                    if let Some(cached_results) = all_cached {
+                        image_set_tensor = Some(cached_results);
+                    } else {
+                        let img_features = match image_attention_mask {
+                            Some(attn_mask) => self.get_image_features(
+                                &input_embeds.flatten(0, 1)?,
+                                Some(&attn_mask.ne(0.)?.flatten(0, 1)?),
+                            )?,
+                            None => self.get_image_features(input_embeds, None)?,
+                        };
 
-                    let base_feat_height = (img_features.dim(1)? as f64).sqrt() as usize;
-                    let base_feat_width = base_feat_height;
+                        let base_feat_height_target = self.base_feat_height_target.unwrap();
+                        let base_resolution = self.crop_size;
+                        let base_feat_height_reduction = self.base_feat_height_reduction;
 
-                    assert_eq!(base_feat_height, base_feat_height_target);
-                    assert_eq!(base_feat_width, base_feat_height_target);
+                        let base_feat_height = (img_features.dim(1)? as f64).sqrt() as usize;
+                        let base_feat_width = base_feat_height;
 
-                    let img_features = img_features.reshape((
-                        bs,
-                        (),
-                        base_feat_height * base_feat_width,
-                        self.image_dim_out,
-                    ))?;
-                    let C = self.image_dim_out;
-                    let H = base_feat_height;
+                        assert_eq!(base_feat_height, base_feat_height_target);
+                        assert_eq!(base_feat_width, base_feat_height_target);
 
-                    let mut output_imgs = Vec::new();
-                    for (bs_, &(h, w)) in image_sizes_ref.iter().enumerate().take(bs) {
-                        let h = h as usize / base_resolution;
-                        let w = w as usize / base_resolution;
-                        let B_ = h * w;
-
-                        // 1 x (24x24) x 1024
-                        let global_img_feature = img_features.i((bs_, ..1))?;
-
-                        // 1 x 12 x 12 x 4096
-                        let glb_img = global_img_feature
-                            .reshape((1, H, H, C))?
-                            .reshape((
-                                1,
-                                H / base_feat_height_reduction,
-                                base_feat_height_reduction,
-                                H / base_feat_height_reduction,
-                                base_feat_height_reduction,
-                                C,
-                            ))?
-                            .contiguous()?
-                            .permute((0, 1, 3, 2, 4, 5))?
-                            .reshape((
-                                1,
-                                H / base_feat_height_reduction,
-                                H / base_feat_height_reduction,
-                                base_feat_height_reduction * base_feat_height_reduction * C,
-                            ))?
-                            .contiguous()?;
-                        let temp_glbl_gn = self
-                            .sub_gn
-                            .as_ref()
-                            .expect("Need `sub_gn` if `use_hd_transform`")
-                            .repeat((1, H / base_feat_height_reduction, 1, 1))?;
-
-                        // 1 x 156 x 4096
-                        let glb_img = Tensor::cat(&[glb_img, temp_glbl_gn], 2)?.reshape((
-                            1,
+                        let img_features = img_features.reshape((
+                            bs,
                             (),
-                            base_feat_height_reduction * base_feat_height_reduction * C,
+                            base_feat_height * base_feat_width,
+                            self.image_dim_out,
                         ))?;
+                        let C = self.image_dim_out;
+                        let H = base_feat_height;
 
-                        // (max_num_crops-1) x (12x12) x C
-                        let mut sub_img = img_features.i((bs_, 1..))?;
+                        let mut output_imgs = Vec::new();
+                        for (bs_, &(h, w)) in image_sizes_ref.iter().enumerate().take(bs) {
+                            let h = h as usize / base_resolution;
+                            let w = w as usize / base_resolution;
+                            let B_ = h * w;
 
-                        // 16x574x1024
-                        // Get rid of padding sub_img
-                        sub_img = sub_img.i(..B_)?;
+                            // 1 x (24x24) x 1024
+                            let global_img_feature = img_features.i((bs_, ..1))?;
 
-                        // (num_crops, 12, 2, 12, 2, 1024) -> (num_crops, 12, 12, 2, 2, 1024) -> (num_crops, 12*12, 4*1024)
-                        sub_img = sub_img
-                            .reshape((B_, H, H, C))?
-                            .reshape((
-                                B_,
-                                H / base_feat_height_reduction,
-                                base_feat_height_reduction,
-                                H / base_feat_height_reduction,
-                                base_feat_height_reduction,
-                                C,
-                            ))?
-                            .contiguous()?
-                            .permute((0, 1, 3, 2, 4, 5))?
-                            .reshape((
-                                B_,
-                                (),
-                                base_feat_height_reduction * base_feat_height_reduction * C,
-                            ))?
-                            .contiguous()?;
-                        sub_img = sub_img
-                            .reshape(BigShapeWithOneHole((
-                                1usize,
-                                h,
-                                w,
-                                base_feat_height / base_feat_height_reduction,
-                                base_feat_width / base_feat_height_reduction,
-                                (),
-                            )))?
-                            .permute((0, 1, 3, 2, 4, 5))?
-                            .reshape((
+                            // 1 x 12 x 12 x 4096
+                            let glb_img = global_img_feature
+                                .reshape((1, H, H, C))?
+                                .reshape((
+                                    1,
+                                    H / base_feat_height_reduction,
+                                    base_feat_height_reduction,
+                                    H / base_feat_height_reduction,
+                                    base_feat_height_reduction,
+                                    C,
+                                ))?
+                                .contiguous()?
+                                .permute((0, 1, 3, 2, 4, 5))?
+                                .reshape((
+                                    1,
+                                    H / base_feat_height_reduction,
+                                    H / base_feat_height_reduction,
+                                    base_feat_height_reduction * base_feat_height_reduction * C,
+                                ))?
+                                .contiguous()?;
+                            let temp_glbl_gn = self
+                                .sub_gn
+                                .as_ref()
+                                .expect("Need `sub_gn` if `use_hd_transform`")
+                                .repeat((1, H / base_feat_height_reduction, 1, 1))?;
+
+                            // 1 x 156 x 4096
+                            let glb_img = Tensor::cat(&[glb_img, temp_glbl_gn], 2)?.reshape((
                                 1,
-                                h * base_feat_height / base_feat_height_reduction,
-                                w * base_feat_width / base_feat_height_reduction,
+                                (),
                                 base_feat_height_reduction * base_feat_height_reduction * C,
                             ))?;
 
-                        let (temp_sub_GN, temp_len) =
-                            if let Some(image_attention_mask) = image_attention_mask {
+                            // (max_num_crops-1) x (12x12) x C
+                            let mut sub_img = img_features.i((bs_, 1..))?;
+
+                            // 16x574x1024
+                            // Get rid of padding sub_img
+                            sub_img = sub_img.i(..B_)?;
+
+                            // (num_crops, 12, 2, 12, 2, 1024) -> (num_crops, 12, 12, 2, 2, 1024) -> (num_crops, 12*12, 4*1024)
+                            sub_img = sub_img
+                                .reshape((B_, H, H, C))?
+                                .reshape((
+                                    B_,
+                                    H / base_feat_height_reduction,
+                                    base_feat_height_reduction,
+                                    H / base_feat_height_reduction,
+                                    base_feat_height_reduction,
+                                    C,
+                                ))?
+                                .contiguous()?
+                                .permute((0, 1, 3, 2, 4, 5))?
+                                .reshape((
+                                    B_,
+                                    (),
+                                    base_feat_height_reduction * base_feat_height_reduction * C,
+                                ))?
+                                .contiguous()?;
+                            sub_img = sub_img
+                                .reshape(BigShapeWithOneHole((
+                                    1usize,
+                                    h,
+                                    w,
+                                    base_feat_height / base_feat_height_reduction,
+                                    base_feat_width / base_feat_height_reduction,
+                                    (),
+                                )))?
+                                .permute((0, 1, 3, 2, 4, 5))?
+                                .reshape((
+                                    1,
+                                    h * base_feat_height / base_feat_height_reduction,
+                                    w * base_feat_width / base_feat_height_reduction,
+                                    base_feat_height_reduction * base_feat_height_reduction * C,
+                                ))?;
+
+                            let (temp_sub_GN, temp_len) = if let Some(image_attention_mask) =
+                                image_attention_mask
+                            {
                                 let h_indices = Tensor::arange_step(
                                     0,
                                     image_attention_mask.dim(2)? as u32,
@@ -600,59 +630,66 @@ impl ImageEmbedding {
                                 )
                             };
 
-                        let sub_img = Tensor::cat(&[sub_img, temp_sub_GN], 2)?.reshape((
-                            1,
-                            (),
-                            base_feat_height_reduction * base_feat_height_reduction * C,
-                        ))?;
+                            let sub_img = Tensor::cat(&[sub_img, temp_sub_GN], 2)?.reshape((
+                                1,
+                                (),
+                                base_feat_height_reduction * base_feat_height_reduction * C,
+                            ))?;
 
-                        // (1, num_img_tokens, 1024*4)
+                            // (1, num_img_tokens, 1024*4)
 
-                        // glb + sub
-                        match self.hd_transform_order.as_str() {
-                            "glb_sub" => {
-                                output_imgs.push(Tensor::cat(
-                                    &[
-                                        glb_img,
-                                        self.glb_gn
-                                            .as_ref()
-                                            .expect("Need `glb_gn` if `use_hd_transform`")
-                                            .clone(),
-                                        sub_img,
-                                    ],
-                                    1,
-                                )?);
+                            // glb + sub
+                            match self.hd_transform_order.as_str() {
+                                "glb_sub" => {
+                                    output_imgs.push(Tensor::cat(
+                                        &[
+                                            glb_img,
+                                            self.glb_gn
+                                                .as_ref()
+                                                .expect("Need `glb_gn` if `use_hd_transform`")
+                                                .clone(),
+                                            sub_img,
+                                        ],
+                                        1,
+                                    )?);
+                                }
+                                "sub_glb" => {
+                                    output_imgs.push(Tensor::cat(
+                                        &[
+                                            sub_img,
+                                            self.glb_gn
+                                                .as_ref()
+                                                .expect("Need `glb_gn` if `use_hd_transform`")
+                                                .clone(),
+                                            glb_img,
+                                        ],
+                                        1,
+                                    )?);
+                                }
+                                other => {
+                                    candle_core::bail!("Invalid hd_transform_order=`{other}`");
+                                }
                             }
-                            "sub_glb" => {
-                                output_imgs.push(Tensor::cat(
-                                    &[
-                                        sub_img,
-                                        self.glb_gn
-                                            .as_ref()
-                                            .expect("Need `glb_gn` if `use_hd_transform`")
-                                            .clone(),
-                                        glb_img,
-                                    ],
-                                    1,
-                                )?);
-                            }
-                            other => {
-                                candle_core::bail!("Invalid hd_transform_order=`{other}`");
-                            }
+
+                            // (h*w+1)*144 + 1 + (h+1)*12
+                            assert_eq!(temp_len, output_imgs.last().unwrap().dims()[1]);
                         }
 
-                        // (h*w+1)*144 + 1 + (h+1)*12
-                        assert_eq!(temp_len, output_imgs.last().unwrap().dims()[1]);
-                    }
-
-                    let mut image_set_tensor_inner = Vec::new();
-                    for img in output_imgs {
-                        let layerout = self
-                            .layers
-                            .forward(&img.to_device(&target_dev)?.to_dtype(target_dtype)?)?;
-                        image_set_tensor_inner.push(layerout);
-                    }
-                    image_set_tensor = Some(image_set_tensor_inner);
+                        let mut image_set_tensor_inner = Vec::new();
+                        for (idx, img) in output_imgs.into_iter().enumerate() {
+                            let layerout = self
+                                .layers
+                                .forward(&img.to_device(&target_dev)?.to_dtype(target_dtype)?)?;
+                            // Cache each image's projected features
+                            if idx < image_hashes.len() {
+                                let mut guard =
+                                    encoder_cache.lock().expect("encoder cache lock poisoned");
+                                guard.insert(image_hashes[idx], vec![layerout.clone()]);
+                            }
+                            image_set_tensor_inner.push(layerout);
+                        }
+                        image_set_tensor = Some(image_set_tensor_inner);
+                    } // close else (cache miss)
                 }
             } else {
                 unreachable!()

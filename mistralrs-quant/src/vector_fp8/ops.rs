@@ -178,12 +178,44 @@ impl CustomOp2 for Fp8VectorDequantize {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        _scale_s: &candle_core::MetalStorage,
-        _scale_l: &candle_core::Layout,
-        _weight_s: &candle_core::MetalStorage,
-        _weight_l: &candle_core::Layout,
+        scale_s: &candle_core::MetalStorage,
+        scale_l: &candle_core::Layout,
+        weight_s: &candle_core::MetalStorage,
+        weight_l: &candle_core::Layout,
     ) -> Result<(candle_core::MetalStorage, candle_core::Shape)> {
-        candle_core::bail!("FP8 vector dequantization not yet implemented for Metal");
+        use candle_core::backend::BackendStorage;
+
+        if weight_l.start_offset() != 0 || !weight_l.is_contiguous() {
+            candle_core::bail!("Expected weight to have start offset 0, continuous");
+        }
+        if scale_l.start_offset() != 0 || !scale_l.is_contiguous() {
+            candle_core::bail!("Expected scales to have start offset 0, continuous");
+        }
+
+        let device = weight_s.device();
+        let encoder = device.command_encoder()?;
+        encoder.set_label("fp8-vector-dequant");
+
+        let num_elements = weight_l.shape().elem_count();
+        let out_shape = weight_l.shape().clone();
+
+        let output = device.new_buffer(num_elements, self.out_ty, "fp8-vector-dequant-output")?;
+
+        crate::metal_kernels::call_fp8_vector_dequant(
+            device.device(),
+            &encoder,
+            &crate::metal_kernels::Kernels::new(),
+            self.out_ty,
+            weight_s.buffer(),
+            scale_s.buffer(),
+            &output,
+            num_elements,
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        let newstorage =
+            candle_core::MetalStorage::new(output, device.clone(), num_elements, self.out_ty);
+        Ok((newstorage, out_shape))
     }
 }
 
@@ -291,7 +323,7 @@ fn cpu_fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
 pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
     // Check that tensor size is divisible by 128
     let num_elements = input.shape().elem_count();
-    if num_elements % VECTOR_SIZE != 0 {
+    if !num_elements.is_multiple_of(VECTOR_SIZE) {
         candle_core::bail!(
             "Tensor size {} must be divisible by {} for vector FP8 quantization",
             num_elements,

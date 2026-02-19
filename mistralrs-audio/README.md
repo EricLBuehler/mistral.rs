@@ -5,4 +5,4 @@ This crate provides audio utilities for `mistral.rs` similar to how
 functions for reading audio, resampling, channel handling and computing
 mel spectrogram features.
 
-Documentation: <https://ericlbuehler.github.io/mistral.rs/mistralrs_audio/index.html>
+Documentation: <https://docs.rs/mistralrs-audio/>

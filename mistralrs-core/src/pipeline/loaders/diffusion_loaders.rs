@@ -15,8 +15,6 @@ use pyo3::pyclass;
 use regex::Regex;
 use serde::Deserialize;
 
-use tracing::info;
-
 use super::{ModelPaths, NormalLoadingMetadata};
 use crate::{
     api_dir_list, api_get_file,
@@ -60,7 +58,7 @@ pub trait DiffusionModelLoader: Send + Sync {
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq)]
 /// The architecture to load the vision model as.
 pub enum DiffusionLoaderType {
     #[serde(rename = "flux")]
@@ -79,6 +77,33 @@ impl FromStr for DiffusionLoaderType {
                 "Unknown architecture `{a}`. Possible architectures: `flux`."
             )),
         }
+    }
+}
+
+impl DiffusionLoaderType {
+    /// Auto-detect diffusion loader type from a repo file listing.
+    /// Extend this when adding new diffusion pipelines.
+    pub fn auto_detect_from_files(files: &[String]) -> Option<Self> {
+        if Self::matches_flux(files) {
+            return Some(Self::Flux);
+        }
+        None
+    }
+
+    fn matches_flux(files: &[String]) -> bool {
+        let flux_regex = Regex::new(r"^flux\\d+-(schnell|dev)\\.safetensors$");
+        let Ok(flux_regex) = flux_regex else {
+            return false;
+        };
+        let has_transformer = files.iter().any(|f| f == "transformer/config.json");
+        let has_vae = files.iter().any(|f| f == "vae/config.json");
+        let has_ae = files.iter().any(|f| f == "ae.safetensors");
+        let has_flux = files.iter().any(|f| {
+            let name = f.rsplit('/').next().unwrap_or(f);
+            flux_regex.is_match(name)
+        });
+
+        has_transformer && has_vae && has_ae && has_flux
     }
 }
 
@@ -128,7 +153,7 @@ impl ModelPaths for DiffusionModelPaths {
 
 /// [`DiffusionLoader`] for a Flux Diffusion model.
 ///
-/// [`DiffusionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.DiffusionLoader.html
+/// [`DiffusionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.DiffusionLoader.html
 pub struct FluxLoader {
     pub(crate) offload: bool,
 }

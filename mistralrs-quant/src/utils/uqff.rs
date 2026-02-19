@@ -235,7 +235,7 @@ fn bytes_to_data<T: WithDType>(
 ) -> Result<Tensor> {
     let size_in_bytes = T::DTYPE.size_in_bytes();
     let elem_count = data.len() / size_in_bytes;
-    if (data.as_ptr() as usize) % size_in_bytes == 0 {
+    if (data.as_ptr() as usize).is_multiple_of(size_in_bytes) {
         // SAFETY This is safe because we just checked that this
         // was correctly aligned.
         let data: &[T] =

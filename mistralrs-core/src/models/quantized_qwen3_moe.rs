@@ -33,8 +33,8 @@ impl Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let w1 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w1)?;
         let w3 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w3)?;
-        let y = &(candle_nn::ops::silu(&w1)? * w3)?;
-        MatMul.qmethod_matmul(y, &*self.feed_forward_w2)
+        let y = crate::ops::mul_and_act(&w1, &w3, crate::layers::Activation::Silu)?;
+        MatMul.qmethod_matmul(&y, &*self.feed_forward_w2)
     }
 }
 
@@ -43,7 +43,6 @@ struct FusedMoe {
     gate_experts: QMatMul,
     up_experts: QMatMul,
     down_experts: QMatMul,
-    act: candle_nn::Activation,
     norm_topk_prob: bool,
     num_experts_per_tok: usize,
 }
@@ -70,8 +69,9 @@ impl FusedMoe {
             let xs = xs.reshape((num_tokens, 1, hidden_dim))?;
             let gate = self.gate_experts.indexed_moe_forward(&xs, &indices)?;
             let up = self.up_experts.indexed_moe_forward(&xs, &indices)?;
+            let activated = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
             self.down_experts
-                .indexed_moe_forward(&(up * gate.apply(&self.act)?)?, &indices)?
+                .indexed_moe_forward(&activated, &indices)?
         };
         ys.broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
             .sum(D::Minus2)?
@@ -400,7 +400,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     gate_experts: QMatMul::from_qtensor(gate_experts)?,
                     up_experts: QMatMul::from_qtensor(up_experts)?,
                     down_experts: QMatMul::from_qtensor(down_experts)?,
-                    act: candle_nn::Activation::Silu,
                     norm_topk_prob: moe_cfg.norm_topk_prob,
                     num_experts_per_tok: moe_cfg.num_experts_per_tok,
                 };
@@ -477,6 +476,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     softcap: None,
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,
+                    sinks: None,
                 },
                 dtype,
             })
@@ -551,9 +551,7 @@ impl ModelWeights {
             layer_in = x;
         }
         let x = self.norm.forward(&layer_in)?;
-        extract_logits(
-            &MatMul.qmethod_matmul(&x.contiguous()?, &*self.output)?,
-            context_lens,
-        )
+        let x = extract_logits(&x, context_lens)?;
+        MatMul.qmethod_matmul(&x.contiguous()?, &*self.output)
     }
 }

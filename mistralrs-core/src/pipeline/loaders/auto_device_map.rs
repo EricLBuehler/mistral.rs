@@ -1,7 +1,7 @@
 use std::fmt::{self, Display};
 
 use crate::paged_attention::{
-    calculate_cache_config, ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
+    calculate_cache_config, MemoryGpuConfig, ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
 };
 use crate::utils::debug::DeviceRepr;
 use crate::{DeviceLayerMapMetadata, DeviceMapMetadata, MemoryUsage, PagedAttentionConfig};
@@ -14,6 +14,19 @@ use super::DeviceMappedModelLoader;
 
 const GPU_RESERVE_FRACTION: f64 = 0.02;
 const GPU_MIN_RESERVE_BYTES: usize = 512 * 1024 * 1024; // 512MB safety buffer
+
+/// Usable device capacity after subtracting a small safety reserve for GPUs.
+/// CPU devices return `avail_bytes` unchanged.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn device_cap(avail_bytes: usize, dev: &Device) -> usize {
+    if dev.is_cpu() {
+        avail_bytes
+    } else {
+        let reserve_frac = (avail_bytes as f64 * GPU_RESERVE_FRACTION) as usize;
+        let reserve = reserve_frac.max(GPU_MIN_RESERVE_BYTES).min(avail_bytes);
+        avail_bytes.saturating_sub(reserve)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(crate) enum NonMappedSubModel {
@@ -76,6 +89,14 @@ impl AutoDeviceMapParams {
     pub fn max_seq_len(&self) -> usize {
         match self {
             Self::Text { max_seq_len, .. } | Self::Vision { max_seq_len, .. } => *max_seq_len,
+        }
+    }
+
+    pub fn max_batch_size(&self) -> usize {
+        match self {
+            Self::Text { max_batch_size, .. } | Self::Vision { max_batch_size, .. } => {
+                *max_batch_size
+            }
         }
     }
 }
@@ -162,7 +183,11 @@ macro_rules! b_to_mb {
     };
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss
+)]
 /// Core logic for automatic device mapping
 pub fn get_device_layers(
     loader: &dyn DeviceMappedModelLoader,
@@ -199,8 +224,39 @@ pub fn get_device_layers(
     let model_cfg = loader.model_config(config)?;
     let kv_cache_elems = match paged_attn_config {
         Some(cfg) => {
+            // For MbAmount, clamp to available memory so the capacity check
+            // below stays consistent. Utilization and ContextSize pass through
+            // to calculate_cache_config which handles model weight subtraction.
+            let effective_mem_gpu = match cfg.mem_gpu {
+                MemoryGpuConfig::MbAmount(user_mb) => {
+                    // Clamp user's KV budget to available memory.
+                    let primary_dev = &devices[0];
+                    let avail_bytes = MemoryUsage.get_memory_available(primary_dev)?;
+                    let cap = device_cap(avail_bytes, primary_dev);
+                    let act_overhead = non_mapped_max.max(mapped_max);
+                    let budget_mb = cap.saturating_sub(act_overhead) / (1024 * 1024);
+                    MemoryGpuConfig::MbAmount(budget_mb.min(user_mb))
+                }
+                MemoryGpuConfig::Utilization(f) => {
+                    // Prevent overallocation when total_memory > available_memory
+                    // (e.g., unified memory systems, other GPU processes using VRAM).
+                    // Cap the KV budget so model + activations + KV fits within
+                    // the device capacity derived from *available* memory.
+                    let primary_dev = &devices[0];
+                    let avail_bytes = MemoryUsage.get_memory_available(primary_dev)?;
+                    let cap = device_cap(avail_bytes, primary_dev);
+                    let act_overhead = non_mapped_max.max(mapped_max);
+                    let budget_mb = ((cap as f64 * f as f64) as usize)
+                        .saturating_sub(remaining + act_overhead)
+                        / (1024 * 1024);
+                    MemoryGpuConfig::MbAmount(budget_mb)
+                }
+                // ContextSize passes through to calculate_cache_config.
+                other => other,
+            };
+
             let cache = calculate_cache_config(
-                cfg.mem_gpu,
+                effective_mem_gpu,
                 Some(cfg.block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE)),
                 dtype,
                 paged_attn_config
@@ -210,6 +266,8 @@ pub fn get_device_layers(
                 &devices[0],
                 &devices.iter().map(|d| Some(d.clone())).collect::<Vec<_>>(),
                 true,
+                Some(total_model_size_in_bytes),
+                Some(max_seq_len * max_batch_size),
             )?;
             let key_shape = calculate_key_block_shape(&*model_cfg, dtype, cache.block_size);
             let key_sz =
@@ -236,12 +294,21 @@ pub fn get_device_layers(
     };
     let kv_cache_bytes = kv_cache_elems * dtype.size_in_bytes();
 
-    // prepare available memory per device, CPU fallback last
+    // prepare available memory per device, CPU fallback last (unless unified memory)
+    let has_unified_memory = devices.iter().any(crate::utils::normal::is_integrated_gpu);
+
     let mut avail = Vec::new();
-    for dev in [devices, &[Device::Cpu]].concat() {
-        let a = MemoryUsage.get_memory_available(&dev)?;
-        avail.push((a, dev));
+    for dev in devices {
+        let a = MemoryUsage.get_memory_available(dev)?;
+        avail.push((a, dev.clone()));
     }
+    // On unified memory systems (iGPUs), GPU and CPU share the same physical RAM.
+    // Don't add CPU as a fallback device since it would double-count memory.
+    if !has_unified_memory {
+        let a = MemoryUsage.get_memory_available(&Device::Cpu)?;
+        avail.push((a, Device::Cpu));
+    }
+
     avail.reverse();
     layer_sizes_in_bytes.reverse();
 
@@ -265,17 +332,8 @@ pub fn get_device_layers(
             .pop()
             .context("No more devices to map to. The model does not fit on this system.")?;
 
-        // For CPU: effectively unlimited capacity since it can use swap memory
         // For GPU/accelerators: keep a small dynamic safety reserve to avoid OOMs
-        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-        let cap = if dev.is_cpu() {
-            // Allow unlimited capacity for CPU - swap will handle it
-            usize::MAX
-        } else {
-            let reserve_fraction = (avail_bytes as f64 * GPU_RESERVE_FRACTION) as usize;
-            let reserve = reserve_fraction.max(GPU_MIN_RESERVE_BYTES).min(avail_bytes);
-            avail_bytes.saturating_sub(reserve)
-        };
+        let cap = device_cap(avail_bytes, &dev);
 
         // Algorithm is to check the following:
         // 1) (no mapping) if *everything* fits on the first dev (non mapped and mapped)
