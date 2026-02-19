@@ -32,8 +32,8 @@ using namespace nvcuda::wmma;
   do {                                                                         \
     cudaError_t err = call;                                                    \
     if (err != cudaSuccess) {                                                  \
-      fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__,        \
-              cudaGetErrorString(err));                                         \
+      fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__,         \
+              cudaGetErrorString(err));                                        \
     }                                                                          \
   } while (0)
 
@@ -101,10 +101,9 @@ __device__ __forceinline__ void dequant_store_8_bf16(int q4, float scale,
 
 // Dispatch dequant by type
 template <typename T>
-__device__ __forceinline__ void dequant_store_8(int q4, float scale,
-                                                uint32_t L0, uint32_t L1,
-                                                uint32_t L2, uint32_t L3,
-                                                T *dst);
+__device__ __forceinline__ void
+dequant_store_8(int q4, float scale, uint32_t L0, uint32_t L1, uint32_t L2,
+                uint32_t L3, T *dst);
 
 template <>
 __device__ __forceinline__ void
@@ -132,13 +131,13 @@ constexpr int WMMA_K_DIM = 16;
 // Each warp handles two WMMA N-tiles (16+16 = 32 along N).
 constexpr int WARPS_M = 4;
 constexpr int WARPS_N = 2;
-constexpr int WARPS_PER_BLOCK = WARPS_M * WARPS_N; // 8
+constexpr int WARPS_PER_BLOCK = WARPS_M * WARPS_N;  // 8
 constexpr int BLOCK_THREADS = WARPS_PER_BLOCK * 32; // 256
 
-constexpr int M_BLK = WARPS_M * WMMA_M_DIM;                // 64
-constexpr int N_BLK = WARPS_N * 2 * WMMA_N_DIM;            // 64 (2 tiles per warp along N)
-constexpr int K_BLK = MXFP4_BLOCK_SIZE;                    // 32
-constexpr int WMMA_K_STEPS = K_BLK / WMMA_K_DIM;           // 2
+constexpr int M_BLK = WARPS_M * WMMA_M_DIM;     // 64
+constexpr int N_BLK = WARPS_N * 2 * WMMA_N_DIM; // 64 (2 tiles per warp along N)
+constexpr int K_BLK = MXFP4_BLOCK_SIZE;         // 32
+constexpr int WMMA_K_STEPS = K_BLK / WMMA_K_DIM; // 2
 
 using VecT = float4;
 constexpr int VEC_SIZE = 8; // float4 = 16 bytes = 8 fp16/bf16 values
@@ -221,9 +220,8 @@ __launch_bounds__(BLOCK_THREADS) __global__
         uint4 w_vec = *reinterpret_cast<const uint4 *>(
             &weight[(size_t)gn * (K / 2) + k_base / 2]);
         float scale =
-            e8m0_to_float(
-                __ldg(&weight_scale[(size_t)gn * scale_stride +
-                                    k_base / MXFP4_BLOCK_SIZE])) *
+            e8m0_to_float(__ldg(&weight_scale[(size_t)gn * scale_stride +
+                                              k_base / MXFP4_BLOCK_SIZE])) *
             0.5f;
 
         T *dst = &B_sh[ln * K_BLK];
@@ -258,8 +256,7 @@ __launch_bounds__(BLOCK_THREADS) __global__
       for (int n_sub = 0; n_sub < 2; n_sub++) {
         fragment<matrix_b, WMMA_M_DIM, WMMA_N_DIM, WMMA_K_DIM, T, col_major>
             b_frag;
-        const T *B_ptr = B_sh +
-                         (warp_n_idx * 2 + n_sub) * WMMA_N_DIM * K_BLK +
+        const T *B_ptr = B_sh + (warp_n_idx * 2 + n_sub) * WMMA_N_DIM * K_BLK +
                          k_step * WMMA_K_DIM;
         load_matrix_sync(b_frag, B_ptr, K_BLK);
         mma_sync(c_frag[n_sub], a_frag, b_frag, c_frag[n_sub]);
@@ -314,10 +311,10 @@ template <typename T>
 __launch_bounds__(BLOCK_THREADS) __global__
     void mxfp4_moe_grouped_gemm_wmma_kernel(
         const T *__restrict__ input, const uint8_t *__restrict__ weights,
-        const uint8_t *__restrict__ weight_scales,
-        const T *__restrict__ biases, const uint32_t *__restrict__ indices,
-        T *__restrict__ output, int num_tokens, int topk, int num_experts,
-        int N, int K, bool has_bias, bool input_has_topk_dim) {
+        const uint8_t *__restrict__ weight_scales, const T *__restrict__ biases,
+        const uint32_t *__restrict__ indices, T *__restrict__ output,
+        int num_tokens, int topk, int num_experts, int N, int K, bool has_bias,
+        bool input_has_topk_dim) {
   const uint32_t LUT0 = 0x03020100;
   const uint32_t LUT1 = 0x0C080604;
   const uint32_t LUT2 = 0xFDFEFF00;
@@ -414,9 +411,8 @@ __launch_bounds__(BLOCK_THREADS) __global__
           uint4 w_vec = *reinterpret_cast<const uint4 *>(
               &expert_weight[(size_t)gn * (K / 2) + k_base / 2]);
           float scale =
-              e8m0_to_float(
-                  __ldg(&expert_scale[(size_t)gn * scale_stride +
-                                      k_base / MXFP4_BLOCK_SIZE])) *
+              e8m0_to_float(__ldg(&expert_scale[(size_t)gn * scale_stride +
+                                                k_base / MXFP4_BLOCK_SIZE])) *
               0.5f;
           T *dst = &B_sh[ln * K_BLK];
           dequant_store_8<T>(w_vec.x, scale, LUT0, LUT1, LUT2, LUT3, dst);
@@ -478,11 +474,9 @@ __launch_bounds__(BLOCK_THREADS) __global__
         float val = C_sh[lm * N_BLK + ln];
         if (has_bias && biases != nullptr) {
           if constexpr (std::is_same_v<T, half>) {
-            val +=
-                __half2float(__ldg(&biases[(size_t)expert_id * N + gn]));
+            val += __half2float(__ldg(&biases[(size_t)expert_id * N + gn]));
           } else {
-            val += __bfloat162float(
-                __ldg(&biases[(size_t)expert_id * N + gn]));
+            val += __bfloat162float(__ldg(&biases[(size_t)expert_id * N + gn]));
           }
         }
         if constexpr (std::is_same_v<T, half>) {
@@ -513,27 +507,30 @@ static size_t wmma_smem_bytes() {
   return AB + pad + C;
 }
 
-extern "C" void launch_mxfp4_matmul_wmma_f16(
-    const __half *input, const uint8_t *weight, const uint8_t *weight_scale,
-    const __half *bias, __half *output, int M, int N, int K, bool has_bias,
-    cudaStream_t stream) {
+extern "C" void launch_mxfp4_matmul_wmma_f16(const __half *input,
+                                             const uint8_t *weight,
+                                             const uint8_t *weight_scale,
+                                             const __half *bias, __half *output,
+                                             int M, int N, int K, bool has_bias,
+                                             cudaStream_t stream) {
   using namespace mxfp4_wmma;
 
   dim3 grid(CEILDIV(N, N_BLK), CEILDIV(M, M_BLK));
   dim3 block(BLOCK_THREADS);
   size_t smem = wmma_smem_bytes();
 
-  mxfp4_wmma::mxfp4_matmul_wmma_kernel<half>
-      <<<grid, block, smem, stream>>>(input, weight, weight_scale, bias, output,
-                                      M, N, K, has_bias);
+  mxfp4_wmma::mxfp4_matmul_wmma_kernel<half><<<grid, block, smem, stream>>>(
+      input, weight, weight_scale, bias, output, M, N, K, has_bias);
   CUDA_CHECK(cudaGetLastError());
 }
 
-extern "C" void launch_mxfp4_matmul_wmma_bf16(
-    const __nv_bfloat16 *input, const uint8_t *weight,
-    const uint8_t *weight_scale, const __nv_bfloat16 *bias,
-    __nv_bfloat16 *output, int M, int N, int K, bool has_bias,
-    cudaStream_t stream) {
+extern "C" void launch_mxfp4_matmul_wmma_bf16(const __nv_bfloat16 *input,
+                                              const uint8_t *weight,
+                                              const uint8_t *weight_scale,
+                                              const __nv_bfloat16 *bias,
+                                              __nv_bfloat16 *output, int M,
+                                              int N, int K, bool has_bias,
+                                              cudaStream_t stream) {
   using namespace mxfp4_wmma;
 
   dim3 grid(CEILDIV(N, N_BLK), CEILDIV(M, M_BLK));
@@ -558,15 +555,14 @@ extern "C" void launch_mxfp4_moe_grouped_gemm_wmma_f16(
   int token_list_bytes = ((num_tokens * topk * (int)sizeof(int)) + 15) & ~15;
   size_t smem = token_list_bytes + wmma_smem_bytes();
 
-  CUDA_CHECK(cudaFuncSetAttribute(
-      mxfp4_wmma::mxfp4_moe_grouped_gemm_wmma_kernel<half>,
-      cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
+  CUDA_CHECK(
+      cudaFuncSetAttribute(mxfp4_wmma::mxfp4_moe_grouped_gemm_wmma_kernel<half>,
+                           cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
 
   mxfp4_wmma::mxfp4_moe_grouped_gemm_wmma_kernel<half>
-      <<<grid, block, smem, stream>>>(input, weights, weight_scales, biases,
-                                      indices, output, num_tokens, topk,
-                                      num_experts, N, K, has_bias,
-                                      input_has_topk_dim);
+      <<<grid, block, smem, stream>>>(
+          input, weights, weight_scales, biases, indices, output, num_tokens,
+          topk, num_experts, N, K, has_bias, input_has_topk_dim);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -588,9 +584,8 @@ extern "C" void launch_mxfp4_moe_grouped_gemm_wmma_bf16(
       cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
 
   mxfp4_wmma::mxfp4_moe_grouped_gemm_wmma_kernel<__nv_bfloat16>
-      <<<grid, block, smem, stream>>>(input, weights, weight_scales, biases,
-                                      indices, output, num_tokens, topk,
-                                      num_experts, N, K, has_bias,
-                                      input_has_topk_dim);
+      <<<grid, block, smem, stream>>>(
+          input, weights, weight_scales, biases, indices, output, num_tokens,
+          topk, num_experts, N, K, has_bias, input_has_topk_dim);
   CUDA_CHECK(cudaGetLastError());
 }

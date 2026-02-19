@@ -9,7 +9,9 @@ inline OUT_T from_cache(CACHE_T v) = delete;
 
 // Identity conversions (cache_t == out_t)
 template <> inline float from_cache<float, float>(float v) { return v; }
-template <> inline bfloat16_t from_cache<bfloat16_t, bfloat16_t>(bfloat16_t v) { return v; }
+template <> inline bfloat16_t from_cache<bfloat16_t, bfloat16_t>(bfloat16_t v) {
+  return v;
+}
 template <> inline half from_cache<half, half>(half v) { return v; }
 
 // FP8 E4M3 -> output type conversions
@@ -38,21 +40,20 @@ constant bool use_fp8_scales [[function_constant(10)]];
 template <typename CACHE_T, typename OUT_T>
 [[kernel]] void gather_kv_cache(
     const device CACHE_T *__restrict__ key_cache
-    [[buffer(0)]],  // [num_blocks, kv_heads, head_size/x, block_size, x]
+    [[buffer(0)]], // [num_blocks, kv_heads, head_size/x, block_size, x]
     const device CACHE_T *__restrict__ value_cache
-    [[buffer(1)]],  // [num_blocks, kv_heads, head_size, block_size]
+    [[buffer(1)]], // [num_blocks, kv_heads, head_size, block_size]
     device OUT_T *__restrict__ k_out
-    [[buffer(2)]],  // [num_tokens, kv_heads, head_size]
+    [[buffer(2)]], // [num_tokens, kv_heads, head_size]
     device OUT_T *__restrict__ v_out
-    [[buffer(3)]],  // [num_tokens, kv_heads, head_size]
+    [[buffer(3)]], // [num_tokens, kv_heads, head_size]
     const device float *__restrict__ k_scale
     [[buffer(4), function_constant(use_fp8_scales)]],
     const device float *__restrict__ v_scale
     [[buffer(5), function_constant(use_fp8_scales)]],
     const device int *__restrict__ block_table
-    [[buffer(6)]],  // [batch, max_blocks]
-    const device int *__restrict__ cu_seq_lens
-    [[buffer(7)]],  // [batch + 1]
+    [[buffer(6)]], // [batch, max_blocks]
+    const device int *__restrict__ cu_seq_lens [[buffer(7)]], // [batch + 1]
     device const int &num_tokens [[buffer(8)]],
     device const int &num_seqs [[buffer(9)]],
     device const int &block_size [[buffer(10)]],
@@ -92,12 +93,9 @@ template <typename CACHE_T, typename OUT_T>
   // Precompute strides
   const long k_block_stride =
       (long)num_kv_heads * (head_size / x) * block_size * x;
-  const long k_head_stride =
-      (long)(head_size / x) * block_size * x;
-  const long v_block_stride =
-      (long)num_kv_heads * head_size * block_size;
-  const long v_head_stride =
-      (long)head_size * block_size;
+  const long k_head_stride = (long)(head_size / x) * block_size * x;
+  const long v_block_stride = (long)num_kv_heads * head_size * block_size;
+  const long v_head_stride = (long)head_size * block_size;
 
   for (int i = tid; i < n; i += threads_per_threadgroup) {
     const int head_idx = i / head_size;
@@ -107,17 +105,16 @@ template <typename CACHE_T, typename OUT_T>
     const int x_idx = d / x;
     const int x_offset = d % x;
     const long k_src_idx = (long)block_id * k_block_stride +
-                           head_idx * k_head_stride +
-                           x_idx * block_size * x + slot * x + x_offset;
+                           head_idx * k_head_stride + x_idx * block_size * x +
+                           slot * x + x_offset;
 
     // V: [block_id, head_idx, d, slot]
     const long v_src_idx = (long)block_id * v_block_stride +
                            head_idx * v_head_stride + d * block_size + slot;
 
     if (use_fp8_scales) {
-      k_out[out_base + i] =
-          OUT_T((float)from_cache<CACHE_T, OUT_T>(key_cache[k_src_idx]) *
-                (*k_scale));
+      k_out[out_base + i] = OUT_T(
+          (float)from_cache<CACHE_T, OUT_T>(key_cache[k_src_idx]) * (*k_scale));
       v_out[out_base + i] =
           OUT_T((float)from_cache<CACHE_T, OUT_T>(value_cache[v_src_idx]) *
                 (*v_scale));
@@ -128,7 +125,7 @@ template <typename CACHE_T, typename OUT_T>
   }
 }
 
-#define instantiate_gather_kv_cache(cache_type, out_type)                       \
+#define instantiate_gather_kv_cache(cache_type, out_type)                      \
   template [[host_name("gather_kv_cache_cache_" #cache_type                    \
                        "_out_" #out_type)]] [[kernel]] void                    \
   gather_kv_cache<cache_type, out_type>(                                       \

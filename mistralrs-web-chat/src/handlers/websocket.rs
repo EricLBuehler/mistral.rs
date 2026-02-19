@@ -595,7 +595,7 @@ async fn handle_vision_model(
     let streaming = &mut *params.streaming;
     let active_chat_id = params.active_chat_id;
     // Track the exact set of messages that will be sent *this* turn.
-    let mut msgs_for_stream: Option<VisionMessages> = None;
+    let msgs_for_stream: Option<VisionMessages>;
     // --- Vision input routing ---
     if let Ok(val) = serde_json::from_str::<Value>(user_msg) {
         // Case 1a: pure image payload => buffer it and wait for a prompt
