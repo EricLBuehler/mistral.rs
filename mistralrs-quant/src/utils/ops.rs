@@ -3527,6 +3527,64 @@ mod tests {
         );
     }
 
+    #[cfg(all(feature = "metal", target_os = "macos"))]
+    #[test]
+    fn test_fused_glu_metal_bf16_kernel_loads_and_matches_cpu() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::{DType, Device, Tensor};
+
+        let metal = match Device::new_metal(0) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        let cpu = Device::Cpu;
+
+        let a_data: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 64.0).collect();
+        let b_data: Vec<f32> = (0..256).map(|i| (i as f32 * 0.7 - 90.0) / 50.0).collect();
+
+        let a_cpu = Tensor::from_vec(a_data.clone(), &[256], &cpu)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap();
+        let b_cpu = Tensor::from_vec(b_data.clone(), &[256], &cpu)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap();
+
+        let a_metal = Tensor::from_vec(a_data, &[256], &metal)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap();
+        let b_metal = Tensor::from_vec(b_data, &[256], &metal)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap();
+
+        let out_metal = fused_glu(&a_metal, &b_metal, GluActivationType::Silu)
+            .unwrap()
+            .to_device(&cpu)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+
+        let out_cpu = fused_glu(&a_cpu, &b_cpu, GluActivationType::Silu)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+
+        for (i, (c, m)) in out_cpu.iter().zip(out_metal.iter()).enumerate() {
+            let diff = (c - m).abs();
+            assert!(
+                diff < 1e-2,
+                "BF16 fused_glu mismatch at {i}: cpu={c}, metal={m}, diff={diff}"
+            );
+        }
+    }
+
     #[cfg(feature = "cuda")]
     #[test]
     fn test_fused_glu_cuda_silu_f32() {
