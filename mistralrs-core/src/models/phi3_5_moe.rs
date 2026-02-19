@@ -803,6 +803,7 @@ impl IsqModel for Model {
             uvb_l
                 .pp("post_attention_layernorm")
                 .add(&layer.post_attention_layernorm);
+            uvb_l.pp("block_sparse_moe").pp("gate").add(&layer.mlp.gate);
         }
 
         uvb.to_safetensors()
@@ -821,6 +822,7 @@ impl IsqModel for Model {
             uvb_l
                 .pp("post_attention_layernorm")
                 .add(&layer.post_attention_layernorm);
+            uvb_l.pp("block_sparse_moe").pp("gate").add(&layer.mlp.gate);
 
             let uvb_attn = uvb_l.pp("self_attn");
             uvb_attn.pp("q_proj").add(&layer.self_attn.q_proj);
