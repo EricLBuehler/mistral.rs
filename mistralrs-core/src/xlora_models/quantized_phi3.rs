@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::attention::SdpaParams;
-use crate::device_map::DeviceMapper;
+use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
 use crate::layers::CausalMasker;
 use crate::layers::RmsNorm;
@@ -419,6 +419,10 @@ impl ModelWeights {
             self.dtype,
             self.layers[0].n_head,
         )?;
+        let mask = match self.mapper {
+            Some(ref mapper) => DeviceMappedMask::new(mask, &**mapper)?,
+            None => DeviceMappedMask::from_single(mask),
+        };
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 xs = mapper.map(xs, i)?;
@@ -428,8 +432,7 @@ impl ModelWeights {
             let ys = layer.forward_attn(
                 &ys,
                 mask.as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                    .map(|m| m.get(xs.device())),
                 seqlen_offsets,
                 &mut cache[i],
                 scalings.clone(),

@@ -10,7 +10,7 @@ use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMapper, DeviceMappedMask},
     layers::{embedding, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
@@ -624,6 +624,7 @@ impl VoxtralModel {
             self.num_heads,
         )?;
 
+        let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         let mut xs = input_embeds;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
@@ -633,10 +634,7 @@ impl VoxtralModel {
                 .transpose()?;
             xs = layer.forward(
                 &xs,
-                attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                attention_mask.as_ref().map(|m| m.get(xs.device())),
                 seqlen_offsets,
                 &mut cache.0[i],
                 t_cond_mapped.as_ref(),

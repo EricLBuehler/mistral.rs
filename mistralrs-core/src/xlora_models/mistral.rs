@@ -20,7 +20,7 @@ use tqdm::Iter;
 use tracing::info;
 
 use crate::{
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{Activation, CausalMasker, RmsNorm},
     models::mistral::Config,
     pipeline::{extract_logits, Cache, NormalModel},
@@ -612,14 +612,14 @@ impl XLoraModel {
             xs.dtype(),
             self.cfg.num_attn_heads,
         )?;
+        let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
                 attention_mask
                     .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                    .map(|m| m.get(xs.device())),
                 seqlen_offsets,
                 &mut cache[i],
                 scalings.clone(),

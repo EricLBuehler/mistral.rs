@@ -15,7 +15,7 @@ use std::{
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMapper, DeviceMappedMask},
     kv_cache::{HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType},
     layers::{embedding, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
@@ -1903,6 +1903,7 @@ impl GraniteMoeHybrid {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+        let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             x = self.mapper.map(x, layer_idx)?;
@@ -1913,9 +1914,10 @@ impl GraniteMoeHybrid {
                     if let GraniteLayerCache::Attention(kv_cache) =
                         &mut internal_cache.caches[layer_idx]
                     {
+                        let mask_for_layer = mask.as_ref().map(|m| m.get(x.device()).clone());
                         x = block.forward(
                             &x,
-                            &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                            &mask_for_layer,
                             seqlen_offsets,
                             kv_cache,
                             metadata.as_ref().map(|(kv_cache, metadata)| {

@@ -9,7 +9,7 @@ use mistralrs_quant::{
 use super::config::Config;
 use crate::{
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{self, Activation, F32RmsNorm, Qwen2_5VLRotaryEmbedding, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -461,14 +461,13 @@ impl Qwen2_5VLTextModel {
             .rotary_emb
             .compute_cos_sin(position_ids, xs.dtype())?;
 
+        let attention_mask =
+            DeviceMappedMask::new(attention_mask.map(|m| m.clone()), &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                attention_mask.as_ref().map(|m| m.get(xs.device())),
                 &cos_sin,
                 &mut cache[i],
                 flash_params,

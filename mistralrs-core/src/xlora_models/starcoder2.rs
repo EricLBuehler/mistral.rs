@@ -10,7 +10,7 @@ use tracing::info;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{self, layer_norm, Activation, CausalMasker, RotaryEmbedding, Sdpa},
     lora::{linear_b, linear_no_bias, LinearLayerLike, LoraConfig},
     models::starcoder2::Config,
@@ -596,6 +596,7 @@ impl Model {
             xs.dtype(),
             self.cfg.num_attn_heads,
         )?;
+        let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
 
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
@@ -603,8 +604,7 @@ impl Model {
                 &xs,
                 attention_mask
                     .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                    .map(|m| m.get(xs.device())),
                 seqlen_offsets,
                 &mut cache[i],
                 scalings.clone(),

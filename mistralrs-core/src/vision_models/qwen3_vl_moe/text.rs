@@ -11,7 +11,7 @@ use mistralrs_quant::{
 use super::config::TextConfig;
 use crate::{
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMapper, DeviceMappedMask},
     layers::{self, Activation, Qwen3VLRotaryEmbedding, RmsNorm, Sdpa},
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -662,14 +662,12 @@ impl Qwen3VLMoETextModel {
             .rotary_emb
             .compute_cos_sin(position_ids, xs.dtype())?;
 
+        let attention_mask = DeviceMappedMask::new(attention_mask.cloned(), &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                attention_mask.as_ref().map(|m| m.get(xs.device())),
                 &cos_sin,
                 &mut cache[i],
                 metadata
