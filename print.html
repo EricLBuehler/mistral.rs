@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-4e33210d.js";
+            window.path_to_searchindex_js = "searchindex-1b54fdb4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-cf64f8f3.js"></script>
+        <script src="toc-1401edcc.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -277,7 +277,7 @@
 </ul>
 <h2 id="features"><a class="header" href="#features">Features</a></h2>
 <ul>
-<li><a href="#tool-calling">Tool Calling</a> - Function calling support</li>
+<li><a href="#tool-calling-1">Tool Calling</a> - Function calling support</li>
 <li><a href="#web-search-tool-in-mistralrs">Web Search</a> - Integrated web search</li>
 <li><a href="#chat-templates-and-tokenizer-customization">Chat Templates</a> - Template customization</li>
 <li><a href="#sampling-and-penalty-techniques-in-mistralrs">Sampling Options</a> - Generation parameters</li>
@@ -1938,6 +1938,255 @@ in_situ_quant = "q4k"
 <li>Hardware (GPU model, OS)</li>
 </ol>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="mistralrs-rust-sdk"><a class="header" href="#mistralrs-rust-sdk">mistralrs Rust SDK</a></h1>
+<p>The <code>mistralrs</code> crate provides a high-level Rust API for running LLM inference with mistral.rs.</p>
+<blockquote>
+<p><strong>Full API reference:</strong> <a href="https://docs.rs/mistralrs">docs.rs/mistralrs</a></p>
+</blockquote>
+<p><strong>Table of contents</strong></p>
+<ul>
+<li><a href="#installation">Installation</a></li>
+<li><a href="#quick-start">Quick Start</a></li>
+<li><a href="#model-builders">Model Builders</a></li>
+<li><a href="#request-types">Request Types</a></li>
+<li><a href="#streaming">Streaming</a></li>
+<li><a href="#structured-output">Structured Output</a></li>
+<li><a href="#tool-calling">Tool Calling</a></li>
+<li><a href="#agents">Agents</a></li>
+<li><a href="#blocking-api">Blocking API</a></li>
+<li><a href="#feature-flags">Feature Flags</a></li>
+<li><a href="#examples">Examples</a></li>
+</ul>
+<h2 id="installation"><a class="header" href="#installation">Installation</a></h2>
+<pre><code class="language-bash">cargo add mistralrs
+</code></pre>
+<p>Or in your <code>Cargo.toml</code>:</p>
+<pre><code class="language-toml">[dependencies]
+mistralrs = "0.7"
+</code></pre>
+<p>For GPU acceleration, enable the appropriate feature:</p>
+<pre><code class="language-toml">mistralrs = { version = "0.7", features = ["metal"] }     # macOS
+mistralrs = { version = "0.7", features = ["cuda"] }       # NVIDIA
+</code></pre>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre class="playground"><code class="language-rust">use mistralrs::{IsqBits, ModelBuilder, TextMessages, TextMessageRole};
+
+#[tokio::main]
+async fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
+    let model = ModelBuilder::new("Qwen/Qwen3-4B")
+        .with_auto_isq(IsqBits::Four)
+        .build()
+        .await?;
+
+    let response = model.chat("What is Rust's ownership model?").await?;
+    println!("{response}");
+    Ok(())
+}</code></pre>
+<h2 id="model-builders"><a class="header" href="#model-builders">Model Builders</a></h2>
+<p>All models are created through builder structs. Use <code>ModelBuilder</code> for auto-detection, or a specific builder for more control.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Builder</th><th>Use Case</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ModelBuilder</code></td><td>Auto-detects model type (text, vision, embedding)</td></tr>
+<tr><td><code>TextModelBuilder</code></td><td>Text generation models</td></tr>
+<tr><td><code>VisionModelBuilder</code></td><td>Vision + text models (image/audio input)</td></tr>
+<tr><td><code>GgufModelBuilder</code></td><td>GGUF quantized model files</td></tr>
+<tr><td><code>EmbeddingModelBuilder</code></td><td>Text embedding models</td></tr>
+<tr><td><code>DiffusionModelBuilder</code></td><td>Image generation (e.g., FLUX)</td></tr>
+<tr><td><code>SpeechModelBuilder</code></td><td>Speech synthesis (e.g., Dia)</td></tr>
+<tr><td><code>LoraModelBuilder</code></td><td>Text model with LoRA adapters</td></tr>
+<tr><td><code>XLoraModelBuilder</code></td><td>Text model with X-LoRA adapters</td></tr>
+<tr><td><code>AnyMoeModelBuilder</code></td><td>AnyMoE Mixture of Experts</td></tr>
+<tr><td><code>TextSpeculativeBuilder</code></td><td>Speculative decoding (target + draft)</td></tr>
+</tbody>
+</table>
+</div>
+<p>All builders share common configuration methods:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let model = TextModelBuilder::new("Qwen/Qwen3-4B")
+    .with_auto_isq(IsqBits::Four)      // Platform-optimal quantization
+    .with_logging()                      // Enable logging
+    .with_paged_attn(                    // PagedAttention for memory efficiency
+        PagedAttentionMetaBuilder::default().build()?
+    )
+    .build()
+    .await?;
+<span class="boring">}</span></code></pre>
+<p>Key builder methods include <code>with_isq()</code>, <code>with_auto_isq()</code>, <code>with_dtype()</code>, <code>with_force_cpu()</code>, <code>with_device_mapping()</code>, <code>with_chat_template()</code>, <code>with_paged_attn()</code>, <code>with_max_num_seqs()</code>, <code>with_mcp_client()</code>, and more. See the <a href="https://docs.rs/mistralrs">API docs</a> for the full list.</p>
+<h2 id="request-types"><a class="header" href="#request-types">Request Types</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Type</th><th>Use When</th><th>Sampling</th></tr>
+</thead>
+<tbody>
+<tr><td><code>TextMessages</code></td><td>Simple text-only chat</td><td>Deterministic</td></tr>
+<tr><td><code>VisionMessages</code></td><td>Prompt includes images or audio</td><td>Deterministic</td></tr>
+<tr><td><code>RequestBuilder</code></td><td>Tools, logprobs, custom sampling, constraints, or web search</td><td>Configurable</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>TextMessages</code> and <code>VisionMessages</code> convert into <code>RequestBuilder</code> via <code>Into&lt;RequestBuilder&gt;</code> if you start simple and later need more control.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Simple
+let messages = TextMessages::new()
+    .add_message(TextMessageRole::User, "Hello!");
+let response = model.send_chat_request(messages).await?;
+
+// Advanced
+let request = RequestBuilder::new()
+    .add_message(TextMessageRole::System, "You are helpful.")
+    .add_message(TextMessageRole::User, "Hello!")
+    .set_tools(tools)
+    .with_sampling(SamplingParams { temperature: Some(0.7), ..Default::default() });
+let response = model.send_chat_request(request).await?;
+<span class="boring">}</span></code></pre>
+<h2 id="streaming"><a class="header" href="#streaming">Streaming</a></h2>
+<p><code>Model::stream_chat_request</code> returns a <code>Stream</code> that implements <code>futures::Stream</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use futures::StreamExt;
+use mistralrs::*;
+
+let mut stream = model.stream_chat_request(messages).await?;
+while let Some(chunk) = stream.next().await {
+    if let Response::Chunk(c) = chunk {
+        if let Some(text) = c.choices.first().and_then(|ch| ch.delta.content.as_ref()) {
+            print!("{text}");
+        }
+    }
+}
+<span class="boring">}</span></code></pre>
+<h2 id="structured-output"><a class="header" href="#structured-output">Structured Output</a></h2>
+<p>Derive <code>schemars::JsonSchema</code> on your type and the model will be constrained to produce valid JSON:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use mistralrs::*;
+use schemars::JsonSchema;
+use serde::Deserialize;
+
+#[derive(Deserialize, JsonSchema)]
+struct City {
+    name: String,
+    country: String,
+    population: u64,
+}
+
+let messages = TextMessages::new()
+    .add_message(TextMessageRole::User, "Give me info about Paris.");
+
+let city: City = model.generate_structured::&lt;City&gt;(messages).await?;
+println!("{}: pop. {}", city.name, city.population);
+<span class="boring">}</span></code></pre>
+<h2 id="tool-calling"><a class="header" href="#tool-calling">Tool Calling</a></h2>
+<h3 id="manual-tool-definition"><a class="header" href="#manual-tool-definition">Manual tool definition</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let tools = vec![Tool {
+    tp: ToolType::Function,
+    function: Function {
+        description: Some("Get the weather for a location".to_string()),
+        name: "get_weather".to_string(),
+        parameters: Some(parameters_json),
+    },
+}];
+
+let request = RequestBuilder::new()
+    .add_message(TextMessageRole::User, "What's the weather in NYC?")
+    .set_tools(tools);
+
+let response = model.send_chat_request(request).await?;
+<span class="boring">}</span></code></pre>
+<h3 id="using-the-tool-macro"><a class="header" href="#using-the-tool-macro">Using the <code>#[tool]</code> macro</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use mistralrs::tool;
+
+#[tool(description = "Get the current weather for a location")]
+fn get_weather(
+    #[description = "The city name"] city: String,
+) -&gt; Result&lt;String&gt; {
+    Ok(format!("Sunny, 72F in {city}"))
+}
+<span class="boring">}</span></code></pre>
+<p>See <a href="#tool-calling-1">Tool Calling</a> for full details, or the <a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/tools"><code>examples/advanced/tools/</code></a> example.</p>
+<h2 id="agents"><a class="header" href="#agents">Agents</a></h2>
+<p><code>AgentBuilder</code> wraps the tool-calling loop, automatically dispatching tool calls and feeding results back:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use mistralrs::*;
+
+let agent = AgentBuilder::new(model)
+    .with_system_prompt("You are a helpful assistant with tools.")
+    .with_sync_tool(get_weather_tool, get_weather_callback)
+    .with_max_iterations(10)
+    .build();
+
+let response = agent.run("What's the weather in NYC and London?").await?;
+println!("{}", response.final_text);
+<span class="boring">}</span></code></pre>
+<p>See the <a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/agent"><code>examples/advanced/agent/</code></a> example for streaming agents and the <code>#[tool]</code> macro.</p>
+<h2 id="blocking-api"><a class="header" href="#blocking-api">Blocking API</a></h2>
+<p>For non-async applications, use <code>BlockingModel</code>:</p>
+<pre class="playground"><code class="language-rust">use mistralrs::blocking::BlockingModel;
+use mistralrs::{IsqBits, ModelBuilder};
+
+fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
+    let model = BlockingModel::from_builder(
+        ModelBuilder::new("Qwen/Qwen3-4B")
+            .with_auto_isq(IsqBits::Four),
+    )?;
+    let answer = model.chat("What is 2+2?")?;
+    println!("{answer}");
+    Ok(())
+}</code></pre>
+<blockquote>
+<p><strong>Note:</strong> <code>BlockingModel</code> creates its own tokio runtime. Do not call it from within an existing tokio runtime.</p>
+</blockquote>
+<h2 id="feature-flags"><a class="header" href="#feature-flags">Feature Flags</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Effect</th></tr>
+</thead>
+<tbody>
+<tr><td><code>cuda</code></td><td>CUDA GPU support</td></tr>
+<tr><td><code>flash-attn</code></td><td>Flash Attention 2 kernels (requires <code>cuda</code>)</td></tr>
+<tr><td><code>cudnn</code></td><td>cuDNN acceleration (requires <code>cuda</code>)</td></tr>
+<tr><td><code>nccl</code></td><td>Multi-GPU via NCCL (requires <code>cuda</code>)</td></tr>
+<tr><td><code>metal</code></td><td>Apple Metal GPU support</td></tr>
+<tr><td><code>accelerate</code></td><td>Apple Accelerate framework</td></tr>
+<tr><td><code>mkl</code></td><td>Intel MKL acceleration</td></tr>
+</tbody>
+</table>
+</div>
+<p>The default feature set (no flags) builds with pure Rust — no C compiler or system libraries required.</p>
+<h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
+<p>The crate includes 48 runnable examples organized by topic:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Category</th><th>Examples</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Getting Started</strong></td><td><code>text_generation</code>, <code>streaming</code>, <code>vision</code>, <code>gguf</code>, <code>gguf_locally</code>, <code>embedding</code></td></tr>
+<tr><td><strong>Models</strong></td><td><code>text_models</code>, <code>vision_models</code>, <code>audio</code>, <code>diffusion</code>, <code>speech</code>, <code>multimodal</code></td></tr>
+<tr><td><strong>Quantization</strong></td><td><code>isq</code>, <code>imatrix</code>, <code>uqff</code>, <code>topology</code>, <code>mixture_of_quant_experts</code></td></tr>
+<tr><td><strong>Advanced</strong></td><td><code>tools</code>, <code>agent</code>, <code>grammar</code>, <code>json_schema</code>, <code>web_search</code>, <code>mcp_client</code>, <code>batching</code>, <code>paged_attn</code>, <code>speculative</code>, <code>lora</code>, <code>error_handling</code>, and more</td></tr>
+<tr><td><strong>Cookbook</strong></td><td><code>cookbook_rag</code>, <code>cookbook_structured</code>, <code>cookbook_multiturn</code>, <code>cookbook_agent</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Run any example with:</p>
+<pre><code class="language-bash">cargo run --release --features &lt;features&gt; --example &lt;name&gt;
+</code></pre>
+<p>Browse all examples: <a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples"><code>mistralrs/examples/</code></a></p>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="mistralrs-python-sdk"><a class="header" href="#mistralrs-python-sdk">mistralrs Python SDK</a></h1>
 <p>Documentation for the <code>mistralrs</code> Python package.</p>
 <blockquote>
@@ -2538,7 +2787,7 @@ source .venv/bin/activate  # Linux/macOS
 </code></pre>
 </li>
 </ol>
-<h3 id="feature-flags"><a class="header" href="#feature-flags">Feature Flags</a></h3>
+<h3 id="feature-flags-1"><a class="header" href="#feature-flags-1">Feature Flags</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -3450,7 +3699,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
 <h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/deepseekv2/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{
     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
@@ -3558,7 +3807,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
 <h2 id="rust-sdk-1"><a class="header" href="#rust-sdk-1">Rust SDK</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/deepseekr1/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{
     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
@@ -3730,7 +3979,7 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/gemma3/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Gemma 3 model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
@@ -3756,8 +4005,7 @@ async fn main() -&gt; Result&lt;()&gt; {
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         image,
-        &amp;model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -3924,8 +4172,7 @@ async fn main() -&gt; Result&lt;()&gt; {
         TextMessageRole::User,
         "Describe this image briefly.",
         image,
-        &amp;model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -4023,7 +4270,7 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust-1"><a class="header" href="#rust-1">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/gemma3n/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Gemma 3n model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
@@ -4049,8 +4296,7 @@ async fn main() -&gt; Result&lt;()&gt; {
         TextMessageRole::User,
         "Please describe the image in detail.",
         image,
-        &amp;model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -4158,8 +4404,7 @@ async fn main() -&gt; Result&lt;()&gt; {
             "Describe in detail what is happening.",
             vec![image],
             vec![audio],
-            &amp;model,
-        )?;
+        );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -4283,7 +4528,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
 <h2 id="rust-sdk-3"><a class="header" href="#rust-sdk-3">Rust SDK</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/glm4_moe_lite/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, TextMessages, TextModelBuilder};
 
@@ -4477,7 +4722,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
 <h2 id="rust-sdk-5"><a class="header" href="#rust-sdk-5">Rust SDK</a></h2>
-<p>You can find a more detailed example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/gpt_oss/main.rs">here</a>.</p>
+<p>You can find a more detailed example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{TextMessageRole, TextMessages, TextModelBuilder};
 
@@ -4595,7 +4840,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
 <h2 id="rust-sdk-6"><a class="header" href="#rust-sdk-6">Rust SDK</a></h2>
-<p>You can find a more detailed example demonstrating enabling/disabling thinking <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/qwen3/main.rs">here</a>.</p>
+<p>You can find a more detailed example demonstrating enabling/disabling thinking <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{
     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
@@ -4704,7 +4949,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
 <h2 id="rust-sdk-7"><a class="header" href="#rust-sdk-7">Rust SDK</a></h2>
-<p>You can find a more detailed example demonstrating enabling/disabling thinking <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/smollm3/main.rs">here</a>.</p>
+<p>You can find a more detailed example demonstrating enabling/disabling thinking <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{
     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
@@ -4814,7 +5059,7 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust-2"><a class="header" href="#rust-2">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/idefics2/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Idefics 2 model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
@@ -5040,7 +5285,7 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust-3"><a class="header" href="#rust-3">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/idefics3/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
@@ -5066,8 +5311,7 @@ async fn main() -&gt; Result&lt;()&gt; {
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         image,
-        &amp;model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -5213,7 +5457,7 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust-4"><a class="header" href="#rust-4">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/llava_next/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the LLaVA and LLaVANext model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
@@ -5438,7 +5682,7 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust-5"><a class="header" href="#rust-5">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/llama_vision/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
@@ -5639,7 +5883,7 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust-6"><a class="header" href="#rust-6">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/llama4/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Llama 4 model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
@@ -5666,8 +5910,7 @@ async fn main() -&gt; Result&lt;()&gt; {
         TextMessageRole::User,
         "What is this?",
         image,
-        &amp;model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -5852,7 +6095,7 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust-7"><a class="header" href="#rust-7">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/minicpmo_2_6/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
@@ -6031,7 +6274,7 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust-8"><a class="header" href="#rust-8">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/mistral3/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Mistral 3 model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
@@ -6057,8 +6300,7 @@ async fn main() -&gt; Result&lt;()&gt; {
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         image,
-        &amp;model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -6200,7 +6442,7 @@ print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
 <h2 id="rust-sdk-8"><a class="header" href="#rust-sdk-8">Rust SDK</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/phi3_5_moe/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{
     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
@@ -6318,7 +6560,7 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust-9"><a class="header" href="#rust-9">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/phi3v/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Phi 3 Vision model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
@@ -6512,8 +6754,7 @@ async fn main() -&gt; Result&lt;()&gt; {
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         image,
-        &amp;model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -6624,8 +6865,7 @@ async fn main() -&gt; Result&lt;()&gt; {
             "Describe in detail what is happening.",
             vec![image],
             vec![audio],
-            &amp;model,
-        )?;
+        );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -6759,7 +6999,7 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust-11"><a class="header" href="#rust-11">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/qwen2vl/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
@@ -6786,8 +7026,7 @@ async fn main() -&gt; Result&lt;()&gt; {
         TextMessageRole::User,
         "What type of flower is this? Give some fun facts.",
         image,
-        &amp;model
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -6934,7 +7173,7 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust-12"><a class="header" href="#rust-12">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/qwen3_vl/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
@@ -6958,8 +7197,7 @@ async fn main() -&gt; Result&lt;()&gt; {
         TextMessageRole::User,
         "What is this?",
         vec![image],
-        &amp;model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -7310,7 +7548,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     println!("Returned {} vectors", embeddings.len());
     Ok(())
 }</code></pre>
-<p>This example lives <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/embedding_gemma/main.rs">here</a>, and can be run with:</p>
+<p>This example lives <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/getting_started/embedding/main.rs">here</a>, and can be run with:</p>
 <pre><code class="language-bash">cargo run --package mistralrs --example embedding_gemma
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -7385,7 +7623,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     println!("Returned {} vectors", embeddings.len());
     Ok(())
 }</code></pre>
-<p>You can find the full example at <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/qwen3_embedding/main.rs"><code>mistralrs/examples/qwen3_embedding/main.rs</code></a>.</p>
+<p>You can find the full example at <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/embeddings/main.rs"><code>mistralrs/examples/advanced/embeddings/main.rs</code></a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="quantization-in-mistralrs"><a class="header" href="#quantization-in-mistralrs">Quantization in mistral.rs</a></h1>
 <p>Mistral.rs supports the following quantization:</p>
@@ -8283,7 +8521,7 @@ rank = 16
 alpha = 16
 target_modules = ["gate_proj"]
 </code></pre>
-<h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
+<h2 id="examples-1"><a class="header" href="#examples-1">Examples</a></h2>
 <h2 id="cli"><a class="header" href="#cli">CLI</a></h2>
 <p>CLI usage is via the <a href="#anymoe">TOML selector</a> where you can also find docs on the required fields.</p>
 <p>For example, to use the demo fine-tuned expert:</p>
@@ -8399,7 +8637,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="matformer-matryoshka-transformer-support"><a class="header" href="#matformer-matryoshka-transformer-support">Matformer (Matryoshka Transformer) Support</a></h1>
 <p>Matformer allows you to dynamically resize transformer models at runtime, trading compute/memory for quality. This enables deploying the same model across devices with different resource constraints - from edge devices to powerful GPUs.</p>
-<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<h2 id="quick-start-1"><a class="header" href="#quick-start-1">Quick Start</a></h2>
 <h3 id="command-line-1"><a class="header" href="#command-line-1">Command Line</a></h3>
 <pre><code class="language-bash"># Run Gemma 3n with the E2.49B configuration (2.49B params instead of 3.98B)
 mistralrs run -m google/gemma-3n-E4B-it \
@@ -8634,7 +8872,7 @@ components on the GPU.</p>
 <p class="blockquote-tag-title"><svg viewbox="0 0 16 16" width="18" height="18"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"></path></svg>Note</p>
 <p>The maximum sequence length is also used to ensure that a KV cache will fit for with and without PagedAttention.</p>
 </blockquote>
-<h2 id="examples-1"><a class="header" href="#examples-1">Examples</a></h2>
+<h2 id="examples-2"><a class="header" href="#examples-2">Examples</a></h2>
 <ul>
 <li>Python
 <ul>
@@ -8644,8 +8882,8 @@ components on the GPU.</p>
 </li>
 <li>Rust
 <ul>
-<li>Text models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/text_auto_device_map/main.rs">text_auto_device_map/main.rs</a></li>
-<li>Vision models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/vision_auto_device_map/main.rs">vision_auto_device_map/main.rs</a></li>
+<li>Text models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs">text_auto_device_map/main.rs</a></li>
+<li>Vision models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs">vision_auto_device_map/main.rs</a></li>
 </ul>
 </li>
 <li>Server
@@ -9425,7 +9663,7 @@ cargo run --release --features ring -- ...
 </code></pre>
 <p>The ring backend will automatically handle collective communication for tensor-parallel inference.</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="tool-calling"><a class="header" href="#tool-calling">Tool calling</a></h1>
+<h1 id="tool-calling-1"><a class="header" href="#tool-calling-1">Tool calling</a></h1>
 <p>Tool calling makes LLMs smarter.</p>
 <p>LLMs use tool calling to interact with the outside world. Mistral.rs has OpenAI compatible support for tool calling in all APIs, HTTP, Python, and Rust.</p>
 <p>Note that some models, such as Mistral Small/Nemo models, require a chat template to be specified. For example:</p>
@@ -9470,7 +9708,7 @@ runner = Runner(
 </code></pre>
 <p>See <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_search.py">custom_search.py</a> for a full
 example. In Rust pass <code>.with_tool_callback(...)</code> to the builder as demonstrated
-in <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/custom_search/main.rs">custom_search/main.rs</a>.</p>
+in <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/tool_callback/main.rs">tool_callback/main.rs</a>.</p>
 <h2 id="search-callbacks"><a class="header" href="#search-callbacks">Search callbacks</a></h2>
 <p>Web search uses a DuckDuckGo-based callback by default. Provide your own search
 function with <code>search_callback</code> in Python or <code>.with_search_callback(...)</code> in
@@ -9480,7 +9718,7 @@ and examples.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="web-search-tool-in-mistralrs"><a class="header" href="#web-search-tool-in-mistralrs">Web search tool in mistral.rs</a></h1>
 <p>mistral.rs is compatible with OpenAI’s <code>web_search_options</code> parameter! Once enabled, this allows web searching for models.</p>
-<p>This works with all models that support <a href="#tool-calling">tool calling</a>. However, your mileage may vary depending on the specific model. The following models work during testing and are recommended for usage:</p>
+<p>This works with all models that support <a href="#tool-calling-1">tool calling</a>. However, your mileage may vary depending on the specific model. The following models work during testing and are recommended for usage:</p>
 <ul>
 <li>Hermes 3 3b/8b</li>
 <li>Mistral 3 24b</li>
@@ -10005,7 +10243,7 @@ curl http://localhost:1234/v1/chat/completions \
 <p><strong>New syntax:</strong></p>
 <pre><code class="language-bash">mistralrs from-config --file &lt;CONFIG&gt;
 </code></pre>
-<h2 id="examples-2"><a class="header" href="#examples-2">Examples</a></h2>
+<h2 id="examples-3"><a class="header" href="#examples-3">Examples</a></h2>
 <h3 id="example-1-text-models"><a class="header" href="#example-1-text-models">Example 1: Text Models</a></h3>
 <pre><code class="language-json">{
   "llama3-3b": {
@@ -10306,7 +10544,7 @@ runner.send_chat_completion_request(request, model_id="google/gemma-3-4b-it")
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="mcp-model-context-protocol-client"><a class="header" href="#mcp-model-context-protocol-client">MCP (Model Context Protocol) Client</a></h1>
 <p>mistral.rs includes a built-in MCP client that allows models to connect to external tools and services through the Model Context Protocol. This enables automatic tool discovery and usage from any MCP-compatible server.</p>
-<h2 id="quick-start-1"><a class="header" href="#quick-start-1">Quick Start</a></h2>
+<h2 id="quick-start-2"><a class="header" href="#quick-start-2">Quick Start</a></h2>
 <p>Examples below show HTTP (Hugging Face), Process (filesystem), and WebSocket transports. Replace <code>hf_xxx</code> with your actual Hugging Face token for HTTP examples.</p>
 <h3 id="rust-sdk-14"><a class="header" href="#rust-sdk-14">Rust SDK</a></h3>
 <pre class="playground"><code class="language-rust">use mistralrs::{

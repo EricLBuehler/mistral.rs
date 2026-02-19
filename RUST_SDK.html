@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Mistral 3 - mistral.rs Documentation</title>
+        <title>Rust SDK - mistral.rs Documentation</title>
 
 
         <!-- Custom HTML head -->
@@ -146,7 +146,7 @@
                         <a href="https://github.com/EricLBuehler/mistral.rs" title="Git repository" aria-label="Git repository">
                             <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
                         </a>
-                        <a href="https://github.com/EricLBuehler/mistral.rs/edit/master/docs/./MISTRAL3.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                        <a href="https://github.com/EricLBuehler/mistral.rs/edit/master/docs/./RUST_SDK.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
                             <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
                         </a>
 
@@ -180,192 +180,264 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="mistral-small-31-model-mistralaimistral-small-31-24b-instruct-2503"><a class="header" href="#mistral-small-31-model-mistralaimistral-small-31-24b-instruct-2503">Mistral Small 3.1 Model: <a href="https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503"><code>mistralai/Mistral-Small-3.1-24B-Instruct-2503</code></a></a></h1>
-<p>The Mistral Small 3.1 model is a strong multimodal (text+vision) model with 128k context length, function calling, and strong visual understanding.</p>
-<p>We support the Mistral 3 Model in the Rust, Python, and HTTP APIs, including ISQ for increased performance.</p>
-<p>The Python and HTTP APIs support sending images as:</p>
-<ul>
-<li>URL</li>
-<li>Path to a local image</li>
-<li><a href="https://en.wikipedia.org/wiki/Base64">Base64</a> encoded string</li>
-</ul>
-<p>The Rust SDK takes an image from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
-<h2 id="tool-calling-with-mistral-small-31"><a class="header" href="#tool-calling-with-mistral-small-31">Tool calling with Mistral Small 3.1</a></h2>
-<p>The Mistral Small 3.1 model itself does not come with the correct JINJA chat template to enable tool calling. We provide a chat template for
-tool calling with Mistral Small 3.1, and you can use it by specifying the <code>jinja_explicit</code> parameter in the various APIs. For example:</p>
-<pre><code class="language-bash">mistralrs serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
-</code></pre>
-<h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/mistral3.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+                        <h1 id="mistralrs-rust-sdk"><a class="header" href="#mistralrs-rust-sdk">mistralrs Rust SDK</a></h1>
+<p>The <code>mistralrs</code> crate provides a high-level Rust API for running LLM inference with mistral.rs.</p>
 <blockquote>
-<p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
+<p><strong>Full API reference:</strong> <a href="https://docs.rs/mistralrs">docs.rs/mistralrs</a></p>
 </blockquote>
-<hr>
-<p><strong>Image:</strong></p>
-<img src="https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg">
-<h6><a href="https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg">Credit</a></h6>
-
-<p><strong>Prompt:</strong></p>
-<pre><code>What is this?
-</code></pre>
-<p><strong>Output:</strong></p>
-<pre><code>The image shows a close-up of a vibrant flower with pink petals and a central cluster of yellowish-brown stamens. This flower appears to be from the genus *Gazania*, commonly known as treasure flowers or gazanias. These flowers are known for their daisy-like appearance and bright colors.
-
-Gazania flowers typically have ray florets (the petal-like structures) that can change color based on light conditions—often appearing more vibrant in direct sunlight. They are popular in gardens for their hardiness and ability to thrive in sunny locations with well-drained soil.
-
-If there's anything specific about this flower or its care that interests you further, feel free to ask!
-</code></pre>
-<hr>
-<ol>
-<li>Start the server</li>
-</ol>
-<pre><code>mistralrs serve vision -p 1234 -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
-</code></pre>
-<ol start="2">
-<li>Send a request</li>
-</ol>
-<pre><code class="language-py">from openai import OpenAI
-import httpx
-import textwrap
-import json
-
-
-client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
-
-
-completion = client.chat.completions.create(
-    model="default",
-    messages=[
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": "https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg"
-                    },
-                },
-                {
-                    "type": "text",
-                    "text": "What is this?",
-                },
-            ],
-        },
-    ],
-    max_tokens=256,
-    frequency_penalty=1.0,
-    top_p=0.1,
-    temperature=0,
-)
-resp = completion.choices[0].message.content
-print(resp)
-
-</code></pre>
+<p><strong>Table of contents</strong></p>
 <ul>
-<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">image via base64 here</a>.</li>
-<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
+<li><a href="#installation">Installation</a></li>
+<li><a href="#quick-start">Quick Start</a></li>
+<li><a href="#model-builders">Model Builders</a></li>
+<li><a href="#request-types">Request Types</a></li>
+<li><a href="#streaming">Streaming</a></li>
+<li><a href="#structured-output">Structured Output</a></li>
+<li><a href="#tool-calling">Tool Calling</a></li>
+<li><a href="#agents">Agents</a></li>
+<li><a href="#blocking-api">Blocking API</a></li>
+<li><a href="#feature-flags">Feature Flags</a></li>
+<li><a href="#examples">Examples</a></li>
 </ul>
-<hr>
-<h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
-<p>This is a minimal example of running the Mistral 3 model with a dummy image.</p>
-<pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+<h2 id="installation"><a class="header" href="#installation">Installation</a></h2>
+<pre><code class="language-bash">cargo add mistralrs
+</code></pre>
+<p>Or in your <code>Cargo.toml</code>:</p>
+<pre><code class="language-toml">[dependencies]
+mistralrs = "0.7"
+</code></pre>
+<p>For GPU acceleration, enable the appropriate feature:</p>
+<pre><code class="language-toml">mistralrs = { version = "0.7", features = ["metal"] }     # macOS
+mistralrs = { version = "0.7", features = ["cuda"] }       # NVIDIA
+</code></pre>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre class="playground"><code class="language-rust">use mistralrs::{IsqBits, ModelBuilder, TextMessages, TextMessageRole};
 
 #[tokio::main]
-async fn main() -&gt; Result&lt;()&gt; {
-    let model =
-        VisionModelBuilder::new("mistralai/Mistral-Small-3.1-24B-Instruct-2503")
-            .with_isq(IsqType::Q4K)
-            .with_logging()
-            .build()
-            .await?;
+async fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
+    let model = ModelBuilder::new("Qwen/Qwen3-4B")
+        .with_auto_isq(IsqBits::Four)
+        .build()
+        .await?;
 
-    let bytes = match reqwest::blocking::get(
-        "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg",
-    ) {
-        Ok(http_resp) =&gt; http_resp.bytes()?.to_vec(),
-        Err(e) =&gt; anyhow::bail!(e),
-    };
-    let image = image::load_from_memory(&amp;bytes)?;
-
-    let messages = VisionMessages::new().add_image_message(
-        TextMessageRole::User,
-        "What is depicted here? Please describe the scene in detail.",
-        image,
-    );
-
-    let response = model.send_chat_request(messages).await?;
-
-    println!("{}", response.choices[0].message.content.as_ref().unwrap());
-    dbg!(
-        response.usage.avg_prompt_tok_per_sec,
-        response.usage.avg_compl_tok_per_sec
-    );
-
+    let response = model.chat("What is Rust's ownership model?").await?;
+    println!("{response}");
     Ok(())
 }</code></pre>
-<h2 id="python"><a class="header" href="#python">Python</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/mistral3.py">here</a>.</p>
-<p>This example demonstrates loading and sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
-
-runner = Runner(
-    which=Which.VisionPlain(
-        model_id="mistralai/Mistral-Small-3.1-24B-Instruct-2503",
-        arch=VisionArchitecture.Mistral3,
-    ),
-    in_situ_quant="4"
-)
-
-res = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="default",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": "What is this?",
-                    },
-                ],
-            }
-        ],
-        max_tokens=256,
-        presence_penalty=1.0,
-        top_p=0.1,
-        temperature=0.1,
+<h2 id="model-builders"><a class="header" href="#model-builders">Model Builders</a></h2>
+<p>All models are created through builder structs. Use <code>ModelBuilder</code> for auto-detection, or a specific builder for more control.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Builder</th><th>Use Case</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ModelBuilder</code></td><td>Auto-detects model type (text, vision, embedding)</td></tr>
+<tr><td><code>TextModelBuilder</code></td><td>Text generation models</td></tr>
+<tr><td><code>VisionModelBuilder</code></td><td>Vision + text models (image/audio input)</td></tr>
+<tr><td><code>GgufModelBuilder</code></td><td>GGUF quantized model files</td></tr>
+<tr><td><code>EmbeddingModelBuilder</code></td><td>Text embedding models</td></tr>
+<tr><td><code>DiffusionModelBuilder</code></td><td>Image generation (e.g., FLUX)</td></tr>
+<tr><td><code>SpeechModelBuilder</code></td><td>Speech synthesis (e.g., Dia)</td></tr>
+<tr><td><code>LoraModelBuilder</code></td><td>Text model with LoRA adapters</td></tr>
+<tr><td><code>XLoraModelBuilder</code></td><td>Text model with X-LoRA adapters</td></tr>
+<tr><td><code>AnyMoeModelBuilder</code></td><td>AnyMoE Mixture of Experts</td></tr>
+<tr><td><code>TextSpeculativeBuilder</code></td><td>Speculative decoding (target + draft)</td></tr>
+</tbody>
+</table>
+</div>
+<p>All builders share common configuration methods:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let model = TextModelBuilder::new("Qwen/Qwen3-4B")
+    .with_auto_isq(IsqBits::Four)      // Platform-optimal quantization
+    .with_logging()                      // Enable logging
+    .with_paged_attn(                    // PagedAttention for memory efficiency
+        PagedAttentionMetaBuilder::default().build()?
     )
-)
-print(res.choices[0].message.content)
-print(res.usage)
+    .build()
+    .await?;
+<span class="boring">}</span></code></pre>
+<p>Key builder methods include <code>with_isq()</code>, <code>with_auto_isq()</code>, <code>with_dtype()</code>, <code>with_force_cpu()</code>, <code>with_device_mapping()</code>, <code>with_chat_template()</code>, <code>with_paged_attn()</code>, <code>with_max_num_seqs()</code>, <code>with_mcp_client()</code>, and more. See the <a href="https://docs.rs/mistralrs">API docs</a> for the full list.</p>
+<h2 id="request-types"><a class="header" href="#request-types">Request Types</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Type</th><th>Use When</th><th>Sampling</th></tr>
+</thead>
+<tbody>
+<tr><td><code>TextMessages</code></td><td>Simple text-only chat</td><td>Deterministic</td></tr>
+<tr><td><code>VisionMessages</code></td><td>Prompt includes images or audio</td><td>Deterministic</td></tr>
+<tr><td><code>RequestBuilder</code></td><td>Tools, logprobs, custom sampling, constraints, or web search</td><td>Configurable</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>TextMessages</code> and <code>VisionMessages</code> convert into <code>RequestBuilder</code> via <code>Into&lt;RequestBuilder&gt;</code> if you start simple and later need more control.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Simple
+let messages = TextMessages::new()
+    .add_message(TextMessageRole::User, "Hello!");
+let response = model.send_chat_request(messages).await?;
 
+// Advanced
+let request = RequestBuilder::new()
+    .add_message(TextMessageRole::System, "You are helpful.")
+    .add_message(TextMessageRole::User, "Hello!")
+    .set_tools(tools)
+    .with_sampling(SamplingParams { temperature: Some(0.7), ..Default::default() });
+let response = model.send_chat_request(request).await?;
+<span class="boring">}</span></code></pre>
+<h2 id="streaming"><a class="header" href="#streaming">Streaming</a></h2>
+<p><code>Model::stream_chat_request</code> returns a <code>Stream</code> that implements <code>futures::Stream</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use futures::StreamExt;
+use mistralrs::*;
+
+let mut stream = model.stream_chat_request(messages).await?;
+while let Some(chunk) = stream.next().await {
+    if let Response::Chunk(c) = chunk {
+        if let Some(text) = c.choices.first().and_then(|ch| ch.delta.content.as_ref()) {
+            print!("{text}");
+        }
+    }
+}
+<span class="boring">}</span></code></pre>
+<h2 id="structured-output"><a class="header" href="#structured-output">Structured Output</a></h2>
+<p>Derive <code>schemars::JsonSchema</code> on your type and the model will be constrained to produce valid JSON:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use mistralrs::*;
+use schemars::JsonSchema;
+use serde::Deserialize;
+
+#[derive(Deserialize, JsonSchema)]
+struct City {
+    name: String,
+    country: String,
+    population: u64,
+}
+
+let messages = TextMessages::new()
+    .add_message(TextMessageRole::User, "Give me info about Paris.");
+
+let city: City = model.generate_structured::&lt;City&gt;(messages).await?;
+println!("{}: pop. {}", city.name, city.population);
+<span class="boring">}</span></code></pre>
+<h2 id="tool-calling"><a class="header" href="#tool-calling">Tool Calling</a></h2>
+<h3 id="manual-tool-definition"><a class="header" href="#manual-tool-definition">Manual tool definition</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let tools = vec![Tool {
+    tp: ToolType::Function,
+    function: Function {
+        description: Some("Get the weather for a location".to_string()),
+        name: "get_weather".to_string(),
+        parameters: Some(parameters_json),
+    },
+}];
+
+let request = RequestBuilder::new()
+    .add_message(TextMessageRole::User, "What's the weather in NYC?")
+    .set_tools(tools);
+
+let response = model.send_chat_request(request).await?;
+<span class="boring">}</span></code></pre>
+<h3 id="using-the-tool-macro"><a class="header" href="#using-the-tool-macro">Using the <code>#[tool]</code> macro</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use mistralrs::tool;
+
+#[tool(description = "Get the current weather for a location")]
+fn get_weather(
+    #[description = "The city name"] city: String,
+) -&gt; Result&lt;String&gt; {
+    Ok(format!("Sunny, 72F in {city}"))
+}
+<span class="boring">}</span></code></pre>
+<p>See <a href="TOOL_CALLING.html">Tool Calling</a> for full details, or the <a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/tools"><code>examples/advanced/tools/</code></a> example.</p>
+<h2 id="agents"><a class="header" href="#agents">Agents</a></h2>
+<p><code>AgentBuilder</code> wraps the tool-calling loop, automatically dispatching tool calls and feeding results back:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use mistralrs::*;
+
+let agent = AgentBuilder::new(model)
+    .with_system_prompt("You are a helpful assistant with tools.")
+    .with_sync_tool(get_weather_tool, get_weather_callback)
+    .with_max_iterations(10)
+    .build();
+
+let response = agent.run("What's the weather in NYC and London?").await?;
+println!("{}", response.final_text);
+<span class="boring">}</span></code></pre>
+<p>See the <a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/agent"><code>examples/advanced/agent/</code></a> example for streaming agents and the <code>#[tool]</code> macro.</p>
+<h2 id="blocking-api"><a class="header" href="#blocking-api">Blocking API</a></h2>
+<p>For non-async applications, use <code>BlockingModel</code>:</p>
+<pre class="playground"><code class="language-rust">use mistralrs::blocking::BlockingModel;
+use mistralrs::{IsqBits, ModelBuilder};
+
+fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
+    let model = BlockingModel::from_builder(
+        ModelBuilder::new("Qwen/Qwen3-4B")
+            .with_auto_isq(IsqBits::Four),
+    )?;
+    let answer = model.chat("What is 2+2?")?;
+    println!("{answer}");
+    Ok(())
+}</code></pre>
+<blockquote>
+<p><strong>Note:</strong> <code>BlockingModel</code> creates its own tokio runtime. Do not call it from within an existing tokio runtime.</p>
+</blockquote>
+<h2 id="feature-flags"><a class="header" href="#feature-flags">Feature Flags</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Effect</th></tr>
+</thead>
+<tbody>
+<tr><td><code>cuda</code></td><td>CUDA GPU support</td></tr>
+<tr><td><code>flash-attn</code></td><td>Flash Attention 2 kernels (requires <code>cuda</code>)</td></tr>
+<tr><td><code>cudnn</code></td><td>cuDNN acceleration (requires <code>cuda</code>)</td></tr>
+<tr><td><code>nccl</code></td><td>Multi-GPU via NCCL (requires <code>cuda</code>)</td></tr>
+<tr><td><code>metal</code></td><td>Apple Metal GPU support</td></tr>
+<tr><td><code>accelerate</code></td><td>Apple Accelerate framework</td></tr>
+<tr><td><code>mkl</code></td><td>Intel MKL acceleration</td></tr>
+</tbody>
+</table>
+</div>
+<p>The default feature set (no flags) builds with pure Rust — no C compiler or system libraries required.</p>
+<h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
+<p>The crate includes 48 runnable examples organized by topic:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Category</th><th>Examples</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Getting Started</strong></td><td><code>text_generation</code>, <code>streaming</code>, <code>vision</code>, <code>gguf</code>, <code>gguf_locally</code>, <code>embedding</code></td></tr>
+<tr><td><strong>Models</strong></td><td><code>text_models</code>, <code>vision_models</code>, <code>audio</code>, <code>diffusion</code>, <code>speech</code>, <code>multimodal</code></td></tr>
+<tr><td><strong>Quantization</strong></td><td><code>isq</code>, <code>imatrix</code>, <code>uqff</code>, <code>topology</code>, <code>mixture_of_quant_experts</code></td></tr>
+<tr><td><strong>Advanced</strong></td><td><code>tools</code>, <code>agent</code>, <code>grammar</code>, <code>json_schema</code>, <code>web_search</code>, <code>mcp_client</code>, <code>batching</code>, <code>paged_attn</code>, <code>speculative</code>, <code>lora</code>, <code>error_handling</code>, and more</td></tr>
+<tr><td><strong>Cookbook</strong></td><td><code>cookbook_rag</code>, <code>cookbook_structured</code>, <code>cookbook_multiturn</code>, <code>cookbook_agent</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Run any example with:</p>
+<pre><code class="language-bash">cargo run --release --features &lt;features&gt; --example &lt;name&gt;
 </code></pre>
-<ul>
-<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
-<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
-</ul>
+<p>Browse all examples: <a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples"><code>mistralrs/examples/</code></a></p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="MINICPMO_2_6.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="TROUBLESHOOTING.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="PHI3.5MOE.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="PYTHON_SDK.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -375,11 +447,11 @@ print(res.usage)
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="MINICPMO_2_6.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="TROUBLESHOOTING.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="PHI3.5MOE.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="PYTHON_SDK.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
