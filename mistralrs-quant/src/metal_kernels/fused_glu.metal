@@ -87,24 +87,26 @@ template <typename T>
   }
 }
 
-#define instantiate_fused_glu(type)                                            \
-  template [[host_name("fused_glu_" #type)]] [[kernel]] void fused_glu<type>(  \
-      const device type *a [[buffer(0)]], const device type *b [[buffer(1)]],  \
-      device type *output [[buffer(2)]],                                       \
-      constant uint &n_elements [[buffer(3)]],                                 \
-      constant int &activation [[buffer(4)]],                                  \
+// Helper: emit an explicit template instantiation with a custom exported name.
+#define instantiate_fused_glu_named(host, ty)                                   \
+  template [[host_name(host)]] [[kernel]] void fused_glu<ty>(                   \
+      const device ty *a [[buffer(0)]], const device ty *b [[buffer(1)]],       \
+      device ty *output [[buffer(2)]],                                          \
+      constant uint &n_elements [[buffer(3)]],                                  \
+      constant int &activation [[buffer(4)]],                                   \
       uint tid [[thread_position_in_grid]]);
+
+// Default naming for float/half remains: fused_glu_<type>
+#define instantiate_fused_glu(ty)                                               \
+  instantiate_fused_glu_named("fused_glu_" #ty, ty)
 
 instantiate_fused_glu(float);
 instantiate_fused_glu(half);
 
-// Always provide BF16 kernel entry point named "fused_glu_bfloat".
-// `bfloat16_t` maps to native `bfloat` where available and emulates BF16
-// otherwise, so this symbol exists regardless of selected Metal standard.
-template [[host_name("fused_glu_bfloat")]] [[kernel]] void fused_glu<bfloat16_t>(
-    const device bfloat16_t *a [[buffer(0)]],
-    const device bfloat16_t *b [[buffer(1)]],
-    device bfloat16_t *output [[buffer(2)]],
-    constant uint &n_elements [[buffer(3)]],
-    constant int &activation [[buffer(4)]],
-    uint tid [[thread_position_in_grid]]);
+// Rust expects the BF16 variant to be exported as "fused_glu_bfloat".
+// Using bfloat16_t keeps the kernel available even if native `bfloat` isn't,
+// avoiding the missing-symbol error in #1906.
+instantiate_fused_glu_named("fused_glu_bfloat", bfloat16_t);
+
+#undef instantiate_fused_glu
+#undef instantiate_fused_glu_named
