@@ -30,6 +30,21 @@ jobs:
         with:
           command: check
 
+  check-metal:
+    name: Check (metal)
+    runs-on: macOS-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: --workspace --features metal
+
   check-no-default-features:
     name: Check (no default features)
     runs-on: ubuntu-latest
@@ -53,6 +68,25 @@ jobs:
         with:
           command: test
           args: -p mistralrs-core --no-default-features loader_selects_without_audio_feature -- --nocapture
+
+  check-no-default-features-metal:
+    name: Check (no default features + metal)
+    runs-on: macOS-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: -p mistralrs-core --no-default-features --features metal
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: -p mistralrs --no-default-features --features metal
 
   test:
     name: Test Suite

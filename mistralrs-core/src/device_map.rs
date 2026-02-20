@@ -1,4 +1,4 @@
-use std::{fmt::Debug, sync::Arc};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use crate::{
     pipeline::AutoDeviceMapParams, utils::debug::DeviceRepr, MemoryUsage, Topology, TryIntoDType,
@@ -582,6 +582,55 @@ impl DeviceMapper for NcclPipelineParallelMapper {
     }
     fn get_comm_for(&self, layer_idx: usize) -> Result<Arc<mistralrs_quant::Comm>> {
         Ok(self.mappings[layer_idx].0.clone())
+    }
+}
+
+/// Pre-creates one copy of an attention mask per unique device used by a `DeviceMapper`.
+///
+/// Instead of calling `mask.to_device(xs.device())` inside every layer loop iteration
+/// (which allocates new GPU storage each time when src != dst device), create a
+/// `DeviceMappedMask` once before the loop and call `.get(device)` inside the loop
+/// for zero-allocation mask lookup.
+pub struct DeviceMappedMask {
+    masks: HashMap<DeviceLocation, Tensor>,
+}
+
+impl DeviceMappedMask {
+    /// Build a device-mapped mask. Returns `Ok(None)` when the input mask is `None`.
+    pub fn new(mask: Option<Tensor>, mapper: &dyn DeviceMapper) -> Result<Option<Self>> {
+        let mask = match mask {
+            Some(m) => m,
+            None => return Ok(None),
+        };
+        let mut masks = HashMap::new();
+        for device in mapper.get_unique_devices() {
+            let loc = device.location();
+            if let std::collections::hash_map::Entry::Vacant(e) = masks.entry(loc) {
+                e.insert(mask.to_device(&device)?);
+            }
+        }
+        Ok(Some(Self { masks }))
+    }
+
+    /// Build a device-mapped mask from a single tensor on its current device.
+    /// Useful for quantized models where the mapper may be `None`.
+    /// Returns `None` when the input mask is `None`.
+    pub fn from_single(mask: Option<Tensor>) -> Option<Self> {
+        mask.map(|m| {
+            let mut masks = HashMap::new();
+            masks.insert(m.device().location(), m);
+            Self { masks }
+        })
+    }
+
+    /// Look up the pre-allocated mask for the given device.
+    ///
+    /// # Panics
+    /// Panics if `device` was not among the mapper's unique devices.
+    pub fn get(&self, device: &Device) -> &Tensor {
+        self.masks
+            .get(&device.location())
+            .expect("DeviceMappedMask: device not in mapper's unique devices")
     }
 }
 
