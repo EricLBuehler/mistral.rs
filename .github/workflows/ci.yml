@@ -70,7 +70,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: test
-          args: -p mistralrs --no-default-features
+          args: -p mistralrs --no-default-features --lib --tests
 
   no-audio-dependency-assertion:
     name: No-audio dependency assertion
