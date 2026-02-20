@@ -1,4 +1,11 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
+// Intentional feature coupling:
+// The Python SDK path needs MCP tool types registered as pyclasses.
+// Cargo feature wiring already enforces this, but keep a guard in case feature graphs change.
+#[cfg(all(feature = "pyo3_macros", not(feature = "mcp")))]
+compile_error!("`mistralrs-core/pyo3_macros` requires `mistralrs-core/mcp` (intentional).");
+
 use candle_core::Device;
 use engine::Engine;
 pub use engine::{

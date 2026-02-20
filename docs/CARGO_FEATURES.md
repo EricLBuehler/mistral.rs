@@ -281,7 +281,7 @@ These features are primarily for library development and are not typically used 
 
 | Feature | Description |
 |---------|-------------|
-| `pyo3_macros` | Python bindings support (used by mistralrs-pyo3) |
+| `pyo3_macros` | Python bindings support (used by mistralrs-pyo3). In `mistralrs-core`, enabling this also enables `mcp` (intentional). |
 | `utoipa` | OpenAPI documentation generation |
 
 ---
@@ -294,6 +294,9 @@ These features are primarily for library development and are not typically used 
 |---------|---------|-------------|
 | `audio` | on | Audio input decode/processing + speech models. Some multimodal models remain loadable without this feature for non-audio inputs, but audio request payload support requires it. |
 | `mcp` | on | MCP (Model Context Protocol) integration |
+
+> Note: Disabling `audio` removes the audio I/O/decoding + speech stack (`mistralrs-audio`, `symphonia`, `hound`).  
+> Some multimodal vision models still compile audio-embedding preprocessing even with `audio` disabled, so a few DSP crates (`apodize`, `rubato`, `rustfft`) remain unconditional dependencies in `mistralrs-core` today.
 
 ### Minimal in-process builds
 

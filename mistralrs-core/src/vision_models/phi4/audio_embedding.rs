@@ -26,6 +26,18 @@ pub struct AudioEmbedding {
     target_device_dtype: (Device, DType),
 }
 
+fn maybe_to_device_dtype(
+    t: &Tensor,
+    target_device: &Device,
+    target_dtype: DType,
+) -> Result<Tensor> {
+    if !t.device().same_device(target_device) || t.dtype() != target_dtype {
+        t.to_device(target_device)?.to_dtype(target_dtype)
+    } else {
+        Ok(t.clone())
+    }
+}
+
 impl AudioEmbedding {
     pub fn new(
         cfg: &Phi4MMConfig,
@@ -143,16 +155,9 @@ impl AudioEmbedding {
         let (target_device, target_dtype) = self.target_device_dtype.clone();
 
         let audio_set_tensor = if positions.dim(0)? > 0 {
-            // Convert to target device/dtype if needed
-            let input_embeds = if !input_embeds.device().same_device(&target_device)
-                || input_embeds.dtype() != target_dtype
-            {
-                input_embeds
-                    .to_device(&target_device)?
-                    .to_dtype(target_dtype)?
-            } else {
-                input_embeds.clone()
-            };
+            // Convert to target device/dtype if needed.
+            // Important: dtype mismatch must still convert even if device matches.
+            let input_embeds = maybe_to_device_dtype(input_embeds, &target_device, target_dtype)?;
 
             self.get_audio_features(&input_embeds, audio_attention_mask, input_mode)?
         } else {
@@ -201,5 +206,19 @@ impl AudioEmbedding {
         hidden_states = hidden_states_flat.reshape(original_shape)?;
 
         Ok(hidden_states)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maybe_to_device_dtype_converts_on_dtype_mismatch_even_same_device() -> Result<()> {
+        let dev = Device::Cpu;
+        let t = Tensor::zeros((2, 3), DType::F32, &dev)?;
+        let out = maybe_to_device_dtype(&t, &dev, DType::F64)?;
+        assert_eq!(out.dtype(), DType::F64);
+        Ok(())
     }
 }
