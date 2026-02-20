@@ -270,6 +270,8 @@ mod tests {
     use super::AutoVisionLoader;
     use super::VisionLoaderType;
     #[cfg(not(feature = "audio"))]
+    use crate::SupportedModality;
+    #[cfg(not(feature = "audio"))]
     use crate::vision_models::preprocessor_config::PreProcessorConfig;
     #[cfg(not(feature = "audio"))]
     use crate::vision_models::processor_config::ProcessorConfig;
@@ -320,9 +322,13 @@ mod tests {
         let loader = AutoVisionLoader::get_loader(config)
             .expect("phi4mm loader should be selectable without audio feature");
 
-        loader
+        let modalities = loader
             .modalities(config)
             .expect("phi4mm modalities should be available without audio feature");
+        assert!(
+            !modalities.input.contains(&SupportedModality::Audio),
+            "phi4mm should not report audio modality when audio feature is disabled"
+        );
         let preproc_cfg = PreProcessorConfig {
             audio_compression_rate: Some(8),
             audio_downsample_rate: Some(8),
@@ -339,9 +345,13 @@ mod tests {
         let loader = AutoVisionLoader::get_loader(config)
             .expect("gemma3n loader should be selectable without audio feature");
 
-        loader
+        let modalities = loader
             .modalities(config)
             .expect("gemma3n modalities should be available without audio feature");
+        assert!(
+            !modalities.input.contains(&SupportedModality::Audio),
+            "gemma3n should not report audio modality when audio feature is disabled"
+        );
         let _ = loader.get_processor(
             config,
             Some(ProcessorConfig::default()),
@@ -3103,12 +3113,12 @@ impl VisionModelLoader for Phi4MMLoader {
         Arc::new(Phi4MMPrefixer)
     }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
+        let mut input = vec![SupportedModality::Text, SupportedModality::Vision];
+        if cfg!(feature = "audio") {
+            input.push(SupportedModality::Audio);
+        }
         Ok(Modalities {
-            input: vec![
-                SupportedModality::Text,
-                SupportedModality::Vision,
-                SupportedModality::Audio,
-            ],
+            input,
             output: vec![SupportedModality::Text],
         })
     }
@@ -4788,7 +4798,7 @@ impl VisionModelLoader for Gemma3nLoader {
         // Handle the Gemma 3 1b case here
         Arc::new(Gemma3nProcessor::new(
             processor_config.unwrap_or_default(),
-            true,
+            cfg!(feature = "audio"),
         ))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
@@ -4801,12 +4811,12 @@ impl VisionModelLoader for Gemma3nLoader {
         Arc::new(Gemma3Prefixer)
     }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
+        let mut input = vec![SupportedModality::Text, SupportedModality::Vision];
+        if cfg!(feature = "audio") {
+            input.push(SupportedModality::Audio);
+        }
         Ok(Modalities {
-            input: vec![
-                SupportedModality::Text,
-                SupportedModality::Vision,
-                SupportedModality::Audio,
-            ],
+            input,
             output: vec![SupportedModality::Text],
         })
     }
