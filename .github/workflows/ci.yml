@@ -43,7 +43,11 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: check
-          args: --workspace --features metal
+          args: -p mistralrs-core --features metal
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: -p mistralrs --features metal
 
   check-no-default-features:
     name: Check (no default features)
