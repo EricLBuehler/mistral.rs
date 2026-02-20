@@ -63,11 +63,33 @@ jobs:
         with:
           command: check
           args: -p mistralrs --no-default-features
-      # Keep this targeted to avoid turning CI into a second full test matrix.
       - uses: actions-rs/cargo@v1
         with:
           command: test
-          args: -p mistralrs-core --no-default-features loader_selects_without_audio_feature -- --nocapture
+          args: -p mistralrs-core --no-default-features
+      - uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: -p mistralrs --no-default-features
+
+  no-audio-dependency-assertion:
+    name: No-audio dependency assertion
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - name: Assert no audio decode stack when audio feature is disabled
+        run: |
+          set -euo pipefail
+          if cargo tree -p mistralrs-core --no-default-features | grep -E '(symphonia|hound|mistralrs-audio)'; then
+            echo "Unexpected audio dependency found with --no-default-features."
+            exit 1
+          fi
+          echo "No audio decode dependencies found for mistralrs-core --no-default-features."
 
   check-no-default-features-metal:
     name: Check (no default features + metal)

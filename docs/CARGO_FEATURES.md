@@ -295,8 +295,8 @@ These features are primarily for library development and are not typically used 
 | `audio` | on | Audio input decode/processing + speech models. Some multimodal models remain loadable without this feature for non-audio inputs, but audio request payload support requires it. |
 | `mcp` | on | MCP (Model Context Protocol) integration |
 
-> Note: Disabling `audio` removes the audio I/O/decoding + speech stack (`mistralrs-audio`, `symphonia`, `hound`).  
-> Some multimodal vision models still compile audio-embedding preprocessing even with `audio` disabled, so a few DSP crates (`apodize`, `rubato`, `rustfft`) remain unconditional dependencies in `mistralrs-core` today.
+> Current stance: Disabling `audio` removes the audio I/O/decoding + speech stack (`mistralrs-audio`, `symphonia`, `hound`).
+> We intentionally keep parts of multimodal internals loadable without `audio`, so a few DSP crates (`apodize`, `rubato`, `rustfft`) remain unconditional dependencies in `mistralrs-core` today.
 
 ### Minimal in-process builds
 
@@ -313,6 +313,8 @@ Useful commands for verifying what you pulled in:
 cargo tree -p mistralrs-core --no-default-features
 cargo check -p mistralrs-core --no-default-features
 ```
+
+CI also enforces this contract with a dependency assertion that fails if `mistralrs-audio`, `symphonia`, or `hound` appear in `cargo tree -p mistralrs-core --no-default-features`.
 
 ---
 
