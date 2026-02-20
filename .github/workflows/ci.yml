@@ -30,6 +30,30 @@ jobs:
         with:
           command: check
 
+  check-no-default-features:
+    name: Check (no default features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: -p mistralrs-core --no-default-features
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: -p mistralrs --no-default-features
+      # Keep this targeted to avoid turning CI into a second full test matrix.
+      - uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: -p mistralrs-core --no-default-features loader_selects_without_audio_feature -- --nocapture
+
   test:
     name: Test Suite
     runs-on: ${{ matrix.os }}
