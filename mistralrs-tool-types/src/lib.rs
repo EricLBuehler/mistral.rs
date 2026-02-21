@@ -49,3 +49,59 @@ pub struct CalledFunction {
     pub name: String,
     pub arguments: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn tool_type_serializes_as_function() {
+        let v = serde_json::to_value(ToolType::Function).unwrap();
+        assert_eq!(v, json!("function"));
+    }
+
+    #[test]
+    fn function_accepts_parameters_alias_arguments() {
+        let v = json!({
+            "name": "weather",
+            "description": "Get weather",
+            "arguments": { "city": "Paris" }
+        });
+        let f: Function = serde_json::from_value(v).unwrap();
+        assert_eq!(f.name, "weather");
+        assert_eq!(
+            f.parameters.unwrap().get("city").unwrap(),
+            &json!("Paris")
+        );
+    }
+
+    #[test]
+    fn tool_roundtrip_stable_shape() {
+        let tool = Tool {
+            tp: ToolType::Function,
+            function: Function {
+                description: Some("desc".to_string()),
+                name: "search".to_string(),
+                parameters: Some(HashMap::from([("q".to_string(), json!("term"))])),
+            },
+        };
+        let v = serde_json::to_value(&tool).unwrap();
+        assert_eq!(v.get("type").unwrap(), "function");
+        assert_eq!(v.get("function").unwrap().get("name").unwrap(), "search");
+        let de: Tool = serde_json::from_value(v).unwrap();
+        assert_eq!(de.function.name, "search");
+    }
+
+    #[test]
+    fn called_function_roundtrip() {
+        let called = CalledFunction {
+            name: "tool_name".to_string(),
+            arguments: "{\"a\":1}".to_string(),
+        };
+        let v = serde_json::to_value(&called).unwrap();
+        let de: CalledFunction = serde_json::from_value(v).unwrap();
+        assert_eq!(de.name, "tool_name");
+        assert_eq!(de.arguments, "{\"a\":1}");
+    }
+}
