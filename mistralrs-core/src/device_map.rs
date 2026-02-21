@@ -633,6 +633,12 @@ impl DeviceMappedMask {
             )
         })
     }
+
+    /// Backward-compatible infallible lookup for call sites that still use `.get()`.
+    pub fn get(&self, device: &Device) -> &Tensor {
+        self.try_get(device)
+            .expect("DeviceMappedMask: device not in mapper's unique devices")
+    }
 }
 
 /// Get all devices on the same device type but different ordinals
