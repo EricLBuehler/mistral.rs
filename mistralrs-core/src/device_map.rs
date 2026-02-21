@@ -625,12 +625,13 @@ impl DeviceMappedMask {
 
     /// Look up the pre-allocated mask for the given device.
     ///
-    /// # Panics
-    /// Panics if `device` was not among the mapper's unique devices.
-    pub fn get(&self, device: &Device) -> &Tensor {
-        self.masks
-            .get(&device.location())
-            .expect("DeviceMappedMask: device not in mapper's unique devices")
+    /// Returns an error if `device` was not among the mapper's unique devices.
+    pub fn try_get(&self, device: &Device) -> Result<&Tensor> {
+        self.masks.get(&device.location()).ok_or_else(|| {
+            candle_core::Error::Msg(
+                "DeviceMappedMask: device not in mapper's unique devices".to_string(),
+            )
+        })
     }
 }
 

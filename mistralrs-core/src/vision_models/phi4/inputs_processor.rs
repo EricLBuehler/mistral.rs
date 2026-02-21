@@ -758,6 +758,15 @@ impl Phi4MMInputsProcessor {
             .iter()
             .any(|seq| seq.get_toks().contains(&(AUDIO_SPECIAL_TOKEN_ID as u32)));
 
+        // In "no-audio" builds, the model can still be used (text/image-only),
+        // but attempting to supply audio should produce a clear error.
+        #[cfg(not(feature = "audio"))]
+        if has_audio_tokens {
+            candle_core::bail!(
+                "Audio inputs are not supported in this build (mistralrs-core compiled without the audio feature). Rebuild with --features audio or use default features."
+            );
+        }
+
         if !has_audio_tokens {
             return Ok((None, None, None));
         }
@@ -800,7 +809,9 @@ impl Phi4MMInputsProcessor {
                         audio_frames_list.push(audio_frames);
                     }
                 } else {
-                    candle_core::bail!("No audios in `process_audio_for_sequences`");
+                    candle_core::bail!(
+                        "Phi4MM prompt contains audio placeholder tokens, but no audio inputs were provided."
+                    );
                 };
             }
         }
