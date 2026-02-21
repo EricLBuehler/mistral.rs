@@ -231,11 +231,19 @@ impl Qwen2VLModel {
                     .eq(1f64)?
                     .unsqueeze(0)?
                     .repeat((3, 1))?;
+                let existing_positions = position_ids.i((.., i, ..))?;
+
+                // Be resilient to occasional 1-token drift between generated rope positions and
+                // the attention mask when processing successive multimodal requests.
+                let target_len = llm_positions.dim(D::Minus1)?.min(positions_mask.dim(D::Minus1)?);
+                let llm_positions = llm_positions.narrow(D::Minus1, 0, target_len)?;
+                let positions_mask = positions_mask.narrow(D::Minus1, 0, target_len)?;
+                let existing_positions = existing_positions.narrow(D::Minus1, 0, target_len)?;
 
                 position_ids = position_ids.slice_assign(
-                    &[0..position_ids.dim(0)?, i..i + 1, 0..position_ids.dim(2)?],
+                    &[0..position_ids.dim(0)?, i..i + 1, 0..target_len],
                     &positions_mask
-                        .where_cond(&llm_positions, &position_ids.i((.., i, ..))?)?
+                        .where_cond(&llm_positions, &existing_positions)?
                         .unsqueeze(1)?,
                 )?;
                 mrope_position_deltas
