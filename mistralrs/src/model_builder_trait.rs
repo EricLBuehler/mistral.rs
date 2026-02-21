@@ -1196,6 +1196,7 @@ pub async fn build_auto_pipeline(
 
     let add_model_config = AddModelConfig {
         engine_config,
+        #[cfg(feature = "mcp")]
         mcp_client_config: builder.mcp_client_config.clone(),
         loader_config: Some(loader_config),
     };
