@@ -287,10 +287,116 @@ impl std::fmt::Display for VisionLoaderType {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    #[cfg(not(feature = "audio"))]
+    use super::AutoVisionLoader;
+    use super::VisionLoaderType;
+    #[cfg(not(feature = "audio"))]
+    use crate::vision_models::preprocessor_config::PreProcessorConfig;
+    #[cfg(not(feature = "audio"))]
+    use crate::vision_models::processor_config::ProcessorConfig;
+    #[cfg(not(feature = "audio"))]
+    use crate::SupportedModality;
+
+    #[test]
+    fn phi4mm_arch_string_parses() {
+        let parsed = "phi4mm".parse::<VisionLoaderType>().unwrap();
+        assert_eq!(parsed, VisionLoaderType::Phi4MM);
+    }
+
+    #[test]
+    fn gemma3n_arch_string_parses() {
+        let parsed = "gemma3n".parse::<VisionLoaderType>().unwrap();
+        assert_eq!(parsed, VisionLoaderType::Gemma3n);
+    }
+
+    #[test]
+    fn phi4mm_hf_arch_parses() {
+        let parsed = VisionLoaderType::from_causal_lm_name("Phi4MMForCausalLM").unwrap();
+        assert_eq!(parsed, VisionLoaderType::Phi4MM);
+    }
+
+    #[test]
+    fn gemma3n_hf_arch_parses() {
+        let parsed =
+            VisionLoaderType::from_causal_lm_name("Gemma3nForConditionalGeneration").unwrap();
+        assert_eq!(parsed, VisionLoaderType::Gemma3n);
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn phi4mm_loader_selects_without_audio_feature() {
+        AutoVisionLoader::get_loader(r#"{"architectures":["Phi4MMForCausalLM"]}"#)
+            .expect("phi4mm loader should be selectable without audio feature");
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn gemma3n_loader_selects_without_audio_feature() {
+        AutoVisionLoader::get_loader(r#"{"architectures":["Gemma3nForConditionalGeneration"]}"#)
+            .expect("gemma3n loader should be selectable without audio feature");
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn gemma3_text_model_type_fallback_selects_loader() {
+        AutoVisionLoader::get_loader(r#"{"model_type":"gemma3_text"}"#)
+            .expect("gemma3_text model_type should select gemma3 loader");
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn phi4mm_no_audio_smoke_paths() {
+        let config = r#"{"architectures":["Phi4MMForCausalLM"]}"#;
+        let loader = AutoVisionLoader::get_loader(config)
+            .expect("phi4mm loader should be selectable without audio feature");
+
+        let modalities = loader
+            .modalities(config)
+            .expect("phi4mm modalities should be available without audio feature");
+        assert!(
+            !modalities.input.contains(&SupportedModality::Audio),
+            "phi4mm should not report audio modality when audio feature is disabled"
+        );
+        let preproc_cfg = PreProcessorConfig {
+            audio_compression_rate: Some(8),
+            audio_downsample_rate: Some(8),
+            audio_feat_stride: Some(2),
+            ..Default::default()
+        };
+        let _ = loader.get_processor(config, Some(ProcessorConfig::default()), preproc_cfg, None);
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn gemma3n_no_audio_smoke_paths() {
+        let config = r#"{"architectures":["Gemma3nForConditionalGeneration"]}"#;
+        let loader = AutoVisionLoader::get_loader(config)
+            .expect("gemma3n loader should be selectable without audio feature");
+
+        let modalities = loader
+            .modalities(config)
+            .expect("gemma3n modalities should be available without audio feature");
+        assert!(
+            !modalities.input.contains(&SupportedModality::Audio),
+            "gemma3n should not report audio modality when audio feature is disabled"
+        );
+        let _ = loader.get_processor(
+            config,
+            Some(ProcessorConfig::default()),
+            PreProcessorConfig::default(),
+            None,
+        );
+    }
+}
+
 #[derive(Deserialize)]
 struct AutoVisionLoaderConfig {
     #[serde(default)]
     architectures: Vec<String>,
+    #[serde(default)]
+    model_type: Option<String>,
     /// Voxtral params.json uses a `multimodal` key instead of `architectures`.
     #[serde(default)]
     multimodal: Option<serde_json::Value>,
@@ -309,12 +415,18 @@ impl AutoVisionLoader {
             return Ok(Box::new(VoxtralLoader));
         }
 
-        if auto_cfg.architectures.len() != 1 {
+        let tp = if auto_cfg.architectures.len() == 1 {
+            let name = &auto_cfg.architectures[0];
+            VisionLoaderType::from_causal_lm_name(name)?
+        } else if auto_cfg.architectures.is_empty() {
+            match auto_cfg.model_type.as_deref() {
+                // Some Gemma 3 text checkpoints omit `architectures` and only specify model_type.
+                Some("gemma3_text") => VisionLoaderType::Gemma3,
+                _ => anyhow::bail!("Expected exactly one architecture in config"),
+            }
+        } else {
             anyhow::bail!("Expected exactly one architecture in config");
-        }
-
-        let name = &auto_cfg.architectures[0];
-        let tp = VisionLoaderType::from_causal_lm_name(name)?;
+        };
 
         once_log_info(format!("Automatic loader type determined to be `{tp}`"));
 
