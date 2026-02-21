@@ -3429,6 +3429,7 @@ dependencies = [
  "schemars 1.2.0",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3586,6 +3587,7 @@ dependencies = [
  "tokio",
  "tokio-rayon",
  "tokio-tungstenite",
+ "toktrie",
  "toktrie_hf_tokenizers",
  "toml 0.9.11+spec-1.1.0",
  "tqdm",
@@ -3638,6 +3640,7 @@ dependencies = [
  "candle-core",
  "candle-metal-kernels",
  "cudaforge",
+ "dispatch2",
  "float8",
  "half",
  "objc2-foundation",
@@ -3680,6 +3683,7 @@ dependencies = [
  "candle-metal-kernels",
  "candle-nn",
  "cudaforge",
+ "dispatch2",
  "float8",
  "half",
  "hf-hub",
@@ -7075,8 +7079,15 @@ dependencies = [
  "serde_json",
  "url",
  "utoipa",
+ "utoipa-swagger-ui-vendored",
  "zip 3.0.0",
 ]
+
+[[package]]
+name = "utoipa-swagger-ui-vendored"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2eebbbfe4093922c2b6734d7c679ebfebd704a0d7e56dfcb0d05818ce28977d"
 
 [[package]]
 name = "uuid"

@@ -12,13 +12,16 @@ use super::{Gemma3nLoader, Phi4MMLoader};
 use super::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader, Phi3VLoader,
     Qwen2_5VLLoader, VisionLoaderType,
+    VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
 use crate::kv_cache::{FullCacheManager, NormalCacheManager};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
-use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::chat_template::{
+    calculate_eos_tokens, BeginEndUnkPadTok, ChatTemplateValue, GenerationConfig,
+};
 use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::QuantizationConfigShim;
@@ -44,6 +47,7 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
+use either::Either;
 use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::log::once_log_info;
@@ -183,6 +187,7 @@ impl VisionLoaderBuilder {
             Some(VisionLoaderType::Gemma3n) => Box::new(Gemma3nLoader),
             Some(VisionLoaderType::Qwen3VL) => Box::new(Qwen3VLLoader),
             Some(VisionLoaderType::Qwen3VLMoE) => Box::new(Qwen3VLMoELoader),
+            Some(VisionLoaderType::Voxtral) => Box::new(VoxtralLoader),
             None => Box::new(AutoVisionLoader),
         };
         Box::new(VisionLoader {
@@ -664,13 +669,32 @@ impl Loader for VisionLoader {
             .get_chat_template_explicit()
             .as_ref()
             .map(|x| x.to_string_lossy().to_string());
-        let chat_template = get_chat_template(
+        let mut chat_template = get_chat_template(
             paths,
             self.jinja_explicit.as_ref(),
             chat_template_explicit.as_ref(),
             self.chat_template.as_ref(),
             None,
         );
+
+        // If no chat template was found, use the loader's built-in default (if any).
+        if chat_template.chat_template.is_none() {
+            if let Some(default_tmpl) = self.inner.default_chat_template(&config) {
+                info!("Using loader's built-in default chat template.");
+                chat_template.chat_template = Some(ChatTemplateValue(Either::Left(default_tmpl)));
+            }
+        }
+
+        // If no bos/eos tokens are set, use the loader's defaults (e.g. for Voxtral
+        // which has no tokenizer_config.json).
+        if let Some((bos, eos)) = self.inner.default_bos_eos(&config) {
+            if chat_template.bos_token.is_none() {
+                chat_template.bos_token = Some(BeginEndUnkPadTok(Either::Left(bos)));
+            }
+            if chat_template.eos_token.is_none() {
+                chat_template.eos_token = Some(BeginEndUnkPadTok(Either::Left(eos)));
+            }
+        }
 
         if let Some(calibration_file) = &self.config.calibration_file {
             let calibration_data = std::fs::read_to_string(calibration_file)?;
@@ -965,6 +989,11 @@ impl CacheManagerMixin for VisionPipeline {
                 load_preallocated_cache,
             );
         }
+        // Always clear model-specific state (e.g. Voxtral audio_embeds_cache)
+        // for new prompts. set_none_cache is "Only called for prompt seqs",
+        // so this is always appropriate. Default impl is a no-op.
+        self.model.reset_model_specific_state();
+
         if reset_non_granular {
             self.reset_non_granular_state()
         }
@@ -984,7 +1013,9 @@ impl MetadataMixin for VisionPipeline {
     fn name(&self) -> String {
         self.model_id.clone()
     }
-    fn reset_non_granular_state(&self) {}
+    fn reset_non_granular_state(&self) {
+        self.model.reset_model_specific_state();
+    }
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
         Some(self.tokenizer.clone())
     }

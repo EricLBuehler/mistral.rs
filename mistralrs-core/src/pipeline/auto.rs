@@ -386,6 +386,13 @@ impl AutoLoader {
             return Ok(Detected::Embedding(None));
         }
 
+        // Detect Mistral-native models that use params.json instead of config.json
+        if artifacts.contents.is_none() && artifacts.repo_files.iter().any(|f| f == "params.json") {
+            // Voxtral uses params.json with a "multimodal" key containing "whisper_model_args"
+            info!("Detected `params.json` in repo; routing as Voxtral.");
+            return Ok(Detected::Vision(VisionLoaderType::Voxtral));
+        }
+
         let config = artifacts.contents.as_ref().ok_or_else(|| {
             if let Some(issue) = artifacts.remote_access_issue.as_ref() {
                 hf_access_error(Path::new(&self.model_id), issue)

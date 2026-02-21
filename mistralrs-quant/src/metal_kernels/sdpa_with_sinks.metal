@@ -3,7 +3,8 @@
 // Fused scaled dot-product attention with per-head attention sinks for Metal.
 // Two kernel families:
 //   1. sdpa_vector_with_sinks          — decode path (q_len == 1)
-//      sdpa_vector_with_sinks_2pass_1/2 — decode with long context (k_len >= 1024)
+//      sdpa_vector_with_sinks_2pass_1/2 — decode with long context (k_len >=
+//      1024)
 //   2. flash_attn_sinks                — prefill path (q_len > 1), tiled
 //
 // Sinks: per-head values that contribute to the softmax denominator but
@@ -21,17 +22,13 @@
 
 template <typename T, int D>
 [[kernel]] void sdpa_vector_with_sinks(
-    const device T* queries [[buffer(0)]],
-    const device T* keys [[buffer(1)]],
-    const device T* values [[buffer(2)]],
-    const device float* sinks [[buffer(3)]],  // [num_heads]
-    device T* out [[buffer(4)]],
-    const constant int& gqa_factor,
-    const constant int& N,             // k_len
-    const constant size_t& k_stride,
-    const constant size_t& v_stride,
-    const constant float& scale,
-    uint3 tid [[threadgroup_position_in_grid]],
+    const device T *queries [[buffer(0)]], const device T *keys [[buffer(1)]],
+    const device T *values [[buffer(2)]],
+    const device float *sinks [[buffer(3)]], // [num_heads]
+    device T *out [[buffer(4)]], const constant int &gqa_factor,
+    const constant int &N, // k_len
+    const constant size_t &k_stride, const constant size_t &v_stride,
+    const constant float &scale, uint3 tid [[threadgroup_position_in_grid]],
     uint simd_gid [[simdgroup_index_in_threadgroup]],
     uint simd_lid [[thread_index_in_simdgroup]]) {
 
@@ -165,18 +162,12 @@ template <typename T, int D>
 
 template <typename T, int D>
 [[kernel]] void sdpa_vector_with_sinks_2pass_1(
-    const device T* queries [[buffer(0)]],
-    const device T* keys [[buffer(1)]],
-    const device T* values [[buffer(2)]],
-    device float* out [[buffer(3)]],
-    device float* sums [[buffer(4)]],
-    device float* maxs [[buffer(5)]],
-    const constant int& gqa_factor,
-    const constant int& N,
-    const constant size_t& k_stride,
-    const constant size_t& v_stride,
-    const constant float& scale,
-    uint3 tid [[threadgroup_position_in_grid]],
+    const device T *queries [[buffer(0)]], const device T *keys [[buffer(1)]],
+    const device T *values [[buffer(2)]], device float *out [[buffer(3)]],
+    device float *sums [[buffer(4)]], device float *maxs [[buffer(5)]],
+    const constant int &gqa_factor, const constant int &N,
+    const constant size_t &k_stride, const constant size_t &v_stride,
+    const constant float &scale, uint3 tid [[threadgroup_position_in_grid]],
     uint simd_gid [[simdgroup_index_in_threadgroup]],
     uint simd_lid [[thread_index_in_simdgroup]]) {
 
@@ -202,9 +193,9 @@ template <typename T, int D>
   const int kv_head_idx = head_idx / gqa_factor;
   queries += head_idx * D + simd_lid * elem_per_thread;
   keys += kv_head_idx * k_stride + (block_idx * BN + simd_gid) * D +
-      simd_lid * elem_per_thread;
+          simd_lid * elem_per_thread;
   values += kv_head_idx * v_stride + (block_idx * BN + simd_gid) * D +
-      simd_lid * elem_per_thread;
+            simd_lid * elem_per_thread;
   out += head_idx * blocks * D + block_idx * D + simd_lid * elem_per_thread;
   sums += head_idx * blocks + block_idx;
   maxs += head_idx * blocks + block_idx;
@@ -289,12 +280,11 @@ template <typename T, int D>
 
 template <typename T, int D>
 [[kernel]] void sdpa_vector_with_sinks_2pass_2(
-    const device float* partials [[buffer(0)]],
-    const device float* sums [[buffer(1)]],
-    const device float* maxs [[buffer(2)]],
-    const device float* sinks [[buffer(3)]],  // [num_heads]
-    device T* out [[buffer(4)]],
-    uint3 tid [[threadgroup_position_in_grid]],
+    const device float *partials [[buffer(0)]],
+    const device float *sums [[buffer(1)]],
+    const device float *maxs [[buffer(2)]],
+    const device float *sinks [[buffer(3)]], // [num_heads]
+    device T *out [[buffer(4)]], uint3 tid [[threadgroup_position_in_grid]],
     uint simd_gid [[simdgroup_index_in_threadgroup]],
     uint simd_lid [[thread_index_in_simdgroup]]) {
 
@@ -319,7 +309,8 @@ template <typename T, int D>
   U max_score = maxs[simd_lid];
   U new_max = simd_max(max_score);
 
-  // Integrate sink: treat it as an additional "block" with max=sink, sum=exp(sink-sink)=1
+  // Integrate sink: treat it as an additional "block" with max=sink,
+  // sum=exp(sink-sink)=1
   U sink_val = sinks[head_idx];
   new_max = max(new_max, sink_val);
 
@@ -354,24 +345,21 @@ template <typename T, int D>
 // ============================================================================
 
 // Warp-level sum reduction via simd_sum (Metal equivalent of __shfl_xor_sync)
-inline float warp_reduce_sum(float val) {
-  return simd_sum(val);
-}
+inline float warp_reduce_sum(float val) { return simd_sum(val); }
 
 template <typename T, int HEAD_DIM, int BR, int BC>
 [[kernel]] void flash_attn_sinks_kernel(
-    const device T* Q [[buffer(0)]],         // [B, num_heads, S, D]
-    const device T* K [[buffer(1)]],         // [B, num_kv_heads, S, D]
-    const device T* V [[buffer(2)]],         // [B, num_kv_heads, S, D]
-    const device float* sinks [[buffer(3)]], // [num_heads]
-    device T* O [[buffer(4)]],               // [B, num_heads, S, D]
-    const constant float& scale,
-    const constant int& q_len,              // number of Q positions
-    const constant int& k_len,              // number of K/V positions
-    const constant int& num_heads,
-    const constant int& num_kv_heads,
-    const constant int& window_size,         // 0 = no window (full causal)
-    threadgroup float* shared_mem [[threadgroup(0)]],
+    const device T *Q [[buffer(0)]],         // [B, num_heads, S, D]
+    const device T *K [[buffer(1)]],         // [B, num_kv_heads, S, D]
+    const device T *V [[buffer(2)]],         // [B, num_kv_heads, S, D]
+    const device float *sinks [[buffer(3)]], // [num_heads]
+    device T *O [[buffer(4)]],               // [B, num_heads, S, D]
+    const constant float &scale,
+    const constant int &q_len, // number of Q positions
+    const constant int &k_len, // number of K/V positions
+    const constant int &num_heads, const constant int &num_kv_heads,
+    const constant int &window_size, // 0 = no window (full causal)
+    threadgroup float *shared_mem [[threadgroup(0)]],
     uint3 tgpig [[threadgroup_position_in_grid]],
     uint3 tpitg3 [[thread_position_in_threadgroup]]) {
 
@@ -380,15 +368,15 @@ template <typename T, int HEAD_DIM, int BR, int BC>
   // Padded head dim for clean warp division (round up to multiple of 32)
   constexpr int SIMD_SIZE = 32;
   constexpr int D_PAD = ((HEAD_DIM + SIMD_SIZE - 1) / SIMD_SIZE) * SIMD_SIZE;
-  constexpr int EPT = D_PAD / SIMD_SIZE;  // elements per thread
+  constexpr int EPT = D_PAD / SIMD_SIZE; // elements per thread
   constexpr int BLOCK_SIZE = BR * SIMD_SIZE;
 
   // Shared memory for K and V tiles (float32 for precision)
-  threadgroup float* k_smem = shared_mem;                    // [BC * D_PAD]
-  threadgroup float* v_smem = shared_mem + BC * D_PAD;       // [BC * D_PAD]
+  threadgroup float *k_smem = shared_mem;              // [BC * D_PAD]
+  threadgroup float *v_smem = shared_mem + BC * D_PAD; // [BC * D_PAD]
 
-  const int simd_gid = tpitg / SIMD_SIZE;  // which simdgroup (0..BR-1)
-  const int simd_lid = tpitg % SIMD_SIZE;  // lane within simdgroup
+  const int simd_gid = tpitg / SIMD_SIZE; // which simdgroup (0..BR-1)
+  const int simd_lid = tpitg % SIMD_SIZE; // lane within simdgroup
 
   const int head_idx = tgpig.x;
   const int batch_idx = tgpig.y;
@@ -413,9 +401,8 @@ template <typename T, int HEAD_DIM, int BR, int BC>
   float q_reg[EPT];
   for (int i = 0; i < EPT; i++) {
     const int d = i * SIMD_SIZE + simd_lid;
-    q_reg[i] = (q_row < q_len && d < HEAD_DIM)
-                   ? float(Q[q_offset + d]) * scale
-                   : 0.0f;
+    q_reg[i] =
+        (q_row < q_len && d < HEAD_DIM) ? float(Q[q_offset + d]) * scale : 0.0f;
   }
 
   // Output accumulator in registers
@@ -423,22 +410,22 @@ template <typename T, int HEAD_DIM, int BR, int BC>
   for (int i = 0; i < EPT; i++)
     o_acc[i] = 0.0f;
 
-  float m_i = -INFINITY;  // running max
-  float l_i = 0.0f;       // running sum of exp
+  float m_i = -INFINITY; // running max
+  float l_i = 0.0f;      // running sum of exp
 
   // Block-level KV bounds (union of all simdgroups' causal windows)
   // Q rows are local (0..q_len), absolute KV position = q_row + kv_offset
   const int block_q_start = q_tile_idx * BR;
   const int block_q_end = min(block_q_start + BR, q_len);
   const int block_kv_start =
-      (window_size > 0) ? max(0, block_q_start + kv_offset - window_size + 1) : 0;
+      (window_size > 0) ? max(0, block_q_start + kv_offset - window_size + 1)
+                        : 0;
   const int block_kv_end = min(k_len, block_q_end + kv_offset);
 
   // Per-simdgroup causal bounds (using absolute KV position)
-  const int my_kv_start =
-      (window_size > 0 && q_row < q_len)
-          ? max(0, q_row + kv_offset - window_size + 1)
-          : 0;
+  const int my_kv_start = (window_size > 0 && q_row < q_len)
+                              ? max(0, q_row + kv_offset - window_size + 1)
+                              : 0;
   const int my_kv_end = (q_row < q_len) ? (q_row + kv_offset + 1) : 0;
 
   // Score buffer for current tile (in registers)
@@ -454,20 +441,18 @@ template <typename T, int HEAD_DIM, int BR, int BC>
     for (int idx = int(tpitg); idx < BC * D_PAD; idx += BLOCK_SIZE) {
       const int kj = idx / D_PAD;
       const int kd = idx % D_PAD;
-      k_smem[idx] =
-          (kj < tile_len && kd < HEAD_DIM)
-              ? float(K[kv_base + (tile_start + kj) * HEAD_DIM + kd])
-              : 0.0f;
+      k_smem[idx] = (kj < tile_len && kd < HEAD_DIM)
+                        ? float(K[kv_base + (tile_start + kj) * HEAD_DIM + kd])
+                        : 0.0f;
     }
 
     // --- Cooperatively load V tile into shared memory ---
     for (int idx = int(tpitg); idx < BC * D_PAD; idx += BLOCK_SIZE) {
       const int vj = idx / D_PAD;
       const int vd = idx % D_PAD;
-      v_smem[idx] =
-          (vj < tile_len && vd < HEAD_DIM)
-              ? float(V[kv_base + (tile_start + vj) * HEAD_DIM + vd])
-              : 0.0f;
+      v_smem[idx] = (vj < tile_len && vd < HEAD_DIM)
+                        ? float(V[kv_base + (tile_start + vj) * HEAD_DIM + vd])
+                        : 0.0f;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -516,7 +501,7 @@ template <typename T, int HEAD_DIM, int BR, int BC>
         // Accumulate V contributions
         for (int j = 0; j < tile_len; j++) {
           if (scores[j] <= -INFINITY)
-            continue;  // masked position
+            continue; // masked position
 
           const float p = fast::exp(scores[j] - m_i);
           l_i += p;
@@ -564,19 +549,17 @@ template <typename T, int HEAD_DIM, int BR, int BC>
 
 template <typename T, int HEAD_DIM, int BR, int BC>
 [[kernel]] void flash_attn_sinks_varlen_kernel(
-    const device T* Q [[buffer(0)]],           // [B, num_heads, max_q_len, D]
-    const device T* K [[buffer(1)]],           // [total_kv, num_kv_heads, D]
-    const device T* V [[buffer(2)]],           // [total_kv, num_kv_heads, D]
-    const device float* sinks [[buffer(3)]],   // [num_heads]
-    device T* O [[buffer(4)]],                 // [B, num_heads, max_q_len, D]
-    const device uint* cu_seqlens_q [[buffer(5)]],   // [B+1]
-    const device uint* cu_seqlens_k [[buffer(6)]],  // [B+1]
-    const constant float& scale,
-    const constant int& max_q_len,
-    const constant int& num_heads,
-    const constant int& num_kv_heads,
-    const constant int& window_size,
-    threadgroup float* shared_mem [[threadgroup(0)]],
+    const device T *Q [[buffer(0)]],         // [B, num_heads, max_q_len, D]
+    const device T *K [[buffer(1)]],         // [total_kv, num_kv_heads, D]
+    const device T *V [[buffer(2)]],         // [total_kv, num_kv_heads, D]
+    const device float *sinks [[buffer(3)]], // [num_heads]
+    device T *O [[buffer(4)]],               // [B, num_heads, max_q_len, D]
+    const device uint *cu_seqlens_q [[buffer(5)]], // [B+1]
+    const device uint *cu_seqlens_k [[buffer(6)]], // [B+1]
+    const constant float &scale, const constant int &max_q_len,
+    const constant int &num_heads, const constant int &num_kv_heads,
+    const constant int &window_size,
+    threadgroup float *shared_mem [[threadgroup(0)]],
     uint3 tgpig [[threadgroup_position_in_grid]],
     uint3 tpitg3 [[thread_position_in_threadgroup]]) {
 
@@ -587,8 +570,8 @@ template <typename T, int HEAD_DIM, int BR, int BC>
   constexpr int EPT = D_PAD / SIMD_SIZE;
   constexpr int BLOCK_SIZE = BR * SIMD_SIZE;
 
-  threadgroup float* k_smem = shared_mem;
-  threadgroup float* v_smem = shared_mem + BC * D_PAD;
+  threadgroup float *k_smem = shared_mem;
+  threadgroup float *v_smem = shared_mem + BC * D_PAD;
 
   const int simd_gid = tpitg / SIMD_SIZE;
   const int simd_lid = tpitg % SIMD_SIZE;
@@ -601,9 +584,11 @@ template <typename T, int HEAD_DIM, int BR, int BC>
   const int kv_head_idx = head_idx / gqa_ratio;
 
   // Per-batch-item lengths (derived from cumulative arrays)
-  const int my_q_len = (int)(cu_seqlens_q[batch_idx + 1] - cu_seqlens_q[batch_idx]);
+  const int my_q_len =
+      (int)(cu_seqlens_q[batch_idx + 1] - cu_seqlens_q[batch_idx]);
   const int kv_start = (int)cu_seqlens_k[batch_idx];
-  const int my_kv_len = (int)(cu_seqlens_k[batch_idx + 1] - cu_seqlens_k[batch_idx]);
+  const int my_kv_len =
+      (int)(cu_seqlens_k[batch_idx + 1] - cu_seqlens_k[batch_idx]);
 
   const int q_row = q_tile_idx * BR + simd_gid;
 
@@ -619,7 +604,8 @@ template <typename T, int HEAD_DIM, int BR, int BC>
   float q_reg[EPT];
   for (int i = 0; i < EPT; i++) {
     const int d = i * SIMD_SIZE + simd_lid;
-    q_reg[i] = (q_row_valid && d < HEAD_DIM) ? float(Q[q_offset + d]) * scale : 0.0f;
+    q_reg[i] =
+        (q_row_valid && d < HEAD_DIM) ? float(Q[q_offset + d]) * scale : 0.0f;
   }
 
   float o_acc[EPT];
@@ -633,7 +619,8 @@ template <typename T, int HEAD_DIM, int BR, int BC>
   const int block_q_start = q_tile_idx * BR;
   const int block_q_end = min(block_q_start + BR, my_q_len);
   const int block_kv_start =
-      (window_size > 0) ? max(0, block_q_start + kv_offset - window_size + 1) : 0;
+      (window_size > 0) ? max(0, block_q_start + kv_offset - window_size + 1)
+                        : 0;
   const int block_kv_end = min(my_kv_len, block_q_end + kv_offset);
 
   const int my_kv_start_w =
@@ -651,22 +638,24 @@ template <typename T, int HEAD_DIM, int BR, int BC>
     for (int idx = int(tpitg); idx < BC * D_PAD; idx += BLOCK_SIZE) {
       const int kj = idx / D_PAD;
       const int kd = idx % D_PAD;
-      k_smem[idx] =
-          (kj < tile_len && kd < HEAD_DIM)
-              ? float(K[((kv_start + tile_start + kj) * num_kv_heads +
-                         kv_head_idx) * HEAD_DIM + kd])
-              : 0.0f;
+      k_smem[idx] = (kj < tile_len && kd < HEAD_DIM)
+                        ? float(K[((kv_start + tile_start + kj) * num_kv_heads +
+                                   kv_head_idx) *
+                                      HEAD_DIM +
+                                  kd])
+                        : 0.0f;
     }
 
     // --- Cooperatively load V tile from packed layout ---
     for (int idx = int(tpitg); idx < BC * D_PAD; idx += BLOCK_SIZE) {
       const int vj = idx / D_PAD;
       const int vd = idx % D_PAD;
-      v_smem[idx] =
-          (vj < tile_len && vd < HEAD_DIM)
-              ? float(V[((kv_start + tile_start + vj) * num_kv_heads +
-                         kv_head_idx) * HEAD_DIM + vd])
-              : 0.0f;
+      v_smem[idx] = (vj < tile_len && vd < HEAD_DIM)
+                        ? float(V[((kv_start + tile_start + vj) * num_kv_heads +
+                                   kv_head_idx) *
+                                      HEAD_DIM +
+                                  vd])
+                        : 0.0f;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -754,127 +743,115 @@ template <typename T, int HEAD_DIM, int BR, int BC>
 
 // --- Decode: sdpa_vector_with_sinks ---
 #define instantiate_sdpa_vector_with_sinks(type, head_dim)                     \
-  template [[host_name("sdpa_vector_with_sinks_" #type "_" #head_dim)]]        \
-  [[kernel]] void sdpa_vector_with_sinks<type, head_dim>(                      \
-      const device type* queries [[buffer(0)]],                                \
-      const device type* keys [[buffer(1)]],                                   \
-      const device type* values [[buffer(2)]],                                 \
-      const device float* sinks [[buffer(3)]],                                 \
-      device type* out [[buffer(4)]],                                          \
-      const constant int& gqa_factor,                                          \
-      const constant int& N,                                                   \
-      const constant size_t& k_stride,                                         \
-      const constant size_t& v_stride,                                         \
-      const constant float& scale,                                             \
+  template [[host_name("sdpa_vector_with_sinks_" #type                         \
+                       "_" #head_dim)]] [[kernel]] void                        \
+  sdpa_vector_with_sinks<type, head_dim>(                                      \
+      const device type *queries [[buffer(0)]],                                \
+      const device type *keys [[buffer(1)]],                                   \
+      const device type *values [[buffer(2)]],                                 \
+      const device float *sinks [[buffer(3)]], device type *out [[buffer(4)]], \
+      const constant int &gqa_factor, const constant int &N,                   \
+      const constant size_t &k_stride, const constant size_t &v_stride,        \
+      const constant float &scale, uint3 tid [[threadgroup_position_in_grid]], \
+      uint simd_gid [[simdgroup_index_in_threadgroup]],                        \
+      uint simd_lid [[thread_index_in_simdgroup]]);                            \
+  template [[host_name("sdpa_vector_with_sinks_2pass_1_" #type                 \
+                       "_" #head_dim)]] [[kernel]] void                        \
+  sdpa_vector_with_sinks_2pass_1<type, head_dim>(                              \
+      const device type *queries [[buffer(0)]],                                \
+      const device type *keys [[buffer(1)]],                                   \
+      const device type *values [[buffer(2)]],                                 \
+      device float *out [[buffer(3)]], device float *sums [[buffer(4)]],       \
+      device float *maxs [[buffer(5)]], const constant int &gqa_factor,        \
+      const constant int &N, const constant size_t &k_stride,                  \
+      const constant size_t &v_stride, const constant float &scale,            \
       uint3 tid [[threadgroup_position_in_grid]],                              \
       uint simd_gid [[simdgroup_index_in_threadgroup]],                        \
       uint simd_lid [[thread_index_in_simdgroup]]);                            \
-  template [[host_name("sdpa_vector_with_sinks_2pass_1_" #type "_" #head_dim)]] \
-  [[kernel]] void sdpa_vector_with_sinks_2pass_1<type, head_dim>(              \
-      const device type* queries [[buffer(0)]],                                \
-      const device type* keys [[buffer(1)]],                                   \
-      const device type* values [[buffer(2)]],                                 \
-      device float* out [[buffer(3)]],                                         \
-      device float* sums [[buffer(4)]],                                        \
-      device float* maxs [[buffer(5)]],                                        \
-      const constant int& gqa_factor,                                          \
-      const constant int& N,                                                   \
-      const constant size_t& k_stride,                                         \
-      const constant size_t& v_stride,                                         \
-      const constant float& scale,                                             \
-      uint3 tid [[threadgroup_position_in_grid]],                              \
-      uint simd_gid [[simdgroup_index_in_threadgroup]],                        \
-      uint simd_lid [[thread_index_in_simdgroup]]);                            \
-  template [[host_name("sdpa_vector_with_sinks_2pass_2_" #type "_" #head_dim)]] \
-  [[kernel]] void sdpa_vector_with_sinks_2pass_2<type, head_dim>(              \
-      const device float* partials [[buffer(0)]],                              \
-      const device float* sums [[buffer(1)]],                                  \
-      const device float* maxs [[buffer(2)]],                                  \
-      const device float* sinks [[buffer(3)]],                                 \
-      device type* out [[buffer(4)]],                                          \
+  template [[host_name("sdpa_vector_with_sinks_2pass_2_" #type                 \
+                       "_" #head_dim)]] [[kernel]] void                        \
+  sdpa_vector_with_sinks_2pass_2<type, head_dim>(                              \
+      const device float *partials [[buffer(0)]],                              \
+      const device float *sums [[buffer(1)]],                                  \
+      const device float *maxs [[buffer(2)]],                                  \
+      const device float *sinks [[buffer(3)]], device type *out [[buffer(4)]], \
       uint3 tid [[threadgroup_position_in_grid]],                              \
       uint simd_gid [[simdgroup_index_in_threadgroup]],                        \
       uint simd_lid [[thread_index_in_simdgroup]]);
 
 #define instantiate_sdpa_vector_with_sinks_heads(type)                         \
   instantiate_sdpa_vector_with_sinks(type, 64)                                 \
-  instantiate_sdpa_vector_with_sinks(type, 80)                                 \
-  instantiate_sdpa_vector_with_sinks(type, 96)                                 \
-  instantiate_sdpa_vector_with_sinks(type, 128)                                \
-  instantiate_sdpa_vector_with_sinks(type, 256)
+      instantiate_sdpa_vector_with_sinks(type, 80)                             \
+          instantiate_sdpa_vector_with_sinks(type, 96)                         \
+              instantiate_sdpa_vector_with_sinks(type, 128)                    \
+                  instantiate_sdpa_vector_with_sinks(type, 256)
 
 instantiate_sdpa_vector_with_sinks_heads(float)
-instantiate_sdpa_vector_with_sinks_heads(half)
+    instantiate_sdpa_vector_with_sinks_heads(half)
 #if __METAL_VERSION__ >= 310
-instantiate_sdpa_vector_with_sinks_heads(bfloat16_t)
+        instantiate_sdpa_vector_with_sinks_heads(bfloat16_t)
 #endif
 
 // --- Prefill: flash_attn_sinks_kernel ---
 #define instantiate_flash_attn_sinks(type, hd, br, bc)                         \
-  template [[host_name("flash_attn_sinks_" #type "_hd" #hd "_br" #br "_bc" #bc)]] \
-  [[kernel]] void flash_attn_sinks_kernel<type, hd, br, bc>(                   \
-      const device type* Q [[buffer(0)]],                                      \
-      const device type* K [[buffer(1)]],                                      \
-      const device type* V [[buffer(2)]],                                      \
-      const device float* sinks [[buffer(3)]],                                 \
-      device type* O [[buffer(4)]],                                            \
-      const constant float& scale,                                             \
-      const constant int& q_len,                                               \
-      const constant int& k_len,                                               \
-      const constant int& num_heads,                                           \
-      const constant int& num_kv_heads,                                        \
-      const constant int& window_size,                                         \
-      threadgroup float* shared_mem [[threadgroup(0)]],                        \
+  template [[host_name("flash_attn_sinks_" #type "_hd" #hd "_br" #br           \
+                       "_bc" #bc)]] [[kernel]] void                            \
+  flash_attn_sinks_kernel<type, hd, br, bc>(                                   \
+      const device type *Q [[buffer(0)]], const device type *K [[buffer(1)]],  \
+      const device type *V [[buffer(2)]],                                      \
+      const device float *sinks [[buffer(3)]], device type *O [[buffer(4)]],   \
+      const constant float &scale, const constant int &q_len,                  \
+      const constant int &k_len, const constant int &num_heads,                \
+      const constant int &num_kv_heads, const constant int &window_size,       \
+      threadgroup float *shared_mem [[threadgroup(0)]],                        \
       uint3 tgpig [[threadgroup_position_in_grid]],                            \
       uint3 tpitg3 [[thread_position_in_threadgroup]]);
 
 // BR=8 (simdgroups per threadgroup), BC chosen by head dim
 #define instantiate_flash_attn_sinks_heads(type)                               \
-  instantiate_flash_attn_sinks(type, 64,  8, 64)                              \
-  instantiate_flash_attn_sinks(type, 80,  8, 32)                              \
-  instantiate_flash_attn_sinks(type, 96,  8, 32)                              \
-  instantiate_flash_attn_sinks(type, 112, 8, 32)                              \
-  instantiate_flash_attn_sinks(type, 128, 8, 32)                              \
-  instantiate_flash_attn_sinks(type, 192, 8, 16)                              \
-  instantiate_flash_attn_sinks(type, 256, 8, 16)
+  instantiate_flash_attn_sinks(type, 64, 8, 64)                                \
+      instantiate_flash_attn_sinks(type, 80, 8, 32)                            \
+          instantiate_flash_attn_sinks(type, 96, 8, 32)                        \
+              instantiate_flash_attn_sinks(type, 112, 8, 32)                   \
+                  instantiate_flash_attn_sinks(type, 128, 8, 32)               \
+                      instantiate_flash_attn_sinks(type, 192, 8, 16)           \
+                          instantiate_flash_attn_sinks(type, 256, 8, 16)
 
-instantiate_flash_attn_sinks_heads(float)
-instantiate_flash_attn_sinks_heads(half)
+            instantiate_flash_attn_sinks_heads(float)
+                instantiate_flash_attn_sinks_heads(half)
 #if __METAL_VERSION__ >= 310
-instantiate_flash_attn_sinks_heads(bfloat16_t)
+                    instantiate_flash_attn_sinks_heads(bfloat16_t)
 #endif
 
 // --- Prefill varlen: flash_attn_sinks_varlen_kernel ---
 #define instantiate_flash_attn_sinks_varlen(type, hd, br, bc)                  \
-  template [[host_name("flash_attn_sinks_varlen_" #type "_hd" #hd "_br" #br "_bc" #bc)]] \
-  [[kernel]] void flash_attn_sinks_varlen_kernel<type, hd, br, bc>(            \
-      const device type* Q [[buffer(0)]],                                      \
-      const device type* K [[buffer(1)]],                                      \
-      const device type* V [[buffer(2)]],                                      \
-      const device float* sinks [[buffer(3)]],                                 \
-      device type* O [[buffer(4)]],                                            \
-      const device uint* cu_seqlens_q [[buffer(5)]],                            \
-      const device uint* cu_seqlens_k [[buffer(6)]],                           \
-      const constant float& scale,                                             \
-      const constant int& max_q_len,                                           \
-      const constant int& num_heads,                                           \
-      const constant int& num_kv_heads,                                        \
-      const constant int& window_size,                                         \
-      threadgroup float* shared_mem [[threadgroup(0)]],                        \
+  template [[host_name("flash_attn_sinks_varlen_" #type "_hd" #hd "_br" #br    \
+                       "_bc" #bc)]] [[kernel]] void                            \
+  flash_attn_sinks_varlen_kernel<type, hd, br, bc>(                            \
+      const device type *Q [[buffer(0)]], const device type *K [[buffer(1)]],  \
+      const device type *V [[buffer(2)]],                                      \
+      const device float *sinks [[buffer(3)]], device type *O [[buffer(4)]],   \
+      const device uint *cu_seqlens_q [[buffer(5)]],                           \
+      const device uint *cu_seqlens_k [[buffer(6)]],                           \
+      const constant float &scale, const constant int &max_q_len,              \
+      const constant int &num_heads, const constant int &num_kv_heads,         \
+      const constant int &window_size,                                         \
+      threadgroup float *shared_mem [[threadgroup(0)]],                        \
       uint3 tgpig [[threadgroup_position_in_grid]],                            \
       uint3 tpitg3 [[thread_position_in_threadgroup]]);
 
 #define instantiate_flash_attn_sinks_varlen_heads(type)                        \
-  instantiate_flash_attn_sinks_varlen(type, 64,  8, 64)                       \
-  instantiate_flash_attn_sinks_varlen(type, 80,  8, 32)                       \
-  instantiate_flash_attn_sinks_varlen(type, 96,  8, 32)                       \
-  instantiate_flash_attn_sinks_varlen(type, 112, 8, 32)                       \
-  instantiate_flash_attn_sinks_varlen(type, 128, 8, 32)                       \
-  instantiate_flash_attn_sinks_varlen(type, 192, 8, 16)                       \
-  instantiate_flash_attn_sinks_varlen(type, 256, 8, 16)
+  instantiate_flash_attn_sinks_varlen(                                         \
+      type, 64, 8, 64) instantiate_flash_attn_sinks_varlen(type, 80, 8, 32)    \
+      instantiate_flash_attn_sinks_varlen(type, 96, 8, 32)                     \
+          instantiate_flash_attn_sinks_varlen(type, 112, 8, 32)                \
+              instantiate_flash_attn_sinks_varlen(type, 128, 8, 32)            \
+                  instantiate_flash_attn_sinks_varlen(type, 192, 8, 16)        \
+                      instantiate_flash_attn_sinks_varlen(type, 256, 8, 16)
 
-instantiate_flash_attn_sinks_varlen_heads(float)
-instantiate_flash_attn_sinks_varlen_heads(half)
+                        instantiate_flash_attn_sinks_varlen_heads(float)
+                            instantiate_flash_attn_sinks_varlen_heads(half)
 #if __METAL_VERSION__ >= 310
-instantiate_flash_attn_sinks_varlen_heads(bfloat16_t)
+                                instantiate_flash_attn_sinks_varlen_heads(
+                                    bfloat16_t)
 #endif

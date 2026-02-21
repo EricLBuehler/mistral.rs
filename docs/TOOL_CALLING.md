@@ -31,7 +31,7 @@ Please see [our example here](https://github.com/EricLBuehler/mistral.rs/blob/ma
 > OpenAI docs: https://platform.openai.com/docs/api-reference/chat/create?lang=curl
 
 ## Rust example
-Please see [our example here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/tools/main.rs).
+Please see [our example here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/tools/main.rs).
 
 ## Python example
 Please see [our notebook here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/tool_calling.ipynb).
@@ -58,7 +58,7 @@ runner = Runner(
 
 See [custom_search.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_search.py) for a full
 example. In Rust pass `.with_tool_callback(...)` to the builder as demonstrated
-in [custom_search/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/custom_search/main.rs).
+in [tool_callback/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/tool_callback/main.rs).
 
 ## Search callbacks
 

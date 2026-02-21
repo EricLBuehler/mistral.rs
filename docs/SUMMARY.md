@@ -12,6 +12,7 @@
 
 # SDKs & APIs
 
+- [Rust SDK](RUST_SDK.md)
 - [Python SDK](PYTHON_SDK.md)
 - [Python Installation](PYTHON_INSTALLATION.md)
 - [HTTP Server](HTTP.md)
@@ -22,6 +23,7 @@
 - [Supported Models](SUPPORTED_MODELS.md)
 - [Vision Models](VISION_MODELS.md)
 - [Image Generation](IMAGEGEN_MODELS.md)
+- [Speech Models](SPEECH_MODELS.md)
 - [Embeddings](EMBEDDINGS.md)
 
 ## Text Model Guides
@@ -56,6 +58,7 @@
 ## Other Model Guides
 
 - [FLUX (Diffusion)](FLUX.md)
+- [Voxtral (Speech-to-Text)](VOXTRAL.md)
 - [Dia (Speech)](DIA.md)
 - [EmbeddingGemma](EMBEDDINGGEMMA.md)
 - [Qwen3 Embedding](QWEN3_EMBEDDING.md)

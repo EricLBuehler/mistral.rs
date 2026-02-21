@@ -124,6 +124,7 @@ mistralrs doctor
 - DeepSeek V3
 - GPT-OSS
 - DeepSeek V2
+- Qwen 3 Next
 - Qwen 3 MoE
 - Phi 3.5 MoE
 - Qwen 3
@@ -145,6 +146,7 @@ mistralrs doctor
 <summary><b>Vision Models</b></summary>
 
 - Qwen 3-VL
+- Qwen 3-VL MoE
 - Gemma 3n
 - Llama 4
 - Gemma 3
@@ -164,6 +166,7 @@ mistralrs doctor
 <details>
 <summary><b>Speech Models</b></summary>
 
+- Voxtral (ASR/speech-to-text)
 - Dia
 </details>
 
@@ -239,7 +242,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-[Rust SDK](https://crates.io/crates/mistralrs) | [Examples](mistralrs/examples)
+[API Docs](https://docs.rs/mistralrs) | [Crate](https://crates.io/crates/mistralrs) | [Examples](mistralrs/examples)
 
 ## Docker
 

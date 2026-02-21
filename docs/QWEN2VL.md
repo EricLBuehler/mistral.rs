@@ -131,7 +131,7 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/qwen2vl/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -159,9 +159,8 @@ async fn main() -> Result<()> {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What type of flower is this? Give some fun facts.",
-        image,
-        &model
-    )?;
+        vec![image],
+    );
 
     let response = model.send_chat_request(messages).await?;
 

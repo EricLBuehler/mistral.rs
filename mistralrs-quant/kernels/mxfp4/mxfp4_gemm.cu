@@ -536,9 +536,8 @@ __global__ void mxfp4_moe_grouped_gemm_tiled(
           uint4 w_vec = *reinterpret_cast<const uint4 *>(
               &expert_weight[(size_t)gn * (K / 2) + k_tile / 2]);
           float scale =
-              e8m0_to_float(
-                  __ldg(&expert_scale[(size_t)gn * scale_stride +
-                                      k_tile / MXFP4_BLOCK_SIZE])) *
+              e8m0_to_float(__ldg(&expert_scale[(size_t)gn * scale_stride +
+                                                k_tile / MXFP4_BLOCK_SIZE])) *
               0.5f;
           dequant_store_8(w_vec.x, scale, LUT0, LUT1, LUT2, LUT3,
                           &s_weight[ln][0]);
@@ -590,8 +589,8 @@ __global__ void mxfp4_moe_grouped_gemm_tiled(
             float val = acc[i][j];
             if (has_bias && biases != nullptr) {
               if constexpr (std::is_same_v<T, half>) {
-                val += __half2float(
-                    __ldg(&biases[(size_t)expert_id * N + col]));
+                val +=
+                    __half2float(__ldg(&biases[(size_t)expert_id * N + col]));
               } else {
                 val += __bfloat162float(
                     __ldg(&biases[(size_t)expert_id * N + col]));
@@ -720,10 +719,9 @@ extern "C" void launch_mxfp4_moe_grouped_gemm_f16(
       cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
 
   mxfp4_gemm::mxfp4_moe_grouped_gemm_tiled<half, BM, BN, BK, TM, TN>
-      <<<grid, block, smem, stream>>>(input, weights, weight_scales, biases,
-                                      indices, output, num_tokens, topk,
-                                      num_experts, N, K, has_bias,
-                                      input_has_topk_dim);
+      <<<grid, block, smem, stream>>>(
+          input, weights, weight_scales, biases, indices, output, num_tokens,
+          topk, num_experts, N, K, has_bias, input_has_topk_dim);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -740,13 +738,12 @@ extern "C" void launch_mxfp4_moe_grouped_gemm_bf16(
 
   CUDA_CHECK(cudaFuncSetAttribute(
       mxfp4_gemm::mxfp4_moe_grouped_gemm_tiled<__nv_bfloat16, BM, BN, BK, TM,
-                                                TN>,
+                                               TN>,
       cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
 
   mxfp4_gemm::mxfp4_moe_grouped_gemm_tiled<__nv_bfloat16, BM, BN, BK, TM, TN>
-      <<<grid, block, smem, stream>>>(input, weights, weight_scales, biases,
-                                      indices, output, num_tokens, topk,
-                                      num_experts, N, K, has_bias,
-                                      input_has_topk_dim);
+      <<<grid, block, smem, stream>>>(
+          input, weights, weight_scales, biases, indices, output, num_tokens,
+          topk, num_experts, N, K, has_bias, input_has_topk_dim);
   CUDA_CHECK(cudaGetLastError());
 }

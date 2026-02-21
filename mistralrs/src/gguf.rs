@@ -86,6 +86,7 @@ impl GgufModelBuilder {
         self
     }
 
+    /// Register a callback for a specific tool name.
     pub fn with_tool_callback(
         mut self,
         name: impl Into<String>,
@@ -181,16 +182,11 @@ impl GgufModelBuilder {
     /// If PagedAttention is not supported (query with [`paged_attn_supported`]), this will do nothing.
     ///
     /// [`PagedAttentionMetaBuilder`]: crate::PagedAttentionMetaBuilder
-    pub fn with_paged_attn(
-        mut self,
-        paged_attn_cfg: impl FnOnce() -> anyhow::Result<PagedAttentionConfig>,
-    ) -> anyhow::Result<Self> {
+    pub fn with_paged_attn(mut self, paged_attn_cfg: PagedAttentionConfig) -> Self {
         if paged_attn_supported() {
-            self.paged_attn_cfg = Some(paged_attn_cfg()?);
-        } else {
-            self.paged_attn_cfg = None;
+            self.paged_attn_cfg = Some(paged_attn_cfg);
         }
-        Ok(self)
+        self
     }
 
     /// Set the maximum number of sequences which can be run at once.
@@ -229,6 +225,7 @@ impl GgufModelBuilder {
         self
     }
 
+    /// Load the GGUF model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         let (pipeline, scheduler_config, add_model_config) = build_gguf_pipeline(self).await?;
         Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)

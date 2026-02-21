@@ -122,7 +122,7 @@ where
             let _ = socket
                 .send(Message::Text(format!("Error: {e}").into()))
                 .await;
-            Err(e)
+            Err(e.into())
         }
     }
 }
@@ -284,18 +284,12 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                                 }
                             }
                             if !images.is_empty() {
-                                if let Ok(updated) = vision_msgs.clone().add_multimodal_message(
+                                vision_msgs = vision_msgs.clone().add_multimodal_message(
                                     role.clone(),
                                     msg.content.clone(),
                                     images,
                                     Vec::new(),
-                                    &app.model,
-                                ) {
-                                    vision_msgs = updated;
-                                } else {
-                                    vision_msgs =
-                                        vision_msgs.add_message(role.clone(), msg.content.clone());
-                                }
+                                );
                             } else {
                                 vision_msgs =
                                     vision_msgs.add_message(role.clone(), msg.content.clone());
@@ -415,21 +409,12 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             if !image_buffer.is_empty() || !audio_buffer.is_empty() {
                 let images = mem::take(&mut image_buffer);
                 let audios = mem::take(&mut audio_buffer);
-                match vision_msgs.clone().add_multimodal_message(
+                vision_msgs = vision_msgs.clone().add_multimodal_message(
                     TextMessageRole::User,
                     content.clone(),
                     images,
                     audios,
-                    &app.model,
-                ) {
-                    Ok(updated) => vision_msgs = updated,
-                    Err(e) => {
-                        let _ = socket
-                            .send(Message::Text(format!("Error: {e}").into()))
-                            .await;
-                        continue;
-                    }
-                }
+                );
             } else {
                 vision_msgs = vision_msgs.add_message(TextMessageRole::User, content.clone());
             }

@@ -20,7 +20,7 @@ use tqdm::Iter;
 use tracing::info;
 
 use crate::{
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{embedding, CausalMasker, RmsNorm},
     models::llama::Config,
     pipeline::{self, extract_logits, LayerCaches, NormalLoadingMetadata, NormalModel},
@@ -449,11 +449,12 @@ impl XLoraLlama {
             x.dtype(),
             self.cfg.num_attn_heads,
         )?;
+        let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
             x = block.forward(
                 &x,
-                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                &mask.as_ref().map(|m| m.get(x.device()).clone()),
                 seqlen_offsets,
                 block_idx,
                 &mut cache,

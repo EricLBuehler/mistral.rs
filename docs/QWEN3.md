@@ -78,7 +78,7 @@ print(res.usage)
 ```
 
 ## Rust SDK
-You can find a more detailed example demonstrating enabling/disabling thinking [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/qwen3/main.rs).
+You can find a more detailed example demonstrating enabling/disabling thinking [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs).
 
 ```rust
 use anyhow::Result;

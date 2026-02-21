@@ -11,16 +11,14 @@ using namespace metal;
 //   logits: [batch * heads * q_len, k_len] (contiguous)
 //   sinks:  [heads] - per-head sink values
 // Output:
-//   output: [batch * heads * q_len, k_len] - softmax probabilities (sink dropped)
+//   output: [batch * heads * q_len, k_len] - softmax probabilities (sink
+//   dropped)
 
 template <typename T>
 [[kernel]] void softmax_with_sinks(
-    const device T *logits [[buffer(0)]],
-    const device T *sinks [[buffer(1)]],
-    device T *output [[buffer(2)]],
-    constant uint &num_heads [[buffer(3)]],
-    constant uint &q_len [[buffer(4)]],
-    constant uint &k_len [[buffer(5)]],
+    const device T *logits [[buffer(0)]], const device T *sinks [[buffer(1)]],
+    device T *output [[buffer(2)]], constant uint &num_heads [[buffer(3)]],
+    constant uint &q_len [[buffer(4)]], constant uint &k_len [[buffer(5)]],
     threadgroup float *shared_mem [[threadgroup(0)]],
     uint tgpig [[threadgroup_position_in_grid]],
     uint tpitg [[thread_position_in_threadgroup]],
@@ -127,19 +125,18 @@ template <typename T>
 
 #define instantiate_softmax_with_sinks(type)                                   \
   template [[host_name("softmax_with_sinks_" #type)]] [[kernel]] void          \
-  softmax_with_sinks<type>(                                                    \
-      const device type *logits [[buffer(0)]],                                 \
-      const device type *sinks [[buffer(1)]],                                  \
-      device type *output [[buffer(2)]],                                       \
-      constant uint &num_heads [[buffer(3)]],                                  \
-      constant uint &q_len [[buffer(4)]],                                      \
-      constant uint &k_len [[buffer(5)]],                                      \
-      threadgroup float *shared_mem [[threadgroup(0)]],                        \
-      uint tgpig [[threadgroup_position_in_grid]],                             \
-      uint tpitg [[thread_position_in_threadgroup]],                           \
-      uint sgitg [[simdgroup_index_in_threadgroup]],                           \
-      uint tiisg [[thread_index_in_simdgroup]],                                \
-      uint ntg [[threads_per_threadgroup]]);
+  softmax_with_sinks<type>(const device type *logits [[buffer(0)]],            \
+                           const device type *sinks [[buffer(1)]],             \
+                           device type *output [[buffer(2)]],                  \
+                           constant uint &num_heads [[buffer(3)]],             \
+                           constant uint &q_len [[buffer(4)]],                 \
+                           constant uint &k_len [[buffer(5)]],                 \
+                           threadgroup float *shared_mem [[threadgroup(0)]],   \
+                           uint tgpig [[threadgroup_position_in_grid]],        \
+                           uint tpitg [[thread_position_in_threadgroup]],      \
+                           uint sgitg [[simdgroup_index_in_threadgroup]],      \
+                           uint tiisg [[thread_index_in_simdgroup]],           \
+                           uint ntg [[threads_per_threadgroup]]);
 
 instantiate_softmax_with_sinks(float);
 instantiate_softmax_with_sinks(half);

@@ -30,6 +30,7 @@ pub(crate) mod mistral3;
 pub(crate) mod qwen3_vl;
 pub(crate) mod qwen3_vl_moe;
 pub(crate) mod siglip;
+pub(crate) mod voxtral;
 
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 

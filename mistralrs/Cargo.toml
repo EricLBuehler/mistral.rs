@@ -1,6 +1,6 @@
 [package]
 name = "mistralrs"
-readme = "../README.md"
+readme = "README.md"
 authors = ["Eric Buehler"]
 version.workspace = true
 edition.workspace = true
@@ -11,11 +11,13 @@ keywords.workspace = true
 categories.workspace = true
 license.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/mistralrs"
 
 [dependencies]
 mistralrs-core = { path = "../mistralrs-core", version = "0.7.1-alpha.1", default-features = false }
 mistralrs-macros.workspace = true
 anyhow.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 candle-core.workspace = true
 candle-nn.workspace = true
@@ -33,15 +35,232 @@ walkdir.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+# ========== Getting Started ==========
+
+[[example]]
+name = "text_generation"
+path = "examples/getting_started/text_generation/main.rs"
+
+[[example]]
+name = "streaming"
+path = "examples/getting_started/streaming/main.rs"
+
+[[example]]
+name = "vision"
+path = "examples/getting_started/vision/main.rs"
+
+[[example]]
+name = "gguf"
+path = "examples/getting_started/gguf/main.rs"
+
+[[example]]
+name = "gguf_locally"
+path = "examples/getting_started/gguf_locally/main.rs"
+
+[[example]]
+name = "embedding"
+path = "examples/getting_started/embedding/main.rs"
+
+# ========== Models ==========
+
+[[example]]
+name = "text_models"
+path = "examples/models/text_models/main.rs"
+
+[[example]]
+name = "vision_models"
+path = "examples/models/vision_models/main.rs"
+
+[[example]]
+name = "vision_multiturn"
+path = "examples/models/vision_multiturn/main.rs"
+
+[[example]]
+name = "audio"
+path = "examples/models/audio/main.rs"
+
+[[example]]
+name = "multimodal"
+path = "examples/models/multimodal/main.rs"
+
+[[example]]
+name = "diffusion"
+path = "examples/models/diffusion/main.rs"
+
+[[example]]
+name = "speech"
+path = "examples/models/speech/main.rs"
+
+[[example]]
+name = "asr"
+path = "examples/models/asr/main.rs"
+
+# ========== Quantization ==========
+
+[[example]]
+name = "isq"
+path = "examples/quantization/isq/main.rs"
+
+[[example]]
+name = "imatrix"
+path = "examples/quantization/imatrix/main.rs"
+
+[[example]]
+name = "uqff"
+path = "examples/quantization/uqff/main.rs"
+
+[[example]]
+name = "uqff_vision"
+path = "examples/quantization/uqff_vision/main.rs"
+
+[[example]]
+name = "topology"
+path = "examples/quantization/topology/main.rs"
+
+[[example]]
+name = "mixture_of_quant_experts"
+path = "examples/quantization/mixture_of_quant_experts/main.rs"
+
+# ========== Advanced ==========
+
+[[example]]
+name = "tools"
+path = "examples/advanced/tools/main.rs"
+
+[[example]]
+name = "agent"
+path = "examples/advanced/agent/main.rs"
+
+[[example]]
+name = "agent_streaming"
+path = "examples/advanced/agent_streaming/main.rs"
+
+[[example]]
+name = "web_search"
+path = "examples/advanced/web_search/main.rs"
+
+[[example]]
+name = "search_callback"
+path = "examples/advanced/search_callback/main.rs"
+
+[[example]]
+name = "tool_callback"
+path = "examples/advanced/tool_callback/main.rs"
+
+[[example]]
+name = "mcp_client"
+path = "examples/advanced/mcp_client/main.rs"
+
+[[example]]
+name = "grammar"
+path = "examples/advanced/grammar/main.rs"
+
+[[example]]
+name = "json_schema"
+path = "examples/advanced/json_schema/main.rs"
+
+[[example]]
+name = "llguidance"
+path = "examples/advanced/llguidance/main.rs"
+
+[[example]]
+name = "logits_processor"
+path = "examples/advanced/logits_processor/main.rs"
+
+[[example]]
+name = "file_logging"
+path = "examples/advanced/file_logging/main.rs"
+
+[[example]]
+name = "batching"
+path = "examples/advanced/batching/main.rs"
+
+[[example]]
+name = "batching_embeddings"
+path = "examples/advanced/batching_embeddings/main.rs"
+
+[[example]]
+name = "paged_attn"
+path = "examples/advanced/paged_attn/main.rs"
+
+[[example]]
+name = "speculative"
+path = "examples/advanced/speculative/main.rs"
+
+[[example]]
+name = "auto_device_map"
+path = "examples/advanced/auto_device_map/main.rs"
+
+[[example]]
+name = "multi_model"
+path = "examples/advanced/multi_model/main.rs"
+
+[[example]]
+name = "lora"
+path = "examples/advanced/lora/main.rs"
+
+[[example]]
+name = "xlora"
+path = "examples/advanced/xlora/main.rs"
+
+[[example]]
+name = "anymoe"
+path = "examples/advanced/anymoe/main.rs"
+
+[[example]]
+name = "anymoe_lora"
+path = "examples/advanced/anymoe_lora/main.rs"
+
+[[example]]
+name = "error_handling"
+path = "examples/advanced/error_handling/main.rs"
+
+[[example]]
+name = "perplexity"
+path = "examples/advanced/perplexity/main.rs"
+
+[[example]]
+name = "embeddings"
+path = "examples/advanced/embeddings/main.rs"
+
+# ========== Cookbook ==========
+
+[[example]]
+name = "cookbook_rag"
+path = "examples/cookbook/rag/main.rs"
+
+[[example]]
+name = "cookbook_structured"
+path = "examples/cookbook/structured/main.rs"
+
+[[example]]
+name = "cookbook_multiturn"
+path = "examples/cookbook/multiturn/main.rs"
+
+[[example]]
+name = "cookbook_agent"
+path = "examples/cookbook/agent/main.rs"
+
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 default = ["audio", "mcp"]
 audio = ["mistralrs-core/audio"]
 mcp = ["mistralrs-core/mcp"]
+# NVIDIA CUDA GPU support
 cuda = ["mistralrs-core/cuda"]
+# cuDNN acceleration (requires cuda)
 cudnn = ["mistralrs-core/cudnn"]
+# Apple Metal GPU support (macOS/iOS)
 metal = ["mistralrs-core/metal"]
+# Flash Attention 2 kernels (requires cuda)
 flash-attn = ["cuda", "mistralrs-core/flash-attn"]
+# Apple Accelerate framework for BLAS operations
 accelerate = ["mistralrs-core/accelerate"]
+# Intel MKL acceleration for BLAS operations
 mkl = ["mistralrs-core/mkl"]
+# Multi-GPU support via NCCL (requires cuda)
 nccl = ["mistralrs-core/nccl"]
+# Use ring instead of aws-lc-rs for TLS
 ring = ["mistralrs-core/ring"]

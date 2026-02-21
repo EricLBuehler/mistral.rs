@@ -89,7 +89,7 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/phi3v/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
 
 This is a minimal example of running the Phi 4 Multimodal model with a dummy image.
 
@@ -117,9 +117,8 @@ async fn main() -> Result<()> {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
-        image,
-        &model,
-    )?;
+        vec![image],
+    );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -244,8 +243,7 @@ async fn main() -> Result<()> {
             "Describe in detail what is happening.",
             vec![image],
             vec![audio],
-            &model,
-        )?;
+        );
 
     let response = model.send_chat_request(messages).await?;
 

@@ -130,7 +130,7 @@ print(res.usage)
 
 ## Using the Rust SDK
 
-You can find this example at `mistralrs/examples/speculative/main.rs`.
+You can find this example at `mistralrs/examples/advanced/speculative/main.rs`.
 
 ```rust
 use anyhow::Result;

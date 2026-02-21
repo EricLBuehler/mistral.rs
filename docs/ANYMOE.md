@@ -141,7 +141,7 @@ print(res.usage)
 ```
 
 ## Rust SDK
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/anymoe/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/anymoe/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -155,7 +155,7 @@ async fn main() -> Result<()> {
     let text_builder = TextModelBuilder::new("mistralai/Mistral-7B-Instruct-v0.1")
         .with_isq(IsqType::Q8_0)
         .with_logging()
-        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?;
+        .with_paged_attn(PagedAttentionMetaBuilder::default().build()?);
 
     let model = AnyMoeModelBuilder::from_text_builder(
         text_builder,

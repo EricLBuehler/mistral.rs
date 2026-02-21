@@ -1,17 +1,27 @@
+//! Multi-model builder and pipeline construction utilities.
+
 use mistralrs_core::{AddModelConfig, Pipeline, SchedulerConfig};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::Model;
 
-/// Enum representing all possible model builders that can be used with MultiModelBuilder.
+/// Enum representing all possible model builders that can be used with [`MultiModelBuilder`].
 pub enum AnyModelBuilder {
+    /// A text model builder.
     Text(crate::TextModelBuilder),
+    /// A vision model builder.
     Vision(crate::VisionModelBuilder),
+    /// An auto-detecting model builder.
+    Auto(crate::ModelBuilder),
+    /// A GGUF model builder.
     Gguf(crate::GgufModelBuilder),
+    /// A diffusion (image generation) model builder.
     Diffusion(crate::DiffusionModelBuilder),
     #[cfg(feature = "audio")]
+    /// A speech synthesis model builder.
     Speech(crate::SpeechModelBuilder),
+    /// An embedding model builder.
     Embedding(crate::EmbeddingModelBuilder),
 }
 
@@ -21,6 +31,7 @@ impl AnyModelBuilder {
         match self {
             AnyModelBuilder::Text(b) => b.model_id.clone(),
             AnyModelBuilder::Vision(b) => b.model_id.clone(),
+            AnyModelBuilder::Auto(b) => b.model_id.clone(),
             AnyModelBuilder::Gguf(b) => b.model_id.clone(),
             AnyModelBuilder::Diffusion(b) => b.model_id.clone(),
             #[cfg(feature = "audio")]
@@ -36,6 +47,7 @@ impl AnyModelBuilder {
         match self {
             AnyModelBuilder::Text(b) => build_text_pipeline(b).await,
             AnyModelBuilder::Vision(b) => build_vision_pipeline(b).await,
+            AnyModelBuilder::Auto(b) => build_auto_pipeline(b).await,
             AnyModelBuilder::Gguf(b) => build_gguf_pipeline(b).await,
             AnyModelBuilder::Diffusion(b) => build_diffusion_pipeline(b).await,
             #[cfg(feature = "audio")]
@@ -55,6 +67,12 @@ impl From<crate::TextModelBuilder> for AnyModelBuilder {
 impl From<crate::VisionModelBuilder> for AnyModelBuilder {
     fn from(b: crate::VisionModelBuilder) -> Self {
         AnyModelBuilder::Vision(b)
+    }
+}
+
+impl From<crate::ModelBuilder> for AnyModelBuilder {
+    fn from(b: crate::ModelBuilder) -> Self {
+        AnyModelBuilder::Auto(b)
     }
 }
 
@@ -328,20 +346,27 @@ pub async fn build_text_pipeline(
     )
     .build(builder.loader_type.clone())?;
 
+    let device = builder
+        .device
+        .clone()
+        .unwrap_or(best_device(builder.force_cpu)?);
+    let isq_type: Option<IsqType> = builder
+        .isq
+        .as_ref()
+        .map(|s| crate::resolve_isq(s, &device))
+        .transpose()?;
+
     let pipeline = loader.load_model_from_hf(
         builder.hf_revision.clone(),
         builder.token_source.clone(),
         &builder.dtype,
-        &builder
-            .device
-            .clone()
-            .unwrap_or(best_device(builder.force_cpu).unwrap()),
+        &device,
         !builder.with_logging,
         builder
             .device_mapping
             .clone()
             .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
-        builder.isq,
+        isq_type,
         builder.paged_attn_cfg,
     )?;
 
@@ -396,10 +421,6 @@ pub async fn build_text_pipeline(
     };
 
     // Create loader config for unload/reload support
-    let device = builder
-        .device
-        .clone()
-        .unwrap_or(best_device(builder.force_cpu).unwrap());
     let device_map_setting = builder
         .device_mapping
         .clone()
@@ -411,7 +432,7 @@ pub async fn build_text_pipeline(
             .iter()
             .map(|p| p.to_string_lossy())
             .collect::<Vec<_>>()
-            .join(";")
+            .join(UQFF_MULTI_FILE_DELIMITER)
     });
 
     let loader_config = ModelLoaderConfig {
@@ -437,7 +458,7 @@ pub async fn build_text_pipeline(
         dtype: builder.dtype,
         device,
         device_map_setting,
-        isq: builder.isq,
+        isq: isq_type,
         paged_attn_config: builder.paged_attn_cfg,
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
@@ -488,20 +509,27 @@ pub async fn build_vision_pipeline(
     )
     .build(builder.loader_type.clone());
 
+    let device = builder
+        .device
+        .clone()
+        .unwrap_or(best_device(builder.force_cpu)?);
+    let isq_type: Option<IsqType> = builder
+        .isq
+        .as_ref()
+        .map(|s| crate::resolve_isq(s, &device))
+        .transpose()?;
+
     let pipeline = loader.load_model_from_hf(
         builder.hf_revision.clone(),
         builder.token_source.clone(),
         &builder.dtype,
-        &builder
-            .device
-            .clone()
-            .unwrap_or(best_device(builder.force_cpu).unwrap()),
+        &device,
         !builder.with_logging,
         builder
             .device_mapping
             .clone()
             .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_vision())),
-        builder.isq,
+        isq_type,
         builder.paged_attn_cfg,
     )?;
 
@@ -556,10 +584,6 @@ pub async fn build_vision_pipeline(
     };
 
     // Create loader config for unload/reload support
-    let device = builder
-        .device
-        .clone()
-        .unwrap_or(best_device(builder.force_cpu).unwrap());
     let device_map_setting = builder
         .device_mapping
         .clone()
@@ -571,7 +595,7 @@ pub async fn build_vision_pipeline(
             .iter()
             .map(|p| p.to_string_lossy())
             .collect::<Vec<_>>()
-            .join(";")
+            .join(UQFF_MULTI_FILE_DELIMITER)
     });
 
     let loader_config = ModelLoaderConfig {
@@ -600,7 +624,7 @@ pub async fn build_vision_pipeline(
         dtype: builder.dtype,
         device,
         device_map_setting,
-        isq: builder.isq,
+        isq: isq_type,
         paged_attn_config: builder.paged_attn_cfg,
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
@@ -906,20 +930,27 @@ pub async fn build_embedding_pipeline(
     )
     .build(builder.loader_type.clone());
 
+    let device = builder
+        .device
+        .clone()
+        .unwrap_or(best_device(builder.force_cpu)?);
+    let isq_type: Option<IsqType> = builder
+        .isq
+        .as_ref()
+        .map(|s| crate::resolve_isq(s, &device))
+        .transpose()?;
+
     let pipeline = loader.load_model_from_hf(
         builder.hf_revision.clone(),
         builder.token_source.clone(),
         &builder.dtype,
-        &builder
-            .device
-            .clone()
-            .unwrap_or(best_device(builder.force_cpu).unwrap()),
+        &device,
         !builder.with_logging,
         builder
             .device_mapping
             .clone()
             .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
-        builder.isq,
+        isq_type,
         None,
     )?;
 
@@ -933,10 +964,6 @@ pub async fn build_embedding_pipeline(
     };
 
     // Create loader config for unload/reload support
-    let device = builder
-        .device
-        .clone()
-        .unwrap_or(best_device(builder.force_cpu).unwrap());
     let device_map_setting = builder
         .device_mapping
         .clone()
@@ -948,7 +975,7 @@ pub async fn build_embedding_pipeline(
             .iter()
             .map(|p| p.to_string_lossy())
             .collect::<Vec<_>>()
-            .join(";")
+            .join(UQFF_MULTI_FILE_DELIMITER)
     });
 
     let loader_config = ModelLoaderConfig {
@@ -967,7 +994,7 @@ pub async fn build_embedding_pipeline(
         dtype: builder.dtype,
         device,
         device_map_setting,
-        isq: builder.isq,
+        isq: isq_type,
         paged_attn_config: None,
         silent: !builder.with_logging,
         chat_template: None,
@@ -978,6 +1005,198 @@ pub async fn build_embedding_pipeline(
         engine_config,
         #[cfg(feature = "mcp")]
         mcp_client_config: None,
+        loader_config: Some(loader_config),
+    };
+
+    Ok((pipeline, scheduler_config, add_model_config))
+}
+
+/// Build a model pipeline using auto-detection from a ModelBuilder.
+/// This uses `AutoLoaderBuilder` to detect the model type (text, vision, embedding, etc.)
+/// from the model's config.json, similar to the CLI `run` command.
+pub async fn build_auto_pipeline(
+    builder: crate::ModelBuilder,
+) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
+    use crate::best_device;
+    use mistralrs_core::*;
+
+    let normal_config = NormalSpecificConfig {
+        topology: builder.topology.clone(),
+        organization: builder.organization,
+        write_uqff: builder.write_uqff.clone(),
+        from_uqff: builder.from_uqff.clone(),
+        imatrix: builder.imatrix.clone(),
+        calibration_file: builder.calibration_file.clone(),
+        hf_cache_path: builder.hf_cache_path.clone(),
+        matformer_config_path: builder.matformer_config_path.clone(),
+        matformer_slice_name: builder.matformer_slice_name.clone(),
+    };
+
+    let vision_config = VisionSpecificConfig {
+        topology: builder.topology.clone(),
+        write_uqff: builder.write_uqff.clone(),
+        from_uqff: builder.from_uqff.clone(),
+        max_edge: builder.max_edge,
+        calibration_file: builder.calibration_file.clone(),
+        imatrix: builder.imatrix.clone(),
+        hf_cache_path: builder.hf_cache_path.clone(),
+        matformer_config_path: builder.matformer_config_path.clone(),
+        matformer_slice_name: builder.matformer_slice_name.clone(),
+        organization: builder.organization,
+    };
+
+    let embedding_config = EmbeddingSpecificConfig {
+        topology: builder.topology.clone(),
+        write_uqff: builder.write_uqff.clone(),
+        from_uqff: builder.from_uqff.clone(),
+        hf_cache_path: builder.hf_cache_path.clone(),
+    };
+
+    if builder.with_logging {
+        initialize_logging();
+    }
+
+    let auto_builder = AutoLoaderBuilder::new(
+        normal_config,
+        vision_config,
+        embedding_config,
+        builder.chat_template.clone(),
+        builder.tokenizer_json.clone(),
+        builder.model_id.clone(),
+        builder.no_kv_cache,
+        builder.jinja_explicit.clone(),
+    );
+    let auto_builder = if let Some(ref path) = builder.hf_cache_path {
+        auto_builder.hf_cache_path(path.clone())
+    } else {
+        auto_builder
+    };
+    let loader = auto_builder.build();
+
+    let device = builder
+        .device
+        .clone()
+        .unwrap_or(best_device(builder.force_cpu)?);
+    let isq_type: Option<IsqType> = builder
+        .isq
+        .as_ref()
+        .map(|s| crate::resolve_isq(s, &device))
+        .transpose()?;
+
+    let pipeline = loader.load_model_from_hf(
+        builder.hf_revision.clone(),
+        builder.token_source.clone(),
+        &builder.dtype,
+        &device,
+        !builder.with_logging,
+        builder
+            .device_mapping
+            .clone()
+            .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
+        isq_type,
+        builder.paged_attn_cfg,
+    )?;
+
+    let scheduler_config = match builder.paged_attn_cfg {
+        Some(_) => {
+            let config = pipeline
+                .lock()
+                .await
+                .get_metadata()
+                .cache_config
+                .as_ref()
+                .cloned();
+
+            if let Some(config) = config {
+                SchedulerConfig::PagedAttentionMeta {
+                    max_num_seqs: builder.max_num_seqs,
+                    config,
+                }
+            } else {
+                SchedulerConfig::DefaultScheduler {
+                    method: DefaultSchedulerMethod::Fixed(builder.max_num_seqs.try_into()?),
+                }
+            }
+        }
+        None => SchedulerConfig::DefaultScheduler {
+            method: DefaultSchedulerMethod::Fixed(builder.max_num_seqs.try_into()?),
+        },
+    };
+
+    let engine_config = EngineConfig {
+        throughput_logging_enabled: builder.throughput_logging,
+        search_embedding_model: builder.search_embedding_model,
+        search_callback: builder.search_callback.clone(),
+        tool_callbacks: builder.tool_callbacks.clone(),
+        tool_callbacks_with_tools: builder
+            .tool_callbacks_with_tools
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    mistralrs_core::ToolCallbackWithTool {
+                        callback: v.callback.clone(),
+                        tool: v.tool.clone(),
+                    },
+                )
+            })
+            .collect(),
+        no_kv_cache: builder.no_kv_cache,
+        no_prefix_cache: builder.prefix_cache_n.is_none(),
+        prefix_cache_n: builder.prefix_cache_n.unwrap_or(16),
+        disable_eos_stop: false,
+    };
+
+    // Convert from_uqff Vec<PathBuf> to semicolon-separated string if present
+    let from_uqff_str = builder.from_uqff.as_ref().map(|paths| {
+        paths
+            .iter()
+            .map(|p| p.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(UQFF_MULTI_FILE_DELIMITER)
+    });
+
+    // Create loader config using ModelSelected::Run for auto-detection on reload
+    let device_map_setting = builder
+        .device_mapping
+        .clone()
+        .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()));
+
+    let loader_config = ModelLoaderConfig {
+        model_selected: ModelSelected::Run {
+            model_id: builder.model_id.clone(),
+            tokenizer_json: builder.tokenizer_json.clone(),
+            dtype: builder.dtype,
+            topology: builder.topology_path.clone(),
+            organization: Some(builder.organization),
+            write_uqff: builder.write_uqff.clone(),
+            from_uqff: from_uqff_str,
+            imatrix: builder.imatrix.clone(),
+            calibration_file: builder.calibration_file.clone(),
+            max_edge: builder.max_edge,
+            max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
+            max_num_images: None,
+            max_image_length: None,
+            hf_cache_path: builder.hf_cache_path.clone(),
+            matformer_config_path: builder.matformer_config_path.clone(),
+            matformer_slice_name: builder.matformer_slice_name.clone(),
+        },
+        token_source: builder.token_source.clone(),
+        hf_revision: builder.hf_revision.clone(),
+        dtype: builder.dtype,
+        device,
+        device_map_setting,
+        isq: isq_type,
+        paged_attn_config: builder.paged_attn_cfg,
+        silent: !builder.with_logging,
+        chat_template: builder.chat_template.clone(),
+        jinja_explicit: builder.jinja_explicit.clone(),
+    };
+
+    let add_model_config = AddModelConfig {
+        engine_config,
+        mcp_client_config: builder.mcp_client_config.clone(),
         loader_config: Some(loader_config),
     };
 
