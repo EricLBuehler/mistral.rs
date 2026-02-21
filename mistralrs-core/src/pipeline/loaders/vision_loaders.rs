@@ -341,6 +341,13 @@ mod tests {
 
     #[cfg(not(feature = "audio"))]
     #[test]
+    fn gemma3_text_model_type_fallback_selects_loader() {
+        AutoVisionLoader::get_loader(r#"{"model_type":"gemma3_text"}"#)
+            .expect("gemma3_text model_type should select gemma3 loader");
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
     fn phi4mm_no_audio_smoke_paths() {
         let config = r#"{"architectures":["Phi4MMForCausalLM"]}"#;
         let loader = AutoVisionLoader::get_loader(config)
@@ -389,6 +396,8 @@ mod tests {
 struct AutoVisionLoaderConfig {
     #[serde(default)]
     architectures: Vec<String>,
+    #[serde(default)]
+    model_type: Option<String>,
     /// Voxtral params.json uses a `multimodal` key instead of `architectures`.
     #[serde(default)]
     multimodal: Option<serde_json::Value>,
@@ -407,12 +416,18 @@ impl AutoVisionLoader {
             return Ok(Box::new(VoxtralLoader));
         }
 
-        if auto_cfg.architectures.len() != 1 {
+        let tp = if auto_cfg.architectures.len() == 1 {
+            let name = &auto_cfg.architectures[0];
+            VisionLoaderType::from_causal_lm_name(name)?
+        } else if auto_cfg.architectures.is_empty() {
+            match auto_cfg.model_type.as_deref() {
+                // Some Gemma 3 text checkpoints omit `architectures` and only specify model_type.
+                Some("gemma3_text") => VisionLoaderType::Gemma3,
+                _ => anyhow::bail!("Expected exactly one architecture in config"),
+            }
+        } else {
             anyhow::bail!("Expected exactly one architecture in config");
-        }
-
-        let name = &auto_cfg.architectures[0];
-        let tp = VisionLoaderType::from_causal_lm_name(name)?;
+        };
 
         once_log_info(format!("Automatic loader type determined to be `{tp}`"));
 
