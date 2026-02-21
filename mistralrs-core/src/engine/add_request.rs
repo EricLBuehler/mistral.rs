@@ -25,6 +25,11 @@ use crate::{
 
 use super::{search_request, Engine, TERMINATE_ALL_NEXT_STEP};
 
+#[cfg(feature = "audio")]
+type RequestAudios = Vec<crate::AudioInput>;
+#[cfg(not(feature = "audio"))]
+type RequestAudios = Vec<()>;
+
 impl Engine {
     pub async fn handle_request(self: Arc<Self>, request: Request) {
         match request {
@@ -133,12 +138,12 @@ impl Engine {
         };
 
         #[cfg(feature = "audio")]
-        let audios = match request.messages {
+        let audios: Option<RequestAudios> = match request.messages {
             RequestMessage::VisionChat { ref audios, .. } => Some(audios.clone()),
             _ => None,
         };
         #[cfg(not(feature = "audio"))]
-        let audios: Option<Vec<()>> = None;
+        let audios: Option<RequestAudios> = None;
 
         let matcher = Arc::new(handle_seq_error!(
             ToolCallingMatcher::new(request.tool_choice.unwrap_or(ToolChoice::Auto),),
