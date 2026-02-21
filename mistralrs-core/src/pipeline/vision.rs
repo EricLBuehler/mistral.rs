@@ -11,8 +11,7 @@ use super::{
 use super::{Gemma3nLoader, Phi4MMLoader};
 use super::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader, Phi3VLoader,
-    Qwen2_5VLLoader, VisionLoaderType,
-    VoxtralLoader,
+    Qwen2_5VLLoader, VisionLoaderType, VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};

@@ -71,7 +71,6 @@ use crate::vision_models::qwen3_vl_moe::{
 };
 use crate::vision_models::voxtral::config::VoxtralConfig;
 use crate::vision_models::voxtral::{VoxtralModel, VoxtralProcessor};
-use crate::vision_models::{minicpmo, phi4};
 
 pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     // pixel_values and pixel_attention_mask only specified for prompt seqs
@@ -295,11 +294,11 @@ mod tests {
     use super::AutoVisionLoader;
     use super::VisionLoaderType;
     #[cfg(not(feature = "audio"))]
-    use crate::SupportedModality;
-    #[cfg(not(feature = "audio"))]
     use crate::vision_models::preprocessor_config::PreProcessorConfig;
     #[cfg(not(feature = "audio"))]
     use crate::vision_models::processor_config::ProcessorConfig;
+    #[cfg(not(feature = "audio"))]
+    use crate::SupportedModality;
 
     #[test]
     fn phi4mm_arch_string_parses() {
