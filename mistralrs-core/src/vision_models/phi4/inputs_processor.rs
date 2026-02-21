@@ -763,7 +763,7 @@ impl Phi4MMInputsProcessor {
         #[cfg(not(feature = "audio"))]
         if has_audio_tokens {
             candle_core::bail!(
-                "Audio inputs are not supported in this build (mistralrs-core compiled without the audio feature). Rebuild with --features audio or use default features."
+                "Audio inputs are not supported in this build (mistralrs-core compiled without the audio feature). Enable the `audio` feature in your Cargo.toml dependency (or rebuild with `--features audio`)."
             );
         }
 

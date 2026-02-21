@@ -59,7 +59,9 @@ impl VoxtralAudioProcessor {
     pub fn process_audio(&self, audio: &AudioInput, device: &Device) -> Result<Tensor> {
         if cfg!(not(feature = "audio")) {
             let _ = (audio, device);
-            anyhow::bail!("Enable feature `audio` to use Voxtral audio processing.");
+            anyhow::bail!(
+                "Enable the `audio` feature in your Cargo.toml dependency (or rebuild with `--features audio`) to use Voxtral audio processing."
+            );
         }
         let mono = audio.to_mono();
 

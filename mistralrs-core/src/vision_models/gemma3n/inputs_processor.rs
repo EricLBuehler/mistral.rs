@@ -151,7 +151,7 @@ impl InputsProcessor for Gemma3nImageProcessor {
         #[cfg(not(feature = "audio"))]
         if any_audio_tokens {
             return Err(anyhow::Error::msg(
-                "Audio inputs are not supported in this build (mistralrs-core compiled without the audio feature). Rebuild with --features audio or use default features.",
+                "Audio inputs are not supported in this build (mistralrs-core compiled without the audio feature). Enable the `audio` feature in your Cargo.toml dependency (or rebuild with `--features audio`).",
             ));
         }
 
