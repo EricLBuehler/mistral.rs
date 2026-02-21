@@ -70,10 +70,7 @@ mod tests {
         });
         let f: Function = serde_json::from_value(v).unwrap();
         assert_eq!(f.name, "weather");
-        assert_eq!(
-            f.parameters.unwrap().get("city").unwrap(),
-            &json!("Paris")
-        );
+        assert_eq!(f.parameters.unwrap().get("city").unwrap(), &json!("Paris"));
     }
 
     #[test]
