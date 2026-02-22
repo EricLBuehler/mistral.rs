@@ -94,6 +94,41 @@ impl Qwen2_5VLModel {
         image_nums: Vec<usize>,
         video_nums: Vec<usize>,
     ) -> Result<(Tensor, Tensor)> {
+        fn best_align_to_seq_len(
+            candidate: &Tensor,
+            reference: &Tensor,
+            seq_len: usize,
+        ) -> Result<Tensor> {
+            let head = candidate.narrow(D::Minus1, 0, seq_len)?;
+            let tail = candidate.narrow(D::Minus1, 1, seq_len)?;
+            let reference = reference.narrow(D::Minus1, 0, seq_len)?.to_dtype(DType::F32)?;
+
+            let head_diff = head
+                .to_dtype(DType::F32)?
+                .sub(&reference)?
+                .abs()?
+                .sum_all()?
+                .to_scalar::<f32>()?;
+            let tail_diff = tail
+                .to_dtype(DType::F32)?
+                .sub(&reference)?
+                .abs()?
+                .sum_all()?
+                .to_scalar::<f32>()?;
+
+            if tail_diff < head_diff {
+                tracing::debug!(
+                    "Qwen2.5-VL position drift +1: selecting tail alignment (tail_diff={tail_diff}, head_diff={head_diff}, seq_len={seq_len})"
+                );
+                Ok(tail)
+            } else {
+                tracing::debug!(
+                    "Qwen2.5-VL position drift +1: selecting head alignment (head_diff={head_diff}, tail_diff={tail_diff}, seq_len={seq_len})"
+                );
+                Ok(head)
+            }
+        }
+
         if image_grid_thw.is_some() || video_grid_thw.is_some() {
             let total_input_ids = input_ids.clone();
             let mut position_ids = Tensor::zeros(
@@ -231,11 +266,54 @@ impl Qwen2_5VLModel {
                     .eq(1f64)?
                     .unsqueeze(0)?
                     .repeat((3, 1))?;
+                let existing_positions = position_ids.i((.., i, ..))?;
+                let seq_len = position_ids.dim(D::Minus1)?;
+                let llm_len = llm_positions.dim(D::Minus1)?;
+                let mask_len = positions_mask.dim(D::Minus1)?;
+
+                if llm_len != seq_len || mask_len != seq_len {
+                    tracing::debug!(
+                        "Qwen2.5-VL position drift detected (batch_idx={i}, llm_len={llm_len}, mask_len={mask_len}, seq_len={seq_len})"
+                    );
+                }
+
+                let llm_positions = match llm_len as isize - seq_len as isize {
+                    0 => llm_positions,
+                    1 => best_align_to_seq_len(&llm_positions, &existing_positions, seq_len)?,
+                    -1 => {
+                        let last = llm_positions.i((.., llm_len - 1))?.unsqueeze(D::Minus1)?;
+                        Tensor::cat(&[llm_positions, last], D::Minus1)?
+                    }
+                    _ => {
+                        candle_core::bail!(
+                            "Qwen2.5-VL: position drift too large (batch_idx={i}, llm_len={llm_len}, seq_len={seq_len}, mask_len={mask_len})"
+                        )
+                    }
+                };
+
+                let positions_mask = match mask_len as isize - seq_len as isize {
+                    0 => positions_mask,
+                    1 => positions_mask.narrow(D::Minus1, 0, seq_len)?,
+                    -1 => {
+                        let pad = Tensor::zeros(
+                            (positions_mask.dim(0)?, 1),
+                            positions_mask.dtype(),
+                            positions_mask.device(),
+                        )?;
+                        Tensor::cat(&[positions_mask, pad], D::Minus1)?
+                    }
+                    _ => {
+                        candle_core::bail!(
+                            "Qwen2.5-VL: mask drift too large (batch_idx={i}, mask_len={mask_len}, seq_len={seq_len}, llm_len={llm_len})"
+                        )
+                    }
+                };
+                let existing_positions = existing_positions.narrow(D::Minus1, 0, seq_len)?;
 
                 position_ids = position_ids.slice_assign(
-                    &[0..position_ids.dim(0)?, i..i + 1, 0..position_ids.dim(2)?],
+                    &[0..position_ids.dim(0)?, i..i + 1, 0..seq_len],
                     &positions_mask
-                        .where_cond(&llm_positions, &position_ids.i((.., i, ..))?)?
+                        .where_cond(&llm_positions, &existing_positions)?
                         .unsqueeze(1)?,
                 )?;
                 mrope_position_deltas
