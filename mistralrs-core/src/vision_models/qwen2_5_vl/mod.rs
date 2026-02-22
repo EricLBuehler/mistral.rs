@@ -41,6 +41,42 @@ pub struct Qwen2_5VLModel {
     encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
+fn best_align_to_seq_len(
+    candidate: &Tensor,
+    reference: &Tensor,
+    seq_len: usize,
+    model_tag: &'static str,
+) -> Result<Tensor> {
+    let head = candidate.narrow(D::Minus1, 0, seq_len)?;
+    let tail = candidate.narrow(D::Minus1, 1, seq_len)?;
+    let reference = reference.narrow(D::Minus1, 0, seq_len)?.to_dtype(DType::F32)?;
+
+    let head_diff = head
+        .to_dtype(DType::F32)?
+        .sub(&reference)?
+        .abs()?
+        .sum_all()?
+        .to_scalar::<f32>()?;
+    let tail_diff = tail
+        .to_dtype(DType::F32)?
+        .sub(&reference)?
+        .abs()?
+        .sum_all()?
+        .to_scalar::<f32>()?;
+
+    if tail_diff < head_diff {
+        tracing::debug!(
+            "{model_tag} position drift +1: selecting tail alignment (tail_diff={tail_diff}, head_diff={head_diff}, seq_len={seq_len})"
+        );
+        Ok(tail)
+    } else {
+        tracing::debug!(
+            "{model_tag} position drift +1: selecting head alignment (head_diff={head_diff}, tail_diff={tail_diff}, seq_len={seq_len})"
+        );
+        Ok(head)
+    }
+}
+
 impl Qwen2_5VLModel {
     pub fn new(
         cfg: &Config,
@@ -94,41 +130,6 @@ impl Qwen2_5VLModel {
         image_nums: Vec<usize>,
         video_nums: Vec<usize>,
     ) -> Result<(Tensor, Tensor)> {
-        fn best_align_to_seq_len(
-            candidate: &Tensor,
-            reference: &Tensor,
-            seq_len: usize,
-        ) -> Result<Tensor> {
-            let head = candidate.narrow(D::Minus1, 0, seq_len)?;
-            let tail = candidate.narrow(D::Minus1, 1, seq_len)?;
-            let reference = reference.narrow(D::Minus1, 0, seq_len)?.to_dtype(DType::F32)?;
-
-            let head_diff = head
-                .to_dtype(DType::F32)?
-                .sub(&reference)?
-                .abs()?
-                .sum_all()?
-                .to_scalar::<f32>()?;
-            let tail_diff = tail
-                .to_dtype(DType::F32)?
-                .sub(&reference)?
-                .abs()?
-                .sum_all()?
-                .to_scalar::<f32>()?;
-
-            if tail_diff < head_diff {
-                tracing::debug!(
-                    "Qwen2.5-VL position drift +1: selecting tail alignment (tail_diff={tail_diff}, head_diff={head_diff}, seq_len={seq_len})"
-                );
-                Ok(tail)
-            } else {
-                tracing::debug!(
-                    "Qwen2.5-VL position drift +1: selecting head alignment (head_diff={head_diff}, tail_diff={tail_diff}, seq_len={seq_len})"
-                );
-                Ok(head)
-            }
-        }
-
         if image_grid_thw.is_some() || video_grid_thw.is_some() {
             let total_input_ids = input_ids.clone();
             let mut position_ids = Tensor::zeros(
@@ -270,6 +271,22 @@ impl Qwen2_5VLModel {
                 let seq_len = position_ids.dim(D::Minus1)?;
                 let llm_len = llm_positions.dim(D::Minus1)?;
                 let mask_len = positions_mask.dim(D::Minus1)?;
+                let existing_l1 = existing_positions
+                    .to_dtype(DType::F32)?
+                    .abs()?
+                    .sum_all()?
+                    .to_scalar::<f32>()?;
+                let alignment_reference = if existing_l1 > 0.0 {
+                    existing_positions.clone()
+                } else {
+                    tracing::debug!(
+                        "Qwen2.5-VL alignment reference is all zeros at batch_idx={i}; falling back to attention-derived reference"
+                    );
+                    let attn_row = attention_mask.as_ref().unwrap().i(i)?;
+                    let ref_1d = (attn_row.to_dtype(DType::F32)?.cumsum(D::Minus1)? - 1f64)?;
+                    let ref_1d = masked_fill(&ref_1d, &attn_row.eq(0f64)?, 0i64)?;
+                    ref_1d.unsqueeze(0)?.repeat((3, 1))?.to_dtype(DType::I64)?
+                };
 
                 if llm_len != seq_len || mask_len != seq_len {
                     tracing::debug!(
@@ -279,14 +296,15 @@ impl Qwen2_5VLModel {
 
                 let llm_positions = match llm_len as isize - seq_len as isize {
                     0 => llm_positions,
-                    1 => best_align_to_seq_len(&llm_positions, &existing_positions, seq_len)?,
-                    -1 => {
-                        let last = llm_positions.i((.., llm_len - 1))?.unsqueeze(D::Minus1)?;
-                        Tensor::cat(&[llm_positions, last], D::Minus1)?
-                    }
+                    1 => best_align_to_seq_len(
+                        &llm_positions,
+                        &alignment_reference,
+                        seq_len,
+                        "Qwen2.5-VL",
+                    )?,
                     _ => {
                         candle_core::bail!(
-                            "Qwen2.5-VL: position drift too large (batch_idx={i}, llm_len={llm_len}, seq_len={seq_len}, mask_len={mask_len})"
+                            "Qwen2.5-VL: unsupported position drift (batch_idx={i}, llm_len={llm_len}, seq_len={seq_len}, mask_len={mask_len})"
                         )
                     }
                 };
@@ -294,17 +312,9 @@ impl Qwen2_5VLModel {
                 let positions_mask = match mask_len as isize - seq_len as isize {
                     0 => positions_mask,
                     1 => positions_mask.narrow(D::Minus1, 0, seq_len)?,
-                    -1 => {
-                        let pad = Tensor::zeros(
-                            (positions_mask.dim(0)?, 1),
-                            positions_mask.dtype(),
-                            positions_mask.device(),
-                        )?;
-                        Tensor::cat(&[positions_mask, pad], D::Minus1)?
-                    }
                     _ => {
                         candle_core::bail!(
-                            "Qwen2.5-VL: mask drift too large (batch_idx={i}, mask_len={mask_len}, seq_len={seq_len}, llm_len={llm_len})"
+                            "Qwen2.5-VL: unsupported mask drift (batch_idx={i}, mask_len={mask_len}, seq_len={seq_len}, llm_len={llm_len})"
                         )
                     }
                 };
@@ -720,3 +730,62 @@ impl IsqModel for Qwen2_5VLModel {
 }
 
 impl AnyMoeBaseModelMixin for Qwen2_5VLModel {}
+
+#[cfg(test)]
+mod tests {
+    use super::best_align_to_seq_len;
+    use candle_core::{Device, Result, Tensor};
+
+    #[test]
+    fn best_align_selects_head_when_tail_is_outlier() -> Result<()> {
+        let dev = &Device::Cpu;
+        let reference = Tensor::from_vec(
+            vec![0i64, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4],
+            (3, 5),
+            dev,
+        )?;
+        let candidate = Tensor::from_vec(
+            vec![0i64, 1, 2, 3, 4, 999, 0, 1, 2, 3, 4, 999, 0, 1, 2, 3, 4, 999],
+            (3, 6),
+            dev,
+        )?;
+        let aligned = best_align_to_seq_len(&candidate, &reference, 5, "test")?;
+        assert_eq!(aligned.to_vec2::<i64>()?, reference.to_vec2::<i64>()?);
+        Ok(())
+    }
+
+    #[test]
+    fn best_align_selects_tail_when_head_is_outlier() -> Result<()> {
+        let dev = &Device::Cpu;
+        let reference = Tensor::from_vec(
+            vec![0i64, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4],
+            (3, 5),
+            dev,
+        )?;
+        let candidate = Tensor::from_vec(
+            vec![999i64, 0, 1, 2, 3, 4, 999, 0, 1, 2, 3, 4, 999, 0, 1, 2, 3, 4],
+            (3, 6),
+            dev,
+        )?;
+        let aligned = best_align_to_seq_len(&candidate, &reference, 5, "test")?;
+        assert_eq!(aligned.to_vec2::<i64>()?, reference.to_vec2::<i64>()?);
+        Ok(())
+    }
+
+    #[test]
+    fn best_align_with_zero_reference_prefers_head_for_monotonic_candidate() -> Result<()> {
+        let dev = &Device::Cpu;
+        let reference = Tensor::zeros((3, 5), candle_core::DType::I64, dev)?;
+        let candidate = Tensor::from_vec(
+            vec![0i64, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5],
+            (3, 6),
+            dev,
+        )?;
+        let aligned = best_align_to_seq_len(&candidate, &reference, 5, "test")?;
+        assert_eq!(
+            aligned.to_vec2::<i64>()?,
+            vec![vec![0, 1, 2, 3, 4], vec![0, 1, 2, 3, 4], vec![0, 1, 2, 3, 4]]
+        );
+        Ok(())
+    }
+}
