@@ -198,7 +198,7 @@ impl NormalLoaderType {
             "Gemma2ForCausalLM" => Ok(Self::Gemma2),
             "PhiForCausalLM" => Ok(Self::Phi2),
             "Phi3ForCausalLM" => Ok(Self::Phi3),
-            "LlamaForCausalLM" => Ok(Self::Llama),
+            "LlamaForCausalLM" | "BitnetForCausalLM" | "BitNetForCausalLM" => Ok(Self::Llama),
             "Qwen2ForCausalLM" => Ok(Self::Qwen2),
             "Starcoder2ForCausalLM" => Ok(Self::Starcoder2),
             "PhiMoEForCausalLM" => Ok(Self::Phi3_5MoE),
