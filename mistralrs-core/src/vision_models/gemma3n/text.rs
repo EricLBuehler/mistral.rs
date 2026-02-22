@@ -36,6 +36,15 @@ macro_rules! is_sliding {
 
 const EPS: f64 = 1e-8;
 
+fn validate_softcap(name: &str, softcap: Option<f64>) -> Result<()> {
+    if let Some(softcap) = softcap {
+        if !softcap.is_finite() || softcap <= 0.0 {
+            candle_core::bail!("{name} must be finite and > 0, got {softcap}");
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct Mlp {
     gate: Arc<dyn QuantMethod>,
@@ -964,6 +973,8 @@ impl TextModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        validate_softcap("attn_logit_softcapping", cfg.attn_logit_softcapping)?;
+        validate_softcap("final_logit_softcapping", cfg.final_logit_softcapping)?;
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
                 "Using {} quantization: {}.",
@@ -1430,6 +1441,31 @@ impl TextModel {
         }
 
         Ok(xs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_softcap;
+
+    #[test]
+    fn softcap_validation_accepts_none() {
+        assert!(validate_softcap("attn_logit_softcapping", None).is_ok());
+    }
+
+    #[test]
+    fn softcap_validation_accepts_positive() {
+        assert!(validate_softcap("attn_logit_softcapping", Some(50.0)).is_ok());
+        assert!(validate_softcap("attn_logit_softcapping", Some(1e-12)).is_ok());
+    }
+
+    #[test]
+    fn softcap_validation_rejects_zero_negative_and_non_finite() {
+        assert!(validate_softcap("attn_logit_softcapping", Some(0.0)).is_err());
+        assert!(validate_softcap("attn_logit_softcapping", Some(-1.0)).is_err());
+        assert!(validate_softcap("attn_logit_softcapping", Some(f64::INFINITY)).is_err());
+        assert!(validate_softcap("attn_logit_softcapping", Some(f64::NEG_INFINITY)).is_err());
+        assert!(validate_softcap("attn_logit_softcapping", Some(f64::NAN)).is_err());
     }
 }
 
