@@ -89,6 +89,7 @@ pub struct Gemma3nTextConfig {
     pub laurel_rank: usize,
     pub altup_correct_scale: bool,
     pub activation_sparsity_pattern: Vec<f64>,
+    pub attn_logit_softcapping: Option<f64>,
     pub final_logit_softcapping: Option<f64>,
 }
 
