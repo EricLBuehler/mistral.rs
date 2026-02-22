@@ -290,6 +290,7 @@ impl std::fmt::Display for VisionLoaderType {
 #[cfg(test)]
 mod tests {
     use super::AutoVisionLoader;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
 
     #[test]
     fn gemma3_text_is_rejected_with_helpful_error() {
@@ -304,6 +305,80 @@ mod tests {
             msg.contains("Use the text loader"),
             "missing remediation hint in error: {msg}"
         );
+    }
+
+    #[test]
+    fn gemma3_causallm_architecture_is_rejected_without_model_type() {
+        let config = r#"{"architectures":["Gemma3ForCausalLM"]}"#;
+        let err = match AutoVisionLoader::get_loader(config) {
+            Ok(_) => panic!("Gemma3ForCausalLM must be rejected"),
+            Err(err) => err,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Gemma3ForCausalLM") && msg.contains("text-only"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn supported_vision_architectures_are_accepted() {
+        let supported_architectures = [
+            "Phi3VForCausalLM",
+            "Idefics2ForConditionalGeneration",
+            "LlavaNextForConditionalGeneration",
+            "LlavaForConditionalGeneration",
+            "MllamaForConditionalGeneration",
+            "Qwen2VLForConditionalGeneration",
+            "Idefics3ForConditionalGeneration",
+            "MiniCPMO",
+            "Phi4MMForCausalLM",
+            "Qwen2_5_VLForConditionalGeneration",
+            "Gemma3ForConditionalGeneration",
+            "Mistral3ForConditionalGeneration",
+            "Llama4ForConditionalGeneration",
+            "Gemma3nForConditionalGeneration",
+            "Qwen3VLForConditionalGeneration",
+            "Qwen3VLMoeForConditionalGeneration",
+            "VoxtralForConditionalGeneration",
+            "VoxtralRealtimeForConditionalGeneration",
+        ];
+
+        for architecture in supported_architectures {
+            let config = format!(r#"{{"architectures":["{architecture}"]}}"#);
+            let _ = AutoVisionLoader::get_loader(&config).unwrap_or_else(|err| {
+                panic!("architecture {architecture} should be accepted: {err}")
+            });
+        }
+
+        let voxtral_multimodal_only = r#"{"multimodal":{"audio":true}}"#;
+        let _ = AutoVisionLoader::get_loader(voxtral_multimodal_only)
+            .expect("voxtral multimodal-only config should be accepted");
+    }
+
+    #[test]
+    fn malformed_json_inputs_return_errors_and_do_not_panic() {
+        let malformed_inputs = [
+            "",
+            "{",
+            "null",
+            "[]",
+            r#"{"architectures":null}"#,
+            r#"{"architectures":[null]}"#,
+            r#"{"architectures":["Gemma3ForCausalLM"],"model_type":null}"#,
+            r#"{"architectures":["Gemma3ForConditionalGeneration"],"model_type":123}"#,
+            r#"{"architectures":"Gemma3ForConditionalGeneration"}"#,
+            r#"{"architectures":["UnknownForConditionalGeneration"]}"#,
+        ];
+
+        for input in malformed_inputs {
+            let result = catch_unwind(AssertUnwindSafe(|| AutoVisionLoader::get_loader(input)));
+            assert!(result.is_ok(), "get_loader panicked for input: {input}");
+            assert!(
+                result.expect("already checked").is_err(),
+                "expected an error for malformed input: {input}"
+            );
+        }
     }
 }
 
