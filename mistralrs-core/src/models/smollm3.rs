@@ -12,7 +12,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
     layers::{
         embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, Sdpa, SmolLm3RopeConfig,
@@ -542,11 +542,13 @@ impl SmolLm3 {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+        let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
+            let mask_for_layer = mask.as_ref().map(|m| m.get(x.device()).clone());
             x = block.forward(
                 &x,
-                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                &mask_for_layer,
                 seqlen_offsets,
                 &mut cache[block_idx],
                 metadata

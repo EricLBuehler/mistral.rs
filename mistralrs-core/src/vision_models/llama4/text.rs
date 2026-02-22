@@ -11,7 +11,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{embedding, Activation, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     moe::{MoEExperts, MoEExpertsConfig},
@@ -711,15 +711,17 @@ impl TextModel {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+        let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
+        let chunked_mask = DeviceMappedMask::new(chunked_mask, &*self.mapper)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
+            let mask_for_layer = mask.as_ref().map(|m| m.get(x.device()).clone());
+            let chunked_mask_for_layer = chunked_mask.as_ref().map(|m| m.get(x.device()).clone());
             x = block.forward(
                 &x,
                 &position_ids.to_device(x.device())?,
-                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
-                &chunked_mask
-                    .clone()
-                    .map(|m| m.to_device(x.device()).unwrap()),
+                &mask_for_layer,
+                &chunked_mask_for_layer,
                 seqlen_offsets,
                 &mut cache[block_idx],
                 metadata
