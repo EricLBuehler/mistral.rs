@@ -77,6 +77,51 @@ fn best_align_to_seq_len(
     }
 }
 
+fn attention_alignment_reference_from_mask_row(attn_row: &Tensor) -> Result<Tensor> {
+    let ref_1d = (attn_row.to_dtype(DType::F32)?.cumsum(D::Minus1)? - 1f64)?;
+    let ref_1d = masked_fill(&ref_1d, &attn_row.eq(0f64)?, 0i64)?;
+    ref_1d.unsqueeze(0)?.repeat((3, 1))?.to_dtype(DType::I64)
+}
+
+fn align_llm_positions_with_policy(
+    llm_positions: Tensor,
+    alignment_reference: &Tensor,
+    seq_len: usize,
+    mask_len: usize,
+    model_tag: &'static str,
+    batch_idx: usize,
+) -> Result<Tensor> {
+    let llm_len = llm_positions.dim(D::Minus1)?;
+    match llm_len as isize - seq_len as isize {
+        0 => Ok(llm_positions),
+        1 => best_align_to_seq_len(&llm_positions, alignment_reference, seq_len, model_tag),
+        _ => {
+            candle_core::bail!(
+                "{model_tag}: unsupported position drift (batch_idx={batch_idx}, llm_len={llm_len}, seq_len={seq_len}, mask_len={mask_len})"
+            )
+        }
+    }
+}
+
+fn align_positions_mask_with_policy(
+    positions_mask: Tensor,
+    seq_len: usize,
+    llm_len: usize,
+    model_tag: &'static str,
+    batch_idx: usize,
+) -> Result<Tensor> {
+    let mask_len = positions_mask.dim(D::Minus1)?;
+    match mask_len as isize - seq_len as isize {
+        0 => Ok(positions_mask),
+        1 => positions_mask.narrow(D::Minus1, 0, seq_len),
+        _ => {
+            candle_core::bail!(
+                "{model_tag}: unsupported mask drift (batch_idx={batch_idx}, mask_len={mask_len}, seq_len={seq_len}, llm_len={llm_len})"
+            )
+        }
+    }
+}
+
 impl Qwen2_5VLModel {
     pub fn new(
         cfg: &Config,
@@ -283,9 +328,7 @@ impl Qwen2_5VLModel {
                         "Qwen2.5-VL alignment reference is all zeros at batch_idx={i}; falling back to attention-derived reference"
                     );
                     let attn_row = attention_mask.as_ref().unwrap().i(i)?;
-                    let ref_1d = (attn_row.to_dtype(DType::F32)?.cumsum(D::Minus1)? - 1f64)?;
-                    let ref_1d = masked_fill(&ref_1d, &attn_row.eq(0f64)?, 0i64)?;
-                    ref_1d.unsqueeze(0)?.repeat((3, 1))?.to_dtype(DType::I64)?
+                    attention_alignment_reference_from_mask_row(&attn_row)?
                 };
 
                 if llm_len != seq_len || mask_len != seq_len {
@@ -294,30 +337,22 @@ impl Qwen2_5VLModel {
                     );
                 }
 
-                let llm_positions = match llm_len as isize - seq_len as isize {
-                    0 => llm_positions,
-                    1 => best_align_to_seq_len(
-                        &llm_positions,
-                        &alignment_reference,
-                        seq_len,
-                        "Qwen2.5-VL",
-                    )?,
-                    _ => {
-                        candle_core::bail!(
-                            "Qwen2.5-VL: unsupported position drift (batch_idx={i}, llm_len={llm_len}, seq_len={seq_len}, mask_len={mask_len})"
-                        )
-                    }
-                };
+                let llm_positions = align_llm_positions_with_policy(
+                    llm_positions,
+                    &alignment_reference,
+                    seq_len,
+                    mask_len,
+                    "Qwen2.5-VL",
+                    i,
+                )?;
 
-                let positions_mask = match mask_len as isize - seq_len as isize {
-                    0 => positions_mask,
-                    1 => positions_mask.narrow(D::Minus1, 0, seq_len)?,
-                    _ => {
-                        candle_core::bail!(
-                            "Qwen2.5-VL: unsupported mask drift (batch_idx={i}, mask_len={mask_len}, seq_len={seq_len}, llm_len={llm_len})"
-                        )
-                    }
-                };
+                let positions_mask = align_positions_mask_with_policy(
+                    positions_mask,
+                    seq_len,
+                    llm_len,
+                    "Qwen2.5-VL",
+                    i,
+                )?;
                 let existing_positions = existing_positions.narrow(D::Minus1, 0, seq_len)?;
 
                 position_ids = position_ids.slice_assign(
@@ -733,8 +768,11 @@ impl AnyMoeBaseModelMixin for Qwen2_5VLModel {}
 
 #[cfg(test)]
 mod tests {
-    use super::best_align_to_seq_len;
-    use candle_core::{Device, Result, Tensor};
+    use super::{
+        align_llm_positions_with_policy, align_positions_mask_with_policy,
+        attention_alignment_reference_from_mask_row, best_align_to_seq_len,
+    };
+    use candle_core::{DType, Device, Result, Tensor};
 
     #[test]
     fn best_align_selects_head_when_tail_is_outlier() -> Result<()> {
@@ -822,6 +860,110 @@ mod tests {
         )?;
         let aligned = best_align_to_seq_len(&candidate, &reference, 5, "test")?;
         assert_eq!(aligned.to_vec2::<i64>()?, reference.to_vec2::<i64>()?);
+        Ok(())
+    }
+
+    #[test]
+    fn fallback_reference_from_attention_mask_matches_expected_pattern() -> Result<()> {
+        let dev = &Device::Cpu;
+        let attn_row = Tensor::from_vec(vec![1i64, 1, 1, 0, 0], (5,), dev)?;
+        let reference = attention_alignment_reference_from_mask_row(&attn_row)?;
+        assert_eq!(
+            reference.to_vec2::<i64>()?,
+            vec![vec![0, 1, 2, 0, 0], vec![0, 1, 2, 0, 0], vec![0, 1, 2, 0, 0]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn llm_policy_accepts_equal_and_plus_one_lengths() -> Result<()> {
+        let dev = &Device::Cpu;
+        let seq_len = 5usize;
+        let reference = Tensor::from_vec(
+            vec![0i64, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4],
+            (3, seq_len),
+            dev,
+        )?;
+        let equal = reference.clone();
+        let aligned_equal = align_llm_positions_with_policy(
+            equal,
+            &reference,
+            seq_len,
+            seq_len,
+            "Qwen2.5-VL",
+            0,
+        )?;
+        assert_eq!(aligned_equal.to_vec2::<i64>()?, reference.to_vec2::<i64>()?);
+
+        let plus_one = Tensor::from_vec(
+            vec![0i64, 1, 2, 3, 4, 4, 0, 1, 2, 3, 4, 4, 0, 1, 2, 3, 4, 4],
+            (3, seq_len + 1),
+            dev,
+        )?;
+        let aligned_plus_one = align_llm_positions_with_policy(
+            plus_one,
+            &reference,
+            seq_len,
+            seq_len,
+            "Qwen2.5-VL",
+            0,
+        )?;
+        assert_eq!(aligned_plus_one.dims2()?, (3, seq_len));
+        Ok(())
+    }
+
+    #[test]
+    fn llm_policy_rejects_minus_one_length() -> Result<()> {
+        let dev = &Device::Cpu;
+        let seq_len = 5usize;
+        let reference = Tensor::from_vec(
+            vec![0i64, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4],
+            (3, seq_len),
+            dev,
+        )?;
+        let minus_one = Tensor::from_vec(vec![0i64, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3], (3, 4), dev)?;
+        let err = align_llm_positions_with_policy(
+            minus_one,
+            &reference,
+            seq_len,
+            seq_len,
+            "Qwen2.5-VL",
+            0,
+        )
+        .expect_err("minus-one llm length should error");
+        assert!(err.to_string().contains("unsupported position drift"));
+        Ok(())
+    }
+
+    #[test]
+    fn mask_policy_accepts_equal_and_plus_one_lengths() -> Result<()> {
+        let dev = &Device::Cpu;
+        let seq_len = 5usize;
+        let equal = Tensor::ones((3, seq_len), DType::U8, dev)?;
+        let aligned_equal =
+            align_positions_mask_with_policy(equal, seq_len, seq_len, "Qwen2.5-VL", 0)?;
+        assert_eq!(aligned_equal.dims2()?, (3, seq_len));
+
+        let plus_one = Tensor::ones((3, seq_len + 1), DType::U8, dev)?;
+        let aligned_plus_one =
+            align_positions_mask_with_policy(plus_one, seq_len, seq_len, "Qwen2.5-VL", 0)?;
+        assert_eq!(aligned_plus_one.dims2()?, (3, seq_len));
+        Ok(())
+    }
+
+    #[test]
+    fn mask_policy_rejects_minus_one_and_plus_two_lengths() -> Result<()> {
+        let dev = &Device::Cpu;
+        let seq_len = 5usize;
+        let minus_one = Tensor::ones((3, seq_len - 1), DType::U8, dev)?;
+        let err = align_positions_mask_with_policy(minus_one, seq_len, seq_len, "Qwen2.5-VL", 0)
+            .expect_err("minus-one mask length should error");
+        assert!(err.to_string().contains("unsupported mask drift"));
+
+        let plus_two = Tensor::ones((3, seq_len + 2), DType::U8, dev)?;
+        let err = align_positions_mask_with_policy(plus_two, seq_len, seq_len, "Qwen2.5-VL", 0)
+            .expect_err("plus-two mask length should error");
+        assert!(err.to_string().contains("unsupported mask drift"));
         Ok(())
     }
 }
