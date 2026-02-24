@@ -788,4 +788,40 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn best_align_subtle_extra_at_start_prefers_tail() -> Result<()> {
+        let dev = &Device::Cpu;
+        let reference = Tensor::from_vec(
+            vec![0i64, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4],
+            (3, 5),
+            dev,
+        )?;
+        let candidate = Tensor::from_vec(
+            vec![0i64, 0, 1, 2, 3, 4, 0, 0, 1, 2, 3, 4, 0, 0, 1, 2, 3, 4],
+            (3, 6),
+            dev,
+        )?;
+        let aligned = best_align_to_seq_len(&candidate, &reference, 5, "test")?;
+        assert_eq!(aligned.to_vec2::<i64>()?, reference.to_vec2::<i64>()?);
+        Ok(())
+    }
+
+    #[test]
+    fn best_align_subtle_extra_at_end_prefers_head() -> Result<()> {
+        let dev = &Device::Cpu;
+        let reference = Tensor::from_vec(
+            vec![0i64, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4],
+            (3, 5),
+            dev,
+        )?;
+        let candidate = Tensor::from_vec(
+            vec![0i64, 1, 2, 3, 4, 4, 0, 1, 2, 3, 4, 4, 0, 1, 2, 3, 4, 4],
+            (3, 6),
+            dev,
+        )?;
+        let aligned = best_align_to_seq_len(&candidate, &reference, 5, "test")?;
+        assert_eq!(aligned.to_vec2::<i64>()?, reference.to_vec2::<i64>()?);
+        Ok(())
+    }
 }
