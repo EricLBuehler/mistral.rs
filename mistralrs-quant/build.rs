@@ -189,6 +189,7 @@ fn main() -> Result<(), String> {
             std::fs::write(out_dir.join("mistralrs_quant.metallib"), []).unwrap();
             std::fs::write(out_dir.join("mistralrs_quant_ios.metallib"), []).unwrap();
             std::fs::write(out_dir.join("mistralrs_quant_tvos.metallib"), []).unwrap();
+            std::fs::write(out_dir.join("mistralrs_quant_visionos.metallib"), []).unwrap();
             return Ok(());
         }
 
@@ -196,6 +197,7 @@ fn main() -> Result<(), String> {
             MacOS,
             Ios,
             TvOS,
+            VisionOS,
         }
 
         impl Platform {
@@ -204,17 +206,22 @@ fn main() -> Result<(), String> {
                     Platform::MacOS => "macosx",
                     Platform::Ios => "iphoneos",
                     Platform::TvOS => "appletvos",
+                    Platform::VisionOS => "xros",
                 }
             }
 
             fn metal_std(&self) -> &str {
-                // Use Metal 3.1 unified standard for all platforms.
+                // Use Metal 3.1 unified standard for macOS/iOS/tvOS.
                 // This fixes Xcode 26+ where the default Metal standard may be too low.
                 // https://github.com/EricLBuehler/mistral.rs/issues/1844
                 //
                 // Note: tvOS devices with A15+ (Apple TV 4K 3rd gen) support Metal 3.1.
+                //
+                // visionOS only supports Metal starting at Metal 4.0 (visionOS 26+).
+                // https://support.apple.com/en-us/102894
                 match self {
                     Platform::MacOS | Platform::Ios | Platform::TvOS => "metal3.1",
+                    Platform::VisionOS => "metal4.0",
                 }
             }
         }
@@ -274,6 +281,7 @@ fn main() -> Result<(), String> {
                 Platform::MacOS => "mistralrs_quant.metallib",
                 Platform::Ios => "mistralrs_quant_ios.metallib",
                 Platform::TvOS => "mistralrs_quant_tvos.metallib",
+                Platform::VisionOS => "mistralrs_quant_visionos.metallib",
             };
             let metallib = out_dir.join(lib_name);
             let mut compile_metallib_cmd = Command::new("xcrun");
@@ -313,6 +321,7 @@ fn main() -> Result<(), String> {
         compile(Platform::MacOS)?;
         compile(Platform::Ios)?;
         compile(Platform::TvOS)?;
+        compile(Platform::VisionOS)?;
 
         Ok(())
     }

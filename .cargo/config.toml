@@ -4,6 +4,12 @@ rustflags = [
   "-C", "target-feature=+aes,+sha2,+fp16,+i8mm",
 ]
 
+[target.aarch64-apple-visionos]
+rustflags = [
+  "-C", "target-cpu=apple-m2",
+  "-C", "target-feature=+aes,+sha2,+fp16,+i8mm",
+]
+
 [target.x86_64-apple-darwin]
 rustflags = [
   "-C", "target-cpu=native",
