@@ -1581,14 +1581,32 @@ impl FusedExperts {
                         "FP8 quantization config specified but no scale tensors found for stacked MoE experts. \
                         Loading as unquantized."
                     );
-                let gate_up_proj = experts_vb.get(
-                    (num_experts, hidden_size, moe_intermediate_size * 2),
-                    "gate_up_proj",
-                )?;
-                let down_proj_packed = experts_vb.get(
-                    (num_experts, moe_intermediate_size, hidden_size),
-                    "down_proj",
-                )?;
+                let gate_up_proj = experts_vb
+                    .get(
+                        (num_experts, hidden_size, moe_intermediate_size * 2),
+                        "gate_up_proj",
+                    )
+                    .or_else(|_| {
+                        experts_vb
+                            .get(
+                                (num_experts, moe_intermediate_size * 2, hidden_size),
+                                "gate_up_proj",
+                            )
+                            .and_then(|t| t.transpose(1, 2)?.contiguous())
+                    })?;
+                let down_proj_packed = experts_vb
+                    .get(
+                        (num_experts, moe_intermediate_size, hidden_size),
+                        "down_proj",
+                    )
+                    .or_else(|_| {
+                        experts_vb
+                            .get(
+                                (num_experts, hidden_size, moe_intermediate_size),
+                                "down_proj",
+                            )
+                            .and_then(|t| t.transpose(1, 2)?.contiguous())
+                    })?;
 
                 // Split gate_up_proj into gate_proj and up_proj along the last dimension
                 let gate_proj = gate_up_proj.narrow(2, 0, moe_intermediate_size)?;
@@ -1669,21 +1687,41 @@ impl FusedExperts {
 
             (fused_gate_proj, fused_up_proj, fused_down_proj)
         } else if is_stacked_format {
-            // Stacked format from safetensors:
-            // - gate_up_proj: [num_experts, hidden_size, intermediate_size * 2] = [128, 2048, 1536]
-            // - down_proj: [num_experts, intermediate_size, hidden_size] = [128, 768, 2048]
+            // Stacked format from safetensors. Two conventions exist:
+            // Convention A: [num_experts, hidden_size, intermediate_size * 2]
+            // Convention B (nn.Linear): [num_experts, intermediate_size * 2, hidden_size]
             //
             // GGUF/indexed_moe_forward expects:
-            // - gate/up: [num_experts, intermediate_size, hidden_size] = [128, 768, 2048]
-            // - down: [num_experts, hidden_size, intermediate_size] = [128, 2048, 768]
-            let gate_up_proj = experts_vb.get(
-                (num_experts, hidden_size, moe_intermediate_size * 2),
-                "gate_up_proj",
-            )?;
-            let down_proj_packed = experts_vb.get(
-                (num_experts, moe_intermediate_size, hidden_size),
-                "down_proj",
-            )?;
+            // - gate/up: [num_experts, intermediate_size, hidden_size]
+            // - down: [num_experts, hidden_size, intermediate_size]
+            //
+            // Try convention A first, fall back to convention B (transposing to A).
+            let gate_up_proj = experts_vb
+                .get(
+                    (num_experts, hidden_size, moe_intermediate_size * 2),
+                    "gate_up_proj",
+                )
+                .or_else(|_| {
+                    experts_vb
+                        .get(
+                            (num_experts, moe_intermediate_size * 2, hidden_size),
+                            "gate_up_proj",
+                        )
+                        .and_then(|t| t.transpose(1, 2)?.contiguous())
+                })?;
+            let down_proj_packed = experts_vb
+                .get(
+                    (num_experts, moe_intermediate_size, hidden_size),
+                    "down_proj",
+                )
+                .or_else(|_| {
+                    experts_vb
+                        .get(
+                            (num_experts, hidden_size, moe_intermediate_size),
+                            "down_proj",
+                        )
+                        .and_then(|t| t.transpose(1, 2)?.contiguous())
+                })?;
 
             // Split gate_up_proj into gate_proj and up_proj along the last dimension
             // gate_proj: [num_experts, hidden_size, intermediate_size]

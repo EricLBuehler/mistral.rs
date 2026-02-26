@@ -15,7 +15,7 @@ use super::config::{LayerType, TextConfig};
 use crate::{
     attention::SdpaParams,
     device_map::{DeviceMappedMask, DeviceMapper},
-    layers::{self, Qwen3VLRotaryEmbedding, RmsNorm, Sdpa},
+    layers::{self, GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -181,8 +181,10 @@ fn gated_delta_rule_recurrence(
 // ====================== Gated Delta Net layer ======================
 
 struct GatedDeltaNet {
-    in_proj_qkvz: Linear,
-    in_proj_ba: Linear,
+    in_proj_qkv: Linear,
+    in_proj_z: Linear,
+    in_proj_a: Linear,
+    in_proj_b: Linear,
     conv1d_weight: Tensor,
     dt_bias: Tensor,
     a_log: Tensor,
@@ -222,9 +224,12 @@ impl GatedDeltaNet {
 
         let vb_la = mapper.set_device(layer_idx, vb.pp("linear_attn"), loading_isq);
 
-        let qkvz_out = key_dim * 2 + value_dim * 2;
-        let mut qkvz_w = vb_la.get((qkvz_out, cfg.hidden_size), "in_proj_qkvz.weight")?;
-        let mut ba_w = vb_la.get((num_v_heads * 2, cfg.hidden_size), "in_proj_ba.weight")?;
+        // Separate projections matching HF weight names
+        let qkv_out = key_dim * 2 + value_dim;
+        let mut qkv_w = vb_la.get((qkv_out, cfg.hidden_size), "in_proj_qkv.weight")?;
+        let mut z_w = vb_la.get((value_dim, cfg.hidden_size), "in_proj_z.weight")?;
+        let mut a_w = vb_la.get((num_v_heads, cfg.hidden_size), "in_proj_a.weight")?;
+        let mut b_w = vb_la.get((num_v_heads, cfg.hidden_size), "in_proj_b.weight")?;
 
         let conv_dim = key_dim * 2 + value_dim;
         let mut conv1d_weight = vb_la.get((conv_dim, 1, conv_kernel_size), "conv1d.weight")?;
@@ -232,15 +237,19 @@ impl GatedDeltaNet {
         let mut a_log = vb_la.get(num_v_heads, "A_log")?;
 
         if let Some(ref target_dev) = isq_target_device {
-            qkvz_w = qkvz_w.to_device(target_dev)?;
-            ba_w = ba_w.to_device(target_dev)?;
+            qkv_w = qkv_w.to_device(target_dev)?;
+            z_w = z_w.to_device(target_dev)?;
+            a_w = a_w.to_device(target_dev)?;
+            b_w = b_w.to_device(target_dev)?;
             conv1d_weight = conv1d_weight.to_device(target_dev)?;
             dt_bias = dt_bias.to_device(target_dev)?;
             a_log = a_log.to_device(target_dev)?;
         }
 
-        let in_proj_qkvz = Linear::new(qkvz_w, None);
-        let in_proj_ba = Linear::new(ba_w, None);
+        let in_proj_qkv = Linear::new(qkv_w, None);
+        let in_proj_z = Linear::new(z_w, None);
+        let in_proj_a = Linear::new(a_w, None);
+        let in_proj_b = Linear::new(b_w, None);
 
         let norm = RmsNormGated::new(
             head_v_dim,
@@ -259,8 +268,10 @@ impl GatedDeltaNet {
         )?;
 
         Ok(Self {
-            in_proj_qkvz,
-            in_proj_ba,
+            in_proj_qkv,
+            in_proj_z,
+            in_proj_a,
+            in_proj_b,
             conv1d_weight,
             dt_bias,
             a_log,
@@ -279,39 +290,25 @@ impl GatedDeltaNet {
     fn forward(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (batch_size, seq_len, _hidden) = x.dims3()?;
         let dtype = x.dtype();
-
-        let mixed_qkvz = self.in_proj_qkvz.forward(x)?;
-        let mixed_ba = self.in_proj_ba.forward(x)?;
-
         let v_per_group = self.num_v_heads / self.num_k_heads;
-        let group_size_qkvz = 2 * self.head_k_dim + 2 * v_per_group * self.head_v_dim;
-        let mixed_qkvz =
-            mixed_qkvz.reshape((batch_size, seq_len, self.num_k_heads, group_size_qkvz))?;
 
-        let group_size_ba = 2 * v_per_group;
-        let mixed_ba = mixed_ba.reshape((batch_size, seq_len, self.num_k_heads, group_size_ba))?;
+        // Separate projections
+        let qkv = self.in_proj_qkv.forward(x)?;
+        let z = self.in_proj_z.forward(x)?;
+        let a = self.in_proj_a.forward(x)?;
+        let b = self.in_proj_b.forward(x)?;
 
-        let mut offset = 0;
-        let q = mixed_qkvz.narrow(D::Minus1, offset, self.head_k_dim)?;
-        offset += self.head_k_dim;
-        let k = mixed_qkvz.narrow(D::Minus1, offset, self.head_k_dim)?;
-        offset += self.head_k_dim;
-        let v = mixed_qkvz.narrow(D::Minus1, offset, v_per_group * self.head_v_dim)?;
-        offset += v_per_group * self.head_v_dim;
-        let z = mixed_qkvz.narrow(D::Minus1, offset, v_per_group * self.head_v_dim)?;
+        // Split qkv into q, k, v
+        let q = qkv.narrow(D::Minus1, 0, self.key_dim)?;
+        let k = qkv.narrow(D::Minus1, self.key_dim, self.key_dim)?;
+        let v_flat = qkv.narrow(D::Minus1, self.key_dim * 2, self.value_dim)?;
 
-        let b = mixed_ba.narrow(D::Minus1, 0, v_per_group)?;
-        let a = mixed_ba.narrow(D::Minus1, v_per_group, v_per_group)?;
-
-        let v = v.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
+        // Reshape z to (batch, seq, num_v_heads, head_v_dim)
         let z = z.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
-        let b = b.reshape((batch_size, seq_len, self.num_v_heads))?;
-        let a = a.reshape((batch_size, seq_len, self.num_v_heads))?;
 
-        let q = q.reshape((batch_size, seq_len, self.key_dim))?;
-        let k = k.reshape((batch_size, seq_len, self.key_dim))?;
-        let v_flat = v.reshape((batch_size, seq_len, self.value_dim))?;
+        // a, b are already (batch, seq, num_v_heads)
 
+        // Conv1d on concatenated [q, k, v]
         let mixed_qkv = Tensor::cat(&[&q, &k, &v_flat], D::Minus1)?;
 
         let mixed_qkv = if cache.seqlen_offset > 0 && seq_len == 1 {
@@ -605,8 +602,8 @@ struct FullAttention {
     k_proj: Arc<dyn QuantMethod>,
     v_proj: Arc<dyn QuantMethod>,
     o_proj: Arc<dyn QuantMethod>,
-    q_norm: RmsNorm,
-    k_norm: RmsNorm,
+    q_norm: GemmaRmsNorm,
+    k_norm: GemmaRmsNorm,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -671,8 +668,8 @@ impl FullAttention {
         )?;
 
         let vb_sa_norms = mapper.set_device(layer_idx, vb.pp("self_attn"), false);
-        let q_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
-        let k_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
+        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
+        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
 
         let rot_dim = cfg.rot_dim();
 
@@ -1030,8 +1027,8 @@ enum LayerImpl {
 
 struct DecoderLayer {
     layer_impl: LayerImpl,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
+    input_layernorm: GemmaRmsNorm,
+    post_attention_layernorm: GemmaRmsNorm,
     moe: SparseMoeBlock,
 }
 
@@ -1120,7 +1117,7 @@ impl LocalHybridCache {
 
 pub struct Qwen3_5MoeTextModel {
     embed_tokens: Embedding,
-    pub(super) norm: RmsNorm,
+    pub(super) norm: GemmaRmsNorm,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -1170,10 +1167,10 @@ impl Qwen3_5MoeTextModel {
             ropes.entry(device.location()).or_insert_with(|| {
                 Arc::new(
                     Qwen3VLRotaryEmbedding::new(
-                        cfg.rope_theta as f32,
+                        cfg.rope_theta() as f32,
                         rot_dim,
                         device,
-                        cfg.rope_scaling.mrope_section.clone(),
+                        cfg.mrope_section().to_vec(),
                     )
                     .expect("Failed to create rotary embedding"),
                 )
@@ -1225,12 +1222,12 @@ impl Qwen3_5MoeTextModel {
                 )?),
             };
 
-            let input_layernorm = RmsNorm::new(
+            let input_layernorm = GemmaRmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb_l.pp(layer_idx).pp("input_layernorm"), false),
             )?;
-            let post_attention_layernorm = RmsNorm::new(
+            let post_attention_layernorm = GemmaRmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(
@@ -1262,7 +1259,7 @@ impl Qwen3_5MoeTextModel {
             })
         })?;
 
-        let norm = RmsNorm::new(
+        let norm = GemmaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
@@ -1498,12 +1495,20 @@ impl IsqModel for Qwen3_5MoeTextModel {
                 LayerImpl::LinearAttention(gdn) => {
                     uvb_l
                         .pp("linear_attn")
-                        .pp("in_proj_qkvz")
-                        .add_tensor("weight", gdn.in_proj_qkvz.weight().clone());
+                        .pp("in_proj_qkv")
+                        .add_tensor("weight", gdn.in_proj_qkv.weight().clone());
                     uvb_l
                         .pp("linear_attn")
-                        .pp("in_proj_ba")
-                        .add_tensor("weight", gdn.in_proj_ba.weight().clone());
+                        .pp("in_proj_z")
+                        .add_tensor("weight", gdn.in_proj_z.weight().clone());
+                    uvb_l
+                        .pp("linear_attn")
+                        .pp("in_proj_a")
+                        .add_tensor("weight", gdn.in_proj_a.weight().clone());
+                    uvb_l
+                        .pp("linear_attn")
+                        .pp("in_proj_b")
+                        .add_tensor("weight", gdn.in_proj_b.weight().clone());
                     uvb_l
                         .pp("linear_attn")
                         .add_tensor("conv1d.weight", gdn.conv1d_weight.clone());
