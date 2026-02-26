@@ -291,6 +291,8 @@ impl std::fmt::Display for VisionLoaderType {
 struct AutoVisionLoaderConfig {
     #[serde(default)]
     architectures: Vec<String>,
+    #[serde(default)]
+    model_type: Option<String>,
     /// Voxtral params.json uses a `multimodal` key instead of `architectures`.
     #[serde(default)]
     multimodal: Option<serde_json::Value>,
@@ -302,6 +304,23 @@ pub struct AutoVisionLoader;
 impl AutoVisionLoader {
     fn get_loader(config: &str) -> Result<Box<dyn VisionModelLoader>> {
         let auto_cfg: AutoVisionLoaderConfig = serde_json::from_str(config)?;
+
+        if let Some(model_type) = auto_cfg.model_type.as_deref() {
+            if model_type.ends_with("_text") || model_type == "gemma3_text" {
+                anyhow::bail!(
+                    "AutoVisionLoader: model_type={model_type} indicates a text-only model. Use the text loader / `mistralrs run -m ...` (or Which::Text*) instead of vision."
+                );
+            }
+        }
+        if auto_cfg
+            .architectures
+            .iter()
+            .any(|a| a == "Gemma3ForCausalLM")
+        {
+            anyhow::bail!(
+                "AutoVisionLoader: architectures contains Gemma3ForCausalLM (text-only). This is not a vision checkpoint."
+            );
+        }
 
         // Voxtral: params.json has `multimodal` but no `architectures`
         if auto_cfg.multimodal.is_some() && auto_cfg.architectures.is_empty() {
