@@ -1,121 +1,30 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{Embedding, Linear};
-use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder,
-};
-use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
 
+use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_nn::{Embedding, Linear};
+use mistralrs_quant::{
+    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+};
+
+use super::config::{LayerType, TextConfig};
 use crate::{
-    amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::{DeviceMappedMask, DeviceMapper},
-    kv_cache::{HybridCache, HybridCacheConfig, HybridLayerType},
-    layers::{embedding, linear_no_bias, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
-    layers_masker::PastKvLenCache,
+    layers::{self, Qwen3VLRotaryEmbedding, RmsNorm, Sdpa},
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata,
     },
-    serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
-
-serde_default_fn!(bool, default_tie, true);
-serde_default_fn!(f64, default_rope_theta, 10_000.0);
-serde_default_fn!(f64, default_rms_norm_eps, 1e-6);
-serde_default_fn!(usize, default_full_attn_interval, 4);
-serde_default_fn!(usize, default_conv_kernel, 4);
-serde_default_fn!(usize, default_decoder_sparse_step, 1);
-serde_default_fn!(f64, default_partial_rotary_factor, 0.25);
-serde_default_fn!(bool, default_norm_topk_prob, true);
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Config {
-    pub vocab_size: usize,
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: usize,
-    pub hidden_act: crate::layers::Activation,
-    pub max_position_embeddings: usize,
-    #[serde(default = "default_rms_norm_eps")]
-    pub rms_norm_eps: f64,
-    #[serde(default = "default_rope_theta")]
-    pub rope_theta: f64,
-    pub head_dim: usize,
-    #[serde(default = "default_partial_rotary_factor")]
-    pub partial_rotary_factor: f64,
-    // GDN (Gated Delta Net) config
-    #[serde(default = "default_conv_kernel")]
-    pub linear_conv_kernel_dim: usize,
-    pub linear_key_head_dim: usize,
-    pub linear_value_head_dim: usize,
-    pub linear_num_key_heads: usize,
-    pub linear_num_value_heads: usize,
-    // MoE config
-    #[serde(default = "default_decoder_sparse_step")]
-    pub decoder_sparse_step: usize,
-    pub moe_intermediate_size: usize,
-    pub shared_expert_intermediate_size: usize,
-    pub num_experts_per_tok: usize,
-    pub num_experts: usize,
-    #[serde(default = "default_norm_topk_prob")]
-    pub norm_topk_prob: bool,
-    #[serde(default)]
-    pub mlp_only_layers: Vec<usize>,
-    #[serde(default = "default_full_attn_interval")]
-    pub full_attention_interval: usize,
-    #[serde(default = "default_tie")]
-    pub tie_word_embeddings: bool,
-    pub quantization_config: Option<QuantizedConfig>,
-}
-
-#[derive(Debug, Clone)]
-pub enum LayerType {
-    FullAttention,
-    LinearAttention,
-}
-
-impl Config {
-    pub fn layer_types(&self) -> Vec<LayerType> {
-        (0..self.num_hidden_layers)
-            .map(|i| {
-                // full_attention_interval=4 means layers 3,7,11,... are full attention
-                if (i + 1) % self.full_attention_interval == 0 {
-                    LayerType::FullAttention
-                } else {
-                    LayerType::LinearAttention
-                }
-            })
-            .collect()
-    }
-
-    /// Total key dimension = linear_num_key_heads * linear_key_head_dim
-    pub fn linear_key_dim(&self) -> usize {
-        self.linear_num_key_heads * self.linear_key_head_dim
-    }
-
-    /// Total value dimension = linear_num_value_heads * linear_value_head_dim
-    pub fn linear_value_dim(&self) -> usize {
-        self.linear_num_value_heads * self.linear_value_head_dim
-    }
-
-    /// Conv dim for GDN = key_dim * 2 + value_dim (q, k, v before split)
-    pub fn linear_conv_dim(&self) -> usize {
-        self.linear_key_dim() * 2 + self.linear_value_dim()
-    }
-}
 
 // ====================== RMSNorm Gated (for GDN output) ======================
 
@@ -156,15 +65,13 @@ impl RmsNormGated {
 
 #[derive(Debug)]
 struct GdnLayerCache {
-    /// Conv state: (batch, conv_dim, kernel_size)
     conv_state: Tensor,
-    /// Recurrent state: (batch, num_v_heads, head_k_dim, head_v_dim)
     recurrent_state: Tensor,
     seqlen_offset: usize,
 }
 
 impl GdnLayerCache {
-    fn new(cfg: &Config, dtype: DType, device: &Device) -> Result<Self> {
+    fn new(cfg: &TextConfig, dtype: DType, device: &Device) -> Result<Self> {
         let conv_dim = cfg.linear_conv_dim();
         let conv_state = Tensor::zeros((1, conv_dim, cfg.linear_conv_kernel_dim), dtype, device)?;
         let recurrent_state = Tensor::zeros(
@@ -218,16 +125,6 @@ fn softplus(x: &Tensor) -> Result<Tensor> {
     (Tensor::ones_like(x)? + x.exp()?)?.log()
 }
 
-/// Recurrent gated delta rule (used for both prefill and decode).
-/// Matches torch_recurrent_gated_delta_rule from the reference implementation.
-///
-/// q, k: (batch, seq, num_v_heads, head_k_dim)
-/// v:    (batch, seq, num_v_heads, head_v_dim)
-/// g:    (batch, seq, num_v_heads)
-/// beta: (batch, seq, num_v_heads)
-/// state: (batch, num_v_heads, head_k_dim, head_v_dim)
-///
-/// Returns: (batch, seq, num_v_heads, head_v_dim)
 fn gated_delta_rule_recurrence(
     q: &Tensor,
     k: &Tensor,
@@ -240,11 +137,9 @@ fn gated_delta_rule_recurrence(
     let k_head_dim = q.dim(D::Minus1)?;
     let scale = 1.0 / (k_head_dim as f64).sqrt();
 
-    // Transpose to (batch, heads, seq, dim) and cast to f32
     let q = (q.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)? * scale)?;
     let k = k.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)?;
     let v = v.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)?;
-    // g, beta: (batch, seq, heads) -> (batch, heads, seq)
     let g = g.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)?;
     let beta = beta.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)?;
 
@@ -253,31 +148,24 @@ fn gated_delta_rule_recurrence(
     let mut outputs = Vec::with_capacity(seq_len);
 
     for i in 0..seq_len {
-        // q_t, k_t: (batch, heads, k_dim); v_t: (batch, heads, v_dim)
         let q_t = q.i((.., .., i, ..))?;
         let k_t = k.i((.., .., i, ..))?;
         let v_t = v.i((.., .., i, ..))?;
-        // g_t, beta_t: (batch, heads)
         let g_t = g.i((.., .., i))?;
         let beta_t = beta.i((.., .., i))?;
 
-        // s = s * exp(g_t)
         let decay = g_t.exp()?.unsqueeze(D::Minus1)?.unsqueeze(D::Minus1)?;
         s = s.broadcast_mul(&decay)?;
 
-        // kv_mem = (s * k_t[:,:,:,None]).sum(dim=2) -> (batch, heads, v_dim)
-        let k_exp = k_t.unsqueeze(D::Minus1)?; // (batch, heads, k_dim, 1)
+        let k_exp = k_t.unsqueeze(D::Minus1)?;
         let kv_mem = s.broadcast_mul(&k_exp)?.sum(2)?;
 
-        // delta = (v_t - kv_mem) * beta_t[:,:,None]
         let beta_exp = beta_t.unsqueeze(D::Minus1)?;
         let delta = (v_t - kv_mem)?.broadcast_mul(&beta_exp)?;
 
-        // s = s + k_t[:,:,:,None] * delta[:,:,None,:]
         let outer = k_exp.broadcast_mul(&delta.unsqueeze(2)?)?;
         s = (s + outer)?;
 
-        // y_t = (s * q_t[:,:,:,None]).sum(dim=2) -> (batch, heads, v_dim)
         let q_exp = q_t.unsqueeze(D::Minus1)?;
         let y_t = s.broadcast_mul(&q_exp)?.sum(2)?;
 
@@ -286,9 +174,7 @@ fn gated_delta_rule_recurrence(
 
     *state = s.to_dtype(state.dtype())?;
 
-    // Stack: (batch, heads, v_dim) * seq -> (batch, heads, seq, v_dim)
     let out = Tensor::stack(&outputs, 2)?;
-    // Transpose back to (batch, seq, heads, v_dim)
     out.transpose(1, 2)?.contiguous()?.to_dtype(dtype)
 }
 
@@ -314,13 +200,12 @@ struct GatedDeltaNet {
 impl GatedDeltaNet {
     fn load(
         vb: ShardedVarBuilder,
-        cfg: &Config,
+        cfg: &TextConfig,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        // When ISQ is enabled, get target device so non-quantizable weights go to GPU
         let isq_target_device = if loading_isq {
             mapper.device_for(layer_idx, false).cloned()
         } else {
@@ -337,23 +222,15 @@ impl GatedDeltaNet {
 
         let vb_la = mapper.set_device(layer_idx, vb.pp("linear_attn"), loading_isq);
 
-        // in_proj_qkvz: hidden_size -> key_dim * 2 + value_dim * 2
-        // Output: [q (key_dim), k (key_dim), v (value_dim), z (value_dim)]
         let qkvz_out = key_dim * 2 + value_dim * 2;
         let mut qkvz_w = vb_la.get((qkvz_out, cfg.hidden_size), "in_proj_qkvz.weight")?;
-
-        // in_proj_ba: hidden_size -> num_v_heads * 2 (beta and alpha per head)
         let mut ba_w = vb_la.get((num_v_heads * 2, cfg.hidden_size), "in_proj_ba.weight")?;
 
-        // Conv1d weight: (conv_dim, 1, kernel_size)
-        let conv_dim = key_dim * 2 + value_dim; // q, k, v concatenated
+        let conv_dim = key_dim * 2 + value_dim;
         let mut conv1d_weight = vb_la.get((conv_dim, 1, conv_kernel_size), "conv1d.weight")?;
-
-        // dt_bias and A_log
         let mut dt_bias = vb_la.get(num_v_heads, "dt_bias")?;
         let mut a_log = vb_la.get(num_v_heads, "A_log")?;
 
-        // Move non-quantizable tensors to target device for ISQ compatibility
         if let Some(ref target_dev) = isq_target_device {
             qkvz_w = qkvz_w.to_device(target_dev)?;
             ba_w = ba_w.to_device(target_dev)?;
@@ -365,7 +242,6 @@ impl GatedDeltaNet {
         let in_proj_qkvz = Linear::new(qkvz_w, None);
         let in_proj_ba = Linear::new(ba_w, None);
 
-        // Gated RMSNorm for output
         let norm = RmsNormGated::new(
             head_v_dim,
             cfg.rms_norm_eps,
@@ -373,7 +249,6 @@ impl GatedDeltaNet {
             isq_target_device.as_ref(),
         )?;
 
-        // Output projection
         let out_proj = RowParallelLayer::new(
             value_dim,
             cfg.hidden_size,
@@ -405,13 +280,9 @@ impl GatedDeltaNet {
         let (batch_size, seq_len, _hidden) = x.dims3()?;
         let dtype = x.dtype();
 
-        // 1. Project input
-        let mixed_qkvz = self.in_proj_qkvz.forward(x)?; // (batch, seq, key_dim*2 + value_dim*2)
-        let mixed_ba = self.in_proj_ba.forward(x)?; // (batch, seq, num_v_heads * 2)
+        let mixed_qkvz = self.in_proj_qkvz.forward(x)?;
+        let mixed_ba = self.in_proj_ba.forward(x)?;
 
-        // 2. fix_query_key_value_ordering: grouped head layout
-        // The projection is grouped by num_k_heads. Within each group:
-        //   [head_k_dim, head_k_dim, v_per_group*head_v_dim, v_per_group*head_v_dim]
         let v_per_group = self.num_v_heads / self.num_k_heads;
         let group_size_qkvz = 2 * self.head_k_dim + 2 * v_per_group * self.head_v_dim;
         let mixed_qkvz =
@@ -420,7 +291,6 @@ impl GatedDeltaNet {
         let group_size_ba = 2 * v_per_group;
         let mixed_ba = mixed_ba.reshape((batch_size, seq_len, self.num_k_heads, group_size_ba))?;
 
-        // Split within each group
         let mut offset = 0;
         let q = mixed_qkvz.narrow(D::Minus1, offset, self.head_k_dim)?;
         offset += self.head_k_dim;
@@ -433,30 +303,23 @@ impl GatedDeltaNet {
         let b = mixed_ba.narrow(D::Minus1, 0, v_per_group)?;
         let a = mixed_ba.narrow(D::Minus1, v_per_group, v_per_group)?;
 
-        // Reshape v, z from (batch, seq, num_k_heads, v_per_group*head_v_dim) -> (batch, seq, num_v_heads, head_v_dim)
         let v = v.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
         let z = z.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
-
-        // Reshape b, a from (batch, seq, num_k_heads, v_per_group) -> (batch, seq, num_v_heads)
         let b = b.reshape((batch_size, seq_len, self.num_v_heads))?;
         let a = a.reshape((batch_size, seq_len, self.num_v_heads))?;
 
-        // Flatten q, k, v back to last dim for conv: (batch, seq, key_dim), (batch, seq, key_dim), (batch, seq, value_dim)
         let q = q.reshape((batch_size, seq_len, self.key_dim))?;
         let k = k.reshape((batch_size, seq_len, self.key_dim))?;
         let v_flat = v.reshape((batch_size, seq_len, self.value_dim))?;
 
-        // 3. Concatenate q, k, v for conv1d: (batch, seq, conv_dim)
         let mixed_qkv = Tensor::cat(&[&q, &k, &v_flat], D::Minus1)?;
 
-        // 4. Apply causal conv1d (includes silu activation)
         let mixed_qkv = if cache.seqlen_offset > 0 && seq_len == 1 {
             self.causal_conv1d_update(&mixed_qkv, cache)?
         } else {
             self.causal_conv1d_full(&mixed_qkv, cache)?
         };
 
-        // 5. Split back after conv and reshape to per-head
         let q = mixed_qkv.narrow(D::Minus1, 0, self.key_dim)?;
         let k = mixed_qkv.narrow(D::Minus1, self.key_dim, self.key_dim)?;
         let v = mixed_qkv.narrow(D::Minus1, self.key_dim * 2, self.value_dim)?;
@@ -465,12 +328,10 @@ impl GatedDeltaNet {
         let k = k.reshape((batch_size, seq_len, self.num_k_heads, self.head_k_dim))?;
         let v = v.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
 
-        // 6. Compute beta and g (3D: batch, seq, num_v_heads)
         let (beta, g) = {
             #[cfg(feature = "cuda")]
             {
                 if b.device().is_cuda() {
-                    // CUDA fast path: fused sigmoid(b) and -exp(a_log)*softplus(a+dt_bias)
                     let b_flat = b.contiguous()?.flatten_all()?;
                     let a_flat = a.contiguous()?.flatten_all()?;
                     let a_log_f32 = self.a_log.to_dtype(DType::F32)?.contiguous()?;
@@ -525,9 +386,7 @@ impl GatedDeltaNet {
             }
         };
 
-        // 7. If num_v_heads > num_k_heads, repeat_interleave q and k
         let (q, k) = if v_per_group > 1 {
-            // repeat_interleave along head dim
             let q = q
                 .unsqueeze(3)?
                 .repeat((1, 1, 1, v_per_group, 1))?
@@ -541,16 +400,13 @@ impl GatedDeltaNet {
             (q, k)
         };
 
-        // 8. L2-normalize q and k
         let q = l2_norm(&q, 1e-6)?;
         let k = l2_norm(&k, 1e-6)?;
 
-        // 9. Apply recurrence
         let y = {
             #[cfg(feature = "cuda")]
             {
                 if q.device().is_cuda() {
-                    // CUDA fast path: reshape (B,S,H,D) -> (B*H,S,D) for the kernel
                     let num_heads = self.num_v_heads;
                     let k_head = self.head_k_dim;
                     let v_head = self.head_v_dim;
@@ -584,7 +440,6 @@ impl GatedDeltaNet {
                         .reshape((batch_size * num_heads, seq_len))?
                         .contiguous()?;
 
-                    // State: (B, H, K, V) -> (B*H, K, V) for kernel
                     let mut state_flat = cache
                         .recurrent_state
                         .to_dtype(DType::F32)?
@@ -600,12 +455,10 @@ impl GatedDeltaNet {
                         &mut state_flat,
                     )?;
 
-                    // Write state back: (B*H, K, V) -> (B, H, K, V)
                     cache.recurrent_state = state_flat
                         .reshape((batch_size, num_heads, k_head, v_head))?
                         .to_dtype(cache.recurrent_state.dtype())?;
 
-                    // Output: (B*H, S, V) -> (B, H, S, V) -> (B, S, H, V)
                     out_bh
                         .reshape((batch_size, num_heads, seq_len, v_head))?
                         .transpose(1, 2)?
@@ -623,35 +476,27 @@ impl GatedDeltaNet {
 
         cache.seqlen_offset += seq_len;
 
-        // y: (batch, seq, num_v_heads, head_v_dim)
         let z_shape = z.shape().clone();
-
-        // 10. Apply RMSNormGated: flatten to 2D, apply norm with z as gate, reshape back
         let y = y.reshape(((), self.head_v_dim))?;
         let z = z.reshape(((), self.head_v_dim))?;
         let y = self.norm.forward(&y, &z)?;
         let y = y.reshape(z_shape)?;
         let y = y.reshape((batch_size, seq_len, self.value_dim))?;
 
-        // 11. Output projection
         let original_dtype = x.dtype();
         let mut y_proj = y;
         if let Some(t) = self.out_proj.quantized_act_type() {
             y_proj = y_proj.to_dtype(t)?;
         }
-        let mut res = MatMul.qmethod_matmul(&y_proj, &*self.out_proj)?;
+        let mut res = mistralrs_quant::MatMul.qmethod_matmul(&y_proj, &*self.out_proj)?;
         if self.out_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
 
-    /// Single-step causal conv1d update for decode.
-    /// Reference: torch_causal_conv1d_update
-    /// Input x: (batch, 1, conv_dim), output: (batch, 1, conv_dim)
     fn causal_conv1d_update(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (_batch, seq_len, _conv_dim) = x.dims3()?;
-        // Transpose to (batch, conv_dim, seq_len)
         let x_t = x.transpose(1, 2)?.contiguous()?;
 
         #[cfg(feature = "cuda")]
@@ -673,7 +518,6 @@ impl GatedDeltaNet {
             return output.transpose(1, 2);
         }
 
-        // CPU/Metal fallback
         let state_len = cache.conv_state.dim(2)?;
         let hidden_new = Tensor::cat(&[cache.conv_state.clone(), x_t], 2)?;
         let new_len = hidden_new.dim(2)?;
@@ -696,13 +540,9 @@ impl GatedDeltaNet {
         out.transpose(1, 2)
     }
 
-    /// Full sequence causal conv1d for prefill.
-    /// Reference: F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
-    /// with conv state saved as: F.pad(mixed_qkv, (kernel-1 - seq_len, 0)) or last kernel-1 elements
-    /// Input x: (batch, seq, conv_dim), output: (batch, seq, conv_dim)
     fn causal_conv1d_full(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
         let (batch_size, seq_len, conv_dim) = x.dims3()?;
-        let x_t = x.transpose(1, 2)?.contiguous()?; // (batch, conv_dim, seq_len)
+        let x_t = x.transpose(1, 2)?.contiguous()?;
 
         #[cfg(feature = "cuda")]
         if x_t.device().is_cuda() {
@@ -722,7 +562,6 @@ impl GatedDeltaNet {
             return output.transpose(1, 2);
         }
 
-        // CPU/Metal fallback
         let pad_width = self.conv_kernel_size.saturating_sub(seq_len);
         cache.conv_state = if pad_width > 0 {
             let zeros =
@@ -758,7 +597,7 @@ impl GatedDeltaNet {
     }
 }
 
-// ====================== Full Attention layer ======================
+// ====================== Full Attention layer with MRoPE ======================
 
 #[allow(dead_code)]
 struct FullAttention {
@@ -771,7 +610,7 @@ struct FullAttention {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
-    rotary_emb: Arc<RotaryEmbedding>,
+    rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
     rot_dim: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
@@ -781,11 +620,11 @@ impl FullAttention {
     #[allow(clippy::too_many_arguments)]
     fn load(
         vb: ShardedVarBuilder,
-        cfg: &Config,
+        cfg: &TextConfig,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rotary_emb: Arc<RotaryEmbedding>,
+        rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
@@ -797,7 +636,7 @@ impl FullAttention {
         // q_proj outputs num_heads * head_dim * 2 (doubled for gate)
         let q_proj = ColumnParallelLayer::new(
             cfg.hidden_size,
-            num_heads * head_dim * 2, // q + gate
+            num_heads * head_dim * 2,
             &cfg.quantization_config,
             false,
             comm,
@@ -831,14 +670,12 @@ impl FullAttention {
             vb_sa.pp("o_proj"),
         )?;
 
-        // QK norms use (1+weight) formulation; pass loading_isq=false to ensure device placement
         let vb_sa_norms = mapper.set_device(layer_idx, vb.pp("self_attn"), false);
         let q_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
         let k_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
 
-        let rot_dim = (head_dim as f64 * cfg.partial_rotary_factor) as usize;
+        let rot_dim = cfg.rot_dim();
 
-        let sliding_window = None;
         Ok(Self {
             q_proj,
             k_proj,
@@ -856,7 +693,7 @@ impl FullAttention {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(num_kv_heads, num_heads, comm),
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
-                sliding_window,
+                sliding_window: None,
                 sinks: None,
             },
         })
@@ -866,8 +703,8 @@ impl FullAttention {
     fn forward(
         &self,
         x: &Tensor,
-        attention_mask: &Option<Tensor>,
-        seqlen_offsets: &[usize],
+        attention_mask: Option<&Tensor>,
+        cos_sin: &(Tensor, Tensor),
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -878,21 +715,19 @@ impl FullAttention {
         if let Some(t) = self.q_proj.quantized_act_type() {
             x = x.to_dtype(t)?;
         }
-        let mut q_gate = MatMul.qmethod_matmul(&x, &*self.q_proj)?;
-        let mut k = MatMul.qmethod_matmul(&x, &*self.k_proj)?;
-        let mut v = MatMul.qmethod_matmul(&x, &*self.v_proj)?;
+        let mut q_gate = mistralrs_quant::MatMul.qmethod_matmul(&x, &*self.q_proj)?;
+        let mut k = mistralrs_quant::MatMul.qmethod_matmul(&x, &*self.k_proj)?;
+        let mut v = mistralrs_quant::MatMul.qmethod_matmul(&x, &*self.v_proj)?;
         if self.q_proj.quantized_act_type().is_some() {
             q_gate = q_gate.to_dtype(original_dtype)?;
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
         }
 
-        // Split q_gate into q and gate: first reshape to per-head (head_dim*2), then chunk
-        // Reference: view(*input_shape, -1, head_dim*2), chunk(2, dim=-1)
+        // Split q_gate into q and gate
         let q_gate = q_gate.reshape((b_sz, seq_len, self.num_heads, self.head_dim * 2))?;
         let q = q_gate.narrow(D::Minus1, 0, self.head_dim)?;
         let gate = q_gate.narrow(D::Minus1, self.head_dim, self.head_dim)?;
-        // gate: (batch, seq, num_heads, head_dim) -> (batch, seq, num_heads * head_dim)
         let gate = gate.reshape((b_sz, seq_len, self.num_heads * self.head_dim))?;
 
         // Reshape to (batch, heads, seq, head_dim)
@@ -916,21 +751,23 @@ impl FullAttention {
         q = q.apply(&self.q_norm)?;
         k = k.apply(&self.k_norm)?;
 
-        // Apply partial RoPE
+        // Apply partial MRoPE: split into rotated and pass-through portions
         if self.rot_dim < self.head_dim {
-            let q_rot = q.narrow(D::Minus1, 0, self.rot_dim)?;
+            let mut q_rot = q.narrow(D::Minus1, 0, self.rot_dim)?;
             let q_pass = q.narrow(D::Minus1, self.rot_dim, self.head_dim - self.rot_dim)?;
-            let k_rot = k.narrow(D::Minus1, 0, self.rot_dim)?;
+            let mut k_rot = k.narrow(D::Minus1, 0, self.rot_dim)?;
             let k_pass = k.narrow(D::Minus1, self.rot_dim, self.head_dim - self.rot_dim)?;
 
-            let (q_rot, k_rot) = self.rotary_emb.forward(&q_rot, &k_rot, seqlen_offsets)?;
+            self.rotary_emb.forward(cos_sin, &mut q_rot, &mut k_rot)?;
             q = Tensor::cat(&[q_rot, q_pass], D::Minus1)?;
             k = Tensor::cat(&[k_rot, k_pass], D::Minus1)?;
         } else {
-            let (q_new, k_new) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
-            q = q_new;
-            k = k_new;
+            self.rotary_emb.forward(cos_sin, &mut q, &mut k)?;
         }
+
+        let q = q.contiguous()?;
+        let k = k.contiguous()?;
+        let v = v.contiguous()?;
 
         // Standard attention
         let mut y = match &self.paged_attn {
@@ -939,7 +776,7 @@ impl FullAttention {
                     &q,
                     &k,
                     &v,
-                    attention_mask.clone().as_ref(),
+                    attention_mask,
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
@@ -953,7 +790,7 @@ impl FullAttention {
                         &q,
                         &k,
                         &v,
-                        attention_mask.clone().as_ref(),
+                        attention_mask,
                         None,
                         None,
                         &input_metadata,
@@ -963,12 +800,12 @@ impl FullAttention {
                 }
             },
             None => {
-                let (k, v) = kv_cache.append(&k, &v)?;
+                let (cache_k, cache_v) = kv_cache.append(&k, &v)?;
                 Sdpa.run_attention(
                     &q,
-                    &k,
-                    &v,
-                    attention_mask.clone().as_ref(),
+                    &cache_k.contiguous()?,
+                    &cache_v.contiguous()?,
+                    attention_mask,
                     Some(flash_params),
                     &self.sdpa_params,
                 )?
@@ -988,7 +825,7 @@ impl FullAttention {
         let gate = candle_nn::ops::sigmoid(&gate.to_dtype(y.dtype())?)?;
         y = y.broadcast_mul(&gate)?;
 
-        let mut res = MatMul.qmethod_matmul(&y, &*self.o_proj)?;
+        let mut res = mistralrs_quant::MatMul.qmethod_matmul(&y, &*self.o_proj)?;
         if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
@@ -998,7 +835,6 @@ impl FullAttention {
 
 // ====================== MoE ======================
 
-/// Standard MLP for shared expert
 #[derive(Clone)]
 struct Mlp {
     gate_proj: Arc<dyn QuantMethod>,
@@ -1012,7 +848,7 @@ impl Mlp {
         vb: ShardedVarBuilder,
         hidden_size: usize,
         intermediate_size: usize,
-        quant_config: &Option<QuantizedConfig>,
+        quant_config: &Option<mistralrs_quant::QuantizedConfig>,
         act_fn: crate::layers::Activation,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
@@ -1054,10 +890,10 @@ impl Mlp {
         if let Some(t) = self.gate_proj.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        let gate = MatMul.qmethod_matmul(&xs, &*self.gate_proj)?;
-        let up = MatMul.qmethod_matmul(&xs, &*self.up_proj)?;
+        let gate = mistralrs_quant::MatMul.qmethod_matmul(&xs, &*self.gate_proj)?;
+        let up = mistralrs_quant::MatMul.qmethod_matmul(&xs, &*self.up_proj)?;
         let activated = crate::ops::mul_and_act(&gate, &up, self.act_fn)?;
-        let mut res = MatMul.qmethod_matmul(&activated, &*self.down_proj)?;
+        let mut res = mistralrs_quant::MatMul.qmethod_matmul(&activated, &*self.down_proj)?;
         if self.gate_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
@@ -1069,7 +905,6 @@ impl Mlp {
     }
 }
 
-/// Sparse MoE block with shared expert and shared expert gate
 struct SparseMoeBlock {
     gate: Linear,
     experts: MoEExperts,
@@ -1082,7 +917,7 @@ struct SparseMoeBlock {
 impl SparseMoeBlock {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        cfg: &Config,
+        cfg: &TextConfig,
         vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
@@ -1095,8 +930,7 @@ impl SparseMoeBlock {
             .cloned()
             .unwrap_or(real_device);
 
-        // Router gate
-        let gate = linear_no_bias(
+        let gate = layers::linear_no_bias(
             cfg.hidden_size,
             cfg.num_experts,
             vb.pp("gate").set_device(layer_device.clone()),
@@ -1119,7 +953,6 @@ impl SparseMoeBlock {
             cfg.hidden_act,
         )?;
 
-        // Shared expert
         let shared_expert = Mlp::new(
             vb.pp("shared_expert"),
             cfg.hidden_size,
@@ -1129,7 +962,6 @@ impl SparseMoeBlock {
             comm,
         )?;
 
-        // Shared expert gate: (1, hidden_size) -> sigmoid
         let mut seg_w = vb
             .pp("shared_expert_gate")
             .get((1, cfg.hidden_size), "weight")?;
@@ -1152,12 +984,10 @@ impl SparseMoeBlock {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
-        // 1. Router: softmax over gate logits
         let router_logits = self.gate.forward(&xs_flat)?;
         let routing_weights =
             candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
 
-        // Top-k selection
         let topk_ids = routing_weights
             .arg_sort_last_dim(false)?
             .narrow(D::Minus1, 0, self.num_experts_per_tok)?
@@ -1169,13 +999,10 @@ impl SparseMoeBlock {
             topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;
         }
 
-        // 2. Forward through routed experts
         let mut y = self.experts.forward(xs, topk_weights, &topk_ids)?;
         y = y.reshape((b_size, seq_len, hidden_dim))?;
 
-        // 3. Shared expert with sigmoid gating
         let shared_out = self.shared_expert.forward(xs)?;
-
         let shared_gate = candle_nn::ops::sigmoid(
             &self
                 .shared_expert_gate
@@ -1184,7 +1011,6 @@ impl SparseMoeBlock {
         let shared_gate = shared_gate.reshape((b_size, seq_len, 1))?;
         let shared_out = shared_out.broadcast_mul(&shared_gate)?;
 
-        // 4. Combine
         y + shared_out
     }
 
@@ -1214,8 +1040,8 @@ impl DecoderLayer {
     fn forward_attention(
         &self,
         x: &Tensor,
-        attention_mask: &Option<Tensor>,
-        seqlen_offsets: &[usize],
+        attention_mask: Option<&Tensor>,
+        cos_sin: &(Tensor, Tensor),
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -1229,7 +1055,7 @@ impl DecoderLayer {
         let attn_out = attn.forward(
             &x,
             attention_mask,
-            seqlen_offsets,
+            cos_sin,
             kv_cache,
             metadata,
             flash_params,
@@ -1260,7 +1086,7 @@ impl DecoderLayer {
 // ====================== Local hybrid cache ======================
 
 enum LocalLayerCache {
-    Attention(KvCache),
+    Attention,
     LinearAttention(GdnLayerCache),
 }
 
@@ -1269,17 +1095,16 @@ struct LocalHybridCache {
 }
 
 impl LocalHybridCache {
-    fn new(layer_types: &[LayerType], cfg: &Config, device: &Device, dtype: DType) -> Result<Self> {
+    fn new(
+        layer_types: &[LayerType],
+        cfg: &TextConfig,
+        device: &Device,
+        dtype: DType,
+    ) -> Result<Self> {
         let mut caches = Vec::with_capacity(layer_types.len());
         for lt in layer_types {
             match lt {
-                LayerType::FullAttention => {
-                    caches.push(LocalLayerCache::Attention(KvCache::new_normal(
-                        2,
-                        cfg.max_position_embeddings,
-                        HybridCache::CACHE_GROW_SIZE,
-                    )));
-                }
+                LayerType::FullAttention => caches.push(LocalLayerCache::Attention),
                 LayerType::LinearAttention => {
                     caches.push(LocalLayerCache::LinearAttention(GdnLayerCache::new(
                         cfg, dtype, device,
@@ -1289,148 +1114,86 @@ impl LocalHybridCache {
         }
         Ok(Self { caches })
     }
-
-    fn seqlen(&self) -> usize {
-        for cache in &self.caches {
-            if let LocalLayerCache::Attention(kv) = cache {
-                return kv.current_seq_len();
-            }
-        }
-        0
-    }
 }
 
-impl PastKvLenCache for LocalHybridCache {
-    fn get_past_kv_len(&self) -> Result<usize> {
-        Ok(self.seqlen())
-    }
-}
+// ====================== Text Model ======================
 
-// ====================== Top-level Model ======================
-
-#[allow(dead_code)]
-pub struct Model {
+pub struct Qwen3_5MoeTextModel {
     embed_tokens: Embedding,
+    pub(super) norm: RmsNorm,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
-    norm: RmsNorm,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
     lm_head: Arc<dyn QuantMethod>,
     local_cache: Arc<Mutex<LocalHybridCache>>,
-    kv_cache: EitherCache,
-    device: Device,
-    mapper: Box<dyn DeviceMapper + Send + Sync>,
-    cfg: ModelConfigMetadata,
-    num_attention_heads: usize,
-    max_seq_len: usize,
+    pub(super) cache: EitherCache,
+    pub(super) cfg: ModelConfigMetadata,
+    pub(super) device: Device,
+    pub(super) dtype: DType,
+    pub(super) max_seq_len: usize,
 }
 
-impl Model {
+impl Qwen3_5MoeTextModel {
     pub fn new(
-        cfg: &Config,
+        cfg: &TextConfig,
         vb: ShardedVarBuilder,
-        _is_gptx: bool,
+        tie: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        let vb_m = vb.pp("model");
-        let vb_lm_head = vb.pp("lm_head");
-
-        if let Some(ref quant_cfg) = &cfg.quantization_config {
-            tracing::info!(
-                "Using {} quantization: {}.",
-                quant_cfg.name(),
-                quant_cfg.get_bits_name(&vb_m)
-            );
-        }
-
         let mapper = normal_loading_metadata.mapper;
+        let vb_m = if vb.contains_tensor("language_model.model.embed_tokens.weight") {
+            vb.pp("language_model").pp("model")
+        } else {
+            vb.pp("model").pp("language_model")
+        };
 
-        let embed_tokens = embedding(
+        let embed_tokens = layers::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
             &cfg.quantization_config,
         )?;
 
-        let lm_head = if !cfg.tie_word_embeddings {
-            ReplicatedLayer::new(
-                cfg.hidden_size,
-                cfg.vocab_size,
-                &cfg.quantization_config,
-                false,
-                mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
-            )?
-        } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
-                None,
-            ))?
-        };
-
-        let norm = RmsNorm::new(
-            cfg.hidden_size,
-            cfg.rms_norm_eps,
-            mapper.set_nm_device(vb_m.pp("norm"), false),
-        )?;
-
         let layer_types = cfg.layer_types();
 
-        // Build RoPE for attention layers (partial rotary)
-        let rot_dim = (cfg.head_dim as f64 * cfg.partial_rotary_factor) as usize;
+        // Create MRoPE embeddings (one per device, using rot_dim not head_dim)
+        let rot_dim = cfg.rot_dim();
         let mut ropes = HashMap::new();
-        for (i, layer_type) in layer_types.iter().enumerate().take(cfg.num_hidden_layers) {
-            if matches!(layer_type, LayerType::FullAttention) {
-                let device = mapper
-                    .device_for(i, false)
-                    .unwrap_or(&normal_loading_metadata.real_device);
-                if let std::collections::hash_map::Entry::Vacant(e) = ropes.entry(device.location())
-                {
-                    let rope = RotaryEmbedding::new_partial(
+        for (layer_idx, layer_type) in layer_types.iter().enumerate() {
+            if *layer_type != LayerType::FullAttention {
+                continue;
+            }
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            ropes.entry(device.location()).or_insert_with(|| {
+                Arc::new(
+                    Qwen3VLRotaryEmbedding::new(
                         cfg.rope_theta as f32,
                         rot_dim,
-                        cfg.max_position_embeddings,
                         device,
-                        true,
-                        vb_m.dtype(),
-                    )?;
-                    e.insert(Arc::new(rope));
-                }
-            }
+                        cfg.rope_scaling.mrope_section.clone(),
+                    )
+                    .expect("Failed to create rotary embedding"),
+                )
+            });
         }
 
-        // Log layer config
-        let num_full = layer_types
-            .iter()
-            .filter(|t| matches!(t, LayerType::FullAttention))
-            .count();
-        let num_linear = layer_types
-            .iter()
-            .filter(|t| matches!(t, LayerType::LinearAttention))
-            .count();
-        tracing::info!(
-            "Qwen3Next: {} full attention layers, {} linear attention (GDN) layers",
-            num_full,
-            num_linear
-        );
-
-        // Build layers
-        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
-        for i in NiceProgressBar::<_, 'b'>(
+        let vb_l = vb_m.pp("layers");
+        let layers = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
-        ) {
-            let device = mapper
-                .device_for(i, false)
-                .unwrap_or(&normal_loading_metadata.real_device);
-            let comm = mapper.get_comm_for(i)?;
-            let vb_layer = vb_m.pp(format!("layers.{i}"));
+        )
+        .par_iter_if_isq(|layer_idx| {
+            let comm = mapper.get_comm_for(layer_idx)?;
 
-            let layer_impl = match &layer_types[i] {
+            let layer_impl = match layer_types[layer_idx] {
                 LayerType::FullAttention => {
+                    let device = mapper
+                        .device_for(layer_idx, false)
+                        .unwrap_or(&normal_loading_metadata.real_device);
                     let rotary_emb = ropes
                         .get(&device.location())
                         .expect("No RoPE for device location!")
@@ -1442,10 +1205,10 @@ impl Model {
                         }
                     };
                     LayerImpl::FullAttention(FullAttention::load(
-                        vb_layer.clone(),
+                        vb_l.pp(layer_idx),
                         cfg,
                         &*mapper,
-                        i,
+                        layer_idx,
                         normal_loading_metadata.loading_isq,
                         rotary_emb,
                         paged_attn,
@@ -1453,46 +1216,75 @@ impl Model {
                     )?)
                 }
                 LayerType::LinearAttention => LayerImpl::LinearAttention(GatedDeltaNet::load(
-                    vb_layer.clone(),
+                    vb_l.pp(layer_idx),
                     cfg,
                     &*mapper,
-                    i,
+                    layer_idx,
                     normal_loading_metadata.loading_isq,
                     &comm,
                 )?),
             };
 
-            // (1+weight) RMSNorm for layer norms
             let input_layernorm = RmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
-                mapper.set_device(i, vb_layer.pp("input_layernorm"), false),
+                mapper.set_device(layer_idx, vb_l.pp(layer_idx).pp("input_layernorm"), false),
             )?;
             let post_attention_layernorm = RmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
-                mapper.set_device(i, vb_layer.pp("post_attention_layernorm"), false),
+                mapper.set_device(
+                    layer_idx,
+                    vb_l.pp(layer_idx).pp("post_attention_layernorm"),
+                    false,
+                ),
             )?;
 
             let moe = SparseMoeBlock::new(
                 cfg,
-                mapper.set_device(i, vb_layer.pp("mlp"), normal_loading_metadata.loading_isq),
+                mapper.set_device(
+                    layer_idx,
+                    vb_l.pp(layer_idx).pp("mlp"),
+                    normal_loading_metadata.loading_isq,
+                ),
                 &*mapper,
-                i,
+                layer_idx,
                 normal_loading_metadata.loading_isq,
                 &comm,
                 normal_loading_metadata.real_device.clone(),
             )?;
 
-            layers.push(DecoderLayer {
+            Ok(DecoderLayer {
                 layer_impl,
                 input_layernorm,
                 post_attention_layernorm,
                 moe,
-            });
-        }
+            })
+        })?;
 
-        // Create local hybrid cache
+        let norm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb_m.pp("norm"), false),
+        )?;
+        let lm_head = if !tie {
+            ReplicatedLayer::new(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                &cfg.quantization_config,
+                false,
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
+        } else {
+            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+                mapper.cast_nm_device(
+                    embed_tokens.embeddings(),
+                    normal_loading_metadata.loading_isq,
+                )?,
+                None,
+            ))?
+        };
+
         let local_cache = Arc::new(Mutex::new(LocalHybridCache::new(
             &layer_types,
             cfg,
@@ -1500,145 +1292,164 @@ impl Model {
             vb_m.dtype(),
         )?));
 
-        // Create pipeline hybrid cache config
-        let pipeline_layer_types: Vec<HybridLayerType> = layer_types
-            .iter()
-            .map(|lt| match lt {
-                LayerType::FullAttention => HybridLayerType::Attention,
-                LayerType::LinearAttention => HybridLayerType::Mamba,
-            })
-            .collect();
-
-        let hybrid_cache_config = HybridCacheConfig {
-            layer_types: pipeline_layer_types,
-            max_seq_len: cfg.max_position_embeddings,
-            max_num_seqs: 1,
-            mamba_conv_dim: cfg.linear_conv_dim(),
-            mamba_d_conv: cfg.linear_conv_kernel_dim,
-            mamba_n_heads: cfg.linear_num_value_heads,
-            mamba_head_dim: cfg.linear_key_head_dim,
-            mamba_d_state: cfg.linear_value_head_dim,
-        };
-
-        let pipeline_cache = Arc::new(Mutex::new(
-            HybridCache::new(
-                hybrid_cache_config,
-                vb_m.dtype(),
-                &normal_loading_metadata.real_device,
-            )
-            .map_err(|e| {
-                candle_core::Error::Msg(format!("Failed to create hybrid cache: {}", e))
-            })?,
-        ));
-
-        let num_attention_heads = cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size();
-
         Ok(Self {
             embed_tokens,
-            layers,
-            layer_types,
             norm,
+            layers,
+            layer_types: layer_types.clone(),
             lm_head,
             local_cache,
-            kv_cache: EitherCache::Hybrid(pipeline_cache),
-            device: normal_loading_metadata.real_device,
+            cache: EitherCache::Normal(NormalCache::new(
+                cfg.num_hidden_layers,
+                cfg.max_position_embeddings,
+            )),
+            max_seq_len: cfg.max_position_embeddings,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
+                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
                 num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
                     .max(1),
-                num_attn_heads: num_attention_heads,
                 sliding_window: None,
                 k_head_dim: cfg.head_dim,
                 v_head_dim: cfg.head_dim,
                 kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
+            device: normal_loading_metadata.real_device.clone(),
+            dtype: vb.dtype(),
             mapper,
-            num_attention_heads,
-            max_seq_len: cfg.max_position_embeddings,
         })
     }
 
-    pub fn forward(
+    pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
+        self.embed_tokens.forward(input_ids)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_embeds(
         &self,
-        input_ids: &Tensor,
+        mut xs: Tensor,
+        attention_mask: Option<&Tensor>,
+        position_ids: &Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
+        visual_pos_masks: Option<&Tensor>,
+        deepstack_visual_embeds: Option<&[Tensor]>,
     ) -> Result<Tensor> {
-        let mut x = self.embed_tokens.forward(input_ids)?;
+        let cache = &mut self.cache.normal().0;
+        let mut local_cache = self.local_cache.lock().expect("Lock failed");
 
-        let mut local_cache = self.local_cache.lock().unwrap();
-
-        let mask = CausalMasker.make_causal_mask_matrix(
-            input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*local_cache as &dyn PastKvLenCache),
-            x.dtype(),
-            self.num_attention_heads,
-        )?;
-        let mask = mask.filter(|_| {
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-        });
-        let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
-
-        for (layer_idx, layer) in self.layers.iter().enumerate() {
-            x = self.mapper.map(x, layer_idx)?;
-
-            match &layer.layer_impl {
-                LayerImpl::FullAttention(_) => {
-                    if let LocalLayerCache::Attention(kv_cache) = &mut local_cache.caches[layer_idx]
-                    {
-                        let mask_for_layer = mask.as_ref().map(|m| m.get(x.device()).clone());
-                        x = layer.forward_attention(
-                            &x,
-                            &mask_for_layer,
-                            seqlen_offsets,
-                            kv_cache,
-                            metadata.as_ref().map(|(kv_cache, metadata)| {
-                                (kv_cache[layer_idx].clone(), *metadata)
-                            }),
-                            flash_params,
-                        )?;
-                    }
+        // Compute MRoPE cos/sin using first full-attention layer's rotary embedding
+        let cos_sin = {
+            let first_attn_idx = self
+                .layer_types
+                .iter()
+                .position(|lt| *lt == LayerType::FullAttention)
+                .expect("No full attention layer found");
+            match &self.layers[first_attn_idx].layer_impl {
+                LayerImpl::FullAttention(attn) => {
+                    attn.rotary_emb.compute_cos_sin(position_ids, xs.dtype())?
                 }
-                LayerImpl::LinearAttention(_) => {
-                    if let LocalLayerCache::LinearAttention(gdn_cache) =
-                        &mut local_cache.caches[layer_idx]
-                    {
-                        if seqlen_offsets[0] == 0 {
-                            gdn_cache.reset()?;
-                        }
-                        x = layer.forward_linear(&x, gdn_cache)?;
+                _ => unreachable!(),
+            }
+        };
+
+        let attention_mask = DeviceMappedMask::new(attention_mask.cloned(), &*self.mapper)?;
+
+        for (i, layer) in self.layers.iter().enumerate() {
+            xs = self.mapper.map(xs, i)?;
+
+            match &self.layer_types[i] {
+                LayerType::FullAttention => {
+                    xs = layer.forward_attention(
+                        &xs,
+                        attention_mask.as_ref().map(|m| m.get(xs.device())),
+                        &cos_sin,
+                        &mut cache[i],
+                        metadata
+                            .as_ref()
+                            .map(|(kv_cache, meta)| (kv_cache[i].clone(), *meta)),
+                        flash_params,
+                    )?;
+                }
+                LayerType::LinearAttention => {
+                    let gdn_cache = match &mut local_cache.caches[i] {
+                        LocalLayerCache::LinearAttention(c) => c,
+                        _ => candle_core::bail!("Expected GDN cache for linear attention layer"),
+                    };
+                    if seqlen_offsets[0] == 0 {
+                        gdn_cache.reset()?;
                     }
+                    xs = layer.forward_linear(&xs, gdn_cache)?;
+                }
+            }
+
+            // Integrate DeepStack visual features when provided
+            if let (Some(visual_pos_masks), Some(deepstack)) =
+                (visual_pos_masks, deepstack_visual_embeds)
+            {
+                if i < deepstack.len() {
+                    xs = self.deepstack_process(xs, visual_pos_masks, &deepstack[i])?;
                 }
             }
         }
-
-        let x = x.to_device(&self.device)?;
-        let x = self.norm.forward(&x)?;
-
-        let mut x = extract_logits(&x, context_lens)?;
-
+        let xs = xs.to_device(&self.device)?;
+        let xs = xs.apply(&self.norm)?;
+        let mut xs = extract_logits(&xs, context_lens)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
-            x = x.to_dtype(t)?;
+            xs = xs.to_dtype(t)?;
         }
-        let logits = MatMul.qmethod_matmul(&x, &*self.lm_head)?;
+        self.lm_head.forward(&xs)
+    }
 
-        Ok(logits)
+    fn deepstack_process(
+        &self,
+        hidden_states: Tensor,
+        visual_pos_masks: &Tensor,
+        visual_embeds: &Tensor,
+    ) -> Result<Tensor> {
+        let device = hidden_states.device();
+        let dtype = hidden_states.dtype();
+        let visual_embeds = visual_embeds.to_device(device)?.to_dtype(dtype)?;
+
+        let (batch, seq, hidden) = hidden_states.dims3()?;
+        let total = batch * seq;
+        let hidden_flat = hidden_states.reshape((total, hidden))?;
+
+        let mask_flat: Vec<f32> = visual_pos_masks
+            .to_device(device)?
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1()?;
+        let indices: Vec<u32> = mask_flat
+            .iter()
+            .enumerate()
+            .filter(|(_, &v)| v > 0.0)
+            .map(|(i, _)| i as u32)
+            .collect();
+
+        if indices.is_empty() {
+            return Ok(hidden_states);
+        }
+        if indices.len() != visual_embeds.dim(0)? {
+            candle_core::bail!(
+                "Mismatch between DeepStack visual embeds ({}) and mask positions ({})",
+                visual_embeds.dim(0)?,
+                indices.len()
+            );
+        }
+
+        let idx = Tensor::from_vec(indices, (visual_embeds.dim(0)?,), device)?;
+        let idx_expanded = idx.unsqueeze(1)?.repeat((1, hidden))?;
+        let result = hidden_flat.scatter_add(&idx_expanded, &visual_embeds, 0)?;
+        result.reshape((batch, seq, hidden))
     }
 }
 
-// ====================== Trait Implementations ======================
-
-impl IsqModel for Model {
+impl IsqModel for Qwen3_5MoeTextModel {
     fn get_layers(
         &mut self,
     ) -> (
@@ -1659,8 +1470,8 @@ impl IsqModel for Model {
                     tensors.push((&mut gdn.out_proj, Some(i)));
                 }
             }
-            for m in layer.moe.get_isq_layers() {
-                tensors.push((m, Some(i)));
+            for l in layer.moe.get_isq_layers() {
+                tensors.push((l, Some(i)));
             }
         }
         (tensors, &*self.mapper)
@@ -1668,12 +1479,12 @@ impl IsqModel for Model {
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
-        let uvb_m = uvb.pp("model");
-        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
-        uvb_m.pp("norm").add(&self.norm);
+        let uvb_lm = uvb.pp("model").pp("language_model");
+        uvb_lm.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_lm.pp("norm").add(&self.norm);
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
-            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            let uvb_l = uvb_lm.pp("layers").pp(layer_idx);
             uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
             uvb_l
                 .pp("post_attention_layernorm")
@@ -1709,7 +1520,6 @@ impl IsqModel for Model {
                 }
             }
 
-            // MoE gate and shared expert gate
             uvb_l
                 .pp("mlp")
                 .pp("gate")
@@ -1723,58 +1533,3 @@ impl IsqModel for Model {
         uvb.to_safetensors()
     }
 }
-
-impl NormalModel for Model {
-    fn forward(
-        &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
-    ) -> Result<Tensor> {
-        self.forward(
-            input_ids,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
-    }
-    fn xlora_forward(
-        &self,
-        _input_ids: &Tensor,
-        _input_ids_full: &Tensor,
-        _seqlen_offsets: &[usize],
-        _seqlen_offsets_full: &[usize],
-        _no_kv_cache: bool,
-        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
-        _context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        _flash_params: &FlashParams,
-        _flash_params_full: &FlashParams,
-    ) -> Result<Tensor> {
-        unimplemented!()
-    }
-    fn cache(&self) -> &EitherCache {
-        &self.kv_cache
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.kv_cache
-    }
-    fn device(&self) -> &Device {
-        &self.device
-    }
-    fn is_xlora(&self) -> bool {
-        false
-    }
-    fn max_seq_len(&self) -> usize {
-        self.max_seq_len
-    }
-    fn config(&self) -> &ModelConfigMetadata {
-        &self.cfg
-    }
-}
-
-impl AnyMoeBaseModelMixin for Model {}
