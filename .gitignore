@@ -1,6 +1,7 @@
 /target
 .ruff_cache
 .vscode
+.zed
 *.a
 .DS_Store
 .idea
