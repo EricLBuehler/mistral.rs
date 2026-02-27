@@ -13,7 +13,7 @@ use std::{
 ///
 /// *Purpose*: lets us pass raw byte buffers to
 /// `safetensors::serialize_to_file` without cloning them into a `Vec<u8>` or
-/// converting to a higher‑level tensor type.  
+/// converting to a higher‑level tensor type.
 /// We expose the buffer as a 1‑D `u8` tensor of shape `[len]`.
 #[derive(Clone)]
 pub struct CowBytesView<'a> {
@@ -72,7 +72,10 @@ use crate::{
 
 pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
 // 10 GB max per file
+#[cfg(target_pointer_width = "64")]
 const MAX_UQFF_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
+#[cfg(not(target_pointer_width = "64"))]
+const MAX_UQFF_SIZE_BYTES: usize = usize::MAX;
 pub const UQFF_MULTI_FILE_DELIMITER: &str = ";";
 
 /// Parse ISQ value.
