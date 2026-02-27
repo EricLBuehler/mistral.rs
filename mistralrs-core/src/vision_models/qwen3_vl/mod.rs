@@ -712,14 +712,9 @@ impl Qwen3VLModel {
             )?);
         }
         let ropeidx_attn_mask = Tensor::stack(&ropeidx_attn_mask_bs, 0)?;
-        let ropeidx_input_ids = if attention_mask.is_some() {
-            input_ids
-        } else {
-            input_ids_full
-        };
 
         let (position_ids, mrope_position_deltas) = get_rope_index(
-            ropeidx_input_ids,
+            input_ids_full,
             rope_img_grid_thw.as_ref(),
             rope_vid_grid_thw.as_ref(),
             Some(&ropeidx_attn_mask),
@@ -730,7 +725,9 @@ impl Qwen3VLModel {
             self.vision_end_token_id,
         )?;
         let position_ids = if attention_mask.is_some() {
-            position_ids
+            let full_len = position_ids.dim(2)?;
+            let trimmed_len = input_ids.dim(1)?;
+            position_ids.narrow(2, full_len - trimmed_len, trimmed_len)?
         } else {
             let mut position_ids = Tensor::new(
                 seqlen_offsets.iter().map(|x| *x as i64).collect::<Vec<_>>(),
