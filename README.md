@@ -110,7 +110,7 @@ mistralrs doctor
 **Agentic Features**
 - Integrated [tool calling](docs/TOOL_CALLING.md) with Python/Rust callbacks
 - ⭐ [Web search integration](docs/WEB_SEARCH.md)
-- ⭐ [MCP client](docs/MCP/README.md): Connect to external tools automatically
+- ⭐ [MCP client](docs/MCP/client.md): Connect to external tools automatically
 
 [Full feature documentation](docs/README.md)
 
