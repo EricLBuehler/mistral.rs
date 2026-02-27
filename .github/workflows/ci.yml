@@ -32,7 +32,7 @@ jobs:
 
   check-metal:
     name: Check (metal)
-    runs-on: macOS-latest
+    runs-on: macOS-26
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1

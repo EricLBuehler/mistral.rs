@@ -109,7 +109,7 @@ dirs = "6.0.0"
 thiserror = "2.0.18"
 tokenizers = { version = "0.21.4", default-features = false }
 tokio-tungstenite = "0.28.0"
-tqdm = "0.8.0"
+tqdm = { git = "https://github.com/setoelkahfi/tqdm", branch = "deps/bump-crossterm" }
 chrono = "0.4.43"
 minijinja = { version = "2.14.0", features = ["builtins", "json"] }
 minijinja-contrib = { version = "2.14.0", features = ["pycompat"] }
