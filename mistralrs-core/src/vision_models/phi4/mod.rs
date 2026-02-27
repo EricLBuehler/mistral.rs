@@ -529,9 +529,13 @@ impl Phi4MMModel {
 
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
+            let layer_attention_mask = match attention_mask.as_ref() {
+                Some(mask) => Some(mask.try_get(xs.device())?),
+                None => None,
+            };
             xs = layer.forward(
                 &xs,
-                attention_mask.as_ref().map(|m| m.get(xs.device())),
+                layer_attention_mask,
                 seqlen_offsets,
                 position_ids,
                 &mut cache[i],

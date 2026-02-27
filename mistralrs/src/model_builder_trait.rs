@@ -18,6 +18,7 @@ pub enum AnyModelBuilder {
     Gguf(crate::GgufModelBuilder),
     /// A diffusion (image generation) model builder.
     Diffusion(crate::DiffusionModelBuilder),
+    #[cfg(feature = "audio")]
     /// A speech synthesis model builder.
     Speech(crate::SpeechModelBuilder),
     /// An embedding model builder.
@@ -33,6 +34,7 @@ impl AnyModelBuilder {
             AnyModelBuilder::Auto(b) => b.model_id.clone(),
             AnyModelBuilder::Gguf(b) => b.model_id.clone(),
             AnyModelBuilder::Diffusion(b) => b.model_id.clone(),
+            #[cfg(feature = "audio")]
             AnyModelBuilder::Speech(b) => b.model_id.clone(),
             AnyModelBuilder::Embedding(b) => b.model_id.clone(),
         }
@@ -48,6 +50,7 @@ impl AnyModelBuilder {
             AnyModelBuilder::Auto(b) => build_auto_pipeline(b).await,
             AnyModelBuilder::Gguf(b) => build_gguf_pipeline(b).await,
             AnyModelBuilder::Diffusion(b) => build_diffusion_pipeline(b).await,
+            #[cfg(feature = "audio")]
             AnyModelBuilder::Speech(b) => build_speech_pipeline(b).await,
             AnyModelBuilder::Embedding(b) => build_embedding_pipeline(b).await,
         }
@@ -85,6 +88,7 @@ impl From<crate::DiffusionModelBuilder> for AnyModelBuilder {
     }
 }
 
+#[cfg(feature = "audio")]
 impl From<crate::SpeechModelBuilder> for AnyModelBuilder {
     fn from(b: crate::SpeechModelBuilder) -> Self {
         AnyModelBuilder::Speech(b)
@@ -197,6 +201,7 @@ impl MultiModelBuilder {
             );
         }
 
+        #[cfg(feature = "mcp")]
         if let Some(mcp_config) = add_model_config.mcp_client_config.clone() {
             runner_builder = runner_builder.with_mcp_client(mcp_config);
         }
@@ -290,6 +295,7 @@ pub async fn build_model_from_pipeline(
         );
     }
 
+    #[cfg(feature = "mcp")]
     if let Some(mcp_config) = add_model_config.mcp_client_config.clone() {
         runner_builder = runner_builder.with_mcp_client(mcp_config);
     }
@@ -461,6 +467,7 @@ pub async fn build_text_pipeline(
 
     let add_model_config = AddModelConfig {
         engine_config,
+        #[cfg(feature = "mcp")]
         mcp_client_config: builder.mcp_client_config.clone(),
         loader_config: Some(loader_config),
     };
@@ -626,6 +633,7 @@ pub async fn build_vision_pipeline(
 
     let add_model_config = AddModelConfig {
         engine_config,
+        #[cfg(feature = "mcp")]
         mcp_client_config: None,
         loader_config: Some(loader_config),
     };
@@ -756,6 +764,7 @@ pub async fn build_gguf_pipeline(
 
     let add_model_config = AddModelConfig {
         engine_config,
+        #[cfg(feature = "mcp")]
         mcp_client_config: None,
         loader_config: Some(loader_config),
     };
@@ -818,6 +827,7 @@ pub async fn build_diffusion_pipeline(
 
     let add_model_config = AddModelConfig {
         engine_config,
+        #[cfg(feature = "mcp")]
         mcp_client_config: None,
         loader_config: Some(loader_config),
     };
@@ -825,6 +835,7 @@ pub async fn build_diffusion_pipeline(
     Ok((pipeline, scheduler_config, add_model_config))
 }
 
+#[cfg(feature = "audio")]
 /// Build a speech model pipeline from a SpeechModelBuilder.
 /// Returns the pipeline, scheduler config, and AddModelConfig needed for Model creation.
 pub async fn build_speech_pipeline(
@@ -885,6 +896,7 @@ pub async fn build_speech_pipeline(
 
     let add_model_config = AddModelConfig {
         engine_config,
+        #[cfg(feature = "mcp")]
         mcp_client_config: None,
         loader_config: Some(loader_config),
     };
@@ -991,6 +1003,7 @@ pub async fn build_embedding_pipeline(
 
     let add_model_config = AddModelConfig {
         engine_config,
+        #[cfg(feature = "mcp")]
         mcp_client_config: None,
         loader_config: Some(loader_config),
     };
@@ -1183,6 +1196,7 @@ pub async fn build_auto_pipeline(
 
     let add_model_config = AddModelConfig {
         engine_config,
+        #[cfg(feature = "mcp")]
         mcp_client_config: builder.mcp_client_config.clone(),
         loader_config: Some(loader_config),
     };

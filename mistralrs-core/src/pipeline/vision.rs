@@ -4,13 +4,14 @@ use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoVisionLoader,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
-    ModelKind, ModelPaths, MultimodalPromptPrefixer, Phi4MMLoader, PreProcessingMixin, Processor,
-    Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, TokenSource, VLlama4Loader, VLlamaLoader,
-    VisionModel, VisionModelLoader,
+    ModelKind, ModelPaths, MultimodalPromptPrefixer, PreProcessingMixin, Processor, Qwen2VLLoader,
+    Qwen3VLLoader, Qwen3VLMoELoader, TokenSource, VLlama4Loader, VLlamaLoader, VisionModel,
+    VisionModelLoader,
 };
+use super::{Gemma3nLoader, Phi4MMLoader};
 use super::{
-    Gemma3nLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader,
-    Phi3VLoader, Qwen2_5VLLoader, VisionLoaderType, VoxtralLoader,
+    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader, Phi3VLoader,
+    Qwen2_5VLLoader, VisionLoaderType, VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};

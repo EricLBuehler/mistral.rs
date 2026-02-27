@@ -7,8 +7,11 @@ use crate::{
         AutoDeviceMapParams, EmbeddingLoaderType, IsqOrganization, NormalLoaderType,
         VisionLoaderType,
     },
-    DiffusionLoaderType, ModelDType, SpeechLoaderType,
+    DiffusionLoaderType, ModelDType,
 };
+
+#[cfg(feature = "audio")]
+use crate::SpeechLoaderType;
 
 // Default value functions for serde deserialization
 fn default_model_dtype() -> ModelDType {
@@ -39,6 +42,7 @@ fn parse_diffusion_arch(x: &str) -> Result<DiffusionLoaderType, String> {
     x.parse()
 }
 
+#[cfg(feature = "audio")]
 fn parse_speech_arch(x: &str) -> Result<SpeechLoaderType, String> {
     x.parse()
 }
@@ -158,7 +162,7 @@ pub enum ModelSelected {
         topology: Option<String>,
 
         #[allow(rustdoc::bare_urls)]
-        /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
+        /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: <https://arxiv.org/abs/2310.02410>).
         #[arg(short, long)]
         #[serde(default)]
         organization: Option<IsqOrganization>,
@@ -653,7 +657,7 @@ pub enum ModelSelected {
         #[arg(long)]
         matformer_slice_name: Option<String>,
 
-        /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
+        /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: <https://arxiv.org/abs/2310.02410>).
         #[arg(long)]
         organization: Option<IsqOrganization>,
     },
@@ -674,6 +678,7 @@ pub enum ModelSelected {
         dtype: ModelDType,
     },
 
+    #[cfg(feature = "audio")]
     Speech {
         /// Model ID to load from. This may be a HF hub repo or a local path.
         #[arg(short, long)]

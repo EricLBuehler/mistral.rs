@@ -2,8 +2,7 @@ use super::hf::{hf_access_error, remote_issue_from_api_error, RemoteAccessIssue}
 use super::{
     DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoaderBuilder, EmbeddingLoaderType,
     EmbeddingSpecificConfig, Loader, ModelKind, ModelPaths, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, SpeechLoader, TokenSource, VisionLoaderBuilder, VisionLoaderType,
-    VisionSpecificConfig,
+    NormalSpecificConfig, TokenSource, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
 };
 use crate::utils::{progress::ProgressScopeGuard, tokens::get_token};
 use crate::Ordering;
@@ -189,10 +188,21 @@ enum Detected {
     Vision(VisionLoaderType),
     Embedding(Option<EmbeddingLoaderType>),
     Diffusion(DiffusionLoaderType),
+    #[cfg(feature = "audio")]
     Speech(crate::speech_models::SpeechLoaderType),
 }
 
 impl AutoLoader {
+    #[cfg(not(feature = "audio"))]
+    fn disabled_audio_message_for_architecture(name: &str) -> Option<String> {
+        match name {
+            "DiaForConditionalGeneration" => Some(format!(
+                "Architecture `{name}` is a speech model, but this build disables audio processing. Rebuild with `--features audio` for speech support."
+            )),
+            _ => None,
+        }
+    }
+
     fn try_get_file(
         api: &ApiRepo,
         model_id: &Path,
@@ -344,6 +354,7 @@ impl AutoLoader {
             return Ok(Detected::Diffusion(tp));
         }
 
+        #[cfg(feature = "audio")]
         if let Some(ref config) = artifacts.contents {
             if let Some(tp) =
                 crate::speech_models::SpeechLoaderType::auto_detect_from_config(config)
@@ -396,6 +407,10 @@ impl AutoLoader {
             anyhow::bail!("Expected exactly one architecture in config");
         }
         let name = &cfg.architectures[0];
+        #[cfg(not(feature = "audio"))]
+        if let Some(message) = Self::disabled_audio_message_for_architecture(name) {
+            anyhow::bail!(message);
+        }
         if let Ok(tp) = VisionLoaderType::from_causal_lm_name(name) {
             return Ok(Detected::Vision(tp));
         }
@@ -443,7 +458,9 @@ impl AutoLoader {
                 let loader = DiffusionLoaderBuilder::new(Some(self.model_id.clone())).build(tp);
                 *guard = Some(loader);
             }
+            #[cfg(feature = "audio")]
             Detected::Speech(tp) => {
+                use super::SpeechLoader;
                 let loader: Box<dyn Loader> = Box::new(SpeechLoader {
                     model_id: self.model_id.clone(),
                     dac_model_id: None,
@@ -531,5 +548,44 @@ impl Loader for AutoLoader {
             .as_ref()
             .map(|l| l.get_kind())
             .unwrap_or(ModelKind::Normal)
+    }
+}
+
+#[cfg(all(test, not(feature = "audio")))]
+mod tests {
+    use super::{AutoLoader, ConfigArtifacts};
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    #[test]
+    fn speech_arch_reports_audio_feature_requirement_when_audio_disabled() {
+        let loader = AutoLoader {
+            model_id: "dummy/model".to_string(),
+            normal_builder: Mutex::new(None),
+            vision_builder: Mutex::new(None),
+            embedding_builder: Mutex::new(None),
+            loader: Mutex::new(None),
+            hf_cache_path: Some(PathBuf::from(".")),
+        };
+        let artifacts = ConfigArtifacts {
+            contents: Some("{\"architectures\":[\"DiaForConditionalGeneration\"]}".to_string()),
+            sentence_transformers_present: false,
+            repo_files: vec![],
+            remote_access_issue: None,
+        };
+
+        let err = match loader.detect(&artifacts) {
+            Ok(_) => {
+                panic!("speech auto-detection must be absent when audio feature is disabled")
+            }
+            Err(err) => err,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("DiaForConditionalGeneration")
+                && msg.contains("disables audio processing")
+                && msg.contains("--features audio"),
+            "unexpected error: {msg}"
+        );
     }
 }

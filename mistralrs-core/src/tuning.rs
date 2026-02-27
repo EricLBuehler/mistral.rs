@@ -209,6 +209,7 @@ fn model_id_from_selected(model: &ModelSelected) -> String {
             quantized_model_id, ..
         } => quantized_model_id.clone(),
         ModelSelected::DiffusionPlain { model_id, .. } => model_id.clone(),
+        #[cfg(feature = "audio")]
         ModelSelected::Speech { model_id, .. } => model_id.clone(),
         ModelSelected::Toml { file } => file.clone(),
         ModelSelected::MultiModel { .. } => "multi-model".to_string(),
@@ -483,8 +484,12 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
         | ModelSelected::XLoraGGML { .. } => {
             anyhow::bail!("Auto-tuning is not supported for pre-quantized GGUF/GGML models.");
         }
-        ModelSelected::DiffusionPlain { .. } | ModelSelected::Speech { .. } => {
-            anyhow::bail!("Auto-tuning is not supported for diffusion or speech models.");
+        ModelSelected::DiffusionPlain { .. } => {
+            anyhow::bail!("Auto-tuning is not supported for diffusion models.");
+        }
+        #[cfg(feature = "audio")]
+        ModelSelected::Speech { .. } => {
+            anyhow::bail!("Auto-tuning is not supported for speech models.");
         }
         _ => {}
     }
@@ -683,4 +688,56 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
         warnings,
         notes,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{auto_tune, AutoTuneRequest, TuneProfile};
+    use crate::{DiffusionLoaderType, ModelDType, ModelSelected, TokenSource};
+
+    #[test]
+    fn auto_tune_returns_diffusion_specific_error() {
+        let request = AutoTuneRequest {
+            model: ModelSelected::DiffusionPlain {
+                model_id: "dummy/model".to_string(),
+                arch: DiffusionLoaderType::Flux,
+                dtype: ModelDType::Auto,
+            },
+            token_source: TokenSource::None,
+            hf_revision: None,
+            force_cpu: true,
+            profile: TuneProfile::Balanced,
+            requested_isq: None,
+        };
+
+        let err = auto_tune(request).expect_err("diffusion auto-tune should be rejected");
+        assert_eq!(
+            err.to_string(),
+            "Auto-tuning is not supported for diffusion models."
+        );
+    }
+
+    #[cfg(feature = "audio")]
+    #[test]
+    fn auto_tune_returns_speech_specific_error() {
+        let request = AutoTuneRequest {
+            model: ModelSelected::Speech {
+                model_id: "dummy/model".to_string(),
+                dac_model_id: None,
+                arch: crate::SpeechLoaderType::Dia,
+                dtype: ModelDType::Auto,
+            },
+            token_source: TokenSource::None,
+            hf_revision: None,
+            force_cpu: true,
+            profile: TuneProfile::Balanced,
+            requested_isq: None,
+        };
+
+        let err = auto_tune(request).expect_err("speech auto-tune should be rejected");
+        assert_eq!(
+            err.to_string(),
+            "Auto-tuning is not supported for speech models."
+        );
+    }
 }

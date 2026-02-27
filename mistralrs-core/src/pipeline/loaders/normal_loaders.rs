@@ -83,6 +83,7 @@ pub struct NormalLoadingMetadata {
     // MultiProgress support for parallelized loading
     pub multi_progress: Arc<MultiProgress>,
     // Optional Matryoshka Transformer slicing configuration
+    #[cfg_attr(not(feature = "audio"), allow(dead_code))]
     pub matformer_slicing_config: Option<MatformerSliceConfig>,
 }
 

@@ -719,6 +719,7 @@ impl BincountOp for Tensor {
 }
 
 // https://github.com/mokeyish/candle-ext/blob/ca4547c803469bd51c00ce5eda2f18dd249c8f10/src/triangular.rs#L21
+#[cfg(feature = "audio")]
 pub fn apply_triangular(xs: &Tensor, diagonal: isize, upper: bool) -> Result<Tensor> {
     let device = xs.device();
     let (l, s) = xs.dims2()?;
