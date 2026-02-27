@@ -1419,17 +1419,18 @@ impl Model {
         );
 
         // Build layers
-        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
-        for i in NiceProgressBar::<_, 'b'>(
+        let vb_l = vb_m.pp("layers");
+        let layers = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
             &normal_loading_metadata.multi_progress,
-        ) {
+        )
+        .par_iter_if_isq(|i| {
             let device = mapper
                 .device_for(i, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
             let comm = mapper.get_comm_for(i)?;
-            let vb_layer = vb_m.pp(format!("layers.{i}"));
+            let vb_layer = vb_l.pp(i);
 
             let layer_impl = match &layer_types[i] {
                 LayerType::FullAttention => {
@@ -1464,7 +1465,6 @@ impl Model {
                 )?),
             };
 
-            // (1+weight) RMSNorm for layer norms
             let input_layernorm = GemmaRmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
@@ -1486,13 +1486,13 @@ impl Model {
                 normal_loading_metadata.real_device.clone(),
             )?;
 
-            layers.push(DecoderLayer {
+            Ok(DecoderLayer {
                 layer_impl,
                 input_layernorm,
                 post_attention_layernorm,
                 moe,
-            });
-        }
+            })
+        })?;
 
         // Create local hybrid cache
         let local_cache = Arc::new(Mutex::new(LocalHybridCache::new(
