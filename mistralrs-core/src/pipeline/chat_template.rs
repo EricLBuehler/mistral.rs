@@ -16,6 +16,11 @@ const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
     "<|im_end|>",      // Handle ChatML case
     "<end_of_turn>",   // Handle Gemma2 chat case
     "<|end_of_text|>", // Hermes
+    "<|end|>",         // Phi-3, Phi-3.5, Harmony
+    "<|eot_id|>",      // Llama 3
+    "<|message|>",     // Harmony
+    "<|start|>",       // Harmony
+    "<|channel|>",     // Harmony
 ];
 
 #[allow(dead_code)]
@@ -77,22 +82,21 @@ impl ChatTemplate {
         self.chat_template.is_some()
     }
 
+    pub(crate) fn get_template_contents(&self) -> Vec<String> {
+        match self.chat_template.as_ref() {
+            Some(t) => match &t.0 {
+                Either::Left(s) => vec![s.clone()],
+                Either::Right(vec) => vec.iter().flat_map(|m| m.values().cloned()).collect(),
+            },
+            None => vec![],
+        }
+    }
+
     /// Check if this chat template uses OpenAI Harmony format.
     pub fn is_harmony_format(&self) -> bool {
-        if let Some(ref template_value) = self.chat_template {
-            let template_str = match &template_value.0 {
-                Either::Left(s) => s.as_str(),
-                Either::Right(vec) => {
-                    // For multi-template format, check if any template contains Harmony markers
-                    return vec
-                        .iter()
-                        .any(|t| t.values().any(|v| crate::harmony::is_harmony_template(v)));
-                }
-            };
-            crate::harmony::is_harmony_template(template_str)
-        } else {
-            false
-        }
+        self.get_template_contents()
+            .iter()
+            .any(|t| crate::harmony::is_harmony_template(t))
     }
 
     /// Check if this chat template uses `<think>...</think>` tags for reasoning.
@@ -105,21 +109,9 @@ impl ChatTemplate {
             return false;
         }
 
-        if let Some(ref template_value) = self.chat_template {
-            let template_str = match &template_value.0 {
-                Either::Left(s) => s.as_str(),
-                Either::Right(vec) => {
-                    // For multi-template format, check if any template contains think tags
-                    return vec.iter().any(|t| {
-                        t.values()
-                            .any(|v| crate::think_tags::is_think_tag_template(v))
-                    });
-                }
-            };
-            crate::think_tags::is_think_tag_template(template_str)
-        } else {
-            false
-        }
+        self.get_template_contents()
+            .iter()
+            .any(|t| crate::think_tags::is_think_tag_template(t))
     }
 
     pub fn eos_tok(&self) -> Option<String> {
@@ -152,8 +144,12 @@ pub fn calculate_eos_tokens(
     let mut eos_tok_ids = chat_template.eos_tok().map(|x| vec![x]).unwrap_or_default();
     let mut bos_tok_ids = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
 
+    let templates = chat_template.get_template_contents();
+
     for alternate in SUPPORTED_ALTERNATE_EOS {
-        if tokenizer.get_vocab(true).contains_key(*alternate) {
+        if tokenizer.get_vocab(true).contains_key(*alternate)
+            && templates.iter().any(|t| t.contains(*alternate))
+        {
             eos_tok_ids.push(alternate.to_string())
         }
     }
