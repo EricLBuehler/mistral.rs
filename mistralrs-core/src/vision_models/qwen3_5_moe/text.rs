@@ -15,13 +15,15 @@ use super::config::{LayerType, TextConfig};
 use crate::{
     attention::SdpaParams,
     device_map::{DeviceMappedMask, DeviceMapper},
+    kv_cache::{HybridCache, HybridCacheConfig, HybridLayerType},
     layers::{self, GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
+    layers_masker::PastKvLenCache,
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata,
+        EitherCache, IsqModel, KvCache, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -181,10 +183,8 @@ fn gated_delta_rule_recurrence(
 // ====================== Gated Delta Net layer ======================
 
 struct GatedDeltaNet {
-    in_proj_qkv: Linear,
-    in_proj_z: Linear,
-    in_proj_a: Linear,
-    in_proj_b: Linear,
+    in_proj_qkvz: Linear,
+    in_proj_ba: Linear,
     conv1d_weight: Tensor,
     dt_bias: Tensor,
     a_log: Tensor,
@@ -223,13 +223,45 @@ impl GatedDeltaNet {
         let conv_kernel_size = cfg.linear_conv_kernel_dim;
 
         let vb_la = mapper.set_device(layer_idx, vb.pp("linear_attn"), loading_isq);
+        let v_per_group = num_v_heads / num_k_heads;
 
-        // Separate projections matching HF weight names
-        let qkv_out = key_dim * 2 + value_dim;
-        let mut qkv_w = vb_la.get((qkv_out, cfg.hidden_size), "in_proj_qkv.weight")?;
-        let mut z_w = vb_la.get((value_dim, cfg.hidden_size), "in_proj_z.weight")?;
-        let mut a_w = vb_la.get((num_v_heads, cfg.hidden_size), "in_proj_a.weight")?;
-        let mut b_w = vb_la.get((num_v_heads, cfg.hidden_size), "in_proj_b.weight")?;
+        // Load and merge projections into grouped layout (matching qwen3_next)
+        // Try merged names first (ISQ reload), fall back to separate HF names
+        let qkvz_out = key_dim * 2 + value_dim * 2;
+        let mut qkvz_w = if vb_la.contains_tensor("in_proj_qkvz.weight") {
+            vb_la.get((qkvz_out, cfg.hidden_size), "in_proj_qkvz.weight")?
+        } else {
+            // Load separate HF weights and interleave into grouped layout
+            let qkv_w = vb_la.get(
+                (key_dim * 2 + value_dim, cfg.hidden_size),
+                "in_proj_qkv.weight",
+            )?;
+            let z_w = vb_la.get((value_dim, cfg.hidden_size), "in_proj_z.weight")?;
+            let q_w = qkv_w.narrow(0, 0, key_dim)?;
+            let k_w = qkv_w.narrow(0, key_dim, key_dim)?;
+            let v_w = qkv_w.narrow(0, key_dim * 2, value_dim)?;
+            // Reshape to (num_k_heads, per_head_dim, hidden) for grouping
+            let q_grouped = q_w.reshape((num_k_heads, head_k_dim, cfg.hidden_size))?;
+            let k_grouped = k_w.reshape((num_k_heads, head_k_dim, cfg.hidden_size))?;
+            let v_grouped =
+                v_w.reshape((num_k_heads, v_per_group * head_v_dim, cfg.hidden_size))?;
+            let z_grouped =
+                z_w.reshape((num_k_heads, v_per_group * head_v_dim, cfg.hidden_size))?;
+            // Cat within each group: [q, k, v, z] per group
+            let merged = Tensor::cat(&[q_grouped, k_grouped, v_grouped, z_grouped], 1)?;
+            merged.reshape((qkvz_out, cfg.hidden_size))?
+        };
+
+        let mut ba_w = if vb_la.contains_tensor("in_proj_ba.weight") {
+            vb_la.get((num_v_heads * 2, cfg.hidden_size), "in_proj_ba.weight")?
+        } else {
+            let b_w = vb_la.get((num_v_heads, cfg.hidden_size), "in_proj_b.weight")?;
+            let a_w = vb_la.get((num_v_heads, cfg.hidden_size), "in_proj_a.weight")?;
+            let b_grouped = b_w.reshape((num_k_heads, v_per_group, cfg.hidden_size))?;
+            let a_grouped = a_w.reshape((num_k_heads, v_per_group, cfg.hidden_size))?;
+            let merged = Tensor::cat(&[b_grouped, a_grouped], 1)?;
+            merged.reshape((num_v_heads * 2, cfg.hidden_size))?
+        };
 
         let conv_dim = key_dim * 2 + value_dim;
         let mut conv1d_weight = vb_la.get((conv_dim, 1, conv_kernel_size), "conv1d.weight")?;
@@ -237,19 +269,15 @@ impl GatedDeltaNet {
         let mut a_log = vb_la.get(num_v_heads, "A_log")?;
 
         if let Some(ref target_dev) = isq_target_device {
-            qkv_w = qkv_w.to_device(target_dev)?;
-            z_w = z_w.to_device(target_dev)?;
-            a_w = a_w.to_device(target_dev)?;
-            b_w = b_w.to_device(target_dev)?;
+            qkvz_w = qkvz_w.to_device(target_dev)?;
+            ba_w = ba_w.to_device(target_dev)?;
             conv1d_weight = conv1d_weight.to_device(target_dev)?;
             dt_bias = dt_bias.to_device(target_dev)?;
             a_log = a_log.to_device(target_dev)?;
         }
 
-        let in_proj_qkv = Linear::new(qkv_w, None);
-        let in_proj_z = Linear::new(z_w, None);
-        let in_proj_a = Linear::new(a_w, None);
-        let in_proj_b = Linear::new(b_w, None);
+        let in_proj_qkvz = Linear::new(qkvz_w, None);
+        let in_proj_ba = Linear::new(ba_w, None);
 
         let norm = RmsNormGated::new(
             head_v_dim,
@@ -268,10 +296,8 @@ impl GatedDeltaNet {
         )?;
 
         Ok(Self {
-            in_proj_qkv,
-            in_proj_z,
-            in_proj_a,
-            in_proj_b,
+            in_proj_qkvz,
+            in_proj_ba,
             conv1d_weight,
             dt_bias,
             a_log,
@@ -292,21 +318,43 @@ impl GatedDeltaNet {
         let dtype = x.dtype();
         let v_per_group = self.num_v_heads / self.num_k_heads;
 
-        // Separate projections
-        let qkv = self.in_proj_qkv.forward(x)?;
-        let z = self.in_proj_z.forward(x)?;
-        let a = self.in_proj_a.forward(x)?;
-        let b = self.in_proj_b.forward(x)?;
+        // 1. Project input (2 matmuls instead of 4)
+        let mixed_qkvz = self.in_proj_qkvz.forward(x)?;
+        let mixed_ba = self.in_proj_ba.forward(x)?;
 
-        // Split qkv into q, k, v
-        let q = qkv.narrow(D::Minus1, 0, self.key_dim)?;
-        let k = qkv.narrow(D::Minus1, self.key_dim, self.key_dim)?;
-        let v_flat = qkv.narrow(D::Minus1, self.key_dim * 2, self.value_dim)?;
+        // 2. Grouped head layout split
+        let group_size_qkvz = 2 * self.head_k_dim + 2 * v_per_group * self.head_v_dim;
+        let mixed_qkvz =
+            mixed_qkvz.reshape((batch_size, seq_len, self.num_k_heads, group_size_qkvz))?;
 
-        // Reshape z to (batch, seq, num_v_heads, head_v_dim)
+        let group_size_ba = 2 * v_per_group;
+        let mixed_ba = mixed_ba.reshape((batch_size, seq_len, self.num_k_heads, group_size_ba))?;
+
+        // Split within each group
+        let mut offset = 0;
+        let q = mixed_qkvz.narrow(D::Minus1, offset, self.head_k_dim)?;
+        offset += self.head_k_dim;
+        let k = mixed_qkvz.narrow(D::Minus1, offset, self.head_k_dim)?;
+        offset += self.head_k_dim;
+        let v = mixed_qkvz.narrow(D::Minus1, offset, v_per_group * self.head_v_dim)?;
+        offset += v_per_group * self.head_v_dim;
+        let z = mixed_qkvz.narrow(D::Minus1, offset, v_per_group * self.head_v_dim)?;
+
+        let b = mixed_ba.narrow(D::Minus1, 0, v_per_group)?;
+        let a = mixed_ba.narrow(D::Minus1, v_per_group, v_per_group)?;
+
+        // Reshape v, z -> (batch, seq, num_v_heads, head_v_dim)
+        let v = v.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
         let z = z.reshape((batch_size, seq_len, self.num_v_heads, self.head_v_dim))?;
 
-        // a, b are already (batch, seq, num_v_heads)
+        // Reshape b, a -> (batch, seq, num_v_heads)
+        let b = b.reshape((batch_size, seq_len, self.num_v_heads))?;
+        let a = a.reshape((batch_size, seq_len, self.num_v_heads))?;
+
+        // Flatten q, k, v for conv1d
+        let q = q.reshape((batch_size, seq_len, self.key_dim))?;
+        let k = k.reshape((batch_size, seq_len, self.key_dim))?;
+        let v_flat = v.reshape((batch_size, seq_len, self.value_dim))?;
 
         // Conv1d on concatenated [q, k, v]
         let mixed_qkv = Tensor::cat(&[&q, &k, &v_flat], D::Minus1)?;
@@ -762,10 +810,6 @@ impl FullAttention {
             self.rotary_emb.forward(cos_sin, &mut q, &mut k)?;
         }
 
-        let q = q.contiguous()?;
-        let k = k.contiguous()?;
-        let v = v.contiguous()?;
-
         // Standard attention
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
@@ -800,8 +844,8 @@ impl FullAttention {
                 let (cache_k, cache_v) = kv_cache.append(&k, &v)?;
                 Sdpa.run_attention(
                     &q,
-                    &cache_k.contiguous()?,
-                    &cache_v.contiguous()?,
+                    &cache_k,
+                    &cache_v,
                     attention_mask,
                     Some(flash_params),
                     &self.sdpa_params,
@@ -1083,7 +1127,7 @@ impl DecoderLayer {
 // ====================== Local hybrid cache ======================
 
 enum LocalLayerCache {
-    Attention,
+    Attention(KvCache),
     LinearAttention(GdnLayerCache),
 }
 
@@ -1101,7 +1145,13 @@ impl LocalHybridCache {
         let mut caches = Vec::with_capacity(layer_types.len());
         for lt in layer_types {
             match lt {
-                LayerType::FullAttention => caches.push(LocalLayerCache::Attention),
+                LayerType::FullAttention => {
+                    caches.push(LocalLayerCache::Attention(KvCache::new_normal(
+                        2,
+                        cfg.max_position_embeddings,
+                        HybridCache::CACHE_GROW_SIZE,
+                    )));
+                }
                 LayerType::LinearAttention => {
                     caches.push(LocalLayerCache::LinearAttention(GdnLayerCache::new(
                         cfg, dtype, device,
@@ -1110,6 +1160,21 @@ impl LocalHybridCache {
             }
         }
         Ok(Self { caches })
+    }
+
+    fn seqlen(&self) -> usize {
+        for cache in &self.caches {
+            if let LocalLayerCache::Attention(kv) = cache {
+                return kv.current_seq_len();
+            }
+        }
+        0
+    }
+}
+
+impl PastKvLenCache for LocalHybridCache {
+    fn get_past_kv_len(&self) -> Result<usize> {
+        Ok(self.seqlen())
     }
 }
 
@@ -1289,6 +1354,37 @@ impl Qwen3_5MoeTextModel {
             vb_m.dtype(),
         )?));
 
+        // Create pipeline hybrid cache
+        let pipeline_layer_types: Vec<HybridLayerType> = layer_types
+            .iter()
+            .map(|lt| match lt {
+                LayerType::FullAttention => HybridLayerType::Attention,
+                LayerType::LinearAttention => HybridLayerType::Mamba,
+            })
+            .collect();
+
+        let hybrid_cache_config = HybridCacheConfig {
+            layer_types: pipeline_layer_types,
+            max_seq_len: cfg.max_position_embeddings,
+            max_num_seqs: 1,
+            mamba_conv_dim: cfg.linear_conv_dim(),
+            mamba_d_conv: cfg.linear_conv_kernel_dim,
+            mamba_n_heads: cfg.linear_num_value_heads,
+            mamba_head_dim: cfg.linear_key_head_dim,
+            mamba_d_state: cfg.linear_value_head_dim,
+        };
+
+        let pipeline_cache = Arc::new(Mutex::new(
+            HybridCache::new(
+                hybrid_cache_config,
+                vb_m.dtype(),
+                &normal_loading_metadata.real_device,
+            )
+            .map_err(|e| {
+                candle_core::Error::Msg(format!("Failed to create hybrid cache: {}", e))
+            })?,
+        ));
+
         Ok(Self {
             embed_tokens,
             norm,
@@ -1296,10 +1392,7 @@ impl Qwen3_5MoeTextModel {
             layer_types: layer_types.clone(),
             lm_head,
             local_cache,
-            cache: EitherCache::Normal(NormalCache::new(
-                cfg.num_hidden_layers,
-                cfg.max_position_embeddings,
-            )),
+            cache: EitherCache::Hybrid(pipeline_cache),
             max_seq_len: cfg.max_position_embeddings,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
@@ -1336,7 +1429,6 @@ impl Qwen3_5MoeTextModel {
         visual_pos_masks: Option<&Tensor>,
         deepstack_visual_embeds: Option<&[Tensor]>,
     ) -> Result<Tensor> {
-        let cache = &mut self.cache.normal().0;
         let mut local_cache = self.local_cache.lock().expect("Lock failed");
 
         // Compute MRoPE cos/sin using first full-attention layer's rotary embedding
@@ -1361,26 +1453,27 @@ impl Qwen3_5MoeTextModel {
 
             match &self.layer_types[i] {
                 LayerType::FullAttention => {
-                    xs = layer.forward_attention(
-                        &xs,
-                        attention_mask.as_ref().map(|m| m.get(xs.device())),
-                        &cos_sin,
-                        &mut cache[i],
-                        metadata
-                            .as_ref()
-                            .map(|(kv_cache, meta)| (kv_cache[i].clone(), *meta)),
-                        flash_params,
-                    )?;
+                    if let LocalLayerCache::Attention(kv_cache) = &mut local_cache.caches[i] {
+                        xs = layer.forward_attention(
+                            &xs,
+                            attention_mask.as_ref().map(|m| m.get(xs.device())),
+                            &cos_sin,
+                            kv_cache,
+                            metadata
+                                .as_ref()
+                                .map(|(kv_cache, meta)| (kv_cache[i].clone(), *meta)),
+                            flash_params,
+                        )?;
+                    }
                 }
                 LayerType::LinearAttention => {
-                    let gdn_cache = match &mut local_cache.caches[i] {
-                        LocalLayerCache::LinearAttention(c) => c,
-                        _ => candle_core::bail!("Expected GDN cache for linear attention layer"),
-                    };
-                    if seqlen_offsets[0] == 0 {
-                        gdn_cache.reset()?;
+                    if let LocalLayerCache::LinearAttention(gdn_cache) = &mut local_cache.caches[i]
+                    {
+                        if seqlen_offsets[0] == 0 {
+                            gdn_cache.reset()?;
+                        }
+                        xs = layer.forward_linear(&xs, gdn_cache)?;
                     }
-                    xs = layer.forward_linear(&xs, gdn_cache)?;
                 }
             }
 
@@ -1399,7 +1492,7 @@ impl Qwen3_5MoeTextModel {
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        self.lm_head.forward(&xs)
+        mistralrs_quant::MatMul.qmethod_matmul(&xs, &*self.lm_head)
     }
 
     fn deepstack_process(
@@ -1495,20 +1588,12 @@ impl IsqModel for Qwen3_5MoeTextModel {
                 LayerImpl::LinearAttention(gdn) => {
                     uvb_l
                         .pp("linear_attn")
-                        .pp("in_proj_qkv")
-                        .add_tensor("weight", gdn.in_proj_qkv.weight().clone());
+                        .pp("in_proj_qkvz")
+                        .add_tensor("weight", gdn.in_proj_qkvz.weight().clone());
                     uvb_l
                         .pp("linear_attn")
-                        .pp("in_proj_z")
-                        .add_tensor("weight", gdn.in_proj_z.weight().clone());
-                    uvb_l
-                        .pp("linear_attn")
-                        .pp("in_proj_a")
-                        .add_tensor("weight", gdn.in_proj_a.weight().clone());
-                    uvb_l
-                        .pp("linear_attn")
-                        .pp("in_proj_b")
-                        .add_tensor("weight", gdn.in_proj_b.weight().clone());
+                        .pp("in_proj_ba")
+                        .add_tensor("weight", gdn.in_proj_ba.weight().clone());
                     uvb_l
                         .pp("linear_attn")
                         .add_tensor("conv1d.weight", gdn.conv1d_weight.clone());

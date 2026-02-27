@@ -758,8 +758,7 @@ async fn vision_interactive_mode(
                 }
                 if let Some((hits, misses)) = logger.encoder_cache_stats() {
                     let turn_hits = hits - prev_encoder_hits;
-                    let turn_lookups =
-                        (hits + misses) - (prev_encoder_hits + prev_encoder_misses);
+                    let turn_lookups = (hits + misses) - (prev_encoder_hits + prev_encoder_misses);
                     if turn_lookups > 0 {
                         println!("Encoder cache: {}/{} hits", turn_hits, turn_lookups);
                     }
