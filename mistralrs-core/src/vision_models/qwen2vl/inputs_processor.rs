@@ -515,6 +515,21 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             if total_cached_images > 0 {
                 let n_seqs = input_seqs.len().max(1);
                 let per_seq_cached = total_cached_images / n_seqs;
+                let cached_patch_count = if let Some(ref grid) = image_grid_thw {
+                    let grid_data = grid.to_vec2::<u32>().unwrap();
+                    let grid_per_seq = grid_data.len() / n_seqs;
+                    (0..n_seqs)
+                        .flat_map(|i| {
+                            grid_data[i * grid_per_seq..i * grid_per_seq + per_seq_cached]
+                                .iter()
+                                .map(|row| {
+                                    (row[0] as usize) * (row[1] as usize) * (row[2] as usize)
+                                })
+                        })
+                        .sum::<usize>()
+                } else {
+                    0
+                };
                 if let Some(ref grid) = image_grid_thw {
                     let total_grid = grid.dim(0).unwrap();
                     let grid_per_seq = total_grid / n_seqs;
@@ -532,10 +547,11 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                     }
                 }
                 if let Some(ref pv) = pixel_values {
-                    let n_imgs = pv.dim(1).unwrap();
-                    let remaining = n_imgs.saturating_sub(per_seq_cached);
+                    let total = pv.dim(1).unwrap();
+                    let remaining = total.saturating_sub(cached_patch_count);
                     if remaining > 0 {
-                        pixel_values = Some(pv.narrow(1, per_seq_cached, remaining).unwrap());
+                        pixel_values =
+                            Some(pv.narrow(1, cached_patch_count, remaining).unwrap());
                     } else {
                         pixel_values = None;
                     }
@@ -697,8 +713,8 @@ impl Qwen2VLImageProcessor {
 
         for mut image in images {
             image = image.resize_exact(
-                height,
                 width,
+                height,
                 config
                     .resampling
                     .map(|resample| Some(resample).to_filter())
@@ -801,25 +817,14 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
                 images = mistralrs_vision::pad_to_max_edge(&images, max_edge);
             }
 
-            let mut height = 0;
-            let mut width = 0;
-            for image in &images {
-                let (w, h) = image.dimensions();
-                if w > width {
-                    width = w;
-                }
-                if h > height {
-                    height = h;
-                }
-            }
-
             for image in images {
-                let (patches, (t, h, w)) =
-                    self.preprocess_inner(vec![image], config, device, (height, width))?;
+                let (w, h) = image.dimensions();
+                let (patches, (t, gh, gw)) =
+                    self.preprocess_inner(vec![image], config, device, (h, w))?;
                 pixel_values.push(patches);
-                vision_grid_thw.push(Tensor::new(&[t, h, w], &Device::Cpu)?);
+                vision_grid_thw.push(Tensor::new(&[t, gh, gw], &Device::Cpu)?);
             }
-            let pixel_values = Tensor::stack(&pixel_values, 0)?;
+            let pixel_values = Tensor::cat(&pixel_values, 0)?;
             let vision_grid_thw = Tensor::stack(&vision_grid_thw, 0)?;
             return Ok(PreprocessedImages {
                 pixel_values,
@@ -841,25 +846,14 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
         }
 
         if !videos.is_empty() {
-            let mut height = 0;
-            let mut width = 0;
-            for image in &videos {
-                let (w, h) = image[0].dimensions();
-                if w > width {
-                    width = w;
-                }
-                if h > height {
-                    height = h;
-                }
-            }
-
             for images in videos {
-                let (patches, (t, h, w)) =
-                    self.preprocess_inner(images, config, device, (height, width))?;
+                let (w, h) = images[0].dimensions();
+                let (patches, (t, gh, gw)) =
+                    self.preprocess_inner(images, config, device, (h, w))?;
                 pixel_values.push(patches);
-                vision_grid_thw.push(Tensor::new(&[t, h, w], &Device::Cpu)?);
+                vision_grid_thw.push(Tensor::new(&[t, gh, gw], &Device::Cpu)?);
             }
-            let pixel_values = Tensor::stack(&pixel_values, 0)?;
+            let pixel_values = Tensor::cat(&pixel_values, 0)?;
             let vision_grid_thw = Tensor::stack(&vision_grid_thw, 0)?;
             return Ok(PreprocessedImages {
                 pixel_values,
