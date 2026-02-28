@@ -216,8 +216,8 @@ impl NormalLoaderType {
             "GraniteMoeHybridForCausalLM" => Ok(Self::GraniteMoeHybrid),
             "GptOssForCausalLM" => Ok(Self::GptOss),
             "Qwen3NextForCausalLM" => Ok(Self::Qwen3Next),
-            "Qwen3_5ForCausalLM" => Ok(Self::Qwen3_5),
-            "Qwen3_5MoeForCausalLM" => Ok(Self::Qwen3_5MoE),
+            "Qwen3_5ForCausalLM" | "Qwen3_5ForConditionalGeneration" => Ok(Self::Qwen3_5),
+            "Qwen3_5MoeForCausalLM" | "Qwen3_5MoeForConditionalGeneration" => Ok(Self::Qwen3_5MoE),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
