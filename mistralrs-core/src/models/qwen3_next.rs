@@ -763,13 +763,13 @@ impl GatedDeltaNet {
 // ====================== Full Attention layer ======================
 
 #[allow(dead_code)]
-struct FullAttention {
-    q_proj: Arc<dyn QuantMethod>,
-    k_proj: Arc<dyn QuantMethod>,
-    v_proj: Arc<dyn QuantMethod>,
-    o_proj: Arc<dyn QuantMethod>,
-    q_norm: GemmaRmsNorm,
-    k_norm: GemmaRmsNorm,
+pub struct FullAttention {
+    pub q_proj: Arc<dyn QuantMethod>,
+    pub k_proj: Arc<dyn QuantMethod>,
+    pub v_proj: Arc<dyn QuantMethod>,
+    pub o_proj: Arc<dyn QuantMethod>,
+    pub q_norm: GemmaRmsNorm,
+    pub k_norm: GemmaRmsNorm,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -781,7 +781,7 @@ struct FullAttention {
 
 impl FullAttention {
     #[allow(clippy::too_many_arguments)]
-    fn load(
+    pub fn load(
         vb: ShardedVarBuilder,
         cfg: &Config,
         mapper: &dyn DeviceMapper,
@@ -865,7 +865,7 @@ impl FullAttention {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn forward(
+    pub fn forward(
         &self,
         x: &Tensor,
         attention_mask: &Option<Tensor>,
@@ -1002,15 +1002,15 @@ impl FullAttention {
 
 /// Standard MLP for shared expert
 #[derive(Clone)]
-struct Mlp {
-    gate_proj: Arc<dyn QuantMethod>,
-    up_proj: Arc<dyn QuantMethod>,
-    down_proj: Arc<dyn QuantMethod>,
-    act_fn: crate::layers::Activation,
+pub struct Mlp {
+    pub gate_proj: Arc<dyn QuantMethod>,
+    pub up_proj: Arc<dyn QuantMethod>,
+    pub down_proj: Arc<dyn QuantMethod>,
+    pub act_fn: crate::layers::Activation,
 }
 
 impl Mlp {
-    fn new(
+    pub fn new(
         vb: ShardedVarBuilder,
         hidden_size: usize,
         intermediate_size: usize,
@@ -1050,7 +1050,7 @@ impl Mlp {
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
         if let Some(t) = self.gate_proj.quantized_act_type() {
@@ -1066,24 +1066,24 @@ impl Mlp {
         Ok(res)
     }
 
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
+    pub fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
         vec![&mut self.gate_proj, &mut self.up_proj, &mut self.down_proj]
     }
 }
 
 /// Sparse MoE block with shared expert and shared expert gate
-struct SparseMoeBlock {
-    gate: Linear,
-    experts: MoEExperts,
-    shared_expert: Mlp,
-    shared_expert_gate: Linear,
-    num_experts_per_tok: usize,
-    norm_topk_prob: bool,
+pub struct SparseMoeBlock {
+    pub gate: Linear,
+    pub experts: MoEExperts,
+    pub shared_expert: Mlp,
+    pub shared_expert_gate: Linear,
+    pub num_experts_per_tok: usize,
+    pub norm_topk_prob: bool,
 }
 
 impl SparseMoeBlock {
     #[allow(clippy::too_many_arguments)]
-    fn new(
+    pub fn new(
         cfg: &Config,
         vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
@@ -1150,7 +1150,7 @@ impl SparseMoeBlock {
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
@@ -1190,7 +1190,7 @@ impl SparseMoeBlock {
         y + shared_out
     }
 
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
+    pub fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
         let mut layers = self.experts.get_isq_layers();
         layers.extend(self.shared_expert.get_isq_layers());
         layers

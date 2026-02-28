@@ -25,14 +25,13 @@ pub use normal_loaders::{
     GLM4MoeLoader, Gemma2Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader, LlamaLoader,
     MistralLoader, MixtralLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel,
     NormalModelLoader, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader,
-    Qwen3MoELoader, Qwen3NextLoader, Qwen3_5Loader, Qwen3_5MoELoader, SmolLm3Loader,
-    Starcoder2Loader,
+    Qwen3MoELoader, Qwen3NextLoader, SmolLm3Loader, Starcoder2Loader,
 };
 
 pub use vision_loaders::{
     AutoVisionLoader, Gemma3Loader, Gemma3nLoader, Idefics2Loader, Idefics3Loader, LLaVALoader,
     LLaVANextLoader, MiniCpmOLoader, Mistral3Loader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader,
-    Qwen2_5VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, VLlama4Loader, VLlamaLoader,
+    Qwen2_5VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5VLLoader, VLlama4Loader, VLlamaLoader,
     VisionLoaderType, VisionModel, VisionModelLoader, VoxtralLoader,
 };
 
