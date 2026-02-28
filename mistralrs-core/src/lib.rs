@@ -656,8 +656,16 @@ impl MistralRs {
             info!(
                 "Hybrid model detected (Mamba-Attention), enforcing batch_size=1 for correctness"
             );
-            SchedulerConfig::DefaultScheduler {
-                method: DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()),
+            match method {
+                SchedulerConfig::DefaultScheduler { .. } => SchedulerConfig::DefaultScheduler {
+                    method: DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()),
+                },
+                SchedulerConfig::PagedAttentionMeta { config, .. } => {
+                    SchedulerConfig::PagedAttentionMeta {
+                        max_num_seqs: 1,
+                        config,
+                    }
+                }
             }
         } else {
             method
