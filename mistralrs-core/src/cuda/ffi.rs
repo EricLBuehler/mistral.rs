@@ -276,6 +276,27 @@ extern "C" {
         stream: i64,
     );
 
+    // Mamba SSM selective scan kernel
+    pub(crate) fn selective_scan_cuda(
+        x: *const f32,       // (batch, seq_len, n_heads * head_dim)
+        dt: *const f32,      // (batch, seq_len, n_heads)
+        a: *const f32,       // (n_heads,) - negative exp of A_log
+        b: *const f32,       // (batch, seq_len, n_heads * d_state)
+        c: *const f32,       // (batch, seq_len, n_heads * d_state)
+        d: *const f32,       // (n_heads,)
+        dt_bias: *const f32, // (n_heads,)
+        state: *mut f32,     // (batch, n_heads, head_dim, d_state)
+        y: *mut f32,         // (batch, seq_len, n_heads * head_dim)
+        batch_size: i32,
+        n_heads: i32,
+        head_dim: i32,
+        d_state: i32,
+        seq_len: i32,
+        dt_min: f32,
+        dt_max: f32,
+        stream: i64,
+    );
+
     // GDN (Gated Delta Net) kernels for qwen3_next
     pub(crate) fn gated_delta_rule_recurrence(
         q: *const f32,

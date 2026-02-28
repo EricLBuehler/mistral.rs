@@ -3,7 +3,11 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use tracing::info;
 
-use crate::{pipeline::KvCache, sequence::Sequence};
+use crate::{
+    kv_cache::RecurrentStateSnapshot,
+    pipeline::KvCache,
+    sequence::Sequence,
+};
 
 #[derive(PartialEq, Eq, Debug, Hash)]
 struct Tokens(Vec<u32>);
@@ -28,6 +32,8 @@ impl From<Vec<u32>> for Tokens {
 #[derive(Clone)]
 struct CacheElement {
     cache: Vec<Option<KvCache>>,
+    /// Recurrent state snapshots for hybrid models (one per recurrent layer)
+    recurrent_snapshots: Option<Vec<RecurrentStateSnapshot>>,
     audio_hashes: Option<Vec<u64>>,
     image_hashes: Option<Vec<u64>>,
 }
@@ -43,6 +49,7 @@ pub struct PrefixCacheManagerV2 {
 pub enum MatchingCache {
     Normal {
         normal: Vec<Option<KvCache>>,
+        recurrent_snapshots: Option<Vec<RecurrentStateSnapshot>>,
         images_to_keep: usize,
         audios_to_keep: usize,
         toks: Vec<u32>,
@@ -64,7 +71,11 @@ impl PrefixCacheManagerV2 {
     }
 
     /// This always keeps the cache on the device.
-    pub fn add_sequence(&mut self, seq: &mut Sequence) {
+    pub fn add_sequence(
+        &mut self,
+        seq: &mut Sequence,
+        recurrent_snapshots: Option<Vec<RecurrentStateSnapshot>>,
+    ) {
         // Do not cache if prefix caching disabled
         if self.no_prefix_cache {
             return;
@@ -79,6 +90,7 @@ impl PrefixCacheManagerV2 {
                 seq.get_toks().to_vec().into(),
                 CacheElement {
                     cache,
+                    recurrent_snapshots,
                     image_hashes: seq.image_hashes().map(|x| x.to_vec()),
                     audio_hashes: seq.audio_hashes().map(|x| x.to_vec()),
                 },
@@ -255,6 +267,7 @@ impl PrefixCacheManagerV2 {
             }
             return Ok(Some(MatchingCache::Normal {
                 normal: cache.cache,
+                recurrent_snapshots: cache.recurrent_snapshots,
                 images_to_keep,
                 audios_to_keep,
                 toks: new_toks,

@@ -1,94 +1,135 @@
-//! Hybrid cache for models that mix attention and Mamba layers (e.g., GraniteMoeHybrid)
+//! Hybrid cache for models that mix attention and recurrent layers (e.g., GraniteMoeHybrid, Qwen3 Next)
 //!
 //! This implements vLLM-style continuous batching for hybrid models:
 //! - Attention layers use standard KV cache batching
-//! - Mamba layers use a pre-allocated state pool with indexed access
+//! - Recurrent layers (Mamba SSM or GDN) use a pool-based state with indexed access
 //!
-//! The key insight is that Mamba state is accessed via `state_indices` which map
-//! each sequence in the current batch to its slot in the pre-allocated pool.
+//! The key insight is that recurrent state is accessed via `state_indices` which map
+//! each sequence in the current batch to its slot in the pool.
 
 use candle_core::{Device, IndexOp, Result, Tensor};
 
 use super::KvCache;
+use crate::layers_masker::PastKvLenCache;
 
-/// Pool-based Mamba state cache for continuous batching.
+/// Pool-based recurrent state cache for continuous batching.
 ///
-/// Instead of dynamically sized state tensors, we pre-allocate a pool of
-/// `max_num_seqs` state slots. Each sequence is assigned a slot index, and
-/// the forward pass uses `index_select` (gather) and index assignment (scatter)
+/// Works for both Mamba SSM and GDN (Gated Delta Net) recurrent layers.
+/// Instead of dynamically sized state tensors, we maintain a pool of
+/// state slots that grows dynamically. Each sequence is assigned a slot index,
+/// and the forward pass uses `index_select` (gather) and index assignment (scatter)
 /// to access the correct states.
 #[derive(Debug)]
-pub struct MambaStatePool {
-    /// Convolution state pool: (max_num_seqs, conv_dim, d_conv)
+pub struct RecurrentStatePool {
+    /// Convolution state pool: (capacity, conv_dim, conv_width)
     pub conv_state: Tensor,
-    /// SSM state pool: (max_num_seqs, n_heads, head_dim, d_state)
-    pub ssm_state: Tensor,
+    /// Recurrent state pool: (capacity, ...state_dims)
+    /// For Mamba: (capacity, n_heads, head_dim, d_state)
+    /// For GDN: (capacity, n_v_heads, key_dim, value_dim)
+    pub recurrent_state: Tensor,
     /// Per-slot sequence length offsets (for tracking generation position)
     seqlen_offsets: Vec<usize>,
     /// Stack of free slot indices (for allocation)
     free_slots: Vec<usize>,
-    /// Configuration
-    max_num_seqs: usize,
+    /// Current capacity (grows dynamically)
+    capacity: usize,
+    /// Shape parameters for growing
     conv_dim: usize,
-    d_conv: usize,
-    n_heads: usize,
-    head_dim: usize,
-    d_state: usize,
+    conv_width: usize,
+    state_dims: Vec<usize>,
     dtype: candle_core::DType,
     device: Device,
 }
 
-impl MambaStatePool {
-    #[allow(clippy::too_many_arguments)]
+/// Initial pool capacity before dynamic growth.
+const INITIAL_POOL_CAPACITY: usize = 4;
+
+impl RecurrentStatePool {
+    /// Create a new recurrent state pool.
+    ///
+    /// - `conv_dim`: dimension of the convolution state
+    /// - `conv_width`: kernel size / d_conv for causal conv1d
+    /// - `state_dims`: shape of the recurrent state per slot (e.g. `[n_heads, head_dim, d_state]`)
     pub fn new(
-        max_num_seqs: usize,
         conv_dim: usize,
-        d_conv: usize,
-        n_heads: usize,
-        head_dim: usize,
-        d_state: usize,
+        conv_width: usize,
+        state_dims: Vec<usize>,
         dtype: candle_core::DType,
         device: &Device,
     ) -> Result<Self> {
-        let conv_state = Tensor::zeros((max_num_seqs, conv_dim, d_conv), dtype, device)?;
-        let ssm_state = Tensor::zeros((max_num_seqs, n_heads, head_dim, d_state), dtype, device)?;
+        let capacity = INITIAL_POOL_CAPACITY;
 
-        // All slots start as free
-        let free_slots: Vec<usize> = (0..max_num_seqs).rev().collect();
-        let seqlen_offsets = vec![0; max_num_seqs];
+        let conv_state = Tensor::zeros((capacity, conv_dim, conv_width), dtype, device)?;
+
+        let mut recurrent_shape = vec![capacity];
+        recurrent_shape.extend_from_slice(&state_dims);
+        let recurrent_state = Tensor::zeros(recurrent_shape, dtype, device)?;
+
+        let free_slots: Vec<usize> = (0..capacity).rev().collect();
+        let seqlen_offsets = vec![0; capacity];
 
         Ok(Self {
             conv_state,
-            ssm_state,
+            recurrent_state,
             seqlen_offsets,
             free_slots,
-            max_num_seqs,
+            capacity,
             conv_dim,
-            d_conv,
-            n_heads,
-            head_dim,
-            d_state,
+            conv_width,
+            state_dims,
             dtype,
             device: device.clone(),
         })
     }
 
+    /// Grow the pool by doubling capacity.
+    fn grow(&mut self) -> Result<()> {
+        let new_capacity = self.capacity * 2;
+
+        // Allocate new larger conv_state and copy existing data
+        let new_conv =
+            Tensor::zeros((new_capacity, self.conv_dim, self.conv_width), self.dtype, &self.device)?;
+        new_conv.slice_set(&self.conv_state, 0, 0)?;
+
+        // Allocate new larger recurrent_state and copy existing data
+        let mut recurrent_shape = vec![new_capacity];
+        recurrent_shape.extend_from_slice(&self.state_dims);
+        let new_recurrent = Tensor::zeros(recurrent_shape, self.dtype, &self.device)?;
+        new_recurrent.slice_set(&self.recurrent_state, 0, 0)?;
+
+        // Add new slots to free list
+        self.free_slots
+            .extend((self.capacity..new_capacity).rev());
+        self.seqlen_offsets.resize(new_capacity, 0);
+
+        self.conv_state = new_conv;
+        self.recurrent_state = new_recurrent;
+        self.capacity = new_capacity;
+
+        tracing::info!("Recurrent state pool grew to capacity {new_capacity}");
+        Ok(())
+    }
+
     /// Allocate a state slot for a new sequence. Returns the slot index.
-    /// The slot's state is reset to zeros to prevent state bleeding from previous sequences.
+    /// The pool grows dynamically if no free slots are available.
+    /// The slot's state is reset to zeros to prevent state bleeding.
     pub fn allocate(&mut self) -> Option<usize> {
+        if self.free_slots.is_empty() {
+            if let Err(e) = self.grow() {
+                tracing::error!("Failed to grow recurrent state pool: {e}");
+                return None;
+            }
+        }
         let slot_idx = self.free_slots.pop()?;
-        // Reset the state for the newly allocated slot to prevent state bleeding
         if self.reset_slot(slot_idx).is_err() {
-            // If reset fails, still return the slot but log warning
-            tracing::warn!("Failed to reset Mamba state slot {slot_idx}, state may be stale");
+            tracing::warn!("Failed to reset recurrent state slot {slot_idx}, state may be stale");
         }
         Some(slot_idx)
     }
 
     /// Free a state slot when a sequence completes.
     pub fn free(&mut self, slot_idx: usize) {
-        debug_assert!(slot_idx < self.max_num_seqs);
-        // Reset the state for this slot
+        debug_assert!(slot_idx < self.capacity);
         self.seqlen_offsets[slot_idx] = 0;
         self.free_slots.push(slot_idx);
     }
@@ -109,51 +150,52 @@ impl MambaStatePool {
     }
 
     /// Gather conv states for the given slot indices
-    /// Returns tensor of shape (batch_size, conv_dim, d_conv)
     pub fn gather_conv_state(&self, state_indices: &Tensor) -> Result<Tensor> {
         self.conv_state.index_select(state_indices, 0)
     }
 
-    /// Gather SSM states for the given slot indices
-    /// Returns tensor of shape (batch_size, n_heads, head_dim, d_state)
-    pub fn gather_ssm_state(&self, state_indices: &Tensor) -> Result<Tensor> {
-        self.ssm_state.index_select(state_indices, 0)
+    /// Gather recurrent states for the given slot indices
+    pub fn gather_recurrent_state(&self, state_indices: &Tensor) -> Result<Tensor> {
+        self.recurrent_state.index_select(state_indices, 0)
     }
 
     /// Scatter conv states back to the pool for the given slot indices
     pub fn scatter_conv_state(&mut self, state_indices: &Tensor, values: &Tensor) -> Result<()> {
         let indices: Vec<u32> = state_indices.to_vec1()?;
         for (batch_idx, &slot_idx) in indices.iter().enumerate() {
-            let value = values.i(batch_idx)?.unsqueeze(0)?;
-            // Use slice_set for in-place update (faster than slice_assign)
+            let value = values.i(batch_idx)?.unsqueeze(0)?.contiguous()?;
             self.conv_state.slice_set(&value, 0, slot_idx as usize)?;
         }
         Ok(())
     }
 
-    /// Scatter SSM states back to the pool for the given slot indices
-    pub fn scatter_ssm_state(&mut self, state_indices: &Tensor, values: &Tensor) -> Result<()> {
+    /// Scatter recurrent states back to the pool for the given slot indices
+    pub fn scatter_recurrent_state(
+        &mut self,
+        state_indices: &Tensor,
+        values: &Tensor,
+    ) -> Result<()> {
         let indices: Vec<u32> = state_indices.to_vec1()?;
         for (batch_idx, &slot_idx) in indices.iter().enumerate() {
-            let value = values.i(batch_idx)?.unsqueeze(0)?;
-            // Use slice_set for in-place update (faster than slice_assign)
-            self.ssm_state.slice_set(&value, 0, slot_idx as usize)?;
+            let value = values.i(batch_idx)?.unsqueeze(0)?.contiguous()?;
+            self.recurrent_state
+                .slice_set(&value, 0, slot_idx as usize)?;
         }
         Ok(())
     }
 
     /// Reset a specific slot's state to zeros
     pub fn reset_slot(&mut self, slot_idx: usize) -> Result<()> {
-        let zero_conv = Tensor::zeros((1, self.conv_dim, self.d_conv), self.dtype, &self.device)?;
-        let zero_ssm = Tensor::zeros(
-            (1, self.n_heads, self.head_dim, self.d_state),
-            self.dtype,
-            &self.device,
-        )?;
+        let zero_conv =
+            Tensor::zeros((1, self.conv_dim, self.conv_width), self.dtype, &self.device)?;
 
-        // Use slice_set for in-place update
+        let mut recurrent_shape = vec![1usize];
+        recurrent_shape.extend_from_slice(&self.state_dims);
+        let zero_recurrent = Tensor::zeros(recurrent_shape, self.dtype, &self.device)?;
+
         self.conv_state.slice_set(&zero_conv, 0, slot_idx)?;
-        self.ssm_state.slice_set(&zero_ssm, 0, slot_idx)?;
+        self.recurrent_state
+            .slice_set(&zero_recurrent, 0, slot_idx)?;
         self.seqlen_offsets[slot_idx] = 0;
         Ok(())
     }
@@ -161,14 +203,14 @@ impl MambaStatePool {
     /// Reset all slots
     pub fn reset(&mut self) -> Result<()> {
         self.conv_state = self.conv_state.zeros_like()?;
-        self.ssm_state = self.ssm_state.zeros_like()?;
+        self.recurrent_state = self.recurrent_state.zeros_like()?;
         self.seqlen_offsets.fill(0);
-        self.free_slots = (0..self.max_num_seqs).rev().collect();
+        self.free_slots = (0..self.capacity).rev().collect();
         Ok(())
     }
 
-    pub fn max_num_seqs(&self) -> usize {
-        self.max_num_seqs
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     pub fn num_free_slots(&self) -> usize {
@@ -184,37 +226,35 @@ impl MambaStatePool {
     }
 }
 
-impl Clone for MambaStatePool {
+impl Clone for RecurrentStatePool {
     fn clone(&self) -> Self {
         Self {
             conv_state: self.conv_state.clone(),
-            ssm_state: self.ssm_state.clone(),
+            recurrent_state: self.recurrent_state.clone(),
             seqlen_offsets: self.seqlen_offsets.clone(),
             free_slots: self.free_slots.clone(),
-            max_num_seqs: self.max_num_seqs,
+            capacity: self.capacity,
             conv_dim: self.conv_dim,
-            d_conv: self.d_conv,
-            n_heads: self.n_heads,
-            head_dim: self.head_dim,
-            d_state: self.d_state,
+            conv_width: self.conv_width,
+            state_dims: self.state_dims.clone(),
             dtype: self.dtype,
             device: self.device.clone(),
         }
     }
 }
 
-/// Per-layer cache that can be either attention (KV) or Mamba (state pool)
+/// Per-layer cache that can be either attention (KV) or recurrent (state pool)
 #[derive(Clone, Debug)]
 pub enum HybridLayerCache {
     Attention(KvCache),
-    Mamba(MambaStatePool),
+    Recurrent(RecurrentStatePool),
 }
 
 impl HybridLayerCache {
     pub fn reset(&mut self) {
         match self {
             Self::Attention(kv) => kv.reset(),
-            Self::Mamba(pool) => {
+            Self::Recurrent(pool) => {
                 let _ = pool.reset();
             }
         }
@@ -223,28 +263,28 @@ impl HybridLayerCache {
     pub fn as_kv_cache(&self) -> Option<&KvCache> {
         match self {
             Self::Attention(kv) => Some(kv),
-            Self::Mamba(_) => None,
+            Self::Recurrent(_) => None,
         }
     }
 
     pub fn as_kv_cache_mut(&mut self) -> Option<&mut KvCache> {
         match self {
             Self::Attention(kv) => Some(kv),
-            Self::Mamba(_) => None,
+            Self::Recurrent(_) => None,
         }
     }
 
-    pub fn as_mamba_pool(&self) -> Option<&MambaStatePool> {
+    pub fn as_recurrent_pool(&self) -> Option<&RecurrentStatePool> {
         match self {
             Self::Attention(_) => None,
-            Self::Mamba(pool) => Some(pool),
+            Self::Recurrent(pool) => Some(pool),
         }
     }
 
-    pub fn as_mamba_pool_mut(&mut self) -> Option<&mut MambaStatePool> {
+    pub fn as_recurrent_pool_mut(&mut self) -> Option<&mut RecurrentStatePool> {
         match self {
             Self::Attention(_) => None,
-            Self::Mamba(pool) => Some(pool),
+            Self::Recurrent(pool) => Some(pool),
         }
     }
 }
@@ -253,7 +293,20 @@ impl HybridLayerCache {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HybridLayerType {
     Attention,
-    Mamba,
+    Recurrent,
+}
+
+/// Configuration for the recurrent layer state dimensions
+#[derive(Clone, Debug)]
+pub struct RecurrentLayerConfig {
+    /// Dimension of the convolution state
+    pub conv_dim: usize,
+    /// Kernel size for causal conv1d
+    pub conv_width: usize,
+    /// Shape of the recurrent state per slot.
+    /// For Mamba: [n_heads, head_dim, d_state]
+    /// For GDN: [n_v_heads, key_dim, value_dim]
+    pub state_dims: Vec<usize>,
 }
 
 /// Configuration for creating a hybrid cache
@@ -261,25 +314,19 @@ pub enum HybridLayerType {
 pub struct HybridCacheConfig {
     pub layer_types: Vec<HybridLayerType>,
     pub max_seq_len: usize,
-    pub max_num_seqs: usize,
-    // Mamba-specific config
-    pub mamba_conv_dim: usize,
-    pub mamba_d_conv: usize,
-    pub mamba_n_heads: usize,
-    pub mamba_head_dim: usize,
-    pub mamba_d_state: usize,
+    pub recurrent: RecurrentLayerConfig,
 }
 
-/// Hybrid cache that stores per-layer caches for mixed attention/Mamba models
+/// Hybrid cache that stores per-layer caches for mixed attention/recurrent models
 ///
 /// For continuous batching:
 /// - Attention layers use standard KV cache with batching support
-/// - Mamba layers use MambaStatePool with indexed access via state_indices
+/// - Recurrent layers use RecurrentStatePool with indexed access via state_indices
 #[derive(Clone, Debug)]
 pub struct HybridCache {
     pub caches: Vec<HybridLayerCache>,
     config: HybridCacheConfig,
-    /// Current batch's state indices for Mamba pool access.
+    /// Current batch's state indices for recurrent pool access.
     /// Set by clone_in_cache before forward, used by model during forward.
     /// Shape: (batch_size,) containing pool slot indices.
     state_indices: Option<Tensor>,
@@ -302,16 +349,15 @@ impl HybridCache {
                     config.max_seq_len,
                     Self::CACHE_GROW_SIZE,
                 )),
-                HybridLayerType::Mamba => HybridLayerCache::Mamba(MambaStatePool::new(
-                    config.max_num_seqs,
-                    config.mamba_conv_dim,
-                    config.mamba_d_conv,
-                    config.mamba_n_heads,
-                    config.mamba_head_dim,
-                    config.mamba_d_state,
-                    dtype,
-                    device,
-                )?),
+                HybridLayerType::Recurrent => {
+                    HybridLayerCache::Recurrent(RecurrentStatePool::new(
+                        config.recurrent.conv_dim,
+                        config.recurrent.conv_width,
+                        config.recurrent.state_dims.clone(),
+                        dtype,
+                        device,
+                    )?)
+                }
             };
             caches.push(cache);
         }
@@ -323,18 +369,17 @@ impl HybridCache {
         })
     }
 
-    /// Allocate state slots for a new sequence across all Mamba layers.
+    /// Allocate state slots for a new sequence across all recurrent layers.
     /// Returns the slot index (same for all layers).
     pub fn allocate_seq(&mut self) -> Option<usize> {
-        // All Mamba layers share the same slot index for a sequence
+        // All recurrent layers share the same slot index for a sequence
         let mut slot_idx = None;
         for cache in &mut self.caches {
-            if let HybridLayerCache::Mamba(pool) = cache {
+            if let HybridLayerCache::Recurrent(pool) = cache {
                 if slot_idx.is_none() {
                     slot_idx = pool.allocate();
                     slot_idx?;
                 } else {
-                    // Allocate same slot in other layers (they should be in sync)
                     let _ = pool.allocate();
                 }
             }
@@ -342,19 +387,19 @@ impl HybridCache {
         slot_idx
     }
 
-    /// Free state slots for a sequence across all Mamba layers.
+    /// Free state slots for a sequence across all recurrent layers.
     pub fn free_seq(&mut self, slot_idx: usize) {
         for cache in &mut self.caches {
-            if let HybridLayerCache::Mamba(pool) = cache {
+            if let HybridLayerCache::Recurrent(pool) = cache {
                 pool.free(slot_idx);
             }
         }
     }
 
-    /// Reset a specific sequence's state in all Mamba layers.
+    /// Reset a specific sequence's state in all recurrent layers.
     pub fn reset_seq(&mut self, slot_idx: usize) -> Result<()> {
         for cache in &mut self.caches {
-            if let HybridLayerCache::Mamba(pool) = cache {
+            if let HybridLayerCache::Recurrent(pool) = cache {
                 pool.reset_slot(slot_idx)?;
             }
         }
@@ -379,10 +424,6 @@ impl HybridCache {
         &self.config
     }
 
-    pub fn max_num_seqs(&self) -> usize {
-        self.config.max_num_seqs
-    }
-
     /// Get a mutable reference to a specific layer's cache
     pub fn get_mut(&mut self, layer: usize) -> Option<&mut HybridLayerCache> {
         self.caches.get_mut(layer)
@@ -400,8 +441,82 @@ impl HybridCache {
     }
 
     /// Get the state indices for the current batch.
-    /// Used by the model during forward to access Mamba state pool.
+    /// Used by the model during forward to access recurrent state pool.
     pub fn state_indices(&self) -> Option<&Tensor> {
         self.state_indices.as_ref()
+    }
+}
+
+impl PastKvLenCache for HybridCache {
+    fn get_past_kv_len(&self) -> Result<usize> {
+        for cache in &self.caches {
+            if let HybridLayerCache::Attention(kv) = cache {
+                return Ok(kv.current_seq_len());
+            }
+        }
+        Ok(0)
+    }
+}
+
+/// Snapshot of a single recurrent layer's state for prefix caching.
+#[derive(Clone, Debug)]
+pub struct RecurrentStateSnapshot {
+    pub conv_state: Tensor,
+    pub recurrent_state: Tensor,
+    pub seqlen_offset: usize,
+}
+
+impl HybridCache {
+    /// Snapshot the recurrent state for a sequence at the given slot index.
+    /// Returns one snapshot per recurrent layer, in layer order.
+    pub fn snapshot_recurrent_state(
+        &self,
+        slot_idx: usize,
+    ) -> Result<Vec<RecurrentStateSnapshot>> {
+        let mut snapshots = Vec::new();
+        for cache in &self.caches {
+            if let HybridLayerCache::Recurrent(pool) = cache {
+                let idx_tensor = Tensor::from_vec(
+                    vec![slot_idx as u32],
+                    (1,),
+                    pool.device(),
+                )?;
+                let conv = pool.gather_conv_state(&idx_tensor)?;
+                let recurrent = pool.gather_recurrent_state(&idx_tensor)?;
+                snapshots.push(RecurrentStateSnapshot {
+                    conv_state: conv,
+                    recurrent_state: recurrent,
+                    seqlen_offset: pool.get_seqlen_offset(slot_idx),
+                });
+            }
+        }
+        Ok(snapshots)
+    }
+
+    /// Restore recurrent state snapshots into the pool at the given slot index.
+    /// Snapshots must be in the same layer order as returned by `snapshot_recurrent_state`.
+    pub fn restore_recurrent_state(
+        &mut self,
+        slot_idx: usize,
+        snapshots: &[RecurrentStateSnapshot],
+    ) -> Result<()> {
+        let mut snap_iter = snapshots.iter();
+        for cache in &mut self.caches {
+            if let HybridLayerCache::Recurrent(pool) = cache {
+                if let Some(snap) = snap_iter.next() {
+                    let conv = snap.conv_state.to_device(pool.device())?;
+                    let recurrent = snap.recurrent_state.to_device(pool.device())?;
+                    let idx_tensor = Tensor::from_vec(
+                        vec![slot_idx as u32],
+                        (1,),
+                        pool.device(),
+                    )?;
+                    pool.scatter_conv_state(&idx_tensor, &conv)?;
+                    pool.scatter_recurrent_state(&idx_tensor, &recurrent)?;
+                    pool.set_seqlen_offset(slot_idx, snap.seqlen_offset);
+                }
+            }
+        }
+        Ok(())
     }
 }

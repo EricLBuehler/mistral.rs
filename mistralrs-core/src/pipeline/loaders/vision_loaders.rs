@@ -6333,7 +6333,7 @@ impl VisionModelLoader for Qwen3_5MoeLoader {
         false
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
-        false
+        true
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen3_5MoePrefixer)
