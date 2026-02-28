@@ -147,6 +147,7 @@ mistralrs doctor
 
 - Qwen 3-VL
 - Qwen 3-VL MoE
+- Qwen 3.5 MoE/Dense
 - Gemma 3n
 - Llama 4
 - Gemma 3
