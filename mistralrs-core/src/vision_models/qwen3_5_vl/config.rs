@@ -40,9 +40,13 @@ pub struct TextConfig {
     pub linear_num_value_heads: usize,
     pub linear_value_head_dim: usize,
     // MoE fields
+    #[serde(default)]
     pub moe_intermediate_size: usize,
+    #[serde(default)]
     pub num_experts: usize,
+    #[serde(default)]
     pub num_experts_per_tok: usize,
+    #[serde(default)]
     pub shared_expert_intermediate_size: usize,
     #[serde(default = "default_mlp_only_layers")]
     pub mlp_only_layers: Vec<usize>,
