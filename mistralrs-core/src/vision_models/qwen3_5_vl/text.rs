@@ -12,7 +12,6 @@ use std::{
 };
 
 use crate::{
-    attention::SdpaParams,
     device_map::{DeviceMappedMask, DeviceMapper},
     kv_cache::{HybridCache, HybridCacheConfig, HybridLayerType},
     layers::{embedding, GemmaRmsNorm, RotaryEmbedding},
