@@ -5,8 +5,8 @@ use super::{
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
     ModelKind, ModelPaths, MultimodalPromptPrefixer, Phi4MMLoader, PreProcessingMixin, Processor,
-    Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, TokenSource, VLlama4Loader, VLlamaLoader,
-    VisionModel, VisionModelLoader,
+    Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5VLLoader, TokenSource, VLlama4Loader,
+    VLlamaLoader, VisionModel, VisionModelLoader,
 };
 use super::{
     Gemma3nLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader,
@@ -15,7 +15,7 @@ use super::{
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
-use crate::kv_cache::{FullCacheManager, NormalCacheManager};
+use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{
     calculate_eos_tokens, BeginEndUnkPadTok, ChatTemplateValue, GenerationConfig,
@@ -185,6 +185,7 @@ impl VisionLoaderBuilder {
             Some(VisionLoaderType::Gemma3n) => Box::new(Gemma3nLoader),
             Some(VisionLoaderType::Qwen3VL) => Box::new(Qwen3VLLoader),
             Some(VisionLoaderType::Qwen3VLMoE) => Box::new(Qwen3VLMoELoader),
+            Some(VisionLoaderType::Qwen3_5VL) => Box::new(Qwen3_5VLLoader),
             Some(VisionLoaderType::Voxtral) => Box::new(VoxtralLoader),
             None => Box::new(AutoVisionLoader),
         };
@@ -956,17 +957,17 @@ impl IsqPipelineMixin for VisionPipeline {
 
 impl CacheManagerMixin for VisionPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) {
-        if matches!(self.model.cache(), EitherCache::Full(_)) {
-            FullCacheManager.clone_in_cache(self, seqs, false)
-        } else {
-            NormalCacheManager.clone_in_cache(self, seqs, false)
+        match self.model.cache() {
+            EitherCache::Full(_) => FullCacheManager.clone_in_cache(self, seqs, false),
+            EitherCache::Normal(_) => NormalCacheManager.clone_in_cache(self, seqs, false),
+            EitherCache::Hybrid(_) => HybridCacheManager.clone_in_cache(self, seqs, false),
         }
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence]) {
-        if matches!(self.model.cache(), EitherCache::Full(_)) {
-            FullCacheManager.clone_out_cache(self, seqs, false)
-        } else {
-            NormalCacheManager.clone_out_cache(self, seqs, false)
+        match self.model.cache() {
+            EitherCache::Full(_) => FullCacheManager.clone_out_cache(self, seqs, false),
+            EitherCache::Normal(_) => NormalCacheManager.clone_out_cache(self, seqs, false),
+            EitherCache::Hybrid(_) => HybridCacheManager.clone_out_cache(self, seqs, false),
         }
     }
     fn set_none_cache(
@@ -977,15 +978,19 @@ impl CacheManagerMixin for VisionPipeline {
 
         load_preallocated_cache: bool,
     ) {
-        if matches!(self.model.cache(), EitherCache::Full(_)) {
-            FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
-        } else {
-            NormalCacheManager.set_none_cache(
+        match self.model.cache() {
+            EitherCache::Full(_) => {
+                FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false)
+            }
+            EitherCache::Normal(_) => NormalCacheManager.set_none_cache(
                 self,
                 seqs,
                 modify_draft_cache,
                 load_preallocated_cache,
-            );
+            ),
+            EitherCache::Hybrid(_) => {
+                HybridCacheManager.set_none_cache(self, seqs, modify_draft_cache, false)
+            }
         }
         // Always clear model-specific state (e.g. Voxtral audio_embeds_cache)
         // for new prompts. set_none_cache is "Only called for prompt seqs",

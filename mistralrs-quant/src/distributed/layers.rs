@@ -1501,42 +1501,100 @@ impl FusedExperts {
                 }
 
                 // Load gate_up_proj FP8 tensor and scale
-                // Shape: [num_experts, hidden_size, intermediate_size * 2]
-                let gate_up_fp8 = experts_vb.get_with_hints_dtype(
+                // Try [num_experts, hidden_size, intermediate_size * 2], fallback to transposed
+                let (gate_up_fp8, gate_up_scale) = match experts_vb.get_with_hints_dtype(
                     (num_experts, hidden_size, moe_intermediate_size * 2),
                     "gate_up_proj",
                     Default::default(),
                     candle_core::DType::F8E4M3,
-                )?;
-                let gate_up_scale = experts_vb.get_with_hints_dtype(
-                    (
-                        num_experts,
-                        hidden_size.div_ceil(weight_block_size[0]),
-                        (moe_intermediate_size * 2).div_ceil(weight_block_size[1]),
-                    ),
-                    "gate_up_proj.weight_scale_inv",
-                    Default::default(),
-                    candle_core::DType::F32,
-                )?;
+                ) {
+                    Ok(w) => {
+                        let scale = experts_vb.get_with_hints_dtype(
+                            (
+                                num_experts,
+                                hidden_size.div_ceil(weight_block_size[0]),
+                                (moe_intermediate_size * 2).div_ceil(weight_block_size[1]),
+                            ),
+                            "gate_up_proj.weight_scale_inv",
+                            Default::default(),
+                            candle_core::DType::F32,
+                        )?;
+                        (w, scale)
+                    }
+                    Err(_) => {
+                        let w = experts_vb
+                            .get_with_hints_dtype(
+                                (num_experts, moe_intermediate_size * 2, hidden_size),
+                                "gate_up_proj",
+                                Default::default(),
+                                candle_core::DType::F8E4M3,
+                            )?
+                            .transpose(1, 2)?
+                            .contiguous()?;
+                        let scale = experts_vb
+                            .get_with_hints_dtype(
+                                (
+                                    num_experts,
+                                    (moe_intermediate_size * 2).div_ceil(weight_block_size[0]),
+                                    hidden_size.div_ceil(weight_block_size[1]),
+                                ),
+                                "gate_up_proj.weight_scale_inv",
+                                Default::default(),
+                                candle_core::DType::F32,
+                            )?
+                            .transpose(1, 2)?
+                            .contiguous()?;
+                        (w, scale)
+                    }
+                };
 
                 // Load down_proj FP8 tensor and scale
-                // Shape: [num_experts, intermediate_size, hidden_size]
-                let down_fp8 = experts_vb.get_with_hints_dtype(
+                // Try [num_experts, intermediate_size, hidden_size], fallback to transposed
+                let (down_fp8, down_scale) = match experts_vb.get_with_hints_dtype(
                     (num_experts, moe_intermediate_size, hidden_size),
                     "down_proj",
                     Default::default(),
                     candle_core::DType::F8E4M3,
-                )?;
-                let down_scale = experts_vb.get_with_hints_dtype(
-                    (
-                        num_experts,
-                        moe_intermediate_size.div_ceil(weight_block_size[0]),
-                        hidden_size.div_ceil(weight_block_size[1]),
-                    ),
-                    "down_proj.weight_scale_inv",
-                    Default::default(),
-                    candle_core::DType::F32,
-                )?;
+                ) {
+                    Ok(w) => {
+                        let scale = experts_vb.get_with_hints_dtype(
+                            (
+                                num_experts,
+                                moe_intermediate_size.div_ceil(weight_block_size[0]),
+                                hidden_size.div_ceil(weight_block_size[1]),
+                            ),
+                            "down_proj.weight_scale_inv",
+                            Default::default(),
+                            candle_core::DType::F32,
+                        )?;
+                        (w, scale)
+                    }
+                    Err(_) => {
+                        let w = experts_vb
+                            .get_with_hints_dtype(
+                                (num_experts, hidden_size, moe_intermediate_size),
+                                "down_proj",
+                                Default::default(),
+                                candle_core::DType::F8E4M3,
+                            )?
+                            .transpose(1, 2)?
+                            .contiguous()?;
+                        let scale = experts_vb
+                            .get_with_hints_dtype(
+                                (
+                                    num_experts,
+                                    hidden_size.div_ceil(weight_block_size[0]),
+                                    moe_intermediate_size.div_ceil(weight_block_size[1]),
+                                ),
+                                "down_proj.weight_scale_inv",
+                                Default::default(),
+                                candle_core::DType::F32,
+                            )?
+                            .transpose(1, 2)?
+                            .contiguous()?;
+                        (w, scale)
+                    }
+                };
 
                 // Split gate_up into gate and up
                 let gate_fp8 = gate_up_fp8.narrow(2, 0, moe_intermediate_size)?;
@@ -1676,14 +1734,35 @@ impl FusedExperts {
             // GGUF/indexed_moe_forward expects:
             // - gate/up: [num_experts, intermediate_size, hidden_size] = [128, 768, 2048]
             // - down: [num_experts, hidden_size, intermediate_size] = [128, 2048, 768]
-            let gate_up_proj = experts_vb.get(
+            let gate_up_proj = match experts_vb.get_with_hints(
                 (num_experts, hidden_size, moe_intermediate_size * 2),
                 "gate_up_proj",
-            )?;
-            let down_proj_packed = experts_vb.get(
+                Shard::default(),
+            ) {
+                Ok(w) => w,
+                Err(_) => experts_vb
+                    .get(
+                        (num_experts, moe_intermediate_size * 2, hidden_size),
+                        "gate_up_proj",
+                    )?
+                    .transpose(1, 2)?
+                    .contiguous()?,
+            };
+
+            let down_proj_packed = match experts_vb.get_with_hints(
                 (num_experts, moe_intermediate_size, hidden_size),
                 "down_proj",
-            )?;
+                Shard::default(),
+            ) {
+                Ok(w) => w,
+                Err(_) => experts_vb
+                    .get(
+                        (num_experts, hidden_size, moe_intermediate_size),
+                        "down_proj",
+                    )?
+                    .transpose(1, 2)?
+                    .contiguous()?,
+            };
 
             // Split gate_up_proj into gate_proj and up_proj along the last dimension
             // gate_proj: [num_experts, hidden_size, intermediate_size]

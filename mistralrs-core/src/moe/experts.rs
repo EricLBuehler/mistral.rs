@@ -241,18 +241,36 @@ impl MoEExperts {
         let num_experts = cfg.num_experts;
 
         // Load stacked gate_up_proj: [num_experts, hidden, inter*2]
-        let gate_up_w = experts_vb.get_with_hints(
+        let gate_up_w = match experts_vb.get_with_hints(
             (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
             "gate_up_proj",
             shard(2, comm.rank(), comm.world_size()),
-        )?;
+        ) {
+            Ok(w) => w,
+            Err(_) => {
+                let w = experts_vb.get(
+                    (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
+                    "gate_up_proj",
+                )?;
+                w.transpose(1, 2)?.contiguous()?
+            }
+        };
 
         // Load stacked down_proj: [num_experts, inter, hidden]
-        let down_w = experts_vb.get_with_hints(
+        let down_w = match experts_vb.get_with_hints(
             (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
             "down_proj",
             shard(1, comm.rank(), comm.world_size()),
-        )?;
+        ) {
+            Ok(w) => w,
+            Err(_) => {
+                let w = experts_vb.get(
+                    (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
+                    "down_proj",
+                )?;
+                w.transpose(1, 2)?.contiguous()?
+            }
+        };
 
         let w_size_n = gate_up_w.dim(2)? / 2;
 

@@ -27,6 +27,7 @@ pub(crate) mod gemma3;
 pub(crate) mod gemma3n;
 pub(crate) mod llama4;
 pub(crate) mod mistral3;
+pub(crate) mod qwen3_5_vl;
 pub(crate) mod qwen3_vl;
 pub(crate) mod qwen3_vl_moe;
 pub(crate) mod siglip;
