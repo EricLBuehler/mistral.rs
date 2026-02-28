@@ -35,10 +35,6 @@ pub struct Qwen3_5VLModel {
     text: Qwen3_5VLTextModel,
     vision: Qwen3VLVisionModel,
     spatial_merge_size: usize,
-    image_token_id: u32,
-    video_token_id: u32,
-    vision_start_token_id: u32,
-    vision_end_token_id: u32,
     encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
@@ -83,10 +79,6 @@ impl Qwen3_5VLModel {
             text,
             vision,
             spatial_merge_size: cfg.vision_config.spatial_merge_size,
-            image_token_id: cfg.image_token_id,
-            video_token_id: cfg.video_token_id,
-            vision_start_token_id: cfg.vision_start_token_id,
-            vision_end_token_id: cfg.vision_end_token_id,
             encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
     }

@@ -12,7 +12,6 @@ serde_default_fn!(f64, default_partial_rotary_factor, 0.25);
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct MRopeParameters {
-    pub mrope_section: Vec<usize>,
     #[serde(default)]
     pub rope_theta: Option<f64>,
     #[serde(default = "default_partial_rotary_factor")]
@@ -79,10 +78,6 @@ impl TextConfig {
 pub struct Config {
     pub text_config: TextConfig,
     pub vision_config: VisionConfig,
-    pub image_token_id: u32,
-    pub video_token_id: u32,
-    pub vision_start_token_id: u32,
-    pub vision_end_token_id: u32,
     pub tie_word_embeddings: bool,
     /// Top-level quantization_config takes precedence
     pub quantization_config: Option<QuantizedConfig>,

@@ -221,7 +221,6 @@ impl PastKvLenCache for LocalHybridCache {
 pub struct Qwen3_5VLTextModel {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
-    layer_types: Vec<LayerType>,
     norm: GemmaRmsNorm,
     lm_head: Arc<dyn QuantMethod>,
     local_cache: Arc<Mutex<LocalHybridCache>>,
@@ -231,7 +230,6 @@ pub struct Qwen3_5VLTextModel {
     pub(super) max_seq_len: usize,
     pub(super) cfg: ModelConfigMetadata,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
-    num_attention_heads: usize,
     pub(super) sliding_window: Option<usize>,
 }
 
@@ -500,7 +498,6 @@ impl Qwen3_5VLTextModel {
         Ok(Self {
             embed_tokens,
             layers,
-            layer_types,
             norm,
             lm_head,
             local_cache,
@@ -521,7 +518,6 @@ impl Qwen3_5VLTextModel {
                 kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
-            num_attention_heads,
             sliding_window: cfg.sliding_window,
         })
     }
