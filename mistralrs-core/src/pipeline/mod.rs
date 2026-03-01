@@ -162,6 +162,7 @@ impl GeneralMetadata {
     }
 }
 
+#[derive(Clone, Copy)]
 pub enum CacheInstruction {
     In,
     Out,
@@ -334,6 +335,7 @@ pub trait MultimodalPromptPrefixer: Send + Sync {
     }
 }
 
+#[derive(Clone)]
 pub enum CacheBackendMetadata {
     DefaultInstructions {
         pre_op: CacheInstruction,
