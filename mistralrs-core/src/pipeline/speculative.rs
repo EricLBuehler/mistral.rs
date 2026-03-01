@@ -1,5 +1,6 @@
 use std::{
     any::Any,
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -14,7 +15,8 @@ use tracing::warn;
 use crate::{
     device_map::DeviceMapper,
     get_mut_arcmutex,
-    kv_cache::NormalCacheManager,
+    kv_cache::{CacheManager, HybridCacheManager, NormalCacheManager, RecurrentStateSnapshot},
+    layers_masker::PastKvLenCache,
     pipeline::sampling::{
         finish_or_add_toks_to_seq, sample_sequence, sample_target_sequence_speculative,
     },
@@ -23,7 +25,6 @@ use crate::{
     DeviceMapSetting, Loader, ModelKind, PagedAttentionConfig, Pipeline, TokenSource, TryIntoDType,
 };
 
-use crate::kv_cache::CacheManager;
 use crate::utils::progress::ProgressScopeGuard;
 
 use super::{
@@ -165,6 +166,10 @@ impl Loader for SpeculativeLoader {
 pub struct SpeculativePipeline {
     target: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     draft: Arc<tokio::sync::Mutex<dyn Pipeline>>,
+    // Exposes the target model cache to engine-level cache checks/management.
+    target_cache: EitherCache,
+    // Draft hybrid slot index per sequence id.
+    draft_recurrent_slots: Mutex<HashMap<usize, usize>>,
     gamma: usize,
     metadata: Arc<GeneralMetadata>,
     category: ModelCategory,
@@ -178,6 +183,59 @@ pub struct SpeculativeConfig {
 }
 
 impl SpeculativePipeline {
+    fn swap_in_draft_recurrent_indices(&self, seqs: &mut [&mut Sequence]) -> Vec<Option<usize>> {
+        let slots = self.draft_recurrent_slots.lock().unwrap();
+        let mut originals = Vec::with_capacity(seqs.len());
+        for seq in seqs.iter_mut() {
+            originals.push(seq.recurrent_state_idx());
+            seq.set_recurrent_state_idx(slots.get(seq.id()).copied());
+        }
+        originals
+    }
+
+    fn capture_draft_recurrent_indices(&self, seqs: &mut [&mut Sequence]) {
+        let mut slots = self.draft_recurrent_slots.lock().unwrap();
+        for seq in seqs.iter_mut() {
+            if let Some(idx) = seq.recurrent_state_idx() {
+                slots.insert(*seq.id(), idx);
+            } else {
+                slots.remove(seq.id());
+            }
+        }
+    }
+
+    fn restore_recurrent_indices(seqs: &mut [&mut Sequence], originals: Vec<Option<usize>>) {
+        for (seq, original) in seqs.iter_mut().zip(originals) {
+            seq.set_recurrent_state_idx(original);
+        }
+    }
+
+    fn cleanup_finished_draft_slots(&self, seqs: &mut [&mut Sequence]) {
+        let mut to_free = Vec::new();
+        {
+            let mut slots = self.draft_recurrent_slots.lock().unwrap();
+            for seq in seqs.iter_mut() {
+                if seq.is_finished_paged_attn() {
+                    if let Some(idx) = slots.remove(seq.id()) {
+                        to_free.push(idx);
+                    }
+                }
+            }
+        }
+
+        if to_free.is_empty() {
+            return;
+        }
+
+        let draft = get_mut_arcmutex!(self.draft);
+        if matches!(draft.cache(), EitherCache::Hybrid(_)) {
+            let mut hybrid = draft.cache().hybrid();
+            for idx in to_free {
+                hybrid.free_seq(idx);
+            }
+        }
+    }
+
     pub fn new(
         target: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         draft: Arc<tokio::sync::Mutex<dyn Pipeline>>,
@@ -218,10 +276,13 @@ impl SpeculativePipeline {
         }
         let metadata = get_mut_arcmutex!(target).get_metadata().clone();
         let category = get_mut_arcmutex!(target).category();
+        let target_cache = get_mut_arcmutex!(target).cache().clone();
         // TODO: some checks or relaxation here?
         Ok(Self {
             target,
             draft,
+            target_cache,
+            draft_recurrent_slots: Mutex::new(HashMap::new()),
             gamma: config.gamma,
             metadata,
             category,
@@ -247,12 +308,49 @@ impl IsqPipelineMixin for SpeculativePipeline {
 
 impl CacheManagerMixin for SpeculativePipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) {
-        NormalCacheManager.clone_in_cache(&*get_mut_arcmutex!(self.draft), seqs, true);
-        NormalCacheManager.clone_in_cache(&*get_mut_arcmutex!(self.target), seqs, false);
+        {
+            let draft = get_mut_arcmutex!(self.draft);
+            if matches!(draft.cache(), EitherCache::Hybrid(_)) {
+                // Use draft-specific recurrent slots and keep sequence-owned
+                // recurrent_state_idx reserved for the target pipeline.
+                let originals = self.swap_in_draft_recurrent_indices(seqs);
+                HybridCacheManager.clone_in_cache(&*draft, seqs, true);
+                self.capture_draft_recurrent_indices(seqs);
+                Self::restore_recurrent_indices(seqs, originals);
+            } else {
+                NormalCacheManager.clone_in_cache(&*draft, seqs, true);
+            }
+        }
+        {
+            let target = get_mut_arcmutex!(self.target);
+            if matches!(target.cache(), EitherCache::Hybrid(_)) {
+                HybridCacheManager.clone_in_cache(&*target, seqs, false);
+            } else {
+                NormalCacheManager.clone_in_cache(&*target, seqs, false);
+            }
+        }
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence]) {
-        NormalCacheManager.clone_out_cache(&*get_mut_arcmutex!(self.draft), seqs, true);
-        NormalCacheManager.clone_out_cache(&*get_mut_arcmutex!(self.target), seqs, false);
+        {
+            let draft = get_mut_arcmutex!(self.draft);
+            if matches!(draft.cache(), EitherCache::Hybrid(_)) {
+                let originals = self.swap_in_draft_recurrent_indices(seqs);
+                HybridCacheManager.clone_out_cache(&*draft, seqs, true);
+                self.capture_draft_recurrent_indices(seqs);
+                Self::restore_recurrent_indices(seqs, originals);
+            } else {
+                NormalCacheManager.clone_out_cache(&*draft, seqs, true);
+            }
+        }
+        {
+            let target = get_mut_arcmutex!(self.target);
+            if matches!(target.cache(), EitherCache::Hybrid(_)) {
+                HybridCacheManager.clone_out_cache(&*target, seqs, false);
+            } else {
+                NormalCacheManager.clone_out_cache(&*target, seqs, false);
+            }
+        }
+        self.cleanup_finished_draft_slots(seqs);
     }
     fn set_none_cache(
         &self,
@@ -261,24 +359,39 @@ impl CacheManagerMixin for SpeculativePipeline {
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
     ) {
-        NormalCacheManager.set_none_cache(
-            &*get_mut_arcmutex!(self.draft),
-            seqs,
-            modify_draft_cache,
-            load_preallocated_cache,
-        );
-        NormalCacheManager.set_none_cache(
-            &*get_mut_arcmutex!(self.target),
-            seqs,
-            false,
-            load_preallocated_cache,
-        );
+        {
+            let draft = get_mut_arcmutex!(self.draft);
+            if matches!(draft.cache(), EitherCache::Hybrid(_)) {
+                HybridCacheManager.set_none_cache(
+                    &*draft,
+                    seqs,
+                    modify_draft_cache,
+                    load_preallocated_cache,
+                );
+                self.draft_recurrent_slots.lock().unwrap().clear();
+            } else {
+                NormalCacheManager.set_none_cache(
+                    &*draft,
+                    seqs,
+                    modify_draft_cache,
+                    load_preallocated_cache,
+                );
+            }
+        }
+        {
+            let target = get_mut_arcmutex!(self.target);
+            if matches!(target.cache(), EitherCache::Hybrid(_)) {
+                HybridCacheManager.set_none_cache(&*target, seqs, false, load_preallocated_cache);
+            } else {
+                NormalCacheManager.set_none_cache(&*target, seqs, false, load_preallocated_cache);
+            }
+        }
         if reset_non_granular {
             self.reset_non_granular_state()
         }
     }
     fn cache(&self) -> &EitherCache {
-        unreachable!()
+        &self.target_cache
     }
     fn do_preallocated_cache(&self) -> bool {
         // KV cache size is not the same (necessarily)
@@ -364,6 +477,51 @@ impl Pipeline for SpeculativePipeline {
 
                 let seq = &mut input_seqs[0];
 
+                // Detect hybrid caches and capture initial state for snapshot/restore
+                let draft_is_hybrid = matches!(
+                    get_mut_arcmutex!(self.draft).cache(),
+                    EitherCache::Hybrid(_)
+                );
+                let target_is_hybrid = matches!(
+                    get_mut_arcmutex!(self.target).cache(),
+                    EitherCache::Hybrid(_)
+                );
+
+                let initial_draft_cache_len = if draft_is_hybrid {
+                    get_mut_arcmutex!(self.draft)
+                        .cache()
+                        .hybrid()
+                        .get_past_kv_len()
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+
+                // Snapshot draft recurrent state before draft token generation
+                let draft_recurrent_snapshot: Option<Vec<RecurrentStateSnapshot>> =
+                    if draft_is_hybrid {
+                        let slot_idx = self
+                            .draft_recurrent_slots
+                            .lock()
+                            .unwrap()
+                            .get(seq.id())
+                            .copied()
+                            .ok_or_else(|| {
+                                candle_core::Error::Msg(format!(
+                                    "Hybrid draft is missing recurrent slot for sequence {}",
+                                    seq.id()
+                                ))
+                            })?;
+                        Some(
+                            get_mut_arcmutex!(self.draft)
+                                .cache()
+                                .hybrid()
+                                .snapshot_recurrent_state(slot_idx)?,
+                        )
+                    } else {
+                        None
+                    };
+
                 // ======================= Run draft model gamma times producing tokens ============================
                 // ======================= Sample the `gamma` logits. ============================
                 let mut draft_samples = Vec::new();
@@ -425,6 +583,12 @@ impl Pipeline for SpeculativePipeline {
                     }
                     draft_prefill_tokens.push(sample.sample.token);
                 }
+                // Clone before move — needed for hybrid cache replay after rejection
+                let draft_prefill_tokens_clone = if draft_is_hybrid || target_is_hybrid {
+                    Some(draft_prefill_tokens.clone())
+                } else {
+                    None
+                };
                 seq.set_prefill_toks(draft_prefill_tokens);
 
                 // ======================= Run the model with all draft tokens. ============================
@@ -435,12 +599,29 @@ impl Pipeline for SpeculativePipeline {
                         .map(|(k, _)| k.dims()[2])
                         .unwrap_or(0),
                     EitherCache::Normal(normal) => normal.lock().unwrap().0[0].current_seq_len(),
-                    EitherCache::Hybrid(_) => {
-                        candle_core::bail!(
-                            "Speculative decoding is not supported with hybrid caches"
-                        )
+                    EitherCache::Hybrid(hybrid) => {
+                        hybrid.lock().unwrap().get_past_kv_len().unwrap_or(0)
                     }
                 };
+
+                // Snapshot target recurrent state before target forward
+                let target_recurrent_snapshot: Option<Vec<RecurrentStateSnapshot>> =
+                    if target_is_hybrid {
+                        let slot_idx = seq.recurrent_state_idx().ok_or_else(|| {
+                            candle_core::Error::Msg(format!(
+                                "Hybrid target is missing recurrent slot for sequence {}",
+                                seq.id()
+                            ))
+                        })?;
+                        Some(
+                            get_mut_arcmutex!(self.target)
+                                .cache()
+                                .hybrid()
+                                .snapshot_recurrent_state(slot_idx)?,
+                        )
+                    } else {
+                        None
+                    };
 
                 // ========= Run the model ============
                 let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
@@ -494,24 +675,80 @@ impl Pipeline for SpeculativePipeline {
                 // ======================= Narrow caches to account for rejections ============================
                 let n_not_accepted = self.gamma - accepted_tokens.len();
 
-                match get_mut_arcmutex!(self.draft).cache() {
-                    EitherCache::Full(full) => {
-                        for (k, v) in full.lock().iter_mut().flatten() {
-                            *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
-                            *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                if draft_is_hybrid {
+                    if n_not_accepted > 0 {
+                        let slot_idx = self
+                            .draft_recurrent_slots
+                            .lock()
+                            .unwrap()
+                            .get(seq.id())
+                            .copied()
+                            .ok_or_else(|| {
+                                candle_core::Error::Msg(format!(
+                                    "Hybrid draft is missing recurrent slot for sequence {}",
+                                    seq.id()
+                                ))
+                            })?;
+                        {
+                            let draft_guard = get_mut_arcmutex!(self.draft);
+                            let mut hybrid = draft_guard.cache().hybrid();
+                            hybrid.restore_recurrent_state(
+                                slot_idx,
+                                draft_recurrent_snapshot.as_ref().unwrap(),
+                            )?;
+                            hybrid.truncate_attention_to(initial_draft_cache_len)?;
+                        }
+
+                        // Replay accepted tokens through draft to advance cache
+                        let draft_prefill_toks = draft_prefill_tokens_clone.as_ref().unwrap();
+                        let n_replay = draft_prefill_toks.len().saturating_sub(n_not_accepted);
+                        if n_replay > 0 {
+                            let replay_toks = draft_prefill_toks[..n_replay].to_vec();
+                            seq.set_prefill_toks(replay_toks);
+                            let is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
+                            let device = get_mut_arcmutex!(self.draft).device();
+                            let no_kv_cache =
+                                get_mut_arcmutex!(self.draft).get_metadata().no_kv_cache;
+                            let inputs = self
+                                .get_processor()
+                                .inputs_processor()
+                                .process_inputs(
+                                    self.tokenizer(),
+                                    &mut [seq],
+                                    true,
+                                    is_xlora,
+                                    &device,
+                                    no_kv_cache,
+                                    Some((n_replay, initial_draft_cache_len)),
+                                    false,
+                                    None,
+                                    None,
+                                    get_mut_arcmutex!(self.draft).device_mapper(),
+                                )
+                                .unwrap()
+                                .inputs;
+                            let _ = get_mut_arcmutex!(self.draft).forward_inputs(inputs, false)?;
+                            seq.reset_prefill_toks();
                         }
                     }
-                    EitherCache::Normal(normal) => {
-                        for cache in &mut *normal.lock().unwrap().0 {
-                            cache
-                                .set_len(cache.current_seq_len() - n_not_accepted)
-                                .map_err(|_| candle_core::Error::msg("KV cache set_len failed."))?;
+                } else {
+                    match get_mut_arcmutex!(self.draft).cache() {
+                        EitherCache::Full(full) => {
+                            for (k, v) in full.lock().iter_mut().flatten() {
+                                *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+                                *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                            }
                         }
-                    }
-                    EitherCache::Hybrid(_) => {
-                        candle_core::bail!(
-                            "Speculative decoding is not supported with hybrid caches"
-                        )
+                        EitherCache::Normal(normal) => {
+                            for cache in &mut *normal.lock().unwrap().0 {
+                                cache
+                                    .set_len(cache.current_seq_len() - n_not_accepted)
+                                    .map_err(|_| {
+                                        candle_core::Error::msg("KV cache set_len failed.")
+                                    })?;
+                            }
+                        }
+                        EitherCache::Hybrid(_) => unreachable!(),
                     }
                 }
                 if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
@@ -529,24 +766,74 @@ impl Pipeline for SpeculativePipeline {
                         }
                     }
                 }
-                match get_mut_arcmutex!(self.target).cache() {
-                    EitherCache::Full(full) => {
-                        for (k, v) in full.lock().iter_mut().flatten() {
-                            *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
-                            *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                if target_is_hybrid {
+                    if n_not_accepted > 0 {
+                        let slot_idx = seq.recurrent_state_idx().ok_or_else(|| {
+                            candle_core::Error::Msg(format!(
+                                "Hybrid target is missing recurrent slot for sequence {}",
+                                seq.id()
+                            ))
+                        })?;
+                        {
+                            let target_guard = get_mut_arcmutex!(self.target);
+                            let mut hybrid = target_guard.cache().hybrid();
+                            hybrid.restore_recurrent_state(
+                                slot_idx,
+                                target_recurrent_snapshot.as_ref().unwrap(),
+                            )?;
+                            hybrid.truncate_attention_to(initial_cache_len)?;
+                        }
+
+                        // Replay accepted tokens through target to advance cache
+                        let draft_prefill_toks = draft_prefill_tokens_clone.as_ref().unwrap();
+                        let n_replay = draft_prefill_toks.len().saturating_sub(n_not_accepted);
+                        if n_replay > 0 {
+                            let replay_toks = draft_prefill_toks[..n_replay].to_vec();
+                            seq.set_prefill_toks(replay_toks);
+                            let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
+                            let device = get_mut_arcmutex!(self.target).device();
+                            let no_kv_cache =
+                                get_mut_arcmutex!(self.target).get_metadata().no_kv_cache;
+                            let inputs = self
+                                .get_processor()
+                                .inputs_processor()
+                                .process_inputs(
+                                    self.tokenizer(),
+                                    &mut [seq],
+                                    true,
+                                    is_xlora,
+                                    &device,
+                                    no_kv_cache,
+                                    Some((n_replay, initial_cache_len)),
+                                    false,
+                                    None,
+                                    None,
+                                    get_mut_arcmutex!(self.target).device_mapper(),
+                                )
+                                .unwrap()
+                                .inputs;
+                            let _ = get_mut_arcmutex!(self.target).forward_inputs(inputs, false)?;
+                            seq.reset_prefill_toks();
                         }
                     }
-                    EitherCache::Normal(normal) => {
-                        for cache in &mut *normal.lock().unwrap().0 {
-                            cache
-                                .set_len(cache.current_seq_len() - n_not_accepted)
-                                .map_err(|_| candle_core::Error::msg("KV cache set_len failed."))?;
+                } else {
+                    match get_mut_arcmutex!(self.target).cache() {
+                        EitherCache::Full(full) => {
+                            for (k, v) in full.lock().iter_mut().flatten() {
+                                *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+                                *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                            }
                         }
-                    }
-                    EitherCache::Hybrid(_) => {
-                        candle_core::bail!(
-                            "Speculative decoding is not supported with hybrid caches"
-                        )
+                        EitherCache::Normal(normal) => {
+                            for cache in &mut *normal.lock().unwrap().0 {
+                                cache
+                                    .set_len(cache.current_seq_len() - n_not_accepted)
+                                    .map_err(|_| {
+                                        candle_core::Error::msg("KV cache set_len failed.")
+                                    })?;
+                            }
+                        }
+                        EitherCache::Hybrid(_) => unreachable!(),
                     }
                 }
                 if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {

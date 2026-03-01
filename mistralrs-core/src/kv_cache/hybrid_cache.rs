@@ -511,6 +511,19 @@ impl PastKvLenCache for HybridCache {
     }
 }
 
+impl HybridCache {
+    /// Truncate all attention layer KV caches to the given sequence length.
+    /// Recurrent layers are unchanged — use snapshot/restore for recurrent rollback.
+    pub fn truncate_attention_to(&mut self, len: usize) -> Result<()> {
+        for cache in &mut self.caches {
+            if let HybridLayerCache::Attention(kv) = cache {
+                kv.set_len(len)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Snapshot of a single recurrent layer's state for prefix caching.
 #[derive(Clone, Debug)]
 pub struct RecurrentStateSnapshot {
@@ -522,6 +535,7 @@ pub struct RecurrentStateSnapshot {
 impl HybridCache {
     /// Snapshot the recurrent state for a sequence at the given slot index.
     /// Returns one snapshot per recurrent layer, in layer order.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn snapshot_recurrent_state(&self, slot_idx: usize) -> Result<Vec<RecurrentStateSnapshot>> {
         let mut snapshots = Vec::new();
         for cache in &self.caches {
@@ -541,6 +555,7 @@ impl HybridCache {
 
     /// Restore recurrent state snapshots into the pool at the given slot index.
     /// Snapshots must be in the same layer order as returned by `snapshot_recurrent_state`.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn restore_recurrent_state(
         &mut self,
         slot_idx: usize,

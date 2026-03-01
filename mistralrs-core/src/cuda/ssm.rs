@@ -134,6 +134,7 @@ pub fn selective_scan_cuda(
 }
 
 #[cfg(not(feature = "cuda"))]
+#[allow(clippy::too_many_arguments)]
 pub fn selective_scan_cuda(
     _x: &candle_core::Tensor,
     _dt: &candle_core::Tensor,

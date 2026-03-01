@@ -210,7 +210,7 @@ pub fn selective_scan_metal(
 }
 
 #[cfg(not(feature = "metal"))]
-#[allow(dead_code)]
+#[allow(dead_code, clippy::too_many_arguments)]
 pub fn selective_scan_metal(
     _x: &candle_core::Tensor,
     _dt: &candle_core::Tensor,

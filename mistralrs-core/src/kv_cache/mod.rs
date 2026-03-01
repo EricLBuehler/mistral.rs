@@ -909,7 +909,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
         &self,
         pipeline: &T,
         seqs: &mut [&mut crate::sequence::Sequence],
-        _modify_draft_cache: bool,
+        modify_draft_cache: bool,
     ) {
         let mut hybrid_cache = pipeline.cache().hybrid();
         let num_layers = hybrid_cache.num_layers();
@@ -946,10 +946,10 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                 hybrid_cache.set_state_indices(None);
             } else {
                 // Build state_indices tensor from sequences
-                #[allow(clippy::cast_possible_truncation)]
                 let mut indices = Vec::with_capacity(seqs.len());
                 for seq in seqs.iter() {
                     if let Some(idx) = seq.recurrent_state_idx() {
+                        #[allow(clippy::cast_possible_truncation)]
                         indices.push(idx as u32);
                     } else {
                         tracing::warn!(
@@ -979,7 +979,12 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                 let mut template_cache: Option<KvCache> = None;
 
                 for seq in seqs.iter_mut() {
-                    if let Some(Some(ref kv)) = seq.normal_cache().get(layer_idx) {
+                    let seq_cache = if modify_draft_cache {
+                        seq.normal_draft_cache()
+                    } else {
+                        seq.normal_cache()
+                    };
+                    if let Some(Some(ref kv)) = seq_cache.get(layer_idx) {
                         if template_cache.is_none() {
                             template_cache = Some(kv.clone());
                         }
@@ -1034,7 +1039,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
         }
     }
 
-    fn clone_out_cache(&self, pipeline: &T, seqs: &mut [&mut Sequence], _modify_draft_cache: bool) {
+    fn clone_out_cache(&self, pipeline: &T, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         let hybrid_cache = pipeline.cache().hybrid();
         let num_layers = hybrid_cache.num_layers();
         let num_seqs = seqs.len();
@@ -1053,17 +1058,21 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                         let seq_k = k_chunks.get(seq_idx).unwrap().contiguous().unwrap();
                         let seq_v = v_chunks.get(seq_idx).unwrap().contiguous().unwrap();
 
+                        let seq_cache = if modify_draft_cache {
+                            seq.normal_draft_cache()
+                        } else {
+                            seq.normal_cache()
+                        };
+
                         // Initialize cache if needed
-                        if seq.normal_cache().get(layer_idx).is_none()
-                            || seq.normal_cache()[layer_idx].is_none()
-                        {
-                            while seq.normal_cache().len() <= layer_idx {
-                                seq.normal_cache().push(None);
+                        if seq_cache.get(layer_idx).is_none() || seq_cache[layer_idx].is_none() {
+                            while seq_cache.len() <= layer_idx {
+                                seq_cache.push(None);
                             }
-                            seq.normal_cache()[layer_idx] = Some(kv_cache.clone());
+                            seq_cache[layer_idx] = Some(kv_cache.clone());
                         }
 
-                        if let Some(ref mut seq_kv) = seq.normal_cache()[layer_idx] {
+                        if let Some(ref mut seq_kv) = seq_cache[layer_idx] {
                             match (kv_cache, seq_kv) {
                                 (KvCache::Normal { k: src_k, .. }, KvCache::Normal { k, v }) => {
                                     k.all_data = Some(seq_k);
@@ -1101,12 +1110,17 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
         &self,
         pipeline: &T,
         seqs: &mut [&mut Sequence],
-        _modify_draft_cache: bool,
+        modify_draft_cache: bool,
         _load_preallocated_cache: bool,
     ) {
         // Reset attention KV caches in sequences
         for seq in seqs.iter_mut() {
-            for kv in seq.normal_cache().iter_mut().flatten() {
+            let seq_cache = if modify_draft_cache {
+                seq.normal_draft_cache()
+            } else {
+                seq.normal_cache()
+            };
+            for kv in seq_cache.iter_mut().flatten() {
                 kv.reset();
             }
         }

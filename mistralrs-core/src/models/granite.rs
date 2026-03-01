@@ -1936,13 +1936,14 @@ impl GraniteMoeHybrid {
         // Get state_indices for Mamba layers from pipeline cache
         let state_indices = pipeline_cache.state_indices().cloned();
 
-        // Build attention mask - use seqlen_offsets for attention layers
+        // Build attention mask - use seqlen offsets for paged chunks, otherwise
+        // derive past length from the pipeline hybrid cache (attention layers).
         let mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             metadata
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*internal_cache as &dyn PastKvLenCache),
+                .unwrap_or(&*pipeline_cache as &dyn PastKvLenCache),
             x.dtype(),
             self.num_attention_heads,
         )?;
@@ -1960,10 +1961,24 @@ impl GraniteMoeHybrid {
 
             match layer {
                 DecoderLayer::Attention(block) => {
-                    // Use internal cache for attention layers
-                    if let GraniteLayerCache::Attention(kv_cache) =
+                    if let Some(HybridLayerCache::Attention(kv_cache)) =
+                        pipeline_cache.get_mut(layer_idx)
+                    {
+                        let mask_for_layer = mask.as_ref().map(|m| m.get(x.device()).clone());
+                        x = block.forward(
+                            &x,
+                            &mask_for_layer,
+                            seqlen_offsets,
+                            kv_cache,
+                            metadata.as_ref().map(|(kv_cache, metadata)| {
+                                (kv_cache[layer_idx].clone(), *metadata)
+                            }),
+                            flash_params,
+                        )?;
+                    } else if let GraniteLayerCache::Attention(kv_cache) =
                         &mut internal_cache.caches[layer_idx]
                     {
+                        // Safety fallback: keep legacy path if layer-cache wiring is inconsistent.
                         let mask_for_layer = mask.as_ref().map(|m| m.get(x.device()).clone());
                         x = block.forward(
                             &x,
@@ -1978,25 +1993,11 @@ impl GraniteMoeHybrid {
                     }
                 }
                 DecoderLayer::Mamba(block) => {
-                    // For batch_size=1, use internal cache (faster, no gather/scatter overhead)
-                    // For batch_size>1, use pool-based approach with gather/scatter
-                    let batch_size = x.dim(0)?;
-
-                    if batch_size == 1 {
-                        // Single sequence: use internal cache directly (no pool overhead)
-                        if let GraniteLayerCache::Mamba(mamba_cache) =
-                            &mut internal_cache.caches[layer_idx]
-                        {
-                            // Reset state at start of new sequence (prompt phase)
-                            if seqlen_offsets[0] == 0 {
-                                mamba_cache.reset()?;
-                            }
-                            x = block.forward(&x, mamba_cache)?;
-                        }
-                    } else if let (Some(ref indices), Some(HybridLayerCache::Recurrent(pool))) =
+                    // Use pooled recurrent state whenever state indices are available.
+                    // This is required for hybrid continuous batching and prefix-cache restore.
+                    if let (Some(ref indices), Some(HybridLayerCache::Recurrent(pool))) =
                         (&state_indices, pipeline_cache.get_mut(layer_idx))
                     {
-                        // Multiple sequences: use pool with gather/scatter
                         let conv_state = pool.gather_conv_state(indices)?;
                         let ssm_state = pool.gather_recurrent_state(indices)?;
 
@@ -2029,7 +2030,7 @@ impl GraniteMoeHybrid {
                             &mut internal_cache.caches[layer_idx]
                         {
                             // Reset state at start of new sequence (prompt phase)
-                            if seqlen_offsets[0] == 0 {
+                            if seqlen_offsets.first().copied() == Some(0) {
                                 mamba_cache.reset()?;
                             }
                             x = block.forward(&x, mamba_cache)?;

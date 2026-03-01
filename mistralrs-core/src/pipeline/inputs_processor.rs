@@ -80,6 +80,7 @@ pub mod text_models_inputs_processor {
         Tensor::cat(&padded_x[..], 0).map_err(anyhow::Error::msg)
     }
 
+    #[derive(Clone)]
     pub struct PagedAttentionMeta {
         pub sliding_window: Option<usize>,
         pub block_size: usize,
