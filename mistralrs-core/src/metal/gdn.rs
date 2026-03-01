@@ -205,6 +205,110 @@ pub fn gated_delta_rule_recurrence_metal(
 }
 
 // ============================================================================
+// Public API: chunked_gated_delta_rule_recurrence (prefill optimization)
+// ============================================================================
+
+/// Chunked gated delta rule recurrence on Metal (prefill optimization).
+///
+/// Processes prefill tokens in 32-token chunks instead of one at a time.
+/// Same interface as `gated_delta_rule_recurrence_metal`.
+///
+/// q, k: [BH, S, K]  v: [BH, S, V]  g, beta: [BH, S]
+/// state: [BH, K, V] (mutated in-place)
+/// Returns: output [BH, S, V]
+#[cfg(feature = "metal")]
+pub fn chunked_gated_delta_rule_recurrence_metal(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state: &mut Tensor,
+) -> Result<Tensor> {
+    let q = q.contiguous()?;
+    let k = k.contiguous()?;
+    let v = v.contiguous()?;
+    let g = g.contiguous()?;
+    let beta = beta.contiguous()?;
+
+    let (bh, seq_len, k_dim) = q.dims3()?;
+    let v_dim = v.dim(2)?;
+
+    let Device::Metal(dev) = q.device() else {
+        candle_core::bail!("chunked_gated_delta_rule_recurrence_metal: expected Metal device");
+    };
+
+    // BT=32 for all Metal variants (fits 32KB threadgroup memory)
+    let kernel_name = match k_dim {
+        128 => "chunked_gated_delta_rule_32_128_64",
+        64 => "chunked_gated_delta_rule_32_64_64",
+        _ => {
+            // Fallback to sequential kernel for unsupported k_dim
+            return gated_delta_rule_recurrence_metal(&q, &k, &v, &g, &beta, state);
+        }
+    };
+    let bv = 64usize;
+
+    let pipeline = load_pipeline(dev.device(), kernel_name)?;
+
+    // Allocate output
+    let output = Tensor::zeros((bh, seq_len, v_dim), DType::F32, q.device())?;
+
+    let (q_buf, q_off) = metal_buffer_and_offset(&q)?;
+    let (k_buf, k_off) = metal_buffer_and_offset(&k)?;
+    let (v_buf, v_off) = metal_buffer_and_offset(&v)?;
+    let (g_buf, g_off) = metal_buffer_and_offset(&g)?;
+    let (beta_buf, beta_off) = metal_buffer_and_offset(&beta)?;
+    let (state_buf, state_off) = metal_buffer_and_offset(state)?;
+    let (out_buf, out_off) = metal_buffer_and_offset(&output)?;
+
+    let encoder = dev.command_encoder()?;
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_buffer(0, Some(q_buf), q_off);
+    encoder.set_buffer(1, Some(k_buf), k_off);
+    encoder.set_buffer(2, Some(v_buf), v_off);
+    encoder.set_buffer(3, Some(g_buf), g_off);
+    encoder.set_buffer(4, Some(beta_buf), beta_off);
+    encoder.set_buffer(5, Some(state_buf), state_off);
+    encoder.set_buffer(6, Some(out_buf), out_off);
+
+    let seq_len_i32 = seq_len as i32;
+    let v_dim_i32 = v_dim as i32;
+    encoder.set_bytes(7, &seq_len_i32);
+    encoder.set_bytes(8, &v_dim_i32);
+
+    let grid_x = (v_dim + bv - 1) / bv;
+    let thread_groups = MTLSize {
+        width: grid_x,
+        height: bh,
+        depth: 1,
+    };
+    let threads_per_group = MTLSize {
+        width: bv,
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(thread_groups, threads_per_group);
+
+    Ok(output)
+}
+
+#[cfg(not(feature = "metal"))]
+#[allow(dead_code)]
+pub fn chunked_gated_delta_rule_recurrence_metal(
+    _q: &candle_core::Tensor,
+    _k: &candle_core::Tensor,
+    _v: &candle_core::Tensor,
+    _g: &candle_core::Tensor,
+    _beta: &candle_core::Tensor,
+    _state: &mut candle_core::Tensor,
+) -> candle_core::Result<candle_core::Tensor> {
+    candle_core::bail!("chunked_gated_delta_rule_recurrence_metal requires the metal feature")
+}
+
+// ============================================================================
 // Public API: causal_conv1d
 // ============================================================================
 

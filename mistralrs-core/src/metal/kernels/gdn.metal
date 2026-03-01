@@ -201,6 +201,193 @@ void gated_delta_rule_kernel_fallback<64, 256>(
     uint2, uint);
 
 // ============================================================================
+// Kernel 1b: chunked_gated_delta_rule_recurrence (prefill optimization)
+//
+// Processes prefill tokens in BT-token chunks instead of one at a time.
+// Same thread model as Kernel 1: one block per (v_tile, batch*head),
+// one thread per V-column. Each thread owns BK registers of state.
+//
+// Uses BT=32 on Metal to fit within 32KB threadgroup memory limit.
+//
+// q,k: [BH, S, K]  v: [BH, S, V]  g,beta: [BH, S]
+// state: [BH, K, V] (in/out)  output: [BH, S, V]
+// ============================================================================
+
+template <int BT, int BK, int BV>
+[[kernel]] void chunked_gated_delta_rule_kernel(
+    const device float *q [[buffer(0)]],
+    const device float *k [[buffer(1)]],
+    const device float *v [[buffer(2)]],
+    const device float *g [[buffer(3)]],
+    const device float *beta [[buffer(4)]],
+    device float *state [[buffer(5)]],
+    device float *output [[buffer(6)]],
+    constant int &seq_len [[buffer(7)]],
+    constant int &v_dim [[buffer(8)]],
+    uint2 tgpig [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]])
+{
+    const int v_tile = tgpig.x;
+    const int bh = tgpig.y;
+    const int v_idx = v_tile * BV + (int)tid;
+
+    if (v_idx >= v_dim) return;
+
+    const int num_chunks = (seq_len + BT - 1) / BT;
+
+    const device float *q_bh = q + bh * seq_len * BK;
+    const device float *k_bh = k + bh * seq_len * BK;
+    const device float *v_bh = v + bh * seq_len * v_dim;
+    const device float *g_bh = g + bh * seq_len;
+    const device float *beta_bh = beta + bh * seq_len;
+    device float *state_bh = state + bh * BK * v_dim;
+    device float *out_bh = output + bh * seq_len * v_dim;
+
+    // Threadgroup memory
+    threadgroup float k_chunk[BT * BK];
+    threadgroup float kk_dot[BT * BT];
+    threadgroup float gcum[BT];
+    threadgroup float beta_s[BT];
+    threadgroup float q_buf[BK];
+
+    // Load state column into registers
+    float s[BK];
+    for (int j = 0; j < BK; j++) {
+        s[j] = state_bh[j * v_dim + v_idx];
+    }
+
+    // Per-thread register array for corrected deltas
+    float delta_arr[BT];
+
+    for (int c = 0; c < num_chunks; c++) {
+        const int chunk_start = c * BT;
+        const int chunk_len = min(BT, seq_len - chunk_start);
+
+        // === Phase 1: Cooperative load of k, beta, g into threadgroup memory ===
+        for (int t = 0; t < chunk_len; t++) {
+            for (int j = (int)tid; j < BK; j += BV) {
+                k_chunk[t * BK + j] = k_bh[(chunk_start + t) * BK + j];
+            }
+        }
+        if ((int)tid < chunk_len) {
+            beta_s[tid] = beta_bh[chunk_start + tid];
+            gcum[tid] = g_bh[chunk_start + tid];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        // === Phase 1b: Parallel prefix sum of g (Hillis-Steele) ===
+        for (int stride = 1; stride < BT; stride <<= 1) {
+            float prev = 0.0f;
+            if ((int)tid < chunk_len && (int)tid >= stride)
+                prev = gcum[tid - stride];
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            if ((int)tid < chunk_len && (int)tid >= stride)
+                gcum[tid] += prev;
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+
+        // === Phase 2: Compute kk_dot[i][j] = dot(k[i], k[j]) for j < i ===
+        for (int idx = (int)tid; idx < chunk_len * chunk_len; idx += BV) {
+            int i = idx / chunk_len;
+            int j = idx % chunk_len;
+            if (j < i) {
+                float dot = 0.0f;
+                for (int d = 0; d < BK; d++) {
+                    dot = fma(k_chunk[i * BK + d], k_chunk[j * BK + d], dot);
+                }
+                kk_dot[i * BT + j] = dot;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        // === Phase 3: Forward substitution (per V-column, in registers) ===
+        for (int i = 0; i < chunk_len; i++) {
+            float v_i = v_bh[(chunk_start + i) * v_dim + v_idx];
+            float decay_i = exp(gcum[i]);
+            float beta_i = beta_s[i];
+
+            // Inter-chunk contribution: state @ k[i] with decay
+            float kv_mem = 0.0f;
+            for (int d = 0; d < BK; d++) {
+                kv_mem = fma(s[d] * decay_i, k_chunk[i * BK + d], kv_mem);
+            }
+
+            float rhs = beta_i * (v_i - kv_mem);
+
+            // Subtract lower-triangular contributions (intra-chunk)
+            for (int j = 0; j < i; j++) {
+                float a_ij = beta_i * kk_dot[i * BT + j] * exp(gcum[i] - gcum[j]);
+                rhs -= a_ij * delta_arr[j];
+            }
+            delta_arr[i] = rhs;
+        }
+
+        // === Phase 4: Output computation (per V-column) ===
+        for (int i = 0; i < chunk_len; i++) {
+            // Cooperatively load q[i] into threadgroup memory
+            for (int j = (int)tid; j < BK; j += BV) {
+                q_buf[j] = q_bh[(chunk_start + i) * BK + j];
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+
+            float decay_i = exp(gcum[i]);
+
+            // Inter-chunk contribution: q[i] @ (state * decay)
+            float o_val = 0.0f;
+            for (int d = 0; d < BK; d++) {
+                o_val = fma(q_buf[d], s[d] * decay_i, o_val);
+            }
+
+            // Intra-chunk contribution
+            for (int j = 0; j <= i; j++) {
+                float qk_dot = 0.0f;
+                for (int d = 0; d < BK; d++) {
+                    qk_dot = fma(q_buf[d], k_chunk[j * BK + d], qk_dot);
+                }
+                o_val += qk_dot * delta_arr[j] * exp(gcum[i] - gcum[j]);
+            }
+
+            out_bh[(chunk_start + i) * v_dim + v_idx] = o_val;
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+
+        // === Phase 5: State update for next chunk ===
+        float g_total = gcum[chunk_len - 1];
+        for (int d = 0; d < BK; d++) {
+            float s_new = s[d] * exp(g_total);
+            for (int t = 0; t < chunk_len; t++) {
+                s_new += k_chunk[t * BK + d] * delta_arr[t] * exp(g_total - gcum[t]);
+            }
+            s[d] = s_new;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    // Write final state back
+    for (int j = 0; j < BK; j++) {
+        state_bh[j * v_dim + v_idx] = s[j];
+    }
+}
+
+// Explicit instantiations for chunked kernel (BT=32 to fit 32KB threadgroup memory)
+template [[host_name("chunked_gated_delta_rule_32_128_64")]] [[kernel]]
+void chunked_gated_delta_rule_kernel<32, 128, 64>(
+    const device float*, const device float*, const device float*,
+    const device float*, const device float*,
+    device float*, device float*,
+    constant int&, constant int&,
+    uint2, uint);
+
+template [[host_name("chunked_gated_delta_rule_32_64_64")]] [[kernel]]
+void chunked_gated_delta_rule_kernel<32, 64, 64>(
+    const device float*, const device float*, const device float*,
+    const device float*, const device float*,
+    device float*, device float*,
+    constant int&, constant int&,
+    uint2, uint);
+
+// ============================================================================
 // Kernel 2a: causal_conv1d_update (decode path, single step)
 // ============================================================================
 

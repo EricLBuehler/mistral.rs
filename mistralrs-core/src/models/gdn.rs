@@ -610,14 +610,26 @@ impl GatedDeltaNet {
             .reshape((batch_size * num_heads, k_head, v_head))?
             .contiguous()?;
 
-        let out_bh = crate::cuda::gdn::gated_delta_rule_recurrence_cuda(
-            &q_bh,
-            &k_bh,
-            &v_bh,
-            &g_bh,
-            &beta_bh,
-            &mut state_flat,
-        )?;
+        const CHUNK_THRESHOLD: usize = 64;
+        let out_bh = if seq_len >= CHUNK_THRESHOLD {
+            crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(
+                &q_bh,
+                &k_bh,
+                &v_bh,
+                &g_bh,
+                &beta_bh,
+                &mut state_flat,
+            )?
+        } else {
+            crate::cuda::gdn::gated_delta_rule_recurrence_cuda(
+                &q_bh,
+                &k_bh,
+                &v_bh,
+                &g_bh,
+                &beta_bh,
+                &mut state_flat,
+            )?
+        };
 
         cache.recurrent_state = state_flat
             .reshape((batch_size, num_heads, k_head, v_head))?
@@ -682,14 +694,26 @@ impl GatedDeltaNet {
             .reshape((batch_size * num_heads, k_head, v_head))?
             .contiguous()?;
 
-        let out_bh = crate::metal::gdn::gated_delta_rule_recurrence_metal(
-            &q_bh,
-            &k_bh,
-            &v_bh,
-            &g_bh,
-            &beta_bh,
-            &mut state_flat,
-        )?;
+        const CHUNK_THRESHOLD: usize = 64;
+        let out_bh = if seq_len >= CHUNK_THRESHOLD {
+            crate::metal::gdn::chunked_gated_delta_rule_recurrence_metal(
+                &q_bh,
+                &k_bh,
+                &v_bh,
+                &g_bh,
+                &beta_bh,
+                &mut state_flat,
+            )?
+        } else {
+            crate::metal::gdn::gated_delta_rule_recurrence_metal(
+                &q_bh,
+                &k_bh,
+                &v_bh,
+                &g_bh,
+                &beta_bh,
+                &mut state_flat,
+            )?
+        };
 
         cache.recurrent_state = state_flat
             .reshape((batch_size, num_heads, k_head, v_head))?
