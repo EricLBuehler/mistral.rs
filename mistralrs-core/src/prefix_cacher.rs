@@ -4,8 +4,7 @@ use itertools::Itertools;
 use tracing::info;
 
 use crate::{
-    kv_cache::RecurrentStateSnapshot,
-    pipeline::KvCache,
+    kv_cache::RecurrentStateSnapshot, paged_attention::block_hash::BlockHash, pipeline::KvCache,
     sequence::Sequence,
 };
 
@@ -40,6 +39,7 @@ struct CacheElement {
 
 pub struct PrefixCacheManagerV2 {
     caches: IndexMap<Tokens, CacheElement>,
+    paged_recurrent_caches: IndexMap<Vec<BlockHash>, Vec<RecurrentStateSnapshot>>,
     n_on_device: usize,
     no_prefix_cache: bool,
     has_paged_attention: bool,
@@ -64,10 +64,15 @@ impl PrefixCacheManagerV2 {
         }
         PrefixCacheManagerV2 {
             caches: IndexMap::new(),
+            paged_recurrent_caches: IndexMap::new(),
             n_on_device,
             no_prefix_cache,
             has_paged_attention,
         }
+    }
+
+    fn paged_recurrent_capacity(&self) -> usize {
+        self.n_on_device.max(1).saturating_mul(8)
     }
 
     /// This always keeps the cache on the device.
@@ -159,7 +164,49 @@ impl PrefixCacheManagerV2 {
     pub fn evict_all_caches(&mut self) -> Result<usize> {
         let len = self.caches.len();
         self.caches.clear();
+        self.paged_recurrent_caches.clear();
         Ok(len)
+    }
+
+    /// Add a recurrent-state snapshot for a paged-attention block-hash prefix key.
+    /// This is used by hybrid models to restore recurrent states alongside paged KV prefix hits.
+    pub fn add_paged_recurrent_prefix(
+        &mut self,
+        key: Vec<BlockHash>,
+        snapshots: Vec<RecurrentStateSnapshot>,
+    ) {
+        if self.no_prefix_cache
+            || !self.has_paged_attention
+            || key.is_empty()
+            || snapshots.is_empty()
+        {
+            return;
+        }
+
+        // Maintain LRU order by reinserting on update.
+        let _ = self.paged_recurrent_caches.shift_remove(&key);
+        self.paged_recurrent_caches.insert(key, snapshots);
+
+        while self.paged_recurrent_caches.len() > self.paged_recurrent_capacity() {
+            let _ = self.paged_recurrent_caches.shift_remove_index(0);
+        }
+    }
+
+    /// Lookup a recurrent-state snapshot for a paged-attention block-hash prefix key.
+    /// Returns a cloned snapshot and updates LRU order.
+    pub fn get_paged_recurrent_prefix(
+        &mut self,
+        key: &[BlockHash],
+    ) -> Option<Vec<RecurrentStateSnapshot>> {
+        if self.no_prefix_cache || !self.has_paged_attention || key.is_empty() {
+            return None;
+        }
+
+        let key = key.to_vec();
+        let snapshots = self.paged_recurrent_caches.shift_remove(&key)?;
+        let out = snapshots.clone();
+        self.paged_recurrent_caches.insert(key, snapshots);
+        Some(out)
     }
 
     /// Search for a matching cache given some tokens. Image-containing sequences are now cached too.

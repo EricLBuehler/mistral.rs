@@ -17,7 +17,9 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::{DeviceMappedMask, DeviceMapper},
-    kv_cache::{HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig},
+    kv_cache::{
+        HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
+    },
     layers::{
         embedding, linear_no_bias, CausalMasker, GemmaRmsNorm, MatMul, RotaryEmbedding, Sdpa,
     },
@@ -847,7 +849,11 @@ impl Model {
             recurrent: RecurrentLayerConfig {
                 conv_dim: cfg.linear_conv_dim(),
                 conv_width: cfg.linear_conv_kernel_dim,
-                state_dims: vec![cfg.linear_num_value_heads, cfg.linear_key_head_dim, cfg.linear_value_head_dim],
+                state_dims: vec![
+                    cfg.linear_num_value_heads,
+                    cfg.linear_key_head_dim,
+                    cfg.linear_value_head_dim,
+                ],
             },
         };
 
@@ -942,8 +948,7 @@ impl Model {
                     }
                 }
                 LayerImpl::LinearAttention(_) => {
-                    if let Some(HybridLayerCache::Recurrent(pool)) =
-                        hybrid_cache.get_mut(layer_idx)
+                    if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(layer_idx)
                     {
                         if let Some(ref indices) = state_indices {
                             let conv_state = pool.gather_conv_state(indices)?;
@@ -961,17 +966,11 @@ impl Model {
                             x = layer.forward_linear(&x, &mut gdn_cache)?;
 
                             pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
-                            pool.scatter_recurrent_state(
-                                indices,
-                                &gdn_cache.recurrent_state,
-                            )?;
+                            pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
 
                             let indices_vec: Vec<u32> = indices.to_vec1()?;
                             for &idx in &indices_vec {
-                                pool.set_seqlen_offset(
-                                    idx as usize,
-                                    gdn_cache.seqlen_offset,
-                                );
+                                pool.set_seqlen_offset(idx as usize, gdn_cache.seqlen_offset);
                             }
                         }
                     }
@@ -1112,7 +1111,7 @@ impl NormalModel for Model {
         _flash_params: &FlashParams,
         _flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
-        unimplemented!()
+        candle_core::bail!("Qwen3Next does not support X-LoRA forward")
     }
     fn cache(&self) -> &EitherCache {
         &self.kv_cache

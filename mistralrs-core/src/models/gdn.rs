@@ -278,10 +278,8 @@ impl GatedDeltaNet {
                     vb_la.get((qkvz_out, hidden_size), "in_proj_qkvz.weight")?
                 } else {
                     // Load separate HF weights and interleave into grouped layout
-                    let qkv_w = vb_la.get(
-                        (key_dim * 2 + value_dim, hidden_size),
-                        "in_proj_qkv.weight",
-                    )?;
+                    let qkv_w =
+                        vb_la.get((key_dim * 2 + value_dim, hidden_size), "in_proj_qkv.weight")?;
                     let z_w = vb_la.get((value_dim, hidden_size), "in_proj_z.weight")?;
                     let q_w = qkv_w.narrow(0, 0, key_dim)?;
                     let k_w = qkv_w.narrow(0, key_dim, key_dim)?;
@@ -292,8 +290,7 @@ impl GatedDeltaNet {
                         v_w.reshape((num_k_heads, v_per_group * head_v_dim, hidden_size))?;
                     let z_grouped =
                         z_w.reshape((num_k_heads, v_per_group * head_v_dim, hidden_size))?;
-                    let merged =
-                        Tensor::cat(&[q_grouped, k_grouped, v_grouped, z_grouped], 1)?;
+                    let merged = Tensor::cat(&[q_grouped, k_grouped, v_grouped, z_grouped], 1)?;
                     merged.reshape((qkvz_out, hidden_size))?
                 }
             }
@@ -499,47 +496,22 @@ impl GatedDeltaNet {
             #[cfg(feature = "cuda")]
             {
                 if q.device().is_cuda() {
-                    self.recurrence_cuda(
-                        &q, &k, &v, &g, &beta, batch_size, seq_len, cache, dtype,
-                    )?
+                    self.recurrence_cuda(&q, &k, &v, &g, &beta, batch_size, seq_len, cache, dtype)?
                 } else {
-                    gated_delta_rule_recurrence(
-                        &q,
-                        &k,
-                        &v,
-                        &g,
-                        &beta,
-                        &mut cache.recurrent_state,
-                    )?
+                    gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?
                 }
             }
             #[cfg(feature = "metal")]
             {
                 if q.device().is_metal() {
-                    self.recurrence_metal(
-                        &q, &k, &v, &g, &beta, batch_size, seq_len, cache, dtype,
-                    )?
+                    self.recurrence_metal(&q, &k, &v, &g, &beta, batch_size, seq_len, cache, dtype)?
                 } else {
-                    gated_delta_rule_recurrence(
-                        &q,
-                        &k,
-                        &v,
-                        &g,
-                        &beta,
-                        &mut cache.recurrent_state,
-                    )?
+                    gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?
                 }
             }
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
             {
-                gated_delta_rule_recurrence(
-                    &q,
-                    &k,
-                    &v,
-                    &g,
-                    &beta,
-                    &mut cache.recurrent_state,
-                )?
+                gated_delta_rule_recurrence(&q, &k, &v, &g, &beta, &mut cache.recurrent_state)?
             }
         };
 
@@ -566,12 +538,7 @@ impl GatedDeltaNet {
         Ok(res)
     }
 
-    fn compute_beta_g_cpu(
-        &self,
-        b: &Tensor,
-        a: &Tensor,
-        dtype: DType,
-    ) -> Result<(Tensor, Tensor)> {
+    fn compute_beta_g_cpu(&self, b: &Tensor, a: &Tensor, dtype: DType) -> Result<(Tensor, Tensor)> {
         let beta = candle_nn::ops::sigmoid(b)?;
         let a_f = a.to_dtype(DType::F32)?;
         let dt_bias_expanded = self

@@ -3,7 +3,7 @@
 /// Mirrors the CUDA implementations in `cuda/gdn.rs`.
 
 #[cfg(feature = "metal")]
-use candle_core::{DType, Device, MetalDevice, Storage, Tensor, Result};
+use candle_core::{DType, Device, MetalDevice, Result, Storage, Tensor};
 
 #[cfg(feature = "metal")]
 use candle_metal_kernels::metal::{
@@ -46,7 +46,9 @@ fn load_gdn_library(device: &MetalRawDevice) -> Result<Library> {
     };
     let lib = device
         .new_library_with_source(GDN_METAL_SOURCE, Some(&compile_options))
-        .map_err(|e| candle_core::Error::Msg(format!("Failed to compile GDN Metal kernels: {e}")))?;
+        .map_err(|e| {
+            candle_core::Error::Msg(format!("Failed to compile GDN Metal kernels: {e}"))
+        })?;
     Ok(GDN_LIBRARY.get_or_init(|| lib).clone())
 }
 
@@ -56,9 +58,9 @@ fn load_pipeline(device: &MetalRawDevice, name: &str) -> Result<ComputePipeline>
 
     // Check read lock first
     {
-        let pipelines = pipelines_lock.read().map_err(|e| {
-            candle_core::Error::Msg(format!("Failed to lock pipeline cache: {e}"))
-        })?;
+        let pipelines = pipelines_lock
+            .read()
+            .map_err(|e| candle_core::Error::Msg(format!("Failed to lock pipeline cache: {e}")))?;
         if let Some(pipeline) = pipelines.get(name) {
             return Ok(pipeline.clone());
         }
@@ -66,12 +68,14 @@ fn load_pipeline(device: &MetalRawDevice, name: &str) -> Result<ComputePipeline>
 
     // Not found, compile and insert
     let lib = load_gdn_library(device)?;
-    let func = lib
-        .get_function(name, None)
-        .map_err(|e| candle_core::Error::Msg(format!("Failed to load Metal function '{name}': {e}")))?;
+    let func = lib.get_function(name, None).map_err(|e| {
+        candle_core::Error::Msg(format!("Failed to load Metal function '{name}': {e}"))
+    })?;
     let pipeline = device
         .new_compute_pipeline_state_with_function(&func)
-        .map_err(|e| candle_core::Error::Msg(format!("Failed to create pipeline for '{name}': {e}")))?;
+        .map_err(|e| {
+            candle_core::Error::Msg(format!("Failed to create pipeline for '{name}': {e}"))
+        })?;
 
     let mut pipelines = pipelines_lock.write().map_err(|e| {
         candle_core::Error::Msg(format!("Failed to lock pipeline cache for write: {e}"))
@@ -226,7 +230,9 @@ pub fn causal_conv1d_metal(
     let type_suffix = match dtype {
         DType::F16 => "half",
         DType::BF16 => "bfloat16_t",
-        _ => candle_core::bail!("causal_conv1d_metal: unsupported dtype {dtype:?}, expected F16 or BF16"),
+        _ => candle_core::bail!(
+            "causal_conv1d_metal: unsupported dtype {dtype:?}, expected F16 or BF16"
+        ),
     };
 
     let Device::Metal(dev) = x.device() else {
@@ -401,7 +407,9 @@ pub fn fused_gdn_gating_metal(
     let type_suffix = match dtype {
         DType::F16 => "half",
         DType::BF16 => "bfloat16_t",
-        _ => candle_core::bail!("fused_gdn_gating_metal: unsupported dtype {dtype:?}, expected F16 or BF16"),
+        _ => candle_core::bail!(
+            "fused_gdn_gating_metal: unsupported dtype {dtype:?}, expected F16 or BF16"
+        ),
     };
 
     let total_elements = b.elem_count();

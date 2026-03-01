@@ -6328,9 +6328,7 @@ impl VisionModelLoader for Qwen3_5MoeLoader {
         Arc::new(Qwen3_5MoeProcessor::new(max_edge))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        // Hybrid model with GDN layers cannot use paged attention for GDN layers,
-        // but full attention layers can. For now, disable paged attention.
-        false
+        true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true

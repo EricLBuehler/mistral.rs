@@ -4,7 +4,7 @@
 /// single GPU kernel dispatch on Metal devices.
 
 #[cfg(feature = "metal")]
-use candle_core::{DType, Device, Storage, Tensor, Result};
+use candle_core::{DType, Device, Result, Storage, Tensor};
 
 #[cfg(feature = "metal")]
 use candle_metal_kernels::metal::{
@@ -44,7 +44,9 @@ fn load_ssm_library(device: &MetalRawDevice) -> Result<Library> {
     };
     let lib = device
         .new_library_with_source(SSM_METAL_SOURCE, Some(&compile_options))
-        .map_err(|e| candle_core::Error::Msg(format!("Failed to compile SSM Metal kernels: {e}")))?;
+        .map_err(|e| {
+            candle_core::Error::Msg(format!("Failed to compile SSM Metal kernels: {e}"))
+        })?;
     Ok(SSM_LIBRARY.get_or_init(|| lib).clone())
 }
 
@@ -62,12 +64,14 @@ fn load_pipeline(device: &MetalRawDevice, name: &str) -> Result<ComputePipeline>
     }
 
     let lib = load_ssm_library(device)?;
-    let func = lib
-        .get_function(name, None)
-        .map_err(|e| candle_core::Error::Msg(format!("Failed to load SSM Metal function '{name}': {e}")))?;
+    let func = lib.get_function(name, None).map_err(|e| {
+        candle_core::Error::Msg(format!("Failed to load SSM Metal function '{name}': {e}"))
+    })?;
     let pipeline = device
         .new_compute_pipeline_state_with_function(&func)
-        .map_err(|e| candle_core::Error::Msg(format!("Failed to create SSM pipeline for '{name}': {e}")))?;
+        .map_err(|e| {
+            candle_core::Error::Msg(format!("Failed to create SSM pipeline for '{name}': {e}"))
+        })?;
 
     let mut pipelines = pipelines_lock.write().map_err(|e| {
         candle_core::Error::Msg(format!("Failed to lock SSM pipeline cache for write: {e}"))
@@ -147,7 +151,11 @@ pub fn selective_scan_metal(
     let pipeline = load_pipeline(dev.device(), kernel_name)?;
 
     // Allocate output
-    let y = Tensor::zeros((batch_size, seq_len, n_heads * head_dim), DType::F32, x_flat.device())?;
+    let y = Tensor::zeros(
+        (batch_size, seq_len, n_heads * head_dim),
+        DType::F32,
+        x_flat.device(),
+    )?;
 
     let (x_buf, x_off) = metal_buffer_and_offset(&x_flat)?;
     let (dt_buf, dt_off) = metal_buffer_and_offset(&dt)?;

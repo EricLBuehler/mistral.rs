@@ -87,8 +87,11 @@ impl RecurrentStatePool {
         let new_capacity = self.capacity * 2;
 
         // Allocate new larger conv_state and copy existing data
-        let new_conv =
-            Tensor::zeros((new_capacity, self.conv_dim, self.conv_width), self.dtype, &self.device)?;
+        let new_conv = Tensor::zeros(
+            (new_capacity, self.conv_dim, self.conv_width),
+            self.dtype,
+            &self.device,
+        )?;
         new_conv.slice_set(&self.conv_state, 0, 0)?;
 
         // Allocate new larger recurrent_state and copy existing data
@@ -98,8 +101,7 @@ impl RecurrentStatePool {
         new_recurrent.slice_set(&self.recurrent_state, 0, 0)?;
 
         // Add new slots to free list
-        self.free_slots
-            .extend((self.capacity..new_capacity).rev());
+        self.free_slots.extend((self.capacity..new_capacity).rev());
         self.seqlen_offsets.resize(new_capacity, 0);
 
         self.conv_state = new_conv;
@@ -186,8 +188,11 @@ impl RecurrentStatePool {
 
     /// Reset a specific slot's state to zeros
     pub fn reset_slot(&mut self, slot_idx: usize) -> Result<()> {
-        let zero_conv =
-            Tensor::zeros((1, self.conv_dim, self.conv_width), self.dtype, &self.device)?;
+        let zero_conv = Tensor::zeros(
+            (1, self.conv_dim, self.conv_width),
+            self.dtype,
+            &self.device,
+        )?;
 
         let mut recurrent_shape = vec![1usize];
         recurrent_shape.extend_from_slice(&self.state_dims);
@@ -349,15 +354,13 @@ impl HybridCache {
                     config.max_seq_len,
                     Self::CACHE_GROW_SIZE,
                 )),
-                HybridLayerType::Recurrent => {
-                    HybridLayerCache::Recurrent(RecurrentStatePool::new(
-                        config.recurrent.conv_dim,
-                        config.recurrent.conv_width,
-                        config.recurrent.state_dims.clone(),
-                        dtype,
-                        device,
-                    )?)
-                }
+                HybridLayerType::Recurrent => HybridLayerCache::Recurrent(RecurrentStatePool::new(
+                    config.recurrent.conv_dim,
+                    config.recurrent.conv_width,
+                    config.recurrent.state_dims.clone(),
+                    dtype,
+                    device,
+                )?),
             };
             caches.push(cache);
         }
@@ -372,19 +375,69 @@ impl HybridCache {
     /// Allocate state slots for a new sequence across all recurrent layers.
     /// Returns the slot index (same for all layers).
     pub fn allocate_seq(&mut self) -> Option<usize> {
-        // All recurrent layers share the same slot index for a sequence
-        let mut slot_idx = None;
-        for cache in &mut self.caches {
-            if let HybridLayerCache::Recurrent(pool) = cache {
-                if slot_idx.is_none() {
-                    slot_idx = pool.allocate();
-                    slot_idx?;
-                } else {
-                    let _ = pool.allocate();
+        // Collect recurrent layer indices once so rollback can target only recurrent pools.
+        let recurrent_layers: Vec<usize> = self
+            .caches
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, cache)| match cache {
+                HybridLayerCache::Recurrent(_) => Some(idx),
+                HybridLayerCache::Attention(_) => None,
+            })
+            .collect();
+
+        let mut expected_slot = None;
+        let mut allocated_slots = Vec::new();
+
+        for &layer_idx in &recurrent_layers {
+            let slot_idx = {
+                let HybridLayerCache::Recurrent(pool) = &mut self.caches[layer_idx] else {
+                    unreachable!("recurrent_layers only contains recurrent entries");
+                };
+                match pool.allocate() {
+                    Some(idx) => idx,
+                    None => {
+                        for (&rollback_layer_idx, &rollback_slot_idx) in
+                            recurrent_layers.iter().zip(allocated_slots.iter())
+                        {
+                            if let HybridLayerCache::Recurrent(pool) =
+                                &mut self.caches[rollback_layer_idx]
+                            {
+                                pool.free(rollback_slot_idx);
+                            }
+                        }
+                        return None;
+                    }
                 }
+            };
+
+            if let Some(expected) = expected_slot {
+                if slot_idx != expected {
+                    tracing::warn!(
+                        "Hybrid recurrent pool slot mismatch: expected {expected}, got {slot_idx}. Rolling back allocation."
+                    );
+                    if let HybridLayerCache::Recurrent(pool) = &mut self.caches[layer_idx] {
+                        pool.free(slot_idx);
+                    }
+                    for (&rollback_layer_idx, &rollback_slot_idx) in
+                        recurrent_layers.iter().zip(allocated_slots.iter())
+                    {
+                        if let HybridLayerCache::Recurrent(pool) =
+                            &mut self.caches[rollback_layer_idx]
+                        {
+                            pool.free(rollback_slot_idx);
+                        }
+                    }
+                    return None;
+                }
+            } else {
+                expected_slot = Some(slot_idx);
             }
+
+            allocated_slots.push(slot_idx);
         }
-        slot_idx
+
+        expected_slot
     }
 
     /// Free state slots for a sequence across all recurrent layers.
@@ -469,18 +522,11 @@ pub struct RecurrentStateSnapshot {
 impl HybridCache {
     /// Snapshot the recurrent state for a sequence at the given slot index.
     /// Returns one snapshot per recurrent layer, in layer order.
-    pub fn snapshot_recurrent_state(
-        &self,
-        slot_idx: usize,
-    ) -> Result<Vec<RecurrentStateSnapshot>> {
+    pub fn snapshot_recurrent_state(&self, slot_idx: usize) -> Result<Vec<RecurrentStateSnapshot>> {
         let mut snapshots = Vec::new();
         for cache in &self.caches {
             if let HybridLayerCache::Recurrent(pool) = cache {
-                let idx_tensor = Tensor::from_vec(
-                    vec![slot_idx as u32],
-                    (1,),
-                    pool.device(),
-                )?;
+                let idx_tensor = Tensor::from_vec(vec![slot_idx as u32], (1,), pool.device())?;
                 let conv = pool.gather_conv_state(&idx_tensor)?;
                 let recurrent = pool.gather_recurrent_state(&idx_tensor)?;
                 snapshots.push(RecurrentStateSnapshot {
@@ -506,11 +552,7 @@ impl HybridCache {
                 if let Some(snap) = snap_iter.next() {
                     let conv = snap.conv_state.to_device(pool.device())?;
                     let recurrent = snap.recurrent_state.to_device(pool.device())?;
-                    let idx_tensor = Tensor::from_vec(
-                        vec![slot_idx as u32],
-                        (1,),
-                        pool.device(),
-                    )?;
+                    let idx_tensor = Tensor::from_vec(vec![slot_idx as u32], (1,), pool.device())?;
                     pool.scatter_conv_state(&idx_tensor, &conv)?;
                     pool.scatter_recurrent_state(&idx_tensor, &recurrent)?;
                     pool.set_seqlen_offset(slot_idx, snap.seqlen_offset);

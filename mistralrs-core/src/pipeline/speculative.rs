@@ -436,7 +436,9 @@ impl Pipeline for SpeculativePipeline {
                         .unwrap_or(0),
                     EitherCache::Normal(normal) => normal.lock().unwrap().0[0].current_seq_len(),
                     EitherCache::Hybrid(_) => {
-                        unreachable!("Speculative decoding is not supported with hybrid caches")
+                        candle_core::bail!(
+                            "Speculative decoding is not supported with hybrid caches"
+                        )
                     }
                 };
 
@@ -507,7 +509,9 @@ impl Pipeline for SpeculativePipeline {
                         }
                     }
                     EitherCache::Hybrid(_) => {
-                        unreachable!("Speculative decoding is not supported with hybrid caches")
+                        candle_core::bail!(
+                            "Speculative decoding is not supported with hybrid caches"
+                        )
                     }
                 }
                 if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
@@ -519,7 +523,9 @@ impl Pipeline for SpeculativePipeline {
                             }
                         }
                         EitherCache::Normal(_) | EitherCache::Hybrid(_) => {
-                            unreachable!()
+                            candle_core::bail!(
+                                "Speculative decoding X-LoRA path requires full cache backend."
+                            )
                         }
                     }
                 }
@@ -538,7 +544,9 @@ impl Pipeline for SpeculativePipeline {
                         }
                     }
                     EitherCache::Hybrid(_) => {
-                        unreachable!("Speculative decoding is not supported with hybrid caches")
+                        candle_core::bail!(
+                            "Speculative decoding is not supported with hybrid caches"
+                        )
                     }
                 }
                 if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
@@ -550,7 +558,9 @@ impl Pipeline for SpeculativePipeline {
                             }
                         }
                         EitherCache::Normal(_) | EitherCache::Hybrid(_) => {
-                            unreachable!()
+                            candle_core::bail!(
+                                "Speculative decoding X-LoRA path requires full cache backend."
+                            )
                         }
                     }
                 }
@@ -623,7 +633,9 @@ impl Pipeline for SpeculativePipeline {
 
                 Ok(exec_duration)
             }
-            CacheBackendMetadata::PagedAttention { .. } => unreachable!(),
+            CacheBackendMetadata::PagedAttention { .. } => {
+                candle_core::bail!("Speculative decoding does not support paged-attention backend.")
+            }
         }
     }
     fn category(&self) -> ModelCategory {

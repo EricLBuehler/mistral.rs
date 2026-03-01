@@ -924,15 +924,47 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
             }
         });
 
+        // Ensure every sequence has a recurrent slot when using hybrid cache.
+        let mut state_index_allocation_failed = false;
+        for seq in seqs.iter_mut() {
+            if seq.recurrent_state_idx().is_none() {
+                if let Some(slot_idx) = hybrid_cache.allocate_seq() {
+                    seq.set_recurrent_state_idx(Some(slot_idx));
+                } else {
+                    tracing::warn!(
+                        "Failed to allocate recurrent state slot for sequence {}, hybrid forward may fail.",
+                        seq.id()
+                    );
+                    state_index_allocation_failed = true;
+                    break;
+                }
+            }
+        }
+
         if let Some(device) = recurrent_device {
-            // Build state_indices tensor from sequences
-            #[allow(clippy::cast_possible_truncation)]
-            let indices: Vec<u32> = seqs
-                .iter()
-                .map(|seq| seq.recurrent_state_idx().unwrap_or(0) as u32)
-                .collect();
-            if let Ok(state_indices) = Tensor::from_vec(indices, (seqs.len(),), &device) {
-                hybrid_cache.set_state_indices(Some(state_indices));
+            if state_index_allocation_failed {
+                hybrid_cache.set_state_indices(None);
+            } else {
+                // Build state_indices tensor from sequences
+                #[allow(clippy::cast_possible_truncation)]
+                let mut indices = Vec::with_capacity(seqs.len());
+                for seq in seqs.iter() {
+                    if let Some(idx) = seq.recurrent_state_idx() {
+                        indices.push(idx as u32);
+                    } else {
+                        tracing::warn!(
+                            "Sequence {} missing recurrent_state_idx during hybrid clone_in_cache.",
+                            seq.id()
+                        );
+                        hybrid_cache.set_state_indices(None);
+                        return;
+                    }
+                }
+                if let Ok(state_indices) = Tensor::from_vec(indices, (seqs.len(),), &device) {
+                    hybrid_cache.set_state_indices(Some(state_indices));
+                } else {
+                    hybrid_cache.set_state_indices(None);
+                }
             }
         }
 

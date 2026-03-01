@@ -16,7 +16,9 @@ use super::config::{LayerType, TextConfig};
 use crate::{
     attention::SdpaParams,
     device_map::{DeviceMappedMask, DeviceMapper},
-    kv_cache::{HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig},
+    kv_cache::{
+        HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
+    },
     layers::{self, GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
     models::gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode},
     moe::{MoEExperts, MoEExpertsConfig},
@@ -722,7 +724,11 @@ impl Qwen3_5MoeTextModel {
             recurrent: RecurrentLayerConfig {
                 conv_dim: cfg.linear_conv_dim(),
                 conv_width: cfg.linear_conv_kernel_dim,
-                state_dims: vec![cfg.linear_num_value_heads, cfg.linear_key_head_dim, cfg.linear_value_head_dim],
+                state_dims: vec![
+                    cfg.linear_num_value_heads,
+                    cfg.linear_key_head_dim,
+                    cfg.linear_value_head_dim,
+                ],
             },
         };
 
@@ -805,9 +811,7 @@ impl Qwen3_5MoeTextModel {
 
             match &self.layer_types[i] {
                 LayerType::FullAttention => {
-                    if let Some(HybridLayerCache::Attention(kv_cache)) =
-                        hybrid_cache.get_mut(i)
-                    {
+                    if let Some(HybridLayerCache::Attention(kv_cache)) = hybrid_cache.get_mut(i) {
                         xs = layer.forward_attention(
                             &xs,
                             attention_mask.as_ref().map(|m| m.get(xs.device())),
@@ -821,9 +825,7 @@ impl Qwen3_5MoeTextModel {
                     }
                 }
                 LayerType::LinearAttention => {
-                    if let Some(HybridLayerCache::Recurrent(pool)) =
-                        hybrid_cache.get_mut(i)
-                    {
+                    if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) {
                         if let Some(ref indices) = state_indices {
                             let conv_state = pool.gather_conv_state(indices)?;
                             let recurrent_state = pool.gather_recurrent_state(indices)?;
@@ -840,17 +842,11 @@ impl Qwen3_5MoeTextModel {
                             xs = layer.forward_linear(&xs, &mut gdn_cache)?;
 
                             pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
-                            pool.scatter_recurrent_state(
-                                indices,
-                                &gdn_cache.recurrent_state,
-                            )?;
+                            pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
 
                             let indices_vec: Vec<u32> = indices.to_vec1()?;
                             for &idx in &indices_vec {
-                                pool.set_seqlen_offset(
-                                    idx as usize,
-                                    gdn_cache.seqlen_offset,
-                                );
+                                pool.set_seqlen_offset(idx as usize, gdn_cache.seqlen_offset);
                             }
                         }
                     }

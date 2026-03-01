@@ -30,8 +30,8 @@ pub fn selective_scan_cuda(
     dt_min: f32,
     dt_max: f32,
 ) -> candle_core::Result<candle_core::Tensor> {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
 
     let x = x.contiguous()?;
     let dt = dt.contiguous()?;
@@ -84,7 +84,10 @@ pub fn selective_scan_cuda(
         _ => candle::bail!("selective_scan_cuda: state must be on CUDA"),
     };
     let state_ptr = {
-        let ptr = state_s.slice(state_l.start_offset()..).device_ptr(state_s.stream()).0 as *mut f32;
+        let ptr = state_s
+            .slice(state_l.start_offset()..)
+            .device_ptr(state_s.stream())
+            .0 as *mut f32;
         ptr
     };
     let _ = state_s;
@@ -106,7 +109,10 @@ pub fn selective_scan_cuda(
             d_ptr,
             dt_bias_ptr,
             state_ptr,
-            {let p = y_buf.device_ptr(y_buf.stream()).0 as *mut f32; p},
+            {
+                let p = y_buf.device_ptr(y_buf.stream()).0 as *mut f32;
+                p
+            },
             batch_size as i32,
             n_heads as i32,
             head_dim as i32,

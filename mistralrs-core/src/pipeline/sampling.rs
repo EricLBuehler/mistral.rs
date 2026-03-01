@@ -214,9 +214,8 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         if let Some(reason) = is_done {
             if use_prefix_cacher {
                 let recurrent_snapshots = if this.cache().is_hybrid() {
-                    seq.recurrent_state_idx().and_then(|idx| {
-                        this.cache().hybrid().snapshot_recurrent_state(idx).ok()
-                    })
+                    seq.recurrent_state_idx()
+                        .and_then(|idx| this.cache().hybrid().snapshot_recurrent_state(idx).ok())
                 } else {
                     None
                 };
@@ -371,9 +370,8 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 
             if use_prefix_cacher {
                 let recurrent_snapshots = if this.cache().is_hybrid() {
-                    seq.recurrent_state_idx().and_then(|idx| {
-                        this.cache().hybrid().snapshot_recurrent_state(idx).ok()
-                    })
+                    seq.recurrent_state_idx()
+                        .and_then(|idx| this.cache().hybrid().snapshot_recurrent_state(idx).ok())
                 } else {
                     None
                 };

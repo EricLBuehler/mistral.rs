@@ -4530,7 +4530,7 @@ impl NormalModelLoader for GraniteMoeHybridLoader {
         _normal_loading_metadata: NormalLoadingMetadata,
         _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        todo!()
+        anyhow::bail!("GraniteMoeHybrid does not support X-LoRA")
     }
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
@@ -4538,6 +4538,9 @@ impl NormalModelLoader for GraniteMoeHybridLoader {
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: crate::models::granite::Config = serde_json::from_str(config)?;
         Ok(Box::new(cfg))
+    }
+    fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
+        Ok(true)
     }
 }
 
@@ -4932,7 +4935,7 @@ impl NormalModelLoader for Qwen3NextLoader {
         Ok(Box::new(cfg))
     }
     fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
-        Ok(false)
+        Ok(true)
     }
 }
 

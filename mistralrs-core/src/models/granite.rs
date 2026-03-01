@@ -16,7 +16,9 @@ use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
     attention::SdpaParams,
     device_map::{DeviceMappedMask, DeviceMapper},
-    kv_cache::{HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig},
+    kv_cache::{
+        HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
+    },
     layers::{embedding, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -2178,7 +2180,7 @@ impl NormalModel for GraniteMoeHybrid {
         _flash_params: &FlashParams,
         _flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
-        unimplemented!()
+        candle_core::bail!("GraniteMoeHybrid does not support X-LoRA forward")
     }
     fn cache(&self) -> &crate::pipeline::EitherCache {
         &self.kv_cache

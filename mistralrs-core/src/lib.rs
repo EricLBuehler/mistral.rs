@@ -34,10 +34,10 @@ pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISI
 };
 
 mod cuda;
-mod metal;
 mod device_map;
 mod engine;
 mod lora;
+mod metal;
 mod model_loader;
 mod moe;
 mod ops;
