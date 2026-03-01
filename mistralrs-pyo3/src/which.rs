@@ -96,6 +96,7 @@ pub enum VisionArchitecture {
     Gemma3n,
     Qwen3VL,
     Qwen3VLMoE,
+    Qwen3_5,
     Qwen3_5Moe,
     Voxtral,
 }
@@ -119,6 +120,7 @@ impl From<VisionArchitecture> for VisionLoaderType {
             VisionArchitecture::Gemma3n => VisionLoaderType::Gemma3n,
             VisionArchitecture::Qwen3VL => VisionLoaderType::Qwen3VL,
             VisionArchitecture::Qwen3VLMoE => VisionLoaderType::Qwen3VLMoE,
+            VisionArchitecture::Qwen3_5 => VisionLoaderType::Qwen3_5,
             VisionArchitecture::Qwen3_5Moe => VisionLoaderType::Qwen3_5Moe,
             VisionArchitecture::Voxtral => VisionLoaderType::Voxtral,
         }

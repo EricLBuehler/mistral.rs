@@ -55,7 +55,7 @@
 - [Phi 4 Multimodal](PHI4MM.md)
 - [Qwen 2-VL](QWEN2VL.md)
 - [Qwen 3-VL](QWEN3VL.md)
-- [Qwen 3.5 MoE](QWEN3_5MOE.md)
+- [Qwen 3.5](QWEN3_5.md)
 
 ## Other Model Guides
 

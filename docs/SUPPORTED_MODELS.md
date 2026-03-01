@@ -32,7 +32,7 @@ Complete reference for model support in mistral.rs.
 
 - Qwen 3-VL
 - Qwen 3-VL MoE
-- Qwen 3.5 MoE
+- Qwen 3.5
 - Gemma 3n
 - Llama 4
 - Gemma 3
@@ -118,7 +118,7 @@ Complete reference for model support in mistral.rs.
 |Qwen 3 VL| | |✅|
 |Qwen 3 MoE|✅| |✅|
 |Qwen 3-VL MoE| | |✅|
-|Qwen 3.5 MoE| | |✅|
+|Qwen 3.5| | |✅|
 |Qwen 3 Next| | |✅|
 |Phi 4 Multimodal| | |✅|
 |Granite 4.0| | |✅|
@@ -169,7 +169,7 @@ Complete reference for model support in mistral.rs.
 |Voxtral| | | |
 |Qwen 3 VL| | | |
 |Qwen 3-VL MoE| | | |
-|Qwen 3.5 MoE| | | |
+|Qwen 3.5| | | |
 |Qwen 3 Next| | | |
 |Phi 4 Multimodal| | | |
 |Llama 3.2 Vision| | | |
@@ -212,7 +212,7 @@ Complete reference for model support in mistral.rs.
 |Voxtral| |
 |Qwen 3 VL| |
 |Qwen 3-VL MoE| |
-|Qwen 3.5 MoE| |
+|Qwen 3.5| |
 |Qwen 3 Next| |
 |Phi 4 Multimodal| |
 |Dia 1.6b| |

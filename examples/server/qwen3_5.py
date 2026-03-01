@@ -1,6 +1,7 @@
 """
 Start the server:
-    mistralrs serve vision -p 1234 -m Qwen/Qwen3.5-35B-A3B
+    Dense:  mistralrs serve vision -p 1234 -m Qwen/Qwen3.5-27B
+    MoE:    mistralrs serve vision -p 1234 -m Qwen/Qwen3.5-35B-A3B
 """
 
 from openai import OpenAI

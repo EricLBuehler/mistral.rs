@@ -52,7 +52,7 @@
 - [LLaVA](LLaVA.md) | [Llama 3.2 Vision](VLLAMA.md) | [Llama 4](LLAMA4.md)
 - [MiniCPM-O 2.6](MINICPMO_2_6.md) | [Mistral 3](MISTRAL3.md)
 - [Phi 3.5 MoE](PHI3.5MOE.md) | [Phi 3.5 Vision](PHI3V.md) | [Phi 4 Multimodal](PHI4MM.md)
-- [Qwen 2-VL](QWEN2VL.md) | [Qwen 3 VL](QWEN3VL.md) | [Qwen 3.5 MoE](QWEN3_5MOE.md)
+- [Qwen 2-VL](QWEN2VL.md) | [Qwen 3 VL](QWEN3VL.md) | [Qwen 3.5](QWEN3_5.md)
 
 **Other Models:**
 - [FLUX (Diffusion)](FLUX.md) | [Dia (Speech)](DIA.md)

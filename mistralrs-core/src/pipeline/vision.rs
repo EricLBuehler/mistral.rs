@@ -5,7 +5,7 @@ use super::{
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
     ModelKind, ModelPaths, MultimodalPromptPrefixer, Phi4MMLoader, PreProcessingMixin, Processor,
-    Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5MoeLoader, TokenSource, VLlama4Loader,
+    Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, TokenSource, VLlama4Loader,
     VLlamaLoader, VisionModel, VisionModelLoader,
 };
 use super::{
@@ -185,6 +185,7 @@ impl VisionLoaderBuilder {
             Some(VisionLoaderType::Gemma3n) => Box::new(Gemma3nLoader),
             Some(VisionLoaderType::Qwen3VL) => Box::new(Qwen3VLLoader),
             Some(VisionLoaderType::Qwen3VLMoE) => Box::new(Qwen3VLMoELoader),
+            Some(VisionLoaderType::Qwen3_5) => Box::new(Qwen3_5Loader),
             Some(VisionLoaderType::Qwen3_5Moe) => Box::new(Qwen3_5MoeLoader),
             Some(VisionLoaderType::Voxtral) => Box::new(VoxtralLoader),
             None => Box::new(AutoVisionLoader),

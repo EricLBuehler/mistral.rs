@@ -145,7 +145,7 @@ mistralrs doctor
 <details>
 <summary><b>Vision Models</b></summary>
 
-- Qwen 3.5 MoE
+- Qwen 3.5
 - Qwen 3-VL
 - Qwen 3-VL MoE
 - Gemma 3n

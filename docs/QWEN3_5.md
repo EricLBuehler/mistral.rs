@@ -1,8 +1,11 @@
-# Qwen 3.5 MoE Vision Model
+# Qwen 3.5 Vision Models
 
-The Qwen 3.5 MoE models are vision-language models using a hybrid Gated Delta Network (GDN) + full attention architecture with Mixture of Experts. Available sizes include 35B-A3B and 397B-A17B.
+The Qwen 3.5 models are vision-language models using a hybrid Gated Delta Network (GDN) + full attention architecture. Both dense and MoE (Mixture of Experts) variants are supported:
 
-Mistral.rs supports the Qwen 3.5 MoE vision model family with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements. MoE variants also support [MoQE](ISQ.md) via the `--organization moqe` flag.
+- **Dense**: `Qwen/Qwen3.5-27B`
+- **MoE**: `Qwen/Qwen3.5-35B-A3B`, `Qwen/Qwen3.5-397B-A17B`
+
+Mistral.rs supports the Qwen 3.5 vision model family with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements. MoE variants also support [MoQE](ISQ.md) via the `--organization moqe` flag.
 
 UQFF quantizations are also available.
 
@@ -16,7 +19,7 @@ The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/
 > Note: When using device mapping or model topology, only the text model and its layers will be managed. This is because it contains most of the model parameters.
 
 ## ToC
-- [Qwen 3.5 MoE Vision Model](#qwen-35-moe-vision-model)
+- [Qwen 3.5 Vision Models](#qwen-35-vision-models)
   - [ToC](#toc)
   - [Interactive mode](#interactive-mode)
   - [HTTP server](#http-server)
@@ -27,14 +30,20 @@ The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/
 
 Mistral.rs supports interactive mode for vision models! It is an easy way to interact with the model.
 
-Start up interactive mode with the Qwen 3.5 MoE model:
+Start up interactive mode with the Qwen 3.5 model (dense):
+
+```
+mistralrs run vision -m Qwen/Qwen3.5-27B
+```
+
+Or with the MoE variant:
 
 ```
 mistralrs run vision -m Qwen/Qwen3.5-35B-A3B
 ```
 
 ## HTTP server
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_5_moe.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_5.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -43,7 +52,7 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 1) Start the server
 
 ```
-mistralrs serve vision -p 1234 -m Qwen/Qwen3.5-35B-A3B
+mistralrs serve vision -p 1234 -m Qwen/Qwen3.5-27B
 ```
 
 2) Send a request
@@ -96,7 +105,7 @@ use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("Qwen/Qwen3.5-35B-A3B")
+    let model = VisionModelBuilder::new("Qwen/Qwen3.5-27B")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()
@@ -131,7 +140,7 @@ async fn main() -> Result<()> {
 ---
 
 ## Python
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_5_moe.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_5.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -140,14 +149,24 @@ This example demonstrates loading and sending a chat completion request with an 
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 
-MODEL_ID = "Qwen/Qwen3.5-35B-A3B"
+# Dense variant
+MODEL_ID = "Qwen/Qwen3.5-27B"
 
 runner = Runner(
     which=Which.VisionPlain(
         model_id=MODEL_ID,
-        arch=VisionArchitecture.Qwen3_5Moe,
+        arch=VisionArchitecture.Qwen3_5,
     ),
 )
+
+# For MoE variant, use:
+# MODEL_ID = "Qwen/Qwen3.5-35B-A3B"
+# runner = Runner(
+#     which=Which.VisionPlain(
+#         model_id=MODEL_ID,
+#         arch=VisionArchitecture.Qwen3_5Moe,
+#     ),
+# )
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(

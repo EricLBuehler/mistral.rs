@@ -1,13 +1,23 @@
 from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 
-MODEL_ID = "Qwen/Qwen3.5-35B-A3B"
+# Dense variant
+MODEL_ID = "Qwen/Qwen3.5-27B"
 
 runner = Runner(
     which=Which.VisionPlain(
         model_id=MODEL_ID,
-        arch=VisionArchitecture.Qwen3_5Moe,
+        arch=VisionArchitecture.Qwen3_5,
     ),
 )
+
+# For MoE variant, use:
+# MODEL_ID = "Qwen/Qwen3.5-35B-A3B"
+# runner = Runner(
+#     which=Which.VisionPlain(
+#         model_id=MODEL_ID,
+#         arch=VisionArchitecture.Qwen3_5Moe,
+#     ),
+# )
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
