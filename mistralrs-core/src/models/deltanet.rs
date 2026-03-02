@@ -275,20 +275,38 @@ impl GatedDeltaNet {
             None
         };
 
-        let num_k_heads = cfg.linear_num_key_heads();
-        let num_v_heads = cfg.linear_num_value_heads();
+        let world_size = comm.world_size();
+        let num_k_heads_global = cfg.linear_num_key_heads();
+        let num_v_heads_global = cfg.linear_num_value_heads();
+
+        if num_v_heads_global % world_size != 0 || num_k_heads_global % world_size != 0 {
+            candle_core::bail!(
+                "linear attention heads must be divisible by tensor parallel world_size (num_v_heads={}, num_k_heads={}, world_size={})",
+                num_v_heads_global,
+                num_k_heads_global,
+                world_size
+            );
+        }
+
+        let num_k_heads = num_k_heads_global / world_size;
+        let num_v_heads = num_v_heads_global / world_size;
+
         let head_k_dim = cfg.linear_key_head_dim();
         let head_v_dim = cfg.linear_value_head_dim();
         let key_dim = num_k_heads * head_k_dim;
         let value_dim = num_v_heads * head_v_dim;
+
+        let key_dim_global = num_k_heads_global * head_k_dim;
+        let value_dim_global = num_v_heads_global * head_v_dim;
+
         let conv_kernel_size = cfg.linear_conv_kernel_dim();
 
         let vb_la = mapper.set_device(layer_idx, vb.pp("linear_attn"), loading_isq);
 
-        let qkvz_out = key_dim * 2 + value_dim * 2;
+        let qkvz_out_global = key_dim_global * 2 + value_dim_global * 2;
         let in_proj_qkvz = mistralrs_quant::ColumnParallelLayer::new(
             cfg.hidden_size(),
-            qkvz_out,
+            qkvz_out_global,
             cfg.quantization_config(),
             false,
             comm,
@@ -296,17 +314,33 @@ impl GatedDeltaNet {
         )?;
         let in_proj_ba = mistralrs_quant::ColumnParallelLayer::new(
             cfg.hidden_size(),
-            num_v_heads * 2,
+            num_v_heads_global * 2,
             cfg.quantization_config(),
             false,
             comm,
             vb_la.pp("in_proj_ba"),
         )?;
 
-        let conv_dim = key_dim * 2 + value_dim;
-        let mut conv1d_weight = vb_la.get((conv_dim, 1, conv_kernel_size), "conv1d.weight")?;
-        let mut dt_bias = vb_la.get(num_v_heads, "dt_bias")?;
-        let mut a_log = vb_la.get(num_v_heads, "A_log")?;
+        let conv_dim_global = key_dim_global * 2 + value_dim_global;
+        let mut conv1d_weight =
+            vb_la.get((conv_dim_global, 1, conv_kernel_size), "conv1d.weight")?;
+
+        let sd = mistralrs_quant::Shard::Simple {
+            dim: 0,
+            rank: comm.rank(),
+            world_size: comm.world_size(),
+        };
+        let mut dt_bias = vb_la.get_with_hints((num_v_heads_global,), "dt_bias", sd)?;
+        let mut a_log = vb_la.get_with_hints((num_v_heads_global,), "A_log", sd)?;
+
+        let rank = comm.rank();
+        let q_start = rank * key_dim;
+        let k_start = key_dim_global + rank * key_dim;
+        let v_start = key_dim_global * 2 + rank * value_dim;
+        let q_w = conv1d_weight.narrow(0, q_start, key_dim)?;
+        let k_w = conv1d_weight.narrow(0, k_start, key_dim)?;
+        let v_w = conv1d_weight.narrow(0, v_start, value_dim)?;
+        conv1d_weight = candle_core::Tensor::cat(&[&q_w, &k_w, &v_w], 0)?;
 
         if let Some(ref target_dev) = isq_target_device {
             conv1d_weight = conv1d_weight.to_device(target_dev)?;
@@ -365,21 +399,39 @@ impl GatedDeltaNet {
             None
         };
 
-        let num_k_heads = cfg.linear_num_key_heads();
-        let num_v_heads = cfg.linear_num_value_heads();
+        let world_size = comm.world_size();
+        let num_k_heads_global = cfg.linear_num_key_heads();
+        let num_v_heads_global = cfg.linear_num_value_heads();
+
+        if num_v_heads_global % world_size != 0 || num_k_heads_global % world_size != 0 {
+            candle_core::bail!(
+                "linear attention heads must be divisible by tensor parallel world_size (num_v_heads={}, num_k_heads={}, world_size={})",
+                num_v_heads_global,
+                num_k_heads_global,
+                world_size
+            );
+        }
+
+        let num_k_heads = num_k_heads_global / world_size;
+        let num_v_heads = num_v_heads_global / world_size;
+
         let head_k_dim = cfg.linear_key_head_dim();
         let head_v_dim = cfg.linear_value_head_dim();
         let key_dim = num_k_heads * head_k_dim;
         let value_dim = num_v_heads * head_v_dim;
+
+        let key_dim_global = num_k_heads_global * head_k_dim;
+        let value_dim_global = num_v_heads_global * head_v_dim;
+
         let conv_kernel_size = cfg.linear_conv_kernel_dim();
 
         let vb_la = mapper.set_device(layer_idx, vb.pp("linear_attn"), loading_isq);
 
-        let qkv_out = key_dim * 2 + value_dim;
+        let qkv_out_global = key_dim_global * 2 + value_dim_global;
 
         let in_proj_qkv = mistralrs_quant::ColumnParallelLayer::new(
             cfg.hidden_size(),
-            qkv_out,
+            qkv_out_global,
             cfg.quantization_config(),
             false,
             comm,
@@ -387,7 +439,7 @@ impl GatedDeltaNet {
         )?;
         let in_proj_z = mistralrs_quant::ColumnParallelLayer::new(
             cfg.hidden_size(),
-            value_dim,
+            value_dim_global,
             cfg.quantization_config(),
             false,
             comm,
@@ -395,7 +447,7 @@ impl GatedDeltaNet {
         )?;
         let in_proj_b = mistralrs_quant::ColumnParallelLayer::new(
             cfg.hidden_size(),
-            num_v_heads,
+            num_v_heads_global,
             cfg.quantization_config(),
             false,
             comm,
@@ -403,17 +455,34 @@ impl GatedDeltaNet {
         )?;
         let in_proj_a = mistralrs_quant::ColumnParallelLayer::new(
             cfg.hidden_size(),
-            num_v_heads,
+            num_v_heads_global,
             cfg.quantization_config(),
             false,
             comm,
             vb_la.pp("in_proj_a"),
         )?;
 
-        let conv_dim = key_dim * 2 + value_dim;
-        let mut conv1d_weight = vb_la.get((conv_dim, 1, conv_kernel_size), "conv1d.weight")?;
-        let mut dt_bias = vb_la.get(num_v_heads, "dt_bias")?;
-        let mut a_log = vb_la.get(num_v_heads, "A_log")?;
+        let conv_dim_global = key_dim_global * 2 + value_dim_global;
+        let mut conv1d_weight =
+            vb_la.get((conv_dim_global, 1, conv_kernel_size), "conv1d.weight")?;
+
+        // Learned GDN parameters ()
+        let sd = mistralrs_quant::Shard::Simple {
+            dim: 0,
+            rank: comm.rank(),
+            world_size: comm.world_size(),
+        };
+        let mut dt_bias = vb_la.get_with_hints((num_v_heads_global,), "dt_bias", sd)?;
+        let mut a_log = vb_la.get_with_hints((num_v_heads_global,), "A_log", sd)?;
+
+        let rank = comm.rank();
+        let q_start = rank * key_dim;
+        let k_start = key_dim_global + rank * key_dim;
+        let v_start = key_dim_global * 2 + rank * value_dim;
+        let q_w = conv1d_weight.narrow(0, q_start, key_dim)?;
+        let k_w = conv1d_weight.narrow(0, k_start, key_dim)?;
+        let v_w = conv1d_weight.narrow(0, v_start, value_dim)?;
+        conv1d_weight = candle_core::Tensor::cat(&[&q_w, &k_w, &v_w], 0)?;
 
         if let Some(ref target_dev) = isq_target_device {
             conv1d_weight = conv1d_weight.to_device(target_dev)?;
