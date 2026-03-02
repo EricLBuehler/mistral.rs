@@ -26,6 +26,7 @@ pub enum MoELayout {
 }
 
 /// Configuration for MoEExperts
+#[derive(Debug)]
 pub struct MoEExpertsConfig {
     pub num_experts: usize,
     pub num_experts_per_tok: usize,
@@ -271,7 +272,7 @@ impl MoEExperts {
     ) -> Result<FusedExpertsWeights> {
         let num_experts = cfg.num_experts;
 
-        let (gate_up_w, down_w) = match cfg.layout {
+        let (gate_up_w, down_w, w_size_n) = match cfg.layout {
             MoELayout::HiddenPacked => {
                 // gate_up: [E, H, 2*I] -> shard(2, ..., world_size*2) -> [E, H, 2*I_local] (K=H, N=2*I_local)
                 let gate_w = experts_vb.get_with_hints(
@@ -292,7 +293,8 @@ impl MoEExperts {
                     "down_proj",
                     shard(1, comm.rank(), comm.world_size()),
                 )?;
-                (gate_up_w, down_w)
+                let w_size_n = gate_up_w.dim(2)? / 2;
+                (gate_up_w, down_w, w_size_n)
             }
             MoELayout::InterPacked => {
                 // gate_up: [E, 2*I, H] -> shard(1, ..., world_size*2) -> [E, 2*I_local, H] (N=2*I_local, K=H)
@@ -307,8 +309,6 @@ impl MoEExperts {
                     shard(1, comm.rank() + comm.world_size(), comm.world_size() * 2),
                 )?;
                 let gate_up_w = Tensor::cat(&[&gate_w, &up_w], 1)?;
-                // Transpose to [E, H, 2*I_local] (K=H, N=2*I_local)
-                let gate_up_w = gate_up_w.transpose(1, 2)?.contiguous()?;
 
                 // down: [E, H, I] -> shard(2, ..., world_size) -> [E, H, I_local] (N=H, K=I_local)
                 let down_w = experts_vb.get_with_hints(
@@ -316,19 +316,16 @@ impl MoEExperts {
                     "down_proj",
                     shard(2, comm.rank(), comm.world_size()),
                 )?;
-                // Transpose to [E, I_local, H] (K=I_local, N=H)
-                let down_w = down_w.transpose(1, 2)?.contiguous()?;
-                (gate_up_w, down_w)
+                let w_size_n = gate_up_w.dim(1)? / 2;
+                (gate_up_w, down_w, w_size_n)
             }
         };
-
-        let w_size_n = gate_up_w.dim(2)? / 2;
 
         Ok(FusedExpertsWeights {
             gate_up_w,
             down_w,
             w_size_n,
-            stacked_format: true,
+            stacked_format: matches!(cfg.layout, MoELayout::HiddenPacked),
         })
     }
 

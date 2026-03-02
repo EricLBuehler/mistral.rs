@@ -9,7 +9,7 @@ use mistralrs_quant::{
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
-use crate::moe::{MoEExperts, MoEExpertsConfig, MoELayout};
+use crate::moe::{MoEExperts, MoEExpertsConfig};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
@@ -389,8 +389,7 @@ impl MoeMlp {
             cfg.num_experts_per_tok,
             cfg.hidden_size,
             cfg.moe_intermediate_size,
-        )
-        .with_layout(MoELayout::InterPacked);
+        );
 
         // Load experts with automatic backend selection
         let experts = MoEExperts::new(

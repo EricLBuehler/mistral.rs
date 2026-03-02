@@ -13,7 +13,7 @@ use crate::{
     attention::SdpaParams,
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{self, Activation, Qwen3VLRotaryEmbedding, RmsNorm, Sdpa},
-    moe::{MoEExperts, MoEExpertsConfig, MoELayout},
+    moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -120,8 +120,7 @@ impl MoeMlp {
             cfg.num_experts_per_tok,
             cfg.hidden_size,
             cfg.moe_intermediate_size,
-        )
-        .with_layout(MoELayout::InterPacked);
+        );
 
         // Load experts with automatic backend selection
         let experts = MoEExperts::new(

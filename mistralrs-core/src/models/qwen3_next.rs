@@ -21,7 +21,7 @@ use crate::{
         embedding, linear_no_bias, CausalMasker, GemmaRmsNorm, MatMul, RotaryEmbedding, Sdpa,
     },
     layers_masker::PastKvLenCache,
-    moe::{MoEExperts, MoEExpertsConfig},
+    moe::{MoEExperts, MoEExpertsConfig, MoELayout},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -1133,6 +1133,7 @@ impl SparseMoeBlock {
         loading_isq: bool,
         comm: &Arc<mistralrs_quant::Comm>,
         real_device: Device,
+        is_qwen3_5: bool,
     ) -> Result<Self> {
         let layer_device = mapper
             .device_for(layer_idx, false)
@@ -1146,12 +1147,16 @@ impl SparseMoeBlock {
             vb.pp("gate").set_device(layer_device.clone()),
         )?;
 
-        let moe_cfg = MoEExpertsConfig::new(
+        let mut moe_cfg = MoEExpertsConfig::new(
             cfg.num_experts,
             cfg.num_experts_per_tok,
             cfg.hidden_size,
             cfg.moe_intermediate_size,
         );
+
+        if is_qwen3_5 {
+            moe_cfg = moe_cfg.with_layout(MoELayout::InterPacked);
+        }
 
         let experts = MoEExperts::new(
             &moe_cfg,
@@ -1532,6 +1537,7 @@ impl Model {
                 normal_loading_metadata.loading_isq,
                 &comm,
                 normal_loading_metadata.real_device.clone(),
+                false,
             )?;
 
             layers.push(DecoderLayer {

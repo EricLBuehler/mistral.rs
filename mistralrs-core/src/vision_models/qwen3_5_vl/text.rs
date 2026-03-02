@@ -440,6 +440,7 @@ impl Qwen3_5VLTextModel {
                     normal_loading_metadata.loading_isq,
                     &comm,
                     normal_loading_metadata.real_device.clone(),
+                    true,
                 )?)
             };
 
