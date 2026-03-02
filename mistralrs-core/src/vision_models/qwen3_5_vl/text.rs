@@ -547,13 +547,23 @@ impl Qwen3_5VLTextModel {
             xs = self.mapper.map(xs, i)?;
 
             let (kv_cache, gdn_cache) = match &mut local_cache.caches[i] {
-                LocalLayerCache::Attention(kv) => (Some(kv), None),
+                LocalLayerCache::Attention(kv) => {
+                    // Reset KV cache on first chunk
+                    if metadata
+                        .as_ref()
+                        .map(|(_, meta)| meta.is_first_prompt_chunk)
+                        .unwrap_or(seqlen_offsets[0] == 0)
+                    {
+                        kv.reset();
+                    }
+                    (Some(kv), None)
+                }
                 LocalLayerCache::LinearAttention(gdn) => {
                     // Reset GDN cache on first chunk
                     if metadata
                         .as_ref()
                         .map(|(_, meta)| meta.is_first_prompt_chunk)
-                        .unwrap_or(true)
+                        .unwrap_or(seqlen_offsets[0] == 0)
                     {
                         gdn.reset()?;
                     }

@@ -316,12 +316,12 @@ impl TextMoe {
         loading_isq: bool,
         layer_device: Device,
     ) -> Result<Self> {
-        let moe_cfg = MoEExpertsConfig {
-            num_experts: cfg.num_local_experts,
-            num_experts_per_tok: cfg.num_experts_per_tok,
-            hidden_size: cfg.hidden_size,
-            moe_intermediate_size: cfg.intermediate_size,
-        };
+        let moe_cfg = MoEExpertsConfig::new(
+            cfg.num_local_experts,
+            cfg.num_experts_per_tok,
+            cfg.hidden_size,
+            cfg.intermediate_size,
+        );
 
         let experts = MoEExperts::new(
             &moe_cfg,

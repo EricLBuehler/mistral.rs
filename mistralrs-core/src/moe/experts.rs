@@ -17,12 +17,43 @@ use crate::cuda::moe;
 use crate::layers::Activation;
 use crate::moe::shard;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoELayout {
+    /// gate_up: [E, H, 2*I], down: [E, I, H] (Standard)
+    HiddenPacked,
+    /// gate_up: [E, 2*I, H], down: [E, H, I] (Qwen3.5)
+    InterPacked,
+}
+
 /// Configuration for MoEExperts
 pub struct MoEExpertsConfig {
     pub num_experts: usize,
     pub num_experts_per_tok: usize,
     pub hidden_size: usize,
     pub moe_intermediate_size: usize,
+    pub layout: MoELayout,
+}
+
+impl MoEExpertsConfig {
+    pub fn new(
+        num_experts: usize,
+        num_experts_per_tok: usize,
+        hidden_size: usize,
+        moe_intermediate_size: usize,
+    ) -> Self {
+        Self {
+            num_experts,
+            num_experts_per_tok,
+            hidden_size,
+            moe_intermediate_size,
+            layout: MoELayout::HiddenPacked,
+        }
+    }
+
+    pub fn with_layout(mut self, layout: MoELayout) -> Self {
+        self.layout = layout;
+        self
+    }
 }
 
 /// Backend selection for MoE experts
@@ -240,37 +271,54 @@ impl MoEExperts {
     ) -> Result<FusedExpertsWeights> {
         let num_experts = cfg.num_experts;
 
-        // Load stacked gate_up_proj: [num_experts, hidden, inter*2]
-        let gate_up_w = match experts_vb.get_with_hints(
-            (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
-            "gate_up_proj",
-            shard(2, comm.rank(), comm.world_size()),
-        ) {
-            Ok(w) => w,
-            Err(_) => {
-                let w = experts_vb.get_with_hints(
-                    (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
+        let (gate_up_w, down_w) = match cfg.layout {
+            MoELayout::HiddenPacked => {
+                // gate_up: [E, H, 2*I] -> shard(2, ..., world_size*2) -> [E, H, 2*I_local] (K=H, N=2*I_local)
+                let gate_w = experts_vb.get_with_hints(
+                    (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
                     "gate_up_proj",
+                    shard(2, comm.rank(), comm.world_size() * 2),
+                )?;
+                let up_w = experts_vb.get_with_hints(
+                    (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
+                    "gate_up_proj",
+                    shard(2, comm.rank() + comm.world_size(), comm.world_size() * 2),
+                )?;
+                let gate_up_w = Tensor::cat(&[&gate_w, &up_w], 2)?;
+
+                // down: [E, I, H] -> shard(1, ..., world_size) -> [E, I_local, H] (K=I_local, N=H)
+                let down_w = experts_vb.get_with_hints(
+                    (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
+                    "down_proj",
                     shard(1, comm.rank(), comm.world_size()),
                 )?;
-                w.transpose(1, 2)?.contiguous()?
+                (gate_up_w, down_w)
             }
-        };
+            MoELayout::InterPacked => {
+                // gate_up: [E, 2*I, H] -> shard(1, ..., world_size*2) -> [E, 2*I_local, H] (N=2*I_local, K=H)
+                let gate_w = experts_vb.get_with_hints(
+                    (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
+                    "gate_up_proj",
+                    shard(1, comm.rank(), comm.world_size() * 2),
+                )?;
+                let up_w = experts_vb.get_with_hints(
+                    (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
+                    "gate_up_proj",
+                    shard(1, comm.rank() + comm.world_size(), comm.world_size() * 2),
+                )?;
+                let gate_up_w = Tensor::cat(&[&gate_w, &up_w], 1)?;
+                // Transpose to [E, H, 2*I_local] (K=H, N=2*I_local)
+                let gate_up_w = gate_up_w.transpose(1, 2)?.contiguous()?;
 
-        // Load stacked down_proj: [num_experts, inter, hidden]
-        let down_w = match experts_vb.get_with_hints(
-            (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
-            "down_proj",
-            shard(1, comm.rank(), comm.world_size()),
-        ) {
-            Ok(w) => w,
-            Err(_) => {
-                let w = experts_vb.get_with_hints(
+                // down: [E, H, I] -> shard(2, ..., world_size) -> [E, H, I_local] (N=H, K=I_local)
+                let down_w = experts_vb.get_with_hints(
                     (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
                     "down_proj",
                     shard(2, comm.rank(), comm.world_size()),
                 )?;
-                w.transpose(1, 2)?.contiguous()?
+                // Transpose to [E, I_local, H] (K=I_local, N=H)
+                let down_w = down_w.transpose(1, 2)?.contiguous()?;
+                (gate_up_w, down_w)
             }
         };
 

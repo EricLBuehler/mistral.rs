@@ -9,7 +9,7 @@ use mistralrs_quant::{
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
-use crate::moe::{MoEExperts, MoEExpertsConfig};
+use crate::moe::{MoEExperts, MoEExpertsConfig, MoELayout};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
@@ -384,12 +384,13 @@ impl MoeMlp {
             vb.pp("gate").set_device(layer_device.clone()),
         )?;
 
-        let moe_cfg = MoEExpertsConfig {
-            num_experts: cfg.num_experts,
-            num_experts_per_tok: cfg.num_experts_per_tok,
-            hidden_size: cfg.hidden_size,
-            moe_intermediate_size: cfg.moe_intermediate_size,
-        };
+        let moe_cfg = MoEExpertsConfig::new(
+            cfg.num_experts,
+            cfg.num_experts_per_tok,
+            cfg.hidden_size,
+            cfg.moe_intermediate_size,
+        )
+        .with_layout(MoELayout::InterPacked);
 
         // Load experts with automatic backend selection
         let experts = MoEExperts::new(

@@ -549,12 +549,12 @@ impl Moe {
             .cloned()
             .unwrap_or(real_device);
 
-        let moe_cfg = MoEExpertsConfig {
-            num_experts: n_routed_experts,
-            num_experts_per_tok: cfg.num_experts_per_tok.unwrap(),
-            hidden_size: cfg.hidden_size,
-            moe_intermediate_size: cfg.moe_intermediate_size,
-        };
+        let moe_cfg = MoEExpertsConfig::new(
+            n_routed_experts,
+            cfg.num_experts_per_tok.unwrap(),
+            cfg.hidden_size,
+            cfg.moe_intermediate_size,
+        );
 
         // Use the optimized MoEExperts with automatic backend selection
         let experts = MoEExperts::new(

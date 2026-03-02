@@ -13,7 +13,7 @@ use crate::{
     attention::SdpaParams,
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{self, Activation, Qwen3VLRotaryEmbedding, RmsNorm, Sdpa},
-    moe::{MoEExperts, MoEExpertsConfig},
+    moe::{MoEExperts, MoEExpertsConfig, MoELayout},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -115,12 +115,13 @@ impl MoeMlp {
             vb.pp("gate").set_device(layer_device.clone()),
         )?;
 
-        let moe_cfg = MoEExpertsConfig {
-            num_experts: cfg.num_experts,
-            num_experts_per_tok: cfg.num_experts_per_tok,
-            hidden_size: cfg.hidden_size,
-            moe_intermediate_size: cfg.moe_intermediate_size,
-        };
+        let moe_cfg = MoEExpertsConfig::new(
+            cfg.num_experts,
+            cfg.num_experts_per_tok,
+            cfg.hidden_size,
+            cfg.moe_intermediate_size,
+        )
+        .with_layout(MoELayout::InterPacked);
 
         // Load experts with automatic backend selection
         let experts = MoEExperts::new(

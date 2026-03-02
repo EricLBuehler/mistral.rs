@@ -1146,12 +1146,12 @@ impl SparseMoeBlock {
             vb.pp("gate").set_device(layer_device.clone()),
         )?;
 
-        let moe_cfg = MoEExpertsConfig {
-            num_experts: cfg.num_experts,
-            num_experts_per_tok: cfg.num_experts_per_tok,
-            hidden_size: cfg.hidden_size,
-            moe_intermediate_size: cfg.moe_intermediate_size,
-        };
+        let moe_cfg = MoEExpertsConfig::new(
+            cfg.num_experts,
+            cfg.num_experts_per_tok,
+            cfg.hidden_size,
+            cfg.moe_intermediate_size,
+        );
 
         let experts = MoEExperts::new(
             &moe_cfg,
@@ -1647,6 +1647,13 @@ impl Model {
                 LayerImpl::FullAttention(_) => {
                     if let LocalLayerCache::Attention(kv_cache) = &mut local_cache.caches[layer_idx]
                     {
+                        if metadata
+                            .as_ref()
+                            .map(|(_, meta)| meta.is_first_prompt_chunk)
+                            .unwrap_or(seqlen_offsets[0] == 0)
+                        {
+                            kv_cache.reset();
+                        }
                         let mask_for_layer = mask.as_ref().map(|m| m.get(x.device()).clone());
                         x = layer.forward_attention(
                             &x,
@@ -1664,7 +1671,11 @@ impl Model {
                     if let LocalLayerCache::LinearAttention(gdn_cache) =
                         &mut local_cache.caches[layer_idx]
                     {
-                        if seqlen_offsets[0] == 0 {
+                        if metadata
+                            .as_ref()
+                            .map(|(_, meta)| meta.is_first_prompt_chunk)
+                            .unwrap_or(seqlen_offsets[0] == 0)
+                        {
                             gdn_cache.reset()?;
                         }
                         x = layer.forward_linear(&x, gdn_cache)?;

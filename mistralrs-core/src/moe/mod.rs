@@ -2,7 +2,7 @@ mod experts;
 
 use mistralrs_quant::Shard;
 
-pub use experts::{MoEExperts, MoEExpertsConfig};
+pub use experts::{MoEExperts, MoEExpertsConfig, MoELayout};
 
 pub fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
     Shard::Simple {
