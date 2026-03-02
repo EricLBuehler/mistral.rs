@@ -265,9 +265,10 @@ impl MoEExperts {
         ) {
             Ok(w) => w,
             Err(_) => {
-                let w = experts_vb.get(
+                let w = experts_vb.get_with_hints(
                     (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
                     "down_proj",
+                    shard(2, comm.rank(), comm.world_size()),
                 )?;
                 w.transpose(1, 2)?.contiguous()?
             }
