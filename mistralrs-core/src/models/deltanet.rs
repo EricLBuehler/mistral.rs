@@ -5,8 +5,7 @@
 //! This module provides the core DeltaNet recurrence and causal conv1d primitives that are common
 //! across all Qwen3 hybrid-attention models.
 
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::Linear;
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use mistralrs_quant::{QuantMethod, QuantizedConfig, RowParallelLayer, ShardedVarBuilder};
 use std::sync::Arc;
 
@@ -212,15 +211,15 @@ pub fn gated_delta_rule_recurrence(
 pub enum GdnProjection {
     /// Qwen3Next: fused in_proj_qkvz (key_dim*2 + value_dim*2) + in_proj_ba (num_v_heads*2)
     FusedQkvzBa {
-        in_proj_qkvz: Linear,
-        in_proj_ba: Linear,
+        in_proj_qkvz: Arc<dyn QuantMethod>,
+        in_proj_ba: Arc<dyn QuantMethod>,
     },
     /// Qwen3.5: split in_proj_qkv (key_dim*2 + value_dim) + in_proj_z (value_dim) + in_proj_b (num_v_heads) + in_proj_a (num_v_heads)
     SplitQkvZa {
-        in_proj_qkv: Linear,
-        in_proj_z: Linear,
-        in_proj_b: Linear,
-        in_proj_a: Linear,
+        in_proj_qkv: Arc<dyn QuantMethod>,
+        in_proj_z: Arc<dyn QuantMethod>,
+        in_proj_b: Arc<dyn QuantMethod>,
+        in_proj_a: Arc<dyn QuantMethod>,
     },
 }
 
@@ -287,8 +286,22 @@ impl GatedDeltaNet {
         let vb_la = mapper.set_device(layer_idx, vb.pp("linear_attn"), loading_isq);
 
         let qkvz_out = key_dim * 2 + value_dim * 2;
-        let mut qkvz_w = vb_la.get((qkvz_out, cfg.hidden_size()), "in_proj_qkvz.weight")?;
-        let mut ba_w = vb_la.get((num_v_heads * 2, cfg.hidden_size()), "in_proj_ba.weight")?;
+        let in_proj_qkvz = mistralrs_quant::ColumnParallelLayer::new(
+            cfg.hidden_size(),
+            qkvz_out,
+            cfg.quantization_config(),
+            false,
+            comm,
+            vb_la.pp("in_proj_qkvz"),
+        )?;
+        let in_proj_ba = mistralrs_quant::ColumnParallelLayer::new(
+            cfg.hidden_size(),
+            num_v_heads * 2,
+            cfg.quantization_config(),
+            false,
+            comm,
+            vb_la.pp("in_proj_ba"),
+        )?;
 
         let conv_dim = key_dim * 2 + value_dim;
         let mut conv1d_weight = vb_la.get((conv_dim, 1, conv_kernel_size), "conv1d.weight")?;
@@ -296,8 +309,6 @@ impl GatedDeltaNet {
         let mut a_log = vb_la.get(num_v_heads, "A_log")?;
 
         if let Some(ref target_dev) = isq_target_device {
-            qkvz_w = qkvz_w.to_device(target_dev)?;
-            ba_w = ba_w.to_device(target_dev)?;
             conv1d_weight = conv1d_weight.to_device(target_dev)?;
             dt_bias = dt_bias.to_device(target_dev)?;
             a_log = a_log.to_device(target_dev)?;
@@ -321,8 +332,8 @@ impl GatedDeltaNet {
 
         Ok(Self {
             projection: GdnProjection::FusedQkvzBa {
-                in_proj_qkvz: Linear::new(qkvz_w, None),
-                in_proj_ba: Linear::new(ba_w, None),
+                in_proj_qkvz,
+                in_proj_ba,
             },
             conv1d_weight,
             dt_bias,
@@ -365,10 +376,39 @@ impl GatedDeltaNet {
         let vb_la = mapper.set_device(layer_idx, vb.pp("linear_attn"), loading_isq);
 
         let qkv_out = key_dim * 2 + value_dim;
-        let mut qkv_w = vb_la.get((qkv_out, cfg.hidden_size()), "in_proj_qkv.weight")?;
-        let mut z_w = vb_la.get((value_dim, cfg.hidden_size()), "in_proj_z.weight")?;
-        let mut b_w = vb_la.get((num_v_heads, cfg.hidden_size()), "in_proj_b.weight")?;
-        let mut a_w = vb_la.get((num_v_heads, cfg.hidden_size()), "in_proj_a.weight")?;
+
+        let in_proj_qkv = mistralrs_quant::ColumnParallelLayer::new(
+            cfg.hidden_size(),
+            qkv_out,
+            cfg.quantization_config(),
+            false,
+            comm,
+            vb_la.pp("in_proj_qkv"),
+        )?;
+        let in_proj_z = mistralrs_quant::ColumnParallelLayer::new(
+            cfg.hidden_size(),
+            value_dim,
+            cfg.quantization_config(),
+            false,
+            comm,
+            vb_la.pp("in_proj_z"),
+        )?;
+        let in_proj_b = mistralrs_quant::ColumnParallelLayer::new(
+            cfg.hidden_size(),
+            num_v_heads,
+            cfg.quantization_config(),
+            false,
+            comm,
+            vb_la.pp("in_proj_b"),
+        )?;
+        let in_proj_a = mistralrs_quant::ColumnParallelLayer::new(
+            cfg.hidden_size(),
+            num_v_heads,
+            cfg.quantization_config(),
+            false,
+            comm,
+            vb_la.pp("in_proj_a"),
+        )?;
 
         let conv_dim = key_dim * 2 + value_dim;
         let mut conv1d_weight = vb_la.get((conv_dim, 1, conv_kernel_size), "conv1d.weight")?;
@@ -376,10 +416,6 @@ impl GatedDeltaNet {
         let mut a_log = vb_la.get(num_v_heads, "A_log")?;
 
         if let Some(ref target_dev) = isq_target_device {
-            qkv_w = qkv_w.to_device(target_dev)?;
-            z_w = z_w.to_device(target_dev)?;
-            b_w = b_w.to_device(target_dev)?;
-            a_w = a_w.to_device(target_dev)?;
             conv1d_weight = conv1d_weight.to_device(target_dev)?;
             dt_bias = dt_bias.to_device(target_dev)?;
             a_log = a_log.to_device(target_dev)?;
@@ -403,10 +439,10 @@ impl GatedDeltaNet {
 
         Ok(Self {
             projection: GdnProjection::SplitQkvZa {
-                in_proj_qkv: Linear::new(qkv_w, None),
-                in_proj_z: Linear::new(z_w, None),
-                in_proj_b: Linear::new(b_w, None),
-                in_proj_a: Linear::new(a_w, None),
+                in_proj_qkv,
+                in_proj_z,
+                in_proj_b,
+                in_proj_a,
             },
             conv1d_weight,
             dt_bias,
@@ -433,8 +469,8 @@ impl GatedDeltaNet {
                 in_proj_qkvz,
                 in_proj_ba,
             } => {
-                let mixed_qkvz = in_proj_qkvz.forward(x)?;
-                let mixed_ba = in_proj_ba.forward(x)?;
+                let mixed_qkvz = MatMul.qmethod_matmul(x, &**in_proj_qkvz)?;
+                let mixed_ba = MatMul.qmethod_matmul(x, &**in_proj_ba)?;
 
                 let group_size_qkvz = 2 * self.head_k_dim + 2 * v_per_group * self.head_v_dim;
                 let mixed_qkvz =
@@ -481,10 +517,10 @@ impl GatedDeltaNet {
                 in_proj_b,
                 in_proj_a,
             } => {
-                let proj_qkv = in_proj_qkv.forward(x)?;
-                let z_full = in_proj_z.forward(x)?;
-                let b = in_proj_b.forward(x)?;
-                let a = in_proj_a.forward(x)?;
+                let proj_qkv = MatMul.qmethod_matmul(x, &**in_proj_qkv)?;
+                let z_full = MatMul.qmethod_matmul(x, &**in_proj_z)?;
+                let b = MatMul.qmethod_matmul(x, &**in_proj_b)?;
+                let a = MatMul.qmethod_matmul(x, &**in_proj_a)?;
 
                 let q = proj_qkv.narrow(D::Minus1, 0, self.key_dim)?;
                 let k = proj_qkv.narrow(D::Minus1, self.key_dim, self.key_dim)?;

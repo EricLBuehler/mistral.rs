@@ -297,8 +297,8 @@ fn gated_delta_rule_recurrence(
 // ====================== Gated Delta Net layer ======================
 
 struct GatedDeltaNet {
-    in_proj_qkvz: Linear,
-    in_proj_ba: Linear,
+    in_proj_qkvz: Arc<dyn QuantMethod>,
+    in_proj_ba: Arc<dyn QuantMethod>,
     conv1d_weight: Tensor,
     dt_bias: Tensor,
     a_log: Tensor,
@@ -342,10 +342,24 @@ impl GatedDeltaNet {
         // in_proj_qkvz: hidden_size -> key_dim * 2 + value_dim * 2
         // Output: [q (key_dim), k (key_dim), v (value_dim), z (value_dim)]
         let qkvz_out = key_dim * 2 + value_dim * 2;
-        let mut qkvz_w = vb_la.get((qkvz_out, cfg.hidden_size), "in_proj_qkvz.weight")?;
+        let in_proj_qkvz = mistralrs_quant::ColumnParallelLayer::new(
+            cfg.hidden_size,
+            qkvz_out,
+            &cfg.quantization_config,
+            false,
+            comm,
+            vb_la.pp("in_proj_qkvz"),
+        )?;
 
         // in_proj_ba: hidden_size -> num_v_heads * 2 (beta and alpha per head)
-        let mut ba_w = vb_la.get((num_v_heads * 2, cfg.hidden_size), "in_proj_ba.weight")?;
+        let in_proj_ba = mistralrs_quant::ColumnParallelLayer::new(
+            cfg.hidden_size,
+            num_v_heads * 2,
+            &cfg.quantization_config,
+            false,
+            comm,
+            vb_la.pp("in_proj_ba"),
+        )?;
 
         // Conv1d weight: (conv_dim, 1, kernel_size)
         let conv_dim = key_dim * 2 + value_dim; // q, k, v concatenated
@@ -357,15 +371,10 @@ impl GatedDeltaNet {
 
         // Move non-quantizable tensors to target device for ISQ compatibility
         if let Some(ref target_dev) = isq_target_device {
-            qkvz_w = qkvz_w.to_device(target_dev)?;
-            ba_w = ba_w.to_device(target_dev)?;
             conv1d_weight = conv1d_weight.to_device(target_dev)?;
             dt_bias = dt_bias.to_device(target_dev)?;
             a_log = a_log.to_device(target_dev)?;
         }
-
-        let in_proj_qkvz = Linear::new(qkvz_w, None);
-        let in_proj_ba = Linear::new(ba_w, None);
 
         // Gated RMSNorm for output
         let norm = RmsNormGated::new(
@@ -408,8 +417,8 @@ impl GatedDeltaNet {
         let dtype = x.dtype();
 
         // 1. Project input
-        let mixed_qkvz = self.in_proj_qkvz.forward(x)?; // (batch, seq, key_dim*2 + value_dim*2)
-        let mixed_ba = self.in_proj_ba.forward(x)?; // (batch, seq, num_v_heads * 2)
+        let mixed_qkvz = crate::layers::MatMul.qmethod_matmul(x, &*self.in_proj_qkvz)?; // (batch, seq, key_dim*2 + value_dim*2)
+        let mixed_ba = crate::layers::MatMul.qmethod_matmul(x, &*self.in_proj_ba)?; // (batch, seq, num_v_heads * 2)
 
         // 2. fix_query_key_value_ordering: grouped head layout
         // The projection is grouped by num_k_heads. Within each group:
@@ -1690,11 +1699,11 @@ impl IsqModel for Model {
                     uvb_l
                         .pp("linear_attn")
                         .pp("in_proj_qkvz")
-                        .add_tensor("weight", gdn.in_proj_qkvz.weight().clone());
+                        .add_tensor("weight", gdn.in_proj_qkvz.unquant_weight_bias().unwrap().0);
                     uvb_l
                         .pp("linear_attn")
                         .pp("in_proj_ba")
-                        .add_tensor("weight", gdn.in_proj_ba.weight().clone());
+                        .add_tensor("weight", gdn.in_proj_ba.unquant_weight_bias().unwrap().0);
                     uvb_l
                         .pp("linear_attn")
                         .add_tensor("conv1d.weight", gdn.conv1d_weight.clone());

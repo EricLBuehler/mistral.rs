@@ -692,32 +692,32 @@ impl IsqModel for Qwen3_5VLTextModel {
                             uvb_l
                                 .pp("linear_attn")
                                 .pp("in_proj_qkv")
-                                .add_tensor("weight", in_proj_qkv.weight().clone());
+                                .add_tensor("weight", in_proj_qkv.unquant_weight_bias().unwrap().0);
                             uvb_l
                                 .pp("linear_attn")
                                 .pp("in_proj_z")
-                                .add_tensor("weight", in_proj_z.weight().clone());
+                                .add_tensor("weight", in_proj_z.unquant_weight_bias().unwrap().0);
                             uvb_l
                                 .pp("linear_attn")
                                 .pp("in_proj_b")
-                                .add_tensor("weight", in_proj_b.weight().clone());
+                                .add_tensor("weight", in_proj_b.unquant_weight_bias().unwrap().0);
                             uvb_l
                                 .pp("linear_attn")
                                 .pp("in_proj_a")
-                                .add_tensor("weight", in_proj_a.weight().clone());
+                                .add_tensor("weight", in_proj_a.unquant_weight_bias().unwrap().0);
                         }
                         GdnProjection::FusedQkvzBa {
                             in_proj_qkvz,
                             in_proj_ba,
                         } => {
-                            uvb_l
-                                .pp("linear_attn")
-                                .pp("in_proj_qkvz")
-                                .add_tensor("weight", in_proj_qkvz.weight().clone());
+                            uvb_l.pp("linear_attn").pp("in_proj_qkvz").add_tensor(
+                                "weight",
+                                in_proj_qkvz.unquant_weight_bias().unwrap().0,
+                            );
                             uvb_l
                                 .pp("linear_attn")
                                 .pp("in_proj_ba")
-                                .add_tensor("weight", in_proj_ba.weight().clone());
+                                .add_tensor("weight", in_proj_ba.unquant_weight_bias().unwrap().0);
                         }
                     }
                     uvb_l
