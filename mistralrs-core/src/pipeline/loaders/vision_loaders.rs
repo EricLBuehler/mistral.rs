@@ -291,8 +291,6 @@ impl std::fmt::Display for VisionLoaderType {
 struct AutoVisionLoaderConfig {
     #[serde(default)]
     architectures: Vec<String>,
-    #[serde(default)]
-    model_type: Option<String>,
     /// Voxtral params.json uses a `multimodal` key instead of `architectures`.
     #[serde(default)]
     multimodal: Option<serde_json::Value>,
@@ -304,23 +302,6 @@ pub struct AutoVisionLoader;
 impl AutoVisionLoader {
     fn get_loader(config: &str) -> Result<Box<dyn VisionModelLoader>> {
         let auto_cfg: AutoVisionLoaderConfig = serde_json::from_str(config)?;
-
-        if let Some(model_type) = auto_cfg.model_type.as_deref() {
-            if model_type.ends_with("_text") || model_type == "gemma3_text" {
-                anyhow::bail!(
-                    "AutoVisionLoader: model_type={model_type} indicates a text-only model. Use the text loader / `mistralrs run -m ...` (or Which::Text*) instead of vision."
-                );
-            }
-        }
-        if auto_cfg
-            .architectures
-            .iter()
-            .any(|a| a == "Gemma3ForCausalLM")
-        {
-            anyhow::bail!(
-                "AutoVisionLoader: architectures contains Gemma3ForCausalLM (text-only). This is not a vision checkpoint."
-            );
-        }
 
         // Voxtral: params.json has `multimodal` but no `architectures`
         if auto_cfg.multimodal.is_some() && auto_cfg.architectures.is_empty() {
@@ -335,7 +316,19 @@ impl AutoVisionLoader {
         let name = &auto_cfg.architectures[0];
         let tp = VisionLoaderType::from_causal_lm_name(name)?;
 
-        once_log_info(format!("Automatic loader type determined to be `{tp}`"));
+        if tp == VisionLoaderType::Gemma3 {
+            let gemma_cfg: Gemma3Config = serde_json::from_str(config)?;
+            match gemma_cfg {
+                Gemma3Config::Text(_) => {
+                    once_log_info("Automatic loader type determined to be `gemma3` (text-only)")
+                }
+                Gemma3Config::WithVision { .. } => {
+                    once_log_info("Automatic loader type determined to be `gemma3` (multimodal)")
+                }
+            }
+        } else {
+            once_log_info(format!("Automatic loader type determined to be `{tp}`"));
+        }
 
         // Delegate to the concrete loader
         Ok(match tp {
@@ -357,6 +350,59 @@ impl AutoVisionLoader {
             VisionLoaderType::Qwen3VLMoE => Box::new(Qwen3VLMoELoader),
             VisionLoaderType::Voxtral => Box::new(VoxtralLoader),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AutoVisionLoader;
+    use crate::pipeline::SupportedModality;
+
+    #[test]
+    fn gemma3_text_config_is_accepted_in_auto_vision_loader() {
+        let config = r#"{
+            "architectures":["Gemma3ForCausalLM"],
+            "model_type":"gemma3_text",
+            "hidden_size":1024,
+            "intermediate_size":8192,
+            "num_hidden_layers":18,
+            "sliding_window":1024
+        }"#;
+
+        let loader = AutoVisionLoader::get_loader(config)
+            .expect("Gemma3 text configs should not be rejected");
+        let modalities = loader
+            .modalities(config)
+            .expect("Gemma3 text config modalities should parse");
+        assert_eq!(modalities.input, vec![SupportedModality::Text]);
+        assert_eq!(modalities.output, vec![SupportedModality::Text]);
+    }
+
+    #[test]
+    fn gemma3_with_vision_config_reports_multimodal_input() {
+        let config = r#"{
+            "architectures":["Gemma3ForConditionalGeneration"],
+            "text_config":{
+                "hidden_size":1024,
+                "intermediate_size":8192,
+                "num_hidden_layers":18,
+                "sliding_window":1024
+            },
+            "vision_config":{},
+            "image_token_index":256000,
+            "mm_tokens_per_image":256
+        }"#;
+
+        let loader =
+            AutoVisionLoader::get_loader(config).expect("Gemma3 multimodal configs should load");
+        let modalities = loader
+            .modalities(config)
+            .expect("Gemma3 multimodal config modalities should parse");
+        assert_eq!(
+            modalities.input,
+            vec![SupportedModality::Text, SupportedModality::Vision]
+        );
+        assert_eq!(modalities.output, vec![SupportedModality::Text]);
     }
 }
 
@@ -3705,9 +3751,16 @@ impl VisionModelLoader for Gemma3Loader {
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Gemma3Prefixer)
     }
-    fn modalities(&self, _config: &str) -> Result<Modalities> {
+    fn modalities(&self, config: &str) -> Result<Modalities> {
+        let cfg: Gemma3Config = serde_json::from_str(config)?;
+        let input = match cfg {
+            Gemma3Config::Text(_) => vec![SupportedModality::Text],
+            Gemma3Config::WithVision { .. } => {
+                vec![SupportedModality::Text, SupportedModality::Vision]
+            }
+        };
         Ok(Modalities {
-            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            input,
             output: vec![SupportedModality::Text],
         })
     }
