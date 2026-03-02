@@ -166,13 +166,13 @@ struct GdnLayerCache {
 }
 
 impl GdnLayerCache {
-    fn new(cfg: &Config, dtype: DType, device: &Device, world_size: usize) -> Result<Self> {
-        let conv_dim = cfg.hidden_size / world_size;
+    fn new(cfg: &Config, dtype: DType, device: &Device) -> Result<Self> {
+        let conv_dim = cfg.linear_conv_dim();
         let conv_state = Tensor::zeros((1, conv_dim, cfg.linear_conv_kernel_dim), dtype, device)?;
         let recurrent_state = Tensor::zeros(
             (
                 1,
-                (cfg.linear_num_value_heads / world_size).max(1),
+                cfg.linear_num_value_heads,
                 cfg.linear_key_head_dim,
                 cfg.linear_value_head_dim,
             ),
@@ -297,8 +297,8 @@ fn gated_delta_rule_recurrence(
 // ====================== Gated Delta Net layer ======================
 
 struct GatedDeltaNet {
-    in_proj_qkvz: Arc<dyn QuantMethod>,
-    in_proj_ba: Arc<dyn QuantMethod>,
+    in_proj_qkvz: Linear,
+    in_proj_ba: Linear,
     conv1d_weight: Tensor,
     dt_bias: Tensor,
     a_log: Tensor,
@@ -329,85 +329,43 @@ impl GatedDeltaNet {
             None
         };
 
-        let world_size = comm.world_size();
-        let num_k_heads_global = cfg.linear_num_key_heads;
-        let num_v_heads_global = cfg.linear_num_value_heads;
-
-        if num_v_heads_global % world_size != 0 || num_k_heads_global % world_size != 0 {
-            candle_core::bail!(
-                "linear attention heads must be divisible by tensor parallel world_size (num_v_heads={}, num_k_heads={}, world_size={})",
-                num_v_heads_global,
-                num_k_heads_global,
-                world_size
-            );
-        }
-
-        let num_k_heads = num_k_heads_global / world_size;
-        let num_v_heads = num_v_heads_global / world_size;
-
+        let num_k_heads = cfg.linear_num_key_heads;
+        let num_v_heads = cfg.linear_num_value_heads;
         let head_k_dim = cfg.linear_key_head_dim;
         let head_v_dim = cfg.linear_value_head_dim;
         let key_dim = num_k_heads * head_k_dim;
         let value_dim = num_v_heads * head_v_dim;
-
-        let key_dim_global = num_k_heads_global * head_k_dim;
-        let value_dim_global = num_v_heads_global * head_v_dim;
-
         let conv_kernel_size = cfg.linear_conv_kernel_dim;
 
         let vb_la = mapper.set_device(layer_idx, vb.pp("linear_attn"), loading_isq);
 
         // in_proj_qkvz: hidden_size -> key_dim * 2 + value_dim * 2
         // Output: [q (key_dim), k (key_dim), v (value_dim), z (value_dim)]
-        let qkvz_out_global = key_dim_global * 2 + value_dim_global * 2;
-        let in_proj_qkvz = mistralrs_quant::ColumnParallelLayer::new(
-            cfg.hidden_size,
-            qkvz_out_global,
-            &cfg.quantization_config,
-            false,
-            comm,
-            vb_la.pp("in_proj_qkvz"),
-        )?;
+        let qkvz_out = key_dim * 2 + value_dim * 2;
+        let mut qkvz_w = vb_la.get((qkvz_out, cfg.hidden_size), "in_proj_qkvz.weight")?;
 
         // in_proj_ba: hidden_size -> num_v_heads * 2 (beta and alpha per head)
-        let in_proj_ba = mistralrs_quant::ColumnParallelLayer::new(
-            cfg.hidden_size,
-            num_v_heads_global * 2,
-            &cfg.quantization_config,
-            false,
-            comm,
-            vb_la.pp("in_proj_ba"),
-        )?;
+        let mut ba_w = vb_la.get((num_v_heads * 2, cfg.hidden_size), "in_proj_ba.weight")?;
 
         // Conv1d weight: (conv_dim, 1, kernel_size)
-        // q, k, v concatenated
-        let conv_dim_global = key_dim_global * 2 + value_dim_global;
-        let mut conv1d_weight =
-            vb_la.get((conv_dim_global, 1, conv_kernel_size), "conv1d.weight")?;
+        let conv_dim = key_dim * 2 + value_dim; // q, k, v concatenated
+        let mut conv1d_weight = vb_la.get((conv_dim, 1, conv_kernel_size), "conv1d.weight")?;
 
-        let sd = mistralrs_quant::Shard::Simple {
-            dim: 0,
-            rank: comm.rank(),
-            world_size: comm.world_size(),
-        };
-        let mut dt_bias = vb_la.get_with_hints((num_v_heads_global,), "dt_bias", sd)?;
-        let mut a_log = vb_la.get_with_hints((num_v_heads_global,), "A_log", sd)?;
-
-        let rank = comm.rank();
-        let q_start = rank * key_dim;
-        let k_start = key_dim_global + rank * key_dim;
-        let v_start = key_dim_global * 2 + rank * value_dim;
-        let q_w = conv1d_weight.narrow(0, q_start, key_dim)?;
-        let k_w = conv1d_weight.narrow(0, k_start, key_dim)?;
-        let v_w = conv1d_weight.narrow(0, v_start, value_dim)?;
-        conv1d_weight = candle_core::Tensor::cat(&[&q_w, &k_w, &v_w], 0)?;
+        // dt_bias and A_log
+        let mut dt_bias = vb_la.get(num_v_heads, "dt_bias")?;
+        let mut a_log = vb_la.get(num_v_heads, "A_log")?;
 
         // Move non-quantizable tensors to target device for ISQ compatibility
         if let Some(ref target_dev) = isq_target_device {
+            qkvz_w = qkvz_w.to_device(target_dev)?;
+            ba_w = ba_w.to_device(target_dev)?;
             conv1d_weight = conv1d_weight.to_device(target_dev)?;
             dt_bias = dt_bias.to_device(target_dev)?;
             a_log = a_log.to_device(target_dev)?;
         }
+
+        let in_proj_qkvz = Linear::new(qkvz_w, None);
+        let in_proj_ba = Linear::new(ba_w, None);
 
         // Gated RMSNorm for output
         let norm = RmsNormGated::new(
@@ -450,8 +408,8 @@ impl GatedDeltaNet {
         let dtype = x.dtype();
 
         // 1. Project input
-        let mixed_qkvz = crate::layers::MatMul.qmethod_matmul(x, &*self.in_proj_qkvz)?; // (batch, seq, key_dim*2 + value_dim*2)
-        let mixed_ba = crate::layers::MatMul.qmethod_matmul(x, &*self.in_proj_ba)?; // (batch, seq, num_v_heads * 2)
+        let mixed_qkvz = self.in_proj_qkvz.forward(x)?; // (batch, seq, key_dim*2 + value_dim*2)
+        let mixed_ba = self.in_proj_ba.forward(x)?; // (batch, seq, num_v_heads * 2)
 
         // 2. fix_query_key_value_ordering: grouped head layout
         // The projection is grouped by num_k_heads. Within each group:
@@ -1318,13 +1276,7 @@ struct LocalHybridCache {
 }
 
 impl LocalHybridCache {
-    fn new(
-        layer_types: &[LayerType],
-        cfg: &Config,
-        device: &Device,
-        dtype: DType,
-        world_size: usize,
-    ) -> Result<Self> {
+    fn new(layer_types: &[LayerType], cfg: &Config, device: &Device, dtype: DType) -> Result<Self> {
         let mut caches = Vec::with_capacity(layer_types.len());
         for lt in layer_types {
             match lt {
@@ -1337,7 +1289,7 @@ impl LocalHybridCache {
                 }
                 LayerType::LinearAttention => {
                     caches.push(LocalLayerCache::LinearAttention(GdnLayerCache::new(
-                        cfg, dtype, device, world_size,
+                        cfg, dtype, device,
                     )?));
                 }
             }
@@ -1554,7 +1506,6 @@ impl Model {
             cfg,
             &normal_loading_metadata.real_device,
             vb_m.dtype(),
-            mapper.get_comm_for(0)?.world_size(),
         )?));
 
         // Create pipeline hybrid cache config
@@ -1756,11 +1707,11 @@ impl IsqModel for Model {
                     uvb_l
                         .pp("linear_attn")
                         .pp("in_proj_qkvz")
-                        .add_tensor("weight", gdn.in_proj_qkvz.unquant_weight_bias().unwrap().0);
+                        .add_tensor("weight", gdn.in_proj_qkvz.weight().clone());
                     uvb_l
                         .pp("linear_attn")
                         .pp("in_proj_ba")
-                        .add_tensor("weight", gdn.in_proj_ba.unquant_weight_bias().unwrap().0);
+                        .add_tensor("weight", gdn.in_proj_ba.weight().clone());
                     uvb_l
                         .pp("linear_attn")
                         .add_tensor("conv1d.weight", gdn.conv1d_weight.clone());

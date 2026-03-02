@@ -177,7 +177,6 @@ impl LocalHybridCache {
         cfg: &TextConfig,
         device: &Device,
         dtype: DType,
-        world_size: usize,
     ) -> Result<Self> {
         let adapter = TextConfigAdapter(cfg);
         let mut caches = Vec::with_capacity(layer_types.len());
@@ -192,7 +191,7 @@ impl LocalHybridCache {
                 }
                 LayerType::LinearAttention => {
                     caches.push(LocalLayerCache::LinearAttention(GdnLayerCache::new(
-                        &adapter, dtype, device, world_size,
+                        &adapter, dtype, device,
                     )?));
                 }
             }
@@ -458,7 +457,6 @@ impl Qwen3_5VLTextModel {
             cfg,
             &normal_loading_metadata.real_device,
             vb_m.dtype(),
-            mapper.get_comm_for(0)?.world_size(),
         )?));
 
         // Create pipeline hybrid cache config
@@ -705,32 +703,32 @@ impl IsqModel for Qwen3_5VLTextModel {
                             uvb_l
                                 .pp("linear_attn")
                                 .pp("in_proj_qkv")
-                                .add_tensor("weight", in_proj_qkv.unquant_weight_bias().unwrap().0);
+                                .add_tensor("weight", in_proj_qkv.weight().clone());
                             uvb_l
                                 .pp("linear_attn")
                                 .pp("in_proj_z")
-                                .add_tensor("weight", in_proj_z.unquant_weight_bias().unwrap().0);
+                                .add_tensor("weight", in_proj_z.weight().clone());
                             uvb_l
                                 .pp("linear_attn")
                                 .pp("in_proj_b")
-                                .add_tensor("weight", in_proj_b.unquant_weight_bias().unwrap().0);
+                                .add_tensor("weight", in_proj_b.weight().clone());
                             uvb_l
                                 .pp("linear_attn")
                                 .pp("in_proj_a")
-                                .add_tensor("weight", in_proj_a.unquant_weight_bias().unwrap().0);
+                                .add_tensor("weight", in_proj_a.weight().clone());
                         }
                         GdnProjection::FusedQkvzBa {
                             in_proj_qkvz,
                             in_proj_ba,
                         } => {
-                            uvb_l.pp("linear_attn").pp("in_proj_qkvz").add_tensor(
-                                "weight",
-                                in_proj_qkvz.unquant_weight_bias().unwrap().0,
-                            );
+                            uvb_l
+                                .pp("linear_attn")
+                                .pp("in_proj_qkvz")
+                                .add_tensor("weight", in_proj_qkvz.weight().clone());
                             uvb_l
                                 .pp("linear_attn")
                                 .pp("in_proj_ba")
-                                .add_tensor("weight", in_proj_ba.unquant_weight_bias().unwrap().0);
+                                .add_tensor("weight", in_proj_ba.weight().clone());
                         }
                     }
                     uvb_l
