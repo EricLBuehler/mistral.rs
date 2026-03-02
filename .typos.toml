@@ -33,6 +33,8 @@ extend-ignore-re = [
     "mxfp4_get_max_smem_optin",
     "alog",
     "ba",
+    "Ba",
+    "layrnorm"
 ]
 
 [type.rust.extend-identifiers]
