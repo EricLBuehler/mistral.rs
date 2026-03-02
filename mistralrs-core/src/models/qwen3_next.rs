@@ -166,13 +166,13 @@ struct GdnLayerCache {
 }
 
 impl GdnLayerCache {
-    fn new(cfg: &Config, dtype: DType, device: &Device) -> Result<Self> {
-        let conv_dim = cfg.linear_conv_dim();
+    fn new(cfg: &Config, dtype: DType, device: &Device, world_size: usize) -> Result<Self> {
+        let conv_dim = cfg.hidden_size / world_size;
         let conv_state = Tensor::zeros((1, conv_dim, cfg.linear_conv_kernel_dim), dtype, device)?;
         let recurrent_state = Tensor::zeros(
             (
                 1,
-                cfg.linear_num_value_heads,
+                (cfg.linear_num_value_heads / world_size).max(1),
                 cfg.linear_key_head_dim,
                 cfg.linear_value_head_dim,
             ),
@@ -1313,7 +1313,13 @@ struct LocalHybridCache {
 }
 
 impl LocalHybridCache {
-    fn new(layer_types: &[LayerType], cfg: &Config, device: &Device, dtype: DType) -> Result<Self> {
+    fn new(
+        layer_types: &[LayerType],
+        cfg: &Config,
+        device: &Device,
+        dtype: DType,
+        world_size: usize,
+    ) -> Result<Self> {
         let mut caches = Vec::with_capacity(layer_types.len());
         for lt in layer_types {
             match lt {
@@ -1326,7 +1332,7 @@ impl LocalHybridCache {
                 }
                 LayerType::LinearAttention => {
                     caches.push(LocalLayerCache::LinearAttention(GdnLayerCache::new(
-                        cfg, dtype, device,
+                        cfg, dtype, device, world_size,
                     )?));
                 }
             }
@@ -1542,6 +1548,7 @@ impl Model {
             cfg,
             &normal_loading_metadata.real_device,
             vb_m.dtype(),
+            mapper.get_comm_for(0)?.world_size(),
         )?));
 
         // Create pipeline hybrid cache config

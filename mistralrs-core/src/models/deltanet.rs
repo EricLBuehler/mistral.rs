@@ -88,13 +88,18 @@ pub struct GdnLayerCache {
 }
 
 impl GdnLayerCache {
-    pub fn new(cfg: &dyn DeltaNetConfig, dtype: DType, device: &Device) -> Result<Self> {
-        let conv_dim = cfg.linear_conv_dim();
+    pub fn new(
+        cfg: &dyn DeltaNetConfig,
+        dtype: DType,
+        device: &Device,
+        world_size: usize,
+    ) -> Result<Self> {
+        let conv_dim = cfg.linear_conv_dim() / world_size;
         let conv_state = Tensor::zeros((1, conv_dim, cfg.linear_conv_kernel_dim()), dtype, device)?;
         let recurrent_state = Tensor::zeros(
             (
                 1,
-                cfg.linear_num_value_heads(),
+                (cfg.linear_num_value_heads() / world_size).max(1),
                 cfg.linear_key_head_dim(),
                 cfg.linear_value_head_dim(),
             ),

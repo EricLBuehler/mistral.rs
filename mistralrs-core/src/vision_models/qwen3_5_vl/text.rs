@@ -177,6 +177,7 @@ impl LocalHybridCache {
         cfg: &TextConfig,
         device: &Device,
         dtype: DType,
+        world_size: usize,
     ) -> Result<Self> {
         let adapter = TextConfigAdapter(cfg);
         let mut caches = Vec::with_capacity(layer_types.len());
@@ -191,7 +192,7 @@ impl LocalHybridCache {
                 }
                 LayerType::LinearAttention => {
                     caches.push(LocalLayerCache::LinearAttention(GdnLayerCache::new(
-                        &adapter, dtype, device,
+                        &adapter, dtype, device, world_size,
                     )?));
                 }
             }
@@ -456,6 +457,7 @@ impl Qwen3_5VLTextModel {
             cfg,
             &normal_loading_metadata.real_device,
             vb_m.dtype(),
+            mapper.get_comm_for(0)?.world_size(),
         )?));
 
         // Create pipeline hybrid cache config
