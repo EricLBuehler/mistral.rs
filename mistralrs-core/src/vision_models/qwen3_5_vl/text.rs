@@ -553,10 +553,7 @@ impl Qwen3_5VLTextModel {
                         .map(|(_, meta)| meta.is_first_prompt_chunk)
                         .unwrap_or(true)
                     {
-                        // Check if seqlen_offset is 0 via cache
-                        if gdn.seqlen_offset == 0 || xs.dim(1)? > 1 {
-                            gdn.reset()?;
-                        }
+                        gdn.reset()?;
                     }
                     (None, Some(gdn))
                 }
