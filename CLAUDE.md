@@ -109,6 +109,10 @@ When adding new quantization methods:
 - `mistralrs-pyo3/src/lib.rs` - Python SDK entry point
 - `mistralrs/examples/` - Usage examples for Rust SDK
 
+### Pull Requests
+
+Never include a "Test plan" section in PR descriptions.
+
 ### Testing Approach
 
 You should *always* run `cargo check`/`cargo c` before returning to make sure code compiles. If code does not compile, only make edits.

@@ -17,6 +17,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.repository == 'EricLBuehler/mistral.rs'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
