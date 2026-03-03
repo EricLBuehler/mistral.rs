@@ -293,7 +293,9 @@ impl GatedDeltaNet {
         let num_k_heads_global = cfg.linear_num_key_heads();
         let num_v_heads_global = cfg.linear_num_value_heads();
 
-        if num_v_heads_global % world_size != 0 || num_k_heads_global % world_size != 0 {
+        if !num_v_heads_global.is_multiple_of(world_size)
+            || !num_k_heads_global.is_multiple_of(world_size)
+        {
             candle_core::bail!(
                 "linear attention heads must be divisible by tensor parallel world_size (num_v_heads={}, num_k_heads={}, world_size={})",
                 num_v_heads_global,
@@ -417,7 +419,9 @@ impl GatedDeltaNet {
         let num_k_heads_global = cfg.linear_num_key_heads();
         let num_v_heads_global = cfg.linear_num_value_heads();
 
-        if num_v_heads_global % world_size != 0 || num_k_heads_global % world_size != 0 {
+        if !num_v_heads_global.is_multiple_of(world_size)
+            || !num_k_heads_global.is_multiple_of(world_size)
+        {
             candle_core::bail!(
                 "linear attention heads must be divisible by tensor parallel world_size (num_v_heads={}, num_k_heads={}, world_size={})",
                 num_v_heads_global,
