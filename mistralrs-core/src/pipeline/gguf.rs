@@ -49,6 +49,7 @@ use crate::{
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 use anyhow::{bail, Result};
+use candle_core::quantized::gguf_file;
 use candle_core::{Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -76,30 +77,45 @@ enum Model {
     Qwen3MoE(QQwen3MoE),
 }
 
-fn is_mmproj_filename(path: &std::path::Path) -> bool {
-    path.file_name()
-        .and_then(|x| x.to_str())
-        .map(|x| x.to_ascii_lowercase().contains("mmproj"))
-        .unwrap_or(false)
-}
-
-fn is_gemma3_hint(model_id: &str, filenames: &[PathBuf]) -> bool {
-    let model_id_hint = model_id.to_ascii_lowercase().contains("gemma3")
-        || model_id.to_ascii_lowercase().contains("gemma-3");
-    let filename_hint = filenames.iter().any(|p| {
-        p.to_string_lossy().to_ascii_lowercase().contains("gemma3")
-            || p.to_string_lossy().to_ascii_lowercase().contains("gemma-3")
+fn ensure_supported_gemma3_gguf_scope(
+    architectures: &[String],
+    filenames: &[PathBuf],
+) -> Result<()> {
+    let has_gemma3 = architectures.iter().any(|a| a == "gemma3");
+    let has_non_gemma3 = architectures.iter().any(|a| a != "gemma3");
+    let has_mmproj_filename = filenames.iter().any(|path| {
+        path.file_name()
+            .and_then(|x| x.to_str())
+            .map(|x| x.to_ascii_lowercase().contains("mmproj"))
+            .unwrap_or(false)
     });
-    model_id_hint || filename_hint
-}
-
-fn ensure_supported_gemma3_gguf_scope(model_id: &str, filenames: &[PathBuf]) -> Result<()> {
-    if is_gemma3_hint(model_id, filenames) && filenames.iter().any(|f| is_mmproj_filename(f)) {
+    if has_gemma3 && (has_non_gemma3 || has_mmproj_filename) {
         bail!(
             "Unsupported Gemma 3 GGUF multimodal configuration: text-only Gemma 3 GGUF is supported, but Gemma 3 GGUF with mmproj (multimodal) is not supported yet."
         );
     }
     Ok(())
+}
+
+fn gguf_architectures_from_paths(paths: &[PathBuf]) -> Result<Vec<String>> {
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let mut reader = std::fs::File::open(path)?;
+        let content = gguf_file::Content::read(&mut reader)?;
+        let arch = content
+            .metadata
+            .get("general.architecture")
+            .and_then(|x| x.to_string().ok())
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "GGUF file `{}` is missing `general.architecture` metadata",
+                    path.display()
+                )
+            })?;
+        out.push(arch);
+    }
+    Ok(out)
 }
 
 fn is_supported_quant_arch(arch: GGUFArchitecture) -> bool {
@@ -366,7 +382,8 @@ impl Loader for GGUFLoader {
 
         info!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
-        ensure_supported_gemma3_gguf_scope(&self.quantized_model_id, paths.get_weight_filenames())?;
+        let gguf_architectures = gguf_architectures_from_paths(paths.get_weight_filenames())?;
+        ensure_supported_gemma3_gguf_scope(&gguf_architectures, paths.get_weight_filenames())?;
 
         let mut readers = Vec::new();
         for filename in paths.get_weight_filenames() {
@@ -927,12 +944,24 @@ mod tests {
     #[test]
     fn gemma3_mmproj_is_rejected_with_targeted_error() {
         let err = ensure_supported_gemma3_gguf_scope(
-            "google/functiongemma-3",
+            &["gemma3".to_string(), "clip".to_string()],
             &[PathBuf::from("model.gguf"), PathBuf::from("mmproj.gguf")],
         )
         .expect_err("gemma3 mmproj must be rejected");
         let msg = err.to_string();
         assert!(msg.contains("text-only Gemma 3 GGUF is supported"));
         assert!(msg.contains("not supported yet"));
+    }
+
+    #[test]
+    fn mixed_arch_with_gemma3_is_rejected_even_without_mmproj_filename() {
+        let err = ensure_supported_gemma3_gguf_scope(
+            &["gemma3".to_string(), "clip".to_string()],
+            &[PathBuf::from("model.gguf"), PathBuf::from("extra.gguf")],
+        )
+        .expect_err("gemma3 mixed-arch payload must be rejected");
+        assert!(err
+            .to_string()
+            .contains("text-only Gemma 3 GGUF is supported"));
     }
 }
