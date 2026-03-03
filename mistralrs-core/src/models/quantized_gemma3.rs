@@ -348,7 +348,7 @@ fn gemma3_use_sliding_window(
     if !sliding_window_pattern.is_empty() {
         return sliding_window_pattern[layer_idx % sliding_window_pattern.len()];
     }
-    (layer_idx + 1) % sliding_window_pattern_interval != 0
+    !(layer_idx + 1).is_multiple_of(sliding_window_pattern_interval)
 }
 
 fn ensure_gemma3_causal_mode(causal: bool) -> Result<()> {
