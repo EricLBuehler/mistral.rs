@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use candle_core::quantized::ggml_file;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module};
@@ -126,12 +125,18 @@ struct LayerWeights {
     attention_wv: Arc<dyn QuantMethod>,
     attention_wo: Arc<dyn QuantMethod>,
     attention_norm: QRmsNorm,
+    attention_post_norm: QRmsNorm,
     mlp_or_moe: MlpOrMoe,
     ffn_norm: QRmsNorm,
+    ffn_post_norm: QRmsNorm,
+    q_norm: QRmsNorm,
+    k_norm: QRmsNorm,
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
-    rotary: Arc<RotaryEmbedding>,
+    rotary_global: Arc<RotaryEmbedding>,
+    rotary_local: Arc<RotaryEmbedding>,
+    use_sliding_window: bool,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     dtype: DType,
@@ -141,7 +146,8 @@ impl LayerWeights {
     fn forward_attn(
         &self,
         x: &Tensor,
-        mask: Option<&Tensor>,
+        attention_mask: Option<&Tensor>,
+        sliding_attention_mask: Option<&Tensor>,
         start_offsets: &[usize],
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -176,7 +182,23 @@ impl LayerWeights {
             (q, k, v)
         };
 
-        let (q, k) = self.rotary.forward(&q, &k, start_offsets)?;
+        let q_flat = q.flatten(0, 2)?;
+        let k_flat = k.flatten(0, 2)?;
+        let q_flat = self.q_norm.forward(&q_flat)?;
+        let k_flat = self.k_norm.forward(&k_flat)?;
+        let q = q_flat.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
+        let k = k_flat.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+
+        let (q, k) = if self.use_sliding_window {
+            self.rotary_local.forward(&q, &k, start_offsets)?
+        } else {
+            self.rotary_global.forward(&q, &k, start_offsets)?
+        };
+        let mask = if self.use_sliding_window {
+            sliding_attention_mask
+        } else {
+            attention_mask
+        };
 
         let y = match &self.paged_attn {
             Some(paged_attn) => {
@@ -223,109 +245,6 @@ pub struct ModelWeights {
     dtype: DType,
 }
 
-impl ModelConfig::FromGGML for ModelWeights {
-    fn from_ggml(mut ct: ggml_file::Content, gqa: usize, dtype: DType) -> Result<Self> {
-        let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
-        let rotary = RotaryEmbedding::new_partial(
-            10000.,
-            ct.hparams.n_rot as usize,
-            DEFAULT_MAX_SEQ_LEN as usize,
-            &ct.device,
-            false,
-            dtype,
-        )?;
-        let tok_embeddings = ct.remove("tok_embeddings.weight")?;
-        let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
-        let norm = QRmsNorm::new(ct.remove("norm.weight")?, 1e-5)?;
-        let output = ct.remove("output.weight")?;
-        let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
-        for layer_idx in NiceProgressBar::<_, 'b'>(
-            0..ct.hparams.n_layer,
-            "Loading repeating layers",
-            &new_multi_progress(),
-        ) {
-            let prefix = format!("layers.{layer_idx}");
-            let attention_wq = ct.remove(&format!("{prefix}.attention.wq.weight"))?;
-            let attention_wk = ct.remove(&format!("{prefix}.attention.wk.weight"))?;
-            let attention_wv = ct.remove(&format!("{prefix}.attention.wv.weight"))?;
-            let attention_wo = ct.remove(&format!("{prefix}.attention.wo.weight"))?;
-            let mlp_or_moe = {
-                let feed_forward_w1 = ct.remove(&format!("{prefix}.feed_forward.w1.weight"))?;
-                let feed_forward_w2 = ct.remove(&format!("{prefix}.feed_forward.w2.weight"))?;
-                let feed_forward_w3 = ct.remove(&format!("{prefix}.feed_forward.w3.weight"))?;
-                MlpOrMoe::Mlp(Mlp {
-                    feed_forward_w1: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                        q_weight: Arc::new(feed_forward_w1),
-                        b: None,
-                    })?),
-                    feed_forward_w2: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                        q_weight: Arc::new(feed_forward_w2),
-                        b: None,
-                    })?),
-                    feed_forward_w3: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                        q_weight: Arc::new(feed_forward_w3),
-                        b: None,
-                    })?),
-                })
-            };
-            let attention_norm = ct.remove(&format!("{prefix}.attention_norm.weight"))?;
-            let ffn_norm = ct.remove(&format!("{prefix}.ffn_norm.weight"))?;
-            let n_kv_head = ct.hparams.n_head as usize / gqa;
-            layers.push(LayerWeights {
-                attention_wq: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                    q_weight: Arc::new(attention_wq),
-                    b: None,
-                })?),
-                attention_wk: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                    q_weight: Arc::new(attention_wk),
-                    b: None,
-                })?),
-                attention_wv: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                    q_weight: Arc::new(attention_wv),
-                    b: None,
-                })?),
-                attention_wo: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                    q_weight: Arc::new(attention_wo),
-                    b: None,
-                })?),
-                attention_norm: QRmsNorm::new(attention_norm, 1e-5)?,
-                mlp_or_moe,
-                ffn_norm: QRmsNorm::new(ffn_norm, 1e-5)?,
-                n_head: ct.hparams.n_head as usize,
-                n_kv_head: ct.hparams.n_head as usize / gqa,
-                head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
-                rotary: rotary.clone().into(),
-                paged_attn: None, // TODO
-                sdpa_params: SdpaParams {
-                    n_kv_groups: ct.hparams.n_head as usize / n_kv_head,
-                    softcap: None,
-                    softmax_scale: 1.0 / (head_dim as f32).sqrt(),
-                    sliding_window: None,
-                    sinks: None,
-                },
-                dtype,
-            })
-        }
-        Ok(Self {
-            tok_embeddings: Embedding::new(tok_embeddings, ct.hparams.n_embd as usize),
-            layers,
-            norm,
-            output: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                q_weight: Arc::new(output),
-                b: None,
-            })?),
-            device: ct.device.clone(),
-            cache: EitherCache::Normal(NormalCache::new(
-                ct.hparams.n_layer as usize,
-                DEFAULT_MAX_SEQ_LEN as usize,
-            )),
-            max_seq_len: DEFAULT_MAX_SEQ_LEN as usize, // Cannot determine from ggml.
-            mapper: None,
-            dtype,
-        })
-    }
-}
-
 // gemma3 `llm` fields:
 // https://github.com/ggerganov/ggml/blob/master/docs/gguf.md#llm
 // NOTE: Types here do not match spec
@@ -340,6 +259,10 @@ pub(crate) struct PropsGGUF {
     pub rms_norm_eps: f32,
     pub max_seq_len: usize,
     pub rope_freq_base: f32,
+    pub rope_local_freq_base: f32,
+    pub sliding_window: usize,
+    pub sliding_window_pattern: usize,
+    pub query_pre_attn_scalar: Option<f32>,
     pub key_length: usize,
     pub value_length: usize,
 }
@@ -357,6 +280,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             "embedding_length",
             "rope.dimension_count",
             "attention.layer_norm_rms_epsilon",
+            "attention.sliding_window",
         ];
         c.has_required_keys(&required)?;
 
@@ -380,6 +304,16 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
                 .ok()
                 .unwrap_or(DEFAULT_MAX_SEQ_LEN as u64) as usize,
             rope_freq_base: c.get_value("rope.freq_base").ok().unwrap_or(10_000_f32),
+            rope_local_freq_base: c
+                .get_value("rope.local.freq_base")
+                .ok()
+                .unwrap_or(10_000_f32),
+            sliding_window: c.get_value::<u32>("attention.sliding_window")? as usize,
+            sliding_window_pattern: c
+                .get_value::<u32>("attention.sliding_window_pattern")
+                .ok()
+                .unwrap_or(6) as usize,
+            query_pre_attn_scalar: c.get_value("attention.query_pre_attn_scalar").ok(),
             key_length: c
                 .get_value::<u32>("attention.key_length")
                 .ok()
@@ -422,6 +356,10 @@ impl ModelConfig::FromGGUF for ModelWeights {
             rms_norm_eps,
             max_seq_len,
             rope_freq_base,
+            rope_local_freq_base,
+            sliding_window,
+            sliding_window_pattern,
+            query_pre_attn_scalar,
             key_length,
             value_length,
         } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
@@ -443,13 +381,25 @@ impl ModelConfig::FromGGUF for ModelWeights {
             );
         }
 
-        let mut ropes = HashMap::new();
+        let mut global_ropes = HashMap::new();
+        let mut local_ropes = HashMap::new();
         for layer_idx in 0..block_count {
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
-            ropes.insert(
+            global_ropes.insert(
                 device.location(),
                 Arc::new(RotaryEmbedding::new(
                     rope_freq_base,
+                    rope_dim,
+                    max_seq_len,
+                    device,
+                    false,
+                    dtype,
+                )?),
+            );
+            local_ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new(
+                    rope_local_freq_base,
                     rope_dim,
                     max_seq_len,
                     device,
@@ -466,9 +416,13 @@ impl ModelConfig::FromGGUF for ModelWeights {
         ) {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
-            let rotary = ropes
+            let rotary_global = global_ropes
                 .get(&device.location())
                 .expect("No RoPE for device location!")
+                .clone();
+            let rotary_local = local_ropes
+                .get(&device.location())
+                .expect("No local RoPE for device location!")
                 .clone();
 
             let attention_wq = ct.tensor(&format!("{prefix}.attn_q.weight"), device)?;
@@ -589,7 +543,13 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 }
             };
             let attention_norm = ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?;
+            let attention_post_norm =
+                ct.tensor(&format!("{prefix}.post_attention_norm.weight"), device)?;
             let ffn_norm = ct.tensor(&format!("{prefix}.ffn_norm.weight"), device)?;
+            let ffn_post_norm = ct.tensor(&format!("{prefix}.post_ffw_norm.weight"), device)?;
+            let q_norm = ct.tensor(&format!("{prefix}.attn_q_norm.weight"), device)?;
+            let k_norm = ct.tensor(&format!("{prefix}.attn_k_norm.weight"), device)?;
+            let use_sliding_window = (layer_idx + 1) % sliding_window_pattern != 0;
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
                 AttentionImplementation::PagedAttention => {
@@ -614,18 +574,24 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     b: None,
                 })?),
                 attention_norm: QRmsNorm::new(attention_norm, rms_norm_eps)?,
+                attention_post_norm: QRmsNorm::new(attention_post_norm, rms_norm_eps)?,
                 mlp_or_moe,
                 ffn_norm: QRmsNorm::new(ffn_norm, rms_norm_eps)?,
+                ffn_post_norm: QRmsNorm::new(ffn_post_norm, rms_norm_eps)?,
+                q_norm: QRmsNorm::new(q_norm, rms_norm_eps)?,
+                k_norm: QRmsNorm::new(k_norm, rms_norm_eps)?,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim,
-                rotary: rotary.clone(),
+                rotary_global: rotary_global.clone(),
+                rotary_local: rotary_local.clone(),
+                use_sliding_window,
                 paged_attn,
                 sdpa_params: SdpaParams {
                     n_kv_groups: head_count / head_count_kv,
                     softcap: None,
-                    softmax_scale: 1.0 / (head_dim as f32).sqrt(),
-                    sliding_window: None,
+                    softmax_scale: 1.0 / query_pre_attn_scalar.unwrap_or(head_dim as f32).sqrt(),
+                    sliding_window: use_sliding_window.then_some(sliding_window),
                     sinks: None,
                 },
                 dtype,
@@ -679,6 +645,31 @@ impl ModelWeights {
         } else {
             DeviceMappedMask::from_single(mask)
         };
+        let sliding_window = self
+            .layers
+            .iter()
+            .find_map(|layer| layer.sdpa_params.sliding_window);
+        let sliding_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+            x,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &start_offsets as &dyn PastKvLenCache)
+                .unwrap_or(cache as &dyn PastKvLenCache),
+            sliding_window,
+            self.dtype,
+            self.layers[0].n_head,
+        )?;
+        let sliding_mask = sliding_mask.filter(|_| {
+            metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true)
+        });
+        let sliding_mask = if let Some(ref mapper) = self.mapper {
+            DeviceMappedMask::new(sliding_mask, &**mapper)?
+        } else {
+            DeviceMappedMask::from_single(sliding_mask)
+        };
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
@@ -689,18 +680,21 @@ impl ModelWeights {
             let attn = layer.forward_attn(
                 &x,
                 mask.as_ref().map(|m| m.get(x.device())),
+                sliding_mask.as_ref().map(|m| m.get(x.device())),
                 start_offsets,
                 &mut cache[i],
                 metadata
                     .as_ref()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
             )?;
-            let x = (attn + residual)?;
+            let x = layer.attention_post_norm.forward(&attn)?;
+            let x = (x + residual)?;
 
             // MLP
             let residual = &x;
             let x = layer.ffn_norm.forward(&x)?;
             let x = layer.mlp_or_moe.forward(&x)?;
+            let x = layer.ffn_post_norm.forward(&x)?;
             let x = (x + residual)?;
             layer_in = x;
         }
