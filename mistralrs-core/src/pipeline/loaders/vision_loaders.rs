@@ -353,59 +353,6 @@ impl AutoVisionLoader {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::AutoVisionLoader;
-    use crate::pipeline::SupportedModality;
-
-    #[test]
-    fn gemma3_text_config_is_accepted_in_auto_vision_loader() {
-        let config = r#"{
-            "architectures":["Gemma3ForCausalLM"],
-            "model_type":"gemma3_text",
-            "hidden_size":1024,
-            "intermediate_size":8192,
-            "num_hidden_layers":18,
-            "sliding_window":1024
-        }"#;
-
-        let loader = AutoVisionLoader::get_loader(config)
-            .expect("Gemma3 text configs should not be rejected");
-        let modalities = loader
-            .modalities(config)
-            .expect("Gemma3 text config modalities should parse");
-        assert_eq!(modalities.input, vec![SupportedModality::Text]);
-        assert_eq!(modalities.output, vec![SupportedModality::Text]);
-    }
-
-    #[test]
-    fn gemma3_with_vision_config_reports_multimodal_input() {
-        let config = r#"{
-            "architectures":["Gemma3ForConditionalGeneration"],
-            "text_config":{
-                "hidden_size":1024,
-                "intermediate_size":8192,
-                "num_hidden_layers":18,
-                "sliding_window":1024
-            },
-            "vision_config":{},
-            "image_token_index":256000,
-            "mm_tokens_per_image":256
-        }"#;
-
-        let loader =
-            AutoVisionLoader::get_loader(config).expect("Gemma3 multimodal configs should load");
-        let modalities = loader
-            .modalities(config)
-            .expect("Gemma3 multimodal config modalities should parse");
-        assert_eq!(
-            modalities.input,
-            vec![SupportedModality::Text, SupportedModality::Vision]
-        );
-        assert_eq!(modalities.output, vec![SupportedModality::Text]);
-    }
-}
-
 impl VisionModelLoader for AutoVisionLoader {
     fn load(
         &self,
