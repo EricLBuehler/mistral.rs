@@ -535,6 +535,80 @@ impl ColumnParallelLayer {
         }
         Ok(vec_layers)
     }
+
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new_merged_chunks(
+        in_dim: usize,
+        out_dim: usize,
+        chunks: Vec<usize>,
+        config: &Option<QuantizedConfig>,
+        comm: &Arc<crate::Comm>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Vec<Arc<dyn QuantMethod>>> {
+        if chunks.is_empty() {
+            candle_core::bail!("`chunks` must not be empty");
+        }
+        let sum_chunks: usize = chunks.iter().sum();
+        if sum_chunks != out_dim {
+            candle_core::bail!("sum of chunk sizes ({sum_chunks}) must equal out_dim ({out_dim})");
+        }
+        if config.is_some() {
+            candle_core::bail!(
+                "new_merged_chunks does not support pre-quantized layers; use ISQ or non-merged loading"
+            );
+        }
+
+        let base_vb = vb.clone();
+        let vb = if should_apply_immediate_isq(&vb) {
+            vb.set_device(Device::Cpu)
+        } else {
+            vb
+        };
+
+        // Handle the case where the layer is dummy (no tensors)
+        if !vb.contains_tensor("weight") {
+            let mut vec_layers = Vec::with_capacity(chunks.len());
+            for _ in 0..chunks.len() {
+                let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
+                vec_layers.push(Arc::new(layer) as Arc<dyn QuantMethod>);
+            }
+            return Ok(vec_layers);
+        }
+
+        let mut weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
+        weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
+
+        let rank = comm.rank();
+        let world_size = comm.world_size();
+        let mut chunk_start = 0usize;
+        let mut vec_layers = Vec::with_capacity(chunks.len());
+
+        for &chunk_size in &chunks {
+            if chunk_size % world_size != 0 {
+                candle_core::bail!(
+                    "chunk size {chunk_size} is not divisible by tensor parallel world_size {world_size}"
+                );
+            }
+            let local_chunk = chunk_size / world_size;
+            let ws = weight
+                .narrow(0, chunk_start, chunk_size)?
+                .narrow(0, rank * local_chunk, local_chunk)?
+                .contiguous()?;
+            chunk_start += chunk_size;
+
+            let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+                Linear::new(ws, None),
+            ))?;
+            let this_unquant = Arc::new(Self {
+                weight: Arc::new(layer),
+                bias: None,
+            });
+            let this: Arc<dyn QuantMethod> = apply_immediate_isq(this_unquant, base_vb.clone())?;
+            vec_layers.push(this);
+        }
+
+        Ok(vec_layers)
+    }
 }
 
 impl QuantMethod for ColumnParallelLayer {

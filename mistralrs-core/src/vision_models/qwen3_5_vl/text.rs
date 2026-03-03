@@ -14,7 +14,7 @@ use std::{
 use crate::{
     device_map::{DeviceMappedMask, DeviceMapper},
     kv_cache::{HybridCache, HybridCacheConfig, HybridLayerType},
-    layers::{embedding, GemmaRmsNorm, RotaryEmbedding},
+    layers::{embedding, CausalMasker, GemmaRmsNorm, RotaryEmbedding},
     layers_masker::PastKvLenCache,
     models::{
         deltanet::{DeltaNetConfig, GatedDeltaNet, GdnLayerCache, GdnProjection},
@@ -177,6 +177,7 @@ impl LocalHybridCache {
         cfg: &TextConfig,
         device: &Device,
         dtype: DType,
+        world_size: usize,
     ) -> Result<Self> {
         let adapter = TextConfigAdapter(cfg);
         let mut caches = Vec::with_capacity(layer_types.len());
@@ -191,7 +192,7 @@ impl LocalHybridCache {
                 }
                 LayerType::LinearAttention => {
                     caches.push(LocalLayerCache::LinearAttention(GdnLayerCache::new(
-                        &adapter, dtype, device,
+                        &adapter, dtype, device, world_size,
                     )?));
                 }
             }
@@ -457,6 +458,7 @@ impl Qwen3_5VLTextModel {
             cfg,
             &normal_loading_metadata.real_device,
             vb_m.dtype(),
+            mapper.get_comm_for(0)?.world_size(),
         )?));
 
         // Create pipeline hybrid cache config
@@ -540,34 +542,45 @@ impl Qwen3_5VLTextModel {
     ) -> Result<Tensor> {
         let mut local_cache = self.local_cache.lock().unwrap();
 
+        let is_first_chunk = metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(seqlen_offsets[0] == 0);
+
+        if is_first_chunk {
+            for cache in &mut local_cache.caches {
+                match cache {
+                    LocalLayerCache::Attention(kv) => kv.reset(),
+                    LocalLayerCache::LinearAttention(gdn) => gdn.reset()?,
+                }
+            }
+        }
+
+        let attention_mask = if let Some(attention_mask) = attention_mask {
+            Some(attention_mask)
+        } else {
+            let (bsz, seq_len, _) = xs.dims3()?;
+            let mask_input = Tensor::zeros((bsz, seq_len), DType::U8, xs.device())?;
+            CausalMasker.make_sliding_window_causal_mask_matrix(
+                &mask_input,
+                metadata
+                    .as_ref()
+                    .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                    .unwrap_or(&*local_cache as &dyn PastKvLenCache),
+                self.sliding_window,
+                xs.dtype(),
+                self.cfg.num_attn_heads,
+            )?
+        };
+        let attention_mask = attention_mask.filter(|_| is_first_chunk);
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
 
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
 
             let (kv_cache, gdn_cache) = match &mut local_cache.caches[i] {
-                LocalLayerCache::Attention(kv) => {
-                    // Reset KV cache on first chunk
-                    if metadata
-                        .as_ref()
-                        .map(|(_, meta)| meta.is_first_prompt_chunk)
-                        .unwrap_or(seqlen_offsets[0] == 0)
-                    {
-                        kv.reset();
-                    }
-                    (Some(kv), None)
-                }
-                LocalLayerCache::LinearAttention(gdn) => {
-                    // Reset GDN cache on first chunk
-                    if metadata
-                        .as_ref()
-                        .map(|(_, meta)| meta.is_first_prompt_chunk)
-                        .unwrap_or(seqlen_offsets[0] == 0)
-                    {
-                        gdn.reset()?;
-                    }
-                    (None, Some(gdn))
-                }
+                LocalLayerCache::Attention(kv) => (Some(kv), None),
+                LocalLayerCache::LinearAttention(gdn) => (None, Some(gdn)),
             };
 
             xs = layer.forward(
@@ -703,32 +716,62 @@ impl IsqModel for Qwen3_5VLTextModel {
                             uvb_l
                                 .pp("linear_attn")
                                 .pp("in_proj_qkv")
-                                .add_tensor("weight", in_proj_qkv.weight().clone());
+                                .add_tensor("weight", in_proj_qkv.unquant_weight_bias().unwrap().0);
                             uvb_l
                                 .pp("linear_attn")
                                 .pp("in_proj_z")
-                                .add_tensor("weight", in_proj_z.weight().clone());
+                                .add_tensor("weight", in_proj_z.unquant_weight_bias().unwrap().0);
                             uvb_l
                                 .pp("linear_attn")
                                 .pp("in_proj_b")
-                                .add_tensor("weight", in_proj_b.weight().clone());
+                                .add_tensor("weight", in_proj_b.unquant_weight_bias().unwrap().0);
                             uvb_l
                                 .pp("linear_attn")
                                 .pp("in_proj_a")
-                                .add_tensor("weight", in_proj_a.weight().clone());
+                                .add_tensor("weight", in_proj_a.unquant_weight_bias().unwrap().0);
+                        }
+                        GdnProjection::SplitQkvZaMerged {
+                            in_proj_q,
+                            in_proj_k,
+                            in_proj_v,
+                            in_proj_z,
+                            in_proj_b,
+                            in_proj_a,
+                        } => {
+                            let q = in_proj_q.unquant_weight_bias().unwrap().0;
+                            let k = in_proj_k.unquant_weight_bias().unwrap().0;
+                            let v = in_proj_v.unquant_weight_bias().unwrap().0;
+                            let qkv = Tensor::cat(&[&q, &k, &v], 0)
+                                .expect("Failed to reconstruct in_proj_qkv from merged chunks");
+                            uvb_l
+                                .pp("linear_attn")
+                                .pp("in_proj_qkv")
+                                .add_tensor("weight", qkv);
+                            uvb_l
+                                .pp("linear_attn")
+                                .pp("in_proj_z")
+                                .add_tensor("weight", in_proj_z.unquant_weight_bias().unwrap().0);
+                            uvb_l
+                                .pp("linear_attn")
+                                .pp("in_proj_b")
+                                .add_tensor("weight", in_proj_b.unquant_weight_bias().unwrap().0);
+                            uvb_l
+                                .pp("linear_attn")
+                                .pp("in_proj_a")
+                                .add_tensor("weight", in_proj_a.unquant_weight_bias().unwrap().0);
                         }
                         GdnProjection::FusedQkvzBa {
                             in_proj_qkvz,
                             in_proj_ba,
                         } => {
-                            uvb_l
-                                .pp("linear_attn")
-                                .pp("in_proj_qkvz")
-                                .add_tensor("weight", in_proj_qkvz.weight().clone());
+                            uvb_l.pp("linear_attn").pp("in_proj_qkvz").add_tensor(
+                                "weight",
+                                in_proj_qkvz.unquant_weight_bias().unwrap().0,
+                            );
                             uvb_l
                                 .pp("linear_attn")
                                 .pp("in_proj_ba")
-                                .add_tensor("weight", in_proj_ba.weight().clone());
+                                .add_tensor("weight", in_proj_ba.unquant_weight_bias().unwrap().0);
                         }
                     }
                     uvb_l

@@ -12,8 +12,6 @@ use text::Qwen3_5VLTextModel;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
-    layers::CausalMasker,
-    layers_masker::PastKvLenCache,
     paged_attention::{
         encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
     },
@@ -103,19 +101,6 @@ impl Qwen3_5VLModel {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let mut attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
-            input_ids,
-            &seqlen_offsets as &dyn PastKvLenCache,
-            self.text.sliding_window,
-            self.text.dtype,
-            self.text.cfg.num_attn_heads,
-        )?;
-        let is_first_chunk = metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true);
-        attention_mask = attention_mask.filter(|_| is_first_chunk);
-
         let mut input_embeds = self.text.embed_tokens(input_ids)?;
         let (batch_size, seq_len, hidden_dim) = input_embeds.dims3()?;
         let device = input_embeds.device().clone();
@@ -408,7 +393,7 @@ impl Qwen3_5VLModel {
 
         let out = self.text.forward_embeds(
             input_embeds,
-            attention_mask,
+            None,
             seqlen_offsets,
             context_lens,
             metadata,
