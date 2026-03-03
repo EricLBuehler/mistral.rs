@@ -261,7 +261,9 @@ pub(crate) struct PropsGGUF {
     pub rope_freq_base: f32,
     pub rope_local_freq_base: f32,
     pub sliding_window: usize,
-    pub sliding_window_pattern: usize,
+    pub sliding_window_pattern: Vec<bool>,
+    pub sliding_window_pattern_interval: usize,
+    pub causal: bool,
     pub query_pre_attn_scalar: Option<f32>,
     pub key_length: usize,
     pub value_length: usize,
@@ -289,6 +291,15 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
 
         // NOTE: Values are not aligned with GGUFv3 types
         // TODO: Normalize value types to spec
+        let sliding_window_pattern = c
+            .get_value::<Vec<bool>>("attention.sliding_window_pattern")
+            .ok()
+            .unwrap_or_default();
+        let sliding_window_pattern_interval = c
+            .get_value::<u32>("attention.sliding_window_pattern")
+            .ok()
+            .unwrap_or(6) as usize;
+
         let props = Self {
             n_expert: c.get_value::<u32>("expert_count").ok().unwrap_or(0) as usize,
             n_expert_used: c.get_value::<u32>("expert_used_count").ok().unwrap_or(0) as usize,
@@ -309,10 +320,9 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
                 .ok()
                 .unwrap_or(10_000_f32),
             sliding_window: c.get_value::<u32>("attention.sliding_window")? as usize,
-            sliding_window_pattern: c
-                .get_value::<u32>("attention.sliding_window_pattern")
-                .ok()
-                .unwrap_or(6) as usize,
+            sliding_window_pattern,
+            sliding_window_pattern_interval,
+            causal: c.get_value::<bool>("attention.causal").ok().unwrap_or(true),
             query_pre_attn_scalar: c.get_value("attention.query_pre_attn_scalar").ok(),
             key_length: c
                 .get_value::<u32>("attention.key_length")
@@ -328,6 +338,26 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
 
         Ok(props)
     }
+}
+
+fn gemma3_use_sliding_window(
+    layer_idx: usize,
+    sliding_window_pattern: &[bool],
+    sliding_window_pattern_interval: usize,
+) -> bool {
+    if !sliding_window_pattern.is_empty() {
+        return sliding_window_pattern[layer_idx % sliding_window_pattern.len()];
+    }
+    (layer_idx + 1) % sliding_window_pattern_interval != 0
+}
+
+fn ensure_gemma3_causal_mode(causal: bool) -> Result<()> {
+    if !causal {
+        candle_core::bail!(
+            "Unsupported Gemma 3 GGUF variant: `attention.causal=false` (embedding/non-causal). Only causal text-generation Gemma 3 GGUF is supported."
+        );
+    }
+    Ok(())
 }
 
 impl ModelConfig::FromGGUF for ModelWeights {
@@ -359,10 +389,13 @@ impl ModelConfig::FromGGUF for ModelWeights {
             rope_local_freq_base,
             sliding_window,
             sliding_window_pattern,
+            sliding_window_pattern_interval,
+            causal,
             query_pre_attn_scalar,
             key_length,
             value_length,
         } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
+        ensure_gemma3_causal_mode(causal)?;
 
         let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = qtok_embeddings.dequantize(device)?;
@@ -549,7 +582,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let ffn_post_norm = ct.tensor(&format!("{prefix}.post_ffw_norm.weight"), device)?;
             let q_norm = ct.tensor(&format!("{prefix}.attn_q_norm.weight"), device)?;
             let k_norm = ct.tensor(&format!("{prefix}.attn_k_norm.weight"), device)?;
-            let use_sliding_window = (layer_idx + 1) % sliding_window_pattern != 0;
+            let use_sliding_window = gemma3_use_sliding_window(
+                layer_idx,
+                &sliding_window_pattern,
+                sliding_window_pattern_interval,
+            );
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
                 AttentionImplementation::PagedAttention => {
@@ -702,5 +739,37 @@ impl ModelWeights {
         let x = self.norm.forward(&layer_in)?;
         let x = extract_logits(&x, context_lens)?;
         MatMul.qmethod_matmul(&x.contiguous()?, &*self.output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ensure_gemma3_causal_mode, gemma3_use_sliding_window};
+
+    #[test]
+    fn sliding_window_pattern_bool_array_is_honored() {
+        let pattern = vec![true, true, true, true, true, false];
+        let got: Vec<bool> = (0..12)
+            .map(|idx| gemma3_use_sliding_window(idx, &pattern, 99))
+            .collect();
+        let expected = vec![
+            true, true, true, true, true, false, true, true, true, true, true, false,
+        ];
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn sliding_window_pattern_interval_fallback_is_used_when_bool_array_missing() {
+        let got: Vec<bool> = (0..6)
+            .map(|idx| gemma3_use_sliding_window(idx, &[], 6))
+            .collect();
+        let expected = vec![true, true, true, true, true, false];
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn non_causal_gemma3_is_rejected() {
+        let err = ensure_gemma3_causal_mode(false).expect_err("non-causal must be rejected");
+        assert!(err.to_string().contains("attention.causal=false"));
     }
 }
