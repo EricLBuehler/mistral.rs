@@ -108,7 +108,8 @@ pub use self::inputs_processor::{
 };
 use self::text_models_inputs_processor::PagedAttentionMeta;
 pub use crate::kv_cache::{
-    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache, NormalCacheType,
+    Cache, CacheManager, EitherCache, HybridLayerCache, KvCache, LayerCaches, NormalCache,
+    NormalCacheType,
 };
 
 #[derive(Clone, PartialEq, Eq)]
@@ -669,6 +670,35 @@ pub trait Pipeline:
                 Ok(exec_duration)
             }
             CacheBackendMetadata::PagedAttention { metadata } => {
+                // For hybrid models, build state_indices tensor from sequences'
+                // recurrent_state_idx so recurrent layers are active during forward.
+                // Paged attention manages KV caches separately, but recurrent state
+                // pool access still needs the indices tensor to be set.
+                if self.cache().is_hybrid() {
+                    let mut hybrid_cache = self.cache().hybrid();
+                    let recurrent_device = hybrid_cache.caches.iter().find_map(|c| {
+                        if let HybridLayerCache::Recurrent(pool) = c {
+                            Some(pool.device().clone())
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(device) = recurrent_device {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let indices: Vec<u32> = input_seqs
+                            .iter()
+                            .filter_map(|seq| seq.recurrent_state_idx().map(|idx| idx as u32))
+                            .collect();
+                        if indices.len() == input_seqs.len() {
+                            if let Ok(si) =
+                                Tensor::from_vec(indices, (input_seqs.len(),), &device)
+                            {
+                                hybrid_cache.set_state_indices(Some(si));
+                            }
+                        }
+                    }
+                }
+
                 let inputs_iter =
                     std::iter::once(self.get_processor().inputs_processor().process_inputs(
                         self.tokenizer(),
