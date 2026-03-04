@@ -262,11 +262,13 @@ pub(crate) struct PropsGGUF {
     pub rms_norm_eps: f32,
     pub max_seq_len: usize,
     pub rope_freq_base: f32,
+    pub rope_scaling_factor: Option<f32>,
     pub rope_local_freq_base: f32,
     pub sliding_window: usize,
     pub sliding_window_pattern: Vec<bool>,
     pub sliding_window_pattern_interval: usize,
     pub causal: bool,
+    pub attn_logit_softcapping: Option<f32>,
     pub query_pre_attn_scalar: Option<f32>,
     pub final_logit_softcapping: Option<f64>,
     pub key_length: usize,
@@ -303,6 +305,8 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             .get_value::<u32>("attention.sliding_window_pattern")
             .ok()
             .unwrap_or(6) as usize;
+        let rope_scaling_factor = c.get_value::<f32>("rope.scaling.factor").ok();
+        let attn_logit_softcapping = c.get_value::<f32>("attn_logit_softcapping").ok();
         let final_logit_softcapping =
             c.get_value::<f64>("final_logit_softcapping")
                 .ok()
@@ -327,6 +331,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
                 .ok()
                 .unwrap_or(DEFAULT_MAX_SEQ_LEN as u64) as usize,
             rope_freq_base: c.get_value("rope.freq_base").ok().unwrap_or(10_000_f32),
+            rope_scaling_factor,
             rope_local_freq_base: c
                 .get_value("rope.local.freq_base")
                 .ok()
@@ -335,6 +340,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             sliding_window_pattern,
             sliding_window_pattern_interval,
             causal: c.get_value::<bool>("attention.causal").ok().unwrap_or(true),
+            attn_logit_softcapping,
             query_pre_attn_scalar: c.get_value("attention.query_pre_attn_scalar").ok(),
             final_logit_softcapping,
             key_length: c
@@ -441,11 +447,13 @@ impl ModelConfig::FromGGUF for ModelWeights {
             rms_norm_eps,
             max_seq_len,
             rope_freq_base,
+            rope_scaling_factor,
             rope_local_freq_base,
             sliding_window,
             sliding_window_pattern,
             sliding_window_pattern_interval,
             causal,
+            attn_logit_softcapping,
             query_pre_attn_scalar,
             final_logit_softcapping,
             key_length,
@@ -476,10 +484,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             global_ropes.insert(
                 device.location(),
-                Arc::new(RotaryEmbedding::new(
+                Arc::new(RotaryEmbedding::new_scaled(
                     rope_freq_base,
                     rope_dim,
                     max_seq_len,
+                    rope_scaling_factor,
                     device,
                     false,
                     dtype,
@@ -682,7 +691,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 paged_attn,
                 sdpa_params: SdpaParams {
                     n_kv_groups: head_count / head_count_kv,
-                    softcap: None,
+                    softcap: attn_logit_softcapping,
                     softmax_scale: 1.0 / query_pre_attn_scalar.unwrap_or(head_dim as f32).sqrt(),
                     sliding_window: use_sliding_window.then_some(sliding_window),
                     sinks: None,
@@ -810,7 +819,9 @@ impl ModelWeights {
 
 #[cfg(test)]
 mod tests {
-    use candle_core::{Device, Tensor};
+    use candle_core::{DType, Device, Tensor};
+
+    use crate::layers::RotaryEmbedding;
 
     use super::{
         apply_final_logit_softcapping, ensure_gemma3_causal_mode, gemma3_cache_types,
@@ -873,6 +884,32 @@ mod tests {
         assert!((gemma3_embedding_scale(2560) - 50.59644256269407).abs() < 1e-12);
         assert!((gemma3_embedding_scale(3840) - 61.96773353931867).abs() < 1e-12);
         assert!((gemma3_embedding_scale(5376) - 73.32121111929344).abs() < 1e-12);
+    }
+
+    #[test]
+    fn global_rope_scaling_factor_changes_rotary_frequencies() {
+        let device = Device::Cpu;
+        let unscaled =
+            RotaryEmbedding::new_scaled(1_000_000.0, 256, 8, None, &device, false, DType::F32)
+                .expect("unscaled rotary must build");
+        let scaled =
+            RotaryEmbedding::new_scaled(1_000_000.0, 256, 8, Some(8.0), &device, false, DType::F32)
+                .expect("scaled rotary must build");
+
+        let (cos_unscaled, _) = unscaled
+            .get_cos_sin()
+            .expect("unscaled cos/sin must be readable");
+        let (cos_scaled, _) = scaled
+            .get_cos_sin()
+            .expect("scaled cos/sin must be readable");
+        let cos_unscaled = cos_unscaled
+            .to_vec2::<f32>()
+            .expect("unscaled cos must materialize");
+        let cos_scaled = cos_scaled
+            .to_vec2::<f32>()
+            .expect("scaled cos must materialize");
+
+        assert!((cos_unscaled[1][0] - cos_scaled[1][0]).abs() > 1e-6);
     }
 
     #[test]
