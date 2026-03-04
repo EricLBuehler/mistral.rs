@@ -242,6 +242,7 @@ pub struct ModelWeights {
     pub device: Device,
     pub cache: EitherCache,
     pub max_seq_len: usize,
+    final_logit_softcapping: Option<f64>,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     dtype: DType,
 }
@@ -266,6 +267,7 @@ pub(crate) struct PropsGGUF {
     pub sliding_window_pattern_interval: usize,
     pub causal: bool,
     pub query_pre_attn_scalar: Option<f32>,
+    pub final_logit_softcapping: Option<f64>,
     pub key_length: usize,
     pub value_length: usize,
 }
@@ -300,6 +302,14 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             .get_value::<u32>("attention.sliding_window_pattern")
             .ok()
             .unwrap_or(6) as usize;
+        let final_logit_softcapping =
+            c.get_value::<f64>("final_logit_softcapping")
+                .ok()
+                .or_else(|| {
+                    c.get_value::<f32>("final_logit_softcapping")
+                        .ok()
+                        .map(f64::from)
+                });
 
         let props = Self {
             n_expert: c.get_value::<u32>("expert_count").ok().unwrap_or(0) as usize,
@@ -325,6 +335,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             sliding_window_pattern_interval,
             causal: c.get_value::<bool>("attention.causal").ok().unwrap_or(true),
             query_pre_attn_scalar: c.get_value("attention.query_pre_attn_scalar").ok(),
+            final_logit_softcapping,
             key_length: c
                 .get_value::<u32>("attention.key_length")
                 .ok()
@@ -385,6 +396,20 @@ fn ensure_gemma3_causal_mode(causal: bool) -> Result<()> {
     Ok(())
 }
 
+fn apply_final_logit_softcapping(
+    xs: Tensor,
+    final_logit_softcapping: Option<f64>,
+) -> Result<Tensor> {
+    if let Some(final_logit_softcapping) = final_logit_softcapping {
+        let xs = (xs / final_logit_softcapping)?;
+        let xs = xs.tanh()?;
+        let xs = (xs * final_logit_softcapping)?;
+        Ok(xs)
+    } else {
+        Ok(xs)
+    }
+}
+
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         mut ct: Content<'_, R>,
@@ -417,6 +442,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             sliding_window_pattern_interval,
             causal,
             query_pre_attn_scalar,
+            final_logit_softcapping,
             key_length,
             value_length,
         } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
@@ -677,6 +703,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             device: device.clone(),
             cache: EitherCache::Normal(NormalCache::from_types(cache_types)),
             max_seq_len,
+            final_logit_softcapping,
             mapper: Some(mapper),
             dtype,
         })
@@ -770,15 +797,18 @@ impl ModelWeights {
         let layer_in = layer_in.to_device(&self.device)?;
         let x = self.norm.forward(&layer_in)?;
         let x = extract_logits(&x, context_lens)?;
-        MatMul.qmethod_matmul(&x.contiguous()?, &*self.output)
+        let x = MatMul.qmethod_matmul(&x.contiguous()?, &*self.output)?;
+        apply_final_logit_softcapping(x, self.final_logit_softcapping)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use candle_core::{Device, Tensor};
+
     use super::{
-        ensure_gemma3_causal_mode, gemma3_cache_types, gemma3_use_sliding_window, KvCache,
-        NormalCache,
+        apply_final_logit_softcapping, ensure_gemma3_causal_mode, gemma3_cache_types,
+        gemma3_use_sliding_window, KvCache, NormalCache,
     };
 
     #[test]
@@ -809,6 +839,26 @@ mod tests {
         let got: Vec<bool> = cache.0.iter().map(KvCache::is_rotating).collect();
         let expected = vec![true, true, true, true, true, false];
         assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn final_logit_softcapping_matches_reference_formula() {
+        let xs = Tensor::new(&[-4.0f32, -1.0, 0.0, 1.0, 4.0], &Device::Cpu)
+            .expect("tensor creation must succeed");
+        let got = apply_final_logit_softcapping(xs, Some(2.0))
+            .expect("softcapping must succeed")
+            .to_vec1::<f32>()
+            .expect("vector extraction must succeed");
+        let expected: Vec<f32> = [-4.0f32, -1.0, 0.0, 1.0, 4.0]
+            .into_iter()
+            .map(|x| (x / 2.0).tanh() * 2.0)
+            .collect();
+        for (got, expected) in got.iter().zip(expected.iter()) {
+            assert!(
+                (got - expected).abs() < 1e-5,
+                "got {got}, expected {expected}"
+            );
+        }
     }
 
     #[test]
