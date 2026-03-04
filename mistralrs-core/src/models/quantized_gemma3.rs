@@ -236,6 +236,7 @@ impl LayerWeights {
 
 pub struct ModelWeights {
     tok_embeddings: Embedding,
+    embedding_scale: f64,
     layers: Vec<LayerWeights>,
     norm: QRmsNorm,
     output: Arc<dyn QuantMethod>,
@@ -394,6 +395,10 @@ fn ensure_gemma3_causal_mode(causal: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn gemma3_embedding_scale(embedding_length: usize) -> f64 {
+    (embedding_length as f64).sqrt()
 }
 
 fn apply_final_logit_softcapping(
@@ -694,6 +699,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         );
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
+            embedding_scale: gemma3_embedding_scale(embedding_length),
             layers,
             norm,
             output: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
@@ -718,7 +724,7 @@ impl ModelWeights {
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
-        let mut layer_in = self.tok_embeddings.forward(x)?;
+        let mut layer_in = (self.tok_embeddings.forward(x)? * self.embedding_scale)?;
         let cache = &mut self.cache.normal().0;
         let mask = CausalMasker.make_causal_mask_matrix(
             x,
@@ -808,7 +814,7 @@ mod tests {
 
     use super::{
         apply_final_logit_softcapping, ensure_gemma3_causal_mode, gemma3_cache_types,
-        gemma3_use_sliding_window, KvCache, NormalCache,
+        gemma3_embedding_scale, gemma3_use_sliding_window, KvCache, NormalCache,
     };
 
     #[test]
@@ -859,6 +865,14 @@ mod tests {
                 "got {got}, expected {expected}"
             );
         }
+    }
+
+    #[test]
+    fn embedding_scale_matches_reference_sqrt_hidden_size() {
+        assert!((gemma3_embedding_scale(1152) - 33.94112549695428).abs() < 1e-12);
+        assert!((gemma3_embedding_scale(2560) - 50.59644256269407).abs() < 1e-12);
+        assert!((gemma3_embedding_scale(3840) - 61.96773353931867).abs() < 1e-12);
+        assert!((gemma3_embedding_scale(5376) - 73.32121111929344).abs() < 1e-12);
     }
 
     #[test]
