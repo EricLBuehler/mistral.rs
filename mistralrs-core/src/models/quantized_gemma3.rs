@@ -23,6 +23,7 @@ use crate::pipeline::NormalCacheType;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
+use tracing::warn;
 // Default fallback for models that don't specify context_length
 const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
 
@@ -407,6 +408,34 @@ fn gemma3_embedding_scale(embedding_length: usize) -> f64 {
     (embedding_length as f64).sqrt()
 }
 
+fn gemma3_rope_scaling_factor_with_backcompat(
+    embedding_length: usize,
+    rope_scaling_factor: Option<f32>,
+) -> Option<f32> {
+    if rope_scaling_factor.is_some() {
+        return rope_scaling_factor;
+    }
+    // Back-compat for older Gemma 3 4B/12B/27B GGUF exports that omitted rope scaling.
+    // 1B models do not use the long-context factor.
+    match embedding_length {
+        2560 | 3840 | 5376 => Some(8.0),
+        _ => None,
+    }
+}
+
+fn gemma3_final_logit_softcapping_with_backcompat(
+    embedding_length: usize,
+    final_logit_softcapping: Option<f64>,
+) -> Option<f64> {
+    // Back-compat for older 1B exports that carried an incorrect non-null final softcap.
+    if embedding_length == 1152
+        && matches!(final_logit_softcapping, Some(v) if (v - 30.0).abs() < f64::EPSILON)
+    {
+        return None;
+    }
+    final_logit_softcapping
+}
+
 fn apply_final_logit_softcapping(
     xs: Tensor,
     final_logit_softcapping: Option<f64>,
@@ -459,6 +488,23 @@ impl ModelConfig::FromGGUF for ModelWeights {
             key_length,
             value_length,
         } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
+        let raw_rope_scaling_factor = rope_scaling_factor;
+        let raw_final_logit_softcapping = final_logit_softcapping;
+        let rope_scaling_factor =
+            gemma3_rope_scaling_factor_with_backcompat(embedding_length, raw_rope_scaling_factor);
+        let final_logit_softcapping = gemma3_final_logit_softcapping_with_backcompat(
+            embedding_length,
+            raw_final_logit_softcapping,
+        );
+        if raw_rope_scaling_factor.is_none() && rope_scaling_factor == Some(8.0) {
+            warn!(
+                "Gemma 3 GGUF back-compat: missing `rope.scaling.factor`, defaulting to 8.0 for hidden size {}",
+                embedding_length
+            );
+        }
+        if raw_final_logit_softcapping == Some(30.0) && final_logit_softcapping.is_none() {
+            warn!("Gemma 3 GGUF back-compat: overriding 1B `final_logit_softcapping=30` to `None`");
+        }
         ensure_gemma3_causal_mode(causal)?;
 
         let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
@@ -825,7 +871,9 @@ mod tests {
 
     use super::{
         apply_final_logit_softcapping, ensure_gemma3_causal_mode, gemma3_cache_types,
-        gemma3_embedding_scale, gemma3_use_sliding_window, KvCache, NormalCache,
+        gemma3_embedding_scale, gemma3_final_logit_softcapping_with_backcompat,
+        gemma3_rope_scaling_factor_with_backcompat, gemma3_use_sliding_window, KvCache,
+        NormalCache,
     };
 
     #[test]
@@ -910,6 +958,39 @@ mod tests {
             .expect("scaled cos must materialize");
 
         assert!((cos_unscaled[1][0] - cos_scaled[1][0]).abs() > 1e-6);
+    }
+
+    #[test]
+    fn rope_scaling_backcompat_defaults_to_8_for_long_context_gemma3_sizes() {
+        assert_eq!(
+            gemma3_rope_scaling_factor_with_backcompat(2560, None),
+            Some(8.0)
+        );
+        assert_eq!(
+            gemma3_rope_scaling_factor_with_backcompat(3840, None),
+            Some(8.0)
+        );
+        assert_eq!(
+            gemma3_rope_scaling_factor_with_backcompat(5376, None),
+            Some(8.0)
+        );
+        assert_eq!(gemma3_rope_scaling_factor_with_backcompat(1152, None), None);
+    }
+
+    #[test]
+    fn final_softcap_backcompat_clears_old_1b_value() {
+        assert_eq!(
+            gemma3_final_logit_softcapping_with_backcompat(1152, Some(30.0)),
+            None
+        );
+        assert_eq!(
+            gemma3_final_logit_softcapping_with_backcompat(1152, Some(20.0)),
+            Some(20.0)
+        );
+        assert_eq!(
+            gemma3_final_logit_softcapping_with_backcompat(2560, Some(30.0)),
+            Some(30.0)
+        );
     }
 
     #[test]
