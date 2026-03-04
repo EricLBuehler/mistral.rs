@@ -19,6 +19,7 @@ use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::EitherCache;
 use crate::pipeline::KvCache;
 use crate::pipeline::NormalCache;
+use crate::pipeline::NormalCacheType;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::{new_multi_progress, NiceProgressBar};
@@ -351,6 +352,30 @@ fn gemma3_use_sliding_window(
     !(layer_idx + 1).is_multiple_of(sliding_window_pattern_interval)
 }
 
+fn gemma3_cache_types(
+    block_count: usize,
+    max_seq_len: usize,
+    sliding_window: usize,
+    sliding_window_pattern: &[bool],
+    sliding_window_pattern_interval: usize,
+) -> Vec<NormalCacheType> {
+    (0..block_count)
+        .map(|layer_idx| {
+            if gemma3_use_sliding_window(
+                layer_idx,
+                sliding_window_pattern,
+                sliding_window_pattern_interval,
+            ) {
+                NormalCacheType::SlidingWindow {
+                    window: sliding_window,
+                }
+            } else {
+                NormalCacheType::Normal { max_seq_len }
+            }
+        })
+        .collect()
+}
+
 fn ensure_gemma3_causal_mode(causal: bool) -> Result<()> {
     if !causal {
         candle_core::bail!(
@@ -634,6 +659,13 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 dtype,
             })
         }
+        let cache_types = gemma3_cache_types(
+            block_count,
+            max_seq_len,
+            sliding_window,
+            &sliding_window_pattern,
+            sliding_window_pattern_interval,
+        );
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
             layers,
@@ -643,7 +675,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 b: None,
             })?),
             device: device.clone(),
-            cache: EitherCache::Normal(NormalCache::new(block_count, max_seq_len)),
+            cache: EitherCache::Normal(NormalCache::from_types(cache_types)),
             max_seq_len,
             mapper: Some(mapper),
             dtype,
@@ -744,7 +776,10 @@ impl ModelWeights {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_gemma3_causal_mode, gemma3_use_sliding_window};
+    use super::{
+        ensure_gemma3_causal_mode, gemma3_cache_types, gemma3_use_sliding_window, KvCache,
+        NormalCache,
+    };
 
     #[test]
     fn sliding_window_pattern_bool_array_is_honored() {
@@ -763,6 +798,15 @@ mod tests {
         let got: Vec<bool> = (0..6)
             .map(|idx| gemma3_use_sliding_window(idx, &[], 6))
             .collect();
+        let expected = vec![true, true, true, true, true, false];
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn cache_uses_rotating_kv_only_for_sliding_layers() {
+        let cache = NormalCache::from_types(gemma3_cache_types(6, 8192, 1024, &[], 6));
+        let cache = cache.lock().expect("cache lock poisoned");
+        let got: Vec<bool> = cache.0.iter().map(KvCache::is_rotating).collect();
         let expected = vec![true, true, true, true, true, false];
         assert_eq!(got, expected);
     }
