@@ -8,11 +8,11 @@ use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
-use crate::attention::SdpaParams;
+use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
-use crate::layers::{CausalMasker, MatMul, QRmsNorm, RotaryEmbedding, Sdpa};
-use crate::layers_masker::PastKvLenCache;
+use crate::layers::{CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa};
+use crate::layers_masker::{CausalMaskConfig, PastKvLenCache};
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::extract_logits;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -33,12 +33,14 @@ struct Mlp {
     feed_forward_w3: Arc<dyn QuantMethod>,
 }
 
+const GEMMA3_MLP_ACTIVATION: crate::layers::Activation = crate::layers::Activation::GeluPytorchTanh;
+
 impl Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let w1 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w1)?;
-        let w3 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w3)?;
-        let y = crate::ops::mul_and_act(&w1, &w3, crate::layers::Activation::Silu)?;
-        MatMul.qmethod_matmul(&y, &*self.feed_forward_w2)
+        let w1 = self.feed_forward_w1.forward(xs)?;
+        let w3 = self.feed_forward_w3.forward(xs)?;
+        let y = crate::ops::mul_and_act(&w1, &w3, GEMMA3_MLP_ACTIVATION)?;
+        self.feed_forward_w2.forward(&y)
     }
 }
 
@@ -61,7 +63,7 @@ impl MlpOrMoe {
             } => {
                 let (b_size, seq_len, hidden_dim) = xs.dims3()?;
                 let xs = xs.reshape(((), hidden_dim))?;
-                let router_logits = MatMul.qmethod_matmul(&xs, &**feed_forward_gate_inp)?;
+                let router_logits = feed_forward_gate_inp.forward(&xs)?;
                 let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
 
                 // In order to extract topk, we extract the data from the tensor and manipulate it
@@ -148,23 +150,17 @@ impl LayerWeights {
     fn forward_attn(
         &self,
         x: &Tensor,
-        attention_mask: Option<&Tensor>,
-        sliding_attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
+        sliding_attention_mask: &AttentionMask,
         start_offsets: &[usize],
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
-        let q = MatMul
-            .qmethod_matmul(x, &*self.attention_wq)?
-            .to_dtype(self.dtype)?;
-        let k = MatMul
-            .qmethod_matmul(x, &*self.attention_wk)?
-            .to_dtype(self.dtype)?;
-        let v = MatMul
-            .qmethod_matmul(x, &*self.attention_wv)?
-            .to_dtype(self.dtype)?;
+        let q = self.attention_wq.forward(x)?.to_dtype(self.dtype)?;
+        let k = self.attention_wk.forward(x)?.to_dtype(self.dtype)?;
+        let v = self.attention_wv.forward(x)?.to_dtype(self.dtype)?;
 
         let (q, k, v) = if seq_len != 1 {
             let q = q
@@ -224,13 +220,13 @@ impl LayerWeights {
             }
         };
 
-        let y = if mask.is_some() {
+        let y = if !matches!(mask, AttentionMask::None) {
             y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
         } else {
             y.reshape((b_sz, seq_len, ()))?
         };
 
-        let y = MatMul.qmethod_matmul(&y.to_dtype(x.dtype())?, &*self.attention_wo)?;
+        let y = self.attention_wo.forward(&y.to_dtype(x.dtype())?)?;
         Ok(y)
     }
 }
@@ -302,10 +298,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             .get_value::<Vec<bool>>("attention.sliding_window_pattern")
             .ok()
             .unwrap_or_default();
-        let sliding_window_pattern_interval = c
-            .get_value::<u32>("attention.sliding_window_pattern")
-            .ok()
-            .unwrap_or(6) as usize;
+        let sliding_window_pattern_interval = gemma3_sliding_window_pattern_interval(&c);
         let rope_scaling_factor = c.get_value::<f32>("rope.scaling.factor").ok();
         let attn_logit_softcapping = c.get_value::<f32>("attn_logit_softcapping").ok();
         let final_logit_softcapping =
@@ -369,6 +362,13 @@ fn gemma3_use_sliding_window(
         return sliding_window_pattern[layer_idx % sliding_window_pattern.len()];
     }
     !(layer_idx + 1).is_multiple_of(sliding_window_pattern_interval)
+}
+
+fn gemma3_sliding_window_pattern_interval(c: &ContentMetadata<'_>) -> usize {
+    c.get_value::<u32>("attention.full_attention_interval")
+        .ok()
+        .or_else(|| c.get_value::<u32>("attention.sliding_window_pattern").ok())
+        .unwrap_or(6) as usize
 }
 
 fn gemma3_cache_types(
@@ -781,22 +781,25 @@ impl ModelWeights {
     ) -> Result<Tensor> {
         let mut layer_in = (self.tok_embeddings.forward(x)? * self.embedding_scale)?;
         let cache = &mut self.cache.normal().0;
-        let mask = CausalMasker.make_causal_mask_matrix(
+        let mask = CausalMasker.make_causal_mask(
             x,
             metadata
                 .as_ref()
                 .map(|(_, _)| &start_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
             self.dtype,
-            self.layers[0].n_head,
+            &CausalMaskConfig::default(),
         )?;
         // PagedAttention prompt chunking
-        let mask = mask.filter(|_| {
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-        });
+        let mask = if metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(true)
+        {
+            mask
+        } else {
+            AttentionMask::None
+        };
         let mask = if let Some(ref mapper) = self.mapper {
             DeviceMappedMask::new(mask, &**mapper)?
         } else {
@@ -806,22 +809,28 @@ impl ModelWeights {
             .layers
             .iter()
             .find_map(|layer| layer.sdpa_params.sliding_window);
-        let sliding_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+        let sliding_mask = CausalMasker.make_causal_mask(
             x,
             metadata
                 .as_ref()
                 .map(|(_, _)| &start_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
-            sliding_window,
             self.dtype,
-            self.layers[0].n_head,
+            &CausalMaskConfig {
+                sliding_window,
+                ..Default::default()
+            },
         )?;
-        let sliding_mask = sliding_mask.filter(|_| {
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-        });
+        // PagedAttention prompt chunking
+        let sliding_mask = if metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(true)
+        {
+            sliding_mask
+        } else {
+            AttentionMask::None
+        };
         let sliding_mask = if let Some(ref mapper) = self.mapper {
             DeviceMappedMask::new(sliding_mask, &**mapper)?
         } else {
@@ -836,8 +845,8 @@ impl ModelWeights {
             let x = layer.attention_norm.forward(&x)?;
             let attn = layer.forward_attn(
                 &x,
-                mask.as_ref().map(|m| m.get(x.device())),
-                sliding_mask.as_ref().map(|m| m.get(x.device())),
+                &mask.get(x.device()),
+                &sliding_mask.get(x.device()),
                 start_offsets,
                 &mut cache[i],
                 metadata
@@ -858,13 +867,16 @@ impl ModelWeights {
         let layer_in = layer_in.to_device(&self.device)?;
         let x = self.norm.forward(&layer_in)?;
         let x = extract_logits(&x, context_lens)?;
-        let x = MatMul.qmethod_matmul(&x.contiguous()?, &*self.output)?;
+        let x = self.output.forward(&x.contiguous()?)?;
         apply_final_logit_softcapping(x, self.final_logit_softcapping)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use candle_core::quantized::gguf_file::Value;
     use candle_core::{DType, Device, Tensor};
 
     use crate::layers::RotaryEmbedding;
@@ -872,8 +884,8 @@ mod tests {
     use super::{
         apply_final_logit_softcapping, ensure_gemma3_causal_mode, gemma3_cache_types,
         gemma3_embedding_scale, gemma3_final_logit_softcapping_with_backcompat,
-        gemma3_rope_scaling_factor_with_backcompat, gemma3_use_sliding_window, KvCache,
-        NormalCache,
+        gemma3_rope_scaling_factor_with_backcompat, gemma3_sliding_window_pattern_interval,
+        gemma3_use_sliding_window, KvCache, NormalCache, GEMMA3_MLP_ACTIVATION,
     };
 
     #[test]
@@ -895,6 +907,25 @@ mod tests {
             .collect();
         let expected = vec![true, true, true, true, true, false];
         assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn sliding_window_interval_prefers_full_attention_interval() {
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "gemma3.attention.full_attention_interval".to_string(),
+            Value::U32(9),
+        );
+        metadata.insert(
+            "gemma3.attention.sliding_window_pattern".to_string(),
+            Value::U32(6),
+        );
+        let md = crate::utils::gguf_metadata::ContentMetadata {
+            path_prefix: "gemma3",
+            metadata: &metadata,
+        };
+
+        assert_eq!(gemma3_sliding_window_pattern_interval(&md), 9);
     }
 
     #[test]
@@ -990,6 +1021,14 @@ mod tests {
         assert_eq!(
             gemma3_final_logit_softcapping_with_backcompat(2560, Some(30.0)),
             Some(30.0)
+        );
+    }
+
+    #[test]
+    fn gemma3_mlp_activation_is_gelu_pytorch_tanh() {
+        assert_eq!(
+            GEMMA3_MLP_ACTIVATION,
+            crate::layers::Activation::GeluPytorchTanh
         );
     }
 
