@@ -1,9 +1,6 @@
 [build]
 rustflags = ["-C", "target-cpu=native"]
 
-[net]
-git-fetch-with-cli = true
-
 [target.aarch64-apple-darwin]
 rustflags = [
   "-C", "target-cpu=native",
