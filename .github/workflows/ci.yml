@@ -128,6 +128,54 @@ jobs:
         with:
           config: .typos.toml
 
+  unicode-safety:
+    name: Unicode Safety
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject bidirectional control characters (Trojan Source)
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          # Bidi and directional controls that can visually reorder source.
+          forbidden = {
+              0x202A,  # LRE
+              0x202B,  # RLE
+              0x202D,  # LRO
+              0x202E,  # RLO
+              0x202C,  # PDF
+              0x2066,  # LRI
+              0x2067,  # RLI
+              0x2068,  # FSI
+              0x2069,  # PDI
+              0x200E,  # LRM
+              0x200F,  # RLM
+          }
+
+          files = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
+          findings = []
+          for file in files:
+              path = Path(file)
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except (UnicodeDecodeError, OSError):
+                  continue
+              for lineno, line in enumerate(text.splitlines(), 1):
+                  for ch in line:
+                      codepoint = ord(ch)
+                      if codepoint in forbidden:
+                          findings.append((file, lineno, codepoint))
+
+          if findings:
+              for file, lineno, codepoint in findings:
+                  print(f"{file}:{lineno}: forbidden Unicode U+{codepoint:04X}")
+              sys.exit(1)
+          print("No forbidden bidirectional Unicode control characters found.")
+          PY
+
   msrv:
     name: MSRV Check (1.90)
     runs-on: ubuntu-latest
