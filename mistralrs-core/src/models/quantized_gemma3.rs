@@ -33,11 +33,13 @@ struct Mlp {
     feed_forward_w3: Arc<dyn QuantMethod>,
 }
 
+const GEMMA3_MLP_ACTIVATION: crate::layers::Activation = crate::layers::Activation::GeluPytorchTanh;
+
 impl Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let w1 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w1)?;
         let w3 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w3)?;
-        let y = crate::ops::mul_and_act(&w1, &w3, crate::layers::Activation::Silu)?;
+        let y = crate::ops::mul_and_act(&w1, &w3, GEMMA3_MLP_ACTIVATION)?;
         MatMul.qmethod_matmul(&y, &*self.feed_forward_w2)
     }
 }
@@ -302,10 +304,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             .get_value::<Vec<bool>>("attention.sliding_window_pattern")
             .ok()
             .unwrap_or_default();
-        let sliding_window_pattern_interval = c
-            .get_value::<u32>("attention.sliding_window_pattern")
-            .ok()
-            .unwrap_or(6) as usize;
+        let sliding_window_pattern_interval = gemma3_sliding_window_pattern_interval(&c);
         let rope_scaling_factor = c.get_value::<f32>("rope.scaling.factor").ok();
         let attn_logit_softcapping = c.get_value::<f32>("attn_logit_softcapping").ok();
         let final_logit_softcapping =
@@ -369,6 +368,13 @@ fn gemma3_use_sliding_window(
         return sliding_window_pattern[layer_idx % sliding_window_pattern.len()];
     }
     !(layer_idx + 1).is_multiple_of(sliding_window_pattern_interval)
+}
+
+fn gemma3_sliding_window_pattern_interval(c: &ContentMetadata<'_>) -> usize {
+    c.get_value::<u32>("attention.full_attention_interval")
+        .ok()
+        .or_else(|| c.get_value::<u32>("attention.sliding_window_pattern").ok())
+        .unwrap_or(6) as usize
 }
 
 fn gemma3_cache_types(
@@ -865,6 +871,9 @@ impl ModelWeights {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use candle_core::quantized::gguf_file::Value;
     use candle_core::{DType, Device, Tensor};
 
     use crate::layers::RotaryEmbedding;
@@ -872,8 +881,8 @@ mod tests {
     use super::{
         apply_final_logit_softcapping, ensure_gemma3_causal_mode, gemma3_cache_types,
         gemma3_embedding_scale, gemma3_final_logit_softcapping_with_backcompat,
-        gemma3_rope_scaling_factor_with_backcompat, gemma3_use_sliding_window, KvCache,
-        NormalCache,
+        gemma3_rope_scaling_factor_with_backcompat, gemma3_sliding_window_pattern_interval,
+        gemma3_use_sliding_window, KvCache, NormalCache, GEMMA3_MLP_ACTIVATION,
     };
 
     #[test]
@@ -895,6 +904,25 @@ mod tests {
             .collect();
         let expected = vec![true, true, true, true, true, false];
         assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn sliding_window_interval_prefers_full_attention_interval() {
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "gemma3.attention.full_attention_interval".to_string(),
+            Value::U32(9),
+        );
+        metadata.insert(
+            "gemma3.attention.sliding_window_pattern".to_string(),
+            Value::U32(6),
+        );
+        let md = crate::utils::gguf_metadata::ContentMetadata {
+            path_prefix: "gemma3",
+            metadata: &metadata,
+        };
+
+        assert_eq!(gemma3_sliding_window_pattern_interval(&md), 9);
     }
 
     #[test]
@@ -990,6 +1018,14 @@ mod tests {
         assert_eq!(
             gemma3_final_logit_softcapping_with_backcompat(2560, Some(30.0)),
             Some(30.0)
+        );
+    }
+
+    #[test]
+    fn gemma3_mlp_activation_is_gelu_pytorch_tanh() {
+        assert_eq!(
+            GEMMA3_MLP_ACTIVATION,
+            crate::layers::Activation::GeluPytorchTanh
         );
     }
 
