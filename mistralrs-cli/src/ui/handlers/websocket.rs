@@ -73,7 +73,7 @@ fn apply_gen_params(
         .set_sampler_topp(top_p)
         .set_sampler_topk(top_k)
         .set_sampler_max_len(max_tokens)
-        .set_sampler_frequency_penalty(rep_penalty);
+        .set_sampler_repetition_penalty(rep_penalty);
 
     builder
 }
