@@ -1,6 +1,7 @@
+#[cfg(feature = "audio")]
+use crate::AudioInput;
 use either::Either;
 use indexmap::IndexMap;
-use mistralrs_audio::AudioInput;
 use mistralrs_quant::IsqType;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -80,6 +81,7 @@ pub enum RequestMessage {
     VisionChat {
         #[serde(skip)] // TODO
         images: Vec<image::DynamicImage>,
+        #[cfg(feature = "audio")]
         #[serde(skip)] // TODO
         audios: Vec<AudioInput>,
         messages: Vec<IndexMap<String, MessageContent>>,

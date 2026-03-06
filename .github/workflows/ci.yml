@@ -43,7 +43,115 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: check
-          args: --workspace --features metal
+          args: -p mistralrs-core --features metal
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: -p mistralrs --features metal
+
+  check-no-default-features:
+    name: Check (no default features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: -p mistralrs-core --no-default-features
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: -p mistralrs --no-default-features
+      - uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: -p mistralrs-core --no-default-features
+      - uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: -p mistralrs --no-default-features --lib --tests
+
+  no-audio-dependency-assertion:
+    name: No-audio dependency assertion
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - name: Assert no audio decode stack when audio feature is disabled
+        run: |
+          set -euo pipefail
+          tree="$(cargo tree -p mistralrs-core --no-default-features -e no-dev --prefix none)"
+          if echo "$tree" | grep -E '^(mistralrs-audio|symphonia|hound) v'; then
+            echo "Unexpected audio dependency found with --no-default-features."
+            exit 1
+          fi
+          echo "No audio decode dependencies found for mistralrs-core --no-default-features."
+
+  check-no-default-features-windows:
+    name: Check (no default features, windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: -p mistralrs-core --no-default-features
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: -p mistralrs --no-default-features
+
+  check-no-default-features-metal:
+    name: Check (no default features + metal)
+    runs-on: macOS-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: -p mistralrs-core --no-default-features --features metal
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: -p mistralrs --no-default-features --features metal
+
+  check-mixed-modular-features:
+    name: Check (mixed modular features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: -p mistralrs-core --no-default-features --features mcp
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: -p mistralrs-core --no-default-features --features audio
 
   test:
     name: Test Suite
@@ -127,6 +235,20 @@ jobs:
         uses: crate-ci/typos@master
         with:
           config: .typos.toml
+
+  bidi-controls:
+    name: Bidi control chars
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail on bidi control characters (Trojan Source class)
+        run: |
+          set -euo pipefail
+          if rg -nP "[\x{202A}-\x{202E}\x{2066}-\x{2069}]" -- .; then
+            echo "Found bidirectional Unicode control characters."
+            exit 1
+          fi
+          echo "No bidirectional Unicode control characters found."
 
   msrv:
     name: MSRV Check (1.90)

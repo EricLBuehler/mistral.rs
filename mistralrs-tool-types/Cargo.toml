@@ -1,0 +1,21 @@
+[package]
+name = "mistralrs-tool-types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Shared tool calling types for mistral.rs"
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+pyo3 = { workspace = true, optional = true }
+utoipa = { workspace = true, optional = true }
+
+[features]
+default = []
+pyo3_macros = ["dep:pyo3"]
+utoipa = ["dep:utoipa"]

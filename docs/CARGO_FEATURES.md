@@ -281,8 +281,58 @@ These features are primarily for library development and are not typically used 
 
 | Feature | Description |
 |---------|-------------|
-| `pyo3_macros` | Python bindings support (used by mistralrs-pyo3) |
+| `pyo3_macros` | Python bindings support (used by mistralrs-pyo3). In `mistralrs-core`, enabling this also enables `mcp` (intentional). |
 | `utoipa` | OpenAPI documentation generation |
+
+---
+
+## Modular Core Features (`mistralrs-core`)
+
+`mistralrs-core` now exposes feature flags for optional subsystems. These are **default-on** so existing users see no behavior change.
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `audio` | on | Audio input decode/processing + speech models. Some multimodal models remain loadable without this feature for non-audio inputs, but audio request payload support requires it. |
+| `mcp` | on | MCP (Model Context Protocol) integration |
+
+> Current stance: Disabling `audio` removes the audio I/O/decoding + speech stack (`mistralrs-audio`, `symphonia`, `hound`).
+> We intentionally keep parts of multimodal internals loadable without `audio`, so a few DSP crates (`apodize`, `rubato`, `rustfft`) remain unconditional dependencies in `mistralrs-core` today.
+
+### Minimal in-process builds
+
+Disable default subsystems and enable only what you need:
+
+```toml
+[dependencies]
+mistralrs-core = { version = "*", default-features = false, features = ["metal"] }
+```
+
+Useful commands for verifying what you pulled in:
+
+```bash
+cargo tree -p mistralrs-core --no-default-features
+cargo check -p mistralrs-core --no-default-features
+```
+
+CI also enforces this contract with a dependency assertion that fails if `mistralrs-audio`, `symphonia`, or `hound` appear in `cargo tree -p mistralrs-core --no-default-features`.
+
+---
+
+## Top-level Rust SDK Features (`mistralrs`)
+
+The top-level `mistralrs` crate forwards modular subsystem flags into `mistralrs-core`.
+
+| Feature | Default | Forwards to |
+|---------|---------|-------------|
+| `audio` | on | `mistralrs-core/audio` |
+| `mcp` | on | `mistralrs-core/mcp` |
+
+Minimal SDK build example:
+
+```toml
+[dependencies]
+mistralrs = { version = "*", default-features = false, features = ["metal"] }
+```
 
 ---
 

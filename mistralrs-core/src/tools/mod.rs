@@ -12,11 +12,7 @@ use std::fmt;
 use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
 
-use crate::Pipeline;
-use mistralrs_mcp::CalledFunction;
-
-// Re-export the types so they're accessible as tools::Type
-pub use mistralrs_mcp::{ToolCallback, ToolCallbackWithTool};
+use crate::{CalledFunction, Pipeline, ToolCallback, ToolCallbackWithTool};
 
 /// Collection of callbacks keyed by tool name.
 pub type ToolCallbacks = HashMap<String, Arc<ToolCallback>>;

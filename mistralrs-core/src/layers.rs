@@ -29,12 +29,12 @@ use crate::{
     ops::SplitOp,
     vision_models::{
         gemma3::config::Gemma3TextConfig,
-        gemma3n::config::Gemma3nTextConfig,
         llama4,
         mllama::{MLlamaRopeScaling, MLlamaRopeType, MLlamaTextConfig},
-        phi4::Phi4MMConfig,
     },
 };
+
+use crate::vision_models::{gemma3n::config::Gemma3nTextConfig, phi4::Phi4MMConfig};
 
 pub use mistralrs_quant::MatMul;
 
@@ -1699,7 +1699,7 @@ impl Phi4MMRotaryEmbedding {
         let scaling_factor = if scale <= 1.0 {
             1.0
         } else {
-            (1.0 + scale.ln() / (cfg.original_max_position_embeddings as f64).ln()).sqrt()
+            (1.0_f64 + scale.ln() / (cfg.original_max_position_embeddings as f64).ln()).sqrt()
         };
 
         // Short cos/sin

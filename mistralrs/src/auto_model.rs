@@ -76,6 +76,7 @@ pub struct ModelBuilder {
     // Auto-model unique fields
     pub(crate) max_edge: Option<u32>,
     pub(crate) no_kv_cache: bool,
+    #[cfg(feature = "mcp")]
     pub(crate) mcp_client_config: Option<McpClientConfig>,
 }
 
@@ -121,6 +122,7 @@ impl ModelBuilder {
             // Unique fields
             max_edge: None,
             no_kv_cache: false,
+            #[cfg(feature = "mcp")]
             mcp_client_config: None,
         }
     }
@@ -130,6 +132,7 @@ impl ModelBuilder {
 
     /// Configure MCP client to connect to external MCP servers and automatically
     /// register their tools for use in automatic tool calling.
+    #[cfg(feature = "mcp")]
     pub fn with_mcp_client(mut self, config: McpClientConfig) -> Self {
         self.mcp_client_config = Some(config);
         self

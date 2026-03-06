@@ -171,6 +171,7 @@ impl From<TextMessages> for VisionMessages {
         Self {
             messages: text.messages,
             images: Vec::new(),
+            #[cfg(feature = "audio")]
             audios: Vec::new(),
             enable_thinking: text.enable_thinking,
             pending_prefixes: Vec::new(),
@@ -199,6 +200,7 @@ struct PendingMediaPrefix {
 pub struct VisionMessages {
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,
+    #[cfg(feature = "audio")]
     audios: Vec<AudioInput>,
     enable_thinking: Option<bool>,
     pending_prefixes: Vec<PendingMediaPrefix>,
@@ -216,6 +218,7 @@ impl VisionMessages {
         Self {
             images: Vec::new(),
             messages: Vec::new(),
+            #[cfg(feature = "audio")]
             audios: Vec::new(),
             enable_thinking: None,
             pending_prefixes: Vec::new(),
@@ -242,7 +245,14 @@ impl VisionMessages {
         text: impl ToString,
         images: Vec<DynamicImage>,
     ) -> Self {
-        self.add_multimodal_message(role, text, images, vec![])
+        #[cfg(feature = "audio")]
+        {
+            self.add_multimodal_message(role, text, images, vec![])
+        }
+        #[cfg(not(feature = "audio"))]
+        {
+            self.add_multimodal_message(role, text, images)
+        }
     }
 
     /// Append a message containing audio.
@@ -250,6 +260,7 @@ impl VisionMessages {
     /// Model-specific prefix tokens are applied automatically when the
     /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
     /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
+    #[cfg(feature = "audio")]
     pub fn add_audio_message(
         self,
         role: TextMessageRole,
@@ -269,7 +280,7 @@ impl VisionMessages {
         role: TextMessageRole,
         text: impl ToString,
         images: Vec<DynamicImage>,
-        audios: Vec<AudioInput>,
+        #[cfg(feature = "audio")] audios: Vec<AudioInput>,
     ) -> Self {
         // Images
         let n_added_images = images.len();
@@ -278,9 +289,16 @@ impl VisionMessages {
         self.images.extend(images);
 
         // Audios
+        #[cfg(feature = "audio")]
         let n_added_audios = audios.len();
+        #[cfg(not(feature = "audio"))]
+        let n_added_audios = 0;
+        #[cfg(feature = "audio")]
         let audio_indices: Vec<usize> =
             (self.audios.len()..self.audios.len() + n_added_audios).collect();
+        #[cfg(not(feature = "audio"))]
+        let audio_indices: Vec<usize> = Vec::new();
+        #[cfg(feature = "audio")]
         self.audios.extend(audios);
 
         if n_added_images > 0 || n_added_audios > 0 {
@@ -291,6 +309,7 @@ impl VisionMessages {
                     Value::String("image".to_string()),
                 )]));
             }
+            #[cfg(feature = "audio")]
             for _ in 0..n_added_audios {
                 content_vec.push(IndexMap::from([(
                     "type".to_string(),
@@ -327,6 +346,7 @@ impl VisionMessages {
     pub fn clear(mut self) -> Self {
         self.messages.clear();
         self.images.clear();
+        #[cfg(feature = "audio")]
         self.audios.clear();
         self.pending_prefixes.clear();
         self
@@ -354,11 +374,14 @@ impl RequestLike for VisionMessages {
         std::mem::swap(&mut other_messages, &mut self.messages);
         let mut other_images = Vec::new();
         std::mem::swap(&mut other_images, &mut self.images);
+        #[cfg(feature = "audio")]
         let mut other_audios = Vec::new();
+        #[cfg(feature = "audio")]
         std::mem::swap(&mut other_audios, &mut self.audios);
         RequestMessage::VisionChat {
             images: other_images,
             messages: other_messages,
+            #[cfg(feature = "audio")]
             audios: other_audios,
             enable_thinking: self.enable_thinking,
             reasoning_effort: None,
@@ -403,6 +426,7 @@ impl RequestLike for VisionMessages {
 pub struct RequestBuilder {
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,
+    #[cfg(feature = "audio")]
     audios: Vec<AudioInput>,
     logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
     adapters: Vec<String>,
@@ -428,6 +452,7 @@ impl From<TextMessages> for RequestBuilder {
         Self {
             messages: value.messages,
             images: Vec::new(),
+            #[cfg(feature = "audio")]
             audios: Vec::new(),
             logits_processors: Vec::new(),
             adapters: Vec::new(),
@@ -449,6 +474,7 @@ impl From<VisionMessages> for RequestBuilder {
         Self {
             messages: value.messages,
             images: value.images,
+            #[cfg(feature = "audio")]
             audios: value.audios,
             logits_processors: Vec::new(),
             adapters: Vec::new(),
@@ -471,6 +497,7 @@ impl RequestBuilder {
         Self {
             messages: Vec::new(),
             images: Vec::new(),
+            #[cfg(feature = "audio")]
             audios: Vec::new(),
             logits_processors: Vec::new(),
             adapters: Vec::new(),
@@ -565,7 +592,14 @@ impl RequestBuilder {
         text: impl ToString,
         images: Vec<DynamicImage>,
     ) -> Self {
-        self.add_multimodal_message(role, text, images, vec![])
+        #[cfg(feature = "audio")]
+        {
+            self.add_multimodal_message(role, text, images, vec![])
+        }
+        #[cfg(not(feature = "audio"))]
+        {
+            self.add_multimodal_message(role, text, images)
+        }
     }
 
     /// Append a message containing audio.
@@ -573,6 +607,7 @@ impl RequestBuilder {
     /// Model-specific prefix tokens are applied automatically when the
     /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
     /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
+    #[cfg(feature = "audio")]
     pub fn add_audio_message(
         self,
         role: TextMessageRole,
@@ -592,7 +627,7 @@ impl RequestBuilder {
         role: TextMessageRole,
         text: impl ToString,
         images: Vec<DynamicImage>,
-        audios: Vec<AudioInput>,
+        #[cfg(feature = "audio")] audios: Vec<AudioInput>,
     ) -> Self {
         // Images
         let n_added_images = images.len();
@@ -601,9 +636,16 @@ impl RequestBuilder {
         self.images.extend(images);
 
         // Audios
+        #[cfg(feature = "audio")]
         let n_added_audios = audios.len();
+        #[cfg(not(feature = "audio"))]
+        let n_added_audios = 0;
+        #[cfg(feature = "audio")]
         let audio_indices: Vec<usize> =
             (self.audios.len()..self.audios.len() + n_added_audios).collect();
+        #[cfg(not(feature = "audio"))]
+        let audio_indices: Vec<usize> = Vec::new();
+        #[cfg(feature = "audio")]
         self.audios.extend(audios);
 
         if n_added_images > 0 || n_added_audios > 0 {
@@ -614,6 +656,7 @@ impl RequestBuilder {
                     Value::String("image".to_string()),
                 )]));
             }
+            #[cfg(feature = "audio")]
             for _ in 0..n_added_audios {
                 content_vec.push(IndexMap::from([(
                     "type".to_string(),
@@ -797,7 +840,12 @@ impl RequestLike for RequestBuilder {
     }
 
     fn take_messages(&mut self) -> RequestMessage {
-        if self.images.is_empty() && self.audios.is_empty() {
+        #[cfg(feature = "audio")]
+        let no_media = self.images.is_empty() && self.audios.is_empty();
+        #[cfg(not(feature = "audio"))]
+        let no_media = self.images.is_empty();
+
+        if no_media {
             let mut other = Vec::new();
             std::mem::swap(&mut other, &mut self.messages);
             RequestMessage::Chat {
@@ -810,11 +858,14 @@ impl RequestLike for RequestBuilder {
             std::mem::swap(&mut other_messages, &mut self.messages);
             let mut other_images = Vec::new();
             std::mem::swap(&mut other_images, &mut self.images);
+            #[cfg(feature = "audio")]
             let mut other_audios = Vec::new();
+            #[cfg(feature = "audio")]
             std::mem::swap(&mut other_audios, &mut self.audios);
             RequestMessage::VisionChat {
                 images: other_images,
                 messages: other_messages,
+                #[cfg(feature = "audio")]
                 audios: other_audios,
                 enable_thinking: self.enable_thinking,
                 reasoning_effort: None,
