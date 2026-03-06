@@ -21,11 +21,9 @@ jobs:
         rust: [stable]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: ${{ matrix.rust }}
-          override: true
       - uses: actions-rs/cargo@v1
         with:
           command: check
@@ -35,11 +33,9 @@ jobs:
     runs-on: macOS-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: stable
-          override: true
       - uses: actions-rs/cargo@v1
         with:
           command: check
@@ -54,11 +50,9 @@ jobs:
         rust: [stable]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: ${{ matrix.rust }}
-          override: true
       - uses: actions-rs/cargo@v1
         env:
           TESTS_HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -71,11 +65,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: stable
-          override: true
       - run: rustup component add rustfmt
       - uses: actions-rs/cargo@v1
         with:
@@ -87,11 +79,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: stable
-          override: true
       - run: rustup component add clippy
       - uses: actions-rs/cargo@v1
         with:
@@ -103,11 +93,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: stable
-          override: true
       - uses: actions-rs/cargo@v1
         with:
           command: doc
@@ -118,11 +106,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: stable
-          override: true
       - name: Typos check with custom config file
         uses: crate-ci/typos@master
         with:
@@ -181,11 +167,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: 1.90.0
-          override: true
       - uses: actions-rs/cargo@v1
         with:
           command: check
