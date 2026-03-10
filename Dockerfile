@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Stage 1: Build environment
-FROM rust:latest AS builder
+FROM rust:1-bookworm AS builder
 
 # Set working directory and copy files
 WORKDIR /mistralrs
@@ -29,6 +29,7 @@ RUN <<HEREDOC
 HEREDOC
 
 # Copy the built binaries from the builder stage
+COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs /usr/local/bin/
 COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-bench /usr/local/bin/
 COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-server /usr/local/bin/
 COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-web-chat /usr/local/bin/
