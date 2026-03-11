@@ -24,7 +24,7 @@ mistralrs-server-core = { workspace = true }
 mistralrs = { workspace = true }
 candle-core = { workspace = true }
 
-clap = { workspace = true }
+clap = { workspace = true, features = ["env"] }
 clap_complete = "4.5"
 tokio = { workspace = true }
 tracing = { workspace = true }
