@@ -2,11 +2,14 @@
 
 use anyhow::Result;
 use axum::{
+    body::Body,
     extract::DefaultBodyLimit,
-    http::{self, Method},
+    http::{self, Method, Request, StatusCode},
+    middleware,
     routing::{get, post},
     Router,
 };
+use subtle::ConstantTimeEq;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 #[cfg(feature = "swagger-ui")]
 use utoipa_swagger_ui::SwaggerUi;
@@ -74,6 +77,8 @@ pub struct MistralRsServerRouterBuilder {
     allowed_origins: Option<Vec<String>>,
     /// Optional axum default request body limit
     max_body_limit: Option<usize>,
+    /// Optional API key for Bearer authentication
+    api_key: Option<String>,
 }
 
 impl Default for MistralRsServerRouterBuilder {
@@ -87,6 +92,7 @@ impl Default for MistralRsServerRouterBuilder {
             base_path: None,
             allowed_origins: None,
             max_body_limit: None,
+            api_key: None,
         }
     }
 }
@@ -150,6 +156,12 @@ impl MistralRsServerRouterBuilder {
         self
     }
 
+    /// Sets the API key for Bearer authentication.
+    pub fn with_api_key(mut self, api_key: String) -> Self {
+        self.api_key = Some(api_key);
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
@@ -168,7 +180,12 @@ impl MistralRsServerRouterBuilder {
         })?;
 
         #[allow(unused_mut)]
-        let mut router = init_router(mistralrs, self.allowed_origins, self.max_body_limit)?;
+        let mut router = init_router(
+            mistralrs,
+            self.allowed_origins,
+            self.max_body_limit,
+            self.api_key,
+        )?;
 
         #[cfg(feature = "swagger-ui")]
         if self.include_swagger_routes {
@@ -192,6 +209,7 @@ fn init_router(
     state: SharedMistralRsState,
     allowed_origins: Option<Vec<String>>,
     max_body_limit: Option<usize>,
+    api_key: Option<String>,
 ) -> Result<Router> {
     let allow_origin = if let Some(origins) = allowed_origins {
         let parsed_origins: Result<Vec<_>, _> = origins.into_iter().map(|o| o.parse()).collect();
@@ -201,7 +219,7 @@ fn init_router(
             Err(_) => anyhow::bail!("Invalid origin format"),
         }
     } else {
-        AllowOrigin::any()
+        AllowOrigin::list([])
     };
 
     let router_max_body_limit = max_body_limit.unwrap_or(DEFAULT_MAX_BODY_LIMIT);
@@ -211,7 +229,7 @@ fn init_router(
         .allow_headers([http::header::CONTENT_TYPE, http::header::AUTHORIZATION])
         .allow_origin(allow_origin);
 
-    let router = Router::new()
+    let mut router = Router::new()
         .route("/v1/chat/completions", post(chatcompletions))
         .route("/v1/completions", post(completions))
         .route("/v1/embeddings", post(embeddings))
@@ -232,10 +250,58 @@ fn init_router(
             "/v1/responses/{response_id}",
             get(get_response).delete(delete_response),
         )
-        .route("/v1/responses/{response_id}/cancel", post(cancel_response))
+        .route("/v1/responses/{response_id}/cancel", post(cancel_response));
+
+    if let Some(api_key) = api_key {
+        router = router.layer(middleware::from_fn(
+            move |req: Request<Body>, next: middleware::Next| {
+                let api_key = api_key.clone();
+                async move {
+                    let auth_header = req
+                        .headers()
+                        .get(http::header::AUTHORIZATION)
+                        .and_then(|h| h.to_str().ok());
+
+                    let mut authenticated = false;
+                    if let Some(auth_header) = auth_header {
+                        if let Some(token) = auth_header.strip_prefix("Bearer ") {
+                            if verify_token(token, &api_key) {
+                                authenticated = true;
+                            }
+                        }
+                    }
+
+                    if authenticated {
+                        Ok(next.run(req).await)
+                    } else {
+                        Err(StatusCode::UNAUTHORIZED)
+                    }
+                }
+            },
+        ));
+    }
+
+    let router = router
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .with_state(state);
 
     Ok(router)
+}
+
+fn verify_token(token: &str, api_key: &str) -> bool {
+    token.as_bytes().ct_eq(api_key.as_bytes()).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_verify_token() {
+        assert!(verify_token("secret", "secret"));
+        assert!(!verify_token("secret", "wrong"));
+        assert!(!verify_token("secret", "secrets"));
+        assert!(!verify_token("secrets", "secret"));
+    }
 }

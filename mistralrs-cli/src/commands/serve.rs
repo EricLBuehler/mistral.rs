@@ -86,10 +86,13 @@ pub async fn run_server(
     let mistralrs_for_ui = mistralrs.clone();
 
     // Build and run the server
-    let mut app = MistralRsServerRouterBuilder::new()
-        .with_mistralrs(mistralrs)
-        .build()
-        .await?;
+    let mut builder = MistralRsServerRouterBuilder::new().with_mistralrs(mistralrs);
+
+    if let Some(api_key) = server.api_key {
+        builder = builder.with_api_key(api_key);
+    }
+
+    let mut app = builder.build().await?;
 
     if server.ui {
         let ui_router = build_ui_router(

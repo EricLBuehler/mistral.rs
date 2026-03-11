@@ -13,7 +13,7 @@ pub struct ServerOptions {
     pub port: u16,
 
     /// Bind address
-    #[arg(long, default_value = "0.0.0.0")]
+    #[arg(long, default_value = "127.0.0.1")]
     #[serde(default = "default_host")]
     pub host: String,
 
@@ -31,16 +31,22 @@ pub struct ServerOptions {
     #[arg(long)]
     #[serde(default)]
     pub ui: bool,
+
+    /// API key for Bearer authentication
+    #[arg(long, env = "MISTRALRS_API_KEY")]
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 impl Default for ServerOptions {
     fn default() -> Self {
         Self {
             port: 1234,
-            host: "0.0.0.0".to_string(),
+            host: "127.0.0.1".to_string(),
             mcp_port: None,
             mcp_config: None,
             ui: false,
+            api_key: None,
         }
     }
 }
@@ -50,5 +56,5 @@ fn default_port() -> u16 {
 }
 
 fn default_host() -> String {
-    "0.0.0.0".to_string()
+    "127.0.0.1".to_string()
 }
