@@ -743,6 +743,8 @@ pub struct OpenResponsesStreamer {
     content_part_added: bool,
     /// Whether output item has been added
     output_item_added: bool,
+    /// ID for the output item to ensure consistency
+    output_item_id: Option<String>,
     /// Store flag
     store: bool,
     /// Conversation history for storage
@@ -784,6 +786,7 @@ impl OpenResponsesStreamer {
             accumulated_reasoning: String::new(),
             content_part_added: false,
             output_item_added: false,
+            output_item_id: None,
             store,
             conversation_history,
             on_done: None,
@@ -820,15 +823,26 @@ impl OpenResponsesStreamer {
         resource
     }
 
+    fn get_or_create_output_item_id(&mut self) -> String {
+        if let Some(ref id) = self.output_item_id {
+            id.clone()
+        } else {
+            let id = format!("msg_{}", Uuid::new_v4());
+            self.output_item_id = Some(id.clone());
+            id
+        }
+    }
+
     /// Build current response resource with output
-    fn build_current_response(&self, status: ResponseStatus) -> ResponseResource {
+    fn build_current_response(&mut self, status: ResponseStatus) -> ResponseResource {
         let mut resource = self.build_response_resource(status);
 
         // Build output items from accumulated state
         if !self.accumulated_text.is_empty() {
             let content = vec![OutputContent::text(self.accumulated_text.clone())];
+            let id = self.get_or_create_output_item_id();
             let item = OutputItem::message(
-                format!("msg_{}", Uuid::new_v4()),
+                id,
                 content,
                 if status == ResponseStatus::Completed {
                     ItemStatus::Completed
@@ -931,7 +945,7 @@ impl futures::Stream for OpenResponsesStreamer {
                     );
 
                     let seq = self.streaming_state.next_sequence_number();
-                    let mut response = self.build_current_response(ResponseStatus::Failed);
+                    let mut response = self.as_mut().get_mut().build_current_response(ResponseStatus::Failed);
                     response.error = Some(ResponseError::new("model_error", msg.to_string()));
 
                     let event = OpenResponsesStreamEvent::ResponseFailed {
@@ -1001,11 +1015,8 @@ impl futures::Stream for OpenResponsesStreamer {
                             if !self.output_item_added {
                                 self.output_item_added = true;
                                 let seq = self.streaming_state.next_sequence_number();
-                                let item = OutputItem::message(
-                                    format!("msg_{}", Uuid::new_v4()),
-                                    vec![],
-                                    ItemStatus::InProgress,
-                                );
+                                let id = self.get_or_create_output_item_id();
+                                let item = OutputItem::message(id, vec![], ItemStatus::InProgress);
                                 events_to_emit.push(OpenResponsesStreamEvent::OutputItemAdded {
                                     sequence_number: seq,
                                     output_index: 0,
@@ -1074,11 +1085,8 @@ impl futures::Stream for OpenResponsesStreamer {
                         if self.output_item_added {
                             let seq = self.streaming_state.next_sequence_number();
                             let content = vec![OutputContent::text(self.accumulated_text.clone())];
-                            let item = OutputItem::message(
-                                format!("msg_{}", Uuid::new_v4()),
-                                content,
-                                ItemStatus::Completed,
-                            );
+                            let id = self.get_or_create_output_item_id();
+                            let item = OutputItem::message(id, content, ItemStatus::Completed);
                             events_to_emit.push(OpenResponsesStreamEvent::OutputItemDone {
                                 sequence_number: seq,
                                 output_index: 0,
@@ -1215,7 +1223,7 @@ fn chat_response_to_response_resource(
     request_ctx: &RequestContext,
 ) -> ResponseResource {
     let created_at = chat_resp.created;
-    let mut resource = ResponseResource::new(request_id, chat_resp.model.clone(), created_at);
+    let mut resource = ResponseResource::new(request_id, chat_resp.model.clone(), created_at as u64);
 
     let mut output_items = Vec::new();
     let mut output_text_parts = Vec::new();
@@ -1318,16 +1326,14 @@ async fn parse_openresponses_request(
     // parallel_tool_calls: only `true` (default) or `None` is supported
     if let Some(false) = oairequest.parallel_tool_calls {
         anyhow::bail!(
-            "parallel_tool_calls=false is not supported. \
-             mistral.rs does not currently support disabling parallel tool calls."
+            "parallel_tool_calls=false is not supported.              mistral.rs does not currently support disabling parallel tool calls."
         );
     }
 
     // max_tool_calls: only `None` (unlimited) is supported
     if oairequest.max_tool_calls.is_some() {
         anyhow::bail!(
-            "max_tool_calls is not supported. \
-             mistral.rs does not currently support limiting the number of tool calls."
+            "max_tool_calls is not supported.              mistral.rs does not currently support limiting the number of tool calls."
         );
     }
 
@@ -1816,3 +1822,4 @@ fn handle_error(
 ) -> OpenResponsesResponder {
     handle_completion_error(state, e)
 }
+
