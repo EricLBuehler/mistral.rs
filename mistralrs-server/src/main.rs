@@ -1,11 +1,11 @@
 use anyhow::Result;
 use clap::Parser;
+use indexmap::IndexMap;
 use mistralrs_core::{
     initialize_logging, McpClientConfig, ModelSelected, PagedCacheType, SearchEmbeddingModel,
     TokenSource,
 };
 use rust_mcp_sdk::schema::LATEST_PROTOCOL_VERSION;
-use std::collections::HashMap;
 use tokio::join;
 use tracing::{error, info, warn};
 
@@ -298,7 +298,7 @@ fn load_multi_model_config(config_path: &str) -> Result<Vec<ModelConfig>> {
         )
     })?;
 
-    let configs_parsed: HashMap<String, ModelConfigParsed> = serde_json::from_str(&config_content)
+    let configs_parsed: IndexMap<String, ModelConfigParsed> = serde_json::from_str(&config_content)
         .map_err(|e| anyhow::anyhow!("Failed to parse multi-model config: {}", e))?;
 
     if configs_parsed.is_empty() {
@@ -348,6 +348,10 @@ async fn main() -> Result<()> {
         } => {
             // Multi-model mode
             let model_configs = load_multi_model_config(&config)?;
+
+            if model_configs.len() > 1 && default_model_id.is_none() {
+                anyhow::bail!("Providing a `default_model_id` is mandatory when the multi-model configuration contains more than one model.");
+            }
 
             let mut builder = MistralRsForServerBuilder::new()
                 .with_max_seqs(args.max_seqs)
