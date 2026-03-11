@@ -150,62 +150,36 @@ impl HttpTransport {
         })
     }
 
-    /// Parse Server-Sent Events response to extract JSON-RPC message
-    ///
-    /// Handles SSE format used by some MCP servers for streaming responses.
-    /// SSE format: `data: <json>\n\n` or `event: <type>\ndata: <json>\n\n`
-    ///
-    /// # Arguments
-    ///
-    /// * `sse_text` - Raw SSE response text from the server
-    ///
-    /// # Returns
-    ///
-    /// Parsed JSON value from the SSE data field
-    ///
-    /// # Errors
-    ///
-    /// - No valid JSON data found in SSE response
-    /// - Malformed SSE format
-    /// - JSON parsing errors
-    fn parse_sse_response(sse_text: &str) -> Result<Value> {
-        // SSE format: data: <json>\n\n or event: <type>\ndata: <json>\n\n
-        let mut json_data = None;
 
-        for line in sse_text.lines() {
-            let line = line.trim();
+    fn parse_sse_line(line: &str) -> Option<Value> {
+        let line = line.trim();
 
-            // Skip empty lines and comments
-            if line.is_empty() || line.starts_with(':') {
-                continue;
-            }
+        // Skip empty lines and comments
+        if line.is_empty() || line.starts_with(':') {
+            return None;
+        }
 
-            // Parse SSE field
-            if let Some((field, value)) = line.split_once(':') {
-                let field = field.trim();
-                let value = value.trim();
+        // Parse SSE field
+        if let Some((field, value)) = line.split_once(':') {
+            let field = field.trim();
+            let value = value.trim();
 
-                match field {
-                    "data" => {
-                        // Try to parse the JSON data
-                        if let Ok(parsed) = serde_json::from_str::<Value>(value) {
-                            json_data = Some(parsed);
-                            break;
-                        }
+            match field {
+                "data" => {
+                    // Try to parse the JSON data
+                    if let Ok(parsed) = serde_json::from_str::<Value>(value) {
+                        return Some(parsed);
                     }
-                    "event" => {
-                        // Handle different event types if needed
-                        continue;
-                    }
-                    _ => {
-                        // Ignore other SSE fields like id, retry, etc.
-                        continue;
-                    }
+                }
+                "event" => {
+                    // Handle different event types if needed
+                }
+                _ => {
+                    // Ignore other SSE fields like id, retry, etc.
                 }
             }
         }
-
-        json_data.ok_or_else(|| anyhow::anyhow!("No valid JSON data found in SSE response"))
+        None
     }
 }
 
@@ -301,8 +275,47 @@ impl McpTransport for HttpTransport {
 
         let response_body: Value = if content_type.contains("text/event-stream") {
             // Handle Server-Sent Events
-            let response_text = response.text().await?;
-            Self::parse_sse_response(&response_text)?
+            let mut stream = response.bytes_stream();
+            let mut buffer = Vec::new();
+            let mut total_bytes = 0;
+            const MAX_BUFFER_SIZE: usize = 10 * 1024 * 1024; // 10MB
+
+            let mut final_json = None;
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| anyhow::anyhow!("SSE stream error: {e}"))?;
+                total_bytes += chunk.len();
+                if total_bytes > MAX_BUFFER_SIZE {
+                    return Err(anyhow::anyhow!("SSE response exceeded 10MB limit"));
+                }
+                buffer.extend_from_slice(&chunk);
+
+                let mut consumed = 0;
+                while let Some(pos) = buffer[consumed..].iter().position(|&b| b == b'\n') {
+                    let line_end = consumed + pos;
+                    let line = std::str::from_utf8(&buffer[consumed..line_end])
+                        .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in SSE stream: {e}"))?;
+
+                    if let Some(parsed) = Self::parse_sse_line(line) {
+                        final_json = Some(parsed);
+                        break;
+                    }
+                    consumed = line_end + 1;
+                }
+                buffer.drain(..consumed);
+
+                if final_json.is_some() {
+                    break;
+                }
+            }
+
+            // Check if there's any remaining data in the buffer that might be a valid line
+            if final_json.is_none() && !buffer.is_empty() {
+                if let Ok(line) = std::str::from_utf8(&buffer) {
+                    final_json = Self::parse_sse_line(line);
+                }
+            }
+
+            final_json.ok_or_else(|| anyhow::anyhow!("No valid JSON data found in SSE response"))?
         } else {
             // Handle regular JSON response
             response.json().await?
@@ -1062,5 +1075,40 @@ impl McpTransport for WebSocketTransport {
                 .map_err(|e| anyhow::anyhow!("Failed to send WebSocket message: {}", e))?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_parse_sse_line() {
+        // Valid data line
+        let line = "data: {\"result\": \"success\"}";
+        let parsed = HttpTransport::parse_sse_line(line).unwrap();
+        assert_eq!(parsed, json!({"result": "success"}));
+
+        // Valid data line with event
+        let line = "event: message";
+        assert!(HttpTransport::parse_sse_line(line).is_none());
+        let line = "data: {\"id\": 1}";
+        let parsed = HttpTransport::parse_sse_line(line).unwrap();
+        assert_eq!(parsed, json!({"id": 1}));
+
+        // Empty line
+        assert!(HttpTransport::parse_sse_line("").is_none());
+
+        // Comment line
+        assert!(HttpTransport::parse_sse_line(": comment").is_none());
+
+        // Malformed JSON
+        let line = "data: {invalid}";
+        assert!(HttpTransport::parse_sse_line(line).is_none());
+
+        // Not a data line
+        let line = "other: value";
+        assert!(HttpTransport::parse_sse_line(line).is_none());
     }
 }
