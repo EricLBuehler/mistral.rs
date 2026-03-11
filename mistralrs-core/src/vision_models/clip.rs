@@ -303,7 +303,7 @@ impl ClipVisionTransformer {
     /// where (for example) `.pp("embeddings")` is valid.
     pub fn new(vb: ShardedVarBuilder, c: &ClipConfig) -> Result<Self> {
         let embeddings = ClipVisionEmbeddings::new(vb.pp("embeddings"), c)?;
-        let pre_layer_norm = layers::layer_norm(c.hidden_size, 1e-5, vb.pp("pre_layrnorm"))?;
+        let pre_layer_norm = layers::layer_norm(c.hidden_size, 1e-5, vb.pp("pre_layernorm"))?;
         let encoder = ClipEncoder::new(vb.pp("encoder"), c)?;
         let final_layer_norm = layers::layer_norm(c.hidden_size, 1e-5, vb.pp("post_layernorm"))?;
         Ok(Self {
@@ -330,7 +330,7 @@ impl ClipVisionTransformer {
     pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
-        uvb.pp("pre_layrnorm").add(&self.pre_layer_norm);
+        uvb.pp("pre_layernorm").add(&self.pre_layer_norm);
         uvb.pp("post_layernorm").add(&self.final_layer_norm);
 
         // vision embeddings
