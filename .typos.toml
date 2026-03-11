@@ -35,6 +35,9 @@ extend-ignore-re = [
     "ba",
 ]
 
+[default.extend-words]
+"layrnorm" = "layrnorm"
+
 [type.rust.extend-identifiers]
 "arange" = "arange"
 "arange_step" = "arange_step"
