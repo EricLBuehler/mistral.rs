@@ -6,14 +6,16 @@ use axum::{
     response::IntoResponse,
 };
 use futures_util::{sink::SinkExt, stream::StreamExt};
-use mistralrs_core::{AudioInput, Request, Response, NormalRequest, RequestMessage, SamplingParams, Constraint};
+use mistralrs_core::{
+    AudioInput, Constraint, NormalRequest, Request, RequestMessage, Response, SamplingParams,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::types::SharedMistralRsState;
 use crate::handler_core::create_response_channel;
+use crate::types::SharedMistralRsState;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type")]
@@ -48,11 +50,29 @@ pub enum ServerEvent {
     #[serde(rename = "response.created")]
     ResponseCreated { response: Value },
     #[serde(rename = "response.text.delta")]
-    ResponseTextDelta { delta: String, response_id: String, item_id: String, output_index: usize, content_index: usize },
+    ResponseTextDelta {
+        delta: String,
+        response_id: String,
+        item_id: String,
+        output_index: usize,
+        content_index: usize,
+    },
     #[serde(rename = "response.audio_transcript.delta")]
-    ResponseAudioTranscriptDelta { delta: String, response_id: String, item_id: String, output_index: usize, content_index: usize },
+    ResponseAudioTranscriptDelta {
+        delta: String,
+        response_id: String,
+        item_id: String,
+        output_index: usize,
+        content_index: usize,
+    },
     #[serde(rename = "response.audio.delta")]
-    ResponseAudioDelta { delta: String, response_id: String, item_id: String, output_index: usize, content_index: usize },
+    ResponseAudioDelta {
+        delta: String,
+        response_id: String,
+        item_id: String,
+        output_index: usize,
+        content_index: usize,
+    },
     #[serde(rename = "response.done")]
     ResponseDone { response: Value },
 }
@@ -74,15 +94,21 @@ async fn handle_socket(socket: WebSocket, state: SharedMistralRsState) {
 
     // Send session.created
     let session_id = format!("sess_{}", Uuid::new_v4());
-    let _ = sender.send(Message::Text(serde_json::to_string(&ServerEvent::SessionCreated {
-        session: json!({
-            "id": session_id,
-            "object": "realtime.session",
-            "model": "default",
-            "modalities": ["text", "audio"],
-            "instructions": "You are a helpful assistant.",
-        }),
-    }).unwrap().into())).await;
+    let _ = sender
+        .send(Message::Text(
+            serde_json::to_string(&ServerEvent::SessionCreated {
+                session: json!({
+                    "id": session_id,
+                    "object": "realtime.session",
+                    "model": "default",
+                    "modalities": ["text", "audio"],
+                    "instructions": "You are a helpful assistant.",
+                }),
+            })
+            .unwrap()
+            .into(),
+        ))
+        .await;
 
     while let Some(Ok(msg)) = receiver.next().await {
         match msg {
@@ -91,25 +117,44 @@ async fn handle_socket(socket: WebSocket, state: SharedMistralRsState) {
                 match event {
                     Ok(ClientEvent::SessionUpdate { session }) => {
                         session_config = session.clone();
-                        let _ = sender.send(Message::Text(serde_json::to_string(&ServerEvent::SessionUpdated {
-                            session: session_config.clone(),
-                        }).unwrap().into())).await;
+                        let _ = sender
+                            .send(Message::Text(
+                                serde_json::to_string(&ServerEvent::SessionUpdated {
+                                    session: session_config.clone(),
+                                })
+                                .unwrap()
+                                .into(),
+                            ))
+                            .await;
                     }
                     Ok(ClientEvent::InputAudioBufferAppend { audio }) => {
                         use base64::Engine;
-                        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(audio) {
+                        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(audio)
+                        {
                             audio_buffer.extend(decoded);
                         }
                     }
                     Ok(ClientEvent::InputAudioBufferCommit {}) => {
                         let item_id = format!("item_{}", Uuid::new_v4());
-                        let _ = sender.send(Message::Text(serde_json::to_string(&ServerEvent::InputAudioBufferCommitted {
-                            item_id,
-                        }).unwrap().into())).await;
+                        let _ = sender
+                            .send(Message::Text(
+                                serde_json::to_string(&ServerEvent::InputAudioBufferCommitted {
+                                    item_id,
+                                })
+                                .unwrap()
+                                .into(),
+                            ))
+                            .await;
                     }
                     Ok(ClientEvent::InputAudioBufferClear {}) => {
                         audio_buffer.clear();
-                        let _ = sender.send(Message::Text(serde_json::to_string(&ServerEvent::InputAudioBufferCleared {}).unwrap().into())).await;
+                        let _ = sender
+                            .send(Message::Text(
+                                serde_json::to_string(&ServerEvent::InputAudioBufferCleared {})
+                                    .unwrap()
+                                    .into(),
+                            ))
+                            .await;
                     }
                     Ok(ClientEvent::ResponseCreate { .. }) => {
                         let response_id = format!("resp_{}", Uuid::new_v4());
@@ -136,21 +181,34 @@ async fn handle_socket(socket: WebSocket, state: SharedMistralRsState) {
                         };
 
                         let (tx, mut rx) = create_response_channel(None);
-                        
-                        let instructions = session_config["instructions"].as_str().unwrap_or("You are a helpful assistant.").to_string();
-                        
+
+                        let instructions = session_config["instructions"]
+                            .as_str()
+                            .unwrap_or("You are a helpful assistant.")
+                            .to_string();
+
                         let mut messages = Vec::new();
-                        
+
                         // System message
                         let mut system_msg = indexmap::IndexMap::new();
-                        system_msg.insert("role".to_string(), either::Either::Left("system".to_string()));
-                        system_msg.insert("content".to_string(), either::Either::Left(instructions));
+                        system_msg.insert(
+                            "role".to_string(),
+                            either::Either::Left("system".to_string()),
+                        );
+                        system_msg
+                            .insert("content".to_string(), either::Either::Left(instructions));
                         messages.push(system_msg);
 
                         // User message
                         let mut user_msg = indexmap::IndexMap::new();
-                        user_msg.insert("role".to_string(), either::Either::Left("user".to_string()));
-                        user_msg.insert("content".to_string(), either::Either::Left("Please respond to the audio if provided.".to_string()));
+                        user_msg
+                            .insert("role".to_string(), either::Either::Left("user".to_string()));
+                        user_msg.insert(
+                            "content".to_string(),
+                            either::Either::Left(
+                                "Please respond to the audio if provided.".to_string(),
+                            ),
+                        );
                         messages.push(user_msg);
 
                         let request = Request::Normal(Box::new(NormalRequest {
@@ -190,13 +248,21 @@ async fn handle_socket(socket: WebSocket, state: SharedMistralRsState) {
                                 Response::Chunk(chunk) => {
                                     for choice in chunk.choices {
                                         if let Some(content) = choice.delta.content {
-                                            let _ = sender.send(Message::Text(serde_json::to_string(&ServerEvent::ResponseTextDelta {
-                                                delta: content,
-                                                response_id: response_id.clone(),
-                                                item_id: "item_output".to_string(),
-                                                output_index: 0,
-                                                content_index: 0,
-                                            }).unwrap().into())).await;
+                                            let _ = sender
+                                                .send(Message::Text(
+                                                    serde_json::to_string(
+                                                        &ServerEvent::ResponseTextDelta {
+                                                            delta: content,
+                                                            response_id: response_id.clone(),
+                                                            item_id: "item_output".to_string(),
+                                                            output_index: 0,
+                                                            content_index: 0,
+                                                        },
+                                                    )
+                                                    .unwrap()
+                                                    .into(),
+                                                ))
+                                                .await;
                                         }
                                     }
                                 }
@@ -220,9 +286,15 @@ async fn handle_socket(socket: WebSocket, state: SharedMistralRsState) {
                         // TODO: Implement cancel logic if needed
                     }
                     Err(e) => {
-                        let _ = sender.send(Message::Text(serde_json::to_string(&ServerEvent::Error {
-                            error: json!({ "message": format!("Invalid event: {}", e) }),
-                        }).unwrap().into())).await;
+                        let _ = sender
+                            .send(Message::Text(
+                                serde_json::to_string(&ServerEvent::Error {
+                                    error: json!({ "message": format!("Invalid event: {}", e) }),
+                                })
+                                .unwrap()
+                                .into(),
+                            ))
+                            .await;
                     }
                 }
             }
