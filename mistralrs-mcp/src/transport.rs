@@ -150,7 +150,6 @@ impl HttpTransport {
         })
     }
 
-
     fn parse_sse_line(line: &str) -> Option<Value> {
         let line = line.trim();
 
