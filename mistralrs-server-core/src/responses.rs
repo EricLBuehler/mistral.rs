@@ -753,6 +753,8 @@ pub struct OpenResponsesStreamer {
     events: Vec<OpenResponsesStreamEvent>,
     /// Request context for echoing back request parameters
     request_context: RequestContext,
+    /// Final response resource for storage
+    final_response: Option<ResponseResource>,
 }
 
 impl OpenResponsesStreamer {
@@ -789,6 +791,7 @@ impl OpenResponsesStreamer {
             on_done: None,
             events: Vec::new(),
             request_context,
+            final_response: None,
         }
     }
 
@@ -873,10 +876,10 @@ impl futures::Stream for OpenResponsesStreamer {
                 return Poll::Ready(Some(Ok(Event::default().data("[DONE]"))));
             }
             DoneState::Done => {
-                // Store conversation history if needed
+                // Store conversation history and response if needed
                 if self.store {
+                    let cache = get_response_cache();
                     if let Some(history) = self.conversation_history.take() {
-                        let cache = get_response_cache();
                         let mut history = history;
 
                         // Add assistant's response
@@ -895,6 +898,12 @@ impl futures::Stream for OpenResponsesStreamer {
                         let _ = cache.store_conversation_history(
                             self.streaming_state.response_id.clone(),
                             history,
+                        );
+                    }
+                    if let Some(response) = self.final_response.take() {
+                        let _ = cache.store_response(
+                            self.streaming_state.response_id.clone(),
+                            response,
                         );
                     }
                 }
@@ -1104,6 +1113,8 @@ impl futures::Stream for OpenResponsesStreamer {
                             ));
                         }
 
+                        self.final_response = Some(response.clone());
+
                         events_to_emit.push(OpenResponsesStreamEvent::ResponseCompleted {
                             sequence_number: seq,
                             response,
@@ -1138,6 +1149,9 @@ impl futures::Stream for OpenResponsesStreamer {
                         self.metadata.clone(),
                         &self.request_context,
                     );
+
+                    self.final_response = Some(response.clone());
+
                     let event = OpenResponsesStreamEvent::ResponseCompleted {
                         sequence_number: seq,
                         response,
