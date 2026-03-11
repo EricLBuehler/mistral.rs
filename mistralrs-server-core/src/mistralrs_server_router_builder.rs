@@ -7,6 +7,8 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use tower::ServiceBuilder;
+use tower::limit::ConcurrencyLimitLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 #[cfg(feature = "swagger-ui")]
 use utoipa_swagger_ui::SwaggerUi;
@@ -74,6 +76,13 @@ pub struct MistralRsServerRouterBuilder {
     allowed_origins: Option<Vec<String>>,
     /// Optional axum default request body limit
     max_body_limit: Option<usize>,
+    /// Optional maximum number of in-flight requests.
+    ///
+    /// LLM inference is memory-intensive; without a concurrency cap a burst of
+    /// simultaneous requests can exhaust GPU/CPU memory and cause OOM.  When
+    /// set, requests beyond the limit are queued by the Tower `ConcurrencyLimitLayer`
+    /// until a slot opens rather than being rejected outright.
+    max_concurrency: Option<usize>,
 }
 
 impl Default for MistralRsServerRouterBuilder {
@@ -87,6 +96,7 @@ impl Default for MistralRsServerRouterBuilder {
             base_path: None,
             allowed_origins: None,
             max_body_limit: None,
+            max_concurrency: None,
         }
     }
 }
@@ -150,6 +160,22 @@ impl MistralRsServerRouterBuilder {
         self
     }
 
+    /// Sets the maximum number of requests that may be in-flight simultaneously.
+    ///
+    /// LLM inference is memory-intensive — a burst of concurrent requests can
+    /// exhaust VRAM/RAM and cause OOM.  This wraps the router with Tower's
+    /// [`ConcurrencyLimitLayer`], which queues excess requests rather than
+    /// rejecting them, providing back-pressure without dropping traffic.
+    ///
+    /// A reasonable starting value is `num_gpus * 4` or the batch size your
+    /// model uses, e.g. `8` for a single-GPU deployment.
+    ///
+    /// [`ConcurrencyLimitLayer`]: tower::limit::ConcurrencyLimitLayer
+    pub fn with_max_concurrency(mut self, max_concurrency: usize) -> Self {
+        self.max_concurrency = Some(max_concurrency);
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
@@ -168,7 +194,7 @@ impl MistralRsServerRouterBuilder {
         })?;
 
         #[allow(unused_mut)]
-        let mut router = init_router(mistralrs, self.allowed_origins, self.max_body_limit)?;
+        let mut router = init_router(mistralrs, self.allowed_origins, self.max_body_limit, self.max_concurrency)?;
 
         #[cfg(feature = "swagger-ui")]
         if self.include_swagger_routes {
@@ -192,6 +218,7 @@ fn init_router(
     state: SharedMistralRsState,
     allowed_origins: Option<Vec<String>>,
     max_body_limit: Option<usize>,
+    max_concurrency: Option<usize>,
 ) -> Result<Router> {
     let allow_origin = if let Some(origins) = allowed_origins {
         let parsed_origins: Result<Vec<_>, _> = origins.into_iter().map(|o| o.parse()).collect();
@@ -236,6 +263,16 @@ fn init_router(
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .with_state(state);
+
+    let router = if let Some(limit) = max_concurrency {
+        router.layer(
+            ServiceBuilder::new()
+                .layer(ConcurrencyLimitLayer::new(limit))
+                .into_inner(),
+        )
+    } else {
+        router
+    };
 
     Ok(router)
 }
