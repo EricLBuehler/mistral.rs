@@ -1226,8 +1226,7 @@ fn chat_response_to_response_resource(
     request_ctx: &RequestContext,
 ) -> ResponseResource {
     let created_at = chat_resp.created;
-    let mut resource =
-        ResponseResource::new(request_id, chat_resp.model.clone(), created_at);
+    let mut resource = ResponseResource::new(request_id, chat_resp.model.clone(), created_at);
 
     let mut output_items = Vec::new();
     let mut output_text_parts = Vec::new();
