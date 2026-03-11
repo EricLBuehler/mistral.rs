@@ -21,7 +21,7 @@ use mistralrs::AudioInput;
 use crate::chat::append_chat_message;
 use crate::models::LoadedModel;
 use crate::types::{AppState, GenerationParams};
-use crate::utils::get_cache_dir;
+use crate::utils::{get_cache_dir, validate_id};
 
 /// Generation parameters that can be sent per-message from the frontend
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -221,6 +221,12 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
         // Handle per-connection chat ID setting
         if let Ok(val) = serde_json::from_str::<Value>(&user_msg) {
             if let Some(id) = val.get("chat_id").and_then(|v| v.as_str()) {
+                if !validate_id(id) {
+                    let _ = socket
+                        .send(Message::Text("Error: Invalid chat ID".into()))
+                        .await;
+                    continue;
+                }
                 if active_chat_id.as_deref() != Some(id) {
                     active_chat_id = Some(id.to_string());
                     text_msgs = TextMessages::new();

@@ -27,7 +27,7 @@ use crate::types::{
     // Append partial assistant messages
     // (defined below)
 };
-use crate::utils::get_cache_dir;
+use crate::utils::{get_cache_dir, validate_id};
 use serde::Deserialize;
 
 fn validate_image_upload(
@@ -369,6 +369,9 @@ pub async fn select_model(
         }
         // --- sync the active chat file so future loads use the correct model ---
         if let Some(chat_id) = app.current_chat.read().await.clone() {
+            if !validate_id(&chat_id) {
+                return (StatusCode::BAD_REQUEST, "Invalid chat ID").into_response();
+            }
             let path = format!("{}/{}.json", app.chats_dir, chat_id);
             if let Ok(data) = fs::read(&path).await {
                 if let Ok(mut chat) = serde_json::from_slice::<ChatFile>(&data) {
@@ -458,6 +461,9 @@ pub async fn delete_chat(
     State(app): State<Arc<AppState>>,
     Json(req): Json<DeleteChatRequest>,
 ) -> impl IntoResponse {
+    if !validate_id(&req.id) {
+        return (StatusCode::BAD_REQUEST, "Invalid chat ID").into_response();
+    }
     let path = format!("{}/{}.json", app.chats_dir, req.id);
     if let Err(e) = tokio::fs::remove_file(&path).await {
         error!("delete chat error: {}", e);
@@ -478,6 +484,9 @@ pub async fn load_chat(
     State(app): State<Arc<AppState>>,
     Json(req): Json<LoadChatRequest>,
 ) -> impl IntoResponse {
+    if !validate_id(&req.id) {
+        return (StatusCode::BAD_REQUEST, "Invalid chat ID").into_response();
+    }
     let path = format!("{}/{}.json", app.chats_dir, req.id);
     match fs::read(&path).await {
         Ok(data) => match serde_json::from_slice::<ChatFile>(&data) {
@@ -510,6 +519,9 @@ pub async fn rename_chat(
     State(app): State<Arc<AppState>>,
     Json(req): Json<RenameChatRequest>,
 ) -> impl IntoResponse {
+    if !validate_id(&req.id) {
+        return (StatusCode::BAD_REQUEST, "Invalid chat ID").into_response();
+    }
     let path = format!("{}/{}.json", app.chats_dir, req.id);
     if let Ok(data) = fs::read(&path).await {
         if let Ok(mut chat) = serde_json::from_slice::<ChatFile>(&data) {

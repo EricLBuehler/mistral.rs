@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tokio::fs;
 
 use crate::types::{AppState, ChatFile, ChatMessage};
+use crate::utils::validate_id;
 
 /// Append a chat message to the specified chat file.
 pub async fn append_chat_message(
@@ -12,6 +13,9 @@ pub async fn append_chat_message(
     content: &str,
     images: Option<Vec<String>>,
 ) -> Result<()> {
+    if !validate_id(chat_id) {
+        anyhow::bail!("Invalid chat ID");
+    }
     // Ignore replay helpers sent from the front-end
     if content.trim_start().starts_with("{\"restore\":") {
         return Ok(());
