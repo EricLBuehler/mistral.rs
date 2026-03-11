@@ -901,10 +901,8 @@ impl futures::Stream for OpenResponsesStreamer {
                         );
                     }
                     if let Some(response) = self.final_response.take() {
-                        let _ = cache.store_response(
-                            self.streaming_state.response_id.clone(),
-                            response,
-                        );
+                        let _ = cache
+                            .store_response(self.streaming_state.response_id.clone(), response);
                     }
                 }
 
