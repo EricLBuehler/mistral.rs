@@ -1496,7 +1496,7 @@ async fn parse_openresponses_request(
 )]
 pub async fn create_response(
     State(state): ExtractedMistralRsState,
-    Json(oairequest): Json<OpenResponsesCreateRequest>,
+    Json(mut oairequest): Json<OpenResponsesCreateRequest>,
 ) -> OpenResponsesResponder {
     let (tx, rx) = create_response_channel(None);
     let request_id = format!("resp_{}", Uuid::new_v4());
@@ -1515,6 +1515,7 @@ pub async fn create_response(
 
     // Handle background processing
     if background {
+        oairequest.stream = Some(false);
         let task_manager = get_background_task_manager();
         let task_id = task_manager.create_task(model_name.clone());
 
