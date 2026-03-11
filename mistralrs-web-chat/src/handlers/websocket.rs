@@ -556,7 +556,9 @@ async fn handle_text_model(
     // Apply generation parameters
     request_builder = apply_gen_params(request_builder, &params.gen_params, &app.default_params);
 
-    if let Some(opts) = web_search_opts {
+    if let Some(mut opts) = web_search_opts {
+        opts.search_description = None;
+        opts.extract_description = None;
         request_builder = request_builder.with_web_search_options(opts);
     }
 
