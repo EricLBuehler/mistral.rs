@@ -945,7 +945,10 @@ impl futures::Stream for OpenResponsesStreamer {
                     );
 
                     let seq = self.streaming_state.next_sequence_number();
-                    let mut response = self.as_mut().get_mut().build_current_response(ResponseStatus::Failed);
+                    let mut response = self
+                        .as_mut()
+                        .get_mut()
+                        .build_current_response(ResponseStatus::Failed);
                     response.error = Some(ResponseError::new("model_error", msg.to_string()));
 
                     let event = OpenResponsesStreamEvent::ResponseFailed {
@@ -1223,7 +1226,8 @@ fn chat_response_to_response_resource(
     request_ctx: &RequestContext,
 ) -> ResponseResource {
     let created_at = chat_resp.created;
-    let mut resource = ResponseResource::new(request_id, chat_resp.model.clone(), created_at as u64);
+    let mut resource =
+        ResponseResource::new(request_id, chat_resp.model.clone(), created_at);
 
     let mut output_items = Vec::new();
     let mut output_text_parts = Vec::new();
@@ -1822,4 +1826,3 @@ fn handle_error(
 ) -> OpenResponsesResponder {
     handle_completion_error(state, e)
 }
-
