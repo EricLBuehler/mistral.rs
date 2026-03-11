@@ -16,5 +16,8 @@ pub fn get_cache_dir() -> PathBuf {
 
 /// Validates that a string is a safe ID (alphanumeric, underscores, or hyphens)
 pub fn validate_id(id: &str) -> bool {
-    !id.is_empty() && id.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
 }
