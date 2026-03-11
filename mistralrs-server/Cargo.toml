@@ -21,6 +21,7 @@ ctrlc.workspace = true
 directories.workspace = true
 either.workspace = true
 indexmap.workspace = true
+libc.workspace = true
 mistralrs-core.workspace = true
 mistralrs-server-core.workspace = true
 regex.workspace = true

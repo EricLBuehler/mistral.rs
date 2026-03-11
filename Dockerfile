@@ -23,7 +23,8 @@ RUN <<HEREDOC
         libomp-dev \
         ca-certificates \
         libssl-dev \
-        curl
+        curl \
+        libc6
 
     rm -rf /var/lib/apt/lists/*
 HEREDOC
@@ -32,6 +33,7 @@ HEREDOC
 COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-bench /usr/local/bin/
 COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-server /usr/local/bin/
 COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-web-chat /usr/local/bin/
+COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs /usr/local/bin/
 # Copy chat templates for users running models which may not include them
 COPY --from=builder /mistralrs/chat_templates /chat_templates
 
