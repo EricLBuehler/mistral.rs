@@ -45,6 +45,9 @@ pub async fn run_server(
     // Extract quantization settings
     let isq = extract_isq_setting(&model_type);
 
+    let listener =
+        tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
+
     // Build the MistralRs instance
     let mut builder = MistralRsForServerBuilder::new()
         .with_model(model_selected)
@@ -101,9 +104,6 @@ pub async fn run_server(
         app = app.nest("/ui", ui_router);
         info!("UI available at http://{}:{}/ui", server.host, server.port);
     }
-
-    let listener =
-        tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
 
     info!("Server listening on http://{}:{}", server.host, server.port);
 

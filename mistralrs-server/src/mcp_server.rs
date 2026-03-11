@@ -352,17 +352,13 @@ async fn handle_jsonrpc(
 // Create HTTP MCP server - this replaces your old create_mcp_server function
 pub async fn create_http_mcp_server(
     state: SharedMistralRsState,
-    host: String,
-    port: u16,
+    listener: TcpListener,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let handler = Arc::new(HttpMcpHandler::new(state));
 
     let app = Router::new()
         .route("/mcp", post(handle_jsonrpc))
         .with_state(handler);
-
-    let addr = format!("{host}:{port}");
-    let listener = TcpListener::bind(&addr).await?;
 
     axum::serve(listener, app).await?;
 

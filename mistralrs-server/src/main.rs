@@ -341,6 +341,28 @@ async fn main() -> Result<()> {
 
     let paged_attn = configure_paged_attn_from_flags(args.paged_attn, args.no_paged_attn)?;
 
+    if !args.interactive_mode && args.port.is_none() && args.mcp_port.is_none() {
+        anyhow::bail!("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port` or `--mcp-port`?")
+    }
+
+    let oai_listener = if let Some(port) = args.port {
+        let ip = args.serve_ip.as_deref().unwrap_or("0.0.0.0");
+        let addr = format!("{ip}:{port}");
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        Some(listener)
+    } else {
+        None
+    };
+
+    let mcp_listener = if let Some(port) = args.mcp_port {
+        let ip = args.serve_ip.as_deref().unwrap_or("0.0.0.0");
+        let addr = format!("{ip}:{port}");
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        Some(listener)
+    } else {
+        None
+    };
+
     let mistralrs = match args.model {
         ModelSelected::MultiModel {
             config,
@@ -426,18 +448,11 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    if !args.interactive_mode && args.port.is_none() && args.mcp_port.is_none() {
-        anyhow::bail!("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port` or `--mcp-port`?")
-    }
-
-    let mcp_port = if let Some(port) = args.mcp_port {
-        let host = args
-            .serve_ip
-            .clone()
-            .unwrap_or_else(|| "0.0.0.0".to_string());
-        info!("MCP server listening on http://{host}:{port}/mcp.");
+    let mcp_port = if let Some(listener) = mcp_listener {
+        let addr = listener.local_addr()?;
+        info!("MCP server listening on http://{addr}/mcp.");
         info!("MCP protocol version is {}.", LATEST_PROTOCOL_VERSION);
-        let mcp_server = mcp_server::create_http_mcp_server(mistralrs.clone(), host, port);
+        let mcp_server = mcp_server::create_http_mcp_server(mistralrs.clone(), listener);
 
         tokio::spawn(async move {
             if let Err(e) = mcp_server.await {
@@ -448,21 +463,15 @@ async fn main() -> Result<()> {
         tokio::spawn(async {})
     };
 
-    let oai_port = if let Some(port) = args.port {
-        let ip = args
-            .serve_ip
-            .clone()
-            .unwrap_or_else(|| "0.0.0.0".to_string());
-
-        // Create listener early to validate address before model loading
-        let listener = tokio::net::TcpListener::bind(format!("{ip}:{port}")).await?;
+    let oai_port = if let Some(listener) = oai_listener {
+        let addr = listener.local_addr()?;
 
         let app = MistralRsServerRouterBuilder::new()
             .with_mistralrs(mistralrs)
             .build()
             .await?;
 
-        info!("OpenAI-compatible server listening on http://{ip}:{port}.");
+        info!("OpenAI-compatible server listening on http://{addr}.");
 
         tokio::spawn(async move {
             if let Err(e) = axum::serve(listener, app).await {
