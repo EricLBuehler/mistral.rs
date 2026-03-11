@@ -22,6 +22,7 @@ use crate::{
         tune_model, unload_model,
     },
     image_generation::image_generation,
+    realtime::realtime_handler,
     responses::{cancel_response, create_response, delete_response, get_response},
     speech_generation::speech_generation,
     types::SharedMistralRsState,
@@ -227,6 +228,7 @@ fn init_router(
         .route("/re_isq", post(re_isq))
         .route("/v1/images/generations", post(image_generation))
         .route("/v1/audio/speech", post(speech_generation))
+        .route("/v1/realtime", get(realtime_handler))
         .route("/v1/responses", post(create_response))
         .route(
             "/v1/responses/{response_id}",

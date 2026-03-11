@@ -232,6 +232,7 @@ pub mod mistralrs_for_server_builder;
 pub mod mistralrs_server_router_builder;
 pub mod openai;
 pub mod openapi_doc;
+pub mod realtime;
 pub mod responses;
 pub mod responses_types;
 pub mod speech_generation;

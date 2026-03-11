@@ -14,11 +14,12 @@ homepage.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-axum = { workspace = true, features = ["tokio"] }
+axum = { workspace = true, features = ["tokio", "ws"] }
 candle-core.workspace = true
 data-url.workspace = true
 either.workspace = true
 futures.workspace = true
+futures-util.workspace = true
 image.workspace = true
 indexmap.workspace = true
 itertools.workspace = true
@@ -35,7 +36,7 @@ tracing.workspace = true
 url.workspace = true
 utoipa = { workspace = true, features = ["axum_extras"] }
 utoipa-swagger-ui = { workspace = true, features = ["axum"], optional = true }
-uuid.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }

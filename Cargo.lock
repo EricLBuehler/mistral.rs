@@ -3737,6 +3737,7 @@ dependencies = [
  "data-url",
  "either",
  "futures",
+ "futures-util",
  "image",
  "indexmap 2.13.0",
  "intel-mkl-src",
