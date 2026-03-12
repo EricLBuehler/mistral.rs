@@ -136,6 +136,8 @@ The CI pipeline is defined in `.github/workflows/ci.yml` and includes:
 ## Contribution Conventions
 
 - Follow Rust 2021 idioms, keep code minimal and focused.
+- **CRITICAL**: Maintain strict scope adherence. Do NOT apply repository-wide formatting, typo-squashing, or any other changes outside the immediate files and functions required to resolve the specific issue you are tasked with. Let the CI handle formatting in master.
+- **CRITICAL**: Do NOT add new dependencies (e.g. `libc` to `Cargo.toml`) globally across workspace crates unless it is functionally necessary for the Rust codebase. Environment dependencies should stay in the `Dockerfile`.
 - Update `/docs/` and examples when adding features or breaking changes.
 - Add tests and examples for new functionality.
 - Commit messages should be clear and follow conventional style where possible.
