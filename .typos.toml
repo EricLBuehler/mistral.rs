@@ -38,6 +38,8 @@ extend-ignore-re = [
 [type.rust.extend-identifiers]
 "arange" = "arange"
 "arange_step" = "arange_step"
+"pre_layrnorm" = "pre_layrnorm"
+"layrnorm" = "layrnorm"
 "cna" = "cna"
 "from_mmaped_safetensors" = "from_mmaped_safetensors"
 "MmapedSafetensors" = "MmapedSafetensors"
