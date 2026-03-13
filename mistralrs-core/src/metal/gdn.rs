@@ -151,13 +151,13 @@ pub fn gated_delta_rule_recurrence_metal(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_buffer(0, Some(q_buf), q_off);
-    encoder.set_buffer(1, Some(k_buf), k_off);
-    encoder.set_buffer(2, Some(v_buf), v_off);
-    encoder.set_buffer(3, Some(g_buf), g_off);
-    encoder.set_buffer(4, Some(beta_buf), beta_off);
-    encoder.set_buffer(5, Some(state_buf), state_off);
-    encoder.set_buffer(6, Some(out_buf), out_off);
+    encoder.set_buffer(0, Some(&q_buf), q_off);
+    encoder.set_buffer(1, Some(&k_buf), k_off);
+    encoder.set_buffer(2, Some(&v_buf), v_off);
+    encoder.set_buffer(3, Some(&g_buf), g_off);
+    encoder.set_buffer(4, Some(&beta_buf), beta_off);
+    encoder.set_buffer(5, Some(&state_buf), state_off);
+    encoder.set_buffer(6, Some(&out_buf), out_off);
 
     let seq_len_i32 = seq_len as i32;
     let v_dim_i32 = v_dim as i32;
@@ -265,13 +265,13 @@ pub fn chunked_gated_delta_rule_recurrence_metal(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_buffer(0, Some(q_buf), q_off);
-    encoder.set_buffer(1, Some(k_buf), k_off);
-    encoder.set_buffer(2, Some(v_buf), v_off);
-    encoder.set_buffer(3, Some(g_buf), g_off);
-    encoder.set_buffer(4, Some(beta_buf), beta_off);
-    encoder.set_buffer(5, Some(state_buf), state_off);
-    encoder.set_buffer(6, Some(out_buf), out_off);
+    encoder.set_buffer(0, Some(&q_buf), q_off);
+    encoder.set_buffer(1, Some(&k_buf), k_off);
+    encoder.set_buffer(2, Some(&v_buf), v_off);
+    encoder.set_buffer(3, Some(&g_buf), g_off);
+    encoder.set_buffer(4, Some(&beta_buf), beta_off);
+    encoder.set_buffer(5, Some(&state_buf), state_off);
+    encoder.set_buffer(6, Some(&out_buf), out_off);
 
     let seq_len_i32 = seq_len as i32;
     let v_dim_i32 = v_dim as i32;
@@ -361,10 +361,10 @@ pub fn causal_conv1d_metal(
         let encoder: &ComputeCommandEncoder = encoder.as_ref();
         encoder.set_compute_pipeline_state(&pipeline);
 
-        encoder.set_buffer(0, Some(x_buf), x_off);
-        encoder.set_buffer(1, Some(w_buf), w_off);
-        encoder.set_buffer(2, Some(cs_buf), cs_off);
-        encoder.set_buffer(3, Some(out_buf), out_off);
+        encoder.set_buffer(0, Some(&x_buf), x_off);
+        encoder.set_buffer(1, Some(&w_buf), w_off);
+        encoder.set_buffer(2, Some(&cs_buf), cs_off);
+        encoder.set_buffer(3, Some(&out_buf), out_off);
 
         let bs = batch_size as i32;
         let cd = conv_dim as i32;
@@ -406,9 +406,9 @@ pub fn causal_conv1d_metal(
             let encoder: &ComputeCommandEncoder = encoder.as_ref();
             encoder.set_compute_pipeline_state(&conv_pipeline);
 
-            encoder.set_buffer(0, Some(x_buf), x_off);
-            encoder.set_buffer(1, Some(w_buf), w_off);
-            encoder.set_buffer(2, Some(out_buf), out_off);
+            encoder.set_buffer(0, Some(&x_buf), x_off);
+            encoder.set_buffer(1, Some(&w_buf), w_off);
+            encoder.set_buffer(2, Some(&out_buf), out_off);
 
             let bs = batch_size as i32;
             let cd = conv_dim as i32;
@@ -444,8 +444,8 @@ pub fn causal_conv1d_metal(
             let encoder: &ComputeCommandEncoder = encoder.as_ref();
             encoder.set_compute_pipeline_state(&save_pipeline);
 
-            encoder.set_buffer(0, Some(x_buf), x_off);
-            encoder.set_buffer(1, Some(cs_buf), cs_off);
+            encoder.set_buffer(0, Some(&x_buf), x_off);
+            encoder.set_buffer(1, Some(&cs_buf), cs_off);
 
             let bs = batch_size as i32;
             let cd = conv_dim as i32;
@@ -539,12 +539,12 @@ pub fn fused_gdn_gating_metal(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_buffer(0, Some(b_buf), b_off);
-    encoder.set_buffer(1, Some(a_buf), a_off);
-    encoder.set_buffer(2, Some(alog_buf), alog_off);
-    encoder.set_buffer(3, Some(dtb_buf), dtb_off);
-    encoder.set_buffer(4, Some(beta_buf), beta_off);
-    encoder.set_buffer(5, Some(g_buf), g_off);
+    encoder.set_buffer(0, Some(&b_buf), b_off);
+    encoder.set_buffer(1, Some(&a_buf), a_off);
+    encoder.set_buffer(2, Some(&alog_buf), alog_off);
+    encoder.set_buffer(3, Some(&dtb_buf), dtb_off);
+    encoder.set_buffer(4, Some(&beta_buf), beta_off);
+    encoder.set_buffer(5, Some(&g_buf), g_off);
 
     let total = total_elements as i32;
     let heads = num_heads as i32;

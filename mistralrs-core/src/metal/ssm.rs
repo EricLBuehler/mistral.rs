@@ -173,15 +173,15 @@ pub fn selective_scan_metal(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_buffer(0, Some(x_buf), x_off);
-    encoder.set_buffer(1, Some(dt_buf), dt_off);
-    encoder.set_buffer(2, Some(a_buf), a_off);
-    encoder.set_buffer(3, Some(b_buf), b_off);
-    encoder.set_buffer(4, Some(c_buf), c_off);
-    encoder.set_buffer(5, Some(d_buf), d_off);
-    encoder.set_buffer(6, Some(dtb_buf), dtb_off);
-    encoder.set_buffer(7, Some(st_buf), st_off);
-    encoder.set_buffer(8, Some(y_buf), y_off);
+    encoder.set_buffer(0, Some(&x_buf), x_off);
+    encoder.set_buffer(1, Some(&dt_buf), dt_off);
+    encoder.set_buffer(2, Some(&a_buf), a_off);
+    encoder.set_buffer(3, Some(&b_buf), b_off);
+    encoder.set_buffer(4, Some(&c_buf), c_off);
+    encoder.set_buffer(5, Some(&d_buf), d_off);
+    encoder.set_buffer(6, Some(&dtb_buf), dtb_off);
+    encoder.set_buffer(7, Some(&st_buf), st_off);
+    encoder.set_buffer(8, Some(&y_buf), y_off);
 
     let n_heads_i32 = n_heads as i32;
     let head_dim_i32 = head_dim as i32;
