@@ -5,8 +5,8 @@ use super::{
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
     ModelKind, ModelPaths, MultimodalPromptPrefixer, Phi4MMLoader, PreProcessingMixin, Processor,
-    Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, TokenSource, VLlama4Loader,
-    VLlamaLoader, VisionModel, VisionModelLoader,
+    Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, TokenSource,
+    VLlama4Loader, VLlamaLoader, VisionModel, VisionModelLoader,
 };
 use super::{
     Gemma3nLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader,

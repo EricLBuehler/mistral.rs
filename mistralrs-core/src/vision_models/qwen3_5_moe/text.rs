@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Embedding, Linear};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
@@ -578,6 +578,12 @@ impl Qwen3_5MoeTextModel {
             &cfg.quantization_config,
         )?;
 
+        if !cfg.mlp_only_layers.is_empty() {
+            candle_core::bail!(
+                "Qwen3.5 MoE `mlp_only_layers` is not implemented yet in mistral.rs."
+            );
+        }
+
         let layer_types = cfg.layer_types();
 
         // Create MRoPE embeddings (one per device, using rot_dim not head_dim)
@@ -788,6 +794,16 @@ impl Qwen3_5MoeTextModel {
     ) -> Result<Tensor> {
         let mut hybrid_cache = self.cache.hybrid();
         let state_indices = hybrid_cache.state_indices().cloned();
+        if self
+            .layer_types
+            .iter()
+            .any(|lt| matches!(lt, LayerType::LinearAttention))
+            && state_indices.is_none()
+        {
+            candle_core::bail!(
+                "Hybrid recurrent state indices are required for linear-attention layers."
+            );
+        }
 
         // Compute MRoPE cos/sin using first full-attention layer's rotary embedding
         let cos_sin = {
@@ -826,29 +842,47 @@ impl Qwen3_5MoeTextModel {
                 }
                 LayerType::LinearAttention => {
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) {
-                        if let Some(ref indices) = state_indices {
-                            let conv_state = pool.gather_conv_state(indices)?;
-                            let recurrent_state = pool.gather_recurrent_state(indices)?;
-
-                            let first_idx: u32 = indices.i(0)?.to_scalar()?;
-                            let seqlen_offset = pool.get_seqlen_offset(first_idx as usize);
-
-                            let mut gdn_cache = GdnLayerCache {
-                                conv_state,
-                                recurrent_state,
-                                seqlen_offset,
-                            };
-
-                            xs = layer.forward_linear(&xs, &mut gdn_cache)?;
-
-                            pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
-                            pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
-
-                            let indices_vec: Vec<u32> = indices.to_vec1()?;
-                            for &idx in &indices_vec {
-                                pool.set_seqlen_offset(idx as usize, gdn_cache.seqlen_offset);
-                            }
+                        let indices = state_indices.as_ref().expect(
+                            "checked above: linear-attention layers require recurrent indices",
+                        );
+                        let indices_vec: Vec<u32> = indices.to_vec1()?;
+                        if indices_vec.is_empty() {
+                            candle_core::bail!("Hybrid recurrent state indices are empty.");
                         }
+
+                        let first_offset = pool.get_seqlen_offset(indices_vec[0] as usize);
+                        if indices_vec
+                            .iter()
+                            .any(|&idx| pool.get_seqlen_offset(idx as usize) != first_offset)
+                        {
+                            candle_core::bail!(
+                                "Hybrid recurrent seqlen offsets diverged within a batch for layer {i}."
+                            );
+                        }
+
+                        let conv_state = pool.gather_conv_state(indices)?;
+                        let recurrent_state = pool.gather_recurrent_state(indices)?;
+
+                        let mut gdn_cache = GdnLayerCache {
+                            conv_state,
+                            recurrent_state,
+                            seqlen_offset: first_offset,
+                        };
+
+                        xs = layer.forward_linear(&xs, &mut gdn_cache)?;
+
+                        pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
+                        pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
+
+                        let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
+                        for &idx in &indices_vec {
+                            let updated = pool.get_seqlen_offset(idx as usize) + delta;
+                            pool.set_seqlen_offset(idx as usize, updated);
+                        }
+                    } else {
+                        candle_core::bail!(
+                            "Hybrid cache layer {i} is not recurrent for a linear-attention layer."
+                        );
                     }
                 }
             }

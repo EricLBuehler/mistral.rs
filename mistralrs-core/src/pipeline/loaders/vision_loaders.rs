@@ -63,9 +63,7 @@ use crate::vision_models::qwen2_5_vl::{
     Config as Qwen2_5VLConfig, Qwen2_5VLModel, Qwen2_5VLProcessor,
 };
 use crate::vision_models::qwen2vl::{Config as Qwen2VLConfig, Qwen2VLModel, Qwen2VLProcessor};
-use crate::vision_models::qwen3_5::{
-    Config as Qwen3_5Config, Qwen3_5Model, Qwen3_5Processor,
-};
+use crate::vision_models::qwen3_5::{Config as Qwen3_5Config, Qwen3_5Model, Qwen3_5Processor};
 use crate::vision_models::qwen3_5_moe::{
     Config as Qwen3_5MoeConfig, Qwen3_5MoeModel, Qwen3_5MoeProcessor,
 };
@@ -6367,15 +6365,9 @@ impl IsqModelLoader for Qwen3_5Loader {
                 r"model\.language_model\.layers\.(\d+)\.linear_attn\.out_proj\.(weight|bias)$",
             )?,
             // Dense MLP
-            Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
-            )?,
-            Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$",
-            )?,
-            Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
-            )?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
@@ -6568,13 +6560,16 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
                     let key_dim = text_cfg.linear_key_dim();
                     let value_dim = text_cfg.linear_value_dim();
                     let conv_dim = text_cfg.linear_conv_dim();
-                    let in_proj_qkvz = hidden * (key_dim + key_dim + value_dim + hidden);
-                    let in_proj_ba = hidden * (key_dim + key_dim);
+                    // in_proj_qkvz: (2 * key_dim + 2 * value_dim, hidden)
+                    let in_proj_qkvz = hidden * (key_dim * 2 + value_dim * 2);
+                    // in_proj_ba: (2 * num_v_heads, hidden)
+                    let in_proj_ba = hidden * (text_cfg.linear_num_value_heads * 2);
                     let out_proj = value_dim * hidden / weight_pack_factor;
                     let conv1d = conv_dim * text_cfg.linear_conv_kernel_dim;
                     let dt_bias = text_cfg.linear_num_value_heads;
                     let a_log = text_cfg.linear_num_value_heads;
-                    let norm = hidden;
+                    // RmsNormGated over per-head value dim
+                    let norm = text_cfg.linear_value_head_dim;
                     in_proj_qkvz + in_proj_ba + out_proj + conv1d + dt_bias + a_log + norm
                 }
             };
@@ -6944,10 +6939,10 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
                     let key_dim = text_cfg.linear_key_dim();
                     let value_dim = text_cfg.linear_value_dim();
                     let conv_dim = text_cfg.linear_conv_dim();
-                    // in_proj_qkvz: hidden -> key_dim + key_dim + value_dim + hidden
-                    let in_proj_qkvz = hidden * (key_dim + key_dim + value_dim + hidden);
-                    // in_proj_ba: hidden -> key_dim + key_dim
-                    let in_proj_ba = hidden * (key_dim + key_dim);
+                    // in_proj_qkvz: (2 * key_dim + 2 * value_dim, hidden)
+                    let in_proj_qkvz = hidden * (key_dim * 2 + value_dim * 2);
+                    // in_proj_ba: (2 * num_v_heads, hidden)
+                    let in_proj_ba = hidden * (text_cfg.linear_num_value_heads * 2);
                     // out_proj: value_dim -> hidden
                     let out_proj = value_dim * hidden / weight_pack_factor;
                     // conv1d weight
@@ -6955,7 +6950,8 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
                     // dt_bias, A_log, norm weight
                     let dt_bias = text_cfg.linear_num_value_heads;
                     let a_log = text_cfg.linear_num_value_heads;
-                    let norm = hidden;
+                    // RmsNormGated over per-head value dim
+                    let norm = text_cfg.linear_value_head_dim;
                     in_proj_qkvz + in_proj_ba + out_proj + conv1d + dt_bias + a_log + norm
                 }
             };

@@ -51,8 +51,9 @@ pub use loaders::{
     NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader,
     PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader,
     Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3VLLoader,
-    Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, SmolLm3Loader, Starcoder2Loader, TokenSource,
-    VLlama4Loader, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader, VoxtralLoader,
+    Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, SmolLm3Loader, Starcoder2Loader,
+    TokenSource, VLlama4Loader, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
+    VoxtralLoader,
 };
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(
@@ -690,8 +691,7 @@ pub trait Pipeline:
                             .filter_map(|seq| seq.recurrent_state_idx().map(|idx| idx as u32))
                             .collect();
                         if indices.len() == input_seqs.len() {
-                            if let Ok(si) =
-                                Tensor::from_vec(indices, (input_seqs.len(),), &device)
+                            if let Ok(si) = Tensor::from_vec(indices, (input_seqs.len(),), &device)
                             {
                                 hybrid_cache.set_state_indices(Some(si));
                             }

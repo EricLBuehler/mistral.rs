@@ -926,18 +926,26 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
 
         // Ensure every sequence has a recurrent slot when using hybrid cache.
         let mut state_index_allocation_failed = false;
-        for seq in seqs.iter_mut() {
+        let mut newly_allocated = Vec::new();
+        for (seq_idx, seq) in seqs.iter_mut().enumerate() {
             if seq.recurrent_state_idx().is_none() {
                 if let Some(slot_idx) = hybrid_cache.allocate_seq() {
                     seq.set_recurrent_state_idx(Some(slot_idx));
+                    newly_allocated.push((seq_idx, slot_idx));
                 } else {
                     tracing::warn!(
-                        "Failed to allocate recurrent state slot for sequence {}, hybrid forward may fail.",
+                        "Failed to allocate recurrent state slot for sequence {}, hybrid forward will fail for this batch.",
                         seq.id()
                     );
                     state_index_allocation_failed = true;
                     break;
                 }
+            }
+        }
+        if state_index_allocation_failed {
+            for (seq_idx, slot_idx) in newly_allocated {
+                seqs[seq_idx].set_recurrent_state_idx(None);
+                hybrid_cache.free_seq(slot_idx);
             }
         }
 
