@@ -28,6 +28,8 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Qwen2`
 - `Gemma2`
 - `GLM4`
+- `GLM4MoeLite`
+- `GLM4Moe`
 - `Starcoder2`
 - `Phi3_5MoE`
 - `DeepseekV2`
@@ -37,6 +39,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `SmolLm3`
 - `GraniteMoeHybrid`
 - `GptOss`
+- `Qwen3Next`
 
 ### ISQ Organization
 - `Default`
@@ -58,6 +61,10 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Llama4`
 - `Gemma3n`
 - `Qwen3VL`
+- `Qwen3VLMoE`
+- `Qwen3_5`
+- `Qwen3_5Moe`
+- `Voxtral`
 
 ### Architecture for diffusion models
 - `Flux`
