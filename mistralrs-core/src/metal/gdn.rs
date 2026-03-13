@@ -4,7 +4,8 @@
 
 #[cfg(feature = "metal")]
 use candle_core::backend::BackendStorage;
-use candle_core::{DType, Device, MetalDevice, Result, Storage, Tensor};
+#[cfg(feature = "metal")]
+use candle_core::{DType, Device, Result, Storage, Tensor};
 
 #[cfg(feature = "metal")]
 use candle_metal_kernels::metal::{
@@ -84,12 +85,12 @@ fn load_pipeline(device: &MetalRawDevice, name: &str) -> Result<ComputePipeline>
 
 // Helper to extract Metal buffer and byte offset from a tensor
 #[cfg(feature = "metal")]
-fn metal_buffer_and_offset(tensor: &Tensor) -> Result<(&Buffer, usize)> {
+fn metal_buffer_and_offset(tensor: &Tensor) -> Result<(Buffer, usize)> {
     let (storage, layout) = tensor.storage_and_layout();
     match &*storage {
         Storage::Metal(m) => {
             let offset = layout.start_offset() * m.dtype().size_in_bytes();
-            Ok((m.buffer(), offset))
+            Ok((m.buffer().clone(), offset))
         }
         _ => candle_core::bail!("Expected Metal tensor"),
     }
