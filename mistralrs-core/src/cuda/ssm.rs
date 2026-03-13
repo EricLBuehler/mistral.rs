@@ -116,8 +116,10 @@ pub fn selective_scan_cuda(
             batch_size as i32,
             n_heads as i32,
             head_dim as i32,
-            d_state as i32,
-            seq_len as i32,
+            #[allow(clippy::cast_possible_truncation)]
+            {d_state as i32},
+            #[allow(clippy::cast_possible_truncation)]
+            {seq_len as i32},
             dt_min,
             dt_max,
             stream,

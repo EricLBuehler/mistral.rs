@@ -4,6 +4,7 @@
 /// single GPU kernel dispatch on Metal devices.
 
 #[cfg(feature = "metal")]
+use candle_core::backend::BackendStorage;
 use candle_core::{DType, Device, Result, Storage, Tensor};
 
 #[cfg(feature = "metal")]
@@ -12,7 +13,7 @@ use candle_metal_kernels::metal::{
 };
 
 #[cfg(feature = "metal")]
-use objc2_metal::{MTLCompileOptions, MTLDevice, MTLMathMode, MTLSize};
+use objc2_metal::{MTLCompileOptions, MTLMathMode, MTLSize};
 
 #[cfg(feature = "metal")]
 use std::collections::HashMap;

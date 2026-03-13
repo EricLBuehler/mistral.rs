@@ -3,6 +3,7 @@
 /// Mirrors the CUDA implementations in `cuda/gdn.rs`.
 
 #[cfg(feature = "metal")]
+use candle_core::backend::BackendStorage;
 use candle_core::{DType, Device, MetalDevice, Result, Storage, Tensor};
 
 #[cfg(feature = "metal")]
@@ -11,13 +12,10 @@ use candle_metal_kernels::metal::{
 };
 
 #[cfg(feature = "metal")]
-use objc2_metal::{MTLCompileOptions, MTLDevice, MTLMathMode, MTLSize};
+use objc2_metal::{MTLCompileOptions, MTLMathMode, MTLSize};
 
 #[cfg(feature = "metal")]
 use std::collections::HashMap;
-
-#[cfg(feature = "metal")]
-use std::ffi::c_void;
 
 #[cfg(feature = "metal")]
 use std::sync::{OnceLock, RwLock};
@@ -351,7 +349,7 @@ pub fn causal_conv1d_metal(
         let pipeline = load_pipeline(dev.device(), &kernel_name)?;
 
         let output = Tensor::zeros((batch_size, conv_dim, 1), dtype, x.device())?;
-        let mut new_conv_state = conv_state.clone();
+        let new_conv_state = conv_state.clone();
 
         let (x_buf, x_off) = metal_buffer_and_offset(&x)?;
         let (w_buf, w_off) = metal_buffer_and_offset(&weight)?;
