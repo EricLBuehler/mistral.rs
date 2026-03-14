@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-601bc465.js";
+            window.path_to_searchindex_js = "searchindex-d31f9cfa.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-84731ca8.js"></script>
+        <script src="toc-bbe877b8.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -229,7 +229,7 @@
 <li><a href="#deepseek-v2-deepseek-aideepseek-v2-lite">DeepSeek V2</a> | <a href="#deepseek-v3-deepseek-aideepseek-v3-deepseek-aideepseek-r1">DeepSeek V3</a></li>
 <li><a href="#gemma-2-model">Gemma 2</a> | <a href="#gemma-3-model-googlegemma-3-4b-it">Gemma 3</a> | <a href="#gemma-3n-model-googlegemma-3n-e4b-it">Gemma 3n</a></li>
 <li><a href="#glm4-model">GLM4</a> | <a href="#glm-47-flash-moe-zai-orgglm-47-flash">GLM-4.7-Flash</a> | <a href="#glm-47-moe-zai-orgglm-47">GLM-4.7</a></li>
-<li><a href="#qwen-3-collection">Qwen 3</a> | <a href="#smollm3-huggingfacetbsmollm3-3b">SmolLM3</a> | <a href="#gpt-oss">GPT-OSS</a></li>
+<li><a href="#qwen-3-collection">Qwen 3</a> | <a href="#qwen-3-next-collection">Qwen 3 Next</a> | <a href="#smollm3-huggingfacetbsmollm3-3b">SmolLM3</a> | <a href="#gpt-oss">GPT-OSS</a></li>
 </ul>
 <p><strong>Vision Models:</strong></p>
 <ul>
@@ -237,7 +237,7 @@
 <li><a href="#llava-and-llavanext-model-llava-hf-model-family">LLaVA</a> | <a href="#llama-32-vision-model-meta-llamallama-32-11b-vision-instruct">Llama 3.2 Vision</a> | <a href="#llama-4-series-meta-llamallama-4-scout-17b-16e-instruct">Llama 4</a></li>
 <li><a href="#minicpm-o-26-model-openbmbminicpm-o-2_6">MiniCPM-O 2.6</a> | <a href="#mistral-small-31-model-mistralaimistral-small-31-24b-instruct-2503">Mistral 3</a></li>
 <li><a href="#phi-35-model-microsoftphi-35-moe-instruct">Phi 3.5 MoE</a> | <a href="#phi-3-vision-model-microsoftphi-35-vision-instruct">Phi 3.5 Vision</a> | <a href="#phi-4-multimodal-model-microsoftphi-4-multimodal-instruct">Phi 4 Multimodal</a></li>
-<li><a href="#qwen-2-vision-model-qwen2-vl-collection">Qwen 2-VL</a> | <a href="#qwen-3-vision-model-qwen3-vl-collection">Qwen 3 VL</a></li>
+<li><a href="#qwen-2-vision-model-qwen2-vl-collection">Qwen 2-VL</a> | <a href="#qwen-3-vision-model-qwen3-vl-collection">Qwen 3 VL</a> | <a href="#qwen-35-vision-models">Qwen 3.5</a></li>
 </ul>
 <p><strong>Other Models:</strong></p>
 <ul>
@@ -2215,6 +2215,8 @@ fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
 <li><code>Qwen2</code></li>
 <li><code>Gemma2</code></li>
 <li><code>GLM4</code></li>
+<li><code>GLM4MoeLite</code></li>
+<li><code>GLM4Moe</code></li>
 <li><code>Starcoder2</code></li>
 <li><code>Phi3_5MoE</code></li>
 <li><code>DeepseekV2</code></li>
@@ -2224,6 +2226,7 @@ fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
 <li><code>SmolLm3</code></li>
 <li><code>GraniteMoeHybrid</code></li>
 <li><code>GptOss</code></li>
+<li><code>Qwen3Next</code></li>
 </ul>
 <h3 id="isq-organization"><a class="header" href="#isq-organization">ISQ Organization</a></h3>
 <ul>
@@ -2247,6 +2250,10 @@ fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
 <li><code>Llama4</code></li>
 <li><code>Gemma3n</code></li>
 <li><code>Qwen3VL</code></li>
+<li><code>Qwen3VLMoE</code></li>
+<li><code>Qwen3_5</code></li>
+<li><code>Qwen3_5Moe</code></li>
+<li><code>Voxtral</code></li>
 </ul>
 <h3 id="architecture-for-diffusion-models"><a class="header" href="#architecture-for-diffusion-models">Architecture for diffusion models</a></h3>
 <ul>
@@ -3365,6 +3372,7 @@ curl http://localhost:1234/v1/responses \
 <ul>
 <li>Qwen 3-VL</li>
 <li>Qwen 3-VL MoE</li>
+<li>Qwen 3.5</li>
 <li>Gemma 3n</li>
 <li>Llama 4</li>
 <li>Gemma 3</li>
@@ -3404,6 +3412,7 @@ curl http://localhost:1234/v1/responses \
 <li>starcoder2</li>
 <li>qwen2</li>
 <li>qwen3</li>
+<li>qwen3moe</li>
 </ul>
 <p><strong>With adapters:</strong></p>
 <ul>
@@ -3450,7 +3459,9 @@ curl http://localhost:1234/v1/responses \
 <tr><td>Voxtral</td><td></td><td></td><td>✅</td></tr>
 <tr><td>Gemma 3n</td><td></td><td></td><td>✅</td></tr>
 <tr><td>Qwen 3 VL</td><td></td><td></td><td>✅</td></tr>
+<tr><td>Qwen 3 MoE</td><td>✅</td><td></td><td>✅</td></tr>
 <tr><td>Qwen 3-VL MoE</td><td></td><td></td><td>✅</td></tr>
+<tr><td>Qwen 3.5</td><td></td><td></td><td>✅</td></tr>
 <tr><td>Qwen 3 Next</td><td></td><td></td><td>✅</td></tr>
 <tr><td>Phi 4 Multimodal</td><td></td><td></td><td>✅</td></tr>
 <tr><td>Granite 4.0</td><td></td><td></td><td>✅</td></tr>
@@ -3511,6 +3522,7 @@ curl http://localhost:1234/v1/responses \
 <tr><td>Voxtral</td><td></td><td></td><td></td></tr>
 <tr><td>Qwen 3 VL</td><td></td><td></td><td></td></tr>
 <tr><td>Qwen 3-VL MoE</td><td></td><td></td><td></td></tr>
+<tr><td>Qwen 3.5</td><td></td><td></td><td></td></tr>
 <tr><td>Qwen 3 Next</td><td></td><td></td><td></td></tr>
 <tr><td>Phi 4 Multimodal</td><td></td><td></td><td></td></tr>
 <tr><td>Llama 3.2 Vision</td><td></td><td></td><td></td></tr>
@@ -3558,6 +3570,7 @@ curl http://localhost:1234/v1/responses \
 <tr><td>Voxtral</td><td></td></tr>
 <tr><td>Qwen 3 VL</td><td></td></tr>
 <tr><td>Qwen 3-VL MoE</td><td></td></tr>
+<tr><td>Qwen 3.5</td><td></td></tr>
 <tr><td>Qwen 3 Next</td><td></td></tr>
 <tr><td>Phi 4 Multimodal</td><td></td></tr>
 <tr><td>Dia 1.6b</td><td></td></tr>
@@ -3610,6 +3623,7 @@ curl http://localhost:1234/v1/responses \
 <li>Mistral 3: <a href="#mistral-small-31-model-mistralaimistral-small-31-24b-instruct-2503">MISTRAL3.md</a></li>
 <li>Llama 4: <a href="#llama-4-series-meta-llamallama-4-scout-17b-16e-instruct">LLAMA4.md</a></li>
 <li>Qwen 3-VL: <a href="#qwen-3-vision-model-qwen3-vl-collection">QWEN3VL.md</a></li>
+<li>Qwen 3.5: <a href="#qwen-35-vision-models">QWEN3_5.md</a></li>
 <li>MiniCPM-O 2.6: <a href="#minicpm-o-26-model-openbmbminicpm-o-2_6">MINICPMO_2_6.md</a></li>
 </ul>
 <blockquote>
@@ -4908,6 +4922,105 @@ async fn main() -&gt; Result&lt;()&gt; {
     Ok(())
 }</code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="qwen-3-next-collection"><a class="header" href="#qwen-3-next-collection">Qwen 3 Next: <a href="https://huggingface.co/collections/Qwen/qwen3-coder-next"><code>collection</code></a></a></h1>
+<p>Qwen3-Coder-Next is a coding-focused language model using a hybrid Gated Delta Network (GDN) + full attention architecture with Mixture of Experts. With only 3B activated parameters (80B total), it achieves performance comparable to models with 10-20x more active parameters. It supports a 256K context window.</p>
+<blockquote>
+<p>Note: mistral.rs can load the <a href="https://huggingface.co/Qwen/Qwen3-Coder-Next-FP8">FP8 pre-quantized version</a> natively! Simply replace the model ID.</p>
+</blockquote>
+<pre><code class="language-bash">mistralrs run --isq 4 -m Qwen/Qwen3-Coder-Next
+</code></pre>
+<p>GGUF quantized models are also supported:</p>
+<pre><code class="language-bash">mistralrs run --format gguf -m Qwen/Qwen3-Coder-Next-GGUF -f &lt;filename&gt;
+</code></pre>
+<h2 id="http-api-8"><a class="header" href="#http-api-8">HTTP API</a></h2>
+<p>You can find a more detailed example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_next.py">here</a>.</p>
+<pre><code class="language-bash">mistralrs serve --isq 4 -p 1234 -m Qwen/Qwen3-Coder-Next
+</code></pre>
+<pre><code class="language-py">import openai
+
+client = openai.OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
+
+messages = []
+prompt = input("Enter system prompt &gt;&gt;&gt; ")
+if len(prompt) &gt; 0:
+    messages.append({"role": "system", "content": prompt})
+
+
+while True:
+    prompt = input("&gt;&gt;&gt; ")
+    messages.append({"role": "user", "content": prompt})
+    completion = client.chat.completions.create(
+        model="default",
+        messages=messages,
+        max_tokens=256,
+        frequency_penalty=1.0,
+        top_p=0.1,
+        temperature=0,
+    )
+    resp = completion.choices[0].message.content
+    print(resp)
+    messages.append({"role": "assistant", "content": resp})
+</code></pre>
+<h2 id="python-sdk-9"><a class="header" href="#python-sdk-9">Python SDK</a></h2>
+<p>You can find a more detailed example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_next.py">here</a>.</p>
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+
+runner = Runner(
+    which=Which.Plain(
+        model_id="Qwen/Qwen3-Coder-Next",
+        arch=Architecture.Qwen3Next,
+    ),
+    in_situ_quant="Q4K",
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {"role": "user", "content": "Write a Python function to compute fibonacci numbers."}
+        ],
+        max_tokens=256,
+        presence_penalty=1.0,
+        top_p=0.1,
+        temperature=0.1,
+    )
+)
+print(res.choices[0].message.content)
+print(res.usage)
+</code></pre>
+<h2 id="rust-sdk-7"><a class="header" href="#rust-sdk-7">Rust SDK</a></h2>
+<p>You can find a more detailed example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs">here</a>.</p>
+<pre class="playground"><code class="language-rust">use anyhow::Result;
+use mistralrs::{
+    IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
+};
+
+#[tokio::main]
+async fn main() -&gt; Result&lt;()&gt; {
+    let model = TextModelBuilder::new("Qwen/Qwen3-Coder-Next")
+        .with_isq(IsqType::Q4K)
+        .with_logging()
+        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+        .build()
+        .await?;
+
+    let messages = TextMessages::new()
+        .add_message(
+            TextMessageRole::User,
+            "Write a Python function to compute fibonacci numbers.",
+        );
+
+    let response = model.send_chat_request(messages).await?;
+
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    dbg!(
+        response.usage.avg_prompt_tok_per_sec,
+        response.usage.avg_compl_tok_per_sec
+    );
+
+    Ok(())
+}</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="smollm3-huggingfacetbsmollm3-3b"><a class="header" href="#smollm3-huggingfacetbsmollm3-3b">SmolLM3: <a href="https://huggingface.co/HuggingFaceTB/SmolLM3-3B"><code>HuggingFaceTB/SmolLM3-3B</code></a></a></h1>
 <p>SmolLM3 is a 3B parameter long-context hybrid reasoning language model. It supports 6 languages, advanced reasoning and long context. SmolLM3 is a fully open model that offers strong performance at the 3B–4B scale.</p>
 <p><strong>Default, easiest:</strong></p>
@@ -4924,7 +5037,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 </blockquote>
 <h2 id="enabling-thinking-1"><a class="header" href="#enabling-thinking-1">Enabling thinking</a></h2>
 <p>The SmolLM3 models are hybrid reasoning models which can be controlled at inference-time. <strong>By default, reasoning is enabled for these models.</strong> To dynamically control this, it is recommended to either add <code>/no_think</code> or <code>/think</code> to your prompt. Alternatively, you can specify the <code>enable_thinking</code> flag as detailed by the API-specific examples.</p>
-<h2 id="http-api-8"><a class="header" href="#http-api-8">HTTP API</a></h2>
+<h2 id="http-api-9"><a class="header" href="#http-api-9">HTTP API</a></h2>
 <p>You can find a more detailed example demonstrating enabling/disabling thinking <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/smollm3.py">here</a>.</p>
 <pre><code class="language-bash">mistralrs serve --isq 8 -p 1234 -m HuggingFaceTB/SmolLM3-3B
 </code></pre>
@@ -4952,7 +5065,7 @@ while True:
     print(resp)
     messages.append({"role": "assistant", "content": resp})
 </code></pre>
-<h2 id="python-sdk-9"><a class="header" href="#python-sdk-9">Python SDK</a></h2>
+<h2 id="python-sdk-10"><a class="header" href="#python-sdk-10">Python SDK</a></h2>
 <p>You can find a more detailed example demonstrating enabling/disabling thinking <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/smollm3.py">here</a>.</p>
 <pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 
@@ -4979,7 +5092,7 @@ res = runner.send_chat_completion_request(
 print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
-<h2 id="rust-sdk-7"><a class="header" href="#rust-sdk-7">Rust SDK</a></h2>
+<h2 id="rust-sdk-8"><a class="header" href="#rust-sdk-8">Rust SDK</a></h2>
 <p>You can find a more detailed example demonstrating enabling/disabling thinking <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{
@@ -6421,7 +6534,7 @@ print(res.usage)
 </blockquote>
 <pre><code class="language-bash">mistralrs run --isq 4 -m microsoft/Phi-3.5-MoE-instruct --isq-organization moqe
 </code></pre>
-<h2 id="http-api-9"><a class="header" href="#http-api-9">HTTP API</a></h2>
+<h2 id="http-api-10"><a class="header" href="#http-api-10">HTTP API</a></h2>
 <pre><code class="language-bash">mistralrs serve --isq 4 -p 1234 -m microsoft/Phi-3.5-MoE-instruct
 </code></pre>
 <pre><code class="language-py">import openai
@@ -6447,7 +6560,7 @@ while True:
     print(resp)
     messages.append({"role": "assistant", "content": resp})
 </code></pre>
-<h2 id="python-sdk-10"><a class="header" href="#python-sdk-10">Python SDK</a></h2>
+<h2 id="python-sdk-11"><a class="header" href="#python-sdk-11">Python SDK</a></h2>
 <pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
@@ -6472,7 +6585,7 @@ res = runner.send_chat_completion_request(
 print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
-<h2 id="rust-sdk-8"><a class="header" href="#rust-sdk-8">Rust SDK</a></h2>
+<h2 id="rust-sdk-9"><a class="header" href="#rust-sdk-9">Rust SDK</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{
@@ -6864,7 +6977,7 @@ print(res.usage)
   ]
 }
 </code></pre>
-<h3 id="rust-sdk-9"><a class="header" href="#rust-sdk-9">Rust SDK</a></h3>
+<h3 id="rust-sdk-10"><a class="header" href="#rust-sdk-10">Rust SDK</a></h3>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{AudioInput, IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
 
@@ -7292,6 +7405,194 @@ print(res.usage)
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="qwen-35-vision-models"><a class="header" href="#qwen-35-vision-models">Qwen 3.5 Vision Models</a></h1>
+<p>The Qwen 3.5 models are vision-language models using a hybrid Gated Delta Network (GDN) + full attention architecture. Both dense and MoE (Mixture of Experts) variants are supported:</p>
+<ul>
+<li><strong>Dense</strong>: <code>Qwen/Qwen3.5-27B</code></li>
+<li><strong>MoE</strong>: <code>Qwen/Qwen3.5-35B-A3B</code>, <code>Qwen/Qwen3.5-397B-A17B</code></li>
+</ul>
+<p>Mistral.rs supports the Qwen 3.5 vision model family with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements. MoE variants also support <a href="#in-situ-quantization-isq">MoQE</a> via the <code>--organization moqe</code> flag.</p>
+<p>UQFF quantizations are also available.</p>
+<p>The Python and HTTP APIs support sending images as:</p>
+<ul>
+<li>URL</li>
+<li>Path to a local image</li>
+<li><a href="https://en.wikipedia.org/wiki/Base64">Base64</a> encoded string</li>
+</ul>
+<p>The Rust SDK takes an image from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
+<blockquote>
+<p>Note: When using device mapping or model topology, only the text model and its layers will be managed. This is because it contains most of the model parameters.</p>
+</blockquote>
+<h2 id="toc-5"><a class="header" href="#toc-5">ToC</a></h2>
+<ul>
+<li><a href="#qwen-35-vision-models">Qwen 3.5 Vision Models</a>
+<ul>
+<li><a href="#toc-5">ToC</a></li>
+<li><a href="#interactive-mode-5">Interactive mode</a></li>
+<li><a href="#http-server-14">HTTP server</a></li>
+<li><a href="#rust-13">Rust</a></li>
+<li><a href="#python-13">Python</a></li>
+</ul>
+</li>
+</ul>
+<h2 id="interactive-mode-5"><a class="header" href="#interactive-mode-5">Interactive mode</a></h2>
+<p>Mistral.rs supports interactive mode for vision models! It is an easy way to interact with the model.</p>
+<p>Start up interactive mode with the Qwen 3.5 model (dense):</p>
+<pre><code>mistralrs run vision -m Qwen/Qwen3.5-27B
+</code></pre>
+<p>Or with the MoE variant:</p>
+<pre><code>mistralrs run vision -m Qwen/Qwen3.5-35B-A3B
+</code></pre>
+<h2 id="http-server-14"><a class="header" href="#http-server-14">HTTP server</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_5.py">here</a>.</p>
+<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<blockquote>
+<p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
+</blockquote>
+<ol>
+<li>Start the server</li>
+</ol>
+<pre><code>mistralrs serve vision -p 1234 -m Qwen/Qwen3.5-27B
+</code></pre>
+<ol start="2">
+<li>Send a request</li>
+</ol>
+<pre><code class="language-py">from openai import OpenAI
+
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
+
+completion = client.chat.completions.create(
+    model="default",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://www.garden-treasures.com/cdn/shop/products/IMG_6245.jpg"
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "What type of flower is this? Give some fun facts.",
+                },
+            ],
+        },
+    ],
+    max_tokens=256,
+    frequency_penalty=1.0,
+    top_p=0.1,
+    temperature=0,
+)
+resp = completion.choices[0].message.content
+print(resp)
+
+</code></pre>
+<ul>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
+</ul>
+<hr>
+<h2 id="rust-13"><a class="header" href="#rust-13">Rust</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<pre class="playground"><code class="language-rust">use anyhow::Result;
+use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+
+#[tokio::main]
+async fn main() -&gt; Result&lt;()&gt; {
+    let model = VisionModelBuilder::new("Qwen/Qwen3.5-27B")
+        .with_isq(IsqType::Q4K)
+        .with_logging()
+        .build()
+        .await?;
+
+    let bytes = match reqwest::blocking::get(
+        "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg",
+    ) {
+        Ok(http_resp) =&gt; http_resp.bytes()?.to_vec(),
+        Err(e) =&gt; anyhow::bail!(e),
+    };
+    let image = image::load_from_memory(&amp;bytes)?;
+
+    let messages = VisionMessages::new().add_image_message(
+        TextMessageRole::User,
+        "What is this?",
+        vec![image],
+    );
+
+    let response = model.send_chat_request(messages).await?;
+
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    dbg!(
+        response.usage.avg_prompt_tok_per_sec,
+        response.usage.avg_compl_tok_per_sec
+    );
+
+    Ok(())
+}</code></pre>
+<hr>
+<h2 id="python-13"><a class="header" href="#python-13">Python</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_5.py">here</a>.</p>
+<p>This example demonstrates loading and sending a chat completion request with an image.</p>
+<blockquote>
+<p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
+</blockquote>
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+
+# Dense variant
+MODEL_ID = "Qwen/Qwen3.5-27B"
+
+runner = Runner(
+    which=Which.VisionPlain(
+        model_id=MODEL_ID,
+        arch=VisionArchitecture.Qwen3_5,
+    ),
+)
+
+# For MoE variant, use:
+# MODEL_ID = "Qwen/Qwen3.5-35B-A3B"
+# runner = Runner(
+#     which=Which.VisionPlain(
+#         model_id=MODEL_ID,
+#         arch=VisionArchitecture.Qwen3_5Moe,
+#     ),
+# )
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://www.garden-treasures.com/cdn/shop/products/IMG_6245.jpg"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "What type of flower is this? Give some fun facts.",
+                    },
+                ],
+            }
+        ],
+        max_tokens=256,
+        presence_penalty=1.0,
+        top_p=0.1,
+        temperature=0.1,
+    )
+)
+print(res.choices[0].message.content)
+print(res.usage)
+</code></pre>
+<ul>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="flux1-model-black-forest-labsflux1-schnell"><a class="header" href="#flux1-model-black-forest-labsflux1-schnell">FLUX.1 Model: <a href="https://huggingface.co/black-forest-labs/FLUX.1-schnell"><code>black-forest-labs/FLUX.1-schnell</code></a></a></h1>
 <p>The FLUX model is a 12 billion parameter rectified flow transformer capable of generating images from text descriptions.</p>
 <p>We support both the <code>-schnell</code> and <code>-dev</code> versions of the model.</p>
@@ -7309,7 +7610,7 @@ print(res.usage)
 </tbody>
 </table>
 </div>
-<h2 id="http-server-14"><a class="header" href="#http-server-14">HTTP server</a></h2>
+<h2 id="http-server-15"><a class="header" href="#http-server-15">HTTP server</a></h2>
 <p>The OpenAI HTTP server provides a compatible way to easily use this implementation. As per the specification, output images can be returned as local paths to images or be encoded to base64.</p>
 <pre><code>mistralrs serve diffusion -p 1234 -m black-forest-labs/FLUX.1-schnell -a flux
 </code></pre>
@@ -7389,7 +7690,7 @@ print(res.choices[0].url)
 <blockquote>
 <p>Note: Voxtral uses Mistral’s native format (<code>params.json</code>, <code>consolidated.safetensors</code>, <code>tekken.json</code>), which mistral.rs handles automatically.</p>
 </blockquote>
-<h2 id="http-server-15"><a class="header" href="#http-server-15">HTTP server</a></h2>
+<h2 id="http-server-16"><a class="header" href="#http-server-16">HTTP server</a></h2>
 <p>We support an OpenAI compatible HTTP API for audio models.</p>
 <ol>
 <li>Start the server</li>
@@ -7433,7 +7734,7 @@ completion = client.chat.completions.create(
 resp = completion.choices[0].message.content
 print(resp)
 </code></pre>
-<h2 id="rust-13"><a class="header" href="#rust-13">Rust</a></h2>
+<h2 id="rust-14"><a class="header" href="#rust-14">Rust</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/asr/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{AudioInput, TextMessageRole, VisionMessages, VisionModelBuilder};
@@ -7465,7 +7766,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
-<h2 id="python-13"><a class="header" href="#python-13">Python</a></h2>
+<h2 id="python-14"><a class="header" href="#python-14">Python</a></h2>
 <pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 
 runner = Runner(
@@ -7513,7 +7814,7 @@ print(res.usage)
 <blockquote>
 <p>Note: voice cloning support is coming!</p>
 </blockquote>
-<h2 id="http-server-16"><a class="header" href="#http-server-16">HTTP server</a></h2>
+<h2 id="http-server-17"><a class="header" href="#http-server-17">HTTP server</a></h2>
 <p>The OpenAI HTTP server provides a drop-in compatible way to easily use Dia locally!</p>
 <blockquote>
 <p>Note: we only support <code>pcm</code> and <code>wav</code> outputs.</p>
@@ -7632,7 +7933,7 @@ model via the OpenAI-compatible HTTP server, running it from Python, and embeddi
 </tbody>
 </table>
 </div>
-<h2 id="http-server-17"><a class="header" href="#http-server-17">HTTP server</a></h2>
+<h2 id="http-server-18"><a class="header" href="#http-server-18">HTTP server</a></h2>
 <p>Launch the server in embedding mode to expose an OpenAI-compatible <code>/v1/embeddings</code> endpoint:</p>
 <pre><code class="language-bash">mistralrs serve -p 1234 -m google/embeddinggemma-300m
 </code></pre>
@@ -7655,7 +7956,7 @@ models, run in multi-model mode and assign an identifier in the selector configu
 }
 </code></pre>
 <p>See <a href="#post-v1embeddings">docs/HTTP.md</a> for the full request schema and response layout.</p>
-<h2 id="python-sdk-11"><a class="header" href="#python-sdk-11">Python SDK</a></h2>
+<h2 id="python-sdk-12"><a class="header" href="#python-sdk-12">Python SDK</a></h2>
 <p>Instantiate <code>Runner</code> with the <code>Which.Embedding</code> selector and request EmbeddingGemma explicitly. The helper method
 <code>send_embedding_request</code> returns batched embeddings as Python lists.</p>
 <pre><code class="language-python">from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
@@ -7676,7 +7977,7 @@ embeddings = runner.send_embedding_request(request)
 print(len(embeddings), len(embeddings[0]))
 </code></pre>
 <p>Refer to <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/embedding_gemma.py">this example</a> for a complete runnable script.</p>
-<h2 id="rust-sdk-10"><a class="header" href="#rust-sdk-10">Rust SDK</a></h2>
+<h2 id="rust-sdk-11"><a class="header" href="#rust-sdk-11">Rust SDK</a></h2>
 <p>Use the <code>EmbeddingModelBuilder</code> helper from the <code>mistralrs</code> crate to create the model and submit an
 <code>EmbeddingRequest</code>:</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
@@ -7706,7 +8007,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 <h1 id="qwen3-embedding"><a class="header" href="#qwen3-embedding">Qwen3 Embedding</a></h1>
 <p>The Qwen3 Embedding model series is the latest proprietary model of the Qwen family, specifically designed for text embedding and ranking tasks.</p>
 <p>For a catalog of all embedding backends, see <a href="#embeddings-overview">EMBEDDINGS.md</a>.</p>
-<h2 id="http-server-18"><a class="header" href="#http-server-18">HTTP server</a></h2>
+<h2 id="http-server-19"><a class="header" href="#http-server-19">HTTP server</a></h2>
 <p>Serve the model with the OpenAI-compatible endpoint enabled:</p>
 <pre><code class="language-bash">mistralrs serve -p 1234 -m Qwen/Qwen3-Embedding-0.6B
 </code></pre>
@@ -7729,7 +8030,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 }
 </code></pre>
 <p>See <a href="#post-v1embeddings">docs/HTTP.md</a> for the full request schema.</p>
-<h2 id="python-sdk-12"><a class="header" href="#python-sdk-12">Python SDK</a></h2>
+<h2 id="python-sdk-13"><a class="header" href="#python-sdk-13">Python SDK</a></h2>
 <p>Instantiate <code>Runner</code> with the embedding selector and request Qwen3 explicitly. The output mirrors the
 OpenAI embeddings array shape:</p>
 <pre><code class="language-python">from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
@@ -7750,7 +8051,7 @@ embeddings = runner.send_embedding_request(request)
 print(len(embeddings), len(embeddings[0]))
 </code></pre>
 <p>A ready-to-run version can be found at <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_embedding.py"><code>examples/python/qwen3_embedding.py</code></a>.</p>
-<h2 id="rust-sdk-11"><a class="header" href="#rust-sdk-11">Rust SDK</a></h2>
+<h2 id="rust-sdk-12"><a class="header" href="#rust-sdk-12">Rust SDK</a></h2>
 <p>Use the <code>EmbeddingModelBuilder</code> helper just like with EmbeddingGemma. The example below mirrors the
 repository sample:</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
@@ -7989,10 +8290,10 @@ The uniquely powerful quantized file format.
 <li><strong>Easy</strong> 🤗: Download UQFF models <em>easily</em> and <em>quickly</em> from Hugging Face, or use a local file.</li>
 <li><strong>Customizable</strong> 🛠️: Make and publish your own UQFF files in minutes.</li>
 </ol>
-<h1 id="toc-5"><a class="header" href="#toc-5">ToC</a></h1>
+<h1 id="toc-6"><a class="header" href="#toc-6">ToC</a></h1>
 <ul>
 <li><a href="#universal-quantized-file-format-uqff">Universal Quantized File Format: UQFF</a></li>
-<li><a href="#toc-5">ToC</a>
+<li><a href="#toc-6">ToC</a>
 <ul>
 <li><a href="#motivation">Motivation</a></li>
 <li><a href="#support">Support</a></li>
@@ -8204,7 +8505,7 @@ mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k --isq q8_0 -o ph
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="uqff-internal-structure"><a class="header" href="#uqff-internal-structure">UQFF internal structure</a></h1>
 <p>The following describes the exact memory layout of UQFF tensors of version 0.1.0.</p>
-<h2 id="toc-6"><a class="header" href="#toc-6">ToC</a></h2>
+<h2 id="toc-7"><a class="header" href="#toc-7">ToC</a></h2>
 <ul>
 <li><a href="#gguf-quantization">GGUF quantization</a></li>
 <li><a href="#hqq-quantization">HQQ quantization</a></li>
@@ -8579,7 +8880,7 @@ The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X
 <p>This can be enabled by passing <code>--tgt-non-granular-index</code> followed by $k$:</p>
 <pre><code class="language-bash">mistralrs serve -p 1234 --xlora lamm-mit/x-lora --xlora-order orderings/xlora-paper-ordering.json --tgt-non-granular-index 5
 </code></pre>
-<h3 id="python-14"><a class="header" href="#python-14">Python</a></h3>
+<h3 id="python-15"><a class="header" href="#python-15">Python</a></h3>
 <p>Set the <code>tgt_non_granular_index</code> attribute to a non-<code>None</code> value in the <code>Which</code> selection:</p>
 <pre><code class="language-py">from mistralrs import Runner, Which
 
@@ -8724,7 +9025,7 @@ res = runner.send_chat_completion_request(
 print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
-<h2 id="rust-sdk-12"><a class="header" href="#rust-sdk-12">Rust SDK</a></h2>
+<h2 id="rust-sdk-13"><a class="header" href="#rust-sdk-13">Rust SDK</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/anymoe/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{
@@ -8795,7 +9096,7 @@ mistralrs run -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 </code></pre>
-<h3 id="python-15"><a class="header" href="#python-15">Python</a></h3>
+<h3 id="python-16"><a class="header" href="#python-16">Python</a></h3>
 <pre><code class="language-python">from mistralrs import Runner, Which, VisionArchitecture
 
 runner = Runner(
@@ -8807,7 +9108,7 @@ runner = Runner(
     ),
 )
 </code></pre>
-<h3 id="rust-14"><a class="header" href="#rust-14">Rust</a></h3>
+<h3 id="rust-15"><a class="header" href="#rust-15">Rust</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use mistralrs::VisionModelBuilder;
@@ -9340,16 +9641,13 @@ runner = Runner(
 <li><strong>Same model category:</strong> Both must be the same type (e.g., both text models or both vision models)</li>
 <li><strong>KV cache enabled:</strong> Both models must have KV caching enabled (default behavior)</li>
 </ul>
-<h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
-<blockquote>
-<p>Note: PagedAttention is not currently supported with speculative decoding.</p>
-</blockquote>
-<blockquote>
-<p>Note: Prefix caching is not supported with speculative decoding.</p>
-</blockquote>
-<blockquote>
-<p>Note: Hybrid KV caches are not supported with speculative decoding.</p>
-</blockquote>
+<h2 id="compatibility"><a class="header" href="#compatibility">Compatibility</a></h2>
+<ul>
+<li><strong>PagedAttention:</strong> Supported.</li>
+<li><strong>Prefix caching:</strong> Supported for both sequence-level (non-paged) and paged-attention backends.</li>
+<li><strong>Hybrid KV caches:</strong> Supported, including hybrid recurrent-state snapshot/restore during rejection handling.</li>
+<li><strong>Batching:</strong> Supported. Multi-sequence speculative requests are executed per sequence internally, preserving batching semantics.</li>
+</ul>
 <h2 id="using-toml-configuration"><a class="header" href="#using-toml-configuration">Using TOML Configuration</a></h2>
 <p>The recommended way to configure speculative decoding is via TOML. Create a config file (e.g., <code>speculative.toml</code>):</p>
 <pre><code class="language-toml">[model]
@@ -9497,7 +9795,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 <ul>
 <li><strong>Acceptance rate:</strong> Higher acceptance rates lead to better speedups. Monitor your logs for rejection statistics.</li>
 <li><strong>Draft model overhead:</strong> If the draft model is too large relative to the target, the overhead may negate speedup benefits.</li>
-<li><strong>Batch size:</strong> Speculative decoding is most beneficial for single-request scenarios. For high-throughput batch inference, standard decoding may be more efficient.</li>
+<li><strong>Batch size:</strong> Speculative decoding supports batched requests, but currently executes each sequence independently inside the speculative step. For very high-throughput workloads, standard decoding may still be more efficient.</li>
 <li><strong>Memory usage:</strong> Both models must fit in memory simultaneously. Consider quantizing one or both models.</li>
 </ul>
 <h2 id="combining-with-other-features"><a class="header" href="#combining-with-other-features">Combining with Other Features</a></h2>
@@ -9846,7 +10144,7 @@ cargo run --release --features ring -- ...
 <p>You can override tool execution using a <strong>tool callback</strong>. The callback receives
 the tool name and a dictionary of arguments and must return the tool output as a
 string.</p>
-<h3 id="python-16"><a class="header" href="#python-16">Python</a></h3>
+<h3 id="python-17"><a class="header" href="#python-17">Python</a></h3>
 <pre><code class="language-py">def tool_cb(name: str, args: dict) -&gt; str:
     if name == "local_search":
         return json.dumps(local_search(args.get("query", "")))
@@ -9912,7 +10210,7 @@ runner = Runner(
     search_callback=search_callback,
 )
 </code></pre>
-<h2 id="http-server-19"><a class="header" href="#http-server-19">HTTP server</a></h2>
+<h2 id="http-server-20"><a class="header" href="#http-server-20">HTTP server</a></h2>
 <p><strong>Be sure to add <code>--enable-search</code>!</strong></p>
 <p>Here are some examples using various models. Note that this works for both streaming and completion requests, so interactive mode is featured here!</p>
 <pre><code class="language-bash">mistralrs run --enable-search --isq 4 -m Qwen/Qwen3-4B
@@ -9948,7 +10246,7 @@ if completion.choices[0].message.tool_calls is not None:
     tool_called = completion.choices[0].message.tool_calls[0].function
     print(tool_called)
 </code></pre>
-<h2 id="python-sdk-13"><a class="header" href="#python-sdk-13">Python SDK</a></h2>
+<h2 id="python-sdk-14"><a class="header" href="#python-sdk-14">Python SDK</a></h2>
 <pre><code class="language-py">from mistralrs import (
     Runner,
     Which,
@@ -9999,7 +10297,7 @@ res = runner.send_chat_completion_request(
 print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
-<h2 id="rust-sdk-13"><a class="header" href="#rust-sdk-13">Rust SDK</a></h2>
+<h2 id="rust-sdk-14"><a class="header" href="#rust-sdk-14">Rust SDK</a></h2>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{
     SearchEmbeddingModel, IsqType, RequestBuilder, TextMessageRole, TextMessages, TextModelBuilder,
@@ -10136,7 +10434,7 @@ $ mistralrs serve -p 1234 --log output.log -m microsoft/Orca-2-13b --tokenizer-j
 </code></pre>
 <h2 id="api-usage"><a class="header" href="#api-usage">API Usage</a></h2>
 <p>All sampling parameters can be set in API requests:</p>
-<h3 id="http-api-10"><a class="header" href="#http-api-10">HTTP API</a></h3>
+<h3 id="http-api-11"><a class="header" href="#http-api-11">HTTP API</a></h3>
 <pre><code class="language-json">{
   "model": "default",
   "messages": [...],
@@ -10154,7 +10452,7 @@ $ mistralrs serve -p 1234 --log output.log -m microsoft/Orca-2-13b --tokenizer-j
   "dry_sequence_breakers": ["\n"]
 }
 </code></pre>
-<h3 id="python-sdk-14"><a class="header" href="#python-sdk-14">Python SDK</a></h3>
+<h3 id="python-sdk-15"><a class="header" href="#python-sdk-15">Python SDK</a></h3>
 <pre><code class="language-python">response = runner.send_chat_completion_request(
     ChatCompletionRequest(
         model="default",
@@ -10697,7 +10995,7 @@ runner.send_chat_completion_request(request, model_id="google/gemma-3-4b-it")
 <p>mistral.rs includes a built-in MCP client that allows models to connect to external tools and services through the Model Context Protocol. This enables automatic tool discovery and usage from any MCP-compatible server.</p>
 <h2 id="quick-start-2"><a class="header" href="#quick-start-2">Quick Start</a></h2>
 <p>Examples below show HTTP (Hugging Face), Process (filesystem), and WebSocket transports. Replace <code>hf_xxx</code> with your actual Hugging Face token for HTTP examples.</p>
-<h3 id="rust-sdk-14"><a class="header" href="#rust-sdk-14">Rust SDK</a></h3>
+<h3 id="rust-sdk-15"><a class="header" href="#rust-sdk-15">Rust SDK</a></h3>
 <pre class="playground"><code class="language-rust">use mistralrs::{
     TextModelBuilder, McpClientConfig, McpServerConfig, McpServerSource,
     TextMessages, TextMessageRole,
@@ -10775,7 +11073,7 @@ async fn main() -&gt; anyhow::Result&lt;()&gt; {
     
     Ok(())
 }</code></pre>
-<h3 id="python-sdk-15"><a class="header" href="#python-sdk-15">Python SDK</a></h3>
+<h3 id="python-sdk-16"><a class="header" href="#python-sdk-16">Python SDK</a></h3>
 <pre><code class="language-python">import mistralrs
 
 # Process example (filesystem server - recommended for getting started)
@@ -10845,7 +11143,7 @@ res = runner.send_chat_completion_request(
 )
 print(res.choices[0].message.content)
 </code></pre>
-<h3 id="http-api-11"><a class="header" href="#http-api-11">HTTP API</a></h3>
+<h3 id="http-api-12"><a class="header" href="#http-api-12">HTTP API</a></h3>
 <ol>
 <li>Create <code>mcp-config.json</code>:</li>
 </ol>
@@ -11013,17 +11311,17 @@ print(res.choices[0].message.content)
 </table>
 </div>
 <hr>
-<h2 id="toc-7"><a class="header" href="#toc-7">ToC</a></h2>
+<h2 id="toc-8"><a class="header" href="#toc-8">ToC</a></h2>
 <ul>
 <li><a href="#mcp-protocol-support">MCP protocol support</a>
 <ul>
-<li><a href="#toc-7">ToC</a></li>
+<li><a href="#toc-8">ToC</a></li>
 <li><a href="#running">Running</a></li>
 <li><a href="#check-if-its-working">Check if it’s working</a></li>
 <li><a href="#example-clients">Example clients</a>
 <ul>
-<li><a href="#python-17">Python</a></li>
-<li><a href="#rust-15">Rust</a></li>
+<li><a href="#python-18">Python</a></li>
+<li><a href="#rust-16">Rust</a></li>
 <li><a href="#http">HTTP</a></li>
 </ul>
 </li>
@@ -11051,7 +11349,7 @@ print(res.choices[0].message.content)
 }'      
 </code></pre>
 <h2 id="example-clients"><a class="header" href="#example-clients">Example clients</a></h2>
-<h3 id="python-17"><a class="header" href="#python-17">Python</a></h3>
+<h3 id="python-18"><a class="header" href="#python-18">Python</a></h3>
 <p>The <a href="https://pypi.org/project/mcp/">reference Python SDK</a> can be installed via:</p>
 <pre><code class="language-bash">pip install --upgrade mcp
 </code></pre>
@@ -11097,7 +11395,7 @@ async def main() -&gt; None:
 if __name__ == "__main__":
     asyncio.run(main())
 </code></pre>
-<h3 id="rust-15"><a class="header" href="#rust-15">Rust</a></h3>
+<h3 id="rust-16"><a class="header" href="#rust-16">Rust</a></h3>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use rust_mcp_sdk::{
     mcp_client::client_runtime,
