@@ -182,9 +182,7 @@ fn prompt_readme_details(default_model_id: &str) -> (String, Option<String>) {
 
     // Ask for base model
     eprintln!();
-    eprint!(
-        "Base model for the README (press Enter for '{default_model_id}'): ",
-    );
+    eprint!("Base model for the README (press Enter for '{default_model_id}'): ",);
     io::stderr().flush().ok();
     let base_model = lines
         .next()
