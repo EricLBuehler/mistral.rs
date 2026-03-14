@@ -52,6 +52,18 @@ fn get_no_readme(model_type: &QuantizeModelType) -> bool {
     }
 }
 
+/// Extract the README override flags from the QuantizeModelType
+fn get_readme_overrides(model_type: &QuantizeModelType) -> (Option<String>, Option<String>) {
+    match model_type {
+        QuantizeModelType::Auto { output, .. }
+        | QuantizeModelType::Text { output, .. }
+        | QuantizeModelType::Vision { output, .. }
+        | QuantizeModelType::Embedding { output, .. } => {
+            (output.uqff_base_model.clone(), output.uqff_repo_id.clone())
+        }
+    }
+}
+
 /// Run UQFF quantization and generation, supporting multiple ISQ types.
 pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) -> Result<()> {
     initialize_logging();
@@ -62,6 +74,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
     let model_id = get_model_id(&model_type).to_string();
     let is_vision = matches!(&model_type, QuantizeModelType::Vision { .. });
     let no_readme = get_no_readme(&model_type);
+    let (flag_base_model, flag_repo_id) = get_readme_overrides(&model_type);
 
     // Multiple ISQ values require directory output mode
     if isq_values.len() > 1 && file_mode {
@@ -136,10 +149,16 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
 
     // Generate README.md model card and upload hint in directory mode
     if !file_mode {
-        let (base_model, repo_id) = if !no_readme {
-            prompt_readme_details(&model_id)
+        let (base_model, repo_id) = if no_readme {
+            (model_id.clone(), flag_repo_id)
+        } else if flag_base_model.is_some() || flag_repo_id.is_some() {
+            // CLI flags provided — skip interactive prompts
+            (
+                flag_base_model.unwrap_or_else(|| model_id.clone()),
+                flag_repo_id,
+            )
         } else {
-            (model_id.clone(), None)
+            prompt_readme_details(&model_id)
         };
 
         if !no_readme {

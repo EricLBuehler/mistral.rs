@@ -211,7 +211,15 @@ This produces the following in `phi3.5-uqff/`:
 
 When using directory output mode, the `quantize` command automatically generates a `README.md` model card in the output directory. This model card includes Hugging Face YAML frontmatter, a description, and an examples table with the appropriate `--from-uqff` commands for each quantization.
 
-To skip model card generation, use `--no-readme`:
+By default, the command prompts interactively for the base model and HF repo ID. To bypass the interactive prompts (e.g. in CI or scripts), use `--uqff-base-model` and/or `--uqff-repo-id`:
+
+```bash
+mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/ \
+    --uqff-base-model microsoft/Phi-3.5-mini-instruct \
+    --uqff-repo-id EricB/Phi-3.5-mini-instruct-UQFF
+```
+
+To skip model card generation entirely, use `--no-readme`:
 ```bash
 mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/ --no-readme
 ```
