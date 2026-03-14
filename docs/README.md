@@ -45,14 +45,14 @@
 - [DeepSeek V2](DEEPSEEKV2.md) | [DeepSeek V3](DEEPSEEKV3.md)
 - [Gemma 2](GEMMA2.md) | [Gemma 3](GEMMA3.md) | [Gemma 3n](GEMMA3N.md)
 - [GLM4](GLM4.md) | [GLM-4.7-Flash](GLM4_MOE_LITE.md) | [GLM-4.7](GLM4_MOE.md)
-- [Qwen 3](QWEN3.md) | [SmolLM3](SMOLLM3.md) | [GPT-OSS](GPT_OSS.md)
+- [Qwen 3](QWEN3.md) | [Qwen 3 Next](QWEN3NEXT.md) | [SmolLM3](SMOLLM3.md) | [GPT-OSS](GPT_OSS.md)
 
 **Vision Models:**
 - [Idefics 2](IDEFICS2.md) | [Idefics 3](IDEFICS3.md)
 - [LLaVA](LLaVA.md) | [Llama 3.2 Vision](VLLAMA.md) | [Llama 4](LLAMA4.md)
 - [MiniCPM-O 2.6](MINICPMO_2_6.md) | [Mistral 3](MISTRAL3.md)
 - [Phi 3.5 MoE](PHI3.5MOE.md) | [Phi 3.5 Vision](PHI3V.md) | [Phi 4 Multimodal](PHI4MM.md)
-- [Qwen 2-VL](QWEN2VL.md) | [Qwen 3 VL](QWEN3VL.md)
+- [Qwen 2-VL](QWEN2VL.md) | [Qwen 3 VL](QWEN3VL.md) | [Qwen 3.5](QWEN3_5.md)
 
 **Other Models:**
 - [FLUX (Diffusion)](FLUX.md) | [Dia (Speech)](DIA.md)

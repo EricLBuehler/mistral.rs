@@ -38,6 +38,7 @@
 - [GLM-4.7 MoE](GLM4_MOE.md)
 - [GPT-OSS](GPT_OSS.md)
 - [Qwen 3](QWEN3.md)
+- [Qwen 3 Next](QWEN3NEXT.md)
 - [SmolLM3](SMOLLM3.md)
 
 ## Vision Model Guides
@@ -54,6 +55,7 @@
 - [Phi 4 Multimodal](PHI4MM.md)
 - [Qwen 2-VL](QWEN2VL.md)
 - [Qwen 3-VL](QWEN3VL.md)
+- [Qwen 3.5](QWEN3_5.md)
 
 ## Other Model Guides
 

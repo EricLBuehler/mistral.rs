@@ -16,6 +16,7 @@ Please see docs for the following model types:
 - Mistral 3: [MISTRAL3.md](MISTRAL3.md)
 - Llama 4: [LLAMA4.md](LLAMA4.md)
 - Qwen 3-VL: [QWEN3VL.md](QWEN3VL.md)
+- Qwen 3.5: [QWEN3_5.md](QWEN3_5.md)
 - MiniCPM-O 2.6: [MINICPMO_2_6.md](MINICPMO_2_6.md)
 
 > Note for the Python and HTTP APIs:

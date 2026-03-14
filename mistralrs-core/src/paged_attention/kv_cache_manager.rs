@@ -270,6 +270,36 @@ impl KVCacheManager {
         }
     }
 
+    /// Trim a running request's allocation to `num_tokens`.
+    ///
+    /// This is useful when a speculative path over-allocates temporary lookahead
+    /// slots and then needs to release unneeded tail blocks.
+    pub fn trim_request_to_num_tokens(&mut self, request_id: usize, num_tokens: usize) {
+        let num_required_blocks = num_tokens.div_ceil(self.block_size);
+
+        let mut removed_blocks = {
+            let Some(req) = self.req_to_blocks.get_mut(&request_id) else {
+                return;
+            };
+
+            if num_required_blocks >= req.block_ids.len() {
+                req.num_cached_blocks = req.num_cached_blocks.min(req.block_ids.len());
+                return;
+            }
+
+            let removed = req
+                .block_ids
+                .drain(num_required_blocks..)
+                .collect::<Vec<_>>();
+            req.num_cached_blocks = req.num_cached_blocks.min(req.block_ids.len());
+            removed
+        };
+
+        // Free in reverse order for LRU eviction priority.
+        removed_blocks.reverse();
+        self.block_pool.free_blocks(&removed_blocks);
+    }
+
     /// Cache newly-full blocks after tokens are computed.
     ///
     /// Called after each step (prefill or decode) to register full blocks
@@ -560,6 +590,33 @@ mod tests {
         assert_eq!(table[2], 0);
         assert_eq!(table[3], 0);
         assert_eq!(table[4], 0);
+    }
+
+    #[test]
+    fn test_trim_request_allocation() {
+        let mut mgr = KVCacheManager::new(8, 4, false, vec![0]);
+        mgr.allocate_slots(1, 12, &[]).unwrap();
+        assert_eq!(mgr.num_blocks_for_request(1), 3);
+        assert_eq!(mgr.num_free_blocks(), 4); // 8 - 1 null - 3 alloc
+
+        mgr.trim_request_to_num_tokens(1, 8); // 2 blocks
+        assert_eq!(mgr.num_blocks_for_request(1), 2);
+        assert_eq!(mgr.num_free_blocks(), 5);
+    }
+
+    #[test]
+    fn test_trim_clamps_cached_blocks() {
+        let mut mgr = KVCacheManager::new(16, 4, true, vec![0]);
+        let tokens: Vec<u32> = (1..=16).collect();
+        let hashes = compute_block_hashes(&tokens, 4, &[], &[]);
+
+        mgr.allocate_slots(1, 16, &[]).unwrap();
+        mgr.cache_blocks(1, &hashes, 16);
+        assert_eq!(mgr.num_cached_blocks(1), 4);
+
+        mgr.trim_request_to_num_tokens(1, 8);
+        assert_eq!(mgr.num_blocks_for_request(1), 2);
+        assert_eq!(mgr.num_cached_blocks(1), 2);
     }
 
     #[test]

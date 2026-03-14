@@ -487,6 +487,8 @@ async fn vision_interactive_mode(
     };
 
     let mut sampling_params = interactive_sample_parameters();
+    let mut prev_encoder_hits: usize = 0;
+    let mut prev_encoder_misses: usize = 0;
 
     info!("Starting interactive loop with sampling params: {sampling_params:?}");
     println!(
@@ -755,10 +757,13 @@ async fn vision_interactive_mode(
                     );
                 }
                 if let Some((hits, misses)) = logger.encoder_cache_stats() {
-                    let total = hits + misses;
-                    if total > 0 {
-                        println!("Encoder cache: {} hits / {} turns", hits, total);
+                    let turn_hits = hits - prev_encoder_hits;
+                    let turn_lookups = (hits + misses) - (prev_encoder_hits + prev_encoder_misses);
+                    if turn_lookups > 0 {
+                        println!("Encoder cache: {}/{} hits", turn_hits, turn_lookups);
                     }
+                    prev_encoder_hits = hits;
+                    prev_encoder_misses = misses;
                 }
             }
         }
