@@ -398,7 +398,10 @@ impl Qwen3_5MoeModel {
         };
 
         let mut ropeidx_attn_mask_bs = Vec::new();
-        let max_seqlens = *seqlens.iter().max().unwrap();
+        let max_seqlens = *seqlens
+            .iter()
+            .max()
+            .ok_or(candle_core::Error::Msg("seqlens is empty".to_string()))?;
         for len in &seqlens {
             ropeidx_attn_mask_bs.push(Tensor::new(
                 [vec![1f32; *len], vec![0f32; max_seqlens - len]].concat(),

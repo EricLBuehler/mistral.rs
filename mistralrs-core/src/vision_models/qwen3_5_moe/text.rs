@@ -822,6 +822,32 @@ impl Qwen3_5MoeTextModel {
 
         let attention_mask = DeviceMappedMask::new(attention_mask.cloned(), &*self.mapper)?;
 
+        // Precompute deepstack index tensors once to avoid repeated CPU-GPU syncs
+        let deepstack_indices = if let Some(visual_pos_masks) = visual_pos_masks {
+            let mask_flat: Vec<f32> = visual_pos_masks
+                .to_device(&self.device)?
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1()?;
+            let indices: Vec<u32> = mask_flat
+                .iter()
+                .enumerate()
+                .filter(|(_, &v)| v > 0.0)
+                .map(|(i, _)| i as u32)
+                .collect();
+            if indices.is_empty() {
+                None
+            } else {
+                let hidden = xs.dim(candle_core::D::Minus1)?;
+                let n = indices.len();
+                let idx = Tensor::from_vec(indices, (n,), &self.device)?;
+                let idx_expanded = idx.unsqueeze(1)?.repeat((1, hidden))?;
+                Some((idx, idx_expanded))
+            }
+        } else {
+            None
+        };
+
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
 
@@ -888,11 +914,11 @@ impl Qwen3_5MoeTextModel {
             }
 
             // Integrate DeepStack visual features when provided
-            if let (Some(visual_pos_masks), Some(deepstack)) =
-                (visual_pos_masks, deepstack_visual_embeds)
+            if let (Some((idx, idx_expanded)), Some(deepstack)) =
+                (&deepstack_indices, deepstack_visual_embeds)
             {
                 if i < deepstack.len() {
-                    xs = self.deepstack_process(xs, visual_pos_masks, &deepstack[i])?;
+                    xs = self.deepstack_process(xs, idx, idx_expanded, &deepstack[i])?;
                 }
             }
         }
@@ -908,7 +934,8 @@ impl Qwen3_5MoeTextModel {
     fn deepstack_process(
         &self,
         hidden_states: Tensor,
-        visual_pos_masks: &Tensor,
+        idx: &Tensor,
+        idx_expanded: &Tensor,
         visual_embeds: &Tensor,
     ) -> Result<Tensor> {
         let device = hidden_states.device();
@@ -919,32 +946,15 @@ impl Qwen3_5MoeTextModel {
         let total = batch * seq;
         let hidden_flat = hidden_states.reshape((total, hidden))?;
 
-        let mask_flat: Vec<f32> = visual_pos_masks
-            .to_device(device)?
-            .to_dtype(DType::F32)?
-            .flatten_all()?
-            .to_vec1()?;
-        let indices: Vec<u32> = mask_flat
-            .iter()
-            .enumerate()
-            .filter(|(_, &v)| v > 0.0)
-            .map(|(i, _)| i as u32)
-            .collect();
-
-        if indices.is_empty() {
-            return Ok(hidden_states);
-        }
-        if indices.len() != visual_embeds.dim(0)? {
+        if idx.dim(0)? != visual_embeds.dim(0)? {
             candle_core::bail!(
                 "Mismatch between DeepStack visual embeds ({}) and mask positions ({})",
                 visual_embeds.dim(0)?,
-                indices.len()
+                idx.dim(0)?
             );
         }
 
-        let idx = Tensor::from_vec(indices, (visual_embeds.dim(0)?,), device)?;
-        let idx_expanded = idx.unsqueeze(1)?.repeat((1, hidden))?;
-        let result = hidden_flat.scatter_add(&idx_expanded, &visual_embeds, 0)?;
+        let result = hidden_flat.scatter_add(idx_expanded, &visual_embeds, 0)?;
         result.reshape((batch, seq, hidden))
     }
 }
