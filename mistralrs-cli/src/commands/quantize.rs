@@ -257,10 +257,10 @@ base_model_relation: quantized
 
 Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation: [UQFF docs](https://github.com/EricLBuehler/mistral.rs/blob/master/docs/UQFF.md).
 
-1) **Flexible**: Multiple quantization formats in *one* file format with *one* framework to run them all.
-2) **Reliable**: Compatibility ensured with *embedded* and *checked* semantic versioning information from day 1.
-3) **Easy**: Download UQFF models *easily* and *quickly* from Hugging Face, or use a local file.
-4) **Customizable**: Make and publish your own UQFF files in minutes.
+1) **Flexible** 🌀: Multiple quantization formats in *one* file format with *one* framework to run them all.
+2) **Reliable** 🔒: Compatibility ensured with *embedded* and *checked* semantic versioning information from day 1.
+3) **Easy** 🤗: Download UQFF models *easily* and *quickly* from Hugging Face, or use a local file.
+4) **Customizable** 🛠️: Make and publish your own UQFF files in minutes.
 
 ## Examples
 
