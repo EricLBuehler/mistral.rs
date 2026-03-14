@@ -8,6 +8,7 @@
 | Understand cargo features | [Cargo Features](CARGO_FEATURES.md) |
 | Run a model | [CLI Reference](CLI.md) |
 | Use the HTTP API | [HTTP Server](HTTP.md) |
+| Create & publish UQFF models | [UQFF Guide](UQFF.md#creating-a-uqff-model) |
 | Fix an error | [Troubleshooting](TROUBLESHOOTING.md) |
 | Configure environment | [Configuration](CONFIGURATION.md) |
 | Check model support | [Supported Models](SUPPORTED_MODELS.md) |
@@ -18,6 +19,7 @@
 - [Cargo Features](CARGO_FEATURES.md) - Complete cargo features reference
 - [CLI Reference](CLI.md) - Complete CLI command reference
 - [CLI TOML Configuration](CLI_CONFIG.md) - Configure via TOML files
+- [Create & Publish UQFF Models](UQFF.md#creating-a-uqff-model) - Quantize models and upload to Hugging Face
 - [Troubleshooting](TROUBLESHOOTING.md) - Common issues and solutions
 
 ## SDKs & APIs

@@ -211,24 +211,32 @@ This produces the following in `phi3.5-uqff/`:
 
 When using directory output mode, the `quantize` command automatically generates a `README.md` model card in the output directory. This model card includes Hugging Face YAML frontmatter, a description, and an examples table with the appropriate `--from-uqff` commands for each quantization.
 
-To skip model card generation, use `--no-readme`:
+By default, the command prompts interactively for the base model and HF repo ID. To bypass the interactive prompts (e.g. in CI or scripts), use `--uqff-base-model` and/or `--uqff-repo-id`:
+
+```bash
+mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/ \
+    --uqff-base-model microsoft/Phi-3.5-mini-instruct \
+    --uqff-repo-id EricB/Phi-3.5-mini-instruct-UQFF
+```
+
+To skip model card generation entirely, use `--no-readme`:
 ```bash
 mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/ --no-readme
 ```
 
 ### Uploading to Hugging Face
 
-After quantization completes in directory mode, the `quantize` command prints the `huggingface-cli` upload command you can use. The general form is:
+After quantization completes in directory mode, the `quantize` command prints the `hf` CLI upload command you can use. The general form is:
 
 ```bash
-huggingface-cli upload <YOUR_USERNAME>/<MODEL_NAME>-UQFF <output_dir> --repo-type model --private
+hf upload <YOUR_USERNAME>/<MODEL_NAME>-UQFF <output_dir> --repo-type model --private
 ```
 
 Alternatively, you can upload with Git LFS:
 
 1) Install [git-lfs](https://github.com/git-lfs/git-lfs?tab=readme-ov-file#installing)
 2) Run `git lfs install`
-3) (If the files are larger than **5GB**) Run `huggingface-cli lfs-enable-largefiles .` (you will need to `pip install huggingface_hub`)
+3) (If the files are larger than **5GB**) Run `hf lfs-enable-largefiles .` (you will need to `pip install huggingface_hub`)
 
 After this, you can use Git to track, commit, and push files.
 
