@@ -1,7 +1,7 @@
 //! Quantize command implementation for UQFF generation
 
 use std::collections::{BTreeMap, HashSet};
-use std::io::Write;
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -134,23 +134,66 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
         info!("All {} UQFF quantizations complete!", total);
     }
 
-    // Generate README.md model card in directory mode (unless disabled)
-    if !file_mode && !no_readme {
-        if let Err(e) = generate_model_card(&base_output, &model_id, is_vision) {
-            warn!("Failed to generate README.md: {}", e);
-        }
-    }
-
-    // Print upload hint in directory mode
+    // Generate README.md model card and upload hint in directory mode
     if !file_mode {
-        print_upload_hint(&base_output, &model_id);
+        let (base_model, repo_id) = if !no_readme {
+            prompt_readme_details(&model_id)
+        } else {
+            (model_id.clone(), None)
+        };
+
+        if !no_readme {
+            if let Err(e) =
+                generate_model_card(&base_output, &base_model, repo_id.as_deref(), is_vision)
+            {
+                warn!("Failed to generate README.md: {}", e);
+            }
+        }
+
+        print_upload_hint(&base_output, repo_id.as_deref(), &model_id);
     }
 
     Ok(())
 }
 
+/// Prompt the user for base model and upload destination to populate the README.
+fn prompt_readme_details(default_model_id: &str) -> (String, Option<String>) {
+    let stdin = io::stdin();
+    let mut lines = stdin.lock().lines();
+
+    // Ask for base model
+    eprintln!();
+    eprint!(
+        "Base model for the README (press Enter for '{default_model_id}'): ",
+    );
+    io::stderr().flush().ok();
+    let base_model = lines
+        .next()
+        .and_then(|l| l.ok())
+        .map(|l| l.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| default_model_id.to_string());
+
+    // Ask for upload destination
+    eprint!("HF repo where this will be uploaded (e.g. 'user/model-UQFF', press Enter to skip): ");
+    io::stderr().flush().ok();
+    let repo_id = lines
+        .next()
+        .and_then(|l| l.ok())
+        .map(|l| l.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    eprintln!();
+    (base_model, repo_id)
+}
+
 /// Generate a README.md model card in the UQFF output directory.
-fn generate_model_card(output_dir: &Path, model_id: &str, is_vision: bool) -> Result<()> {
+fn generate_model_card(
+    output_dir: &Path,
+    base_model: &str,
+    repo_id: Option<&str>,
+    is_vision: bool,
+) -> Result<()> {
     // Scan the output directory for .uqff files and group by prefix
     let mut groups: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     for entry in std::fs::read_dir(output_dir)? {
@@ -182,16 +225,18 @@ fn generate_model_card(output_dir: &Path, model_id: &str, is_vision: bool) -> Re
         return Ok(());
     }
 
+    let repo_display = repo_id.unwrap_or("<REPO_ID>");
+
     let mut output = format!(
         r#"---
 tags:
   - uqff
   - mistral.rs
-base_model: {model_id}
+base_model: {base_model}
 base_model_relation: quantized
 ---
 
-# `{model_id}`, UQFF quantization
+# `{base_model}`, UQFF quantization
 
 Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation: [UQFF docs](https://github.com/EricLBuehler/mistral.rs/blob/master/docs/UQFF.md).
 
@@ -229,7 +274,7 @@ Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation
 
         let quant_name = prefix.to_uppercase();
         output += &format!(
-            "|{quant_name}|`mistralrs run -m <REPO_ID>{model_type_flag} --from-uqff {first_file}`|\n"
+            "|{quant_name}|`mistralrs run -m {repo_display}{model_type_flag} --from-uqff {first_file}`|\n"
         );
     }
 
@@ -245,16 +290,21 @@ Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation
     Ok(())
 }
 
-/// Print the huggingface-cli upload command for the user.
-fn print_upload_hint(output_dir: &Path, model_id: &str) {
-    let model_name = Path::new(model_id)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or(model_id);
+/// Print the hf cli upload command for the user.
+fn print_upload_hint(output_dir: &Path, repo_id: Option<&str>, model_id: &str) {
+    let repo = if let Some(id) = repo_id {
+        id.to_string()
+    } else {
+        let model_name = Path::new(model_id)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(model_id);
+        format!("<YOUR_USERNAME>/{model_name}-UQFF")
+    };
 
     info!("To upload your UQFF to Hugging Face, run:");
     info!(
-        "  huggingface-cli upload <YOUR_USERNAME>/{model_name}-UQFF {} --repo-type model --private",
+        "  hf upload {repo} {} --repo-type model --private",
         output_dir.display()
     );
 }

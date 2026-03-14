@@ -218,17 +218,17 @@ mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/ 
 
 ### Uploading to Hugging Face
 
-After quantization completes in directory mode, the `quantize` command prints the `huggingface-cli` upload command you can use. The general form is:
+After quantization completes in directory mode, the `quantize` command prints the `hf` CLI upload command you can use. The general form is:
 
 ```bash
-huggingface-cli upload <YOUR_USERNAME>/<MODEL_NAME>-UQFF <output_dir> --repo-type model --private
+hf upload <YOUR_USERNAME>/<MODEL_NAME>-UQFF <output_dir> --repo-type model --private
 ```
 
 Alternatively, you can upload with Git LFS:
 
 1) Install [git-lfs](https://github.com/git-lfs/git-lfs?tab=readme-ov-file#installing)
 2) Run `git lfs install`
-3) (If the files are larger than **5GB**) Run `huggingface-cli lfs-enable-largefiles .` (you will need to `pip install huggingface_hub`)
+3) (If the files are larger than **5GB**) Run `hf lfs-enable-largefiles .` (you will need to `pip install huggingface_hub`)
 
 After this, you can use Git to track, commit, and push files.
 
