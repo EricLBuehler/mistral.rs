@@ -522,11 +522,11 @@ impl Scheduler for PagedAttentionScheduler {
     fn free_finished_sequence_groups(&mut self) {
         self.free_finished_sequence_groups()
     }
-    fn get_finished_mamba_indices(&self) -> Vec<usize> {
+    fn get_finished_recurrent_indices(&self) -> Vec<usize> {
         self.running
             .iter()
             .filter(|seq| get_mut_arcmutex!(seq).is_finished_paged_attn())
-            .filter_map(|seq| get_mut_arcmutex!(seq).mamba_state_idx())
+            .filter_map(|seq| get_mut_arcmutex!(seq).recurrent_state_idx())
             .collect()
     }
     fn kv_cache_manager(&self) -> Option<Arc<tokio::sync::Mutex<KVCacheManager>>> {
