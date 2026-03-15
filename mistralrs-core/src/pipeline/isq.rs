@@ -188,8 +188,7 @@ pub fn expand_isq_value(s: &str) -> anyhow::Result<Vec<IsqType>> {
     if let Ok(bits) = IsqBits::try_from(s.to_lowercase().as_str()) {
         return Ok(bits.expand());
     }
-    let isq = parse_isq_value(s, None)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let isq = parse_isq_value(s, None).map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(vec![isq])
 }
 
