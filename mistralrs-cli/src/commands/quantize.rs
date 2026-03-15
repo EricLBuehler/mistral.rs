@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use tracing::{info, warn};
 
-use mistralrs_core::{initialize_logging, parse_isq_value, ModelSelected};
+use mistralrs_core::{expand_isq_value, initialize_logging, IsqType, ModelSelected};
 use mistralrs_server_core::mistralrs_for_server_builder::{defaults, MistralRsForServerBuilder};
 
 use crate::args::{GlobalOptions, QuantizeModelType};
@@ -76,38 +76,40 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
     let no_readme = get_no_readme(&model_type);
     let (flag_base_model, flag_repo_id) = get_readme_overrides(&model_type);
 
-    // Multiple ISQ values require directory output mode
-    if isq_values.len() > 1 && file_mode {
+    // Expand numeric ISQ shorthands into concrete variants (both Metal and non-Metal),
+    // then deduplicate by IsqType.
+    let mut seen_strings = HashSet::new();
+    let mut seen_types = HashSet::new();
+    let mut expanded_isq: Vec<IsqType> = Vec::new();
+    for val in isq_values {
+        if !seen_strings.insert(val.to_lowercase()) {
+            warn!("Duplicate --isq value '{}'; skipping.", val);
+            continue;
+        }
+        let types = expand_isq_value(val)?;
+        for tp in types {
+            if seen_types.insert(tp) {
+                expanded_isq.push(tp);
+            }
+        }
+    }
+
+    // Multiple expanded ISQ types require directory output mode
+    if expanded_isq.len() > 1 && file_mode {
         anyhow::bail!(
             "Cannot use multiple --isq values with a .uqff output path. \
              Use a directory path (e.g., -o output/) to auto-name files per ISQ type."
         );
     }
 
-    // Deduplicate ISQ values, preserving order
-    let mut seen = HashSet::new();
-    let unique_isq: Vec<&String> = isq_values
-        .iter()
-        .filter(|v| seen.insert(v.to_lowercase()))
-        .collect();
-    if unique_isq.len() < isq_values.len() {
-        warn!("Duplicate --isq values detected; deduplicating.");
-    }
+    let total = expanded_isq.len();
 
-    // Validate all ISQ strings upfront (fail fast before loading any models)
-    for isq in &unique_isq {
-        parse_isq_value(isq, None)
-            .map_err(|e| anyhow::anyhow!("Invalid --isq value '{}': {}", isq, e))?;
-    }
-
-    let total = unique_isq.len();
-
-    for (i, isq) in unique_isq.iter().enumerate() {
+    for (i, isq) in expanded_isq.iter().enumerate() {
         let effective_output = if file_mode {
             base_output.clone()
         } else {
             std::fs::create_dir_all(&base_output)?;
-            base_output.join(format!("{}.uqff", isq.to_lowercase()))
+            base_output.join(format!("{isq}.uqff"))
         };
 
         info!(
@@ -131,7 +133,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
             .with_prefix_cache_n(0)
             .with_cpu(cpu)
             .with_num_device_layers_optional(device_layers)
-            .with_in_situ_quant_optional(Some(isq.to_string()))
+            .with_in_situ_quant(isq.to_string())
             .build()
             .await?;
 
