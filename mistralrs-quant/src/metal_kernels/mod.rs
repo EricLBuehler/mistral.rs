@@ -30,6 +30,11 @@ const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mistralrs_quant
 const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mistralrs_quant_ios.metallib"));
 #[cfg(target_os = "tvos")]
 const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mistralrs_quant_tvos.metallib"));
+#[cfg(target_os = "visionos")]
+const KERNELS: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/mistralrs_quant_visionos.metallib"
+));
 
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
