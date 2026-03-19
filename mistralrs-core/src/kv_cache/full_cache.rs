@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
+use parking_lot::{Mutex, MutexGuard};
 
 use candle_core::Tensor;
 
@@ -26,7 +27,7 @@ impl EitherCache {
     /// Panics otherwise!
     pub fn normal(&self) -> MutexGuard<'_, NormalCache> {
         match self {
-            Self::Normal(normal) => normal.lock().unwrap(),
+            Self::Normal(normal) => normal.lock(),
             Self::Full(_) => panic!("Got full cache, expected normal cache."),
             Self::Hybrid(_) => panic!("Got hybrid cache, expected normal cache."),
         }
@@ -35,7 +36,7 @@ impl EitherCache {
     /// Panics otherwise!
     pub fn hybrid(&self) -> MutexGuard<'_, HybridCache> {
         match self {
-            Self::Hybrid(hybrid) => hybrid.lock().unwrap(),
+            Self::Hybrid(hybrid) => hybrid.lock(),
             Self::Normal(_) => panic!("Got normal cache, expected hybrid cache."),
             Self::Full(_) => panic!("Got full cache, expected hybrid cache."),
         }

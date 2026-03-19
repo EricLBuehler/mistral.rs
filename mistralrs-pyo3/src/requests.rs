@@ -152,7 +152,7 @@ impl EmbeddingRequest {
     #[new]
     #[pyo3(signature = (input, truncate_sequence=false))]
     fn new(input: Py<PyAny>, truncate_sequence: bool) -> PyResult<Self> {
-        let inputs = Python::with_gil(|py| normalize_embedding_inputs(input.bind(py)))?;
+        let inputs = Python::attach(|py| normalize_embedding_inputs(input.bind(py)))?;
         Ok(Self {
             inputs,
             truncate_sequence,
@@ -328,8 +328,8 @@ impl ChatCompletionRequest {
         truncate_sequence: Option<bool>,
         reasoning_effort: Option<String>,
     ) -> PyResult<Self> {
-        let messages = Python::with_gil(|py| {
-            if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
+        let messages = Python::attach(|py| {
+            if let Ok(messages) = messages.bind(py).cast_exact::<PyList>() {
                 let mut messages_vec = Vec::new();
                 for message in messages {
                     messages_vec.push(message.extract::<HashMap<
@@ -355,7 +355,7 @@ impl ChatCompletionRequest {
                     >,
                     PyErr,
                 >(Either::Left(messages_vec))
-            } else if let Ok(messages) = messages.bind(py).downcast_exact::<PyString>() {
+            } else if let Ok(messages) = messages.bind(py).cast_exact::<PyString>() {
                 let prompt = messages.extract::<String>()?;
                 Ok::<
                     Either<

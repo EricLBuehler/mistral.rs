@@ -19,7 +19,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use tracing::{debug, info, warn};
 
 /// Automatically selects the appropriate loader based on repository/config metadata.
@@ -404,7 +404,7 @@ impl AutoLoader {
     }
 
     fn ensure_loader(&self, artifacts: &ConfigArtifacts) -> Result<()> {
-        let mut guard = self.loader.lock().unwrap();
+        let mut guard = self.loader.lock();
         if guard.is_some() {
             return Ok(());
         }
@@ -413,7 +413,6 @@ impl AutoLoader {
                 let builder = self
                     .normal_builder
                     .lock()
-                    .unwrap()
                     .take()
                     .expect("builder taken");
                 let loader = builder.build(Some(tp)).expect("build normal");
@@ -423,7 +422,6 @@ impl AutoLoader {
                 let builder = self
                     .vision_builder
                     .lock()
-                    .unwrap()
                     .take()
                     .expect("builder taken");
                 let loader = builder.build(Some(tp));
@@ -433,7 +431,6 @@ impl AutoLoader {
                 let builder = self
                     .embedding_builder
                     .lock()
-                    .unwrap()
                     .take()
                     .expect("builder taken");
                 let loader = builder.build(tp);
@@ -475,7 +472,6 @@ impl Loader for AutoLoader {
         self.ensure_loader(&config)?;
         self.loader
             .lock()
-            .unwrap()
             .as_ref()
             .unwrap()
             .load_model_from_hf(
@@ -506,7 +502,6 @@ impl Loader for AutoLoader {
         self.ensure_loader(&config)?;
         self.loader
             .lock()
-            .unwrap()
             .as_ref()
             .unwrap()
             .load_model_from_path(
@@ -527,7 +522,6 @@ impl Loader for AutoLoader {
     fn get_kind(&self) -> ModelKind {
         self.loader
             .lock()
-            .unwrap()
             .as_ref()
             .map(|l| l.get_kind())
             .unwrap_or(ModelKind::Normal)

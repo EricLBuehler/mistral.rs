@@ -1,0 +1,78 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["artifact_type", "variants", "generated_at"],
+  "definitions": {
+    "previewRun": {
+      "type": "object",
+      "required": ["artifact_id", "status"],
+      "properties": {
+        "artifact_id": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["success", "failed", "skipped"]
+        },
+        "html": { "type": "string" },
+        "screenshot": { "type": "string" },
+        "report": { "type": "string" },
+        "runtime_source": {
+          "type": "string",
+          "enum": ["local", "network", "none"]
+        },
+        "runtime_detail": { "type": "string" }
+      }
+    }
+  },
+  "properties": {
+    "artifact_type": { "type": "string" },
+    "variants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "file": { "type": "string" },
+          "files": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "format": { "type": "string" },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "preview": {
+      "type": "object",
+      "properties": {
+        "required": { "type": "boolean" },
+        "runs": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/previewRun" }
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "properties": {
+        "preview_status": {
+          "type": "string",
+          "enum": ["pass", "fail", "partial"]
+        },
+        "has_console_errors": { "type": "boolean" },
+        "has_request_failures": { "type": "boolean" },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "sizes": {
+      "type": "array",
+      "items": { "type": "number" }
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

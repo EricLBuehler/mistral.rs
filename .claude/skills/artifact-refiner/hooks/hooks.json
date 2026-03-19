@@ -1,0 +1,101 @@
+{
+  "hooks": [
+    {
+      "event": "PostToolUse",
+      "matcher": "Write|Edit|MultiEdit",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/validate-manifest.sh 2>&1 || true"
+        }
+      ]
+    },
+    {
+      "event": "SubagentStop",
+      "match_agent": "pmpo-specifier",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh \"${ARTIFACT_NAME:-unnamed}\" specify 2>&1 || true"
+        }
+      ]
+    },
+    {
+      "event": "SubagentStop",
+      "match_agent": "pmpo-planner",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh \"${ARTIFACT_NAME:-unnamed}\" plan 2>&1 || true"
+        }
+      ]
+    },
+    {
+      "event": "SubagentStop",
+      "match_agent": "pmpo-executor",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/post-execute-check.sh 2>&1 || true"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh \"${ARTIFACT_NAME:-unnamed}\" execute 2>&1 || true"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh \"${ARTIFACT_NAME:-unnamed}\" on_phase_complete execute 2>&1 || true"
+        }
+      ]
+    },
+    {
+      "event": "SubagentStop",
+      "match_agent": "pmpo-reflector",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/log-reflection.sh 2>&1 || true"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh \"${ARTIFACT_NAME:-unnamed}\" reflect 2>&1 || true"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh \"${ARTIFACT_NAME:-unnamed}\" on_phase_complete reflect 2>&1 || true"
+        }
+      ]
+    },
+    {
+      "event": "SubagentStop",
+      "match_agent": "artifact-validator",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh \"${ARTIFACT_NAME:-unnamed}\" persist 2>&1 || true"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh \"${ARTIFACT_NAME:-unnamed}\" on_iteration_complete persist 2>&1 || true"
+        }
+      ]
+    },
+    {
+      "event": "Stop",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-finalize.sh \"${ARTIFACT_NAME:-unnamed}\" 2>&1 || true"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh \"${ARTIFACT_NAME:-unnamed}\" on_refinement_complete 2>&1 || true"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/finalize-session.sh 2>&1 || true"
+        }
+      ]
+    }
+  ]
+}

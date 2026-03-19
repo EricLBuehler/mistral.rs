@@ -1,6 +1,5 @@
 //! ## General mistral.rs server route handlers.
 
-use anyhow::Result;
 use axum::extract::{Json, State};
 use mistralrs_core::{
     auto_tune, collect_system_info, parse_isq_value, run_doctor, AutoDeviceMapParams,
@@ -23,6 +22,41 @@ pub enum TuneProfileRequest {
     Fast,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct UnloadModelRequest {
+    #[schema(example = "default")]
+    model_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct ReloadModelRequest {
+    #[schema(example = "default")]
+    model_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct ModelStatusRequest {
+    #[schema(example = "default")]
+    model_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct TuneModelRequest {
+    model: ModelSelected,
+    token_source: TokenSource,
+    hf_revision: Option<String>,
+    #[serde(default)]
+    force_cpu: bool,
+    profile: TuneProfileRequest,
+    requested_isq: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ModelStatusResponse {
+    model_id: String,
+    status: Option<String>,
+}
+
 impl From<TuneProfileRequest> for TuneProfile {
     fn from(value: TuneProfileRequest) -> Self {
         match value {
@@ -34,10 +68,10 @@ impl From<TuneProfileRequest> for TuneProfile {
 }
 
 #[utoipa::path(
-  get,
-  tag = "Mistral.rs",
-  path = "/v1/models",
-  responses((status = 200, description = "Served model info", body = ModelObjects))
+    get,
+    tag = "Mistral.rs",
+    path = "/v1/models",
+    responses((status = 200, description = "Served model info", body = ModelObjects))
 )]
 pub async fn models(State(state): ExtractedMistralRsState) -> Json<ModelObjects> {
     let mut model_objects = Vec::new();
@@ -92,10 +126,10 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Json<ModelObjects>
 }
 
 #[utoipa::path(
-  get,
-  tag = "Mistral.rs",
-  path = "/health",
-  responses((status = 200, description = "Server is healthy"))
+    get,
+    tag = "Mistral.rs",
+    path = "/health",
+    responses((status = 200, description = "Server is healthy"))
 )]
 pub async fn health() -> &'static str {
     "OK"
@@ -109,6 +143,94 @@ pub async fn system_doctor() -> Json<mistralrs_core::DoctorReport> {
     Json(run_doctor())
 }
 
+#[utoipa::path(
+    post,
+    tag = "Mistral.rs",
+    path = "/v1/models/unload",
+    request_body = UnloadModelRequest,
+    responses((status = 200, description = "Unload a loaded model."))
+)]
+pub async fn unload_model(
+    State(state): ExtractedMistralRsState,
+    Json(request): Json<UnloadModelRequest>,
+) -> std::result::Result<String, String> {
+    state
+        .unload_model(&request.model_id)
+        .map_err(|e| e.to_string())?;
+    Ok(format!("Unloaded model {}", request.model_id))
+}
+
+#[utoipa::path(
+    post,
+    tag = "Mistral.rs",
+    path = "/v1/models/reload",
+    request_body = ReloadModelRequest,
+    responses((status = 200, description = "Reload an unloaded model."))
+)]
+pub async fn reload_model(
+    State(state): ExtractedMistralRsState,
+    Json(request): Json<ReloadModelRequest>,
+) -> std::result::Result<String, String> {
+    state
+        .reload_model(&request.model_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(format!("Reloaded model {}", request.model_id))
+}
+
+#[utoipa::path(
+    post,
+    tag = "Mistral.rs",
+    path = "/v1/models/status",
+    request_body = ModelStatusRequest,
+    responses((status = 200, description = "Get model status.", body = ModelStatusResponse))
+)]
+pub async fn get_model_status(
+    State(state): ExtractedMistralRsState,
+    Json(request): Json<ModelStatusRequest>,
+) -> std::result::Result<Json<ModelStatusResponse>, String> {
+    let status = state
+        .get_model_status(&request.model_id)
+        .map_err(|e| e.to_string())?
+        .map(|s| s.to_string());
+    Ok(Json(ModelStatusResponse {
+        model_id: request.model_id,
+        status,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    tag = "Mistral.rs",
+    path = "/v1/models/tune",
+    request_body = TuneModelRequest,
+    responses((status = 200, description = "Auto-tune a model configuration.", body = AutoTuneResult))
+)]
+pub async fn tune_model(
+    Json(request): Json<TuneModelRequest>,
+) -> std::result::Result<Json<AutoTuneResult>, String> {
+    let requested_isq = request
+        .requested_isq
+        .as_deref()
+        .map(|value| parse_isq_value(value, None))
+        .transpose()?;
+    let result = auto_tune(AutoTuneRequest {
+        model: request.model,
+        token_source: request.token_source,
+        hf_revision: request.hf_revision,
+        force_cpu: request.force_cpu,
+        profile: request.profile.into(),
+        requested_isq,
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(Json(result))
+}
+
+#[cfg(feature = "parking-lot-scheduler")]
+pub async fn metrics() -> Json<serde_json::Value> {
+    Json(serde_json::json!({"status": "parking-lot-scheduler-enabled"}))
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ReIsqRequest {
     #[schema(example = "Q4K")]
@@ -116,273 +238,19 @@ pub struct ReIsqRequest {
 }
 
 #[utoipa::path(
-  post,
-  tag = "Mistral.rs",
-  path = "/re_isq",
-  request_body = ReIsqRequest,
-  responses((status = 200, description = "Reapply ISQ to a non GGUF or GGML model."))
+    post,
+    tag = "Mistral.rs",
+    path = "/re_isq",
+    request_body = ReIsqRequest,
+    responses((status = 200, description = "Reapply ISQ to a non GGUF or GGML model."))
 )]
 pub async fn re_isq(
     State(state): ExtractedMistralRsState,
     Json(request): Json<ReIsqRequest>,
-) -> Result<String, String> {
+) -> std::result::Result<String, String> {
     let repr = format!("Re ISQ: {:?}", request.ggml_type);
     MistralRs::maybe_log_request(state.clone(), repr.clone());
     let request = Request::ReIsq(parse_isq_value(&request.ggml_type, None)?);
     state.get_sender(None).unwrap().send(request).await.unwrap();
     Ok(repr)
-}
-
-/// Request for model operations (unload, reload, status)
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
-pub struct ModelOperationRequest {
-    #[schema(example = "my-model")]
-    pub model_id: String,
-}
-
-/// Model status enum
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, ToSchema, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelStatus {
-    Loaded,
-    Unloaded,
-    Reloading,
-    NotFound,
-    /// Model doesn't have loader config for reload
-    NoLoaderConfig,
-    /// Internal error (e.g., lock poisoned)
-    InternalError,
-}
-
-/// Response for model status operations
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
-pub struct ModelStatusResponse {
-    #[schema(example = "my-model")]
-    pub model_id: String,
-    pub status: ModelStatus,
-    /// Error message when status indicates an error condition
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[utoipa::path(
-  post,
-  tag = "Mistral.rs",
-  path = "/v1/models/unload",
-  request_body = ModelOperationRequest,
-  responses(
-    (status = 200, description = "Model unloaded successfully", body = ModelStatusResponse),
-    (status = 400, description = "Failed to unload model", body = ModelStatusResponse)
-  )
-)]
-pub async fn unload_model(
-    State(state): ExtractedMistralRsState,
-    Json(request): Json<ModelOperationRequest>,
-) -> Json<ModelStatusResponse> {
-    let model_id = request.model_id;
-    match state.unload_model(&model_id) {
-        Ok(()) => Json(ModelStatusResponse {
-            model_id,
-            status: ModelStatus::Unloaded,
-            error: None,
-        }),
-        Err(e) => {
-            let (status, error) = match &e {
-                MistralRsError::ModelNotFound(_) => (ModelStatus::NotFound, None),
-                MistralRsError::ModelAlreadyUnloaded(_) => (ModelStatus::Unloaded, None),
-                MistralRsError::NoLoaderConfig(_) => (ModelStatus::NoLoaderConfig, None),
-                _ => (ModelStatus::InternalError, Some(e.to_string())),
-            };
-            Json(ModelStatusResponse {
-                model_id,
-                status,
-                error,
-            })
-        }
-    }
-}
-
-#[utoipa::path(
-  post,
-  tag = "Mistral.rs",
-  path = "/v1/models/reload",
-  request_body = ModelOperationRequest,
-  responses(
-    (status = 200, description = "Model reloaded successfully", body = ModelStatusResponse),
-    (status = 400, description = "Failed to reload model", body = ModelStatusResponse)
-  )
-)]
-pub async fn reload_model(
-    State(state): ExtractedMistralRsState,
-    Json(request): Json<ModelOperationRequest>,
-) -> Json<ModelStatusResponse> {
-    let model_id = request.model_id;
-    match state.reload_model(&model_id).await {
-        Ok(()) => Json(ModelStatusResponse {
-            model_id,
-            status: ModelStatus::Loaded,
-            error: None,
-        }),
-        Err(e) => {
-            let (status, error) = match &e {
-                MistralRsError::ModelNotFound(_) => (ModelStatus::NotFound, None),
-                MistralRsError::ModelReloading(_) => (ModelStatus::Reloading, None),
-                MistralRsError::ModelAlreadyLoaded(_) => (ModelStatus::Loaded, None),
-                MistralRsError::ReloadFailed(msg) => {
-                    (ModelStatus::InternalError, Some(msg.clone()))
-                }
-                _ => (ModelStatus::InternalError, Some(e.to_string())),
-            };
-            Json(ModelStatusResponse {
-                model_id,
-                status,
-                error,
-            })
-        }
-    }
-}
-
-#[utoipa::path(
-  post,
-  tag = "Mistral.rs",
-  path = "/v1/models/status",
-  request_body = ModelOperationRequest,
-  responses(
-    (status = 200, description = "Model status", body = ModelStatusResponse),
-    (status = 404, description = "Model not found", body = ModelStatusResponse)
-  )
-)]
-pub async fn get_model_status(
-    State(state): ExtractedMistralRsState,
-    Json(request): Json<ModelOperationRequest>,
-) -> Json<ModelStatusResponse> {
-    let model_id = request.model_id;
-    match state.get_model_status(&model_id) {
-        Ok(Some(core_status)) => {
-            let status = match core_status {
-                CoreModelStatus::Loaded => ModelStatus::Loaded,
-                CoreModelStatus::Unloaded => ModelStatus::Unloaded,
-                CoreModelStatus::Reloading => ModelStatus::Reloading,
-            };
-            Json(ModelStatusResponse {
-                model_id,
-                status,
-                error: None,
-            })
-        }
-        Ok(None) => Json(ModelStatusResponse {
-            model_id,
-            status: ModelStatus::NotFound,
-            error: None,
-        }),
-        Err(e) => Json(ModelStatusResponse {
-            model_id,
-            status: ModelStatus::InternalError,
-            error: Some(e.to_string()),
-        }),
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
-pub struct TuneModelRequest {
-    #[schema(example = "meta-llama/Llama-3.2-3B-Instruct")]
-    pub model_id: String,
-    /// Optional model dtype (auto, f16, bf16, etc)
-    #[serde(default)]
-    pub dtype: Option<String>,
-    /// Optional max sequence length for tuning
-    #[serde(default)]
-    pub max_seq_len: Option<usize>,
-    /// Optional max batch size for tuning
-    #[serde(default)]
-    pub max_batch_size: Option<usize>,
-    /// Optional max num images (vision)
-    #[serde(default)]
-    pub max_num_images: Option<usize>,
-    /// Optional max image length (vision)
-    #[serde(default)]
-    pub max_image_length: Option<usize>,
-    /// Optional tuning profile
-    #[serde(default)]
-    pub profile: Option<TuneProfileRequest>,
-    /// Optional fixed ISQ level to test (e.g., Q4K)
-    #[serde(default)]
-    pub requested_isq: Option<String>,
-    /// Optional HF token source
-    #[serde(default)]
-    pub token_source: Option<String>,
-    /// Optional HF revision
-    #[serde(default)]
-    pub hf_revision: Option<String>,
-    /// Force CPU-only tuning
-    #[serde(default)]
-    pub cpu: Option<bool>,
-}
-
-pub async fn tune_model(
-    Json(request): Json<TuneModelRequest>,
-) -> Result<Json<AutoTuneResult>, String> {
-    let token_source = match request.token_source {
-        Some(value) => value
-            .parse()
-            .map_err(|err| format!("Invalid token_source: {err}"))?,
-        None => TokenSource::CacheToken,
-    };
-
-    let dtype = request
-        .dtype
-        .as_deref()
-        .unwrap_or("auto")
-        .parse::<ModelDType>()
-        .map_err(|err| format!("Invalid dtype: {err}"))?;
-
-    let max_seq_len = request
-        .max_seq_len
-        .unwrap_or(AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN);
-    let max_batch_size = request
-        .max_batch_size
-        .unwrap_or(AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE);
-
-    let model_selected = ModelSelected::Run {
-        model_id: request.model_id.clone(),
-        tokenizer_json: None,
-        dtype,
-        topology: None,
-        organization: None,
-        write_uqff: None,
-        from_uqff: None,
-        imatrix: None,
-        calibration_file: None,
-        max_edge: None,
-        max_seq_len,
-        max_batch_size,
-        max_num_images: request.max_num_images,
-        max_image_length: request.max_image_length,
-        hf_cache_path: None,
-        matformer_config_path: None,
-        matformer_slice_name: None,
-    };
-
-    let requested_isq = match request.requested_isq {
-        Some(value) => {
-            Some(parse_isq_value(&value, None).map_err(|err| format!("Invalid isq value: {err}"))?)
-        }
-        None => None,
-    };
-
-    let tune_request = AutoTuneRequest {
-        model: model_selected,
-        token_source,
-        hf_revision: request.hf_revision,
-        force_cpu: request.cpu.unwrap_or(false),
-        profile: request
-            .profile
-            .map(Into::into)
-            .unwrap_or(TuneProfile::Balanced),
-        requested_isq,
-    };
-
-    auto_tune(tune_request)
-        .map(Json)
-        .map_err(|err| err.to_string())
 }

@@ -57,6 +57,7 @@ use std::any::Any;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+use parking_lot::Mutex as ParkingLotMutex;
 use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
@@ -819,7 +820,7 @@ impl Pipeline for GGUFPipeline {
         logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
-        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        rng: Arc<ParkingLotMutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
         sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }

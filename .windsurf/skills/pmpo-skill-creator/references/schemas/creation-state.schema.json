@@ -1,0 +1,113 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Creation State",
+  "description": "Master state manifest for skill creation — tracks progress across sessions",
+  "type": "object",
+  "required": ["creation_id", "skill_name", "mode", "current_phase", "started_at", "updated_at", "current_iteration", "convergence_status"],
+  "properties": {
+    "creation_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this creation session"
+    },
+    "skill_name": {
+      "type": "string",
+      "description": "Name of the skill being created"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["create", "clone", "extend"],
+      "description": "Creation mode"
+    },
+    "source_skill": {
+      "type": ["string", "null"],
+      "description": "Source skill path for clone/extend"
+    },
+    "current_phase": {
+      "type": "string",
+      "enum": ["specify", "plan", "execute", "reflect", "persist", "finalized"],
+      "description": "Current PMPO phase"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "current_iteration": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Current loop iteration"
+    },
+    "max_iterations": {
+      "type": "integer",
+      "default": 3,
+      "description": "Maximum loop iterations before forced termination"
+    },
+    "complexity_tier": {
+      "type": "string",
+      "enum": ["simple", "standard", "full"]
+    },
+    "target_platforms": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "files_generated": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of generated file paths"
+    },
+    "files_validated": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of files that passed validation"
+    },
+    "quality_score": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Latest quality score from Reflect phase"
+    },
+    "convergence_status": {
+      "type": "string",
+      "enum": ["running", "converged", "failed"],
+      "description": "Overall creation status"
+    },
+    "phases_completed": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Phases completed in current iteration"
+    },
+    "checkpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "phase": { "type": "string" },
+          "iteration": { "type": "integer" },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "quality_score": { "type": ["number", "null"] }
+        }
+      }
+    },
+    "reflection_history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "iteration": { "type": "integer" },
+          "status": { "type": "string" },
+          "score": { "type": "number" },
+          "failing_checks": { "type": "integer" },
+          "recommendation": { "type": "string" }
+        }
+      }
+    },
+    "prior_creation_id": {
+      "type": ["string", "null"],
+      "description": "ID of previous creation cycle if resuming"
+    }
+  }
+}

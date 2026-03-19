@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Hook Event",
+  "description": "Standardized payload for hook events emitted during the evolution lifecycle",
+  "type": "object",
+  "required": ["event_type", "evolution_name", "timestamp"],
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "phase_start",
+        "phase_complete",
+        "checkpoint",
+        "iteration_complete",
+        "cycle_complete",
+        "regression_detected",
+        "approval_required",
+        "state_init",
+        "state_finalize"
+      ],
+      "description": "Type of lifecycle event"
+    },
+    "evolution_name": {
+      "type": "string",
+      "description": "User-friendly name of the evolution cycle"
+    },
+    "evolution_id": {
+      "type": "string",
+      "description": "Internal UUID of the evolution cycle"
+    },
+    "domain": {
+      "type": "string",
+      "description": "Evolution domain"
+    },
+    "iteration": {
+      "type": "integer",
+      "description": "Current iteration number"
+    },
+    "phase": {
+      "type": ["string", "null"],
+      "enum": ["assess", "analyze", "plan", "execute", "reflect", "persist", null],
+      "description": "Current or just-completed PMPO phase"
+    },
+    "convergence_status": {
+      "type": "string",
+      "enum": ["running", "converged", "max_iterations", "terminated"],
+      "description": "Current convergence status"
+    },
+    "alignment": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Current goal alignment percentage"
+    },
+    "data": {
+      "type": "object",
+      "description": "Event-specific payload data",
+      "additionalProperties": true
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the event occurred"
+    }
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "State Provider Configuration",
+  "description": "Configuration for the state provider used to persist refinement state across sessions",
+  "type": "object",
+  "required": ["provider_type"],
+  "properties": {
+    "provider_type": {
+      "type": "string",
+      "enum": ["filesystem", "memory", "mcp", "custom"],
+      "description": "Backend type for state persistence"
+    },
+    "config": {
+      "type": "object",
+      "description": "Provider-specific configuration"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "provider_type": { "const": "filesystem" } } },
+      "then": {
+        "properties": {
+          "config": {
+            "type": "object",
+            "properties": {
+              "state_directory": { "type": "string", "default": ".refiner" },
+              "scope": { "type": "string", "enum": ["project", "global"], "default": "project" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "provider_type": { "const": "memory" } } },
+      "then": {
+        "properties": {
+          "config": {
+            "type": "object",
+            "properties": {
+              "tool_name": { "type": "string", "description": "MCP tool for memory operations" },
+              "entity_prefix": { "type": "string", "default": "refiner:" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "provider_type": { "const": "mcp" } } },
+      "then": {
+        "properties": {
+          "config": {
+            "type": "object",
+            "properties": {
+              "server_name": { "type": "string" },
+              "tool_prefix": { "type": "string", "default": "refiner_state" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "provider_type": { "const": "custom" } } },
+      "then": {
+        "properties": {
+          "config": {
+            "type": "object",
+            "properties": {
+              "init_command": { "type": "string" },
+              "save_command": { "type": "string" },
+              "load_command": { "type": "string" }
+            },
+            "required": ["init_command", "save_command", "load_command"]
+          }
+        }
+      }
+    }
+  ]
+}

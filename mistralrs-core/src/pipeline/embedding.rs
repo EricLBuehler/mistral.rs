@@ -53,7 +53,8 @@ use std::borrow::Cow;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::{Mutex as ParkingLotMutex, RwLock};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -189,13 +190,10 @@ impl Loader for EmbeddingLoader {
             self.config.from_uqff.is_some()
         );
         if let Some(from_uqff) = self.config.from_uqff.clone() {
-            *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
+            *self.from_uqff.write() = Some(get_uqff_paths!(&from_uqff, self, silent));
         }
-        *self
-            .token_source
-            .write()
-            .expect("Failed to write to token source") = Some(token_source);
-        *self.revision.write().expect("Failed to write to revision") = revision;
+        *self.token_source.write() = Some(token_source);
+        *self.revision.write() = revision;
         self.load_model_from_path(
             &paths?,
             dtype,
@@ -263,7 +261,7 @@ impl Loader for EmbeddingLoader {
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
-                if let Some(serialized) = &*self.from_uqff.read().unwrap() {
+                if let Some(serialized) = &*self.from_uqff.read() {
                     let weight_pack_factor = {
                         let ser_artifacts = unsafe {
                             candle_core::safetensors::MmapedSafetensors::multi(serialized)?
@@ -604,7 +602,7 @@ impl Loader for EmbeddingLoader {
                 },
                 Arc::new(new_multi_progress()),
             )?;
-        } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
+        } else if let Some(from_uqff) = &*self.from_uqff.read() {
             model.load_from_artifacts(
                 device.clone(),
                 self.config.topology.as_ref(),
@@ -761,7 +759,7 @@ impl Pipeline for EmbeddingPipeline {
         logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
-        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        rng: Arc<ParkingLotMutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
         sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }

@@ -58,6 +58,63 @@ impl Engine {
     }
 
     pub(super) async fn add_request(&self, request: NormalRequest) {
+        // ✅ WORKERPOOL PATH - Submit directly to WorkerPool when feature enabled
+        #[cfg(feature = "parking-lot-scheduler")]
+        if let Some(ref pool) = self.worker_pool {
+            use crate::parking_lot::{InferenceJob, TaskMetadata, ResourceCost, ResourceCostExt, now_ms};
+            use tracing::info;
+            
+            info!("🚀 Submitting request {} to WorkerPool", request.id);
+            
+            // Create InferenceJob from request
+            let job = InferenceJob::from_normal_request(&request);
+            
+            // Calculate resource cost (estimate tokens needed)
+            let estimated_tokens = 512; // Default estimate, could be smarter
+            let cost = ResourceCost::gpu_vram(estimated_tokens);
+            
+            // Create task metadata
+            let meta = TaskMetadata::new(request.id as u64, cost);
+            
+            // Submit to WorkerPool
+            match pool.submit(job, meta).await {
+                Ok(result) => {
+                    use crate::parking_lot::SerializableInferenceResult;
+                    
+                    // Convert result back to Response and send
+                    match result {
+                        SerializableInferenceResult::ChatCompletion(resp) => {
+                            let _ = request.response.send(Response::Done(resp)).await;
+                        }
+                        SerializableInferenceResult::Completion(resp) => {
+                            let _ = request.response.send(Response::CompletionDone(resp)).await;
+                        }
+                        SerializableInferenceResult::StreamingChannel { channel_key, .. } => {
+                            // TODO: Retrieve streaming channel from registry and forward chunks
+                            info!("Streaming result available with key: {}", channel_key);
+                            let _ = request.response.send(Response::ValidationError(
+                                "Streaming not yet fully integrated with WorkerPool".into()
+                            )).await;
+                        }
+                        SerializableInferenceResult::Error { message } => {
+                            let _ = request.response.send(Response::InternalError(
+                                Box::new(std::io::Error::new(std::io::ErrorKind::Other, message))
+                            )).await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = request.response.send(Response::InternalError(
+                        Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("WorkerPool error: {:?}", e)))
+                    )).await;
+                }
+            }
+            
+            // Early return - request handled by WorkerPool
+            return;
+        }
+        
+        // DEFAULT PATH - Use scheduler (when feature not enabled or WorkerPool not available)
         let is_chat = matches!(
             request.messages,
             RequestMessage::Chat { .. } | RequestMessage::VisionChat { .. }

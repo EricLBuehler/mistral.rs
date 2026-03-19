@@ -1,0 +1,105 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "State Provider Configuration",
+  "description": "Configuration for the state provider used by the iterative evolver to persist evolution state across sessions",
+  "type": "object",
+  "required": ["provider_type"],
+  "properties": {
+    "provider_type": {
+      "type": "string",
+      "enum": ["filesystem", "agent_memory", "mcp_tool", "custom"],
+      "description": "Type of state provider backend"
+    },
+    "config": {
+      "type": "object",
+      "description": "Provider-specific configuration",
+      "oneOf": [
+        {
+          "title": "Filesystem Config",
+          "properties": {
+            "state_directory": {
+              "type": "string",
+              "default": ".evolver",
+              "description": "Directory for state files (relative to CWD or absolute)"
+            },
+            "scope": {
+              "type": "string",
+              "enum": ["project", "global"],
+              "default": "project",
+              "description": "Whether state is project-local or global (~/.evolver)"
+            }
+          }
+        },
+        {
+          "title": "Agent Memory Config",
+          "properties": {
+            "entity_prefix": {
+              "type": "string",
+              "default": "evolution",
+              "description": "Prefix for memory entities"
+            },
+            "memory_server": {
+              "type": "string",
+              "default": "surreal_memory",
+              "description": "Name of the memory MCP server"
+            }
+          }
+        },
+        {
+          "title": "MCP Tool Config",
+          "properties": {
+            "server_name": {
+              "type": "string",
+              "description": "Name of the MCP state server"
+            },
+            "init_tool": {
+              "type": "string",
+              "description": "Tool name for init operation"
+            },
+            "get_tool": {
+              "type": "string",
+              "description": "Tool name for get operation"
+            },
+            "save_tool": {
+              "type": "string",
+              "description": "Tool name for save operation"
+            },
+            "list_tool": {
+              "type": "string",
+              "description": "Tool name for list operation"
+            },
+            "checkpoint_tool": {
+              "type": "string",
+              "description": "Tool name for checkpoint operation"
+            },
+            "finalize_tool": {
+              "type": "string",
+              "description": "Tool name for finalize operation"
+            }
+          },
+          "required": ["server_name"]
+        },
+        {
+          "title": "Custom Provider Config",
+          "properties": {
+            "script": {
+              "type": "string",
+              "description": "Path to custom provider script/executable"
+            },
+            "args": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Arguments passed to the script"
+            }
+          },
+          "required": ["script"]
+        }
+      ]
+    },
+    "default_triggers": {
+      "type": "array",
+      "items": { "$ref": "workflow-trigger.schema.json#/definitions/trigger" },
+      "description": "Default workflow triggers applied to all evolutions using this provider"
+    }
+  }
+}

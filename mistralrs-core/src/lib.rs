@@ -66,6 +66,7 @@ pub mod matformer;
 mod mla;
 mod models;
 mod paged_attention;
+pub mod parking_lot;
 mod pipeline;
 mod prefix_cacher;
 mod request;
@@ -161,6 +162,8 @@ pub struct EngineConfig {
     pub search_callback: Option<Arc<SearchCallback>>,
     pub tool_callbacks: tools::ToolCallbacks,
     pub tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+    #[cfg(feature = "parking-lot-scheduler")]
+    pub scheduler_config: Option<parking_lot::ParkingLotSchedulerConfig>,
 }
 
 impl Default for EngineConfig {
@@ -175,6 +178,8 @@ impl Default for EngineConfig {
             search_callback: None,
             tool_callbacks: HashMap::new(),
             tool_callbacks_with_tools: HashMap::new(),
+            #[cfg(feature = "parking-lot-scheduler")]
+            scheduler_config: None,
         }
     }
 }
@@ -582,6 +587,8 @@ impl MistralRs {
                         config.tool_callbacks.clone(),
                         config.tool_callbacks_with_tools.clone(),
                         logger_for_engine,
+                        #[cfg(feature = "parking-lot-scheduler")]
+                        config.scheduler_config.clone(),
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -607,6 +614,8 @@ impl MistralRs {
                         config.tool_callbacks.clone(),
                         config.tool_callbacks_with_tools.clone(),
                         logger_for_engine,
+                        #[cfg(feature = "parking-lot-scheduler")]
+                        config.scheduler_config.clone(),
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -717,6 +726,8 @@ impl MistralRs {
             search_callback,
             tool_callbacks,
             tool_callbacks_with_tools,
+            #[cfg(feature = "parking-lot-scheduler")]
+            scheduler_config: None, // No scheduler config available in this context
         };
 
         // Create the engine instance
@@ -859,6 +870,8 @@ impl MistralRs {
                 search_callback: reboot_state.search_callback.clone(),
                 tool_callbacks: reboot_state.tool_callbacks.clone(),
                 tool_callbacks_with_tools: reboot_state.tool_callbacks_with_tools.clone(),
+                #[cfg(feature = "parking-lot-scheduler")]
+                scheduler_config: None, // Scheduler config not persisted in reboot state
             };
             let new_engine_instance = Self::create_engine_instance(
                 reboot_state.pipeline.clone(),

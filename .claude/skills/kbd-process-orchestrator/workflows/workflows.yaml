@@ -1,0 +1,86 @@
+# KBD Workflow Definitions — Canonical Source
+#
+# This is the single-source-of-truth for all KBD slash commands.
+# The /kbd-init command reads this file and fans out to all tool-specific
+# command directories, so commands appear natively in every AI tool.
+#
+# Format per command:
+#   name:        slash command name (no slash, no spaces)
+#   description: shown in command picker UI
+#   args:        named arguments the command accepts (optional)
+#   skill:       which KBD sub-skill SKILL.md it invokes
+#   prompt_file: which prompts/*.md is the KBD phase prompt
+
+workflows:
+
+  - name: kbd-init
+    description: "Initialize KBD for the current project — auto-discovers project.json and constraints.md"
+    args:
+      - name: project_name
+        optional: true
+        description: "Override project name (default: auto-discovered)"
+    skill: skills/kbd-init/SKILL.md
+    prompt_file: null
+
+  - name: kbd-assess
+    description: "Assess codebase against active phase goals — produces assessment.md"
+    args:
+      - name: phase
+        optional: true
+        description: "Phase name to assess (default: active_phase from project.json)"
+    skill: skills/kbd-assess/SKILL.md
+    prompt_file: prompts/assess.md
+
+  - name: kbd-plan
+    description: "Generate prioritized OpenSpec change list for current phase — produces plan.md"
+    args:
+      - name: phase
+        optional: true
+        description: "Phase to plan (default: active_phase from project.json)"
+    skill: skills/kbd-plan/SKILL.md
+    prompt_file: prompts/plan.md
+
+  - name: kbd-execute
+    description: "Select execution backend and dispatch current phase change list"
+    args:
+      - name: phase
+        optional: true
+        description: "Phase to execute (default: active_phase)"
+    skill: skills/kbd-execute/SKILL.md
+    prompt_file: prompts/execute.md
+
+  - name: kbd-reflect
+    description: "Generate phase reflection report and seed next phase"
+    args:
+      - name: phase
+        optional: true
+        description: "Phase to reflect on (default: active_phase)"
+    skill: skills/kbd-reflect/SKILL.md
+    prompt_file: prompts/reflect.md
+
+  - name: kbd-status
+    description: "Show current KBD state: active phase, change inventory, cross-tool progress, next action"
+    args: []
+    skill: skills/kbd-status/SKILL.md
+    prompt_file: null
+
+  - name: kbd-new-phase
+    description: "Start a new named KBD phase and initialize its directory structure"
+    args:
+      - name: phase_name
+        optional: false
+        description: "Phase name, e.g. phase-3-time-tracking"
+      - name: goals
+        optional: true
+        description: "Comma-separated phase goals (can also be added interactively)"
+    skill: null
+    prompt_file: null
+
+  - name: kbd-full-phase
+    description: "Run full Assess → Plan → Execute → Reflect cycle for current phase"
+    args:
+      - name: phase
+        optional: true
+        description: "Phase name (default: active_phase)"
+    skill: null
+    prompt_file: null

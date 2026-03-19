@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{TITLE}}</title>
+
+  <!-- ========================================================= -->
+  <!-- A2UI Preview Template                                    -->
+  <!-- Uses Lit (latest) + HTMX (Prometheus Artifact Spec)      -->
+  <!-- ========================================================= -->
+
+  <!-- Lit (latest stable from CDN) -->
+  <script type="module">
+    import { LitElement, html, css } from 'https://unpkg.com/lit@latest/index.js?module';
+    window.LitElement = LitElement;
+    window.litHtml = html;
+    window.litCss = css;
+  </script>
+
+  <!-- HTMX (latest) -->
+  <script src="https://unpkg.com/htmx.org@latest"></script>
+
+  <!-- HTMX Extensions (optional but aligned with Prometheus artifact model) -->
+  <script src="https://unpkg.com/htmx.org@latest/dist/ext/json-enc.js"></script>
+  <script src="https://unpkg.com/htmx.org@latest/dist/ext/client-side-templates.js"></script>
+
+  <!-- Alpine.js (optional lightweight state layer if needed) -->
+  <script defer src="https://unpkg.com/alpinejs@latest/dist/cdn.min.js"></script>
+
+  <!-- Prometheus Artifact Runtime Hooks -->
+  <script>
+    window.PROMETHEUS_ARTIFACT_CONTEXT = {
+      manifest: {{MANIFEST_JSON}},
+      spec: {{A2UI_JSON}},
+      generatedAt: "{{GENERATED_AT}}"
+    };
+  </script>
+
+  <style>
+    :root {
+      --background: {{BACKGROUND_COLOR}};
+      --foreground: {{FOREGROUND_COLOR}};
+      --border: {{BORDER_COLOR}};
+      --primary: {{PRIMARY_COLOR}};
+      --muted: {{MUTED_COLOR}};
+    }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--background);
+      color: var(--foreground);
+    }
+
+    header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    main {
+      padding: 1.5rem;
+    }
+
+    .artifact-container {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem;
+      background: white;
+    }
+
+    .meta {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div>
+      <strong>{{TITLE}}</strong>
+      <div class="meta">A2UI Preview Renderer</div>
+    </div>
+    <div class="meta">Generated {{GENERATED_AT}}</div>
+  </header>
+
+  <main>
+    <div class="artifact-container" id="artifact-root"></div>
+  </main>
+
+  <!-- ========================================================= -->
+  <!-- Lit-based A2UI Renderer                                  -->
+  <!-- ========================================================= -->
+
+  <script type="module">
+    const { LitElement, html, css } = window;
+
+    class A2UIPreview extends LitElement {
+      static properties = {
+        spec: { type: Object }
+      };
+
+      static styles = css`
+        :host {
+          display: block;
+        }
+      `;
+
+      constructor() {
+        super();
+        this.spec = window.PROMETHEUS_ARTIFACT_CONTEXT.spec || {};
+      }
+
+      renderNode(node) {
+        if (!node) return html``;
+
+        switch (node.type) {
+          case 'text':
+            return html`<p>${node.content}</p>`;
+
+          case 'button':
+            return html`
+              <button
+                style="background: var(--primary); color: white; padding: 0.5rem 1rem; border-radius: 6px; border: none; cursor: pointer;"
+                @click=${() => this.handleAction(node.action)}
+              >
+                ${node.label}
+              </button>
+            `;
+
+          case 'container':
+            return html`
+              <div style="display: flex; gap: 1rem;">
+                ${(node.children || []).map(child => this.renderNode(child))}
+              </div>
+            `;
+
+          default:
+            return html`<pre>${JSON.stringify(node, null, 2)}</pre>`;
+        }
+      }
+
+      handleAction(action) {
+        if (!action) return;
+
+        // HTMX-driven interaction example
+        if (action.type === 'htmx') {
+          htmx.ajax('POST', action.url, { target: '#artifact-root' });
+        }
+
+        console.log('Action triggered:', action);
+      }
+
+      render() {
+        return html`
+          ${this.renderNode(this.spec.root)}
+        `;
+      }
+    }
+
+    customElements.define('a2ui-preview', A2UIPreview);
+
+    const root = document.getElementById('artifact-root');
+    const el = document.createElement('a2ui-preview');
+    root.appendChild(el);
+  </script>
+
+</body>
+</html>

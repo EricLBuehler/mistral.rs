@@ -1,0 +1,136 @@
+# Mistral.rs Parking Lot Scheduler Configuration
+#
+# This file configures the prometheus_parking_lot scheduler for LLM inference.
+# Place this file at ~/.mistralrs-server/scheduler.yaml for automatic loading,
+# or specify a custom path with --scheduler-config or MISTRALRS_SCHEDULER_CONFIG.
+#
+# Priority: CLI flags > --scheduler-config > env var > default location > built-in defaults
+
+# ============================================================================
+# Thread Pool Configuration
+# ============================================================================
+pool:
+  # Number of worker threads for inference (default: number of CPU cores)
+  # Each worker thread can process one inference request at a time.
+  # 
+  # Recommended values:
+  #   - 4-8 for M1/M2 Macs (matches performance cores)
+  #   - num_cores for multi-GPU setups
+  #   - 4-16 for typical server deployments
+  worker_threads: 4
+  
+  # Stack size per worker thread in bytes (default: 2MB)
+  # Minimum: 65536 (64KB)
+  # Default: 2097152 (2MB)
+  #
+  # Only increase if you encounter stack overflow errors with deep model architectures.
+  # Note: This setting is only available on native platforms (ignored on WASM).
+  thread_stack_size: 2097152  # 2MB
+
+# ============================================================================
+# Resource Limits and Queue Configuration
+# ============================================================================
+limits:
+  # Maximum resource units (KV cache blocks available for allocation)
+  # Set based on GPU memory: roughly (GPU_MEM_MB / 16) for 16-token blocks
+  #
+  # Examples:
+  #   - 1024 units  = ~1GB KV cache for tiny models
+  #   - 4096 units  = ~4GB KV cache for small models (Phi-3, Qwen-0.5B)
+  #   - 8192 units  = ~8GB KV cache for medium models (Mistral-7B)
+  #   - 16384 units = ~16GB KV cache for larger models
+  #   - 32768 units = ~32GB KV cache across multiple GPUs
+  #
+  # Default: 16384 (~256K tokens with 16-token blocks)
+  max_units: 4096
+  
+  # Maximum number of queued requests before rejection (default: 1000)
+  # Requests beyond this limit will be rejected with a 503 error.
+  #
+  # Recommended values:
+  #   - 50-100 for memory-constrained systems (M1/M2 Macs)
+  #   - 500-1000 for typical servers
+  #   - 2000+ for high-throughput production environments
+  max_queue_depth: 100
+  
+  # Request timeout in seconds (default: 120)
+  # Requests that don't complete within this time are cancelled.
+  #
+  # Recommended values:
+  #   - 60-120 for short responses
+  #   - 300-600 for long-context generation
+  #   - 1200+ for very long documents or slow models
+  timeout_secs: 300  # 5 minutes
+
+# ============================================================================
+# Hardware-Specific Configuration Profiles
+# ============================================================================
+
+# Example: M1/M2 Mac Profile (unified memory, 16GB-32GB)
+# pool:
+#   worker_threads: 4  # 4 performance cores
+#   thread_stack_size: 2097152  # Default 2MB
+# limits:
+#   max_units: 4096    # ~4GB for small models (Phi-3, Llama-3-8B)
+#   max_queue_depth: 100
+#   timeout_secs: 300
+
+# Example: Multi-GPU Server Profile (4x A100 80GB or similar)
+# pool:
+#   worker_threads: 16  # More workers for parallel inference
+#   thread_stack_size: 2097152
+# limits:
+#   max_units: 32768    # ~32GB KV cache across GPUs
+#   max_queue_depth: 2000
+#   timeout_secs: 600
+
+# Example: High-Throughput Production (8+ GPUs, 128GB+ VRAM)
+# pool:
+#   worker_threads: 32
+#   thread_stack_size: 2097152
+# limits:
+#   max_units: 65536    # ~64GB KV cache
+#   max_queue_depth: 5000
+#   timeout_secs: 900
+
+# Example: Memory-Constrained System (8GB GPU or CPU-only)
+# pool:
+#   worker_threads: 2
+#   thread_stack_size: 2097152
+# limits:
+#   max_units: 1024     # ~1GB KV cache
+#   max_queue_depth: 25
+#   timeout_secs: 180
+
+# ============================================================================
+# Configuration Notes
+# ============================================================================
+#
+# 1. Thread Count vs GPU Cores:
+#    - More threads ≠ better performance on GPU
+#    - Optimal thread count usually matches CPU cores for batch scheduling
+#    - GPU inference is bottlenecked by VRAM and compute, not thread count
+#
+# 2. Resource Units (max_units):
+#    - Directly impacts memory usage
+#    - Formula: GPU_VRAM_MB / block_size_mb ≈ max_units
+#    - Leave headroom for model weights and activations
+#
+# 3. Queue Depth:
+#    - Higher depth = more buffering, slower rejection
+#    - Lower depth = faster rejection, less memory for queued requests
+#    - Balance based on expected request rate and latency requirements
+#
+# 4. Timeout:
+#    - Should be 2-3x your expected max generation time
+#    - Too short: legitimate requests get cancelled
+#    - Too long: stuck requests block resources
+#
+# 5. CLI Overrides:
+#    - All values here can be overridden via CLI flags:
+#      --worker-threads, --thread-stack-size,
+#      --scheduler-max-units, --scheduler-max-queue, --scheduler-timeout
+#
+# 6. Environment Variable:
+#    - export MISTRALRS_SCHEDULER_CONFIG=/path/to/this/file.yaml
+#    - Takes precedence over default location but not over CLI flags

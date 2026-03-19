@@ -1,0 +1,54 @@
+{
+  "name": "<project-name>",
+  "description": "<one-line description>",
+  "active_phase": "<phase-name>",
+  "spec_paths": [
+    "openspec/specs/*.md"
+  ],
+  "openspec_available": true,
+  "constraint_file": ".kbd-orchestrator/constraints.md",
+  "build_health_command": "<build check command, e.g. pnpm run build OR cargo check --workspace>",
+  "test_command": "<test command, e.g. pnpm test OR cargo test --workspace>",
+  "lint_command": "<lint command, e.g. pnpm run lint OR cargo clippy>",
+  "preferred_planning_agent": "antigravity",
+  "preferred_execution_agents": ["antigravity", "roo-code"],
+  "agents_config": {
+    "antigravity": {
+      "entry": "SKILL.md slash commands",
+      "strengths": ["multi-file features", "browser verification", "planning"]
+    },
+    "roo-code": {
+      "entry": "Roo Code mode in VSCode",
+      "strengths": ["focused implementation", "architect decisions"]
+    },
+    "cursor-agent": {
+      "entry": "Cursor Agent mode",
+      "strengths": ["parallel subagent tasks", "refactoring"]
+    },
+    "codex": {
+      "entry": "OpenAI Codex CLI / app",
+      "strengths": ["parallel isolated tasks via git worktrees"]
+    },
+    "cline": {
+      "entry": "Cline VSCode extension",
+      "strengths": ["terminal-first workflows", "Plan/Act mode"]
+    },
+    "opencode": {
+      "entry": "OpenCode CLI",
+      "strengths": ["quick targeted edits", "file patches"]
+    }
+  },
+  "focus_project_path": "<absolute path to the focus project root — same as this project's root>",
+  "dev_command": "<dev server command or null>",
+  "workspace": {
+    "workspace_file": "<absolute path to .code-workspace file, or null if single-project>",
+    "folders": [
+      {
+        "path": "<absolute path to this focus project>",
+        "role": "focus",
+        "purpose": "Active project — all KBD operations target this directory",
+        "write_access": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "hooks": [
+    {
+      "event": "on_phase_complete",
+      "action": {
+        "type": "command",
+        "target": "echo '[kbd-orchestrator] Phase complete — run /kbd-reflect to generate reflection report, then /kbd-new-phase to start next phase'"
+      }
+    },
+    {
+      "event": "on_change_complete",
+      "action": {
+        "type": "command",
+        "target": "echo '[kbd-orchestrator] Change complete — update progress.json, then run /opsx:verify + /opsx:archive (if OpenSpec) or move to .kbd-orchestrator/changes/archive/ (if native KBD)'"
+      }
+    },
+    {
+      "event": "on_assessment_complete",
+      "action": {
+        "type": "command",
+        "target": "echo '[kbd-orchestrator] Assessment written — run /kbd-plan to generate change list'"
+      }
+    },
+    {
+      "event": "on_plan_complete",
+      "action": {
+        "type": "command",
+        "target": "echo '[kbd-orchestrator] Plan written — run /kbd-execute to select backend and dispatch'"
+      }
+    },
+    {
+      "event": "on_cross_tool_handoff",
+      "action": {
+        "type": "command",
+        "target": "echo '[kbd-orchestrator] Cross-tool handoff — receiving tool should read current-waypoint.json and progress.json before starting'"
+      }
+    },
+    {
+      "event": "on_blocker_detected",
+      "action": {
+        "type": "command",
+        "target": "echo '[kbd-orchestrator] Blocker detected — update progress.json status=BLOCKED, update waypoint fallback_command, commit .kbd-orchestrator/'"
+      }
+    },
+    {
+      "event": "on_reflection_complete",
+      "action": {
+        "type": "command",
+        "target": "echo '[kbd-orchestrator] Reflection complete — waypoint advanced to next phase, run /kbd-new-phase <name> to begin'"
+      }
+    }
+  ]
+}

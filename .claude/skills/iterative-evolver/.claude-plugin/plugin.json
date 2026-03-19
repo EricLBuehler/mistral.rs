@@ -1,0 +1,24 @@
+{
+  "name": "iterative-evolver",
+  "description": "PMPO-driven domain-agnostic iterative evolution engine for assessing, analyzing, planning, executing, and reflecting on improvements across any domain",
+  "version": "1.0.0",
+  "author": {
+    "name": "Travis James",
+    "url": "https://travisjames.ai"
+  },
+  "homepage": "https://travisjames.ai/blog/iterative-evolver",
+  "repository": "https://github.com/GQAdonis/iterative-evolver-skill",
+  "license": "MIT",
+  "skills": [
+    "./skills/evolve",
+    "./skills/evolve-assess",
+    "./skills/evolve-analyze",
+    "./skills/evolve-plan",
+    "./skills/evolve-execute",
+    "./skills/evolve-status",
+    "./skills/evolve-report"
+  ],
+  "agents": "./agents",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
+}

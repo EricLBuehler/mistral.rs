@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Assessment",
+  "description": "Structured assessment output from the Assess phase",
+  "type": "object",
+  "required": ["timestamp", "domain", "goal_inventory", "goal_alignment"],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "domain": {
+      "type": "string"
+    },
+    "goal_inventory": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "priority", "measurable"],
+        "properties": {
+          "id": { "type": "string" },
+          "description": { "type": "string" },
+          "priority": { "type": "string", "enum": ["high", "medium", "low"] },
+          "measurable": { "type": "boolean" },
+          "criteria": { "type": "string" }
+        }
+      }
+    },
+    "current_state_summary": {
+      "type": "string",
+      "description": "Human-readable summary of current state"
+    },
+    "gap_analysis": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["goal_id"],
+        "properties": {
+          "goal_id": { "type": "string" },
+          "supporting_assets": { "type": "array", "items": { "type": "string" } },
+          "missing_elements": { "type": "array", "items": { "type": "string" } },
+          "partial_progress": { "type": "array", "items": { "type": "string" } },
+          "blockers": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "health_indicators": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "value", "status"],
+        "properties": {
+          "name": { "type": "string" },
+          "value": {},
+          "status": { "type": "string", "enum": ["healthy", "warning", "critical"] },
+          "details": { "type": "string" }
+        }
+      }
+    },
+    "goal_alignment": {
+      "type": "object",
+      "required": ["overall_percentage"],
+      "properties": {
+        "overall_percentage": { "type": "number", "minimum": 0, "maximum": 100 },
+        "per_goal": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "goal_id": { "type": "string" },
+              "alignment": { "type": "number", "minimum": 0, "maximum": 100 },
+              "rationale": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "unknowns": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

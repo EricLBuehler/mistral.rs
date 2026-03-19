@@ -27,6 +27,9 @@ use crate::{
     types::SharedMistralRsState,
 };
 
+#[cfg(feature = "parking-lot-scheduler")]
+use crate::handlers::metrics;
+
 // NOTE(EricLBuehler): Accept up to 50mb input
 const N_INPUT_SIZE: usize = 50;
 const MB_TO_B: usize = 1024 * 1024; // 1024 kb in a mb
@@ -236,6 +239,9 @@ fn init_router(
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .with_state(state);
+
+    #[cfg(feature = "parking-lot-scheduler")]
+    let router = router.route("/v1/metrics", get(metrics));
 
     Ok(router)
 }

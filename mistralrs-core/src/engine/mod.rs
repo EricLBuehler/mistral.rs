@@ -13,6 +13,11 @@ use crate::{
     sequence::{SeqStepType, StopReason},
     tools, CompletionResponse, SchedulerConfig, DEBUG,
 };
+
+#[cfg(feature = "parking-lot-scheduler")]
+use crate::parking_lot::{
+    InferenceWorkerPool, InferenceWorkerPoolConfig, LlmExecutor, ResourceAdapter,
+};
 use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::ParserFactory;
 pub use logger::IntervalLogger;
@@ -41,6 +46,7 @@ use tokio::{
     },
     task::JoinHandle,
 };
+use parking_lot::Mutex as ParkingLotMutex;
 
 use crate::{
     get_mut_arcmutex, handle_pipeline_forward_error,
@@ -161,7 +167,12 @@ pub struct Engine {
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacks,
     tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+    
     scheduler: Arc<Mutex<dyn Scheduler>>,
+    
+    #[cfg(feature = "parking-lot-scheduler")]
+    worker_pool: Option<Arc<InferenceWorkerPool>>,
+    
     id: Arc<Mutex<usize>>,
     no_kv_cache: bool,
     prefix_cacher: Arc<Mutex<PrefixCacheManagerV2>>,
@@ -198,6 +209,8 @@ impl Engine {
         tool_callbacks: tools::ToolCallbacks,
         tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
         logger: Arc<IntervalLogger>,
+        #[cfg(feature = "parking-lot-scheduler")]
+        scheduler_config: Option<crate::parking_lot::ParkingLotSchedulerConfig>,
     ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
@@ -214,13 +227,58 @@ impl Engine {
             None => None,
         };
 
-        let scheduler = config.into_scheduler();
-
-        // Configure prefix caching on the scheduler based on the global no_prefix_cache flag
-        // This ensures PagedAttention prefix caching respects the same setting
-        get_mut_arcmutex!(scheduler).set_prefix_caching_enabled(!no_prefix_cache);
+        let scheduler = {
+            let scheduler = config.into_scheduler();
+            // Configure prefix caching on the scheduler based on the global no_prefix_cache flag
+            // This ensures PagedAttention prefix caching respects the same setting
+            get_mut_arcmutex!(scheduler).set_prefix_caching_enabled(!no_prefix_cache);
+            scheduler
+        };
 
         let has_paged_attention = get_mut_arcmutex!(scheduler).kv_cache_manager().is_some();
+
+        #[cfg(feature = "parking-lot-scheduler")]
+        let worker_pool = {
+            use crate::parking_lot::{InferenceWorkerPool, InferenceWorkerPoolConfig, StreamingRegistry};
+            use tracing::info;
+            
+            info!("🚀 Initializing prometheus_parking_lot WorkerPool for inference");
+            
+            // Create executor with the pipeline
+            let executor = LlmExecutor::new(pipeline.clone());
+            
+            // Create streaming registry
+            let streaming_registry = StreamingRegistry::with_default_retention();
+            
+            // Create worker pool config from scheduler_config or defaults
+            let pool_config = if let Some(sched_config) = scheduler_config {
+                info!("📋 Using scheduler configuration from YAML/CLI");
+                InferenceWorkerPoolConfig::from_scheduler_config(sched_config)
+            } else {
+                info!("📋 Using default scheduler configuration");
+                InferenceWorkerPoolConfig::default()
+            };
+            
+            info!("🔧 WorkerPool settings:");
+            info!("   Worker threads: {}", pool_config.worker_count);
+            if let Some(stack_size) = pool_config.thread_stack_size {
+                info!("   Thread stack size: {} bytes", stack_size);
+            }
+            info!("   Max units: {}", pool_config.max_units);
+            info!("   Max queue depth: {}", pool_config.max_queue_depth);
+            info!("   Timeout: {}s", pool_config.timeout_secs);
+            
+            match InferenceWorkerPool::new(executor, streaming_registry, pool_config) {
+                Ok(pool) => {
+                    info!("✅ WorkerPool initialized successfully");
+                    Some(Arc::new(pool))
+                }
+                Err(e) => {
+                    tracing::error!("❌ Failed to initialize WorkerPool: {:?}", e);
+                    None
+                }
+            }
+        };
 
         Ok(Self {
             tx,
@@ -231,6 +289,10 @@ impl Engine {
             tool_callbacks,
             tool_callbacks_with_tools,
             scheduler: scheduler.clone(),
+            
+            #[cfg(feature = "parking-lot-scheduler")]
+            worker_pool,
+            
             id: Arc::new(Mutex::new(0)),
             no_kv_cache,
             prefix_cacher: Arc::new(Mutex::new(PrefixCacheManagerV2::new(
@@ -265,7 +327,7 @@ impl Engine {
             self.logger.enable_logging();
         }
 
-        let rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
+        let rng = Arc::new(ParkingLotMutex::new(Isaac64Rng::seed_from_u64(SEED)));
         let mut last_completion_ids: Vec<usize> = vec![];
         'lp: loop {
             let should_terminate = || {

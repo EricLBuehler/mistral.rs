@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+
+# Editor/IDE
+.idea/
+.vscode/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Env files
+.env
+.env.*
+
+# Claude local settings/cache
+.claude/settings.local.json
+
+# PMPO generated runtime state (not source)
+artifact_manifest.json
+constraints.json
+refinement_log.md
+decisions.md
+dist/

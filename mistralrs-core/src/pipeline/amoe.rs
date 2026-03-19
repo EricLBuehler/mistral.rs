@@ -5,6 +5,7 @@ use std::{
     path::Path,
     sync::Arc,
 };
+use parking_lot::Mutex as ParkingLotMutex;
 
 use base64::{engine::general_purpose, Engine};
 use candle_core::{DType, Device, Tensor};
@@ -262,7 +263,7 @@ impl Pipeline for AnyMoePipeline {
         logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
-        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        rng: Arc<ParkingLotMutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
         get_mut_arcmutex!(self.target)
             .sample_causal_gen(seqs, logits, prefix_cacher, disable_eos_stop, rng)

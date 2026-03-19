@@ -1,9 +1,9 @@
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
+use parking_lot::{Mutex, MutexGuard};
 
 use candle_core::{Result, Tensor, D};
 
 use crate::{
-    get_mut_arcmutex,
     pipeline::{CacheManagerMixin, MetadataMixin},
     sequence::Sequence,
 };
@@ -12,6 +12,8 @@ mod full_cache;
 mod hybrid_cache;
 mod rotating_cache;
 mod single_cache;
+#[cfg(test)]
+mod tests;
 
 pub use full_cache::{EitherCache, LayerCaches};
 pub use hybrid_cache::{
@@ -614,26 +616,26 @@ impl Cache {
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, LayerCaches> {
-        get_mut_arcmutex!(self.cache)
+        self.cache.lock()
     }
 
     pub(crate) fn draft_lock(&self) -> MutexGuard<'_, LayerCaches> {
-        get_mut_arcmutex!(self.draft_cache)
+        self.draft_cache.lock()
     }
 
     /// # Panics
     /// If there is no xlora cache
     pub(crate) fn xlora_lock(&self) -> MutexGuard<'_, LayerCaches> {
-        get_mut_arcmutex!(self.xlora_cache.as_ref().expect("No X-LoRA cache."))
+        self.xlora_cache.as_ref().expect("No X-LoRA cache.").lock()
     }
 
     /// # Panics
     /// If there is no xlora cache
     pub(crate) fn get_scalings_cache(&self) -> MutexGuard<'_, Option<Tensor>> {
-        get_mut_arcmutex!(self
-            .scalings_cache
+        self.scalings_cache
             .as_ref()
-            .expect("No X-LoRA scalings cache."))
+            .expect("No X-LoRA scalings cache.")
+            .lock()
     }
 
     pub(crate) fn is_xlora(&self) -> bool {

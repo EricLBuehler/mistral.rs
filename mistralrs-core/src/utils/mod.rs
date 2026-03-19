@@ -15,13 +15,16 @@ pub(crate) mod varbuilder_utils;
 macro_rules! get_mut_arcmutex {
     ($thing:expr) => {
         loop {
-            if let Ok(inner) = $thing.try_lock() {
-                break inner;
+            // Try tokio mutex first (returns Result)
+            match $thing.try_lock() {
+                Ok(inner) => break inner,
+                Err(_) => {
+                    // Yield to allow other threads to make progress and release the lock.
+                    // This prevents deadlock when a spawned async task busy-loops while
+                    // another task holds the lock across an await point.
+                    std::thread::yield_now();
+                }
             }
-            // Yield to allow other threads to make progress and release the lock.
-            // This prevents deadlock when a spawned async task busy-loops while
-            // another task holds the lock across an await point.
-            std::thread::yield_now();
         }
     };
 }

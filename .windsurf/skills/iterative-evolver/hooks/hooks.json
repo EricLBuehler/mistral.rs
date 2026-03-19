@@ -1,0 +1,108 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/validate-state.sh 2>&1 || true"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "assessor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh \"${EVOLUTION_NAME:-default}\" assess phase_complete 2>&1 || true"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh \"${EVOLUTION_NAME:-default}\" phase_complete assess 2>&1 || true"
+          }
+        ]
+      },
+      {
+        "matcher": "analyst",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh \"${EVOLUTION_NAME:-default}\" analyze phase_complete 2>&1 || true"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh \"${EVOLUTION_NAME:-default}\" phase_complete analyze 2>&1 || true"
+          }
+        ]
+      },
+      {
+        "matcher": "planner",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh \"${EVOLUTION_NAME:-default}\" plan phase_complete 2>&1 || true"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh \"${EVOLUTION_NAME:-default}\" phase_complete plan 2>&1 || true"
+          }
+        ]
+      },
+      {
+        "matcher": "executor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/validate-state.sh 2>&1 || true"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh \"${EVOLUTION_NAME:-default}\" execute phase_complete 2>&1 || true"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh \"${EVOLUTION_NAME:-default}\" phase_complete execute 2>&1 || true"
+          }
+        ]
+      },
+      {
+        "matcher": "reflector",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/log-reflection.sh 2>&1 || true"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh \"${EVOLUTION_NAME:-default}\" reflect phase_complete 2>&1 || true"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh \"${EVOLUTION_NAME:-default}\" phase_complete reflect 2>&1 || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-finalize.sh \"${EVOLUTION_NAME:-default}\" 2>&1 || true"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh \"${EVOLUTION_NAME:-default}\" cycle_complete 2>&1 || true"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/finalize-session.sh 2>&1 || true"
+          }
+        ]
+      }
+    ]
+  }
+}

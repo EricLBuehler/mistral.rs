@@ -1,0 +1,890 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN"
+  "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Knowledge-Based Development — Universal Reference · travisjames.ai</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=Inter:wght@300;400;500;600;700&amp;family=Roboto:wght@300;400;500&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;display=swap" rel="stylesheet" />
+  <style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#F7F7F8;--fg:#0B0F14;--card:#FFFFFF;
+  --muted:#EEF0F3;--muted-fg:#4B5563;--border:#D8DEE6;
+  --primary:#E04E28;--primary-light:#FF6A3D;
+  --accent:#F2D6CF;--accent-fg:#3B1410;
+  --secondary:#0D1117;--sec2:#111827;
+  --green:#16A34A;--green-bg:#ECFDF5;--green-fg:#065F46;
+  --blue:#2563EB;--blue-bg:#EFF6FF;--blue-fg:#1E40AF;
+  --warn:#D97706;--warn-bg:#FFFBEB;--warn-fg:#92400E;
+  --purple:#7C3AED;--purple-bg:#F5F3FF;--purple-fg:#4C1D95;
+  --sans:'Space Grotesk',sans-serif;
+  --body:'Roboto',sans-serif;
+  --ui:'Inter',sans-serif;
+  --mono:'JetBrains Mono',monospace;
+}
+html{scroll-behavior:smooth}
+body{font-family:var(--body);background:var(--bg);color:var(--fg);line-height:1.72;-webkit-font-smoothing:antialiased}
+.nav{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(247,247,248,.94);backdrop-filter:blur(18px);border-bottom:1px solid var(--border);padding:.65rem 2.5rem;display:flex;align-items:center;justify-content:space-between}
+.nav-brand{display:flex;align-items:center;gap:.75rem}
+.nav-mark{width:30px;height:30px;border-radius:7px;background:linear-gradient(135deg,var(--primary),var(--primary-light));display:flex;align-items:center;justify-content:center}
+.nav-mark span{font-family:var(--sans);font-size:.75rem;font-weight:700;color:#fff}
+.nav-name{font-family:var(--sans);font-weight:700;font-size:.88rem;letter-spacing:-.02em}
+.nav-name em{font-style:normal;color:var(--primary)}
+.nav-divider{width:1px;height:16px;background:var(--border);margin:0 .25rem}
+.nav-doc{font-family:var(--mono);font-size:.58rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-fg)}
+.nav-tag{font-family:var(--mono);font-size:.58rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--primary);border:1px solid var(--primary);padding:.18rem .6rem;border-radius:4px}
+.hero-wrap{background:var(--secondary)}
+.hero{padding:8rem 2.5rem 5rem;max-width:960px;margin:0 auto}
+.hero-kicker{display:flex;align-items:center;gap:.6rem;margin-bottom:1.5rem}
+.hero-kicker-dash{width:28px;height:2px;background:var(--primary-light)}
+.hero-kicker-text{font-family:var(--mono);font-size:.62rem;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--primary-light)}
+.hero h1{font-family:var(--sans);font-size:2.75rem;font-weight:700;letter-spacing:-.035em;line-height:1.08;color:#E8EDF3;margin-bottom:1.4rem}
+.hero h1 em{font-style:normal;color:var(--primary-light)}
+.hero-intro{font-family:var(--body);font-size:1.05rem;font-weight:300;line-height:1.78;color:#7B8A9A;max-width:64ch;margin-bottom:2.5rem}
+.hero-rule{height:1px;background:#1A2432;margin-bottom:1.75rem}
+.hero-vitals{display:flex;gap:2.5rem;flex-wrap:wrap}
+.vital{display:flex;align-items:center;gap:.5rem}
+.vital-label{font-family:var(--mono);font-size:.58rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#4B5563}
+.vital-sep{color:#1A2432}
+.vital-value{font-family:var(--mono);font-size:.58rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--primary-light)}
+.doc-body{display:grid;grid-template-columns:220px 1fr;max-width:1100px;margin:0 auto;min-height:100vh}
+.sidebar{background:var(--card);border-right:1px solid var(--border);padding:2.5rem 1.5rem;position:sticky;top:60px;height:calc(100vh - 60px);overflow-y:auto}
+.sb-section{margin-bottom:2rem}
+.sb-label{font-family:var(--mono);font-size:.52rem;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted-fg);margin-bottom:.6rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+.sb-links{display:flex;flex-direction:column;gap:.1rem}
+.sb-link{font-family:var(--ui);font-size:.78rem;color:var(--muted-fg);text-decoration:none;padding:.28rem .5rem;border-radius:4px;line-height:1.4;transition:background .12s,color .12s;border-left:2px solid transparent}
+.sb-link:hover{background:var(--muted);color:var(--fg)}
+.sb-link.active{color:var(--primary);background:var(--accent);border-left-color:var(--primary)}
+.main{padding:3.5rem 3rem 6rem;max-width:720px}
+.section{margin-bottom:5.5rem}
+.sh{display:flex;align-items:flex-start;gap:1.2rem;margin-bottom:2rem;padding-bottom:1.5rem;border-bottom:1px solid var(--border)}
+.sh-num{font-family:var(--mono);font-size:.6rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--primary);background:var(--accent);padding:.28rem .6rem;border-radius:4px;flex-shrink:0;margin-top:.2rem}
+.sh-title{font-family:var(--sans);font-size:1.5rem;font-weight:700;letter-spacing:-.025em;line-height:1.15}
+.sh-sub{font-family:var(--body);font-size:.88rem;color:var(--muted-fg);margin-top:.3rem;line-height:1.55}
+.prose p{font-size:.95rem;line-height:1.8;color:var(--fg);max-width:62ch;margin-bottom:1.1rem}
+.prose p:last-child{margin-bottom:0}
+.thesis{background:var(--secondary);border:1px solid #1A2432;border-radius:14px;padding:1.75rem 2rem;margin:2rem 0;position:relative;overflow:hidden}
+.thesis::after{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--primary),var(--primary-light))}
+.thesis-ey{font-family:var(--mono);font-size:.56rem;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--primary-light);margin-bottom:.75rem}
+.thesis-text{font-family:var(--sans);font-size:1rem;font-weight:600;line-height:1.55;color:#E8EDF3;letter-spacing:-.015em}
+.layer-stack{display:flex;flex-direction:column;gap:0;margin:2rem 0;border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.layer{display:grid;grid-template-columns:28px 1fr;gap:0;background:var(--card);border-bottom:1px solid var(--border)}
+.layer:last-child{border-bottom:none}
+.layer-stripe{width:28px}
+.l-primary .layer-stripe{background:var(--primary)}
+.l-blue .layer-stripe{background:var(--blue)}
+.l-green .layer-stripe{background:var(--green)}
+.l-purple .layer-stripe{background:var(--purple)}
+.layer-body{padding:1.25rem 1.5rem}
+.layer-ey{font-family:var(--mono);font-size:.52rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;margin-bottom:.35rem}
+.l-primary .layer-ey{color:var(--primary)}
+.l-blue .layer-ey{color:var(--blue)}
+.l-green .layer-ey{color:var(--green)}
+.l-purple .layer-ey{color:var(--purple)}
+.layer-title{font-family:var(--sans);font-size:.95rem;font-weight:700;letter-spacing:-.015em;margin-bottom:.4rem}
+.layer-desc{font-family:var(--body);font-size:.85rem;color:var(--muted-fg);line-height:1.65;max-width:56ch}
+.layer-examples{margin-top:.75rem;background:var(--muted);border-radius:6px;padding:.65rem .9rem}
+.lex-label{font-family:var(--mono);font-size:.5rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-fg);margin-bottom:.35rem}
+.lex-items{display:flex;flex-direction:column;gap:.2rem}
+.lex-item{font-family:var(--mono);font-size:.7rem;color:var(--muted-fg);line-height:1.5}
+.pmpo-loop{background:var(--secondary);border-radius:12px;overflow:hidden;margin:2rem 0}
+.pmpo-head{padding:.85rem 1.5rem;border-bottom:1px solid #1A2432;font-family:var(--mono);font-size:.56rem;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#4B5563}
+.pmpo-steps{padding:1.25rem 1.5rem;display:flex;flex-direction:column;gap:.5rem}
+.pmpo-step{display:flex;align-items:center;gap:1rem;padding:.75rem 1rem;border-radius:8px}
+.ps-num{font-family:var(--mono);font-size:.6rem;font-weight:700;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.ps-name{font-family:var(--sans);font-size:.88rem;font-weight:700;letter-spacing:-.01em;margin-bottom:.12rem}
+.ps-desc{font-family:var(--body);font-size:.78rem;line-height:1.5}
+.ps-assess{background:rgba(124,58,237,.12);border:1px solid rgba(124,58,237,.2)}
+.ps-assess .ps-num{background:var(--purple-bg);color:var(--purple)}
+.ps-assess .ps-name{color:#A78BFA}
+.ps-assess .ps-desc{color:#7B8A9A}
+.ps-analyze{background:rgba(37,99,235,.1);border:1px solid rgba(37,99,235,.2)}
+.ps-analyze .ps-num{background:rgba(37,99,235,.15);color:#93C5FD}
+.ps-analyze .ps-name{color:#93C5FD}
+.ps-analyze .ps-desc{color:#7B8A9A}
+.ps-plan{background:rgba(217,119,6,.1);border:1px solid rgba(217,119,6,.2)}
+.ps-plan .ps-num{background:rgba(217,119,6,.15);color:#FCD34D}
+.ps-plan .ps-name{color:#FCD34D}
+.ps-plan .ps-desc{color:#7B8A9A}
+.ps-execute{background:rgba(22,163,74,.1);border:1px solid rgba(22,163,74,.2)}
+.ps-execute .ps-num{background:rgba(22,163,74,.15);color:#6EE7B7}
+.ps-execute .ps-name{color:#6EE7B7}
+.ps-execute .ps-desc{color:#7B8A9A}
+.ps-reflect{background:rgba(224,78,40,.1);border:1px solid rgba(224,78,40,.2)}
+.ps-reflect .ps-num{background:rgba(224,78,40,.15);color:var(--primary-light)}
+.ps-reflect .ps-name{color:var(--primary-light)}
+.ps-reflect .ps-desc{color:#7B8A9A}
+.tool-grid{display:grid;grid-template-columns:1fr 1fr;gap:.85rem;margin:2rem 0}
+.tool-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.2rem;position:relative}
+.tc-role{font-family:var(--mono);font-size:.5rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;padding:.15rem .5rem;border-radius:3px;display:inline-block;margin-bottom:.5rem}
+.tc-role.planner{background:var(--blue-bg);color:var(--blue-fg)}
+.tc-role.executor{background:var(--green-bg);color:var(--green-fg)}
+.tc-role.hybrid{background:var(--warn-bg);color:var(--warn-fg)}
+.tc-name{font-family:var(--sans);font-size:.95rem;font-weight:700;letter-spacing:-.015em;margin-bottom:.5rem}
+.tc-desc{font-family:var(--body);font-size:.8rem;color:var(--muted-fg);line-height:1.62;margin-bottom:.65rem}
+.tc-ideal{font-family:var(--mono);font-size:.62rem;color:var(--muted-fg);font-style:italic;line-height:1.5}
+.skill-block{border-radius:12px;overflow:hidden;margin:2rem 0}
+.skill-header{display:flex;align-items:center;gap:.85rem;padding:1.1rem 1.5rem}
+.skill-block.evolver .skill-header{background:var(--purple-bg);border-bottom:1px solid rgba(124,58,237,.15)}
+.skill-block.refiner .skill-header{background:var(--blue-bg);border-bottom:1px solid rgba(37,99,235,.15)}
+.skill-block.bdd .skill-header{background:var(--green-bg);border-bottom:1px solid rgba(22,163,74,.15)}
+.skill-block.creator .skill-header{background:var(--warn-bg);border-bottom:1px solid rgba(217,119,6,.15)}
+.skill-badge{font-family:var(--mono);font-size:.58rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:.2rem .65rem;border-radius:4px}
+.skill-block.evolver .skill-badge{background:var(--purple);color:#fff}
+.skill-block.refiner .skill-badge{background:var(--blue);color:#fff}
+.skill-block.bdd .skill-badge{background:var(--green);color:#fff}
+.skill-block.creator .skill-badge{background:var(--warn);color:#fff}
+.skill-name{font-family:var(--sans);font-size:1.05rem;font-weight:700;letter-spacing:-.02em}
+.skill-block.evolver .skill-name{color:var(--purple-fg)}
+.skill-block.refiner .skill-name{color:var(--blue-fg)}
+.skill-block.bdd .skill-name{color:var(--green-fg)}
+.skill-block.creator .skill-name{color:var(--warn-fg)}
+.skill-body{background:var(--card);border:1px solid var(--border);border-top:none;padding:1.4rem 1.5rem}
+.skill-desc{font-family:var(--body);font-size:.88rem;color:var(--muted-fg);line-height:1.7;margin-bottom:1.25rem}
+.skill-invoke-label{font-family:var(--mono);font-size:.52rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-fg);margin-bottom:.6rem}
+.skill-invoke-steps{display:flex;flex-direction:column;gap:.5rem}
+.si-step{display:flex;gap:.75rem;align-items:flex-start}
+.si-num{font-family:var(--mono);font-size:.6rem;font-weight:700;background:var(--muted);color:var(--muted-fg);width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:.15rem}
+.si-text{font-family:var(--body);font-size:.83rem;color:var(--fg);line-height:1.6}
+.si-text code{font-family:var(--mono);font-size:.78em;background:var(--muted);color:var(--primary);padding:.1em .35em;border-radius:3px}
+.spec-table{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin:2rem 0}
+.spec-table table{width:100%;border-collapse:collapse}
+.spec-table thead tr{background:var(--sec2)}
+.spec-table thead th{font-family:var(--ui);font-size:.64rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;text-align:left;padding:.8rem 1.25rem;color:#9CA3AF}
+.spec-table tbody tr{border-bottom:1px solid var(--border)}
+.spec-table tbody tr:last-child{border-bottom:none}
+.spec-table tbody tr:hover td{background:#FAFAFA}
+.spec-table tbody td{font-family:var(--body);font-size:.83rem;line-height:1.55;padding:.85rem 1.25rem;vertical-align:top;color:var(--muted-fg)}
+.spec-table tbody td:first-child{font-family:var(--mono);font-size:.72rem;font-weight:600;color:var(--fg)}
+.constraints-block{background:var(--secondary);border-radius:12px;padding:1.5rem;margin:2rem 0}
+.cb-label{font-family:var(--mono);font-size:.54rem;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#4B5563;margin-bottom:1rem}
+.constraint-list{display:flex;flex-direction:column;gap:.5rem}
+.constraint{display:flex;align-items:flex-start;gap:.75rem}
+.c-sev{font-family:var(--mono);font-size:.52rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:.15rem .5rem;border-radius:3px;flex-shrink:0;margin-top:.1rem}
+.c-sev.blocking{background:rgba(220,38,38,.2);color:#FCA5A5;border:1px solid rgba(220,38,38,.3)}
+.c-sev.warning{background:rgba(217,119,6,.15);color:#FCD34D;border:1px solid rgba(217,119,6,.25)}
+.c-text{font-family:var(--mono);font-size:.73rem;color:#A7B0BC;line-height:1.55}
+.wiring-block{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1.5rem;margin:2rem 0}
+.wb-title{font-family:var(--sans);font-size:.95rem;font-weight:700;letter-spacing:-.015em;margin-bottom:.35rem}
+.wb-sub{font-family:var(--body);font-size:.82rem;color:var(--muted-fg);line-height:1.6;margin-bottom:1.1rem}
+.wb-invocation{background:var(--secondary);border-radius:8px;padding:1.1rem 1.25rem}
+.wb-inv-label{font-family:var(--mono);font-size:.52rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#4B5563;margin-bottom:.6rem}
+.wb-code{font-family:var(--mono);font-size:.72rem;color:#A7B0BC;line-height:2}
+.wb-code .key{color:#93C5FD}
+.wb-code .val{color:#6EE7B7}
+.wb-code .comment{color:#4B5563;font-style:italic}
+.trigger-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin:1.5rem 0}
+.trig-card{background:var(--muted);border:1px solid var(--border);border-radius:8px;padding:.9rem 1rem}
+.trig-event{font-family:var(--mono);font-size:.58rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--primary);margin-bottom:.3rem}
+.trig-action{font-family:var(--ui);font-size:.8rem;font-weight:600;margin-bottom:.25rem}
+.trig-desc{font-family:var(--body);font-size:.75rem;color:var(--muted-fg);line-height:1.55}
+.autonomy-ladder{display:flex;flex-direction:column;gap:.6rem;margin:2rem 0}
+.al-rung{display:flex;align-items:stretch;gap:1rem;padding:1rem 1.25rem;border-radius:8px;background:var(--card);border:1px solid var(--border)}
+.al-bar{width:3px;border-radius:2px;flex-shrink:0}
+.al-rung.r1 .al-bar{background:var(--muted-fg)}
+.al-rung.r2 .al-bar{background:var(--blue)}
+.al-rung.r3 .al-bar{background:var(--warn)}
+.al-rung.r4 .al-bar{background:var(--green)}
+.al-label{font-family:var(--mono);font-size:.54rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;flex-shrink:0;width:100px;padding-top:.1rem}
+.al-rung.r1 .al-label{color:var(--muted-fg)}
+.al-rung.r2 .al-label{color:var(--blue)}
+.al-rung.r3 .al-label{color:var(--warn)}
+.al-rung.r4 .al-label{color:var(--green)}
+.al-name{font-family:var(--ui);font-size:.86rem;font-weight:600;flex-shrink:0;width:160px;padding-top:.05rem}
+.al-desc{font-family:var(--body);font-size:.8rem;color:var(--muted-fg);line-height:1.55}
+.co{border-radius:10px;padding:1.1rem 1.3rem;margin:1.75rem 0;display:flex;gap:.8rem}
+.co-icon{font-size:.85rem;flex-shrink:0;margin-top:.1rem}
+.co-title{font-family:var(--ui);font-size:.76rem;font-weight:600;margin-bottom:.25rem}
+.co-text{font-family:var(--body);font-size:.84rem;line-height:1.65}
+.co.ember{background:var(--accent);border-left:3px solid var(--primary)}
+.co.ember .co-title{color:var(--accent-fg)}
+.co.ember .co-text{color:#5c2d24}
+.co.blue{background:var(--blue-bg);border-left:3px solid var(--blue)}
+.co.blue .co-title{color:var(--blue-fg)}
+.co.blue .co-text{color:#1e3a8a}
+.co.green{background:var(--green-bg);border-left:3px solid var(--green)}
+.co.green .co-title{color:var(--green-fg)}
+.co.green .co-text{color:#14532d}
+.slash-grid{display:flex;flex-direction:column;gap:.4rem;margin:1.5rem 0}
+.slash-item{display:flex;align-items:baseline;gap:.85rem;padding:.6rem .9rem;background:var(--muted);border-radius:6px;border:1px solid var(--border)}
+.slash-cmd{font-family:var(--mono);font-size:.76rem;font-weight:600;color:var(--primary);flex-shrink:0;width:240px}
+.slash-desc{font-family:var(--body);font-size:.8rem;color:var(--muted-fg);line-height:1.5}
+.cmd-matrix{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin:2rem 0}
+.cmd-matrix table{width:100%;border-collapse:collapse}
+.cmd-matrix thead tr{background:var(--sec2)}
+.cmd-matrix thead th{font-family:var(--ui);font-size:.58rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;text-align:left;padding:.7rem .9rem;color:#9CA3AF}
+.cmd-matrix thead th:first-child{width:180px}
+.cmd-matrix tbody tr{border-bottom:1px solid var(--border)}
+.cmd-matrix tbody tr:last-child{border-bottom:none}
+.cmd-matrix tbody tr:hover td{background:#FAFAFA}
+.cmd-matrix tbody td{font-family:var(--mono);font-size:.68rem;padding:.65rem .9rem;vertical-align:middle;color:var(--muted-fg);text-align:center}
+.cmd-matrix tbody td:first-child{font-weight:600;color:var(--fg);text-align:left}
+.cmd-check{color:var(--green)}
+.state-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin:2rem 0}
+.state-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.1rem 1.2rem}
+.sc-file{font-family:var(--mono);font-size:.7rem;font-weight:600;color:var(--primary);margin-bottom:.4rem}
+.sc-written{font-family:var(--mono);font-size:.52rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-fg);margin-bottom:.3rem}
+.sc-desc{font-family:var(--body);font-size:.78rem;color:var(--muted-fg);line-height:1.55}
+.footer{background:var(--secondary);border-top:1px solid #1A2432;padding:2.5rem;text-align:center}
+.footer-brand{font-family:var(--sans);font-size:.88rem;font-weight:700;letter-spacing:-.02em;color:#E8EDF3;margin-bottom:.35rem}
+.footer-brand em{font-style:normal;color:var(--primary-light)}
+.footer-meta{font-family:var(--mono);font-size:.58rem;color:#4B5563;letter-spacing:.06em;text-transform:uppercase}
+@media(max-width:760px){
+  .doc-body{grid-template-columns:1fr}
+  .sidebar{display:none}
+  .main{padding:2rem 1.25rem 5rem}
+  .hero{padding:6rem 1.25rem 3.5rem}
+  .hero h1{font-size:2rem}
+  .tool-grid,.trigger-grid,.state-grid{grid-template-columns:1fr}
+  .nav{padding:.65rem 1.25rem}
+}
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav class="nav">
+  <div class="nav-brand">
+    <div class="nav-mark"><span>TJ</span></div>
+    <span class="nav-name">travis<em>james</em>.ai</span>
+    <div class="nav-divider"></div>
+    <span class="nav-doc">KBD Universal Reference</span>
+  </div>
+  <span class="nav-tag">TJ-KBD-UNIVERSAL-001</span>
+</nav>
+
+<!-- HERO -->
+<div class="hero-wrap">
+  <div class="hero">
+    <div class="hero-kicker">
+      <div class="hero-kicker-dash"></div>
+      <span class="hero-kicker-text">travisjames.ai · KBD Process Orchestrator · Universal Reference</span>
+    </div>
+    <h1>Knowledge-Based Development<br/><em>Universal Reference</em></h1>
+    <p class="hero-intro">
+      The project-agnostic KBD process — a PMPO-driven lifecycle for building software reliably across any
+      stack, any team, and any combination of AI tools. Coordinates
+      <code style="font-family:var(--mono);font-size:.85em;background:rgba(255,106,61,.1);color:var(--primary-light);padding:.1em .4em;border-radius:3px">iterative-evolver</code>,
+      <code style="font-family:var(--mono);font-size:.85em;background:rgba(255,106,61,.1);color:var(--primary-light);padding:.1em .4em;border-radius:3px">artifact-refiner</code>,
+      <code style="font-family:var(--mono);font-size:.85em;background:rgba(255,106,61,.1);color:var(--primary-light);padding:.1em .4em;border-radius:3px">bdd-testing</code>, and
+      <code style="font-family:var(--mono);font-size:.85em;background:rgba(255,106,61,.1);color:var(--primary-light);padding:.1em .4em;border-radius:3px">pmpo-skill-creator</code>
+      through file-based state that any AI tool can read and write.
+    </p>
+    <div class="hero-rule"></div>
+    <div class="hero-vitals">
+      <div class="vital"><span class="vital-label">Doc</span><span class="vital-sep">·</span><span class="vital-value">TJ-KBD-UNIVERSAL-001</span></div>
+      <div class="vital"><span class="vital-label">Skill</span><span class="vital-sep">·</span><span class="vital-value">kbd-process-orchestrator v2.0</span></div>
+      <div class="vital"><span class="vital-label">Version</span><span class="vital-sep">·</span><span class="vital-value">2.0 · 2026</span></div>
+      <div class="vital"><span class="vital-label">Scope</span><span class="vital-sep">·</span><span class="vital-value">Any Project · Any Stack · Any AI Tool</span></div>
+      <div class="vital"><span class="vital-label">Author</span><span class="vital-sep">·</span><span class="vital-value">Prometheus AGS</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- BODY -->
+<div class="doc-body">
+  <!-- SIDEBAR -->
+  <nav class="sidebar">
+    <div class="sb-section">
+      <div class="sb-label">Philosophy</div>
+      <div class="sb-links">
+        <a class="sb-link active" href="#thesis">Core Thesis</a>
+        <a class="sb-link" href="#knowledge-stack">Three-Layer Stack</a>
+        <a class="sb-link" href="#pmpo">PMPO Loop</a>
+        <a class="sb-link" href="#three-levels">Three Levels</a>
+      </div>
+    </div>
+    <div class="sb-section">
+      <div class="sb-label">Coordination</div>
+      <div class="sb-links">
+        <a class="sb-link" href="#tools">Tool Registry</a>
+        <a class="sb-link" href="#state-system">File-Based State</a>
+        <a class="sb-link" href="#wayfinding">Wayfinding Protocol</a>
+        <a class="sb-link" href="#cross-tool">Cross-Tool Handoff</a>
+      </div>
+    </div>
+    <div class="sb-section">
+      <div class="sb-label">Integrated Skills</div>
+      <div class="sb-links">
+        <a class="sb-link" href="#iterative-evolver">iterative-evolver</a>
+        <a class="sb-link" href="#artifact-refiner">artifact-refiner</a>
+        <a class="sb-link" href="#bdd-testing">bdd-testing</a>
+        <a class="sb-link" href="#pmpo-skill-creator">pmpo-skill-creator</a>
+        <a class="sb-link" href="#skill-wiring">Skill Integration Map</a>
+      </div>
+    </div>
+    <div class="sb-section">
+      <div class="sb-label">Reference</div>
+      <div class="sb-links">
+        <a class="sb-link" href="#openspec">OpenSpec Layer</a>
+        <a class="sb-link" href="#constraints">Constraint System</a>
+        <a class="sb-link" href="#commands">Command Reference</a>
+        <a class="sb-link" href="#cmd-matrix">Cross-Tool Matrix</a>
+        <a class="sb-link" href="#autonomy">Path to Autonomy</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- MAIN -->
+  <main class="main">
+
+    <!-- §01 THESIS -->
+    <section class="section" id="thesis">
+      <div class="sh"><span class="sh-num">01</span><div><div class="sh-title">Core Thesis</div><div class="sh-sub">From code production to continuous knowledge integration — for any project</div></div></div>
+      <div class="thesis">
+        <div class="thesis-ey">Foundational principle</div>
+        <div class="thesis-text">Software development can be treated as continuous knowledge capture, formalization, and refinement. When that knowledge is made explicit in structured artifacts — specs, phase plans, constraint libraries, reflection reports — any capable AI agent can act on it reliably, independently of which tool happens to be running. KBD solves three root problems: session amnesia, tool fragmentation, and spec drift. The goal is <em style="font-style:italic">Continuous Knowledge Integration</em>, not just continuous delivery.</div>
+      </div>
+      <div class="prose">
+        <p>Traditional software delivery is skill-dependent and context-ephemeral. A developer holds knowledge in their head; when they leave, the knowledge leaves with them. AI coding assistants face the same problem at a different scale: each conversation starts cold, each tool has its own planning state, and implementation drifts from documented intent between sessions.</p>
+        <p>Knowledge-Based Development (KBD) solves this by making knowledge first-class. Architectural decisions, constraints, domain rules, and implementation history are captured in structured artifacts stored in <code>.kbd-orchestrator/</code> — a file-based state directory that any AI tool can read, reason over, and act on without re-explanation.</p>
+        <p>KBD is <strong>project-agnostic</strong> and <strong>tool-agnostic</strong>. It derives project identity from existing config files (AGENTS.md, CLAUDE.md, README.md, package.json, Cargo.toml). It coordinates execution across Antigravity, Roo Code, Cursor, Claude Code, Codex, Cline, Windsurf, OpenCode, Kilo Code — any tool that can read and write files. OpenSpec is an optional enhancement, not a requirement.</p>
+      </div>
+    </section>
+
+    <!-- §02 THREE-LAYER STACK -->
+    <section class="section" id="knowledge-stack">
+      <div class="sh"><span class="sh-num">02</span><div><div class="sh-title">The Three-Layer Knowledge Stack</div><div class="sh-sub">Each layer informs the layer below it. All three must be maintained.</div></div></div>
+      <div class="layer-stack">
+        <div class="layer l-primary">
+          <div class="layer-stripe"></div>
+          <div class="layer-body">
+            <div class="layer-ey">Layer 1 · Project Intelligence</div>
+            <div class="layer-title">Identity, Constraints, Architecture Invariants</div>
+            <div class="layer-desc">Cross-cutting decisions and constraints that govern the entire project lifetime. Read by every agent at session start. Defines what is structurally impossible to violate. KBD auto-discovers these files — they are not authored by KBD itself.</div>
+            <div class="layer-examples">
+              <div class="lex-label">Universal sources (read in priority order)</div>
+              <div class="lex-items">
+                <div class="lex-item"><code>.kbd-orchestrator/project.json</code> — generated by /kbd-init; project name, stack, agent config, build commands</div>
+                <div class="lex-item"><code>AGENTS.md</code> — product mission, architecture rules, never-do list</div>
+                <div class="lex-item"><code>CLAUDE.md</code> — current focus, avoid-list (when present)</div>
+                <div class="lex-item"><code>README.md</code>, <code>package.json</code>, <code>Cargo.toml</code>, <code>pyproject.toml</code> — fallback identity sources</div>
+                <div class="lex-item"><code>.kbd-orchestrator/constraints.md</code> — project-specific blocking + warning constraint rules</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="layer l-blue">
+          <div class="layer-stripe"></div>
+          <div class="layer-body">
+            <div class="layer-ey">Layer 2 · Phase &amp; Change Specifications</div>
+            <div class="layer-title">Phase Plans, Change Specs, Design Decisions</div>
+            <div class="layer-desc">Feature-level knowledge baseline. Phase plans scope what is being built now. Change artifacts specify how each discrete unit of work should be implemented. Stable once created; amendments require new artifacts.</div>
+            <div class="layer-examples">
+              <div class="lex-label">Universal sources</div>
+              <div class="lex-items">
+                <div class="lex-item"><code>.kbd-orchestrator/phases/&lt;phase&gt;/assessment.md</code> — gap analysis from Assess step</div>
+                <div class="lex-item"><code>.kbd-orchestrator/phases/&lt;phase&gt;/plan.md</code> — ordered change list from Plan step</div>
+                <div class="lex-item"><code>.kbd-orchestrator/phases/&lt;phase&gt;/execution.md</code> — backend dispatch contract</div>
+                <div class="lex-item"><code>openspec/changes/&lt;id&gt;/</code> — structured change artifacts (if OpenSpec available)</div>
+                <div class="lex-item"><code>.kbd-orchestrator/changes/&lt;id&gt;/change.md</code> — native change spec (if OpenSpec absent)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="layer l-green">
+          <div class="layer-stripe"></div>
+          <div class="layer-body">
+            <div class="layer-ey">Layer 3 · Execution Artifacts &amp; Progress</div>
+            <div class="layer-title">Running Code, Test Results, Progress State, Reflection Reports</div>
+            <div class="layer-desc">Concrete output of each change. Produced by AI execution agents operating under the constraints of the two layers above. Verified by artifact-refiner and bdd-testing before archiving. All progress committed to git.</div>
+            <div class="layer-examples">
+              <div class="lex-label">Universal sources</div>
+              <div class="lex-items">
+                <div class="lex-item"><code>.kbd-orchestrator/phases/&lt;phase&gt;/progress.json</code> — live task ledger, updated by every executing tool</div>
+                <div class="lex-item"><code>.kbd-orchestrator/current-waypoint.json</code> — canonical resume contract across sessions and tools</div>
+                <div class="lex-item"><code>.refiner/artifacts/&lt;n&gt;/refinement_log.md</code> — per-change QA trail from artifact-refiner</div>
+                <div class="lex-item"><code>.kbd-orchestrator/phases/&lt;phase&gt;/reflection.md</code> — phase retrospective seeding the next phase</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- §03 PMPO LOOP -->
+    <section class="section" id="pmpo">
+      <div class="sh"><span class="sh-num">03</span><div><div class="sh-title">The PMPO Iteration Loop</div><div class="sh-sub">The invariant structure at every level of granularity — phase, change, and artifact</div></div></div>
+      <div class="prose">
+        <p>Prometheus Meta-Prompting Orchestration (PMPO) is the control architecture governing how thinking, planning, execution, and reflection occur across all KBD cycles. It runs at three nested granularities simultaneously and is not a prompt template or chain-of-thought wrapper — it is a meta-level coordination loop that all KBD skills implement.</p>
+      </div>
+      <div class="pmpo-loop">
+        <div class="pmpo-head">PMPO loop · invariant across macro (phase), meso (change), and micro (artifact) levels</div>
+        <div class="pmpo-steps">
+          <div class="pmpo-step ps-assess"><div class="ps-num">1</div><div><div class="ps-name">Assess</div><div class="ps-desc">Inspect current codebase and spec against stated phase goals. Surface gaps, misalignments, and technical debt. Produces a structured assessment report written to <code>.kbd-orchestrator/phases/&lt;phase&gt;/assessment.md</code> — never lost on session reset. Optionally delegates deep analysis to iterative-evolver.</div></div></div>
+          <div class="pmpo-step ps-analyze"><div class="ps-num">2</div><div><div class="ps-name">Analyze</div><div class="ps-desc">Scan for opportunities and highest-leverage gaps. Identify what to build next based on goal priority, risk, and dependency order. Produces the prioritized change inventory for the Plan step.</div></div></div>
+          <div class="pmpo-step ps-plan"><div class="ps-num">3</div><div><div class="ps-name">Plan</div><div class="ps-desc">Produce an ordered list of discrete, implementable, verifiable changes for this phase. Each change is one slice of the product. Write to <code>plan.md</code> and <code>execution.md</code> — the backend selection and dispatch contract for execution agents.</div></div></div>
+          <div class="pmpo-step ps-execute"><div class="ps-num">4</div><div><div class="ps-name">Execute <span style="font-size:.75em;opacity:.7">(via execution agent)</span></div><div class="ps-desc">Select the appropriate execution backend. Dispatch each change. The executing tool reads the change spec, updates <code>progress.json</code> at every task boundary, and commits state to git. QA gates (artifact-refiner, bdd-testing) run per-change before archiving.</div></div></div>
+          <div class="pmpo-step ps-reflect"><div class="ps-num">5</div><div><div class="ps-name">Reflect</div><div class="ps-desc">After all changes in the phase are archived, run /kbd-reflect. Produces a phase reflection report capturing goal achievement, technical debt introduced, lessons learned, and seeds for the next phase. Committed to <code>reflection.md</code> and used as prior context for the next /kbd-assess invocation.</div></div></div>
+        </div>
+      </div>
+      <div class="co blue">
+        <div class="co-icon">ℹ</div>
+        <div>
+          <div class="co-title">State must never live in conversation</div>
+          <div class="co-text">Every output of every PMPO phase — assessments, plans, execution contracts, progress ledgers, reflection reports — is written to disk and committed to git. Session resets, token limits, and agent swaps cannot lose progress because progress is never stored in context.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- §04 THREE LEVELS -->
+    <section class="section" id="three-levels">
+      <div class="sh"><span class="sh-num">04</span><div><div class="sh-title">The Three Levels of KBD</div><div class="sh-sub">PMPO runs at phase, change, and artifact granularity simultaneously</div></div></div>
+      <div class="layer-stack">
+        <div class="layer l-primary">
+          <div class="layer-stripe"></div>
+          <div class="layer-body">
+            <div class="layer-ey">Level 1 · Global Phase</div>
+            <div class="layer-title">KBD Process Orchestrator (this skill)</div>
+            <div class="layer-desc">Owns the Assess → Analyze → Plan → Execute (backend selection + dispatch) → Reflect loop at the phase level. Maintains canonical phase state in <code>.kbd-orchestrator/</code>. Delegates execution to OpenSpec, a native planner backend, or a designated AI tool.</div>
+            <div class="layer-examples">
+              <div class="lex-label">Entry commands</div>
+              <div class="lex-items">
+                <div class="lex-item"><code>/kbd-init</code> · <code>/kbd-assess</code> · <code>/kbd-plan</code> · <code>/kbd-execute</code> · <code>/kbd-reflect</code> · <code>/kbd-full-phase</code></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="layer l-blue">
+          <div class="layer-stripe"></div>
+          <div class="layer-body">
+            <div class="layer-ey">Level 2 · OpenSpec Change (inner loop)</div>
+            <div class="layer-title">OpenSpec skill set (optional enhancement)</div>
+            <div class="layer-desc">Structured change management with proposal → design → tasks → archive. OpenSpec provides a richer artifact contract between planning and execution. When OpenSpec is absent, KBD uses <code>.kbd-orchestrator/changes/&lt;id&gt;/change.md</code> with equivalent structure.</div>
+            <div class="layer-examples">
+              <div class="lex-label">Entry commands (when OpenSpec available)</div>
+              <div class="lex-items">
+                <div class="lex-item"><code>/opsx:new</code> · <code>/opsx:apply</code> · <code>/opsx:verify</code> · <code>/opsx:archive</code></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="layer l-green">
+          <div class="layer-stripe"></div>
+          <div class="layer-body">
+            <div class="layer-ey">Level 3 · Artifact QA (innermost)</div>
+            <div class="layer-title">artifact-refiner skill + bdd-testing skill</div>
+            <div class="layer-desc">Per-change quality assurance. artifact-refiner enforces constraint-driven code quality and iterates until all blocking constraints pass. bdd-testing provides behavioral verification — Gherkin scenarios must pass before a change is marked DONE.</div>
+            <div class="layer-examples">
+              <div class="lex-label">Entry commands</div>
+              <div class="lex-items">
+                <div class="lex-item"><code>/refine-code</code> · <code>/refine-validate</code> · <code>/bdd-feature</code> · <code>pnpm test:bdd</code></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- §05 TOOL REGISTRY -->
+    <section class="section" id="tools">
+      <div class="sh"><span class="sh-num">05</span><div><div class="sh-title">Tool Registry</div><div class="sh-sub">KBD is tool-agnostic. Any agent that can read and write files can participate.</div></div></div>
+      <div class="prose">
+        <p>KBD does not depend on any single AI tool's internal planning mechanism. The <code>.kbd-orchestrator/</code> file system is the universal coordination contract. Any agent reads the waypoint and change spec, executes work, and updates <code>progress.json</code>. The table below describes the recommended role for each recognized execution agent.</p>
+      </div>
+      <div class="tool-grid">
+        <div class="tool-card"><div class="tc-role planner">Global Planner</div><div class="tc-name">Antigravity</div><div class="tc-desc">Multi-file feature development with browser-based UI verification. Reads SKILL.md slash commands. Can record browser flows as BDD evidence. Preferred for phases requiring visual proof of delivery.</div><div class="tc-ideal">Phase kickoffs, UI verification, multi-file features</div></div>
+        <div class="tool-card"><div class="tc-role hybrid">Architect + Executor</div><div class="tc-name">Roo Code</div><div class="tc-desc">Architect mode for system-level planning and design decisions. Code mode for focused, bounded implementation tasks. Mode-switching within a single IDE session. Entry: Roo Architect or Roo Code prompt.</div><div class="tc-ideal">Architecture decisions, bounded task execution</div></div>
+        <div class="tool-card"><div class="tc-role hybrid">Planner + Executor</div><div class="tc-name">Cursor Agent</div><div class="tc-desc">Multi-file refactoring with parallel subagent task dispatch. Subagents update progress.json on completion. Rich file context in IDE. Team-shareable commands via <code>.cursor/commands/</code>.</div><div class="tc-ideal">Parallel subagent tasks, multi-file refactoring</div></div>
+        <div class="tool-card"><div class="tc-role executor">Executor</div><div class="tc-name">Claude Code</div><div class="tc-desc">Terminal-native, codebase-aware agent. Reads CLAUDE.md for constraints. Executes well-scoped changes end-to-end, runs build and test commands, fixes compilation errors iteratively. Team-shareable via <code>.claude/commands/</code>.</div><div class="tc-ideal">Large architectural changes, CLI-driven execution</div></div>
+        <div class="tool-card"><div class="tc-role executor">Executor</div><div class="tc-name">Codex (OpenAI)</div><div class="tc-desc">Parallel isolated tasks via git worktrees. Each change runs in its own worktree; PR or merge updates the main branch. progress.json committed in worktree and merged back. Reads AGENTS.md at repo root.</div><div class="tc-ideal">Parallel isolated tasks, PR-based delivery</div></div>
+        <div class="tool-card"><div class="tc-role hybrid">Plan + Act</div><div class="tc-name">Cline</div><div class="tc-desc">Terminal-first agentic workflows with Plan/Act mode separation. Plan mode reads assessment + change spec and produces a task list. Act mode executes tasks and updates progress.json per task. Invocation: <code>/kbd-assess.md</code> (filename includes .md suffix).</div><div class="tc-ideal">Terminal-first workflows, Plan/Act separation</div></div>
+        <div class="tool-card"><div class="tc-role executor">Executor</div><div class="tc-name">Windsurf Cascade</div><div class="tc-desc">Autonomous multi-step tasks with shared Cascade session. Flow workspace tracks progress within the session; commit progress.json at checkpoints. Workflows via <code>.windsurf/workflows/</code>. Team-shareable via git.</div><div class="tc-ideal">Autonomous multi-step execution, shared sessions</div></div>
+        <div class="tool-card"><div class="tc-role executor">Executor</div><div class="tc-name">OpenCode / Kilo Code</div><div class="tc-desc">Targeted single-file or few-file task execution. OpenCode: CLI/extension with scriptable commands. Kilo Code: VSCode-embedded for focused edits. Both update progress.json manually after targeted operations.</div><div class="tc-ideal">Quick targeted edits, file patches, CI/CD loops</div></div>
+      </div>
+      <div class="co ember">
+        <div class="co-icon">◆</div>
+        <div>
+          <div class="co-title">KBD is the orchestrator — tools are workers</div>
+          <div class="co-text">KBD owns phase state. Execution agents report back by updating <code>progress.json</code> and committing it to git. This gives every tool cross-session and cross-tool visibility into what has been done, what is blocked, and what comes next — without any special runtime or message bus.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- §06 FILE-BASED STATE -->
+    <section class="section" id="state-system">
+      <div class="sh"><span class="sh-num">06</span><div><div class="sh-title">File-Based State System</div><div class="sh-sub"><code>.kbd-orchestrator/</code> is the universal coordination contract</div></div></div>
+      <div class="prose">
+        <p>KBD uses <code>.kbd-orchestrator/</code> as its single source of truth because every AI tool can read and write files. Git provides version history, merge conflict detection, and cross-tool synchronization. No special runtime, message bus, or API integration is required. Any tool that can <code>git pull</code> and write files can participate in a KBD process.</p>
+      </div>
+      <div class="state-grid">
+        <div class="state-card"><div class="sc-file">.kbd-orchestrator/current-waypoint.json</div><div class="sc-written">Written by any orchestrator · Read by all tools</div><div class="sc-desc">Canonical resume contract. Contains active phase, last completed change, next pending change, exact next command, and fallback command. Load this before anything else on every session start.</div></div>
+        <div class="state-card"><div class="sc-file">.kbd-orchestrator/project.json</div><div class="sc-written">Generated by /kbd-init · Read by all tools</div><div class="sc-desc">Project identity + configuration. Name, stack, build/test/lint commands, preferred agents, OpenSpec availability flag. Never commit project-specific values into the skill directory itself.</div></div>
+        <div class="state-card"><div class="sc-file">.kbd-orchestrator/phases/&lt;phase&gt;/assessment.md</div><div class="sc-written">Written by /kbd-assess · Read by /kbd-plan</div><div class="sc-desc">Structured gap analysis output. Lists what is implemented vs. what is missing relative to phase goals. The factual basis for the change plan.</div></div>
+        <div class="state-card"><div class="sc-file">.kbd-orchestrator/phases/&lt;phase&gt;/plan.md</div><div class="sc-written">Written by /kbd-plan · Read by /kbd-execute</div><div class="sc-desc">Ordered change list for this phase. Each entry is one discrete, implementable, verifiable slice. Read-only once created — amendments require a new phase plan.</div></div>
+        <div class="state-card"><div class="sc-file">.kbd-orchestrator/phases/&lt;phase&gt;/execution.md</div><div class="sc-written">Written by /kbd-execute · Read by all tools</div><div class="sc-desc">Backend dispatch contract. Specifies which agent handles which change, entry points, and special instructions per change. The handoff document between orchestrator and executor.</div></div>
+        <div class="state-card"><div class="sc-file">.kbd-orchestrator/phases/&lt;phase&gt;/progress.json</div><div class="sc-written">Updated by every executing tool · Read by /kbd-status</div><div class="sc-desc">Live task progress ledger. Every tool that starts, makes progress on, or completes a change MUST update this file and commit it to git. The universal cross-tool heartbeat.</div></div>
+        <div class="state-card"><div class="sc-file">.kbd-orchestrator/phases/&lt;phase&gt;/reflection.md</div><div class="sc-written">Written by /kbd-reflect · Read by next phase /kbd-assess</div><div class="sc-desc">Phase retrospective. Goal achievement delta, debt introduced, lessons, next phase suggestions. Passed as <code>prior_assessments</code> to the next evolver invocation — the primary mechanism for compounding knowledge across phases.</div></div>
+        <div class="state-card"><div class="sc-file">.kbd-orchestrator/constraints.md</div><div class="sc-written">Authored by human or /kbd-init · Read by all QA tools</div><div class="sc-desc">Project-specific blocking and warning constraint rules. Single source of truth for what violates the constraint envelope. Both artifact-refiner and executing tools read this file — never define constraints in two places.</div></div>
+      </div>
+    </section>
+
+    <!-- §07 WAYFINDING -->
+    <section class="section" id="wayfinding">
+      <div class="sh"><span class="sh-num">07</span><div><div class="sh-title">Wayfinding Protocol</div><div class="sh-sub">How KBD resumes cleanly across sessions, tools, and interruptions</div></div></div>
+      <div class="prose">
+        <p>The most common failure mode in multi-session AI development is not execution quality — it is re-orientation cost. Each new session must re-discover where work left off, which changes are done, what is blocked, and what comes next. KBD eliminates this with a mandatory wayfinding artifact that any tool can read to resume instantly.</p>
+      </div>
+      <div class="wiring-block">
+        <div class="wb-title">current-waypoint.json — minimum required fields</div>
+        <div class="wb-sub">Written after every phase state transition. Load this before any other action on session start.</div>
+        <div class="wb-invocation">
+          <div class="wb-inv-label">Canonical waypoint structure</div>
+          <div class="wb-code">
+            <span class="key">"active_phase":</span> <span class="val">"phase-2-sales-module"</span><br/>
+            <span class="key">"backend":</span> <span class="val">"antigravity"</span><br/>
+            <span class="key">"last_updated":</span> <span class="val">"2026-03-10T14:22:00Z"</span><br/>
+            <span class="key">"last_updated_by":</span> <span class="val">"roo-code"</span><br/>
+            <span class="key">"last_completed_change":</span> <span class="val">"change-007-team-invitations"</span><br/>
+            <span class="key">"next_pending_change":</span> <span class="val">"change-008-clients-page"</span><br/>
+            <span class="key">"preferred_re_entry_skill":</span> <span class="val">"kbd-process-orchestrator"</span><br/>
+            <span class="key">"exact_next_command":</span> <span class="val">"/kbd-execute phase-2-sales-module"</span><br/>
+            <span class="key">"fallback_command":</span> <span class="val">"/kbd-status — if execution.md is stale, re-run /kbd-plan"</span>
+          </div>
+        </div>
+      </div>
+      <div class="co blue">
+        <div class="co-icon">ℹ</div>
+        <div>
+          <div class="co-title">Waypoint-first resumption is non-negotiable</div>
+          <div class="co-text">On every new session, the first action is <code>cat .kbd-orchestrator/current-waypoint.json</code>. This file tells you exactly where to resume. Do not infer status from broader phase discovery until you have confirmed the waypoint is stale or absent.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- §08 CROSS-TOOL HANDOFF -->
+    <section class="section" id="cross-tool">
+      <div class="sh"><span class="sh-num">08</span><div><div class="sh-title">Cross-Tool Handoff Protocol</div><div class="sh-sub">The progress.json contract that every executing tool must follow</div></div></div>
+      <div class="prose">
+        <p>When an AI tool is dispatched to execute a KBD change, it must follow a strict protocol for reading and updating <code>progress.json</code>. This file is the heartbeat of the KBD process — the universal mechanism by which any tool can know what any other tool has done.</p>
+      </div>
+      <div class="trigger-grid">
+        <div class="trig-card"><div class="trig-event">On Change Start</div><div class="trig-action">Read waypoint + change spec</div><div class="trig-desc">Pull latest git state. Read <code>current-waypoint.json</code>, then the change spec. Update <code>progress.json</code> status → IN_PROGRESS, <code>started_by</code> → your tool name. Commit.</div></div>
+        <div class="trig-card"><div class="trig-event">On Each Task Complete</div><div class="trig-action">Increment tasks_done, commit</div><div class="trig-desc">Update <code>tasks_done</code>, <code>last_task_completed</code>, <code>next_task_pending</code>. Commit every few tasks: <code>git add .kbd-orchestrator &amp;&amp; git commit -m "kbd: progress [tool] change-id task N/M"</code></div></div>
+        <div class="trig-card"><div class="trig-event">On Change Complete</div><div class="trig-action">Archive + advance waypoint</div><div class="trig-desc">Status → DONE. Archive (OpenSpec or native KBD). Advance waypoint <code>last_completed_change</code> and <code>next_pending_change</code>. Final commit. Echo <code>[kbd] Change complete</code>.</div></div>
+        <div class="trig-card"><div class="trig-event">On Blocker</div><div class="trig-action">Surface blocker, halt</div><div class="trig-desc">Status → BLOCKED. Add to <code>blockers</code> array. Update waypoint <code>fallback_command</code> with specific description of what is blocking. Commit. Do not attempt to resolve autonomously.</div></div>
+        <div class="trig-card"><div class="trig-event">Conflict Resolution</div><div class="trig-action">Merge progress.json manually</div><div class="trig-desc">Never auto-resolve to "ours" or "theirs." Take the highest <code>tasks_done</code> count, most recent timestamp, union of blockers. Status priority: BLOCKED &gt; IN_PROGRESS &gt; DONE &gt; PENDING.</div></div>
+        <div class="trig-card"><div class="trig-event">Never Do</div><div class="trig-action">Forbidden operations</div><div class="trig-desc">Do not delete or replace progress.json wholesale. Do not reset <code>tasks_done</code>. Do not change <code>started_by</code> once set. Do not modify <code>plan.md</code> during execution. Do not skip git commits.</div></div>
+      </div>
+    </section>
+
+    <!-- §09 ITERATIVE EVOLVER -->
+    <section class="section" id="iterative-evolver">
+      <div class="sh"><span class="sh-num">09</span><div><div class="sh-title">iterative-evolver</div><div class="sh-sub">Deep assessment and phase lifecycle engine — global skill at <code>.agent/skills/iterative-evolver/</code></div></div></div>
+      <div class="skill-block evolver">
+        <div class="skill-header">
+          <span class="skill-badge">Integrated Skill</span>
+          <span class="skill-name">iterative-evolver · Phase Assessment &amp; Reflection Engine</span>
+        </div>
+        <div class="skill-body">
+          <div class="skill-desc">The <strong>iterative-evolver</strong> skill owns deep codebase gap analysis and structured phase reflection with cross-session continuity. KBD's lightweight <code>/kbd-assess</code> is the default; when a phase requires multi-dimensional analysis or continuity across many sessions, KBD delegates to <code>iterative-evolver</code>. State backend: <code>.evolver/evolutions/&lt;evolution-name&gt;/state.json</code> — independent from KBD state, never in conversation.</div>
+          <div class="skill-invoke-label">When KBD delegates to iterative-evolver</div>
+          <div class="skill-invoke-steps">
+            <div class="si-step"><div class="si-num">1</div><div class="si-text">For deep phase assessment: invoke <code>/evolve-assess "&lt;project&gt;-&lt;phase&gt;"</code> with <code>evolution_domain: software</code>, phase goals, target state, project path, and prior phase reflection as <code>prior_assessments</code>. The evolution name is the cross-session resume key — store it in <code>project.json</code> as <code>evolver_evolution_name</code>.</div></div>
+            <div class="si-step"><div class="si-num">2</div><div class="si-text">The skill produces a structured assessment report written to <code>.evolver/evolutions/&lt;evolution-name&gt;/reports/</code>. KBD copies or symlinks this report to <code>.kbd-orchestrator/phases/&lt;phase&gt;/assessment.md</code> as the canonical gap analysis for the Plan step.</div></div>
+            <div class="si-step"><div class="si-num">3</div><div class="si-text">For phase reflection: invoke <code>/evolve-report "&lt;evolution-name&gt;"</code> after all changes in the phase are archived. The output becomes <code>reflection.md</code> in the KBD phase directory and is passed as <code>prior_assessments</code> to the next phase's evolver invocation — this is how the system compounds knowledge across phases.</div></div>
+          </div>
+          <div class="skill-invoke-label" style="margin-top:1.25rem">When NOT to use iterative-evolver</div>
+          <div class="skill-invoke-steps">
+            <div class="si-step"><div class="si-num">✕</div><div class="si-text">For small phases with fewer than 3 changes, use <code>/kbd-assess</code> directly — it is faster and sufficient. Use <code>iterative-evolver</code> when deep multi-dimensional analysis or cross-session assessment continuity is required.</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- §10 ARTIFACT REFINER -->
+    <section class="section" id="artifact-refiner">
+      <div class="sh"><span class="sh-num">10</span><div><div class="sh-title">artifact-refiner</div><div class="sh-sub">Change-level quality assurance engine — global skill at <code>.agent/skills/artifact-refiner/</code></div></div></div>
+      <div class="skill-block refiner">
+        <div class="skill-header">
+          <span class="skill-badge">Integrated Skill</span>
+          <span class="skill-name">artifact-refiner · Constraint-Driven Code QA Gate</span>
+        </div>
+        <div class="skill-body">
+          <div class="skill-desc">The <strong>artifact-refiner</strong> skill owns constraint-driven code quality enforcement at the artifact level. KBD invokes it per completed change — after the executing tool marks the change DONE in <code>progress.json</code>, and before <code>/opsx:archive</code> or native KBD archiving. Constraints are always sourced from <code>.kbd-orchestrator/constraints.md</code>, never defined independently. State backend: <code>.refiner/artifacts/&lt;n&gt;/</code>.</div>
+          <div class="skill-invoke-label">KBD → Refiner lifecycle</div>
+          <div class="skill-invoke-steps">
+            <div class="si-step"><div class="si-num">1</div><div class="si-text">After a change is implemented, invoke <code>/refine-code "&lt;change-id&gt;"</code> with <code>artifact_type: code</code>, <code>content_type: direct:code</code>, and the project constraint list sourced from <code>.kbd-orchestrator/constraints.md</code>. Wire <code>on_iteration_complete</code> to run the project's build health command from <code>project.json</code>.</div></div>
+            <div class="si-step"><div class="si-num">2</div><div class="si-text">The skill iterates — using constraint violations as the driver for refinement — until all blocking constraints pass or maximum iterations (5) are reached. Each iteration writes results to <code>.refiner/artifacts/&lt;change-id&gt;/refinement_log.md</code>.</div></div>
+            <div class="si-step"><div class="si-num">3</div><div class="si-text">On convergence, KBD reads the refinement log. If any blocking constraint remains FAIL, the change is marked BLOCKED in <code>progress.json</code>. If all blocking constraints pass, proceed to <code>/opsx:verify</code> and archive. The refinement log is committed to the repo as the audit trail for that change.</div></div>
+          </div>
+          <div class="skill-invoke-label" style="margin-top:1.25rem">Constraint wiring principle</div>
+          <div class="skill-invoke-steps">
+            <div class="si-step"><div class="si-num">◆</div><div class="si-text"><code>.kbd-orchestrator/constraints.md</code> is the single source of truth for constraints. Never define constraints independently in the refiner invocation. The refiner uses KBD's own constraint file, eliminating duplication between orchestrator and QA gate.</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- §11 BDD TESTING -->
+    <section class="section" id="bdd-testing">
+      <div class="sh"><span class="sh-num">11</span><div><div class="sh-title">bdd-testing</div><div class="sh-sub">Behavioral verification gate — global skill at <code>.agent/skills/bdd-testing/</code></div></div></div>
+      <div class="skill-block bdd">
+        <div class="skill-header">
+          <span class="skill-badge">Integrated Skill</span>
+          <span class="skill-name">bdd-testing · Scenario-Driven Acceptance Verification</span>
+        </div>
+        <div class="skill-body">
+          <div class="skill-desc">The <strong>bdd-testing</strong> skill provides behavioral verification — Gherkin scenarios written from the user's perspective that must pass before a change is marked DONE. BDD feature files serve as living specifications that prove functional completeness, not just structural presence. Named after the change ID for traceability: <code>tests/features/&lt;layer&gt;/&lt;change-id&gt;-&lt;description&gt;.feature</code>.</div>
+          <div class="skill-invoke-label">Placement within a KBD change lifecycle</div>
+          <div class="skill-invoke-steps">
+            <div class="si-step"><div class="si-num">1</div><div class="si-text"><strong>Plan step:</strong> When creating the change spec, generate Gherkin scenarios as acceptance criteria. These are the definition of "done" from the user's perspective before a line of code is written.</div></div>
+            <div class="si-step"><div class="si-num">2</div><div class="si-text"><strong>Execute step:</strong> After the executing tool implements the feature, write step definitions and run <code>pnpm test:bdd:tag "@&lt;change-id&gt;"</code>. All tagged scenarios passing = change DONE. Exit code non-zero = change stays IN_PROGRESS, blockers updated.</div></div>
+            <div class="si-step"><div class="si-num">3</div><div class="si-text"><strong>Reflect step:</strong> BDD coverage report informs the goal completion percentage in <code>reflection.md</code>. For Antigravity-executed phases, browser recording proofs can be embedded as video evidence links in the delivered changes section.</div></div>
+          </div>
+          <div class="skill-invoke-label" style="margin-top:1.25rem">When NOT to use bdd-testing</div>
+          <div class="skill-invoke-steps">
+            <div class="si-step"><div class="si-num">✕</div><div class="si-text">For infrastructure-only changes (migrations, config) with no UI or API surface, skip BDD and use direct integration test commands. For changes under 30 minutes complexity, a Playwright script may be more efficient than Gherkin. BDD is most valuable for user-facing features where acceptance criteria can be stated from the user's perspective.</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- §12 PMPO SKILL CREATOR -->
+    <section class="section" id="pmpo-skill-creator">
+      <div class="sh"><span class="sh-num">12</span><div><div class="sh-title">pmpo-skill-creator</div><div class="sh-sub">KBD self-improvement engine — global skill at <code>.agent/skills/pmpo-skill-creator/</code></div></div></div>
+      <div class="skill-block creator">
+        <div class="skill-header">
+          <span class="skill-badge">Integrated Skill</span>
+          <span class="skill-name">pmpo-skill-creator · Meta-Skill Extension via Reflection</span>
+        </div>
+        <div class="skill-body">
+          <div class="skill-desc">The <strong>pmpo-skill-creator</strong> skill enables KBD to extend itself. During the Reflect phase, if a structural gap is identified — a recurring workflow that KBD does not yet handle, a new integration pattern, or a domain-specific sub-skill needed for future phases — <code>/create-skill</code> or <code>/extend-skill</code> is invoked to formalize the new capability into the skill system. This is how KBD grows smarter across projects and phases.</div>
+          <div class="skill-invoke-label">When KBD invokes pmpo-skill-creator</div>
+          <div class="skill-invoke-steps">
+            <div class="si-step"><div class="si-num">1</div><div class="si-text">During <code>/kbd-reflect</code>: if the reflection report identifies a recurring workflow gap (e.g., "every phase requires a database migration verification step we don't have a skill for"), invoke <code>/create-skill</code> with the observed gap as input.</div></div>
+            <div class="si-step"><div class="si-num">2</div><div class="si-text">If an existing skill (iterative-evolver, artifact-refiner, etc.) needs a new integration adapter for a new tool or pattern, invoke <code>/extend-skill</code> with the extension specification.</div></div>
+            <div class="si-step"><div class="si-num">3</div><div class="si-text">New skills are placed in <code>.agent/skills/</code> and referenced from KBD's integration layer, maintaining the single-source-of-truth principle. The skill creator's output feeds back into the next phase's KBD toolchain.</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- §13 SKILL INTEGRATION MAP -->
+    <section class="section" id="skill-wiring">
+      <div class="sh"><span class="sh-num">13</span><div><div class="sh-title">Skill Integration Map</div><div class="sh-sub">How the four global skills interlock within the KBD phase loop</div></div></div>
+      <div class="prose">
+        <p>The four integrated skills are not copies inside the KBD skill directory — they live in the global <code>.agent/skills/</code> directory and are invoked by reference. This preserves a single source of truth for each skill, ensures updates propagate automatically, and avoids maintenance split. Integration adapters in <code>references/integrations/</code> specify the exact invocation contract without duplicating any logic.</p>
+      </div>
+      <div class="wiring-block">
+        <div class="wb-title">Integration timing in the KBD phase loop</div>
+        <div class="wb-sub">Each skill activates at a specific phase boundary. Skipping a boundary degrades the compound learning value of the full system.</div>
+        <div class="wb-invocation">
+          <div class="wb-inv-label">KBD loop with integrated skill activation points</div>
+          <div class="wb-code">
+            ASSESS<br/>
+            <span class="val"> └─ /kbd-assess</span> <span class="comment">(lightweight, waypoint-aware)</span><br/>
+            <span class="val">    └─ if deep analysis needed: /evolve-assess "&lt;project&gt;-&lt;phase&gt;"</span> <span class="comment">← iterative-evolver</span><br/>
+            <br/>
+            PLAN<br/>
+            <span class="val"> └─ /kbd-plan</span> <span class="comment">(generates ordered change list)</span><br/>
+            <span class="val">    └─ per change: write Gherkin scenarios as acceptance criteria</span> <span class="comment">← bdd-testing</span><br/>
+            <br/>
+            EXECUTE <span class="comment">(per change)</span><br/>
+            <span class="val"> └─ &lt;executing tool&gt; implements the change</span><br/>
+            <span class="val">    └─ write step definitions + run: pnpm test:bdd:tag "@&lt;change-id&gt;"</span> <span class="comment">← bdd-testing</span><br/>
+            <span class="val">    └─ /refine-code "&lt;change-id&gt;"</span> <span class="comment">← artifact-refiner (constraint QA gate)</span><br/>
+            <span class="val">    └─ /opsx:archive or native KBD archive</span><br/>
+            <br/>
+            REFLECT<br/>
+            <span class="val"> └─ /kbd-reflect</span> <span class="comment">(phase retrospective)</span><br/>
+            <span class="val">    └─ /evolve-report "&lt;evolution-name&gt;"</span> <span class="comment">← iterative-evolver (structured reflection)</span><br/>
+            <span class="val">    └─ if structural gap found: /create-skill or /extend-skill</span> <span class="comment">← pmpo-skill-creator</span>
+          </div>
+        </div>
+      </div>
+      <div class="spec-table">
+        <table>
+          <thead><tr><th>Global Skill</th><th>KBD Phase</th><th>Role</th><th>Integration Guide</th></tr></thead>
+          <tbody>
+            <tr><td>iterative-evolver</td><td>Assess + Reflect</td><td>Deep codebase + spec gap analysis with cross-session continuity; structured phase reflection</td><td><code>references/integrations/iterative-evolver.md</code></td></tr>
+            <tr><td>artifact-refiner</td><td>Execute (per-change QA)</td><td>Constraint-driven code quality gate; iterates until blocking constraints pass before archiving</td><td><code>references/integrations/artifact-refiner.md</code></td></tr>
+            <tr><td>bdd-testing</td><td>Plan + Execute (verification)</td><td>Behavioral verification gate; Gherkin scenarios must pass before change is marked DONE</td><td><code>references/integrations/bdd-testing.md</code></td></tr>
+            <tr><td>pmpo-skill-creator</td><td>Reflect (meta)</td><td>KBD self-improvement; extends the skill system when reflection surfaces a structural workflow gap</td><td><code>references/integrations/pmpo-skill-creator.md</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- §14 OPENSPEC -->
+    <section class="section" id="openspec">
+      <div class="sh"><span class="sh-num">14</span><div><div class="sh-title">OpenSpec Layer</div><div class="sh-sub">Optional structured change management — KBD adapts when OpenSpec is absent</div></div></div>
+      <div class="prose">
+        <p>OpenSpec is a structured change management system that provides a richer artifact contract between planning and execution. It is an enhancement to KBD, not a dependency. KBD detects OpenSpec availability from the presence of an <code>openspec/</code> directory and adapts its change management approach accordingly.</p>
+      </div>
+      <div class="layer-stack">
+        <div class="layer l-blue">
+          <div class="layer-stripe"></div>
+          <div class="layer-body">
+            <div class="layer-ey">When OpenSpec IS available</div>
+            <div class="layer-title">Structured change artifacts with full lifecycle</div>
+            <div class="layer-desc">Use <code>/opsx:new</code> to scaffold proposal → design → tasks → spec-delta. Progress tracked in <code>openspec/changes/&lt;id&gt;/tasks.md</code> via checkbox protocol. Archiving via <code>/opsx:archive</code> syncs spec deltas back to canonical specs and feeds the reflection phase.</div>
+            <div class="layer-examples">
+              <div class="lex-label">OpenSpec artifact contract</div>
+              <div class="lex-items">
+                <div class="lex-item"><code>openspec/specs/*.md</code> — canonical spec baseline; what the system does</div>
+                <div class="lex-item"><code>openspec/changes/&lt;id&gt;/proposal.md</code> — scoped intent: what, why, how</div>
+                <div class="lex-item"><code>openspec/changes/&lt;id&gt;/design.md</code> — entities, ports, adapters, file layout</div>
+                <div class="lex-item"><code>openspec/changes/&lt;id&gt;/tasks.md</code> — concrete implementation checklist</div>
+                <div class="lex-item"><code>openspec/changes/&lt;id&gt;/spec-delta.md</code> — how canonical specs change after this change</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="layer l-green">
+          <div class="layer-stripe"></div>
+          <div class="layer-body">
+            <div class="layer-ey">When OpenSpec is NOT available</div>
+            <div class="layer-title">Native KBD change management</div>
+            <div class="layer-desc">Create <code>.kbd-orchestrator/changes/&lt;id&gt;/change.md</code> with the same structure as a combined proposal + tasks document. Track task status with <code>[ ]</code> / <code>[/]</code> / <code>[x]</code> checkboxes. Archive by moving to <code>.kbd-orchestrator/changes/archive/&lt;date&gt;-&lt;id&gt;/</code>. The <code>execution.md</code> format accommodates both paths.</div>
+            <div class="layer-examples">
+              <div class="lex-label">Native KBD change structure</div>
+              <div class="lex-items">
+                <div class="lex-item"><code>.kbd-orchestrator/changes/&lt;id&gt;/change.md</code> — proposal + tasks combined</div>
+                <div class="lex-item"><code>.kbd-orchestrator/changes/archive/&lt;date&gt;-&lt;id&gt;/</code> — finalized changes</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="co ember">
+        <div class="co-icon">◆</div>
+        <div>
+          <div class="co-title">KBD never requires OpenSpec</div>
+          <div class="co-text">The decision to use OpenSpec is a project configuration choice, not a KBD requirement. Set <code>openspec_available: true</code> in <code>.kbd-orchestrator/project.json</code> to enable OpenSpec paths. All KBD commands adapt their artifact handling based on this flag.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- §15 CONSTRAINT SYSTEM -->
+    <section class="section" id="constraints">
+      <div class="sh"><span class="sh-num">15</span><div><div class="sh-title">Constraint System</div><div class="sh-sub">Project-derived rules that define the quality envelope — not hard-coded, not duplicated</div></div></div>
+      <div class="prose">
+        <p>Unlike the earlier DocuMind-specific reference, KBD does not hard-code any project's constraints. Constraints are always defined in <code>.kbd-orchestrator/constraints.md</code> at the project root — authored by the human developer or generated by <code>/kbd-init</code> from a generic template. Both <code>artifact-refiner</code> and all executing tools read this single file. Constraints are never defined in two places.</p>
+      </div>
+      <div class="constraints-block">
+        <div class="cb-label">Generic constraint categories · source: .kbd-orchestrator/constraints.md</div>
+        <div class="constraint-list">
+          <div class="constraint"><span class="c-sev blocking">blocking</span><span class="c-text">Build passes without errors — command specified in <code>project.json</code> as <code>build_health_command</code></span></div>
+          <div class="constraint"><span class="c-sev blocking">blocking</span><span class="c-text">No hardcoded secrets, API keys, tokens, or passwords in source code</span></div>
+          <div class="constraint"><span class="c-sev blocking">blocking</span><span class="c-text">Architecture invariants defined in AGENTS.md "Never Do" list — e.g., no cross-layer imports, no direct provider calls</span></div>
+          <div class="constraint"><span class="c-sev blocking">blocking</span><span class="c-text">No runtime type-unsafe patterns (varies by stack — <code>unwrap()</code> in Rust, <code>any</code> in TypeScript, etc.)</span></div>
+          <div class="constraint"><span class="c-sev blocking">blocking</span><span class="c-text">Project-specific structural invariants (defined per project in <code>.kbd-orchestrator/constraints.md</code>)</span></div>
+          <div class="constraint"><span class="c-sev warning">warning</span><span class="c-text">Tests exist for all new features added in this change</span></div>
+          <div class="constraint"><span class="c-sev warning">warning</span><span class="c-text">No lint warnings at default severity — command specified in <code>project.json</code> as <code>lint_command</code></span></div>
+          <div class="constraint"><span class="c-sev warning">warning</span><span class="c-text">No TODO/FIXME/STUB/HACK comments in committed code</span></div>
+          <div class="constraint"><span class="c-sev warning">warning</span><span class="c-text">Accessibility basics for new UI components (aria-label or semantic HTML)</span></div>
+        </div>
+      </div>
+      <div class="co green">
+        <div class="co-icon">✓</div>
+        <div>
+          <div class="co-title">Constraints are the convergence engine</div>
+          <div class="co-text">The refiner iterates as long as blocking constraints remain violated. A change is never archived with known constraint violations — regardless of which execution agent produced the code. The constraint file, not the agent, is the source of truth for "done."</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- §16 COMMAND REFERENCE -->
+    <section class="section" id="commands">
+      <div class="sh"><span class="sh-num">16</span><div><div class="sh-title">Command Reference</div><div class="sh-sub">The complete KBD command surface — available across all supported tools</div></div></div>
+      <div class="slash-grid">
+        <div class="slash-item"><span class="slash-cmd">/kbd-init [--force] [--dry-run]</span><span class="slash-desc">Auto-discover project identity and generate <code>.kbd-orchestrator/project.json</code>. Runs the command generator script for all configured tools. Run first in any new project.</span></div>
+        <div class="slash-item"><span class="slash-cmd">/kbd-new-phase &lt;name&gt; [goals...]</span><span class="slash-desc">Start a new named phase with optional goal statements. Creates the phase directory structure in <code>.kbd-orchestrator/phases/&lt;name&gt;/</code>.</span></div>
+        <div class="slash-item"><span class="slash-cmd">/kbd-assess [phase-name]</span><span class="slash-desc">Assess current codebase against active phase goals. Lightweight wrapper — delegates to iterative-evolver for deep multi-dimensional analysis when needed. Writes <code>assessment.md</code>.</span></div>
+        <div class="slash-item"><span class="slash-cmd">/kbd-plan [phase-name]</span><span class="slash-desc">Create prioritized change list from the current assessment. Writes <code>plan.md</code> and <code>execution.md</code>. Read-only once created — amendments require a new plan iteration.</span></div>
+        <div class="slash-item"><span class="slash-cmd">/kbd-execute [phase-name]</span><span class="slash-desc">Select execution backend from the tool registry and dispatch the phase. Writes or updates <code>execution.md</code>. Updates waypoint with exact next command for the selected backend.</span></div>
+        <div class="slash-item"><span class="slash-cmd">/kbd-reflect [phase-name]</span><span class="slash-desc">Generate phase reflection report from current progress state. Delegates to iterative-evolver for structured reflection. Writes <code>reflection.md</code> and seeds the next phase's <code>prior_assessments</code>.</span></div>
+        <div class="slash-item"><span class="slash-cmd">/kbd-status</span><span class="slash-desc">Show current phase, change inventory with per-change status, and waypoint-guided next action. Reads <code>current-waypoint.json</code> and <code>progress.json</code>. Primary orientation command on session start.</span></div>
+        <div class="slash-item"><span class="slash-cmd">/kbd-full-phase &lt;name&gt;</span><span class="slash-desc">Run the complete Assess → Plan → Execute → Reflect cycle in one invocation. For experienced use on well-understood phases. Pauses for human approval at the Plan → Execute boundary.</span></div>
+        <div class="slash-item"><span class="slash-cmd">/opsx:new &lt;change-name&gt;</span><span class="slash-desc">Scaffold a new OpenSpec change with proposal, tasks, design, and spec-delta artifacts. (Requires OpenSpec to be available in the project.)</span></div>
+        <div class="slash-item"><span class="slash-cmd">/opsx:apply [change-name]</span><span class="slash-desc">Implement tasks from an OpenSpec change. Loops through the checklist until complete or blocked. Dispatches to the configured execution backend.</span></div>
+        <div class="slash-item"><span class="slash-cmd">/opsx:verify [change-name]</span><span class="slash-desc">Verify implementation against change artifacts: completeness, correctness, coherence. Three-dimension QA check before archiving.</span></div>
+        <div class="slash-item"><span class="slash-cmd">/opsx:archive [change-name]</span><span class="slash-desc">Finalize and archive a completed change. Syncs spec deltas to canonical specs. Updates <code>progress.json</code> and advances the waypoint.</span></div>
+      </div>
+    </section>
+
+    <!-- §17 CROSS-TOOL MATRIX -->
+    <section class="section" id="cmd-matrix">
+      <div class="sh"><span class="sh-num">17</span><div><div class="sh-title">Cross-Tool Command Matrix</div><div class="sh-sub">KBD commands are generated from a single canonical YAML source — never edited directly per tool</div></div></div>
+      <div class="prose">
+        <p>KBD uses a single <code>workflows/workflows.yaml</code> source and a bash generator script (<code>scripts/kbd-generate-commands.sh</code>) to produce tool-specific command files. All tools share the same underlying PMPO patterns — only the file location and invocation syntax differ. After any change to <code>workflows.yaml</code>, run the generator to sync all tool directories.</p>
+      </div>
+      <div class="cmd-matrix">
+        <table>
+          <thead>
+            <tr>
+              <th>Command</th>
+              <th>Antigravity</th>
+              <th>Claude Code</th>
+              <th>Cursor</th>
+              <th>Cline</th>
+              <th>OpenCode</th>
+              <th>Windsurf</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>/kbd-init</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td></tr>
+            <tr><td>/kbd-assess</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td></tr>
+            <tr><td>/kbd-plan</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td></tr>
+            <tr><td>/kbd-execute</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td></tr>
+            <tr><td>/kbd-reflect</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td></tr>
+            <tr><td>/kbd-status</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td></tr>
+            <tr><td>/kbd-new-phase</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td></tr>
+            <tr><td>/kbd-full-phase</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td><td class="cmd-check">✓</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="spec-table">
+        <table>
+          <thead><tr><th>Tool</th><th>Command directory</th><th>Invocation note</th></tr></thead>
+          <tbody>
+            <tr><td>Antigravity</td><td><code>.agent/workflows/</code></td><td>Slash command shown in Antigravity skill list; reads <code>description</code> from SKILL.md frontmatter</td></tr>
+            <tr><td>Claude Code</td><td><code>.claude/commands/</code></td><td>Team-shareable via git; supports <code>$ARGUMENTS</code> and <code>!bash-command</code> inline execution</td></tr>
+            <tr><td>Cursor Agent</td><td><code>.cursor/commands/</code></td><td>Type <code>/</code> in Cursor Agent chat → autocomplete; can reference files with <code>@filename</code> syntax</td></tr>
+            <tr><td>Cline</td><td><code>.clinerules/workflows/</code></td><td>Invocation includes <code>.md</code> suffix: <code>/kbd-assess.md</code> — note the difference from other tools</td></tr>
+            <tr><td>OpenCode</td><td><code>.opencode/commands/</code></td><td>Project-local; also supports global home at <code>~/.config/opencode/commands/</code>; shell output via <code>!command</code></td></tr>
+            <tr><td>Windsurf</td><td><code>.windsurf/workflows/</code></td><td>Auto-generated command name from filename; team-shareable via git; arguments described in workflow body</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="co blue">
+        <div class="co-icon">ℹ</div>
+        <div>
+          <div class="co-title">Never edit generated tool files directly</div>
+          <div class="co-text">All tool-specific command files are generated from <code>workflows/workflows.yaml</code> and the corresponding templates in <code>workflows/templates/</code>. Editing the generated files directly will cause them to be overwritten on the next generator run. Modify the canonical YAML source, then run <code>bash .agent/skills/kbd-process-orchestrator/scripts/kbd-generate-commands.sh</code>.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- §18 PATH TO AUTONOMY -->
+    <section class="section" id="autonomy">
+      <div class="sh"><span class="sh-num">18</span><div><div class="sh-title">The Path to Autonomous Development</div><div class="sh-sub">How a maturing KBD knowledge base reduces human overhead per phase</div></div></div>
+      <div class="prose">
+        <p>As the KBD knowledge base matures — richer phase reflections, deeper constraint libraries, more complete spec baselines, broader skill coverage — the workflow trends naturally toward autonomy. The bottleneck is never execution capability. Current AI agents can already write production-quality code. The bottleneck is knowledge quality. A well-maintained KBD stack directly accelerates the path.</p>
+      </div>
+      <div class="autonomy-ladder">
+        <div class="al-rung r1"><div class="al-bar"></div><div class="al-label">Now</div><div class="al-name">Human-Directed</div><div class="al-desc">Human drives all planning decisions. KBD structures the assessment; human approves the plan before execution begins. AI executes against change specs. Human reviews refiner output and reflection reports before the next phase begins.</div></div>
+        <div class="al-rung r2"><div class="al-bar"></div><div class="al-label">Near-Term</div><div class="al-name">AI-Proposed</div><div class="al-desc">KBD and iterative-evolver propose phases autonomously based on accumulated reflection history. Human approves the plan at the Plan → Execute boundary. Execution and QA (artifact-refiner + bdd-testing) run without per-change interruption.</div></div>
+        <div class="al-rung r3"><div class="al-bar"></div><div class="al-label">Mid-Term</div><div class="al-name">Supervised Loops</div><div class="al-desc">KBD detects spec gaps, creates change specs, dispatches execution agents, routes constraint failures back through the QA gate, and archives completed changes — all without human intervention per change. Human reviews phase reflections and approves phase transitions.</div></div>
+        <div class="al-rung r4"><div class="al-bar"></div><div class="al-label">Long-Term</div><div class="al-name">Strategic Oversight</div><div class="al-desc">Knowledge base rich enough that new features synthesize from domain knowledge alone. The system identifies analogous prior implementations and adapts them. Human oversight concentrates on high-level product direction and architectural invariant governance.</div></div>
+      </div>
+      <div class="thesis">
+        <div class="thesis-ey">Key insight — universal to all projects</div>
+        <div class="thesis-text">The bottleneck to full autonomy is not execution capability — current AI agents can already write production-quality code across any stack. The bottleneck is knowledge quality. A well-maintained KBD stack — phase reflections, constraint libraries, canonical specs, cross-tool progress state — directly accelerates the path to autonomous, self-improving software delivery. Every phase you run builds the knowledge base that makes the next phase easier.</div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- FOOTER -->
+<footer class="footer">
+  <div class="footer-brand">travis<em>james</em>.ai</div>
+  <div class="footer-meta">TJ-KBD-UNIVERSAL-001 · v2.0 · Knowledge-Based Development · Universal Reference · kbd-process-orchestrator · Prometheus Agentic Growth Solutions · 2026</div>
+</footer>
+
+</body>
+</html>

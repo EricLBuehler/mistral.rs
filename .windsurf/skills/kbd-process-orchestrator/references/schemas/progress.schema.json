@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KBD Phase Progress",
+  "description": "Cross-tool progress ledger for a KBD phase. Every AI tool executing a KBD change MUST read and write this file.",
+  "type": "object",
+  "required": ["phase", "last_updated", "last_updated_by", "changes"],
+  "properties": {
+    "phase": {
+      "type": "string",
+      "description": "Active phase name, e.g. 'phase-2-sales-module'"
+    },
+    "last_updated": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of last update"
+    },
+    "last_updated_by": {
+      "type": "string",
+      "enum": ["antigravity", "roo-code", "roo-architect", "cursor-agent", "claude-code", "codex", "cline", "kilo-code", "windsurf", "opencode", "human", "unknown"],
+      "description": "The AI tool or human who last wrote this file"
+    },
+    "assessment_complete": {
+      "type": "boolean",
+      "description": "True once /kbd-assess has run for this phase"
+    },
+    "plan_complete": {
+      "type": "boolean",
+      "description": "True once /kbd-plan has run for this phase"
+    },
+    "execution_dispatched": {
+      "type": "boolean",
+      "description": "True once /kbd-execute has written execution.md"
+    },
+    "reflection_complete": {
+      "type": "boolean",
+      "description": "True once /kbd-reflect has written the reflection"
+    },
+    "changes": {
+      "type": "object",
+      "description": "Map of change-id to per-change progress",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["status"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["PENDING", "IN_PROGRESS", "DONE", "BLOCKED", "SKIPPED"]
+          },
+          "tasks_total": {
+            "type": "integer",
+            "description": "Total number of tasks in this change (from tasks.md or change.md)"
+          },
+          "tasks_done": {
+            "type": "integer",
+            "description": "Number of tasks completed"
+          },
+          "last_task_completed": {
+            "type": ["string", "null"],
+            "description": "Description of the last completed task"
+          },
+          "next_task_pending": {
+            "type": ["string", "null"],
+            "description": "Description of the next pending task"
+          },
+          "started_by": {
+            "type": ["string", "null"],
+            "description": "Tool that started execution of this change"
+          },
+          "started_at": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "completed_by": {
+            "type": ["string", "null"],
+            "description": "Tool that completed this change"
+          },
+          "completed_at": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "blockers": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "List of blocker descriptions"
+          },
+          "notes": {
+            "type": ["string", "null"],
+            "description": "Optional notes from the executing tool"
+          }
+        }
+      }
+    }
+  }
+}

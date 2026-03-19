@@ -1,0 +1,73 @@
+{
+  "hooks": [
+    {
+      "event": "SubagentStop",
+      "match_agent": "{{specify_agent}}",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh {{skill_name}} specify"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh on_phase_complete specify"
+        }
+      ]
+    },
+    {
+      "event": "SubagentStop",
+      "match_agent": "{{plan_agent}}",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh {{skill_name}} plan"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh on_phase_complete plan"
+        }
+      ]
+    },
+    {
+      "event": "SubagentStop",
+      "match_agent": "{{execute_agent}}",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh {{skill_name}} execute"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh on_phase_complete execute"
+        }
+      ]
+    },
+    {
+      "event": "SubagentStop",
+      "match_agent": "{{reflect_agent}}",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh {{skill_name}} reflect"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh on_phase_complete reflect"
+        }
+      ]
+    },
+    {
+      "event": "Stop",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-finalize.sh {{skill_name}}"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh on_creation_complete {{skill_name}}"
+        }
+      ]
+    }
+  ]
+}

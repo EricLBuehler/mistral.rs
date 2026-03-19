@@ -35,6 +35,7 @@ safetensors.workspace = true
 regex.workspace = true
 hf-hub.workspace = true
 tokio.workspace = true
+parking_lot.workspace = true
 
 [features]
 cuda = [
