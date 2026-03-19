@@ -26,9 +26,10 @@ use crate::{
     ModelPaths, Ordering, TokenSource, GLOBAL_HF_CACHE,
 };
 
-// Match files against these, avoids situations like `consolidated.safetensors`
+// Match files against these
 const SAFETENSOR_MATCH: &str = r"model-\d+-of-\d+\.safetensors\b";
 const QUANT_SAFETENSOR_MATCH: &str = r"model\.safetensors\b";
+const CONSOLIDATED_SAFETENSOR_MATCH: &str = r"consolidated\.safetensors\b";
 const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}.((pth)|(pt)|(bin))\b";
 
 #[derive(Clone, Debug)]
@@ -67,8 +68,8 @@ pub fn get_xlora_paths(
                 let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(true)
                     .with_token(get_token(token_source)?);
-                if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                    api = api.with_cache_dir(x.into());
+                if let Some(cache_dir) = crate::hf_hub_cache_dir() {
+                    api = api.with_cache_dir(cache_dir);
                 }
                 api.build().map_err(candle_core::Error::msg)?
             };
@@ -92,7 +93,10 @@ pub fn get_xlora_paths(
             let xlora_classifier = xlora_classifier.first();
 
             let classifier_path = xlora_classifier
-                .map(|xlora_classifier| api_get_file!(api, xlora_classifier, model_id));
+                .map(|xlora_classifier| -> candle_core::Result<_> {
+                    Ok(api_get_file!(api, xlora_classifier, model_id))
+                })
+                .transpose()?;
 
             // Get the path for the xlora config by checking all for valid versions.
             // NOTE(EricLBuehler): Remove this functionality because all configs should be deserializable
@@ -277,8 +281,8 @@ pub fn get_xlora_paths(
                     let mut api = ApiBuilder::from_cache(cache)
                         .with_progress(true)
                         .with_token(get_token(token_source)?);
-                    if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                        api = api.with_cache_dir(x.into());
+                    if let Some(cache_dir) = crate::hf_hub_cache_dir() {
+                        api = api.with_cache_dir(cache_dir);
                     }
                     api.build().map_err(candle_core::Error::msg)?
                 };
@@ -328,8 +332,8 @@ pub fn get_model_paths(
                     let mut api = ApiBuilder::from_cache(cache)
                         .with_progress(true)
                         .with_token(get_token(token_source)?);
-                    if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                        api = api.with_cache_dir(x.into());
+                    if let Some(cache_dir) = crate::hf_hub_cache_dir() {
+                        api = api.with_cache_dir(cache_dir);
                     }
                     api.build().map_err(candle_core::Error::msg)?
                 };
@@ -347,6 +351,7 @@ pub fn get_model_paths(
             // We only match these patterns for model names
             let safetensor_match = Regex::new(SAFETENSOR_MATCH)?;
             let quant_safetensor_match = Regex::new(QUANT_SAFETENSOR_MATCH)?;
+            let consolidated_safetensor_match = Regex::new(CONSOLIDATED_SAFETENSOR_MATCH)?;
             let pickle_match = Regex::new(PICKLE_MATCH)?;
 
             let mut filenames = vec![];
@@ -354,6 +359,7 @@ pub fn get_model_paths(
                 safetensor_match.is_match(x)
                     || pickle_match.is_match(x)
                     || quant_safetensor_match.is_match(x)
+                    || consolidated_safetensor_match.is_match(x)
                     || x == UQFF_RESIDUAL_SAFETENSORS
             });
             let safetensors = listing
@@ -435,7 +441,8 @@ pub(crate) fn get_chat_template(
     } else if chat_template_ovrd.is_some() {
         None
     } else {
-        panic!("Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there. If you are running a GGUF model, it probably does not contain a chat template.");
+        info!("No chat template file found. Chat template may be set via `chat_template.json` or processor config.");
+        None
     };
     let mut template: ChatTemplate = match chat_template_ovrd {
         Some(chat_template) => {
@@ -446,20 +453,25 @@ pub(crate) fn get_chat_template(
             template
         }
         None => {
-            // Check if template_filename is a .jinja file
-            if let Some(template_filename) = paths.get_template_filename() {
-                if template_filename.extension().map(|e| e.to_str()) == Some(Some("jinja")) {
-                    info!("Using chat template from .jinja file.");
-                    let mut template = ChatTemplate::default();
-                    template.chat_template = Some(ChatTemplateValue(Either::Left(
-                        template_content.as_ref().unwrap().clone(),
-                    )));
-                    template
+            if let Some(ref content) = template_content {
+                // Check if template_filename is a .jinja file
+                if let Some(template_filename) = paths.get_template_filename() {
+                    if template_filename.extension().map(|e| e.to_str()) == Some(Some("jinja")) {
+                        info!("Using chat template from .jinja file.");
+                        let mut template = ChatTemplate::default();
+                        template.chat_template =
+                            Some(ChatTemplateValue(Either::Left(content.clone())));
+                        template
+                    } else {
+                        serde_json::from_str(content).unwrap()
+                    }
                 } else {
-                    serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap()
+                    serde_json::from_str(content).unwrap()
                 }
             } else {
-                serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap()
+                // No template content available; downstream code may fill in from
+                // chat_template.json, processor_config, or jinja_explicit.
+                ChatTemplate::default()
             }
         }
     };
@@ -522,47 +534,43 @@ pub(crate) fn get_chat_template(
     match &template.chat_template {
         Some(_) => template,
         None => {
-            info!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
-            let mut deser: HashMap<String, Value> =
-                serde_json::from_str(&template_content.unwrap()).unwrap();
+            if let Some(template_content) = template_content {
+                info!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
+                let mut deser: HashMap<String, Value> =
+                    serde_json::from_str(&template_content).unwrap();
 
-            match chat_template_fallback.cloned() {
-                Some(t) => {
-                    info!("Loading specified loading chat template file at `{t}`.");
-                    let templ: SpecifiedTemplate =
-                        serde_json::from_str(&fs::read_to_string(t.clone()).unwrap()).unwrap();
-                    deser.insert(
-                        "chat_template".to_string(),
-                        Value::String(templ.chat_template),
-                    );
-                    if templ.bos_token.is_some() {
+                match chat_template_fallback.cloned() {
+                    Some(t) => {
+                        info!("Loading specified loading chat template file at `{t}`.");
+                        let templ: SpecifiedTemplate =
+                            serde_json::from_str(&fs::read_to_string(t.clone()).unwrap()).unwrap();
                         deser.insert(
-                            "bos_token".to_string(),
-                            Value::String(templ.bos_token.unwrap()),
+                            "chat_template".to_string(),
+                            Value::String(templ.chat_template),
                         );
+                        if let Some(bos_token) = templ.bos_token {
+                            deser.insert("bos_token".to_string(), Value::String(bos_token));
+                        }
+                        if let Some(eos_token) = templ.eos_token {
+                            deser.insert("eos_token".to_string(), Value::String(eos_token));
+                        }
+                        if let Some(unk_token) = templ.unk_token {
+                            deser.insert("unk_token".to_string(), Value::String(unk_token));
+                        }
                     }
-                    if templ.eos_token.is_some() {
-                        deser.insert(
-                            "eos_token".to_string(),
-                            Value::String(templ.eos_token.unwrap()),
-                        );
-                    }
-                    if templ.unk_token.is_some() {
-                        deser.insert(
-                            "unk_token".to_string(),
-                            Value::String(templ.unk_token.unwrap()),
-                        );
+                    None => {
+                        warn!("No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.");
+                        deser.insert("chat_template".to_string(), Value::Null);
                     }
                 }
-                None => {
-                    warn!("No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.");
-                    deser.insert("chat_template".to_string(), Value::Null);
-                }
+
+                let ser = serde_json::to_string_pretty(&deser)
+                    .expect("Serialization of modified chat template failed.");
+                serde_json::from_str(&ser).unwrap()
+            } else {
+                warn!("No chat template source found. No chat template will be used. Only prompts will be accepted, not messages.");
+                template
             }
-
-            let ser = serde_json::to_string_pretty(&deser)
-                .expect("Serialization of modified chat template failed.");
-            serde_json::from_str(&ser).unwrap()
         }
     }
 }

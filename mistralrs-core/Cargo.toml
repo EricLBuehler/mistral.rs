@@ -1,6 +1,6 @@
 [package]
 name = "mistralrs-core"
-readme = "README.md"
+readme = "../README.md"
 authors = ["Eric Buehler"]
 version.workspace = true
 edition.workspace = true
@@ -72,13 +72,14 @@ mistralrs-quant.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 utoipa = { workspace = true, optional = true }
 schemars.workspace = true
-serde_yaml.workspace = true
+serde-saphyr.workspace = true
 regex.workspace = true
 serde_plain.workspace = true
 as-any.workspace = true
 float8.workspace = true
 llguidance.workspace = true
 toktrie_hf_tokenizers.workspace = true
+toktrie.workspace = true
 candle-flash-attn-v3 = { workspace = true, optional = true }
 safetensors.workspace = true
 serde-big-array.workspace = true
@@ -107,8 +108,9 @@ mistralrs-audio.workspace = true
 rust-mcp-schema.workspace = true
 mistralrs-mcp = { workspace = true, features = ["utoipa"] }
 statrs.workspace = true
+openai-harmony = "0.0.8"
 
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))'.dependencies]
 objc = { workspace = true, optional = true }
 objc2-metal = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
@@ -118,11 +120,10 @@ pyo3_macros = ["pyo3", "mistralrs-mcp/pyo3_macros"]
 cuda = [
     "candle-core/cuda",
     "candle-nn/cuda",
-    "dep:bindgen_cuda",
+    "dep:cudaforge",
     "mistralrs-quant/cuda",
     "dep:mistralrs-paged-attn",
     "mistralrs-paged-attn/cuda",
-    "float8/cuda",
 ]
 cudnn = ["candle-core/cudnn"]
 metal = [
@@ -145,4 +146,4 @@ ring = ["mistralrs-quant/ring"]
 parking-lot-scheduler = []
 
 [build-dependencies]
-bindgen_cuda = { workspace = true, optional = true }
+cudaforge = { workspace = true, optional = true }

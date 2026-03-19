@@ -9,7 +9,7 @@ pub(crate) use content::Content;
 pub(crate) use gguf_tokenizer::{convert_gguf_to_hf_tokenizer, GgufTokenizerConversion};
 use std::str::FromStr;
 
-pub const GGUF_MULTI_FILE_DELIMITER: &str = " ";
+pub const GGUF_MULTI_FILE_DELIMITER: &str = ";";
 
 #[derive(Debug, EnumString, Clone, Copy, strum::Display)]
 #[strum(serialize_all = "lowercase")]
@@ -29,6 +29,7 @@ pub enum GGUFArchitecture {
     Qwen2,
     Qwen3,
     Qwen3MoE,
+    Mistral3,
 }
 
 // Wraps from_str() for some convenience:

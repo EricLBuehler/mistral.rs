@@ -102,7 +102,7 @@ impl Topology {
 
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(topology: &str) -> anyhow::Result<Self> {
-        let deser: DeserTopology = serde_yaml::from_str(topology)?;
+        let deser: DeserTopology = serde_saphyr::from_str(topology)?;
         let device_regex = Regex::new(DEVICE_PATTERN)?;
 
         let mut range_layers = Vec::new();

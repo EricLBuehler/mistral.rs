@@ -7,21 +7,17 @@ The Python and HTTP APIs support sending images as:
 - Path to a local image
 - [Base64](https://en.wikipedia.org/wiki/Base64) encoded string
 
-The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
+The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
 > Note: The Phi 4 Multimodal model works best with one image although it is supported to send multiple images.
 
 > Note: when sending multiple images, they will be resized to the minimum dimension by which all will fit without cropping.
 > Aspect ratio is not preserved in that case.
 
-> [!NOTE]
-> The Phi 4 Multimodal model does not automatically add the image tokens!
-> They should be added to messages manually, and are of the format `<|image_{N}|>` where N starts from 1.
-
 [**Phi 4 multimodal supports audio inputs!**](#audio-input).
 
 ## HTTP server
-You can find this example [here](../examples/server/phi3v.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -35,7 +31,7 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 **Prompt:**
 ```
-<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.
+What is shown in this image? Write a detailed response analyzing the scene.
 ```
 
 **Output:**
@@ -47,11 +43,8 @@ A mountain with snow on it.
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 vision-plain -m microsoft/Phi-4-multimodal-instruct
+mistralrs serve vision -p 1234 -m microsoft/Phi-4-multimodal-instruct
 ```
 
 2) Send a request
@@ -75,7 +68,7 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.",
+                    "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                 },
             ],
         },
@@ -90,13 +83,13 @@ print(resp)
 
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
 
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/phi3v/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
 
 This is a minimal example of running the Phi 4 Multimodal model with a dummy image.
 
@@ -124,9 +117,8 @@ async fn main() -> Result<()> {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
-        image,
-        &model,
-    )?;
+        vec![image],
+    );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -141,7 +133,7 @@ async fn main() -> Result<()> {
 ```
 
 ## Python
-You can find this example [here](../examples/python/phi3v.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -172,7 +164,7 @@ res = runner.send_chat_completion_request(
                     },
                     {
                         "type": "text",
-                        "text": "<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.",
+                        "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                     },
                 ],
             }
@@ -189,7 +181,7 @@ print(res.usage)
 
 ## Audio input
 
-Alongside vision, Phi 4 Multimodal in `mistral.rs` can accept **audio** as an additional modality.  This unlocks fully-local pipelines such as **text + speech + vision → text** where the model can reason jointly over what it *hears* and what it *sees*.
+Alongside vision, Phi 4 Multimodal in `mistral.rs` can accept **audio** as an additional modality.  This unlocks fully-local pipelines such as **text + speech + vision -> text** where the model can reason jointly over what it *hears* and what it *sees*.
 
 `mistral.rs` automatically decodes the supplied audio (WAV/MP3/FLAC/OGG/… – anything [Symphonia](https://github.com/pdeljanov/Symphonia) can handle) into 16-bit PCM.
 
@@ -211,13 +203,13 @@ Audio is delivered with the `audio_url` content-type that mirrors OpenAIʼs offi
     },
     {
       "type": "text",
-      "text": "<|audio_1|><|image_1|>\nDescribe what is happening in this clip in as much detail as possible."
+      "text": "Describe what is happening in this clip in as much detail as possible."
     }
   ]
 }
 ```
 
-### Rust API
+### Rust SDK
 
 ```rust
 use anyhow::Result;
@@ -251,8 +243,7 @@ async fn main() -> Result<()> {
             "Describe in detail what is happening.",
             vec![image],
             vec![audio],
-            &model,
-        )?;
+        );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -263,5 +254,5 @@ async fn main() -> Result<()> {
 
 With this, you now have a single-call pipeline that fuses *sound*, *vision*, and *text* – all running locally through `mistral.rs`! 🔥
 
-- You can find an example of encoding the [image via base64 here](../examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).

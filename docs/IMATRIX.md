@@ -1,6 +1,6 @@
 # Enhancing ISQ with an imatrix
 
-Mistral.rs supports enhancing the performance of models quantized with ISQ by collecting an imatix from [calibration data](../calibration_data/). The following quantizations are supported with an imatrix:
+Mistral.rs supports enhancing the performance of models quantized with ISQ by collecting an imatix from [calibration data](https://github.com/EricLBuehler/mistral.rs/tree/master/calibration_data/). The following quantizations are supported with an imatrix:
 
 - `Q2K`
 - `Q3K`
@@ -17,12 +17,12 @@ Using an imatrix causes the quantization process to take longer as the data must
 To use this, simply specify the calibration data file in the various APIs as detailed below.
 
 ## With the CLI
-```
-./mistralrs-server -i --isq 4 plain -m meta-llama/Llama-3.2-3B-Instruct --calibration-file calibration_data/calibration_datav3_small.txt
+```bash
+mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct --calibration-file calibration_data/calibration_datav3_small.txt
 ```
 
-## With the Rust API
-You can find this example [here](../mistralrs/examples/imatrix/).
+## With the Rust SDK
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/imatrix/).
 
 ```rust
 let model = TextModelBuilder::new("meta-llama/Llama-3.2-3B-Instruct")
@@ -34,8 +34,8 @@ let model = TextModelBuilder::new("meta-llama/Llama-3.2-3B-Instruct")
     .await?;
 ```
 
-## With the Python API
-You can find this example [here](../examples/python/imatrix.py).
+## With the Python SDK
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/imatrix.py).
 
 ```python
 runner = Runner(

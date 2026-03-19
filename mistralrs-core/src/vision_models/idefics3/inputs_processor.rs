@@ -15,7 +15,7 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::Sequence,
+    sequence::{build_mm_features_from_ranges, find_image_delimited_ranges, Sequence},
     vision_models::ModelInputs,
 };
 
@@ -162,9 +162,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
                         (usize::MAX, usize::MAX), // Don't use it here...
                     )
                     .expect("Preprocessing failed");
-                pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
-                pixel_attention_mask_accum
-                    .push(pixel_attention_mask.unwrap().unsqueeze(0).unwrap());
+                let pixel_attention_mask = pixel_attention_mask.unwrap();
 
                 if !seq.multimodal.has_changed_prompt {
                     let detok = tokenizer
@@ -199,15 +197,60 @@ impl InputsProcessor for Idefics3ImageProcessor {
                         .expect("Detokenization failed!");
 
                     let ids = toks.get_ids().to_vec();
+
+                    // Build mm_features for position-aware prefix cache hashing
+                    if seq.mm_features().is_empty() {
+                        if let (Some(hashes), Some(fake_id)) = (
+                            seq.image_hashes().map(|h| h.to_vec()),
+                            tokenizer.token_to_id(FAKE_IMAGE_TOKEN),
+                        ) {
+                            // Each image is wrapped in FAKE_IMAGE_TOKEN pairs.
+                            // Find all FAKE_IMAGE_TOKEN...FAKE_IMAGE_TOKEN ranges.
+                            let ranges = find_image_delimited_ranges(&ids, fake_id, fake_id);
+                            seq.set_mm_features(build_mm_features_from_ranges(
+                                &ranges, &hashes, "img",
+                            ));
+                        }
+                    }
+
                     seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
                     seq.multimodal.has_changed_prompt = true;
                 }
+
+                // Per-sequence prefix cache trimming of pixel_values and pixel_attention_mask
+                let cached = seq.count_prefix_cached_mm_items();
+                let n_sub = pixel_values.dim(0).unwrap_or(0);
+                if cached < n_sub {
+                    if cached > 0 {
+                        pixel_values_accum.push(
+                            pixel_values
+                                .narrow(0, cached, n_sub - cached)
+                                .unwrap()
+                                .unsqueeze(0)
+                                .unwrap(),
+                        );
+                        pixel_attention_mask_accum.push(
+                            pixel_attention_mask
+                                .narrow(0, cached, n_sub - cached)
+                                .unwrap()
+                                .unsqueeze(0)
+                                .unwrap(),
+                        );
+                    } else {
+                        pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
+                        pixel_attention_mask_accum.push(pixel_attention_mask.unsqueeze(0).unwrap());
+                    }
+                }
             }
 
-            (
-                Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
-                Some(Tensor::cat(&pixel_attention_mask_accum, 0).unwrap()),
-            )
+            if pixel_values_accum.is_empty() {
+                (None, None)
+            } else {
+                (
+                    Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
+                    Some(Tensor::cat(&pixel_attention_mask_accum, 0).unwrap()),
+                )
+            }
         } else {
             (None, None)
         };
@@ -254,13 +297,43 @@ impl InputsProcessor for Idefics3ImageProcessor {
             .unwrap()
         };
 
+        let pixel_values = if is_prompt { pixel_values } else { None };
+        let pixel_attention_mask = if is_prompt {
+            pixel_attention_mask
+        } else {
+            None
+        };
+
+        let image_hashes: Vec<u64> = if is_prompt {
+            input_seqs
+                .iter()
+                .flat_map(|seq| {
+                    seq.image_hashes()
+                        .map(|h| {
+                            let cached = seq.count_prefix_cached_mm_items();
+                            if cached < h.len() {
+                                h[cached..].to_vec()
+                            } else {
+                                vec![]
+                            }
+                        })
+                        .unwrap_or_default()
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
             context_lens,
             position_ids,
             pixel_values,
-            model_specific_args: Box::new(pixel_attention_mask),
+            model_specific_args: Box::new(super::Idefics3SpecificArgs {
+                pixel_attention_mask,
+                image_hashes,
+            }),
             paged_attn_meta,
             flash_meta,
         });

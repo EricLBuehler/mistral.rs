@@ -130,10 +130,9 @@ pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
         _ => None,
     };
 
-    let bos = if props.bos.is_some() {
-        Some(props.tokens[props.bos.unwrap() as usize].clone())
-    } else {
-        None
+    let bos = match props.bos {
+        Some(b) => Some(props.tokens[b as usize].clone()),
+        None => None,
     };
 
     Ok(GgufTokenizerConversion {

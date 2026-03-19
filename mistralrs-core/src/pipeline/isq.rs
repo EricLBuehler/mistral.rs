@@ -13,7 +13,7 @@ use std::{
 ///
 /// *Purpose*: lets us pass raw byte buffers to
 /// `safetensors::serialize_to_file` without cloning them into a `Vec<u8>` or
-/// converting to a higher‑level tensor type.  
+/// converting to a higher‑level tensor type.
 /// We expose the buffer as a 1‑D `u8` tensor of shape `[len]`.
 #[derive(Clone)]
 pub struct CowBytesView<'a> {
@@ -55,9 +55,9 @@ use candle_core::{quantized, Context, Device, Tensor};
 use indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use mistralrs_quant::{
-    AfqLayer, CollectedImatrixData, ColumnParallelLayer, DistributedKind, FP8Linear, GgufMatMul,
-    HqqLayer, IsqType, QuantMethod, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
-    ReplicatedLayer, RowParallelLayer, UnquantLinear,
+    AfqLayer, CollectedImatrixData, ColumnParallelLayer, DistributedKind, F8Q8Linear, FP8Linear,
+    GgufMatMul, HqqLayer, IsqBits, IsqType, QuantMethod, QuantizeOntoGuard, QuantizedSerde,
+    QuantizedSerdeType, ReplicatedLayer, RowParallelLayer, UnquantLinear,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use regex::Regex;
@@ -72,7 +72,10 @@ use crate::{
 
 pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
 // 10 GB max per file
+#[cfg(target_pointer_width = "64")]
 const MAX_UQFF_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
+#[cfg(not(target_pointer_width = "64"))]
+const MAX_UQFF_SIZE_BYTES: usize = usize::MAX;
 pub const UQFF_MULTI_FILE_DELIMITER: &str = ";";
 
 /// Parse ISQ value.
@@ -104,19 +107,22 @@ pub const UQFF_MULTI_FILE_DELIMITER: &str = ";";
 /// - `AFQ6`
 /// - `AFQ8`
 pub fn parse_isq_value(s: &str, device: Option<&Device>) -> Result<IsqType, String> {
-    let is_metal = device.map(|device| device.is_metal()).unwrap_or(false);
-    let tp = match s.to_lowercase().as_str() {
-        "2" if is_metal => IsqType::AFQ2,
-        "2" if !is_metal => IsqType::Q2K,
-        "3" if is_metal => IsqType::AFQ3,
-        "3" if !is_metal => IsqType::Q3K,
-        "4" if is_metal => IsqType::AFQ4,
-        "4" if !is_metal => IsqType::Q4K,
-        "5" => IsqType::Q5K,
-        "6" if is_metal => IsqType::AFQ6,
-        "6" if !is_metal => IsqType::Q6K,
-        "8" if is_metal => IsqType::AFQ8,
-        "8" if !is_metal => IsqType::Q8_0,
+    let lowered = s.to_lowercase();
+
+    // Numeric shorthands resolve via IsqBits
+    if let Ok(bits) = IsqBits::try_from(lowered.as_str()) {
+        let tp = match device {
+            Some(dev) => bits.resolve(dev),
+            None => bits.resolve(&Device::Cpu),
+        };
+        #[cfg(feature = "cuda")]
+        {
+            // All IsqBits resolutions are CUDA-safe, so no extra check needed.
+        }
+        return Ok(tp);
+    }
+
+    let tp = match lowered.as_str() {
         "q4_0" => IsqType::Q4_0,
         "q4_1" => IsqType::Q4_1,
         "q5_0" => IsqType::Q5_0,
@@ -137,10 +143,11 @@ pub fn parse_isq_value(s: &str, device: Option<&Device>) -> Result<IsqType, Stri
         "afq4" => IsqType::AFQ4,
         "afq3" => IsqType::AFQ3,
         "afq2" => IsqType::AFQ2,
+        "f8q8" => IsqType::F8Q8,
         // "hqq3" => IsqType::HQQ3,
         // "hqq2" => IsqType::HQQ2,
         // "hqq1" => IsqType::HQQ1,
-        _ => return Err(format!("ISQ type {s} unknown, choose one of `2`, `3`, `4`, `6`, `8`, `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`, `AFQ8`, `AFQ6`, `AFQ4`, `AFQ3`, `AFQ2`.")),
+        _ => return Err(format!("ISQ type {s} unknown, choose one of `2`, `3`, `4`, `5`, `6`, `8`, `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`, `AFQ8`, `AFQ6`, `AFQ4`, `AFQ3`, `AFQ2`, `F8Q8`.")),
     };
     #[cfg(feature = "cuda")]
     {
@@ -158,17 +165,71 @@ pub fn parse_isq_value(s: &str, device: Option<&Device>) -> Result<IsqType, Stri
                 | IsqType::Q6K
                 | IsqType::HQQ8
                 | IsqType::HQQ4
-                | IsqType::F8E4M3 // | IsqType::HQQ3
-                                  // | IsqType::HQQ2
-                                  // | IsqType::HQQ1
+                | IsqType::F8E4M3
+                | IsqType::AFQ2
+                | IsqType::AFQ3
+                | IsqType::AFQ4
+                | IsqType::AFQ6
+                | IsqType::AFQ8
+                | IsqType::F8Q8 // | IsqType::HQQ3
+                                // | IsqType::HQQ2
+                                // | IsqType::HQQ1
         ) {
-            return Err("ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`, `FP8`".to_string());
+            return Err("ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`, `FP8`, `AFQ8`, `AFQ6`, `AFQ4`, `AFQ3`, `AFQ2`, `F8Q8`".to_string());
         }
     }
     Ok(tp)
 }
 
-#[derive(Clone, Debug, Copy, Default, Deserialize)]
+/// Expand an ISQ specifier into concrete `IsqType` variants.
+/// Numeric shorthands (2-8) produce both the non-Metal and Metal variants;
+/// explicit method names resolve to a single variant.
+pub fn expand_isq_value(s: &str) -> anyhow::Result<Vec<IsqType>> {
+    if let Ok(bits) = IsqBits::try_from(s.to_lowercase().as_str()) {
+        return Ok(bits.expand());
+    }
+    let isq = parse_isq_value(s, None).map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(vec![isq])
+}
+
+/// Given a UQFF filename like `"q4k-0.uqff"`, returns `Some(("q4k", 0))`.
+/// Returns `None` for non-sharded filenames like `"model.uqff"` where the
+/// suffix after the last `-` is not a number.
+pub fn parse_uqff_shard(filename: &str) -> Option<(String, u64)> {
+    let stem = std::path::Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())?;
+    let (prefix, suffix) = stem.rsplit_once('-')?;
+    let index = suffix.parse::<u64>().ok()?;
+    Some((prefix.to_string(), index))
+}
+
+/// Expand a single UQFF filename to include all sibling shards.
+///
+/// Given `"q4k-0.uqff"` and a list of available files, returns
+/// `["q4k-0.uqff", "q4k-1.uqff", ...]` for all sequential indices found.
+/// Non-sharded filenames (those not matching `{prefix}-{N}.uqff`) are returned as-is.
+pub fn expand_uqff_shards(first_file: &str, available_files: &[String]) -> Vec<String> {
+    let Some((prefix, _)) = parse_uqff_shard(first_file) else {
+        return vec![first_file.to_string()];
+    };
+    let mut shards = Vec::new();
+    for index in 0u64.. {
+        let candidate = format!("{prefix}-{index}.uqff");
+        if available_files.iter().any(|f| f == &candidate) {
+            shards.push(candidate);
+        } else {
+            break;
+        }
+    }
+    if shards.is_empty() {
+        vec![first_file.to_string()]
+    } else {
+        shards
+    }
+}
+
+#[derive(Clone, Debug, Copy, Default, Deserialize, serde::Serialize)]
 pub enum IsqOrganization {
     #[default]
     #[serde(rename = "default")]
@@ -615,51 +676,73 @@ pub trait IsqModel {
                         .progress_chars("#>-"),
                 );
 
-                #[cfg(not(feature = "metal"))]
-                let n_threads = 2;
-                #[cfg(feature = "metal")]
-                let n_threads = 1;
+                // Metal and CUDA require serialization on the current thread because GPU contexts are thread-local.
+                // Using a rayon thread pool (even with n_threads=1) creates a new thread without the GPU context.
+                #[cfg(any(feature = "metal", feature = "cuda"))]
+                let quantized_values: candle_core::Result<Vec<_>> = {
+                    tensors
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (layer, _))| layer.isq_serde_supported())
+                        .map(|(i, (layer, _))| {
+                            if !silent {
+                                bar.inc(1);
+                            }
+                            Ok((
+                                i.to_string(),
+                                match layer.serialize()? {
+                                    Cow::Borrowed(_) => unreachable!(),
+                                    Cow::Owned(owned) => owned,
+                                },
+                            ))
+                        })
+                        .collect()
+                };
 
-                let pool = rayon::ThreadPoolBuilder::new()
-                    .num_threads(n_threads)
-                    .build()
-                    .map_err(candle_core::Error::msg)?;
+                #[cfg(not(any(feature = "metal", feature = "cuda")))]
+                let quantized_values: candle_core::Result<Vec<_>> = {
+                    let pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(2)
+                        .build()
+                        .map_err(candle_core::Error::msg)?;
 
-                let quantized_values = pool.install(|| {
-                    use rayon::iter::IntoParallelRefIterator;
-                    if silent {
-                        tensors
-                            .par_iter()
-                            .enumerate()
-                            .filter(|(_, (layer, _))| layer.isq_serde_supported())
-                            .map(|(i, (layer, _))| {
-                                Ok((
-                                    i.to_string(),
-                                    match layer.serialize()? {
-                                        Cow::Borrowed(_) => unreachable!(),
-                                        Cow::Owned(owned) => owned,
-                                    },
-                                ))
-                            })
-                            .collect::<candle_core::Result<Vec<_>>>()
-                    } else {
-                        tensors
-                            .par_iter()
-                            .enumerate()
-                            .progress_with(bar)
-                            .filter(|(_, (layer, _))| layer.isq_serde_supported())
-                            .map(|(i, (layer, _))| {
-                                Ok((
-                                    i.to_string(),
-                                    match layer.serialize()? {
-                                        Cow::Borrowed(_) => unreachable!(),
-                                        Cow::Owned(owned) => owned,
-                                    },
-                                ))
-                            })
-                            .collect::<candle_core::Result<Vec<_>>>()
-                    }
-                });
+                    pool.install(|| {
+                        use rayon::iter::IntoParallelRefIterator;
+                        if silent {
+                            tensors
+                                .par_iter()
+                                .enumerate()
+                                .filter(|(_, (layer, _))| layer.isq_serde_supported())
+                                .map(|(i, (layer, _))| {
+                                    Ok((
+                                        i.to_string(),
+                                        match layer.serialize()? {
+                                            Cow::Borrowed(_) => unreachable!(),
+                                            Cow::Owned(owned) => owned,
+                                        },
+                                    ))
+                                })
+                                .collect::<candle_core::Result<Vec<_>>>()
+                        } else {
+                            tensors
+                                .par_iter()
+                                .enumerate()
+                                .progress_with(bar)
+                                .filter(|(_, (layer, _))| layer.isq_serde_supported())
+                                .map(|(i, (layer, _))| {
+                                    Ok((
+                                        i.to_string(),
+                                        match layer.serialize()? {
+                                            Cow::Borrowed(_) => unreachable!(),
+                                            Cow::Owned(owned) => owned,
+                                        },
+                                    ))
+                                })
+                                .collect::<candle_core::Result<Vec<_>>>()
+                        }
+                    })
+                };
+
                 let quantized_values = quantized_values?;
 
                 let parent = serialized
@@ -1005,6 +1088,12 @@ pub trait IsqModel {
                                         &comm,
                                         guard.clone(),
                                     )?,
+                                    QuantizedSerdeType::F8Q8 => F8Q8Linear::deserialize(
+                                        Cow::from(artifact),
+                                        &devices[i],
+                                        &comm,
+                                        guard.clone(),
+                                    )?,
                                 }
                             }
                         };
@@ -1078,6 +1167,12 @@ pub trait IsqModel {
                                         &comm,
                                         guard.clone(),
                                     )?,
+                                    QuantizedSerdeType::F8Q8 => F8Q8Linear::deserialize(
+                                        Cow::from(artifact),
+                                        &devices[i],
+                                        &comm,
+                                        guard.clone(),
+                                    )?,
                                 }
                             }
                         };
@@ -1086,6 +1181,18 @@ pub trait IsqModel {
                     Ok(())
                 })
                 .collect::<candle_core::Result<Vec<_>>>()?;
+        }
+
+        // Verify no DummyLayers remain after deserialization
+        {
+            let (check_tensors, _) = self.get_layers();
+            for (i, (tensor, layer_num)) in check_tensors.iter().enumerate() {
+                if tensor.name() == "dummy" {
+                    candle_core::bail!(
+                        "DummyLayer not replaced at index {i}, layer {layer_num:?} after load_from_artifacts"
+                    );
+                }
+            }
         }
 
         let delta = Instant::now().duration_since(t_start).as_secs_f32();

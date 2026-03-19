@@ -16,7 +16,10 @@ mod single_cache;
 mod tests;
 
 pub use full_cache::{EitherCache, LayerCaches};
-pub use hybrid_cache::{HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType};
+pub use hybrid_cache::{
+    HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
+    RecurrentStateSnapshot,
+};
 pub use rotating_cache::RotatingCache;
 pub use single_cache::SingleCache;
 
@@ -892,15 +895,15 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for FullCach
     }
 }
 
-/// Cache manager for hybrid models (attention + Mamba layers).
+/// Cache manager for hybrid models (attention + recurrent layers).
 ///
 /// This implements vLLM-style continuous batching:
 /// - Attention layers: Standard KV cache batching (cat on clone_in, chunk on clone_out)
-/// - Mamba layers: Pool-based state management with indexed access
+/// - Recurrent layers: Pool-based state management with indexed access
 ///
-/// For Mamba, each sequence has a `mamba_state_idx` pointing to its slot in the
-/// pre-allocated state pool. The forward pass builds a `state_indices` tensor
-/// from these indices and uses gather/scatter operations.
+/// Each sequence has a `recurrent_state_idx` pointing to its slot in the
+/// state pool. The forward pass builds a `state_indices` tensor from these
+/// indices and uses gather/scatter operations.
 pub struct HybridCacheManager;
 
 impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCacheManager {
@@ -908,30 +911,70 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
         &self,
         pipeline: &T,
         seqs: &mut [&mut crate::sequence::Sequence],
-        _modify_draft_cache: bool,
+        modify_draft_cache: bool,
     ) {
         let mut hybrid_cache = pipeline.cache().hybrid();
         let num_layers = hybrid_cache.num_layers();
 
-        // Build state_indices for Mamba layers from sequences' mamba_state_idx
-        // Find the device from the first Mamba layer's pool
-        let mamba_device = hybrid_cache.caches.iter().find_map(|c| {
-            if let HybridLayerCache::Mamba(pool) = c {
+        // Build state_indices for recurrent layers from sequences' recurrent_state_idx
+        // Find the device from the first recurrent layer's pool
+        let recurrent_device = hybrid_cache.caches.iter().find_map(|c| {
+            if let HybridLayerCache::Recurrent(pool) = c {
                 Some(pool.device().clone())
             } else {
                 None
             }
         });
 
-        if let Some(device) = mamba_device {
-            // Build state_indices tensor from sequences
-            #[allow(clippy::cast_possible_truncation)]
-            let indices: Vec<u32> = seqs
-                .iter()
-                .map(|seq| seq.mamba_state_idx().unwrap_or(0) as u32)
-                .collect();
-            if let Ok(state_indices) = Tensor::from_vec(indices, (seqs.len(),), &device) {
-                hybrid_cache.set_state_indices(Some(state_indices));
+        // Ensure every sequence has a recurrent slot when using hybrid cache.
+        let mut state_index_allocation_failed = false;
+        let mut newly_allocated = Vec::new();
+        for (seq_idx, seq) in seqs.iter_mut().enumerate() {
+            if seq.recurrent_state_idx().is_none() {
+                if let Some(slot_idx) = hybrid_cache.allocate_seq() {
+                    seq.set_recurrent_state_idx(Some(slot_idx));
+                    newly_allocated.push((seq_idx, slot_idx));
+                } else {
+                    tracing::warn!(
+                        "Failed to allocate recurrent state slot for sequence {}, hybrid forward will fail for this batch.",
+                        seq.id()
+                    );
+                    state_index_allocation_failed = true;
+                    break;
+                }
+            }
+        }
+        if state_index_allocation_failed {
+            for (seq_idx, slot_idx) in newly_allocated {
+                seqs[seq_idx].set_recurrent_state_idx(None);
+                hybrid_cache.free_seq(slot_idx);
+            }
+        }
+
+        if let Some(device) = recurrent_device {
+            if state_index_allocation_failed {
+                hybrid_cache.set_state_indices(None);
+            } else {
+                // Build state_indices tensor from sequences
+                let mut indices = Vec::with_capacity(seqs.len());
+                for seq in seqs.iter() {
+                    if let Some(idx) = seq.recurrent_state_idx() {
+                        #[allow(clippy::cast_possible_truncation)]
+                        indices.push(idx as u32);
+                    } else {
+                        tracing::warn!(
+                            "Sequence {} missing recurrent_state_idx during hybrid clone_in_cache.",
+                            seq.id()
+                        );
+                        hybrid_cache.set_state_indices(None);
+                        return;
+                    }
+                }
+                if let Ok(state_indices) = Tensor::from_vec(indices, (seqs.len(),), &device) {
+                    hybrid_cache.set_state_indices(Some(state_indices));
+                } else {
+                    hybrid_cache.set_state_indices(None);
+                }
             }
         }
 
@@ -946,7 +989,12 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                 let mut template_cache: Option<KvCache> = None;
 
                 for seq in seqs.iter_mut() {
-                    if let Some(Some(ref kv)) = seq.normal_cache().get(layer_idx) {
+                    let seq_cache = if modify_draft_cache {
+                        seq.normal_draft_cache()
+                    } else {
+                        seq.normal_cache()
+                    };
+                    if let Some(Some(ref kv)) = seq_cache.get(layer_idx) {
                         if template_cache.is_none() {
                             template_cache = Some(kv.clone());
                         }
@@ -958,15 +1006,17 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                 }
 
                 if !k_tensors.is_empty() {
+                    // cat/clone of narrow'd views may be non-contiguous;
+                    // all_data must be contiguous for slice_set in SingleCache::append.
                     let batched_k = if k_tensors.len() > 1 {
                         Tensor::cat(&k_tensors, 0).unwrap()
                     } else {
-                        k_tensors[0].clone()
+                        k_tensors[0].contiguous().unwrap()
                     };
                     let batched_v = if v_tensors.len() > 1 {
                         Tensor::cat(&v_tensors, 0).unwrap()
                     } else {
-                        v_tensors[0].clone()
+                        v_tensors[0].contiguous().unwrap()
                     };
 
                     if let Some(ref template) = template_cache {
@@ -974,15 +1024,19 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                             (KvCache::Normal { k: tk, .. }, KvCache::Normal { k, v }) => {
                                 k.all_data = Some(batched_k);
                                 k.current_seq_len = tk.current_seq_len;
+                                k.capacity_seq_len = tk.current_seq_len;
                                 v.all_data = Some(batched_v);
                                 v.current_seq_len = tk.current_seq_len;
+                                v.capacity_seq_len = tk.current_seq_len;
                             }
                             (KvCache::Rotating { k: tk, .. }, KvCache::Rotating { k, v }) => {
                                 k.all_data = Some(batched_k);
                                 k.current_seq_len = tk.current_seq_len;
+                                k.capacity_seq_len = tk.current_seq_len;
                                 k.offset = tk.offset;
                                 v.all_data = Some(batched_v);
                                 v.current_seq_len = tk.current_seq_len;
+                                v.capacity_seq_len = tk.current_seq_len;
                                 v.offset = tk.offset;
                             }
                             _ => {}
@@ -990,12 +1044,12 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                     }
                 }
             }
-            // For Mamba layers: No copying needed!
+            // For recurrent layers: No copying needed!
             // The pool is accessed directly via state_indices during forward.
         }
     }
 
-    fn clone_out_cache(&self, pipeline: &T, seqs: &mut [&mut Sequence], _modify_draft_cache: bool) {
+    fn clone_out_cache(&self, pipeline: &T, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         let hybrid_cache = pipeline.cache().hybrid();
         let num_layers = hybrid_cache.num_layers();
         let num_seqs = seqs.len();
@@ -1010,26 +1064,33 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                     let v_chunks = v.chunk(num_seqs, 0).unwrap();
 
                     for (seq_idx, seq) in seqs.iter_mut().enumerate() {
-                        let seq_k = k_chunks.get(seq_idx).unwrap().clone();
-                        let seq_v = v_chunks.get(seq_idx).unwrap().clone();
+                        // chunk() returns non-contiguous views; all_data must be contiguous.
+                        let seq_k = k_chunks.get(seq_idx).unwrap().contiguous().unwrap();
+                        let seq_v = v_chunks.get(seq_idx).unwrap().contiguous().unwrap();
+
+                        let seq_cache = if modify_draft_cache {
+                            seq.normal_draft_cache()
+                        } else {
+                            seq.normal_cache()
+                        };
 
                         // Initialize cache if needed
-                        if seq.normal_cache().get(layer_idx).is_none()
-                            || seq.normal_cache()[layer_idx].is_none()
-                        {
-                            while seq.normal_cache().len() <= layer_idx {
-                                seq.normal_cache().push(None);
+                        if seq_cache.get(layer_idx).is_none() || seq_cache[layer_idx].is_none() {
+                            while seq_cache.len() <= layer_idx {
+                                seq_cache.push(None);
                             }
-                            seq.normal_cache()[layer_idx] = Some(kv_cache.clone());
+                            seq_cache[layer_idx] = Some(kv_cache.clone());
                         }
 
-                        if let Some(ref mut seq_kv) = seq.normal_cache()[layer_idx] {
+                        if let Some(ref mut seq_kv) = seq_cache[layer_idx] {
                             match (kv_cache, seq_kv) {
                                 (KvCache::Normal { k: src_k, .. }, KvCache::Normal { k, v }) => {
                                     k.all_data = Some(seq_k);
                                     k.current_seq_len = src_k.current_seq_len;
+                                    k.capacity_seq_len = src_k.current_seq_len;
                                     v.all_data = Some(seq_v);
                                     v.current_seq_len = src_k.current_seq_len;
+                                    v.capacity_seq_len = src_k.current_seq_len;
                                 }
                                 (
                                     KvCache::Rotating { k: src_k, .. },
@@ -1037,9 +1098,11 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                                 ) => {
                                     k.all_data = Some(seq_k);
                                     k.current_seq_len = src_k.current_seq_len;
+                                    k.capacity_seq_len = src_k.current_seq_len;
                                     k.offset = src_k.offset;
                                     v.all_data = Some(seq_v);
                                     v.current_seq_len = src_k.current_seq_len;
+                                    v.capacity_seq_len = src_k.current_seq_len;
                                     v.offset = src_k.offset;
                                 }
                                 _ => {}
@@ -1048,7 +1111,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                     }
                 }
             }
-            // For Mamba layers: No splitting needed!
+            // For recurrent layers: No splitting needed!
             // The pool was updated in-place during forward via scatter operations.
         }
     }
@@ -1057,16 +1120,21 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
         &self,
         pipeline: &T,
         seqs: &mut [&mut Sequence],
-        _modify_draft_cache: bool,
+        modify_draft_cache: bool,
         _load_preallocated_cache: bool,
     ) {
         // Reset attention KV caches in sequences
         for seq in seqs.iter_mut() {
-            for kv in seq.normal_cache().iter_mut().flatten() {
+            let seq_cache = if modify_draft_cache {
+                seq.normal_draft_cache()
+            } else {
+                seq.normal_cache()
+            };
+            for kv in seq_cache.iter_mut().flatten() {
                 kv.reset();
             }
         }
-        // Reset the hybrid cache (including Mamba state pools)
+        // Reset the hybrid cache (including recurrent state pools)
         pipeline.cache().hybrid().reset();
     }
 }

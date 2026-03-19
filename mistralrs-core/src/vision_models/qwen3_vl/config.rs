@@ -4,18 +4,26 @@ use crate::layers::Activation;
 
 use crate::serde_default_fn;
 
-serde_default_fn!(Activation, default_vision_hidden_act, Activation::QuickGelu);
+serde_default_fn!(
+    Activation,
+    default_vision_hidden_act,
+    Activation::GeluPytorchTanh
+);
 serde_default_fn!(usize, default_in_channels, 3);
-serde_default_fn!(usize, default_depth, 32);
-serde_default_fn!(usize, default_hidden_size, 3584);
+serde_default_fn!(usize, default_depth, 27);
+serde_default_fn!(usize, default_hidden_size, 1152);
 serde_default_fn!(usize, default_out_hidden_size, 3584);
-serde_default_fn!(usize, default_intermediate_size, 3420);
+serde_default_fn!(usize, default_intermediate_size, 4304);
 serde_default_fn!(usize, default_num_heads, 16);
-serde_default_fn!(usize, default_patch_size, 14);
+serde_default_fn!(usize, default_patch_size, 16);
 serde_default_fn!(usize, default_spatial_merge_size, 2);
 serde_default_fn!(usize, default_temporal_patch_size, 2);
-serde_default_fn!(usize, default_num_position_embeddings, 576);
-serde_default_fn!(Vec<usize>, default_deepstack_visual_indexes, Vec::new());
+serde_default_fn!(usize, default_num_position_embeddings, 2304);
+serde_default_fn!(
+    Vec<usize>,
+    default_deepstack_visual_indexes,
+    vec![8, 16, 24]
+);
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct VisionConfig {
@@ -45,10 +53,10 @@ pub struct VisionConfig {
     pub deepstack_visual_indexes: Vec<usize>,
 }
 
-// #[derive(Debug, Clone, serde::Deserialize)]
-// pub struct MRopeScaling {
-//     pub mrope_section: Vec<usize>,
-// }
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct MRopeScaling {
+    pub mrope_section: Vec<usize>,
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct TextConfig {
@@ -64,11 +72,12 @@ pub struct TextConfig {
     pub rms_norm_eps: f64,
     pub rope_theta: f64,
     pub sliding_window: Option<usize>,
-    // pub rope_scaling: MRopeScaling,
+    pub rope_scaling: MRopeScaling,
     #[serde(default)]
     pub quantization_config: Option<QuantizedConfig>,
-    // pub vision_start_token_id: usize,
-    // pub max_window_layers: usize,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub max_window_layers: usize,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

@@ -1,6 +1,6 @@
 use mistralrs_core::*;
 
-use crate::{best_device, Model, TextModelBuilder};
+use crate::{best_device, resolve_isq, Model, TextModelBuilder};
 
 /// Wrapper of [`TextModelBuilder`] for X-LoRA models.
 pub struct XLoraModelBuilder {
@@ -11,6 +11,7 @@ pub struct XLoraModelBuilder {
 }
 
 impl XLoraModelBuilder {
+    /// Create an X-LoRA builder from a [`TextModelBuilder`], X-LoRA model ID, and ordering.
     pub fn from_text_model_builder(
         text_model: TextModelBuilder,
         xlora_model_id: impl ToString,
@@ -24,11 +25,13 @@ impl XLoraModelBuilder {
         }
     }
 
+    /// Set the target non-granular index for X-LoRA scaling.
     pub fn tgt_non_granular_index(mut self, tgt_non_granular_idx: usize) -> Self {
         self.tgt_non_granular_index = Some(tgt_non_granular_idx);
         self
     }
 
+    /// Load the X-LoRA model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = NormalSpecificConfig {
             topology: self.text_model.topology,
@@ -63,16 +66,24 @@ impl XLoraModelBuilder {
         .build(self.text_model.loader_type)?;
 
         // Load, into a Pipeline
+        let device = best_device(self.text_model.force_cpu)?;
+        let isq_type: Option<IsqType> = self
+            .text_model
+            .isq
+            .as_ref()
+            .map(|s| resolve_isq(s, &device))
+            .transpose()?;
+
         let pipeline = loader.load_model_from_hf(
             self.text_model.hf_revision,
             self.text_model.token_source,
             &self.text_model.dtype,
-            &best_device(self.text_model.force_cpu)?,
+            &device,
             !self.text_model.with_logging,
             self.text_model
                 .device_mapping
                 .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
-            self.text_model.isq,
+            isq_type,
             self.text_model.paged_attn_cfg,
         )?;
 

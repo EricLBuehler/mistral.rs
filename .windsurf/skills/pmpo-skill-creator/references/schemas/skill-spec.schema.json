@@ -1,0 +1,96 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Skill Specification",
+  "description": "Output contract for the Specify phase — defines what skill to build and how",
+  "type": "object",
+  "required": ["skill_name", "skill_description", "intent", "mode", "complexity_tier", "target_platforms", "pmpo_phases"],
+  "properties": {
+    "skill_name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*[a-z0-9]$",
+      "maxLength": 64,
+      "description": "Kebab-case skill identifier"
+    },
+    "skill_description": {
+      "type": "string",
+      "maxLength": 1024,
+      "minLength": 1,
+      "description": "What the skill does and when to use it"
+    },
+    "intent": {
+      "type": "string",
+      "description": "Full description of the skill's purpose"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["create", "clone", "extend"],
+      "description": "Creation mode"
+    },
+    "source_skill": {
+      "type": ["string", "null"],
+      "description": "Path to source skill for clone/extend modes"
+    },
+    "domain": {
+      "type": "string",
+      "description": "Primary domain for the skill"
+    },
+    "complexity_tier": {
+      "type": "string",
+      "enum": ["simple", "standard", "full"],
+      "description": "Determines file count and feature set"
+    },
+    "target_platforms": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["agentskills-io", "claude-code", "opencode", "cursor", "gemini-cli"]
+      },
+      "minItems": 1,
+      "description": "Which platforms to generate for"
+    },
+    "tools_directory": {
+      "type": ["string", "null"],
+      "description": "Custom tools output directory (e.g., .opencode/tools/)"
+    },
+    "allowed_tools": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Tools the generated skill needs"
+    },
+    "pmpo_phases": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Which PMPO phases to include"
+    },
+    "planned_agents": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Agent names to generate"
+    },
+    "planned_domains": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Domain adapter names"
+    },
+    "planned_sub_skills": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Sub-skill slash commands"
+    },
+    "planned_schemas": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Schema file names to generate"
+    },
+    "constraints": {
+      "type": "object",
+      "properties": {
+        "max_skill_md_lines": { "type": "integer", "default": 500 },
+        "require_frontmatter": { "type": "boolean", "default": true },
+        "require_schemas": { "type": "boolean", "default": true },
+        "require_state_management": { "type": "boolean" },
+        "require_hooks": { "type": "boolean" }
+      }
+    }
+  }
+}

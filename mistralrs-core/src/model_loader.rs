@@ -323,6 +323,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     hf_cache_path: hf_cache_path.clone(),
                     matformer_config_path,
                     matformer_slice_name,
+                    organization: organization.unwrap_or_default(),
                 },
                 EmbeddingSpecificConfig {
                     topology: Topology::from_option_path(topology)?,
@@ -366,6 +367,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             imatrix,
             matformer_config_path,
             matformer_slice_name,
+            organization,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
@@ -382,6 +384,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 hf_cache_path,
                 matformer_config_path,
                 matformer_slice_name,
+                organization: organization.unwrap_or_default(),
             },
             args.chat_template,
             tokenizer_json,

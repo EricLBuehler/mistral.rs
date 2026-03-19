@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use candle_core::{Context, DType, Device, Result, Tensor, D};
 use config::Gemma3Config;
@@ -11,7 +11,10 @@ use text::TextModel;
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{
+        encoder_cache::{cached_encode_images, EncoderCacheManager},
+        AttentionImplementation, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
@@ -33,6 +36,7 @@ pub struct Gemma3Model {
     multi_modal_projector: Option<Gemma3MultiModalProjector>,
     vision_tower: Option<SiglipVisionTransformer>,
     cfg: Gemma3Config,
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
 impl Gemma3Model {
@@ -51,10 +55,12 @@ impl Gemma3Model {
                     is_gptx,
                     normal_loading_metadata,
                     attention_mechanism,
+                    None,
                 )?,
                 multi_modal_projector: None,
                 vision_tower: None,
                 cfg: cfg.clone(),
+                encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
             }),
             Gemma3Config::WithVision {
                 text_config,
@@ -81,23 +87,28 @@ impl Gemma3Model {
                         is_gptx,
                         normal_loading_metadata,
                         attention_mechanism,
+                        Some(*image_token_index),
                     )?,
                     cfg: cfg.clone(),
+                    encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
                 })
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
+        image_hashes: &[u64],
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut input_embeds = self.language_model.embed_tokens(input_ids)?;
+        let has_images = pixel_values.is_some();
         if let Some(pixel_values) = pixel_values {
             let Gemma3Config::WithVision {
                 image_token_index, ..
@@ -121,9 +132,17 @@ impl Gemma3Model {
                 .context("This model does not support vision.")?;
             let multi_modal_projector = self.multi_modal_projector.as_ref().unwrap();
             let dtype = vision_tower.dtype();
-            let vision_outputs =
-                vision_tower.forward(&pixel_values.to_dtype(dtype)?, None, None)?;
-            let image_features = multi_modal_projector.forward(&vision_outputs)?;
+
+            let image_features = cached_encode_images(
+                image_hashes,
+                &pixel_values.to_dtype(dtype)?,
+                &self.encoder_cache,
+                |pv| {
+                    let vision_outputs = vision_tower.forward(pv, None, None)?;
+                    Ok(vec![multi_modal_projector.forward(&vision_outputs)?])
+                },
+            )?[0]
+                .clone();
 
             let mut x_flat = input_embeds.flatten_all()?;
             let src_flat = image_features.flatten_all()?;
@@ -141,6 +160,7 @@ impl Gemma3Model {
             context_lens,
             metadata,
             flash_params,
+            has_images,
         )?;
         Ok(res)
     }
@@ -182,7 +202,9 @@ impl IsqModel for Gemma3Model {
     }
 }
 
-pub struct Gemma3SpecificArgs;
+pub struct Gemma3SpecificArgs {
+    pub image_hashes: Vec<u64>,
+}
 
 impl VisionModel for Gemma3Model {
     fn forward(
@@ -192,13 +214,17 @@ impl VisionModel for Gemma3Model {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        _model_specific_args: Box<dyn std::any::Any>,
+        model_specific_args: Box<dyn std::any::Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
+        let Gemma3SpecificArgs { image_hashes } = *model_specific_args
+            .downcast()
+            .expect("Cannot downcast into `Gemma3SpecificArgs`");
         self.forward(
             input_ids,
             pixel_values,
+            &image_hashes,
             seqlen_offsets,
             context_lens,
             metadata,
@@ -206,7 +232,9 @@ impl VisionModel for Gemma3Model {
         )
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
-        Box::new(Gemma3SpecificArgs)
+        Box::new(Gemma3SpecificArgs {
+            image_hashes: vec![],
+        })
     }
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()
@@ -222,6 +250,19 @@ impl VisionModel for Gemma3Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         self.language_model.config()
+    }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
     }
 }
 

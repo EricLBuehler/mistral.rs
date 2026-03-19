@@ -198,6 +198,7 @@ __global__ void moe_gemm_grouped_kernel(
 
       // Accumulate into c_frag (which persists across k_base iterations)
       mma_sync(c_frag, a_frag, b_frag, c_frag);
+      __syncthreads(); // Fix shared memory mismatch on V100
     } // end k_base loop (we have a fully-accumulated c_frag for this m_base
       // tile)
 
@@ -382,6 +383,7 @@ __global__ void moe_gemm_grouped_transposed_kernel(
 
       // Accumulate into c_frag (which persists across k_base iterations)
       mma_sync(c_frag, a_frag, b_frag, c_frag);
+      __syncthreads(); // Fix shared memory mismatch on V100
     } // end k_base loop (we have a fully-accumulated c_frag for this m_base
       // tile)
 

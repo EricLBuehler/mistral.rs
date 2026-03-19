@@ -47,7 +47,7 @@ fn parse_model_dtype(x: &str) -> Result<ModelDType, String> {
     x.parse()
 }
 
-#[derive(Debug, Clone, Subcommand, serde::Deserialize)]
+#[derive(Debug, Clone, Subcommand, serde::Deserialize, serde::Serialize)]
 pub enum ModelSelected {
     /// Select the model from a toml file
     Toml {
@@ -652,6 +652,10 @@ pub enum ModelSelected {
         /// Name of the Matryoshka Transformer slice to use
         #[arg(long)]
         matformer_slice_name: Option<String>,
+
+        /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
+        #[arg(long)]
+        organization: Option<IsqOrganization>,
     },
 
     /// Select a diffusion model, without quantization or adapters

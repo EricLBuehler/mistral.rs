@@ -7,7 +7,7 @@ use candle_core::{DType, Device, Result, Tensor};
 mod backends;
 
 #[allow(unused)]
-pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa};
+pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn};
 
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
@@ -86,6 +86,7 @@ pub struct SdpaParams {
     pub softcap: Option<f32>,
     pub softmax_scale: f32,
     pub sliding_window: Option<usize>,
+    pub sinks: Option<Tensor>,
 }
 
 pub struct Sdpa;
@@ -112,6 +113,11 @@ impl Sdpa {
         flash_params: Option<&FlashParams>,
         sdpa_params: &SdpaParams,
     ) -> Result<Tensor> {
+        // If sinks are present, dispatch to the sinks backend
+        if let Some(sinks) = &sdpa_params.sinks {
+            return sinks_attn(q, k, v, sinks, mask, flash_params, sdpa_params);
+        }
+
         let (b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()?;
         let (_, _, _, k_head_dim) = k.dims4()?;
         let (_, _, _, v_head_dim) = v.dims4()?;
@@ -221,7 +227,7 @@ impl Sdpa {
         #[allow(unused)]
         if let (Device::Cuda(_), Some(cublaslt)) = (
             q.device(),
-            mistralrs_quant::cublaslt::CUBLASLT_CONTROLLER.get(),
+            mistralrs_quant::cublaslt::CUBLASLT_CONTROLLER.get_for_device(q.device()),
         ) {
             #[cfg(feature = "cuda")]
             {

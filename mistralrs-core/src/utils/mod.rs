@@ -123,6 +123,7 @@ macro_rules! handle_pipeline_forward_error {
                                 content: Some(res),
                                 role: "assistant".to_string(),
                                 tool_calls: None,
+                                reasoning_content: None,
                             },
                             logprobs: None,
                         };

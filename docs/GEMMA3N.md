@@ -12,7 +12,7 @@ The Gemma 3n Model has support in the Rust, Python, and HTTP APIs. Additionally,
 
     Mistral.rs supports this feature!
     
-    You can access it using the `matformer_config_path` ([example config](../matformer_configs/gemma3n.csv)) and `matformer_slice_name` arguments throughout the APIs.
+    You can access it using the `matformer_config_path` ([example config](https://github.com/EricLBuehler/mistral.rs/blob/master/matformer_configs/gemma3n.csv)) and `matformer_slice_name` arguments throughout the APIs.
     
 - **Prequantized UQFF models:**
   - [Gemma 3n E4B](https://huggingface.co/EricB/gemma-3n-E4B-it-UQFF)
@@ -26,7 +26,7 @@ You can read more about MatFormer in mistral.rs [here](MATFORMER.md).
 
 ### Available Slices
 
-The default configuration file ([`matformer_configs/gemma3n.csv`](../matformer_configs/gemma3n.csv)) includes:
+The default configuration file ([`matformer_configs/gemma3n.csv`](https://github.com/EricLBuehler/mistral.rs/blob/master/matformer_configs/gemma3n.csv)) includes:
 - **Main model** (3.98B params, 35 layers) - Full model with best performance
 - **Config for official E2B Model** (1.91B params, 30 layers) - Balanced performance/efficiency  
 - Various intermediate configurations from E1.96B to E3.79B with different layer and FFN configurations
@@ -35,14 +35,12 @@ The default configuration file ([`matformer_configs/gemma3n.csv`](../matformer_c
 
 ```bash
 # Run with the E2.49B slice for balanced performance/efficiency
-cargo run --release --features cuda -- \
-  --port 1234 \
-  run -m google/gemma-3n-E4B-it \
+mistralrs run vision -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 ```
 
-### Python API Example
+### Python SDK Example
 
 ```python
 from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
@@ -85,7 +83,7 @@ res = runner.send_chat_completion_request(
 print(res.choices[0].message.content)
 ```
 
-### Rust API Example
+### Rust SDK Example
 
 ```rust
 use anyhow::Result;
@@ -114,9 +112,8 @@ async fn main() -> Result<()> {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "Describe this image briefly.",
-        image,
-        &model,
-    )?;
+        vec![image],
+    );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -139,7 +136,7 @@ The slice selection allows you to:
 - Maintain acceptable quality for many use cases with smaller slices
 
 ## HTTP server
-You can find this example [here](../examples/server/gemma3n.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/gemma3n.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -173,14 +170,11 @@ The overall impression is one of grandeur, tranquility, and the raw beauty of a 
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 run -m google/gemma-3n-E4B-it
+mistralrs serve vision -p 1234 -m google/gemma-3n-E4B-it
 
 # Or with MatFormer for balanced performance:
-cargo run --release --features ... -- --port 1234 run -m google/gemma-3n-E4B-it \
+mistralrs serve vision -p 1234 -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 ```
@@ -221,13 +215,13 @@ print(resp)
 
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
 
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/gemma3n/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
 
 This is a minimal example of running the Gemma 3n model with a dummy image.
 
@@ -255,9 +249,8 @@ async fn main() -> Result<()> {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "Please describe the image in detail.",
-        image,
-        &model,
-    )?;
+        vec![image],
+    );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -272,7 +265,7 @@ async fn main() -> Result<()> {
 ```
 
 ## Python
-You can find this example [here](../examples/python/gemma3n.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gemma3n.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -343,7 +336,7 @@ Audio is delivered with the `audio_url` content-type that mirrors OpenAIʼs offi
 }
 ```
 
-### Rust API
+### Rust SDK
 
 ```rust
 use anyhow::Result;
@@ -377,8 +370,7 @@ async fn main() -> Result<()> {
             "Describe in detail what is happening.",
             vec![image],
             vec![audio],
-            &model,
-        )?;
+        );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -389,5 +381,5 @@ async fn main() -> Result<()> {
 
 With this, you now have a single-call pipeline that fuses *sound*, *vision*, and *text* – all running locally through `mistral.rs`! 🔥
 
-- You can find an example of encoding the [image via base64 here](../examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).

@@ -10,7 +10,7 @@ use mistralrs_quant::{
 
 use crate::{
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{embedding, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
@@ -142,6 +142,7 @@ impl MLlamaTextSelfAttention {
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
+                sinks: None,
             },
             rope,
             num_heads: cfg.num_attention_heads / comm.world_size(),
@@ -363,6 +364,7 @@ impl MLlamaTextCrossAttention {
                 softcap: None,
                 softmax_scale: 1.0 / (cfg.head_dim() as f32).sqrt(),
                 sliding_window: None,
+                sinks: None,
             },
         })
     }
@@ -662,6 +664,7 @@ impl MLlamaTextModel {
                 sliding_window: None,
                 k_head_dim: cfg.head_dim(),
                 v_head_dim: cfg.head_dim(),
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             cache: EitherCache::Normal(NormalCache::new(
                 cfg.num_hidden_layers,
@@ -693,16 +696,18 @@ impl MLlamaTextModel {
             self.cfg.num_attn_heads,
         )?;
 
+        let self_mask = DeviceMappedMask::new(self_mask, &*self.mapper)?;
+        let cross_attention_mask =
+            DeviceMappedMask::new(cross_attention_mask.cloned(), &*self.mapper)?;
+        let full_text_row_masked_out_mask =
+            DeviceMappedMask::new(full_text_row_masked_out_mask.cloned(), &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             hidden_states = self.mapper.map(hidden_states, i)?;
             match layer {
                 MLlamaDecoderLayer::SelfAttn(attn) => {
                     hidden_states = attn.forward(
                         &hidden_states,
-                        self_mask
-                            .as_ref()
-                            .map(|m| m.to_device(hidden_states.device()).unwrap())
-                            .as_ref(),
+                        self_mask.as_ref().map(|m| m.get(hidden_states.device())),
                         seqlen_offsets,
                         &mut cache[i],
                     )?;
@@ -722,12 +727,10 @@ impl MLlamaTextModel {
                             .as_ref(),
                         cross_attention_mask
                             .as_ref()
-                            .map(|m| m.to_device(hidden_states.device()).unwrap())
-                            .as_ref(),
+                            .map(|m| m.get(hidden_states.device())),
                         full_text_row_masked_out_mask
                             .as_ref()
-                            .map(|m| m.to_device(hidden_states.device()).unwrap())
-                            .as_ref(),
+                            .map(|m| m.get(hidden_states.device())),
                     )?;
                 }
             }

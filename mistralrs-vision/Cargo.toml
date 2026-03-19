@@ -1,6 +1,6 @@
 [package]
 name = "mistralrs-vision"
-readme = "README.md"
+readme = "../README.md"
 authors = ["Eric Buehler"]
 version.workspace = true
 edition.workspace = true

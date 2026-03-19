@@ -4,7 +4,7 @@ rustflags = ["-C", "target-cpu=native"]
 [target.aarch64-apple-darwin]
 rustflags = [
   "-C", "target-cpu=native",
-  "-C", "target-feature=+aes,+sha2,+fp16",
+  "-C", "target-feature=+aes,+sha2,+fp16,+i8mm",
 ]
 
 [target.x86_64-apple-darwin]

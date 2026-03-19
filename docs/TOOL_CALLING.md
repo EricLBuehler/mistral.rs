@@ -7,7 +7,7 @@ LLMs use tool calling to interact with the outside world. Mistral.rs has OpenAI 
 Note that some models, such as Mistral Small/Nemo models, require a chat template to be specified. For example:
 
 ```bash
-./mistralrs-server --port 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503  
+mistralrs serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
 ```
 
 OpenAI docs: https://cookbook.openai.com/examples/how_to_call_functions_with_chat_models
@@ -26,15 +26,15 @@ We support the following models' tool calling in OpenAI-compatible and parse nat
 All models that support tool calling will respond according to the OpenAI tool calling API.
 
 ## OpenAI compatible HTTP example
-Please see [our example here](../examples/server/tool_calling.py).
+Please see [our example here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/tool_calling.py).
 
 > OpenAI docs: https://platform.openai.com/docs/api-reference/chat/create?lang=curl
 
 ## Rust example
-Please see [our example here](../mistralrs/examples/tools/main.rs).
+Please see [our example here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/tools/main.rs).
 
 ## Python example
-Please see [our notebook here](../examples/python/tool_calling.ipynb).
+Please see [our notebook here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/tool_calling.ipynb).
 
 ## Tool callbacks
 
@@ -56,9 +56,9 @@ runner = Runner(
 )
 ```
 
-See [local_tool_search.py](../examples/python/local_tool_search.py) for a full
+See [custom_search.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_search.py) for a full
 example. In Rust pass `.with_tool_callback(...)` to the builder as demonstrated
-in [local_search/main.rs](../mistralrs/examples/local_search/main.rs).
+in [tool_callback/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/tool_callback/main.rs).
 
 ## Search callbacks
 

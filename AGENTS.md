@@ -11,10 +11,10 @@ This file provides instructions for AI agents to understand the layout of the `m
 - `/mistralrs-quant/`     : Quantization support (ISQ, GGUF, GPTQ, AWQ, FP8, HQQ, etc.)
 - `/mistralrs-paged-attn/`: PagedAttention implementation
 - `/mistralrs-pyo3/`      : Python bindings (PyO3)
-- `/mistralrs-server/`    : CLI & OpenAI-compatible HTTP server (subcommands: run/vision-plain, diffusion, speech)
+- `/mistralrs-cli/`       : Unified CLI binary (commands: run, serve, bench, from-config)
 - `/mistralrs-server-core/`: Shared server core logic
-- `/mistralrs-web-chat/`  : Web chat application (static assets & backend integration)
-- `/mistralrs-bench/`     : Benchmarking tools
+- `/mistralrs-web-chat/`  : (Deprecated) Use `mistralrs serve --ui` instead
+- `/mistralrs-bench/`     : (Deprecated) Use `mistralrs bench` instead
 - `/docs/`                : Markdown documentation for models, features, and guides
 - `/examples/`            : Usage examples (Rust, Python, server samples, notebooks)
 - `/chat_templates/`      : Chat formatting templates (JSON/Jinja)
@@ -26,17 +26,17 @@ Mistral.rs supports multiple model types and advanced features via dedicated cra
 
 - **Text Inference**
   - Crate: `mistralrs-core` (low-level ops), `mistralrs` (API wrapper)
-  - CLI: `run` / `plain` subcommand in `mistralrs-server`
+  - CLI: `mistralrs run -m <model>` or `mistralrs serve -m <model>` (auto-detects model type)
   - Docs: `docs/SAMPLING.md`, `docs/TOOL_CALLING.md`
 - **Vision Models**
   - Crate: `mistralrs-vision`
-  - CLI: `vision-plain` subcommand
+  - CLI: `mistralrs run -m <model>` (auto-detects vision models)
   - Docs: `docs/VISION_MODELS.md`, `docs/IMAGEGEN_MODELS.md`, `docs/IMATRIX.md`
 - **Diffusion Models**
-  - CLI: `diffusion` subcommand
+  - CLI: `mistralrs run -m <model>` (auto-detects diffusion models)
   - Docs: `docs/FLUX.md`
 - **Speech Models**
-  - CLI: `speech` subcommand
+  - CLI: `mistralrs run -m <model>` (auto-detects speech models)
   - Docs: `docs/DIA.md`
 - **Quantization & ISQ**
   - Crate: `mistralrs-quant`
@@ -58,10 +58,10 @@ Mistral.rs supports multiple model types and advanced features via dedicated cra
    ```bash
    cargo build --workspace --release --features "<features>"
    ```
-4. Or build/install only the server binary:
+4. Or build/install only the CLI binary:
    ```bash
-   cargo build --release --package mistralrs-server --features "<features>"
-   cargo install --path mistralrs-server --features "<features>"
+   cargo build --release --package mistralrs-cli --features "<features>"
+   cargo install --path mistralrs-cli --features "<features>"
    ```
 
 ## Models
@@ -116,9 +116,11 @@ Avoid returning TODOs.
   ```bash
   python3 examples/python/<script>.py
   ```
-- Run server/CLI:
+- Run CLI:
   ```bash
-  ./target/release/mistralrs-server -i <mode> -m <model> [options]
+  mistralrs run -m <model>        # Interactive mode
+  mistralrs serve -p 1234 -m <model>  # Server mode
+  mistralrs bench -m <model>      # Benchmarking
   ```
 
 ## CI Parity

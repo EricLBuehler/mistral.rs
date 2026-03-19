@@ -15,4 +15,4 @@ the prefill phase.
 | Blackwell | 10.0, 12.0 | RTX 50* | `--features flash-attn` |
 
 > Note: FlashAttention V2 and V3 are mutually exclusive
-> Note: To use FlashAttention in the Python API, [compile from source](../mistralrs-pyo3/README.md).
+> Note: To use FlashAttention in the Python SDK, [compile from source](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/README.md).

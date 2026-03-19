@@ -7,8 +7,39 @@ use tokenizers::Tokenizer;
 use crate::Constraint;
 
 pub fn build_llg_factory(tokenizer: Tokenizer) -> Result<Arc<ParserFactory>> {
-    let env =
-        toktrie_hf_tokenizers::ByteTokenizer::from_tokenizer(tokenizer)?.into_tok_env(None)?;
+    // Collect special token info before from_tokenizer() consumes the tokenizer.
+    let added_special: Vec<(u32, String)> = tokenizer
+        .get_added_tokens_decoder()
+        .into_iter()
+        .filter(|(_, at)| at.special)
+        .map(|(id, at)| (id, at.content))
+        .collect();
+
+    let bt = toktrie_hf_tokenizers::ByteTokenizer::from_tokenizer(tokenizer)?;
+    let info = bt.tokrx_info();
+    let mut token_bytes = bt.token_bytes();
+
+    // Fix up special tokens that from_tokenizer() may have missed.
+    // Tekken tokenizers add special tokens to the BPE base vocab first, which can
+    // prevent the toktrie builder from applying the SPECIAL_TOKEN_MARKER prefix.
+    for (id, content) in &added_special {
+        let idx = *id as usize;
+        if idx < token_bytes.len()
+            && (token_bytes[idx].is_empty()
+                || token_bytes[idx][0] != toktrie::TokTrie::SPECIAL_TOKEN_MARKER)
+        {
+            let mut bytes = content.as_bytes().to_vec();
+            bytes.insert(0, toktrie::TokTrie::SPECIAL_TOKEN_MARKER);
+            token_bytes[idx] = bytes;
+        }
+    }
+
+    let tok_trie = toktrie::TokTrie::from(&info, &token_bytes);
+    let env = toktrie_hf_tokenizers::ByteTokenizerEnv {
+        tokenizer: bt,
+        tok_trie,
+    }
+    .to_env();
     let factory = ParserFactory::new_simple(&env)?;
     Ok(Arc::new(factory))
 }

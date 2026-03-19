@@ -2,7 +2,7 @@
 
 mod text;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
@@ -14,6 +14,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     layers::linear_no_bias,
+    paged_attention::encoder_cache::{cached_encode_images, EncoderCacheManager},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -54,6 +55,7 @@ pub struct Llama4Model {
     vision_model: Llama4VisionModel,
     multi_modal_projector: Llama4MultiModalProjector,
     image_token_index: usize,
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
 impl Llama4Model {
@@ -89,13 +91,16 @@ impl Llama4Model {
             vision_model,
             multi_modal_projector,
             image_token_index: cfg.image_token_index,
+            encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
+        image_hashes: &[u64],
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
@@ -114,13 +119,16 @@ impl Llama4Model {
             // Nonzero before vision model to allow async processing all the way through logits.
             let indices = mask_flat.nonzero()?.squeeze(1)?;
 
-            let image_features = self.vision_model.forward(&pixel_values)?;
-
-            let vision_flat = image_features.reshape(((), image_features.dim(D::Minus1)?))?;
-            let projected_vision_flat = self.multi_modal_projector.forward(&vision_flat)?;
+            let image_features =
+                cached_encode_images(image_hashes, &pixel_values, &self.encoder_cache, |pv| {
+                    let feats = self.vision_model.forward(pv)?;
+                    let flat = feats.reshape(((), feats.dim(D::Minus1)?))?;
+                    Ok(vec![self.multi_modal_projector.forward(&flat)?])
+                })?[0]
+                    .clone();
 
             let mut x_flat = input_embeds.flatten_all()?;
-            let src_flat = projected_vision_flat.flatten_all()?;
+            let src_flat = image_features.flatten_all()?;
 
             let current_vals = x_flat.gather(&indices, 0)?;
             let diff = (src_flat - current_vals)?;
@@ -172,7 +180,9 @@ impl IsqModel for Llama4Model {
     }
 }
 
-pub struct Llama4ModelSpecificArgs;
+pub struct Llama4ModelSpecificArgs {
+    pub image_hashes: Vec<u64>,
+}
 
 impl NormalModel for Llama4Model {
     fn forward(
@@ -187,6 +197,7 @@ impl NormalModel for Llama4Model {
         self.forward(
             input_ids,
             None,
+            &[],
             seqlen_offsets,
             context_lens,
             metadata,
@@ -240,12 +251,13 @@ impl VisionModel for Llama4Model {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
-        let Llama4ModelSpecificArgs = *model_specific_args
+        let Llama4ModelSpecificArgs { image_hashes } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Llama4ModelSpecificArgs`");
         self.forward(
             input_ids,
             pixel_values,
+            &image_hashes,
             seqlen_offsets,
             context_lens,
             metadata,
@@ -268,7 +280,22 @@ impl VisionModel for Llama4Model {
         self.language_model.max_seq_len()
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
-        Box::new(Llama4ModelSpecificArgs)
+        Box::new(Llama4ModelSpecificArgs {
+            image_hashes: vec![],
+        })
+    }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
     }
 }
 

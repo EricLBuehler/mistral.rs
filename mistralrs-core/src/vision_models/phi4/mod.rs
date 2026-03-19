@@ -1,6 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{any::Any, collections::HashMap, sync::Arc};
+use std::{
+    any::Any,
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{Device, Result, Tensor, D};
 use candle_nn::Module;
@@ -10,10 +14,13 @@ use mm_embedding::{InputMode, Phi4MMImageAudioEmbedding};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{self, Activation, CausalMasker, Phi4MMRotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        PagedAttention,
+    },
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -82,6 +89,7 @@ impl Attention {
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: cfg.sliding_window,
+                sinks: None,
             },
         })
     }
@@ -341,6 +349,7 @@ pub struct Phi4MMModel {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: Option<usize>,
     cfg: ModelConfigMetadata,
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
 impl Phi4MMModel {
@@ -452,9 +461,11 @@ impl Phi4MMModel {
                 sliding_window: cfg.sliding_window,
                 k_head_dim: cfg.head_dim(),
                 v_head_dim: cfg.head_dim(),
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
             embed_tokens_extend,
+            encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
     }
 
@@ -473,6 +484,7 @@ impl Phi4MMModel {
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
+        image_hashes: &[u64],
     ) -> Result<Tensor> {
         let mut xs = if input_image_embeds.is_some() || input_audio_embeds.is_some() {
             let projection_mode = match (&input_image_embeds, &input_audio_embeds) {
@@ -490,6 +502,8 @@ impl Phi4MMModel {
                 audio_embed_sizes,
                 audio_attention_mask.as_ref(),
                 projection_mode,
+                image_hashes,
+                &self.encoder_cache,
             )?
         } else {
             self.embed_tokens.forward(input_ids)?
@@ -511,15 +525,13 @@ impl Phi4MMModel {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+        let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
 
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                attention_mask.as_ref().map(|m| m.get(xs.device())),
                 seqlen_offsets,
                 position_ids,
                 &mut cache[i],
@@ -530,11 +542,12 @@ impl Phi4MMModel {
             )?
         }
         let xs = xs.to_device(&self.device)?;
-        let mut xs = xs.apply(&self.norm)?;
+        let xs = xs.apply(&self.norm)?;
+        let mut xs = extract_logits(&xs, context_lens)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
+        MatMul.qmethod_matmul(&xs, &*self.lm_head)
     }
 }
 
@@ -546,6 +559,7 @@ pub(crate) struct Phi4MMVisionSpecificArgs {
     pub input_audio_embeds: Option<Tensor>,
     pub audio_embed_sizes: Option<Vec<usize>>,
     pub audio_attention_mask: Option<Tensor>,
+    pub image_hashes: Vec<u64>,
 }
 
 impl VisionModel for Phi4MMModel {
@@ -567,6 +581,7 @@ impl VisionModel for Phi4MMModel {
             input_audio_embeds,
             audio_attention_mask,
             audio_embed_sizes,
+            image_hashes,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Phi4MMVisionSpecificArgs`");
@@ -584,6 +599,7 @@ impl VisionModel for Phi4MMModel {
             context_lens,
             metadata,
             flash_params,
+            &image_hashes,
         )
     }
     fn cache(&self) -> &EitherCache {
@@ -603,6 +619,19 @@ impl VisionModel for Phi4MMModel {
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
         Box::new(Phi4MMVisionSpecificArgs::default())
+    }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
     }
 }
 

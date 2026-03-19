@@ -22,9 +22,9 @@ completion = client.chat.completions.create(
                     "type": "image_url",
                     "image_url": {"url": IMAGE_URL},
                 },
-                {  # Text with explicit tokens referring to the audio/image above
+                {
                     "type": "text",
-                    "text": "<|audio_1|><|image_1|> Describe in detail what is happening, referencing both what you hear and what you see.",
+                    "text": "Describe in detail what is happening, referencing both what you hear and what you see.",
                 },
             ],
         }

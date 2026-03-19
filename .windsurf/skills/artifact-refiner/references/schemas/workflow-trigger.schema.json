@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Workflow Trigger",
+  "description": "Schema for workflow triggers that fire at refinement lifecycle events",
+  "type": "object",
+  "required": ["triggers"],
+  "properties": {
+    "triggers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["event", "action"],
+        "properties": {
+          "event": {
+            "type": "string",
+            "enum": [
+              "on_phase_start",
+              "on_phase_complete",
+              "on_iteration_complete",
+              "on_refinement_complete",
+              "on_regression",
+              "on_approval_required"
+            ]
+          },
+          "condition": {
+            "type": "string",
+            "description": "Optional condition expression (e.g. 'phase == execute && content_type.startsWith(meta:)')"
+          },
+          "action": {
+            "type": "object",
+            "required": ["type", "target"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["command", "webhook", "mcp_tool", "workflow_file"]
+              },
+              "target": { "type": "string" },
+              "args": { "type": "object" },
+              "timeout_ms": { "type": "integer", "default": 30000 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

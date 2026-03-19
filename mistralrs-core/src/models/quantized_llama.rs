@@ -10,7 +10,7 @@ use candle_nn::{Embedding, Module};
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 use crate::attention::SdpaParams;
-use crate::device_map::DeviceMapper;
+use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
 use crate::layers::{CausalMasker, MatMul, QRmsNorm, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
@@ -36,8 +36,8 @@ impl Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let w1 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w1)?;
         let w3 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w3)?;
-        let y = &(candle_nn::ops::silu(&w1)? * w3)?;
-        MatMul.qmethod_matmul(y, &*self.feed_forward_w2)
+        let y = crate::ops::mul_and_act(&w1, &w3, crate::layers::Activation::Silu)?;
+        MatMul.qmethod_matmul(&y, &*self.feed_forward_w2)
     }
 }
 
@@ -301,6 +301,7 @@ impl ModelConfig::FromGGML for ModelWeights {
                     softcap: None,
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,
+                    sinks: None,
                 },
                 dtype,
             })
@@ -347,7 +348,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
     type Error = anyhow::Error;
 
     fn try_from(c: ContentMetadata) -> std::result::Result<Self, Self::Error> {
-        c.verify_arch("llama")?;
+        c.verify_arch_any(&["llama", "mistral3"])?;
 
         let required = [
             "attention.head_count",
@@ -403,9 +404,20 @@ impl ModelConfig::FromGGUF for ModelWeights {
         attention_mechanism: AttentionImplementation,
         dtype: DType,
     ) -> Result<Self> {
-        // Parameter extraction from metadata.
+        // Choose GGUF path prefix based on architecture so tensor names resolve.
+        let actual_arch: String = ct
+            .get_metadata()
+            .get("general.architecture")
+            .and_then(|v| v.to_string().ok().cloned())
+            .unwrap_or_else(|| "llama".to_string());
+        let path_prefix = if actual_arch == "mistral3" {
+            "mistral3"
+        } else {
+            "llama"
+        };
+
         let metadata = ContentMetadata {
-            path_prefix: "llama",
+            path_prefix,
             metadata: ct.get_metadata(),
         };
         let PropsGGUF {
@@ -623,6 +635,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     softcap: None,
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,
+                    sinks: None,
                 },
                 dtype,
             })
@@ -670,6 +683,11 @@ impl ModelWeights {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+        let mask = if let Some(ref mapper) = self.mapper {
+            DeviceMappedMask::new(mask, &**mapper)?
+        } else {
+            DeviceMappedMask::from_single(mask)
+        };
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
@@ -679,9 +697,7 @@ impl ModelWeights {
             let x = layer.attention_norm.forward(&x)?;
             let attn = layer.forward_attn(
                 &x,
-                mask.as_ref()
-                    .map(|m| m.to_device(x.device()).unwrap())
-                    .as_ref(),
+                mask.as_ref().map(|m| m.get(x.device())),
                 start_offsets,
                 &mut cache[i],
                 metadata
@@ -699,9 +715,7 @@ impl ModelWeights {
         }
         let layer_in = layer_in.to_device(&self.device)?;
         let x = self.norm.forward(&layer_in)?;
-        extract_logits(
-            &MatMul.qmethod_matmul(&x.contiguous()?, &*self.output)?,
-            context_lens,
-        )
+        let x = extract_logits(&x, context_lens)?;
+        MatMul.qmethod_matmul(&x.contiguous()?, &*self.output)
     }
 }

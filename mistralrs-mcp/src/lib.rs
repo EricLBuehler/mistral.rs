@@ -156,6 +156,8 @@ pub use client::{McpClient, McpServerConnection};
 pub use tools::{CalledFunction, Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType};
 pub use types::McpToolResult;
 
+pub use rust_mcp_schema;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -231,7 +233,7 @@ pub struct McpClientConfig {
     /// Maximum number of concurrent tool calls across all MCP servers
     ///
     /// Limits resource usage and prevents overwhelming servers with too many
-    /// simultaneous requests. Defaults to 1 if not specified.
+    /// simultaneous requests. Defaults to 10 if not specified.
     pub max_concurrent_calls: Option<usize>,
 }
 

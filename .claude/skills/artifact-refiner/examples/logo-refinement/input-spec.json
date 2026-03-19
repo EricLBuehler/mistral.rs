@@ -1,0 +1,15 @@
+{
+  "artifact_type": "logo",
+  "intent": "Create modern minimal logo for NexaFlow API platform",
+  "brand_name": "NexaFlow",
+  "colors": {
+    "primary": "#0a1628",
+    "accent": "#00d4ff",
+    "background_light": "#ffffff",
+    "background_dark": "#0a1628"
+  },
+  "style": "modern, minimal, developer tooling, data flow",
+  "required_variants": ["wordmark", "icon", "app-icon", "favicon"],
+  "required_formats": ["svg", "png"],
+  "png_sizes": [16, 32, 48, 64, 128, 192, 256, 512]
+}

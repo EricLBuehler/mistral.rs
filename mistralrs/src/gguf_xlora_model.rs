@@ -11,6 +11,7 @@ pub struct GgufXLoraModelBuilder {
 }
 
 impl GgufXLoraModelBuilder {
+    /// Create a GGUF X-LoRA builder from a [`GgufModelBuilder`], X-LoRA model ID, and ordering.
     pub fn from_gguf_model_builder(
         gguf_model: GgufModelBuilder,
         xlora_model_id: impl ToString,
@@ -24,11 +25,13 @@ impl GgufXLoraModelBuilder {
         }
     }
 
+    /// Set the target non-granular index for X-LoRA scaling.
     pub fn tgt_non_granular_index(mut self, tgt_non_granular_idx: usize) -> Self {
         self.tgt_non_granular_index = Some(tgt_non_granular_idx);
         self
     }
 
+    /// Load the GGUF X-LoRA model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = GGUFSpecificConfig {
             topology: self.gguf_model.topology,

@@ -14,21 +14,21 @@ The Phi 3.5 MoE model is a 16x3.8B parameter decoder-only text-to-text mixture o
     - If multiple experts are selected for the token, then this becomes a weighted sum
     - The design is flexible: 2 or 1 experts can be selected, enabling dense or sparse gating
 
-```
-./mistralrs-server --isq 4 -i plain -m microsoft/Phi-3.5-MoE-instruct
+```bash
+mistralrs run --isq 4 -m microsoft/Phi-3.5-MoE-instruct
 ```
 
 > [!NOTE]
 > This models supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
 
-```
-./mistralrs-server --isq 4 -i plain -m microsoft/Phi-3.5-MoE-instruct --organization moqe
+```bash
+mistralrs run --isq 4 -m microsoft/Phi-3.5-MoE-instruct --isq-organization moqe
 ```
 
 ## HTTP API
 
-```
-./mistralrs-server --isq 4 --port 1234 plain -m microsoft/Phi-3.5-MoE-instruct
+```bash
+mistralrs serve --isq 4 -p 1234 -m microsoft/Phi-3.5-MoE-instruct
 ```
 
 ```py
@@ -56,7 +56,7 @@ while True:
     messages.append({"role": "assistant", "content": resp})
 ```
 
-## Python API
+## Python SDK
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 
@@ -83,8 +83,8 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-## Rust API
-You can find this example [here](../mistralrs/examples/phi3_5_moe/main.rs).
+## Rust SDK
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs).
 
 ```rust
 use anyhow::Result;

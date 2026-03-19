@@ -1,0 +1,87 @@
+{
+  "hooks": [
+    {
+      "event": "SubagentStop",
+      "match_agent": "architect",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh \"$SKILL_NAME\" specify"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh on_phase_complete specify"
+        }
+      ]
+    },
+    {
+      "event": "SubagentStop",
+      "match_agent": "architect_plan",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh \"$SKILL_NAME\" plan"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh on_phase_complete plan"
+        }
+      ]
+    },
+    {
+      "event": "SubagentStop",
+      "match_agent": "generator",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh \"$SKILL_NAME\" execute"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh on_phase_complete execute"
+        }
+      ]
+    },
+    {
+      "event": "SubagentStop",
+      "match_agent": "validator",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh \"$SKILL_NAME\" reflect"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh on_phase_complete reflect"
+        }
+      ]
+    },
+    {
+      "event": "SubagentStop",
+      "match_agent": "generator_persist",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-checkpoint.sh \"$SKILL_NAME\" persist"
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh on_phase_complete persist"
+        }
+      ]
+    },
+    {
+      "event": "Stop",
+      "steps": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/state-finalize.sh \"$SKILL_NAME\""
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/workflow-dispatch.sh on_creation_complete \"$SKILL_NAME\""
+        }
+      ]
+    }
+  ]
+}

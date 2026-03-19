@@ -15,16 +15,10 @@ The Python and HTTP APIs support sending images as:
 - Path to a local image
 - [Base64](https://en.wikipedia.org/wiki/Base64) encoded string
 
-The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
-
-## Interactive mode
-
-> [!NOTE]
-> In interactive mode, the LLaVA vision models do not automatically add the image token!
-> It should be added to messages manually, and is of the format `<image>`.
+The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
 ## HTTP server
-You can find this example [here](../examples/server/llava_next.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/llava_next.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -38,7 +32,7 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 **Prompt:**
 ```
-<image>What is shown in this image? 
+What is shown in this image?
 ```
 
 **Output:**
@@ -50,14 +44,10 @@ Text: The image shows a steep, snow-covered hillside with a pine tree on the rig
 
 1) Start the server
 
-
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 --isq 4 vision-plain -m llava-hf/llava-v1.6-mistral-7b-hf
-//or 
-cargo run  --features cuda -- --port 1234  --isq 4 --chat-template ./chat_templates/vicuna.json vision-plain -m /root/autodl-tmp/llava-v1.6-vicuna-7b-hf // if use vicuna as backend llm, then we need to specific the chat-template
+mistralrs serve vision -p 1234 --isq 4 -m llava-hf/llava-v1.6-mistral-7b-hf
+# or for vicuna backend, specify the chat template:
+mistralrs serve vision -p 1234 --isq 4 -c ./chat_templates/vicuna.json -m llava-hf/llava-v1.6-vicuna-7b-hf
 ```
 
 2) Send a request
@@ -81,7 +71,7 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "<image>What is shown in this image?",
+                    "text": "What is shown in this image?",
                 },
             ],
         },
@@ -95,13 +85,13 @@ resp = completion.choices[0].message.content
 print(resp)
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
 
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/llava_next/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
 
 This is a minimal example of running the LLaVA and LLaVANext model with a dummy image.
 
@@ -146,7 +136,7 @@ async fn main() -> Result<()> {
 ```
 
 ## Python
-You can find this example [here](../examples/python/llava_next.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/llava_next.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -177,7 +167,7 @@ res = runner.send_chat_completion_request(
                     },
                     {
                         "type": "text",
-                        "text": "<image>What is shown in this image?",
+                        "text": "What is shown in this image?",
                     },
                 ],
             },
@@ -192,5 +182,5 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).

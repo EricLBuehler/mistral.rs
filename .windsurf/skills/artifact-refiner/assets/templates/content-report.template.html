@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{TITLE}}</title>
+
+  <!-- ========================================================= -->
+  <!-- PMPO Content Report Template                             -->
+  <!-- Used by ContentRefinerModule                             -->
+  <!-- ========================================================= -->
+
+  <style>
+    :root {
+      --background: {{BACKGROUND_COLOR}};
+      --foreground: {{FOREGROUND_COLOR}};
+      --muted: {{MUTED_COLOR}};
+      --border: {{BORDER_COLOR}};
+      --primary: {{PRIMARY_COLOR}};
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.7;
+      background: var(--background);
+      color: var(--foreground);
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 3rem 1.5rem 4rem;
+    }
+
+    header {
+      margin-bottom: 2.5rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 1.5rem;
+    }
+
+    .title {
+      font-size: 2rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin: 0;
+    }
+
+    .subtitle {
+      margin-top: 0.5rem;
+      color: var(--muted);
+      font-size: 1rem;
+    }
+
+    .meta {
+      margin-top: 0.75rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    article {
+      margin-top: 2rem;
+    }
+
+    article h1,
+    article h2,
+    article h3,
+    article h4 {
+      margin-top: 2rem;
+      margin-bottom: 0.75rem;
+      line-height: 1.3;
+    }
+
+    article p {
+      margin-bottom: 1rem;
+    }
+
+    article ul,
+    article ol {
+      margin-bottom: 1rem;
+      padding-left: 1.5rem;
+    }
+
+    article blockquote {
+      border-left: 4px solid var(--primary);
+      padding-left: 1rem;
+      margin: 1.5rem 0;
+      color: var(--muted);
+    }
+
+    article code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      background: rgba(0,0,0,0.05);
+      padding: 0.15rem 0.35rem;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+
+    article pre {
+      background: rgba(0,0,0,0.05);
+      padding: 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 0.85rem;
+    }
+
+    footer {
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .report-section {
+      margin-top: 2.5rem;
+      padding: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(0,0,0,0.02);
+    }
+
+    .report-section h3 {
+      margin-top: 0;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+
+    .log {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 0.8rem;
+      white-space: pre-wrap;
+      margin-top: 0.5rem;
+    }
+
+    @media (max-width: 640px) {
+      .container {
+        padding: 2rem 1rem 3rem;
+      }
+
+      .title {
+        font-size: 1.5rem;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+
+    <header>
+      <h1 class="title">{{TITLE}}</h1>
+      <div class="subtitle">{{SUBTITLE}}</div>
+      <div class="meta">
+        Generated: {{GENERATED_AT}}<br />
+        Artifact Type: {{ARTIFACT_TYPE}}
+      </div>
+    </header>
+
+    <article>
+      {{CONTENT_HTML}}
+    </article>
+
+    <div class="report-section">
+      <h3>Refinement Summary</h3>
+      <div class="log">{{REFINEMENT_SUMMARY}}</div>
+    </div>
+
+    <div class="report-section">
+      <h3>Constraint Evaluation</h3>
+      <div class="log">{{CONSTRAINT_REPORT}}</div>
+    </div>
+
+    <footer>
+      {{FOOTER_TEXT}}
+    </footer>
+
+  </div>
+
+</body>
+</html>

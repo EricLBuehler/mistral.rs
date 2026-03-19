@@ -756,6 +756,7 @@ mod tests {
             softcap: None,
             n_kv_groups: 1,
             sliding_window: None,
+            sinks: None,
         };
         let scale = sdpa.softmax_scale;
 
@@ -814,6 +815,7 @@ mod tests {
             softcap: None,
             n_kv_groups: 1,
             sliding_window: None,
+            sinks: None,
         };
         let scale = sdpa.softmax_scale;
 
@@ -872,6 +874,7 @@ mod tests {
             softcap: Some(0.5),
             n_kv_groups: 1,
             sliding_window: None,
+            sinks: None,
         };
         let scale = sdpa.softmax_scale;
         let sc = sdpa.softcap.unwrap();
@@ -933,6 +936,7 @@ mod tests {
             softcap: Some(0.5),
             n_kv_groups: 1,
             sliding_window: None,
+            sinks: None,
         };
         let scale = sdpa.softmax_scale;
         let sc = sdpa.softcap.unwrap();

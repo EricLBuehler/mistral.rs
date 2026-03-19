@@ -10,8 +10,8 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     layers::{
-        embedding, Gemma3RotaryEmbedding, MatMul, Mlp, RmsNorm, RotaryEmbedding, ScaledEmbedding,
-        Sdpa,
+        embedding, Gemma3RotaryEmbedding, GemmaRmsNorm, MatMul, Mlp, RotaryEmbedding,
+        ScaledEmbedding, Sdpa,
     },
     layers_masker::BidirectionalMasker,
     paged_attention::AttentionImplementation,
@@ -95,8 +95,8 @@ struct Attention {
     rotary_emb_local: Arc<RotaryEmbedding>,
     use_sliding_window: bool,
     sdpa_params: SdpaParams,
-    q_norm: RmsNorm,
-    k_norm: RmsNorm,
+    q_norm: GemmaRmsNorm,
+    k_norm: GemmaRmsNorm,
 }
 
 impl Attention {
@@ -160,12 +160,12 @@ impl Attention {
             None
         };
 
-        let q_norm = RmsNorm::new_gemma(
+        let q_norm = GemmaRmsNorm::new(
             cfg.head_dim,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("q_norm"), false),
         )?;
-        let k_norm = RmsNorm::new_gemma(
+        let k_norm = GemmaRmsNorm::new(
             cfg.head_dim,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("k_norm"), false),
@@ -190,6 +190,7 @@ impl Attention {
                 softcap: cfg.attn_logit_softcapping.map(|x| x as f32),
                 softmax_scale: 1.0 / (cfg.query_pre_attn_scalar as f32).sqrt(),
                 sliding_window,
+                sinks: None,
             },
             q_norm,
             k_norm,
@@ -269,10 +270,10 @@ impl Attention {
 struct DecoderLayer {
     self_attn: Attention,
     mlp: Box<dyn MlpLayer>,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
-    pre_feedforward_layernorm: RmsNorm,
-    post_feedforward_layernorm: RmsNorm,
+    input_layernorm: GemmaRmsNorm,
+    post_attention_layernorm: GemmaRmsNorm,
+    pre_feedforward_layernorm: GemmaRmsNorm,
+    post_feedforward_layernorm: GemmaRmsNorm,
 }
 
 impl DecoderLayer {
@@ -304,22 +305,22 @@ impl DecoderLayer {
             cfg.hidden_activation,
             comm,
         )?;
-        let input_layernorm = RmsNorm::new_gemma(
+        let input_layernorm = GemmaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
-        let post_attention_layernorm = RmsNorm::new_gemma(
+        let post_attention_layernorm = GemmaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
-        let pre_feedforward_layernorm = RmsNorm::new_gemma(
+        let pre_feedforward_layernorm = GemmaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("pre_feedforward_layernorm"), false),
         )?;
-        let post_feedforward_layernorm = RmsNorm::new_gemma(
+        let post_feedforward_layernorm = GemmaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm"), false),
@@ -368,7 +369,7 @@ impl DecoderLayer {
 pub struct EmbeddingGemma {
     embed_tokens: ScaledEmbedding,
     layers: Vec<DecoderLayer>,
-    norm: RmsNorm,
+    norm: GemmaRmsNorm,
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: usize,
@@ -471,7 +472,7 @@ impl EmbeddingGemma {
                 &comm,
             )
         })?;
-        let norm = RmsNorm::new_gemma(
+        let norm = GemmaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb.pp("norm"), false),
@@ -557,30 +558,28 @@ impl IsqModel for EmbeddingGemma {
         let uvb = UnVarBuilder::new();
 
         uvb.pp("embed_tokens").add(&self.embed_tokens);
-        uvb.pp("norm").add(&self.norm.undo_gemma().unwrap());
+        uvb.pp("norm").add(&self.norm);
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let uvb_l = uvb.pp("layers").pp(layer_idx);
             uvb_l
                 .pp("self_attn")
                 .pp("q_norm")
-                .add(&layer.self_attn.q_norm.undo_gemma().unwrap());
+                .add(&layer.self_attn.q_norm);
             uvb_l
                 .pp("self_attn")
                 .pp("k_norm")
-                .add(&layer.self_attn.k_norm.undo_gemma().unwrap());
-            uvb_l
-                .pp("input_layernorm")
-                .add(&layer.input_layernorm.undo_gemma().unwrap());
+                .add(&layer.self_attn.k_norm);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
             uvb_l
                 .pp("post_attention_layernorm")
-                .add(&layer.post_attention_layernorm.undo_gemma().unwrap());
+                .add(&layer.post_attention_layernorm);
             uvb_l
                 .pp("pre_feedforward_layernorm")
-                .add(&layer.pre_feedforward_layernorm.undo_gemma().unwrap());
+                .add(&layer.pre_feedforward_layernorm);
             uvb_l
                 .pp("post_feedforward_layernorm")
-                .add(&layer.post_feedforward_layernorm.undo_gemma().unwrap());
+                .add(&layer.post_feedforward_layernorm);
         }
 
         uvb.to_safetensors()

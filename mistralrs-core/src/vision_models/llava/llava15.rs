@@ -4,12 +4,14 @@
     clippy::too_many_arguments
 )]
 use std::any::Any;
+use std::sync::{Arc, Mutex};
 
 use super::llava_llm::{LLaVALLM, Llama, Mistral};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::amoe::MlpLayer;
 use crate::device_map::DeviceMapper;
 use crate::layers;
+use crate::paged_attention::encoder_cache::{cached_encode_images, EncoderCacheManager};
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -26,7 +28,9 @@ use candle_nn::{Activation, Linear};
 use mistralrs_quant::NonZeroOp;
 use mistralrs_quant::ShardedVarBuilder;
 
-pub(crate) struct LLaVAVisionSpecificArgs; // only a dumb struct to satisfy the trait
+pub(crate) struct LLaVAVisionSpecificArgs {
+    pub image_hashes: Vec<u64>,
+}
 
 pub struct MMProjector {
     linear_1: Linear,
@@ -117,6 +121,7 @@ pub struct Model {
     config: Config,
     device: Device,
     dtype: DType,
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
 impl Model {
@@ -173,6 +178,7 @@ impl Model {
             config: config.clone(),
             device,
             dtype,
+            encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
     }
 
@@ -187,6 +193,7 @@ impl Model {
         input_ids: &Tensor, //[1,seq_len]
         images: &Tensor,    //[sum of samples of all images,channel,width,height]
         num_image_tokens: usize,
+        image_hashes: &[u64],
     ) -> Result<Tensor> {
         let image_indexes = input_ids
             .squeeze(0)?
@@ -196,7 +203,12 @@ impl Model {
             .to_vec1::<u32>()?;
         let mut result = input_ids.clamp(0i64, i64::MAX)?.to_dtype(DType::U32)?;
         result = self.llm.embed(&result)?; //[seq_len,hidden_size]
-        let image_features = self.encode_images(&images.to_dtype(self.dtype)?)?; //[num of images,patch_size*patch_size,hidden_size]
+        let images_typed = images.to_dtype(self.dtype)?;
+        let image_features =
+            cached_encode_images(image_hashes, &images_typed, &self.encoder_cache, |pv| {
+                Ok(vec![self.encode_images(pv)?])
+            })?[0]
+                .clone(); //[num of images,patch_size*patch_size,hidden_size]
         let num_of_images = image_features.shape().dims()[0];
         let mut image_features_vec = Vec::new();
         for i in 0..num_of_images {
@@ -225,6 +237,7 @@ impl Model {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         num_image_tokens: Option<usize>,
+        image_hashes: &[u64],
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
@@ -237,6 +250,7 @@ impl Model {
                 input_ids,
                 pixel_values,
                 num_image_tokens.unwrap(),
+                image_hashes,
             )?;
             self.llm.forward_input_embed(
                 input_ids,
@@ -299,10 +313,13 @@ impl VisionModel for Model {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
-        _model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
+        model_specific_args: Box<dyn std::any::Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
+        let LLaVAVisionSpecificArgs { image_hashes } = *model_specific_args
+            .downcast()
+            .expect("Cannot downcast into `LLaVAVisionSpecificArgs`");
         self.forward_inputs(
             input_ids,
             pixel_values,
@@ -310,6 +327,7 @@ impl VisionModel for Model {
                 self.clip_vision_tower.num_patches_per_side()
                     * self.clip_vision_tower.num_patches_per_side(),
             ),
+            &image_hashes,
             seqlen_offsets,
             context_lens,
             position_ids,
@@ -337,7 +355,22 @@ impl VisionModel for Model {
         self.llm.config()
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
-        Box::new(())
+        Box::new(LLaVAVisionSpecificArgs {
+            image_hashes: vec![],
+        })
+    }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
     }
 }
 

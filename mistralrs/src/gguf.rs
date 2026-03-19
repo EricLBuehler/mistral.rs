@@ -3,15 +3,9 @@ use mistralrs_core::*;
 use mistralrs_core::{SearchCallback, Tool, ToolCallback};
 use std::collections::HashMap;
 
-use crate::{best_device, Model};
+use crate::model_builder_trait::{build_gguf_pipeline, build_model_from_pipeline};
+use crate::Model;
 use std::sync::Arc;
-
-/// A tool callback with its associated Tool definition.
-#[derive(Clone)]
-pub struct ToolCallbackWithTool {
-    pub callback: Arc<ToolCallback>,
-    pub tool: Tool,
-}
 
 /// Configure a text GGUF model with the various parameters for loading, running, and other inference behaviors.
 pub struct GgufModelBuilder {
@@ -34,6 +28,7 @@ pub struct GgufModelBuilder {
     // Model running
     pub(crate) force_cpu: bool,
     pub(crate) topology: Option<Topology>,
+    pub(crate) topology_path: Option<String>,
     pub(crate) throughput_logging: bool,
 
     // Other things
@@ -66,6 +61,7 @@ impl GgufModelBuilder {
             prefix_cache_n: Some(16),
             with_logging: false,
             topology: None,
+            topology_path: None,
             tok_model_id: None,
             device_mapping: None,
             jinja_explicit: None,
@@ -90,6 +86,7 @@ impl GgufModelBuilder {
         self
     }
 
+    /// Register a callback for a specific tool name.
     pub fn with_tool_callback(
         mut self,
         name: impl Into<String>,
@@ -137,6 +134,18 @@ impl GgufModelBuilder {
         self
     }
 
+    /// Set the model topology from a path. This preserves the path for unload/reload support.
+    /// If there is an overlap, the topology type is used over the ISQ type.
+    pub fn with_topology_from_path<P: AsRef<std::path::Path>>(
+        mut self,
+        path: P,
+    ) -> anyhow::Result<Self> {
+        let path_str = path.as_ref().to_string_lossy().to_string();
+        self.topology = Some(Topology::from_path(&path)?);
+        self.topology_path = Some(path_str);
+        Ok(self)
+    }
+
     /// Literal Jinja chat template OR Path (ending in `.json`) to one.
     pub fn with_chat_template(mut self, chat_template: impl ToString) -> Self {
         self.chat_template = Some(chat_template.to_string());
@@ -173,16 +182,11 @@ impl GgufModelBuilder {
     /// If PagedAttention is not supported (query with [`paged_attn_supported`]), this will do nothing.
     ///
     /// [`PagedAttentionMetaBuilder`]: crate::PagedAttentionMetaBuilder
-    pub fn with_paged_attn(
-        mut self,
-        paged_attn_cfg: impl FnOnce() -> anyhow::Result<PagedAttentionConfig>,
-    ) -> anyhow::Result<Self> {
+    pub fn with_paged_attn(mut self, paged_attn_cfg: PagedAttentionConfig) -> Self {
         if paged_attn_supported() {
-            self.paged_attn_cfg = Some(paged_attn_cfg()?);
-        } else {
-            self.paged_attn_cfg = None;
+            self.paged_attn_cfg = Some(paged_attn_cfg);
         }
-        Ok(self)
+        self
     }
 
     /// Set the maximum number of sequences which can be run at once.
@@ -221,87 +225,9 @@ impl GgufModelBuilder {
         self
     }
 
+    /// Load the GGUF model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
-        let config = GGUFSpecificConfig {
-            topology: self.topology,
-        };
-
-        if self.with_logging {
-            initialize_logging();
-        }
-
-        let loader = GGUFLoaderBuilder::new(
-            self.chat_template,
-            self.tok_model_id,
-            self.model_id,
-            self.files,
-            config,
-            self.no_kv_cache,
-            self.jinja_explicit,
-        )
-        .build();
-
-        // Load, into a Pipeline
-        let pipeline = loader.load_model_from_hf(
-            self.hf_revision,
-            self.token_source,
-            &ModelDType::Auto,
-            &self.device.unwrap_or(best_device(self.force_cpu).unwrap()),
-            !self.with_logging,
-            self.device_mapping
-                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
-            None,
-            self.paged_attn_cfg,
-        )?;
-
-        let scheduler_method = match self.paged_attn_cfg {
-            Some(_) => {
-                let config = pipeline
-                    .lock()
-                    .await
-                    .get_metadata()
-                    .cache_config
-                    .as_ref()
-                    .unwrap()
-                    .clone();
-
-                SchedulerConfig::PagedAttentionMeta {
-                    max_num_seqs: self.max_num_seqs,
-                    config,
-                }
-            }
-            None => SchedulerConfig::DefaultScheduler {
-                method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
-            },
-        };
-
-        let mut runner = MistralRsBuilder::new(
-            pipeline,
-            scheduler_method,
-            self.throughput_logging,
-            self.search_embedding_model,
-        );
-        if let Some(cb) = self.search_callback.clone() {
-            runner = runner.with_search_callback(cb);
-        }
-        for (name, cb) in &self.tool_callbacks {
-            runner = runner.with_tool_callback(name.clone(), cb.clone());
-        }
-        for (name, callback_with_tool) in &self.tool_callbacks_with_tools {
-            runner = runner.with_tool_callback_and_tool(
-                name.clone(),
-                callback_with_tool.callback.clone(),
-                callback_with_tool.tool.clone(),
-            );
-        }
-        runner = runner
-            .with_no_kv_cache(self.no_kv_cache)
-            .with_no_prefix_cache(self.prefix_cache_n.is_none());
-
-        if let Some(n) = self.prefix_cache_n {
-            runner = runner.with_prefix_cache_n(n)
-        }
-
-        Ok(Model::new(runner.build().await))
+        let (pipeline, scheduler_config, add_model_config) = build_gguf_pipeline(self).await?;
+        Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)
     }
 }

@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Refinement State",
+  "description": "Master state manifest for a named artifact refinement session",
+  "type": "object",
+  "required": ["refinement_id", "artifact_name", "artifact_type", "content_type", "started_at", "updated_at", "current_iteration", "max_iterations", "convergence_status"],
+  "properties": {
+    "refinement_id": {
+      "type": "string",
+      "description": "UUID for this refinement session"
+    },
+    "artifact_name": {
+      "type": "string",
+      "description": "Human-readable name for cross-session retrieval (e.g. 'acme-logo', 'dashboard-hero')"
+    },
+    "artifact_type": {
+      "type": "string",
+      "enum": ["logo", "ui", "a2ui", "image", "content", "code", "meta-prompt"],
+      "description": "Domain adapter selector"
+    },
+    "content_type": {
+      "type": "string",
+      "pattern": "^(direct|meta):",
+      "description": "Content type classifier (e.g. 'direct:react', 'meta:image-prompt')"
+    },
+    "state_provider": {
+      "type": "object",
+      "description": "Resolved state provider configuration",
+      "properties": {
+        "provider_type": { "type": "string" },
+        "config": { "type": "object" }
+      }
+    },
+    "started_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "finalized_at": { "type": ["string", "null"], "format": "date-time" },
+    "current_iteration": { "type": "integer", "minimum": 0 },
+    "max_iterations": { "type": "integer", "minimum": 1, "default": 5 },
+    "convergence_status": {
+      "type": "string",
+      "enum": ["running", "converged", "max_iterations_exceeded", "user_terminated"]
+    },
+    "goals": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "High-level refinement objectives"
+    },
+    "constraints": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "Active constraints from specify phase"
+    },
+    "phases_completed": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["specify", "plan", "execute", "reflect", "persist"] }
+    },
+    "iteration_history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "iteration": { "type": "integer" },
+          "phases_completed": { "type": "array", "items": { "type": "string" } },
+          "constraints_satisfied": { "type": "integer" },
+          "constraints_total": { "type": "integer" },
+          "decision": { "type": "string", "enum": ["continue", "terminate"] },
+          "timestamp": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "checkpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "checkpoint_id": { "type": "string" },
+          "phase": { "type": "string" },
+          "iteration": { "type": "integer" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "workflow_triggers": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "Configured workflow triggers for this refinement"
+    },
+    "prior_cycle_id": {
+      "type": ["string", "null"],
+      "description": "ID of the prior finalized cycle this session was seeded from"
+    }
+  }
+}

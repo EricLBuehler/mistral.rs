@@ -28,12 +28,15 @@ pub async fn send_image_responses(
             .unwrap_or(ImageGenerationResponseFormat::Url)
         {
             ImageGenerationResponseFormat::Url => {
-                let saved_path = format!("image-generation-{}.png", Uuid::new_v4());
+                let saved_file = match seq.image_gen_save_file() {
+                    Some(path) => path.to_string_lossy().into_owned(),
+                    None => format!("image-generation-{}.png", Uuid::new_v4()),
+                };
                 image
-                    .save_with_format(&saved_path, image::ImageFormat::Png)
+                    .save_with_format(&saved_file, image::ImageFormat::Png)
                     .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
                 ImageChoice {
-                    url: Some(saved_path),
+                    url: Some(saved_file),
                     b64_json: None,
                 }
             }

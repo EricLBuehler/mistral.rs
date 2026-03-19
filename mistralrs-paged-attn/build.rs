@@ -5,59 +5,39 @@ const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 fn main() -> Result<()> {
-    use std::fs::OpenOptions;
-    use std::io::prelude::*;
     use std::path::PathBuf;
-    use std::process::Command;
 
-    const OTHER_CONTENT: &str = r#"
-pub const USE_FP8: bool = false;
-
-mod backend;
-mod ffi;
-
-pub use backend::{copy_blocks, kv_scale_update, paged_attention, reshape_and_cache, swap_blocks};
-    "#;
+    // Declare expected cfg values for check-cfg lint
+    println!("cargo::rustc-check-cfg=cfg(has_fp8)");
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/cuda/pagedattention.cuh");
     println!("cargo:rerun-if-changed=src/cuda/copy_blocks_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/reshape_and_cache_kernel.cu");
+    println!("cargo:rerun-if-changed=src/cuda/concat_and_cache_mla_kernel.cu");
+    println!("cargo:rerun-if-changed=src/cuda/gather_mla_cache_kernel.cu");
+    println!("cargo:rerun-if-changed=src/cuda/gather_kv_cache_kernel.cu");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer_mla_decode.cu");
     println!("cargo:rerun-if-changed=src/cuda/update_kvscales.cu");
-    // Detect CUDA compute capability for FP8 support
-    let compute_cap = {
-        if let Ok(var) = std::env::var("CUDA_COMPUTE_CAP") {
-            var.parse::<usize>().unwrap() * 10
-        } else {
-            let mut cmd = Command::new("nvidia-smi");
-            match cmd
-                .args(["--query-gpu=compute_cap", "--format=csv"])
-                .output()
-            {
-                Ok(out) => {
-                    let output =
-                        String::from_utf8(out.stdout).expect("Output of nvidia-smi was not utf8.");
-                    (output
-                        .split('\n')
-                        .nth(1)
-                        .unwrap()
-                        .trim()
-                        .parse::<f32>()
-                        .unwrap()
-                        * 100.) as usize
-                }
-                Err(_) => {
-                    // If nvidia-smi fails, assume no FP8 support
-                    println!(
-                        "cargo:warning=Could not detect CUDA compute capability, disabling FP8"
-                    );
-                    0
-                }
-            }
-        }
-    };
+    println!("cargo:rerun-if-changed=src/cuda/flash_attn_sinks.cu");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/cp_async.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/exception.h");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/fastdiv.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/layout.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/math.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/page.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/pos_enc.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/utils.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/vec_dtypes.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/cascade.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/decode.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/default_decode_params.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/state.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/variant_helper.cuh");
+    println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/variants.cuh");
 
-    let mut builder = bindgen_cuda::Builder::default()
+    let mut builder = cudaforge::KernelBuilder::new()
+        .source_glob("src/cuda/*.cu")
         .arg("-std=c++17")
         .arg("-O3")
         .arg("-U__CUDA_NO_HALF_OPERATORS__")
@@ -71,8 +51,9 @@ pub use backend::{copy_blocks, kv_scale_update, paged_attention, reshape_and_cac
         .arg("--compiler-options")
         .arg("-fPIC");
 
+    let compute_cap = builder.get_compute_cap().unwrap_or(80);
     // Enable FP8 if compute capability >= 8.0 (Ampere and newer)
-    let using_fp8 = if compute_cap >= 800 {
+    let using_fp8 = if compute_cap >= 80 {
         builder = builder.arg("-DENABLE_FP8");
         true
     } else {
@@ -95,36 +76,16 @@ pub use backend::{copy_blocks, kv_scale_update, paged_attention, reshape_and_cac
     } else {
         build_dir.join("libmistralrspagedattention.a")
     };
-    builder.build_lib(out_file);
+    builder
+        .build_lib(out_file)
+        .expect("Build paged attention lib failed!");
 
-    let kernel_dir = PathBuf::from("../mistralrs-paged-attn");
-    let absolute_kernel_dir = std::fs::canonicalize(kernel_dir).unwrap();
-
-    println!(
-        "cargo:rustc-link-search=native={}",
-        absolute_kernel_dir.display()
-    );
     println!("cargo:rustc-link-search={}", build_dir.display());
     println!("cargo:rustc-link-lib=mistralrspagedattention");
     println!("cargo:rustc-link-lib=dylib=cudart");
 
-    let mut file = OpenOptions::new()
-        .write(true)
-        .open("src/cuda/mod.rs")
-        .unwrap();
-
-    // Build the new content
-    let new_ct = if using_fp8 {
-        &OTHER_CONTENT
-            .trim()
-            .replace("USE_FP8: bool = false", "USE_FP8: bool = true")
-    } else {
-        OTHER_CONTENT.trim()
-    };
-
-    // Add the other stuff back
-    if let Err(e) = writeln!(file, "{new_ct}") {
-        anyhow::bail!("Error while building dependencies: {:?}\n", e)
+    if using_fp8 {
+        println!("cargo:rustc-cfg=has_fp8");
     }
     Ok(())
 }
@@ -135,11 +96,15 @@ fn main() -> Result<(), String> {
     use std::process::Command;
     use std::{env, str};
 
-    const METAL_SOURCES: [&str; 4] = [
+    // Declare expected cfg values for check-cfg lint
+    println!("cargo::rustc-check-cfg=cfg(has_fp8)");
+
+    const METAL_SOURCES: [&str; 5] = [
         "copy_blocks",
         "pagedattention",
         "reshape_and_cache",
         "kv_scale_update",
+        "gather_kv_cache",
     ];
     for src in METAL_SOURCES {
         println!("cargo::rerun-if-changed=src/metal/kernels/{src}.metal");
@@ -163,12 +128,14 @@ fn main() -> Result<(), String> {
         let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
         std::fs::write(out_dir.join("mistralrs_paged_attention.metallib"), []).unwrap();
         std::fs::write(out_dir.join("mistralrs_paged_attention_ios.metallib"), []).unwrap();
+        std::fs::write(out_dir.join("mistralrs_paged_attention_tvos.metallib"), []).unwrap();
         return Ok(());
     }
 
     enum Platform {
         MacOS,
         Ios,
+        TvOS,
     }
 
     impl Platform {
@@ -176,6 +143,18 @@ fn main() -> Result<(), String> {
             match self {
                 Platform::MacOS => "macosx",
                 Platform::Ios => "iphoneos",
+                Platform::TvOS => "appletvos",
+            }
+        }
+
+        fn metal_std(&self) -> &str {
+            // Use Metal 3.0 unified standard for all platforms.
+            // This fixes Xcode 26+ where the default Metal standard may be too low.
+            // https://github.com/EricLBuehler/mistral.rs/issues/1844
+            //
+            // Note: tvOS devices with A15+ (Apple TV 4K 3rd gen) support Metal 3.0+.
+            match self {
+                Platform::MacOS | Platform::Ios | Platform::TvOS => "metal3.0",
             }
         }
     }
@@ -192,6 +171,7 @@ fn main() -> Result<(), String> {
             .arg("--sdk")
             .arg(platform.sdk())
             .arg("metal")
+            .arg(format!("-std={}", platform.metal_std()))
             .arg(format!("-working-directory={working_directory}"))
             .arg("-Wall")
             .arg("-Wextra")
@@ -232,6 +212,7 @@ fn main() -> Result<(), String> {
         let lib_name = match platform {
             Platform::MacOS => "mistralrs_paged_attention.metallib",
             Platform::Ios => "mistralrs_paged_attention_ios.metallib",
+            Platform::TvOS => "mistralrs_paged_attention_tvos.metallib",
         };
         let metallib = out_dir.join(lib_name);
         let mut compile_metallib_cmd = Command::new("xcrun");
@@ -269,11 +250,14 @@ fn main() -> Result<(), String> {
 
     compile(Platform::MacOS)?;
     compile(Platform::Ios)?;
+    compile(Platform::TvOS)?;
 
     Ok(())
 }
 
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 fn main() -> Result<()> {
+    // Declare expected cfg values for check-cfg lint
+    println!("cargo::rustc-check-cfg=cfg(has_fp8)");
     Ok(())
 }
