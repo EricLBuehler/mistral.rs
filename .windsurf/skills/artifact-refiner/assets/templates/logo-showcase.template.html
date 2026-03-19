@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{TITLE}}</title>
+    <style type="text/css">
+      /* ========== Base ========== */
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        line-height: 1.55;
+        background: {{LIGHT_BG}};
+        color: {{LIGHT_FG}};
+      }
+      .container { max-width: 1100px; margin: 0 auto; padding: 2.5rem 1.5rem 4rem; }
+
+      /* ========== Header ========== */
+      .header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+      .title { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.02em; margin: 0; }
+      .subtitle { font-size: 0.9rem; color: {{LIGHT_MUTED_FG}}; margin: 0.35rem 0 0; }
+      .meta { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+              font-size: 0.75rem; color: {{LIGHT_MUTED_FG}}; }
+      .rule { height: 1px; background: {{LIGHT_BORDER}}; margin: 1.5rem 0 2rem; }
+
+      /* ========== Sections ========== */
+      h2 {
+        font-size: 0.85rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        margin: 2.5rem 0 0.85rem;
+        color: {{LIGHT_MUTED_FG}};
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 1rem;
+      }
+
+      /* ========== Cards ========== */
+      .card {
+        background: {{LIGHT_CARD}};
+        border: 1px solid {{LIGHT_BORDER}};
+        border-radius: 14px;
+        overflow: hidden;
+      }
+      .card .preview {
+        padding: 1.25rem;
+        background: {{LIGHT_BG}};
+        border-bottom: 1px solid {{LIGHT_BORDER}};
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 120px;
+      }
+      .card .preview.dark {
+        background: {{DARK_BG}};
+      }
+      .card .info { padding: 0.9rem 1rem; }
+      .label {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 0.75rem;
+        font-weight: 700;
+        margin: 0;
+      }
+      .paths {
+        margin: 0.35rem 0 0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 0.72rem;
+        color: {{LIGHT_MUTED_FG}};
+        word-break: break-all;
+      }
+
+      /* ========== Favicon Row ========== */
+      .fav-row { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
+      .fav {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        border: 1px solid {{LIGHT_BORDER}};
+        background: {{DARK_BG}};
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .fav img { display: block; max-width: 100%; max-height: 100%; }
+
+      /* ========== Footer ========== */
+      .footer {
+        margin-top: 3rem;
+        padding-top: 1.25rem;
+        border-top: 1px solid {{LIGHT_BORDER}};
+        color: {{LIGHT_MUTED_FG}};
+        font-size: 0.8rem;
+      }
+
+      /* ========== Responsive ========== */
+      @media (max-width: 640px) {
+        .container { padding: 2rem 1rem 3rem; }
+        .title { font-size: 1.3rem; }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="container">
+      <div class="header">
+        <div>
+          <h1 class="title">{{TITLE}}</h1>
+          <p class="subtitle">{{SUBTITLE}}</p>
+        </div>
+        <div class="meta">{{META}}</div>
+      </div>
+
+      <div class="rule"></div>
+
+      <!-- ===================== Wordmarks ===================== -->
+      <h2>Wordmarks</h2>
+      <div class="grid">
+        <div class="card">
+          <div class="preview dark">
+            <img src="{{WORDMARK_DARK_SVG}}" alt="Wordmark Dark SVG" style="max-width: 100%; height: auto;" />
+          </div>
+          <div class="info">
+            <p class="label">Wordmark (Dark)</p>
+            <p class="paths">SVG: {{WORDMARK_DARK_SVG}}<br />PNG: {{WORDMARK_DARK_PNG}}</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="preview">
+            <img src="{{WORDMARK_LIGHT_SVG}}" alt="Wordmark Light SVG" style="max-width: 100%; height: auto;" />
+          </div>
+          <div class="info">
+            <p class="label">Wordmark (Light)</p>
+            <p class="paths">SVG: {{WORDMARK_LIGHT_SVG}}<br />PNG: {{WORDMARK_LIGHT_PNG}}</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="preview dark">
+            <img src="{{WORDMARK_MONO_WHITE_PNG}}" alt="Wordmark Mono White" style="max-width: 100%; height: auto;" />
+          </div>
+          <div class="info">
+            <p class="label">Wordmark (Mono White)</p>
+            <p class="paths">PNG: {{WORDMARK_MONO_WHITE_PNG}}</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="preview">
+            <img src="{{WORDMARK_MONO_DARK_PNG}}" alt="Wordmark Mono Dark" style="max-width: 100%; height: auto;" />
+          </div>
+          <div class="info">
+            <p class="label">Wordmark (Mono Dark)</p>
+            <p class="paths">PNG: {{WORDMARK_MONO_DARK_PNG}}</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===================== Icon Marks ===================== -->
+      <h2>Icon Marks</h2>
+      <div class="grid">
+        <div class="card">
+          <div class="preview dark">
+            <img src="{{ICON_DARK_256}}" alt="Icon Dark 256" style="max-width: 256px; width: 100%; height: auto;" />
+          </div>
+          <div class="info">
+            <p class="label">Icon (Dark) · 256</p>
+            <p class="paths">PNG: {{ICON_DARK_256}}</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="preview">
+            <img src="{{ICON_LIGHT_256}}" alt="Icon Light 256" style="max-width: 256px; width: 100%; height: auto;" />
+          </div>
+          <div class="info">
+            <p class="label">Icon (Light) · 256</p>
+            <p class="paths">PNG: {{ICON_LIGHT_256}}</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="preview" style="background: {{LIGHT_BG}};">
+            <img src="{{ICON_TRANSPARENT_256}}" alt="Icon Transparent 256" style="max-width: 256px; width: 100%; height: auto;" />
+          </div>
+          <div class="info">
+            <p class="label">Icon (Transparent) · 256</p>
+            <p class="paths">PNG: {{ICON_TRANSPARENT_256}}</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===================== App Icons ===================== -->
+      <h2>App Icons</h2>
+      <div class="grid">
+        <div class="card">
+          <div class="preview dark">
+            <img src="{{APPICON_DARK_512}}" alt="App Icon Dark 512" style="max-width: 256px; width: 100%; height: auto;" />
+          </div>
+          <div class="info">
+            <p class="label">App Icon (Dark) · 512</p>
+            <p class="paths">PNG: {{APPICON_DARK_512}}</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="preview">
+            <img src="{{APPICON_LIGHT_512}}" alt="App Icon Light 512" style="max-width: 256px; width: 100%; height: auto;" />
+          </div>
+          <div class="info">
+            <p class="label">App Icon (Light) · 512</p>
+            <p class="paths">PNG: {{APPICON_LIGHT_512}}</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===================== Favicons ===================== -->
+      <h2>Favicons</h2>
+      <div class="fav-row">
+        <div class="fav"><img src="{{FAVICON_16}}" alt="Favicon 16" width="16" height="16" /></div>
+        <div class="fav"><img src="{{FAVICON_32}}" alt="Favicon 32" width="32" height="32" /></div>
+        <div class="fav"><img src="{{FAVICON_48}}" alt="Favicon 48" width="48" height="48" /></div>
+        <div class="fav"><img src="{{FAVICON_64}}" alt="Favicon 64" width="64" height="64" /></div>
+        <div class="fav"><img src="{{FAVICON_128}}" alt="Favicon 128" width="128" height="128" /></div>
+        <div class="fav"><img src="{{FAVICON_192}}" alt="Favicon 192" width="192" height="192" /></div>
+      </div>
+
+      <div class="footer">
+        <div>{{FOOTER_LEFT}}</div>
+        <div>{{FOOTER_RIGHT}}</div>
+      </div>
+    </div>
+  </body>
+</html>

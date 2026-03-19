@@ -5,7 +5,8 @@
 use candle_core::{Device, DeviceLocation, Result, Tensor};
 use candle_nn::Activation as CandleActivation;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, Mutex, Once};
+use std::sync::{LazyLock, Once};
+use parking_lot::Mutex;
 
 /// Controller for the CUBLASLT handle and inhibition flag.
 pub struct CublasLtController {
@@ -34,7 +35,7 @@ impl CublasLtController {
         if self.inhibit.load(Ordering::SeqCst) {
             return None;
         }
-        let handle_opt = self.handle.lock().unwrap();
+        let handle_opt = self.handle.lock();
         *handle_opt
     }
 
@@ -47,13 +48,13 @@ impl CublasLtController {
             return None;
         }
         // Check if the device matches the initialized device
-        let device_loc = self.device_location.lock().unwrap();
+        let device_loc = self.device_location.lock();
         if let Some(init_loc) = *device_loc {
             if device.location() != init_loc {
                 return None;
             }
         }
-        let handle_opt = self.handle.lock().unwrap();
+        let handle_opt = self.handle.lock();
         *handle_opt
     }
 }
@@ -89,14 +90,14 @@ pub fn maybe_init_cublas_lt_wrapper(device: Device) {
                     });
                     let wrapper_ptr = Box::leak(wrapper) as &'static CublasLtWrapper;
 
-                    // Set the controller handle and store the device location
-                    let mut handle_lock = CUBLASLT_CONTROLLER.handle.lock().unwrap();
+                    // Set the controller handle
+                    let mut handle_lock = CUBLASLT_CONTROLLER.handle.lock();
                     *handle_lock = Some(wrapper_ptr);
-                    let mut device_loc = CUBLASLT_CONTROLLER.device_location.lock().unwrap();
+                    let mut device_loc = CUBLASLT_CONTROLLER.device_location.lock();
                     *device_loc = Some(device.location());
                 }
                 _ => {
-                    let mut handle_lock = CUBLASLT_CONTROLLER.handle.lock().unwrap();
+                    let mut handle_lock = CUBLASLT_CONTROLLER.handle.lock();
                     *handle_lock = None;
                 }
             }
@@ -104,7 +105,7 @@ pub fn maybe_init_cublas_lt_wrapper(device: Device) {
 
         #[cfg(not(feature = "cuda"))]
         {
-            let mut handle_lock = CUBLASLT_CONTROLLER.handle.lock().unwrap();
+            let mut handle_lock = CUBLASLT_CONTROLLER.handle.lock();
             *handle_lock = None;
         }
     });
@@ -175,7 +176,9 @@ impl CublasLtWrapper {
         }
         #[cfg(not(feature = "cuda"))]
         {
-            candle_core::bail!("`cuda` feature is not enabled")
+            Err(candle_core::Error::Msg(
+                "`cuda` feature is not enabled".to_string(),
+            ))
         }
     }
 
@@ -228,7 +231,9 @@ impl CublasLtWrapper {
         }
         #[cfg(not(feature = "cuda"))]
         {
-            candle_core::bail!("`cuda` feature is not enabled")
+            Err(candle_core::Error::Msg(
+                "`cuda` feature is not enabled".to_string(),
+            ))
         }
     }
 }

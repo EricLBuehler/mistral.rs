@@ -1,0 +1,12 @@
+# Minimal Mistral.rs Scheduler Configuration
+# Uses defaults for unspecified values
+
+# Thread pool settings
+pool:
+  worker_threads: 4  # Match your CPU core count
+
+# Resource limits
+limits:
+  max_units: 4096       # Adjust based on GPU memory (~4GB KV cache)
+  max_queue_depth: 100  # Max queued requests
+  timeout_secs: 300     # Request timeout in seconds

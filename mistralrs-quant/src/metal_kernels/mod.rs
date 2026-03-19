@@ -9,8 +9,9 @@ use candle_metal_kernels::metal::{
 };
 use objc2_metal::{MTLCompileOptions, MTLDevice, MTLMathMode, MTLSize};
 use std::os::raw::c_void;
-use std::sync::{Arc, RwLock};
-use std::{collections::HashMap, sync::OnceLock};
+use std::sync::{Arc, OnceLock};
+use std::collections::HashMap;
+use parking_lot::RwLock;
 
 pub mod utils;
 use utils::{
@@ -321,7 +322,7 @@ impl Kernels {
         device: &Device,
         name: impl ToString,
     ) -> Result<ComputePipelineState, MetalKernelError> {
-        let mut pipelines = self.pipelines.write()?;
+        let mut pipelines = self.pipelines.write();
         let key = name.to_string();
         if let Some(pipeline) = pipelines.get(&key) {
             Ok(pipeline.clone())
@@ -1735,7 +1736,7 @@ impl SortScratchCache {
         };
 
         // Fast path – try read‑lock first
-        if let Some(buffers) = self.map.read().unwrap().get(&key) {
+        if let Some(buffers) = self.map.read().get(&key) {
             // Touch LRU order (needs write lock)
             self.touch_key(key);
             return MultiBlockSortCache {
@@ -1748,8 +1749,8 @@ impl SortScratchCache {
         }
 
         // Slow path – allocate new buffers
-        let mut map_guard = self.map.write().unwrap();
-        let mut order_guard = self.order.write().unwrap();
+        let mut map_guard = self.map.write();
+        let mut order_guard = self.order.write();
 
         // Evict least‑recently used if we’re at capacity
         if map_guard.len() == self.cap {
@@ -1795,7 +1796,7 @@ impl SortScratchCache {
 
     /// Move `key` to the back of the LRU order list.
     fn touch_key(&self, key: CacheKey) {
-        let mut order = self.order.write().unwrap();
+        let mut order = self.order.write();
         if let Some(pos) = order.iter().position(|k| *k == key) {
             order.remove(pos);
         }

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use candle_core::{DType, Result, Tensor};
+use parking_lot::Mutex as ParkingLotMutex;
 use rand_isaac::Isaac64Rng;
 
 use crate::{
@@ -429,7 +430,7 @@ pub async fn sample_and_add_toks(
     logits_seq: Vec<Tensor>,
     prefix_cacher: &mut PrefixCacheManagerV2,
     disable_eos_stop: bool,
-    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    rng: Arc<ParkingLotMutex<Isaac64Rng>>,
 ) -> Result<()> {
     let seqs_len = seqs.len();
     debug_assert_eq!(logits_seq.len(), seqs_len);
@@ -474,7 +475,7 @@ pub async fn sample_sequence(
     logits: Tensor,
     seq: &mut Sequence,
     return_logprobs: bool,
-    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    rng: Arc<ParkingLotMutex<Isaac64Rng>>,
     use_async_pool: bool,
     sample_speculative: bool,
     multiple_sequences: bool,
@@ -592,7 +593,7 @@ pub async fn sample_target_sequence_speculative(
     logits: Tensor,
     seq: &mut Sequence,
     return_logprobs: bool,
-    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    rng: Arc<ParkingLotMutex<Isaac64Rng>>,
     draft_samples: &[SpeculativeSample],
 ) -> Result<Vec<SpeculativeSample>> {
     let n_toks = draft_samples.len();

@@ -1,3 +1,5 @@
+mod lock_benchmarks;
+
 use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};

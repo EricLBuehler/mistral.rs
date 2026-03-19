@@ -1,0 +1,128 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Evolution State",
+  "description": "Master state manifest for an iterative evolution cycle",
+  "type": "object",
+  "required": ["evolution_id", "evolution_name", "domain", "started_at", "updated_at", "current_iteration", "max_iterations", "goals", "convergence_status"],
+  "properties": {
+    "evolution_id": {
+      "type": "string",
+      "description": "Internal UUID for this evolution cycle"
+    },
+    "evolution_name": {
+      "type": "string",
+      "description": "User-friendly name used as the primary retrieval key across sessions"
+    },
+    "domain": {
+      "type": "string",
+      "enum": ["software", "business", "product", "research", "content", "operations", "compliance", "generic"],
+      "description": "Evolution domain"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the evolution cycle started"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Last update timestamp"
+    },
+    "finalized_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "When this cycle was finalized (null if still running)"
+    },
+    "current_iteration": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Current iteration number"
+    },
+    "max_iterations": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 5,
+      "description": "Maximum iterations before forced termination"
+    },
+    "prior_cycle_id": {
+      "type": ["string", "null"],
+      "description": "evolution_id of the prior cycle (if this was seeded from a finalized state)"
+    },
+    "goals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "priority"],
+        "properties": {
+          "id": { "type": "string" },
+          "description": { "type": "string" },
+          "priority": { "type": "string", "enum": ["high", "medium", "low"] },
+          "measurable_criteria": { "type": "string" }
+        }
+      }
+    },
+    "phases_completed": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["assess", "analyze", "plan", "execute", "reflect", "persist"]
+      },
+      "description": "Phases completed in current iteration"
+    },
+    "convergence_status": {
+      "type": "string",
+      "enum": ["running", "converged", "max_iterations", "terminated"],
+      "description": "Current convergence status"
+    },
+    "state_provider": {
+      "type": "object",
+      "description": "Active state provider configuration",
+      "properties": {
+        "provider_type": {
+          "type": "string",
+          "enum": ["filesystem", "agent_memory", "mcp_tool", "custom"]
+        },
+        "resolved_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "workflow_triggers": {
+      "type": "array",
+      "items": { "$ref": "workflow-trigger.schema.json#/definitions/trigger" },
+      "description": "Workflow triggers registered for this evolution"
+    },
+    "checkpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "checkpoint_id": { "type": "string" },
+          "phase": { "type": "string" },
+          "event_type": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        }
+      },
+      "description": "Mid-session checkpoint references"
+    },
+    "latest_assessment": { "type": "object" },
+    "latest_analysis": { "type": "object" },
+    "latest_plan": { "type": "object" },
+    "latest_execution": { "type": "object" },
+    "latest_reflection": { "type": "object" },
+    "iteration_history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "iteration": { "type": "integer" },
+          "alignment_before": { "type": "number" },
+          "alignment_after": { "type": "number" },
+          "actions_completed": { "type": "integer" },
+          "convergence_decision": { "type": "string" }
+        }
+      }
+    }
+  }
+}

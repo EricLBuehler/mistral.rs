@@ -321,7 +321,6 @@ macro_rules! get_uqff_paths {
                     &$this
                         .token_source
                         .read()
-                        .expect("Failed to read token source")
                         .clone()
                         .unwrap_or(TokenSource::None),
                 )?);
@@ -333,7 +332,6 @@ macro_rules! get_uqff_paths {
         let revision = $this
             .revision
             .read()
-            .expect("Failed to read revision")
             .clone()
             .unwrap_or("main".to_string());
         let api = api.repo(Repo::with_revision(

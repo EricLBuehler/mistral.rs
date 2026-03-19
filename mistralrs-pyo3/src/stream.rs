@@ -20,9 +20,9 @@ impl ChatCompletionStreamer {
     fn __iter__(this: PyRef<'_, Self>) -> PyRef<'_, Self> {
         this
     }
-    fn __next__(mut this: PyRefMut<'_, Self>) -> Option<PyResult<ChatCompletionChunkResponse>> {
+    fn __next__(mut this: PyRefMut<'_, Self>) -> PyResult<Option<ChatCompletionChunkResponse>> {
         if this.is_done {
-            return None;
+            return Ok(None);
         }
         let py = this.py();
         // Temporarily take ownership of `rx` so it can be moved into the
@@ -33,14 +33,14 @@ impl ChatCompletionStreamer {
 
         match recv_result {
             Some(resp) => match resp {
-                Response::ModelError(msg, _) => Some(Err(PyValueError::new_err(msg.to_string()))),
-                Response::ValidationError(e) => Some(Err(PyValueError::new_err(e.to_string()))),
-                Response::InternalError(e) => Some(Err(PyValueError::new_err(e.to_string()))),
+                Response::ModelError(msg, _) => Err(PyValueError::new_err(msg.to_string())),
+                Response::ValidationError(e) => Err(PyValueError::new_err(e.to_string())),
+                Response::InternalError(e) => Err(PyValueError::new_err(e.to_string())),
                 Response::Chunk(response) => {
                     if response.choices.iter().all(|x| x.finish_reason.is_some()) {
                         this.is_done = true;
                     }
-                    Some(Ok(response))
+                    Ok(Some(response))
                 }
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
@@ -51,9 +51,9 @@ impl ChatCompletionStreamer {
                 Response::Raw { .. } => unreachable!(),
                 Response::Embeddings { .. } => unreachable!(),
             },
-            None => Some(Err(PyValueError::new_err(
+            None => Err(PyValueError::new_err(
                 "Received none in ChatCompletionStreamer".to_string(),
-            ))),
+            )),
         }
     }
 }

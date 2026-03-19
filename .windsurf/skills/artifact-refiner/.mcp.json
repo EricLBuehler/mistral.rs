@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "e2b-sandbox": {
+      "command": "npx",
+      "args": ["-y", "@e2b/mcp-server@latest"],
+      "env": {
+        "E2B_API_KEY": "${E2B_API_KEY}"
+      }
+    }
+  }
+}

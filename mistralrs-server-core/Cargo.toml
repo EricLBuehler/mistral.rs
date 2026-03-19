@@ -36,6 +36,7 @@ url.workspace = true
 utoipa = { workspace = true, features = ["axum_extras"] }
 utoipa-swagger-ui = { workspace = true, features = ["axum"], optional = true }
 uuid.workspace = true
+parking_lot.workspace = true
 
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
@@ -52,3 +53,4 @@ accelerate = ["mistralrs-core/accelerate"]
 mkl = ["mistralrs-core/mkl"]
 nccl = ["mistralrs-core/nccl"]
 ring = ["mistralrs-core/ring"]
+parking-lot-scheduler = ["mistralrs-core/parking-lot-scheduler"]

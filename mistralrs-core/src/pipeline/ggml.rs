@@ -41,6 +41,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+use parking_lot::Mutex as ParkingLotMutex;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -566,7 +567,7 @@ impl Pipeline for GGMLPipeline {
         logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
-        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        rng: Arc<ParkingLotMutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
         sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }

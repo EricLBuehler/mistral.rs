@@ -1,0 +1,26 @@
+{
+  "name": "travisjames-skills",
+  "owner": {
+    "name": "Travis James Skills"
+  },
+  "metadata": {
+    "description": "Marketplace for PMPO iterative evolution and assessment plugins.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "iterative-evolver",
+      "source": "./",
+      "category": "productivity",
+      "tags": [
+        "pmpo",
+        "evolution",
+        "assessment",
+        "iterative",
+        "strategy",
+        "analysis",
+        "planning"
+      ]
+    }
+  ]
+}

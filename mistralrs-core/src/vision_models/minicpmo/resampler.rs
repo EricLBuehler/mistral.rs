@@ -1,6 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{LayerNorm, Linear};
@@ -122,7 +123,7 @@ impl Resampler {
     }
 
     pub fn forward(&self, x: &Tensor, tgt_sizes_vec: &[Vec<u32>]) -> Result<Tensor> {
-        let mut pos_embed_cache = self.sincos_pos_embed.lock().unwrap();
+        let mut pos_embed_cache = self.sincos_pos_embed.lock();
 
         let bs = x.dim(0)?;
         let device = x.device();

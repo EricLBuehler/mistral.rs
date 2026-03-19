@@ -2,8 +2,8 @@
 
 use anyhow::Result;
 use std::collections::HashMap;
-use std::sync::LazyLock;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock};
+use parking_lot::RwLock;
 
 use crate::openai::Message;
 use crate::responses_types::ResponseResource;
@@ -77,13 +77,13 @@ impl ResponseCache for InMemoryResponseCache {
     }
 
     fn store_conversation_history(&self, id: String, messages: Vec<Message>) -> Result<()> {
-        let mut histories = self.conversation_histories.write().unwrap();
+        let mut histories = self.conversation_histories.write();
         histories.insert(id, messages);
         Ok(())
     }
 
     fn get_conversation_history(&self, id: &str) -> Result<Option<Vec<Message>>> {
-        let histories = self.conversation_histories.read().unwrap();
+        let histories = self.conversation_histories.read();
         Ok(histories.get(id).cloned())
     }
 }
@@ -96,6 +96,9 @@ pub static RESPONSE_CACHE: LazyLock<Arc<dyn ResponseCache>> =
 pub fn get_response_cache() -> Arc<dyn ResponseCache> {
     RESPONSE_CACHE.clone()
 }
+
+#[cfg(test)]
+mod cached_responses_tests;
 
 #[cfg(test)]
 mod tests {

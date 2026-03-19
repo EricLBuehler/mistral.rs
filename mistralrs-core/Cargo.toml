@@ -92,8 +92,11 @@ http.workspace = true
 ordered-float.workspace = true
 hashbrown.workspace = true
 parking_lot.workspace = true
+prometheus_parking_lot.workspace = true
 ahash.workspace = true
 num-traits.workspace = true
+num_cpus = "1.16"
+flume = "0.11"
 libc.workspace = true
 bm25.workspace = true
 rubato.workspace = true
@@ -140,6 +143,7 @@ mkl = ["candle-core/mkl", "candle-nn/mkl"]
 nccl = ["cuda", "mistralrs-quant/nccl"]
 utoipa = ["dep:utoipa"]
 ring = ["mistralrs-quant/ring"]
+parking-lot-scheduler = []
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }

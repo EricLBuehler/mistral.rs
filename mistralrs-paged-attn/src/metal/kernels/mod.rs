@@ -4,8 +4,9 @@ use candle_metal_kernels::metal::{
     Value,
 };
 use objc2_metal::{MTLCompileOptions, MTLDevice, MTLMathMode, MTLSize};
-use std::sync::{OnceLock, RwLock};
+use std::sync::OnceLock;
 use std::{collections::HashMap, ffi::c_void};
+use parking_lot::RwLock;
 
 pub mod utils;
 use utils::{EncoderProvider, RawBytesEncoder};
@@ -304,7 +305,7 @@ impl Kernels {
         name: String,
         constants: Option<ConstantValues>,
     ) -> Result<ComputePipelineState, MetalKernelError> {
-        let mut pipelines = self.pipelines.write()?;
+        let mut pipelines = self.pipelines.write();
         let key = (name, constants);
         if let Some(pipeline) = pipelines.get(&key) {
             Ok(pipeline.clone())

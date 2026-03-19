@@ -23,6 +23,7 @@ mistralrs-core.workspace = true
 tracing.workspace = true
 tokio.workspace = true
 cli-table.workspace = true
+parking_lot.workspace = true
 
 [features]
 cuda = ["mistralrs-core/cuda"]

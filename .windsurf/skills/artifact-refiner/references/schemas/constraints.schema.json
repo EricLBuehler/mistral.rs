@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://prometheus.pm/pmposkills/artifact-refiner/constraints.schema.json",
+  "title": "Artifact Refiner Constraints Schema",
+  "description": "Schema defining structured constraints for the PMPO Artifact Refiner skill.",
+  "type": "object",
+  "required": ["artifact_type", "constraints"],
+  "properties": {
+    "artifact_type": {
+      "type": "string",
+      "enum": ["logo", "ui", "a2ui", "image", "content"],
+      "description": "Domain of the artifact being refined."
+    },
+    "constraints": {
+      "type": "array",
+      "description": "List of constraint objects applied during refinement.",
+      "items": {
+        "$ref": "#/definitions/constraint"
+      }
+    },
+    "global_rules": {
+      "type": "array",
+      "description": "High-level rules that apply across all refinement iterations.",
+      "items": { "type": "string" }
+    },
+    "termination_conditions": {
+      "type": "array",
+      "description": "Explicit convergence or stop conditions.",
+      "items": { "type": "string" }
+    }
+  },
+  "definitions": {
+    "constraint": {
+      "type": "object",
+      "required": ["id", "description", "severity"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the constraint."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable explanation of the constraint."
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["blocking", "high", "medium", "low"],
+          "description": "Indicates importance of constraint during reflection."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["visual", "structural", "semantic", "technical", "brand", "performance", "accessibility"],
+          "description": "Classification of constraint category."
+        },
+        "validation": {
+          "type": "object",
+          "description": "Optional deterministic validation rules.",
+          "properties": {
+            "requires_code_execution": {
+              "type": "boolean",
+              "description": "Whether this constraint requires deterministic validation via code interpreter."
+            },
+            "validation_method": {
+              "type": "string",
+              "description": "Description of validation strategy (e.g., contrast-check, schema-validate, file-exists)."
+            }
+          },
+          "additionalProperties": false
+        },
+        "target_metric": {
+          "type": "object",
+          "description": "Optional measurable threshold.",
+          "properties": {
+            "metric": { "type": "string" },
+            "operator": {
+              "type": "string",
+              "enum": [">", ">=", "<", "<=", "=="]
+            },
+            "value": { "type": ["number", "string"] }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

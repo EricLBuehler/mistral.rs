@@ -2,6 +2,7 @@ use candle_core::{DType, Device, Error, IndexOp, Result, Shape, Storage, Tensor,
 use candle_nn::var_builder::{Backend, SimpleBackend, VarBuilderArgs};
 use float8::F8E4M3;
 use regex::Regex;
+// Use safetensors types directly but handle version compatibility
 use safetensors::tensor as st;
 use safetensors::tensor::SafeTensors;
 use std::collections::HashMap;
@@ -239,7 +240,7 @@ impl MmapedSafetensors {
             file,
             |data: &[u8]| {
                 let st = safetensors::SafeTensors::deserialize(data)
-                    .map_err(|e| Error::from(e).with_path(p))?;
+                    .map_err(|e| candle_core::Error::from(e).with_path(p))?;
                 Ok::<_, Error>(SafeTensors_(st))
             },
         )?;
@@ -269,7 +270,7 @@ impl MmapedSafetensors {
                 file,
                 |data: &[u8]| {
                     let st = safetensors::SafeTensors::deserialize(data)
-                        .map_err(|e| Error::from(e).with_path(p))?;
+                        .map_err(|e| candle_core::Error::from(e).with_path(p))?;
                     Ok::<_, Error>(SafeTensors_(st))
                 },
             )?;
@@ -309,7 +310,7 @@ impl MmapedSafetensors {
                 *index
             }
         };
-        Ok(self.safetensors[index].get().0.tensor(name)?)
+        Ok(self.safetensors[index].get().0.tensor(name).map_err(candle_core::Error::from)?)
     }
 }
 
@@ -603,7 +604,23 @@ impl Backend for ShardedSafeTensors {
 
                         shape[dim] = block_size;
 
-                        let view_dtype: DType = view_dtype.try_into()?;
+                        let view_dtype: DType = match view_dtype {
+                            st::Dtype::U8 => DType::U8,
+                            st::Dtype::U32 => DType::U32,
+                            st::Dtype::I16 => DType::I16,
+                            st::Dtype::I32 => DType::I32,
+                            st::Dtype::I64 => DType::I64,
+                            st::Dtype::BF16 => DType::BF16,
+                            st::Dtype::F16 => DType::F16,
+                            st::Dtype::F32 => DType::F32,
+                            st::Dtype::F64 => DType::F64,
+                            st::Dtype::F8_E4M3 => DType::F8E4M3,
+                            st::Dtype::F6_E2M3 => DType::F6E2M3,
+                            st::Dtype::F6_E3M2 => DType::F6E3M2,
+                            st::Dtype::F4 => DType::F4,
+                            st::Dtype::F8_E8M0 => DType::F8E8M0,
+                            _ => return Err(Error::UnsupportedSafeTensorDtype(view_dtype)),
+                        };
                         let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
                         Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)?
                     }
@@ -670,7 +687,23 @@ impl Backend for ShardedSafeTensors {
 
                         shape[dim] = len;
 
-                        let view_dtype: DType = view_dtype.try_into()?;
+                        let view_dtype: DType = match view_dtype {
+                            st::Dtype::U8 => DType::U8,
+                            st::Dtype::U32 => DType::U32,
+                            st::Dtype::I16 => DType::I16,
+                            st::Dtype::I32 => DType::I32,
+                            st::Dtype::I64 => DType::I64,
+                            st::Dtype::BF16 => DType::BF16,
+                            st::Dtype::F16 => DType::F16,
+                            st::Dtype::F32 => DType::F32,
+                            st::Dtype::F64 => DType::F64,
+                            st::Dtype::F8_E4M3 => DType::F8E4M3,
+                            st::Dtype::F6_E2M3 => DType::F6E2M3,
+                            st::Dtype::F6_E3M2 => DType::F6E3M2,
+                            st::Dtype::F4 => DType::F4,
+                            st::Dtype::F8_E8M0 => DType::F8E8M0,
+                            _ => return Err(Error::UnsupportedSafeTensorDtype(view_dtype)),
+                        };
                         let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
                         Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)?
                     }

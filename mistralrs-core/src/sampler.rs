@@ -2,8 +2,10 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, LazyLock, Mutex},
+    sync::{Arc, LazyLock},
 };
+
+use parking_lot::Mutex;
 
 use candle_core::{DType, Device, Error, Result, Tensor, D};
 use mistralrs_quant::{CumSumOp, SortOp};
@@ -42,6 +44,12 @@ pub struct SamplingParams {
     pub logits_bias: Option<HashMap<u32, f32>>,
     pub n_choices: usize,
     pub dry_params: Option<DrySamplingParams>,
+}
+
+impl Default for SamplingParams {
+    fn default() -> Self {
+        Self::deterministic()
+    }
 }
 
 impl SamplingParams {
@@ -481,7 +489,7 @@ impl Sampler {
         let log_probs = probs.log()?;
         // Generate cached Gumbel noise (-log(-log(u))) once.
         let gumbel = {
-            let mut guard = self.gumbel_cache.lock().unwrap();
+            let mut guard = self.gumbel_cache.lock();
             if guard.is_none() {
                 let uniform = Tensor::rand(0f32, 1f32, log_probs.shape(), log_probs.device())?;
                 let noise = uniform
@@ -652,7 +660,7 @@ impl Sampler {
     ) -> Result<Logprobs> {
         let distr = WeightedIndex::new(probs).map_err(Error::wrap)?;
 
-        let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
+        let mut mut_ref_rng = &mut *rng.lock();
         let next_token = distr.sample(&mut mut_ref_rng); // "Find the first item which has a weight *higher* than the chosen weight."
         let logprob = probs[next_token].log(10.0);
 
@@ -969,7 +977,7 @@ mod tests {
         use rand::SeedableRng;
         use rand_isaac::Isaac64Rng;
         use std::sync::Arc;
-        use std::sync::Mutex;
+        use parking_lot::Mutex;
 
         let sampler = Sampler::new(
             None,
@@ -1009,7 +1017,7 @@ mod tests {
         use rand::SeedableRng;
         use rand_isaac::Isaac64Rng;
         use std::sync::Arc;
-        use std::sync::Mutex;
+        use parking_lot::Mutex;
 
         let sampler = Sampler::new(
             None,

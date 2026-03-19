@@ -42,9 +42,8 @@ use mistralrs_core::{
 };
 use mistralrs_mcp::{McpClientConfig, McpServerConfig, McpServerSource};
 use pyo3::prelude::*;
-use pyo3::types::PyList;
+use pyo3::types::{PyAny, PyList};
 use pyo3::Bound;
-use pyo3::PyObject;
 use std::fs::File;
 mod anymoe;
 mod requests;
@@ -111,11 +110,11 @@ struct Runner {
 
 static NEXT_REQUEST_ID: Mutex<RefCell<usize>> = Mutex::new(RefCell::new(0));
 
-fn wrap_search_callback(cb: PyObject) -> Arc<SearchCallback> {
+fn wrap_search_callback(cb: Py<PyAny>) -> Arc<SearchCallback> {
     Arc::new(move |params: &SearchFunctionParameters| {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let obj = cb.call1(py, (params.query.clone(),))?;
-            let list = obj.downcast_bound::<PyList>(py)?;
+            let list = obj.cast_bound::<PyList>(py)?;
             let mut results = Vec::new();
             for item in list.iter() {
                 let title: String = item.get_item("title")?.extract()?;
@@ -135,9 +134,9 @@ fn wrap_search_callback(cb: PyObject) -> Arc<SearchCallback> {
     })
 }
 
-fn wrap_tool_callback(cb: PyObject) -> Arc<ToolCallback> {
+fn wrap_tool_callback(cb: Py<PyAny>) -> Arc<ToolCallback> {
     Arc::new(move |func: &CalledFunction| {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let json = py.import("json")?;
             let args: Py<PyAny> = json
                 .call_method1("loads", (func.arguments.clone(),))?
@@ -149,10 +148,10 @@ fn wrap_tool_callback(cb: PyObject) -> Arc<ToolCallback> {
     })
 }
 
-fn wrap_tool_callbacks(obj: PyObject) -> anyhow::Result<ToolCallbacks> {
-    Python::with_gil(|py| {
+fn wrap_tool_callbacks(obj: Py<PyAny>) -> anyhow::Result<ToolCallbacks> {
+    Python::attach(|py| {
         let dict = obj
-            .downcast_bound::<pyo3::types::PyDict>(py)
+            .cast_bound::<pyo3::types::PyDict>(py)
             .map_err(|e| anyhow::anyhow!("Failed to downcast to PyDict: {}", e))?;
 
         let mut map = ToolCallbacks::new();
@@ -161,7 +160,7 @@ fn wrap_tool_callbacks(obj: PyObject) -> anyhow::Result<ToolCallbacks> {
             let name: String = name
                 .extract()
                 .map_err(|e: PyErr| anyhow::anyhow!(e.to_string()))?;
-            let cb_obj: PyObject = cb.into();
+            let cb_obj: Py<PyAny> = cb.into();
             map.insert(name, wrap_tool_callback(cb_obj));
         }
         Ok(map)
@@ -635,8 +634,8 @@ impl Runner {
         seed: Option<u64>,
         enable_search: bool,
         search_embedding_model: Option<String>,
-        search_callback: Option<PyObject>,
-        tool_callbacks: Option<PyObject>,
+        search_callback: Option<Py<PyAny>>,
+        tool_callbacks: Option<Py<PyAny>>,
         mcp_client_config: Option<McpClientConfigPy>,
     ) -> PyApiResult<Self> {
         let tgt_non_granular_index = match which {
@@ -964,7 +963,7 @@ impl Runner {
         model_id: Option<String>,
     ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
         let (tx, mut rx) = channel(10_000);
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let request = request.bind(py).borrow();
             let stop_toks = request
                 .stop_seqs
@@ -1301,7 +1300,7 @@ impl Runner {
         request: Py<EmbeddingRequest>,
         model_id: Option<String>,
     ) -> PyApiResult<Vec<Vec<f32>>> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let (inputs, truncate_sequence, debug_repr) = {
                 let request_ref = request.bind(py).borrow();
                 (
@@ -1409,7 +1408,7 @@ impl Runner {
         model_id: Option<String>,
     ) -> PyApiResult<CompletionResponse> {
         let (tx, mut rx) = channel(10_000);
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let request = request.bind(py).borrow();
             let stop_toks = request
                 .stop_seqs
@@ -1771,7 +1770,7 @@ impl Runner {
         model_id: String,
     ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
         let (tx, mut rx) = channel(10_000);
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let request = request.bind(py).borrow();
             let stop_toks = request
                 .stop_seqs
@@ -2107,7 +2106,7 @@ impl Runner {
         model_id: String,
     ) -> PyApiResult<CompletionResponse> {
         let (tx, mut rx) = channel(10_000);
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let request = request.bind(py).borrow();
             let stop_toks = request
                 .stop_seqs

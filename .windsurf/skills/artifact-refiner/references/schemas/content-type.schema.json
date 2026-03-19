@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Content Type",
+  "description": "Schema for content type declarations that determine how artifacts are produced and evaluated",
+  "type": "object",
+  "required": ["content_type", "evaluation_strategy"],
+  "properties": {
+    "content_type": {
+      "type": "string",
+      "enum": [
+        "direct:react",
+        "direct:html",
+        "direct:content",
+        "direct:image",
+        "direct:code",
+        "meta:image-prompt",
+        "meta:video-prompt",
+        "meta:agent-prompt",
+        "meta:workflow",
+        "meta:composite"
+      ],
+      "description": "Classifier determining output kind and evaluation strategy"
+    },
+    "evaluation_strategy": {
+      "type": "string",
+      "enum": ["output_inspection", "prompt_quality", "test_execution"],
+      "description": "How the Reflect phase evaluates refinement quality"
+    },
+    "target_platform": {
+      "type": "string",
+      "description": "For meta types: downstream system that will consume the output (e.g. 'dall-e-3', 'sora', 'claude')"
+    },
+    "output_format": {
+      "type": "string",
+      "description": "Expected output format (e.g. 'prompt_text', 'tsx', 'html', 'svg', 'markdown')"
+    },
+    "test_generation": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, Execute phase generates a test artifact to validate meta-prompts"
+    },
+    "components": {
+      "type": "array",
+      "items": { "$ref": "#" },
+      "description": "For meta:composite — sub-content-types in this bundle"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "content_type": { "pattern": "^direct:" }
+        }
+      },
+      "then": {
+        "properties": {
+          "evaluation_strategy": { "const": "output_inspection" }
+        }
+      }
+    }
+  ]
+}

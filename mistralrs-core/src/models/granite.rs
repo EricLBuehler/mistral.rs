@@ -9,8 +9,9 @@ use mistralrs_quant::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
+use parking_lot::Mutex;
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
@@ -1930,7 +1931,7 @@ impl GraniteMoeHybrid {
         x = scale_tensor(x, self.embedding_multiplier)?;
 
         // Get both internal cache and pipeline cache
-        let mut internal_cache = self.hybrid_cache.lock().unwrap();
+        let mut internal_cache = self.hybrid_cache.lock();
         let mut pipeline_cache = self.kv_cache.hybrid();
 
         // Get state_indices for Mamba layers from pipeline cache

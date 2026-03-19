@@ -59,9 +59,10 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Instant;
 use std::{env, fs};
+use parking_lot::{Mutex as ParkingLotMutex, RwLock};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -291,13 +292,10 @@ impl Loader for NormalLoader {
             self.config.from_uqff.is_some()
         );
         if let Some(from_uqff) = self.config.from_uqff.clone() {
-            *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
+            *self.from_uqff.write() = Some(get_uqff_paths!(&from_uqff, self, silent));
         }
-        *self
-            .token_source
-            .write()
-            .expect("Failed to write to token source") = Some(token_source);
-        *self.revision.write().expect("Failed to write to revision") = revision;
+        *self.token_source.write() = Some(token_source);
+        *self.revision.write() = revision;
         self.load_model_from_path(
             &paths?,
             dtype,
@@ -366,7 +364,7 @@ impl Loader for NormalLoader {
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
-                if let Some(serialized) = &*self.from_uqff.read().unwrap() {
+                if let Some(serialized) = &*self.from_uqff.read() {
                     let weight_pack_factor = {
                         let ser_artifacts = unsafe {
                             candle_core::safetensors::MmapedSafetensors::multi(serialized)?
@@ -839,12 +837,12 @@ impl Loader for NormalLoader {
                         }
                     }
                     EitherCache::Normal(normal) => {
-                        for layer in &mut *normal.lock().unwrap().0 {
+                        for layer in &mut *normal.lock().0 {
                             layer.reset();
                         }
                     }
                     EitherCache::Hybrid(hybrid) => {
-                        hybrid.lock().unwrap().reset();
+                        hybrid.lock().reset();
                     }
                 }
 
@@ -911,7 +909,7 @@ impl Loader for NormalLoader {
                 },
                 multi_progress.clone(),
             )?;
-        } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
+        } else if let Some(from_uqff) = &*self.from_uqff.read() {
             model.load_from_artifacts(
                 device.clone(),
                 self.config.topology.as_ref(),
@@ -974,8 +972,8 @@ impl Loader for NormalLoader {
         let llg_factory = build_llg_factory(tokenizer.clone())?;
         let num_hidden_layers = match model.cache() {
             EitherCache::Full(full) => full.lock().len(),
-            EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
-            EitherCache::Hybrid(hybrid) => hybrid.lock().unwrap().num_layers(),
+            EitherCache::Normal(normal) => normal.lock().0.len(),
+            EitherCache::Hybrid(hybrid) => hybrid.lock().num_layers(),
         };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;
@@ -1213,7 +1211,7 @@ impl Pipeline for NormalPipeline {
         logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
-        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        rng: Arc<ParkingLotMutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
         sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }

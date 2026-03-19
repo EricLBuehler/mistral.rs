@@ -21,6 +21,7 @@ objc2-foundation = { workspace = true, optional = true }
 dispatch2 = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
 thiserror.workspace = true
+parking_lot.workspace = true
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }
