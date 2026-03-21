@@ -330,7 +330,20 @@ impl AutoVisionLoader {
         let name = &auto_cfg.architectures[0];
         let tp = VisionLoaderType::from_causal_lm_name(name)?;
 
-        once_log_info(format!("Automatic loader type determined to be `{tp}`"));
+        let selection_log = if tp == VisionLoaderType::Gemma3 {
+            let gemma_cfg: Gemma3Config = serde_json::from_str(config)?;
+            match gemma_cfg {
+                Gemma3Config::Text(_) => {
+                    "Automatic loader type determined to be `gemma3` (text-only)".to_string()
+                }
+                Gemma3Config::WithVision { .. } => {
+                    "Automatic loader type determined to be `gemma3` (multimodal)".to_string()
+                }
+            }
+        } else {
+            format!("Automatic loader type determined to be `{tp}`")
+        };
+        once_log_info(selection_log);
 
         // Delegate to the concrete loader
         Ok(match tp {
@@ -3702,9 +3715,16 @@ impl VisionModelLoader for Gemma3Loader {
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Gemma3Prefixer)
     }
-    fn modalities(&self, _config: &str) -> Result<Modalities> {
+    fn modalities(&self, config: &str) -> Result<Modalities> {
+        let cfg: Gemma3Config = serde_json::from_str(config)?;
+        let input = match cfg {
+            Gemma3Config::Text(_) => vec![SupportedModality::Text],
+            Gemma3Config::WithVision { .. } => {
+                vec![SupportedModality::Text, SupportedModality::Vision]
+            }
+        };
         Ok(Modalities {
-            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            input,
             output: vec![SupportedModality::Text],
         })
     }
@@ -7248,5 +7268,74 @@ impl DeviceMappedModelLoader for VoxtralLoader {
         };
 
         Ok(Box::new(cfg))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AutoVisionLoader;
+    use crate::pipeline::SupportedModality;
+    use crate::vision_models::preprocessor_config::PreProcessorConfig;
+    use crate::vision_models::processor_config::ProcessorConfig;
+
+    #[test]
+    fn gemma3_text_config_is_accepted_in_auto_vision_loader() {
+        let config = r#"{
+            "architectures":["Gemma3ForCausalLM"],
+            "model_type":"gemma3_text",
+            "hidden_size":1024,
+            "intermediate_size":8192,
+            "num_hidden_layers":18,
+            "sliding_window":1024
+        }"#;
+
+        let loader = AutoVisionLoader::get_loader(config)
+            .expect("Gemma3 text configs should not be rejected");
+        let modalities = loader
+            .modalities(config)
+            .expect("Gemma3 text config modalities should parse");
+        assert_eq!(modalities.input, vec![SupportedModality::Text]);
+        assert_eq!(modalities.output, vec![SupportedModality::Text]);
+
+        let _ = loader.get_processor(
+            config,
+            Some(ProcessorConfig::default()),
+            PreProcessorConfig::default(),
+            None,
+        );
+    }
+
+    #[test]
+    fn gemma3_with_vision_config_reports_multimodal_input() {
+        let config = r#"{
+            "architectures":["Gemma3ForConditionalGeneration"],
+            "text_config":{
+                "hidden_size":1024,
+                "intermediate_size":8192,
+                "num_hidden_layers":18,
+                "sliding_window":1024
+            },
+            "vision_config":{},
+            "image_token_index":256000,
+            "mm_tokens_per_image":256
+        }"#;
+
+        let loader =
+            AutoVisionLoader::get_loader(config).expect("Gemma3 multimodal configs should load");
+        let modalities = loader
+            .modalities(config)
+            .expect("Gemma3 multimodal config modalities should parse");
+        assert_eq!(
+            modalities.input,
+            vec![SupportedModality::Text, SupportedModality::Vision]
+        );
+        assert_eq!(modalities.output, vec![SupportedModality::Text]);
+
+        let _ = loader.get_processor(
+            config,
+            Some(ProcessorConfig::default()),
+            PreProcessorConfig::default(),
+            None,
+        );
     }
 }
