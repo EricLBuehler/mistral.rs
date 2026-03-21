@@ -8,7 +8,6 @@
 - [Cargo Features](CARGO_FEATURES.md)
 - [CLI Reference](CLI.md)
 - [CLI TOML Configuration](CLI_CONFIG.md)
-- [Create & Publish UQFF Models](UQFF.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
 
 # SDKs & APIs
