@@ -541,6 +541,7 @@ pub enum IsqType {
     AFQ3,
     AFQ2,
     F8Q8,
+    MXFP4,
 }
 
 /// Target bit width for automatic ISQ quantization.
@@ -632,6 +633,7 @@ impl std::fmt::Display for IsqType {
             Self::AFQ3 => write!(f, "afq3"),
             Self::AFQ2 => write!(f, "afq2"),
             Self::F8Q8 => write!(f, "f8q8"),
+            Self::MXFP4 => write!(f, "mxfp4"),
         }
     }
 }
@@ -671,6 +673,9 @@ impl IsqType {
             Self::HQQ4 => 4,
             Self::HQQ8 => 2,
             Self::F8E4M3 => 2,
+            // MXFP4: 4 bits per value + 1 byte scale per 32 values
+            // For BF16 (2 bytes): (2*32)/(16+1) ≈ 3.76 → 3
+            Self::MXFP4 => 3,
         }
     }
 
@@ -683,7 +688,8 @@ impl IsqType {
             | IsqType::AFQ3
             | IsqType::AFQ4
             | IsqType::AFQ6
-            | IsqType::AFQ8 => {
+            | IsqType::AFQ8
+            | IsqType::MXFP4 => {
                 // Use 1 because our HQQ quantizes on the GPU
                 Some(1.try_into().unwrap())
             }
@@ -777,6 +783,7 @@ pub enum QuantizedSerdeType {
     Fp8 = 3,
     Afq = 4,
     F8Q8 = 5,
+    Mxfp4 = 6,
 }
 
 impl TryFrom<usize> for QuantizedSerdeType {
@@ -789,6 +796,7 @@ impl TryFrom<usize> for QuantizedSerdeType {
             3 => Ok(Self::Fp8),
             4 => Ok(Self::Afq),
             5 => Ok(Self::F8Q8),
+            6 => Ok(Self::Mxfp4),
             other => candle_core::bail!("QuantizedSerdeType {other} is invalid."),
         }
     }

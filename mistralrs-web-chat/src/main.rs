@@ -71,7 +71,8 @@ async fn main() -> Result<()> {
     let isq = cli
         .isq
         .as_ref()
-        .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
+        .map(|isq| parse_isq_value(isq, Some(&device)).map_err(|e| anyhow::anyhow!("{e}")))
+        .transpose()?;
 
     // Determine embedding model for web search if enabled
     let search_embedding_model: Option<SearchEmbeddingModel> = if cli.enable_search {
