@@ -1,13 +1,17 @@
 use std::sync::Arc;
 
 use mistralrs_core::{
-    initialize_logging, AutoDeviceMapParams, DefaultSchedulerMethod, DeviceMapSetting, IsqType,
-    MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig, Pipeline, SchedulerConfig,
+    DefaultSchedulerMethod, NormalLoaderBuilder, NormalSpecificConfig, Pipeline, SchedulerConfig,
     SpeculativeConfig, SpeculativePipeline,
 };
 use tokio::sync::Mutex;
 
-use crate::{best_device, resolve_isq, Model, TextModelBuilder};
+use crate::{
+    model_builder_trait::{
+        build_model_from_pipeline, build_pipeline_from_text_loader, maybe_initialize_logging,
+    },
+    Model, TextModelBuilder,
+};
 
 /// Configure speculative decoding with a target and draft text model.
 pub struct TextSpeculativeBuilder {
@@ -39,7 +43,10 @@ impl TextSpeculativeBuilder {
         })
     }
 
-    fn build_pipeline(builder: TextModelBuilder) -> anyhow::Result<Arc<Mutex<dyn Pipeline>>> {
+    async fn build_pipeline(
+        builder: TextModelBuilder,
+    ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, mistralrs_core::AddModelConfig)> {
+        let model = builder.clone();
         let config = NormalSpecificConfig {
             topology: builder.topology,
             organization: builder.organization,
@@ -52,9 +59,7 @@ impl TextSpeculativeBuilder {
             matformer_slice_name: None,
         };
 
-        if builder.with_logging {
-            initialize_logging();
-        }
+        maybe_initialize_logging(builder.with_logging);
 
         let loader = NormalLoaderBuilder::new(
             config,
@@ -66,33 +71,15 @@ impl TextSpeculativeBuilder {
         )
         .build(builder.loader_type)?;
 
-        // Load, into a Pipeline
-        let device = best_device(builder.force_cpu)?;
-        let isq_type: Option<IsqType> = builder
-            .isq
-            .as_ref()
-            .map(|s| resolve_isq(s, &device))
-            .transpose()?;
-
-        let pipeline = loader.load_model_from_hf(
-            builder.hf_revision,
-            builder.token_source,
-            &builder.dtype,
-            &device,
-            !builder.with_logging,
-            builder
-                .device_mapping
-                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
-            isq_type,
-            builder.paged_attn_cfg,
-        )?;
-        Ok(pipeline)
+        let (pipeline, _, add_model_config) =
+            build_pipeline_from_text_loader(model, loader).await?;
+        Ok((pipeline, add_model_config))
     }
 
     /// Build target and draft pipelines and return a speculative-decoding [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
-        let target = Self::build_pipeline(self.target.clone())?;
-        let draft = Self::build_pipeline(self.draft.clone())?;
+        let (target, mut add_model_config) = Self::build_pipeline(self.target.clone()).await?;
+        let (draft, _) = Self::build_pipeline(self.draft.clone()).await?;
 
         let scheduler_method = SchedulerConfig::DefaultScheduler {
             method: DefaultSchedulerMethod::Fixed(self.target.max_num_seqs.try_into()?),
@@ -104,19 +91,10 @@ impl TextSpeculativeBuilder {
             self.speculative_config,
         )?));
 
-        let mut runner = MistralRsBuilder::new(
-            pipeline,
-            scheduler_method,
-            self.target.throughput_logging,
-            self.target.search_embedding_model,
-        );
-        if let Some(cb) = self.target.search_callback.clone() {
-            runner = runner.with_search_callback(cb);
-        }
-        for (name, cb) in &self.target.tool_callbacks {
-            runner = runner.with_tool_callback(name.clone(), cb.clone());
-        }
+        // Speculative decoding still does not expose its own prefix-cache tuning surface.
+        add_model_config.engine_config.no_prefix_cache = false;
+        add_model_config.engine_config.prefix_cache_n = 16;
 
-        Ok(Model::new(runner.build().await))
+        Ok(build_model_from_pipeline(pipeline, scheduler_method, add_model_config).await)
     }
 }
