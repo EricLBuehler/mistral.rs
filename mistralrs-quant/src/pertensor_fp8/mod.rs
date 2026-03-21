@@ -220,7 +220,11 @@ impl QuantMethod for PerTensorFP8Linear {
 
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let w = weight.to_device(&device)?;
-                let b = self.bias.as_ref().map(|b| b.to_device(&device)).transpose()?;
+                let b = self
+                    .bias
+                    .as_ref()
+                    .map(|b| b.to_device(&device))
+                    .transpose()?;
                 crate::MXFP4Layer::quantize(&w, b, &device)
             }
             None => {

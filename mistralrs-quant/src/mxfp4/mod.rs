@@ -280,9 +280,7 @@ impl MXFP4Layer {
         let scales = Tensor::from_vec(scales, (n, num_blocks_per_row), &Device::Cpu)?
             .to_dtype(DType::U8)?
             .to_device(device)?;
-        let bias = bias
-            .map(|b| b.to_device(device))
-            .transpose()?;
+        let bias = bias.map(|b| b.to_device(device)).transpose()?;
 
         Ok(Arc::new(Self {
             blocks,
@@ -465,8 +463,7 @@ impl MXFP4Layer {
     const DEQUANT_LUT: [[f32; 16]; 256] = {
         let mut lut = [[0.0f32; 16]; 256];
         let fp4: [f32; 16] = [
-            0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0,
-            -6.0,
+            0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
         ];
         let mut s = 0u32;
         while s < 256 {
@@ -681,12 +678,12 @@ impl MXFP4Layer {
                     let col_start = blk * MXFP4_BLOCK_SIZE;
 
                     // Load input block
-                    let x_blk = &x_data[x_offset + col_start..x_offset + col_start + MXFP4_BLOCK_SIZE];
+                    let x_blk =
+                        &x_data[x_offset + col_start..x_offset + col_start + MXFP4_BLOCK_SIZE];
 
                     for row in 0..n {
-                        let scale =
-                            scales_data[expert_scales_base + row * num_blocks_per_row + blk]
-                                as usize;
+                        let scale = scales_data[expert_scales_base + row * num_blocks_per_row + blk]
+                            as usize;
                         let dequant = &Self::DEQUANT_LUT[scale];
                         let blk_bytes =
                             &blocks_data[expert_blocks_base + row * k_half + blk * half_block..];
