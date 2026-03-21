@@ -6,7 +6,7 @@ use super::{
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
-use crate::distributed::{self, WorkerTransferData};
+use crate::distributed::{self, use_ring, WorkerTransferData};
 use crate::embedding_models::inputs_processor::{EmbeddingProcessor, ModelInputs};
 use crate::embedding_models::{Dense, DenseActivation, Normalize, Pooling};
 use crate::embedding_normal_model_loader;
@@ -234,7 +234,7 @@ impl Loader for EmbeddingLoader {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
             let WorkerTransferData::Init { id: _, worker_rank } = payload;
             vec![candle_core::Device::new_cuda_with_stream(worker_rank + 1)?]
-        } else if use_nccl {
+        } else if use_nccl || use_ring() {
             vec![candle_core::Device::new_cuda_with_stream(0)?]
         } else {
             device_map::get_all_similar_devices(device)?
@@ -245,14 +245,14 @@ impl Loader for EmbeddingLoader {
                 unsafe { dev.disable_event_tracking() };
             }
         }
-        let device = if use_nccl {
+        let device = if use_nccl || use_ring() {
             available_devices[0].clone()
         } else {
             device.clone()
         };
 
         // If auto, convert to Map if not using nccl
-        if use_nccl {
+        if use_nccl || use_ring() {
             mapper = DeviceMapSetting::DummyNccl {
                 nm_device: available_devices[0].clone(),
             };
@@ -523,7 +523,7 @@ impl Loader for EmbeddingLoader {
         }
         let modules_ser = EmbeddingModulePaths::serialize_modules(&modules_config);
 
-        let mut model = if use_nccl {
+        let mut model = if use_nccl || use_ring() {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,
