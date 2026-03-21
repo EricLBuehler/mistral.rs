@@ -437,7 +437,7 @@ impl From<TextMessages> for RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
-            enable_thinking: None,
+            enable_thinking: value.enable_thinking,
             truncate_sequence: false,
             pending_prefixes: Vec::new(),
         }
@@ -737,6 +737,12 @@ impl RequestBuilder {
     /// Penalize tokens that have appeared at all, regardless of frequency.
     pub fn set_sampler_presence_penalty(mut self, presence_penalty: f32) -> Self {
         self.sampling_params.presence_penalty = Some(presence_penalty);
+        self
+    }
+
+    /// Apply repetition penalty (values > 1 discourage repeats, 1 disables).
+    pub fn set_sampler_repetition_penalty(mut self, repetition_penalty: f32) -> Self {
+        self.sampling_params.repetition_penalty = Some(repetition_penalty);
         self
     }
 
