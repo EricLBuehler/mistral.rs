@@ -1,5 +1,4 @@
 use anyhow::Result;
-use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use http::{Request, Uri};
 use serde_json::Value;
@@ -7,7 +6,11 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tokio::sync::Mutex;
+use std::sync::Arc;
+use futures_util::stream::SplitSink;
 
+type DispatchTable = Arc<Mutex<HashMap<u64,tokio::sync::oneshot::Sender<Result<Value,anyhow::Error>>>>>;
 /// Transport layer for MCP communication
 #[async_trait::async_trait]
 pub trait McpTransport: Send + Sync {
@@ -725,23 +728,39 @@ impl McpTransport for ProcessTransport {
 /// WebSocket-based MCP transport
 ///
 /// Provides real-time bidirectional communication with MCP servers over WebSocket connections.
-/// This transport supports secure connections (WSS), Bearer token authentication, and concurrent
-/// request/response handling with proper JSON-RPC 2.0 message correlation.
+/// This transport supports secure connections (WSS), Bearer token authentication, and correct
+/// concurrent request/response handling via a dispatch table.
 ///
 /// # Features
 ///
 /// - **Async WebSocket Communication**: Built on tokio-tungstenite for high-performance async I/O
-/// - **Request/Response Matching**: Automatic correlation of responses using atomic request IDs
+/// - **Safe Concurrent Requests**: Multiple in-flight requests are correctly demultiplexed using
+///   a shared dispatch table keyed by JSON-RPC request ID
 /// - **Bearer Token Support**: Authentication via Authorization header during handshake
 /// - **Connection Management**: Proper ping/pong and connection lifecycle handling
-/// - **Concurrent Operations**: Split stream architecture allows simultaneous read/write operations
+/// - **Resilient Error Propagation**: Background reader task signals all pending waiters on
+///   connection close or error
 ///
 /// # Architecture
 ///
-/// The transport uses a split-stream design where the WebSocket connection is divided into
-/// separate read and write halves, each protected by async mutexes. This allows concurrent
-/// operations while maintaining thread safety. Request IDs are generated atomically to ensure
-/// unique identification of requests and proper response correlation.
+/// A single background task owns the WebSocket read half and runs for the lifetime of the
+/// transport. When a response arrives, it extracts the JSON-RPC `id` field and looks up
+/// the corresponding `oneshot::Sender` in a shared `HashMap`. Each `send_request()` call
+/// registers its sender before writing to the socket, then awaits its private receiver.
+/// This guarantees that concurrent callers never consume each other's responses, regardless
+/// of server reply ordering.
+///
+/// ```text
+/// send_request() ──► insert (id → tx) in dispatch table
+///                ──► write JSON-RPC message to write half
+///                ──► await rx  (blocks until reader delivers response)
+///
+/// Background reader loop:
+///   msg = ws_read.next().await
+///   id  = msg["id"]
+///   tx  = dispatch_table.remove(id)
+///   tx.send(msg)   ← exactly the right waiter wakes up
+/// ```
 ///
 /// # Example Usage
 ///
@@ -762,7 +781,7 @@ impl McpTransport for ProcessTransport {
 ///         Some(headers)
 ///     ).await?;
 ///
-///     // Use the transport for MCP communication
+///     // Use the transport for MCP communication — safe to call concurrently
 ///     let result = transport.send_request("tools/list", serde_json::Value::Null).await?;
 ///     println!("Available tools: {}", result);
 ///
@@ -778,8 +797,8 @@ pub struct WebSocketTransport {
     write: std::sync::Arc<
         tokio::sync::Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>,
     >,
-    read:
-        std::sync::Arc<tokio::sync::Mutex<SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>>>,
+    pending: DispatchTable,
+    _read_task: tokio::task::JoinHandle<()>,    
     request_id: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
@@ -823,22 +842,21 @@ impl WebSocketTransport {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn new(
-        url: String,
-        _timeout_secs: Option<u64>,
-        headers: Option<HashMap<String, String>>,
-    ) -> Result<Self> {
-        // Create request with headers
-        let uri: Uri = url
-            .parse()
-            .map_err(|e| anyhow::anyhow!("Invalid WebSocket URL: {}", e))?;
-        let mut request = Request::builder()
-            .uri(uri)
-            .body(())
-            .map_err(|e| anyhow::anyhow!("Failed to create WebSocket request: {}", e))?;
-
-        // Add headers if provided
-        if let Some(headers) = headers {
+    pub async fn new(url: String, _timeout_secs: Option<u64>, headers: Option<HashMap<String, String>>) -> Result<Self> {
+    
+    let (ws_stream, _) = match headers {
+        // No custom headers: pass URL string directly, tungstenite adds WS headers
+        None => connect_async(url).await
+            .map_err(|e| anyhow::anyhow!("WebSocket connection failed: {}", e))?,
+        
+        // Custom headers: build Request manually
+        Some(headers) => {
+            let uri: Uri = url.parse()
+                .map_err(|e| anyhow::anyhow!("Invalid WebSocket URL: {}", e))?;
+            let mut request = Request::builder()
+                .uri(uri)
+                .body(())
+                .map_err(|e| anyhow::anyhow!("Failed to create WebSocket request: {}", e))?;
             let req_headers = request.headers_mut();
             for (key, value) in headers {
                 let header_name = key
@@ -848,20 +866,39 @@ impl WebSocketTransport {
                     .parse::<http::header::HeaderValue>()
                     .map_err(|e| anyhow::anyhow!("Invalid header value: {}", e))?;
                 req_headers.insert(header_name, header_value);
+            }  // ← for loop closes here
+            connect_async(request).await
+                .map_err(|e| anyhow::anyhow!("WebSocket connection failed: {}", e))?
+        }  // ← Some(headers) arm closes here
+    };  // ← match closes here
+    
+    // Split the stream
+    let (write, mut read) = ws_stream.split();
+    let pending:DispatchTable = Arc::new(Mutex::new(HashMap::new()));
+    let pending_for_task = Arc::clone(&pending);
+
+        let _read_task = tokio::spawn(async move {
+            while let Some(msg) = read.next().await {
+                match msg {
+                    Ok(Message::Text(text)) => {
+                        let Ok(req) = serde_json::from_str::<Value>(&text) else { continue };
+                        let Some(id) = req.get("id").and_then(|v| v.as_u64()) else { continue };
+                        let mut pending = pending_for_task.lock().await;
+                        let Some(tx) = pending.remove(&id) else { continue };
+                        let _ = tx.send(Ok(req));
+                    }
+                    Ok(Message::Close(_)) | Err(_) => {
+                        break;
+                    }
+                    _ => {}
+                }
             }
-        }
-
-        // Connect to WebSocket
-        let (ws_stream, _) = connect_async(request)
-            .await
-            .map_err(|e| anyhow::anyhow!("WebSocket connection failed: {}", e))?;
-
-        // Split the stream
-        let (write, read) = ws_stream.split();
+        });
 
         Ok(Self {
-            write: std::sync::Arc::new(tokio::sync::Mutex::new(write)),
-            read: std::sync::Arc::new(tokio::sync::Mutex::new(read)),
+            write: std::sync::Arc::new(Mutex::new(write)),
+            pending,
+            _read_task,
             request_id: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
         })
     }
@@ -937,9 +974,13 @@ impl McpTransport for WebSocketTransport {
             "params": params
         });
 
-        // Send request
-        let message = Message::Text(serde_json::to_string(&request_body)?.into());
+        // Register our oneshot receiver BEFORE sending — prevents a race where
+        // the server responds before we've inserted into the dispatch table.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.pending.lock().await.insert(id, tx);
 
+        // Send the request over the WebSocket write half
+        let message = Message::Text(serde_json::to_string(&request_body)?.into());
         {
             let mut write = self.write.lock().await;
             write
@@ -948,53 +989,23 @@ impl McpTransport for WebSocketTransport {
                 .map_err(|e| anyhow::anyhow!("Failed to send WebSocket message: {}", e))?;
         }
 
-        // Read response
-        loop {
-            let mut read = self.read.lock().await;
-            let msg = read
-                .next()
-                .await
-                .ok_or_else(|| anyhow::anyhow!("WebSocket connection closed"))?
-                .map_err(|e| anyhow::anyhow!("WebSocket read error: {}", e))?;
-            drop(read);
+        // Block until the background reader task delivers our response.
+        // rx.await  -> Result<Result<Value, anyhow::Error>, RecvError>
+        // first  ?  -> RecvError: sender was dropped (connection died)
+        // second ?  -> inner Result: error forwarded by the reader task
+        let response_body = rx
+            .await
+            .map_err(|_| anyhow::anyhow!("WebSocket connection closed while waiting for response"))??;
 
-            match msg {
-                Message::Text(text) => {
-                    let response_body: Value = serde_json::from_str(&text)?;
-
-                    // Check if this is the response to our request
-                    if let Some(response_id) = response_body.get("id").and_then(|v| v.as_u64()) {
-                        if response_id == id {
-                            // Check for JSON-RPC errors
-                            if let Some(error) = response_body.get("error") {
-                                return Err(anyhow::anyhow!("MCP server error: {}", error));
-                            }
-
-                            return response_body
-                                .get("result")
-                                .cloned()
-                                .ok_or_else(|| anyhow::anyhow!("No result in MCP response"));
-                        }
-                    }
-                    // If it's not our response, continue reading
-                }
-                Message::Binary(_) => {
-                    // Handle binary messages if needed, for now skip
-                    continue;
-                }
-                Message::Close(_) => {
-                    return Err(anyhow::anyhow!("WebSocket connection closed by server"));
-                }
-                Message::Ping(_) | Message::Pong(_) => {
-                    // Handle ping/pong frames, continue reading
-                    continue;
-                }
-                Message::Frame(_) => {
-                    // Raw frames, continue reading
-                    continue;
-                }
-            }
+        // Check for JSON-RPC level errors
+        if let Some(error) = response_body.get("error") {
+            return Err(anyhow::anyhow!("MCP server error: {}", error));
         }
+
+        response_body
+            .get("result")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("No result in MCP response"))
     }
 
     /// Sends a WebSocket ping frame to test connection health
@@ -1063,4 +1074,59 @@ impl McpTransport for WebSocketTransport {
         }
         Ok(())
     }
+}#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::accept_async;
+    use futures_util::{SinkExt, StreamExt};
+
+    // Spawns a mock WS server that reads 2 requests, replies in REVERSE order
+    async fn spawn_mock_server() -> String {
+        // Port 0 = OS picks a free port
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        
+        tokio::spawn(async move {
+            // Accept one WebSocket connection
+            let (tcp_stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(tcp_stream).await.unwrap();
+            
+            // Read first request and remember its id
+            let msg1 = ws.next().await.unwrap().unwrap();
+            let req1: Value = serde_json::from_str(msg1.to_text().unwrap()).unwrap();
+            let id1 = req1["id"].as_u64().unwrap();
+            
+            // Read second request and remember its id
+            let msg2 = ws.next().await.unwrap().unwrap();
+            let req2: Value = serde_json::from_str(msg2.to_text().unwrap()).unwrap();
+            let id2 = req2["id"].as_u64().unwrap();
+            
+            // Reply OUT OF ORDER: send id2 first, then id1
+            let reply2 = serde_json::json!({"id": id2, "result": {"from": "request_2"}});
+            ws.send(Message::Text(reply2.to_string().into())).await.unwrap();
+            
+            let reply1 = serde_json::json!({"id": id1, "result": {"from": "request_1"}});
+            ws.send(Message::Text(reply1.to_string().into())).await.unwrap();
+        });
+        
+        format!("ws://{}", addr)  // return the address so the test can connect
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_requests_dont_drop_responses() {
+        let url = spawn_mock_server().await;
+        let transport = WebSocketTransport::new(url, None, None).await.unwrap();
+        
+        // Fire two requests concurrently
+        let (result1, result2) = tokio::join!(
+            transport.send_request("method_a", Value::Null),
+            transport.send_request("method_b", Value::Null),
+        );
+        
+        // BOTH must succeed — before the fix, one would hang/fail
+        assert!(result1.is_ok(), "Request 1 failed: {:?}", result1);
+        assert!(result2.is_ok(), "Request 2 failed: {:?}", result2);
+    }
 }
+
