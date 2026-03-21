@@ -14,7 +14,7 @@ use super::{
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
-use crate::distributed::{self, WorkerTransferData};
+use crate::distributed::{self, use_ring, WorkerTransferData};
 use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{
@@ -287,7 +287,7 @@ impl Loader for VisionLoader {
             // Use new_cuda instead of new_cuda_with_stream for NCCL compatibility
             // NCCL manages its own streams, so explicit stream creation can cause conflicts
             vec![candle_core::Device::new_cuda(worker_rank + 1)?]
-        } else if use_nccl {
+        } else if use_nccl || use_ring() {
             vec![candle_core::Device::new_cuda(0)?]
         } else {
             device_map::get_all_similar_devices(device)?
@@ -298,7 +298,7 @@ impl Loader for VisionLoader {
                 unsafe { dev.disable_event_tracking() };
             }
         }
-        let device = if use_nccl {
+        let device = if use_nccl || use_ring() {
             available_devices[0].clone()
         } else {
             device.clone()
@@ -327,7 +327,7 @@ impl Loader for VisionLoader {
 
         // If auto, convert to Map if not using nccl
         let mut max_kv_tokens: Option<usize> = None;
-        if use_nccl {
+        if use_nccl || use_ring() {
             mapper = DeviceMapSetting::DummyNccl {
                 nm_device: available_devices[0].clone(),
             };
@@ -585,7 +585,7 @@ impl Loader for VisionLoader {
 
         let multi_progress = Arc::new(new_multi_progress());
 
-        let mut model = if use_nccl {
+        let mut model = if use_nccl || use_ring() {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,
