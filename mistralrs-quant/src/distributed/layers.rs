@@ -317,6 +317,7 @@ impl QuantizedSerde for RowParallelLayer {
             QuantizedSerdeType::Fp8 => FP8Linear::deserialize_ext_bias(data, device, guard)?,
             QuantizedSerdeType::Afq => AfqLayer::deserialize_ext_bias(data, device, guard)?,
             QuantizedSerdeType::F8Q8 => F8Q8Linear::deserialize_ext_bias(data, device, guard)?,
+            QuantizedSerdeType::Mxfp4 => MXFP4Layer::deserialize_ext_bias(data, device, guard)?,
         };
         Ok(Arc::new(Self {
             weight,
@@ -644,6 +645,7 @@ impl QuantizedSerde for ColumnParallelLayer {
             QuantizedSerdeType::Fp8 => FP8Linear::deserialize_ext_bias(data, device, guard)?,
             QuantizedSerdeType::Afq => AfqLayer::deserialize_ext_bias(data, device, guard)?,
             QuantizedSerdeType::F8Q8 => F8Q8Linear::deserialize_ext_bias(data, device, guard)?,
+            QuantizedSerdeType::Mxfp4 => MXFP4Layer::deserialize_ext_bias(data, device, guard)?,
         };
         Ok(Arc::new(Self { weight, bias }))
     }
@@ -932,6 +934,7 @@ impl QuantizedSerde for ReplicatedLayer {
             QuantizedSerdeType::Fp8 => FP8Linear::deserialize(data, device, comm, guard)?,
             QuantizedSerdeType::Afq => AfqLayer::deserialize(data, device, comm, guard)?,
             QuantizedSerdeType::F8Q8 => F8Q8Linear::deserialize(data, device, comm, guard)?,
+            QuantizedSerdeType::Mxfp4 => MXFP4Layer::deserialize(data, device, comm, guard)?,
         };
         Ok(Arc::new(Self(deserialized)))
     }

@@ -394,6 +394,7 @@ impl Loader for NormalLoader {
                                         .pack_factor(dtype)
                                 }
                                 QuantizedSerdeType::F8Q8 => IsqType::F8Q8.pack_factor(dtype),
+                                QuantizedSerdeType::Mxfp4 => IsqType::MXFP4.pack_factor(dtype),
                             };
                             total_pack_factors += pack_factor;
                         }
