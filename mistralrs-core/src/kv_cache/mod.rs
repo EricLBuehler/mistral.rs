@@ -1133,6 +1133,29 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
             }
         }
         // Reset the hybrid cache (including recurrent state pools)
-        pipeline.cache().hybrid().reset();
+        let mut hybrid_cache = pipeline.cache().hybrid();
+        hybrid_cache.reset();
+
+        // Build state_indices so the forward pass can access recurrent pool states.
+        // Sequences already have slots allocated from add_request.
+        let recurrent_device = hybrid_cache.caches.iter().find_map(|c| {
+            if let HybridLayerCache::Recurrent(pool) = c {
+                Some(pool.device().clone())
+            } else {
+                None
+            }
+        });
+        if let Some(device) = recurrent_device {
+            #[allow(clippy::cast_possible_truncation)]
+            let indices: Vec<u32> = seqs
+                .iter()
+                .filter_map(|seq| seq.recurrent_state_idx().map(|idx| idx as u32))
+                .collect();
+            if indices.len() == seqs.len() {
+                if let Ok(state_indices) = Tensor::from_vec(indices, (seqs.len(),), &device) {
+                    hybrid_cache.set_state_indices(Some(state_indices));
+                }
+            }
+        }
     }
 }
