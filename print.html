@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-d31f9cfa.js";
+            window.path_to_searchindex_js = "searchindex-7e40263e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-bbe877b8.js"></script>
@@ -191,6 +191,7 @@
 <tr><td>Understand cargo features</td><td><a href="#cargo-features-reference">Cargo Features</a></td></tr>
 <tr><td>Run a model</td><td><a href="#mistralrs-cli-reference">CLI Reference</a></td></tr>
 <tr><td>Use the HTTP API</td><td><a href="#http-server">HTTP Server</a></td></tr>
+<tr><td>Create &amp; publish UQFF models</td><td><a href="#creating-a-uqff-model">UQFF Guide</a></td></tr>
 <tr><td>Fix an error</td><td><a href="#troubleshooting-1">Troubleshooting</a></td></tr>
 <tr><td>Configure environment</td><td><a href="#configuration-reference">Configuration</a></td></tr>
 <tr><td>Check model support</td><td><a href="#supported-models">Supported Models</a></td></tr>
@@ -203,6 +204,7 @@
 <li><a href="#cargo-features-reference">Cargo Features</a> - Complete cargo features reference</li>
 <li><a href="#mistralrs-cli-reference">CLI Reference</a> - Complete CLI command reference</li>
 <li><a href="#mistralrs-cli-toml-config">CLI TOML Configuration</a> - Configure via TOML files</li>
+<li><a href="#creating-a-uqff-model">Create &amp; Publish UQFF Models</a> - Quantize models and upload to Hugging Face</li>
 <li><a href="#troubleshooting-1">Troubleshooting</a> - Common issues and solutions</li>
 </ul>
 <h2 id="sdks--apis"><a class="header" href="#sdks--apis">SDKs &amp; APIs</a></h2>
@@ -8092,6 +8094,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 <li>HQQ</li>
 <li>FP8</li>
 <li>F8Q8</li>
+<li>MXFP4</li>
 </ul>
 </li>
 </ul>
@@ -8227,6 +8230,7 @@ python3 scripts/convert_to_gptq.py --src path/to/model --dst output/model/path -
 <li>HQQ8</li>
 <li>FP8</li>
 <li>F8Q8</li>
+<li>MXFP4</li>
 </ul>
 <pre><code>mistralrs run --isq 4 -m meta-llama/Llama-3.2-3B-Instruct
 </code></pre>
@@ -8485,18 +8489,23 @@ mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k --isq q8_0 -o ph
 </blockquote>
 <h3 id="model-card-generation"><a class="header" href="#model-card-generation">Model card generation</a></h3>
 <p>When using directory output mode, the <code>quantize</code> command automatically generates a <code>README.md</code> model card in the output directory. This model card includes Hugging Face YAML frontmatter, a description, and an examples table with the appropriate <code>--from-uqff</code> commands for each quantization.</p>
-<p>To skip model card generation, use <code>--no-readme</code>:</p>
+<p>By default, the command prompts interactively for the base model and HF repo ID. To bypass the interactive prompts (e.g. in CI or scripts), use <code>--uqff-base-model</code> and/or <code>--uqff-repo-id</code>:</p>
+<pre><code class="language-bash">mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/ \
+    --uqff-base-model microsoft/Phi-3.5-mini-instruct \
+    --uqff-repo-id EricB/Phi-3.5-mini-instruct-UQFF
+</code></pre>
+<p>To skip model card generation entirely, use <code>--no-readme</code>:</p>
 <pre><code class="language-bash">mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k -o phi3.5-uqff/ --no-readme
 </code></pre>
 <h3 id="uploading-to-hugging-face"><a class="header" href="#uploading-to-hugging-face">Uploading to Hugging Face</a></h3>
-<p>After quantization completes in directory mode, the <code>quantize</code> command prints the <code>huggingface-cli</code> upload command you can use. The general form is:</p>
-<pre><code class="language-bash">huggingface-cli upload &lt;YOUR_USERNAME&gt;/&lt;MODEL_NAME&gt;-UQFF &lt;output_dir&gt; --repo-type model --private
+<p>After quantization completes in directory mode, the <code>quantize</code> command prints the <code>hf</code> CLI upload command you can use. The general form is:</p>
+<pre><code class="language-bash">hf upload &lt;YOUR_USERNAME&gt;/&lt;MODEL_NAME&gt;-UQFF &lt;output_dir&gt; --repo-type model --private
 </code></pre>
 <p>Alternatively, you can upload with Git LFS:</p>
 <ol>
 <li>Install <a href="https://github.com/git-lfs/git-lfs?tab=readme-ov-file#installing">git-lfs</a></li>
 <li>Run <code>git lfs install</code></li>
-<li>(If the files are larger than <strong>5GB</strong>) Run <code>huggingface-cli lfs-enable-largefiles .</code> (you will need to <code>pip install huggingface_hub</code>)</li>
+<li>(If the files are larger than <strong>5GB</strong>) Run <code>hf lfs-enable-largefiles .</code> (you will need to <code>pip install huggingface_hub</code>)</li>
 </ol>
 <p>After this, you can use Git to track, commit, and push files.</p>
 <h2 id="list-of-models"><a class="header" href="#list-of-models">List of models</a></h2>
