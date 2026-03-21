@@ -3,7 +3,7 @@ use candle_metal_kernels::metal::{
     Buffer, ComputeCommandEncoder, ComputePipeline, ConstantValues, Device, Function, Library,
     Value,
 };
-use objc2_metal::{MTLCompileOptions, MTLDevice, MTLMathMode, MTLSize};
+use objc2_metal::{MTLCompileOptions, MTLDevice, MTLLanguageVersion, MTLMathMode, MTLSize};
 use std::sync::{OnceLock, RwLock};
 use std::{collections::HashMap, ffi::c_void};
 
@@ -267,9 +267,11 @@ impl Kernels {
             }
         }
 
-        // Compile the preprocessed source
+        // Compile the preprocessed source with Metal 3.1 for native bfloat16 support.
+        // This must match the -std=metal3.1 flag used in build.rs for precompiled metallibs.
         let compile_options = {
             let opts = MTLCompileOptions::new();
+            opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
             opts.setMathMode(MTLMathMode::Fast);
             opts
         };
