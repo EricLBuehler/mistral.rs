@@ -13,7 +13,6 @@ pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
 use std::collections::{HashMap, HashSet};
-use std::num::NonZeroUsize;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use std::{
@@ -38,6 +37,7 @@ mod cuda;
 mod device_map;
 mod engine;
 mod lora;
+mod metal;
 mod model_loader;
 mod moe;
 mod ops;
@@ -103,22 +103,22 @@ pub use mistralrs_mcp::{
 pub use mistralrs_mcp::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
-pub use mistralrs_quant::{IsqType, MULTI_LORA_DELIMITER};
+pub use mistralrs_quant::{IsqBits, IsqType, MULTI_LORA_DELIMITER};
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
 pub use pipeline::hf::{hf_home_dir, hf_hub_cache_dir, hf_token_path};
 pub use pipeline::{
-    chat_template::ChatTemplate, parse_isq_value, AdapterPaths, AnyMoeLoader, AnyMoePipeline,
-    AutoDeviceMapParams, AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams, DiffusionLoader,
-    DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoader, EmbeddingLoaderBuilder,
-    EmbeddingLoaderType, EmbeddingModelPaths, EmbeddingSpecificConfig, GGMLLoader,
-    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
-    GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader,
-    Loader, LocalModelPaths, LoraAdapterPaths, MistralLoader, MixtralLoader, Modalities, ModelKind,
-    ModelPaths, MultimodalPromptPrefixer, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
-    SpeculativeLoader, SpeculativePipeline, SpeechLoader, SpeechPipeline, Starcoder2Loader,
-    SupportedModality, TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType,
-    VisionSpecificConfig, UQFF_MULTI_FILE_DELIMITER,
+    chat_template::ChatTemplate, expand_isq_value, parse_isq_value, AdapterPaths, AnyMoeLoader,
+    AnyMoePipeline, AutoDeviceMapParams, AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams,
+    DiffusionLoader, DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoader,
+    EmbeddingLoaderBuilder, EmbeddingLoaderType, EmbeddingModelPaths, EmbeddingSpecificConfig,
+    GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
+    GGUFSpecificConfig, GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader,
+    LlamaLoader, Loader, LocalModelPaths, LoraAdapterPaths, MistralLoader, MixtralLoader,
+    Modalities, ModelKind, ModelPaths, MultimodalPromptPrefixer, NormalLoader, NormalLoaderBuilder,
+    NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
+    SpeculativeConfig, SpeculativeLoader, SpeculativePipeline, SpeechLoader, SpeechPipeline,
+    Starcoder2Loader, SupportedModality, TokenSource, VisionLoader, VisionLoaderBuilder,
+    VisionLoaderType, VisionSpecificConfig, UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
     ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
@@ -647,21 +647,6 @@ impl MistralRs {
         mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
             get_mut_arcmutex!(pipeline).device(),
         );
-
-        // For hybrid models (Mamba-Attention), force batch_size=1 to prevent state bleeding
-        // Mamba's stateful nature makes batched inference complex; this ensures correctness
-        let method = if !get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache
-            && get_mut_arcmutex!(pipeline).cache().is_hybrid()
-        {
-            info!(
-                "Hybrid model detected (Mamba-Attention), enforcing batch_size=1 for correctness"
-            );
-            SchedulerConfig::DefaultScheduler {
-                method: DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()),
-            }
-        } else {
-            method
-        };
 
         let no_kv_cache = no_kv_cache.unwrap_or(false);
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
@@ -1209,21 +1194,6 @@ impl MistralRs {
                 ));
             }
         }
-
-        // For hybrid models (Mamba-Attention), force batch_size=1 to prevent state bleeding
-        let method = {
-            let pipeline_guard = pipeline.try_lock().unwrap();
-            if !pipeline_guard.get_metadata().no_kv_cache && pipeline_guard.cache().is_hybrid() {
-                info!(
-                    "Hybrid model detected (Mamba-Attention), enforcing batch_size=1 for correctness"
-                );
-                SchedulerConfig::DefaultScheduler {
-                    method: DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()),
-                }
-            } else {
-                method
-            }
-        };
 
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),

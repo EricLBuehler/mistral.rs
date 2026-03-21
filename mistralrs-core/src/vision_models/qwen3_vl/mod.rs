@@ -44,7 +44,7 @@ pub struct Qwen3VLModel {
 }
 
 /// Compute 3D MRoPE position IDs and position deltas for Qwen3 VL models.
-/// Shared between Qwen3VLModel and Qwen3VLMoEModel.
+/// Shared between Qwen3VL models.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_rope_index(
     input_ids: &Tensor,

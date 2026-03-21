@@ -66,10 +66,7 @@ macro_rules! get_paths {
             info!("Loading `tokenizer.json` at `{}`", $this.model_id);
             $crate::api_get_file!(api, "tokenizer.json", model_id)
         };
-        let config_filename = if dir_list.contains(&"config.json".to_string()) {
-            info!("Loading `config.json` at `{}`", $this.model_id);
-            $crate::api_get_file!(api, "config.json", model_id)
-        } else if dir_list.contains(&"params.json".to_string()) {
+        let config_filename = if dir_list.contains(&"params.json".to_string()) {
             info!(
                 "Loading `params.json` (Mistral config) at `{}`",
                 $this.model_id
@@ -215,10 +212,7 @@ macro_rules! get_embedding_paths {
             info!("Loading `tokenizer.json` at `{}`", $this.model_id);
             $crate::api_get_file!(api, "tokenizer.json", model_id)
         };
-        let config_filename = if emb_dir_list.contains(&"config.json".to_string()) {
-            info!("Loading `config.json` at `{}`", $this.model_id);
-            $crate::api_get_file!(api, "config.json", model_id)
-        } else if emb_dir_list.contains(&"params.json".to_string()) {
+        let config_filename = if emb_dir_list.contains(&"params.json".to_string()) {
             info!(
                 "Loading `params.json` (Mistral config) at `{}`",
                 $this.model_id

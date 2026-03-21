@@ -27,13 +27,12 @@ The key parameter is `gamma` - the number of draft tokens to generate per specul
 - **Same model category:** Both must be the same type (e.g., both text models or both vision models)
 - **KV cache enabled:** Both models must have KV caching enabled (default behavior)
 
-## Limitations
+## Compatibility
 
-> Note: PagedAttention is not currently supported with speculative decoding.
-
-> Note: Prefix caching is not supported with speculative decoding.
-
-> Note: Hybrid KV caches are not supported with speculative decoding.
+- **PagedAttention:** Supported.
+- **Prefix caching:** Supported for both sequence-level (non-paged) and paged-attention backends.
+- **Hybrid KV caches:** Supported, including hybrid recurrent-state snapshot/restore during rejection handling.
+- **Batching:** Supported. Multi-sequence speculative requests are executed per sequence internally, preserving batching semantics.
 
 ## Using TOML Configuration
 
@@ -195,7 +194,7 @@ For best performance:
 
 - **Acceptance rate:** Higher acceptance rates lead to better speedups. Monitor your logs for rejection statistics.
 - **Draft model overhead:** If the draft model is too large relative to the target, the overhead may negate speedup benefits.
-- **Batch size:** Speculative decoding is most beneficial for single-request scenarios. For high-throughput batch inference, standard decoding may be more efficient.
+- **Batch size:** Speculative decoding supports batched requests, but currently executes each sequence independently inside the speculative step. For very high-throughput workloads, standard decoding may still be more efficient.
 - **Memory usage:** Both models must fit in memory simultaneously. Consider quantizing one or both models.
 
 ## Combining with Other Features

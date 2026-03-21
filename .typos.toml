@@ -62,3 +62,4 @@ extend-ignore-re = [
 "default_depthwise_seperable_out_channel" = "default_depthwise_seperable_out_channel"
 "DepthWiseSeperableConv1d" = "DepthWiseSeperableConv1d"
 "layrnorm" = "layrnorm"
+"pre_layrnorm" = "pre_layrnorm"
