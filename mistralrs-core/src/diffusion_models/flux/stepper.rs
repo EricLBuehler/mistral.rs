@@ -64,6 +64,7 @@ pub struct FluxStepper {
     t5_tok: Tokenizer,
     clip_tok: Tokenizer,
     clip_text: ClipTextTransformer,
+    clip_max_seq_len: usize,
     flux_model: Flux,
     flux_vae: AutoEncoder,
     is_guidance: bool,
@@ -122,7 +123,7 @@ fn get_clip_model_and_tokenizer(
     api: &Api,
     device: &Device,
     silent: bool,
-) -> anyhow::Result<(ClipTextTransformer, Tokenizer)> {
+) -> anyhow::Result<(ClipTextTransformer, Tokenizer, usize)> {
     let repo = api.repo(hf_hub::Repo::model(
         "openai/clip-vit-large-patch14".to_string(),
     ));
@@ -142,12 +143,21 @@ fn get_clip_model_and_tokenizer(
     let config_file = repo.get("config.json")?;
     let config: ClipConfig = serde_json::from_reader(File::open(config_file)?)?;
     let config = config.text_config;
+    let max_position_embeddings = config.max_position_embeddings;
     let model = ClipTextTransformer::new(vb.pp("text_model"), &config)?;
 
     let tokenizer_filename = repo.get("tokenizer.json")?;
-    let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
+    let mut tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
 
-    Ok((model, tokenizer))
+    // CLIP has a hard limit of `max_position_embeddings` (typically 77) tokens.
+    // Ensure the tokenizer truncates to that length so prompts that exceed it
+    // don't cause a narrow-out-of-bounds panic in ClipTextEmbeddings::forward.
+    let _ = tokenizer.with_truncation(Some(tokenizers::TruncationParams {
+        max_length: max_position_embeddings,
+        ..Default::default()
+    }));
+
+    Ok((model, tokenizer, max_position_embeddings))
 }
 
 fn get_tokenization(tok: &Tokenizer, prompts: Vec<String>, device: &Device) -> Result<Tensor> {
@@ -176,13 +186,15 @@ impl FluxStepper {
         info!("Loading T5 XXL tokenizer.");
         let t5_tokenizer = get_t5_tokenizer(&api)?;
         info!("Loading CLIP model and tokenizer.");
-        let (clip_encoder, clip_tokenizer) = get_clip_model_and_tokenizer(&api, device, silent)?;
+        let (clip_encoder, clip_tokenizer, clip_max_seq_len) =
+            get_clip_model_and_tokenizer(&api, device, silent)?;
 
         Ok(Self {
             cfg,
             t5_tok: t5_tokenizer,
             clip_tok: clip_tokenizer,
             clip_text: clip_encoder,
+            clip_max_seq_len,
             flux_model: Flux::new(flux_cfg, flux_vb, device.clone(), offloaded)?,
             flux_vae: AutoEncoder::new(flux_ae_cfg, flux_ae_vb)?,
             is_guidance: cfg.is_guidance,
@@ -226,7 +238,21 @@ impl DiffusionModel for FluxStepper {
             t5_encoder.forward(&t5_input_ids)?
         };
 
-        let clip_input_ids = get_tokenization(&self.clip_tok, prompts, &self.device)?;
+        let mut clip_input_ids = get_tokenization(&self.clip_tok, prompts, &self.device)?;
+
+        // Safety truncation: CLIP's position embeddings are fixed at
+        // `max_position_embeddings` (77).  If the tokenizer didn't truncate
+        // (e.g. missing truncation config), clamp here to avoid a
+        // narrow-out-of-bounds panic in ClipTextEmbeddings::forward.
+        if clip_input_ids.dim(1)? > self.clip_max_seq_len {
+            info!(
+                "CLIP input length {} exceeds max_position_embeddings ({}), truncating.",
+                clip_input_ids.dim(1)?,
+                self.clip_max_seq_len
+            );
+            clip_input_ids = clip_input_ids.narrow(1, 0, self.clip_max_seq_len)?;
+        }
+
         let clip_embed = self
             .clip_text
             .forward(&clip_input_ids)?
