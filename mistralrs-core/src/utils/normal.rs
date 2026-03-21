@@ -118,10 +118,20 @@ fn get_dtypes() -> Vec<DType> {
 }
 
 fn determine_auto_dtype_all(devices: &[&Device]) -> candle_core::Result<DType> {
+    // On iOS, candle's Metal buffer pool has a bug in `buf_size`: it computes
+    // `size.saturating_sub(1).next_power_of_two()` which rounds exact powers
+    // of two *down* (e.g. 2 → 1).  Both BF16 and F16 are 2 bytes per element,
+    // so a scalar tensor gets a 1-byte buffer and `cast_f32_bf16` /
+    // `cast_f32_f16` hits a Metal validation assertion.  F32 at 4 bytes is
+    // safe because `buf_size(4) = (4-1).next_power_of_two() = 4`.
+    // Until the candle fix lands, force F32 on iOS.
+    #[cfg(target_os = "ios")]
+    return Ok(DType::F32);
+
     // We can safely use bf16 for accelerate because we cast up to f32 in all matmuls anyway.
     #[cfg(feature = "accelerate")]
     return Ok(DType::BF16);
-    #[cfg(not(feature = "accelerate"))]
+    #[cfg(not(any(feature = "accelerate", target_os = "ios")))]
     {
         let dev_dtypes = get_dtypes();
         for dtype in get_dtypes_non_cuda()
