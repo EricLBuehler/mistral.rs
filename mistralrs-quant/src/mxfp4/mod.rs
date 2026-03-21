@@ -5,7 +5,7 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 
 use crate::{
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
@@ -220,52 +220,58 @@ impl MXFP4Layer {
 
         let weight_data: Vec<f32> = weight_f32.flatten_all()?.to_vec1()?;
         let num_blocks_per_row = k / MXFP4_BLOCK_SIZE;
-        let mut packed = vec![0u8; n * k / 2];
-        let mut scales = vec![0u8; n * num_blocks_per_row];
+        let k_half = k / 2;
 
-        for row in 0..n {
-            let row_offset = row * k;
-            for blk in 0..num_blocks_per_row {
-                let blk_start = row_offset + blk * MXFP4_BLOCK_SIZE;
-                let block = &weight_data[blk_start..blk_start + MXFP4_BLOCK_SIZE];
+        // Parallelize quantization across rows with rayon
+        use rayon::prelude::*;
+        let row_results: Vec<(Vec<u8>, Vec<u8>)> = (0..n)
+            .into_par_iter()
+            .map(|row| {
+                let row_offset = row * k;
+                let mut row_packed = vec![0u8; k_half];
+                let mut row_scales = vec![0u8; num_blocks_per_row];
 
-                // Find max absolute value in block
-                let max_abs = block.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
+                for (blk, row_scale) in row_scales.iter_mut().enumerate() {
+                    let blk_start = row_offset + blk * MXFP4_BLOCK_SIZE;
+                    let block = &weight_data[blk_start..blk_start + MXFP4_BLOCK_SIZE];
 
-                // Compute E8M0 scale exponent
-                // scale_factor = 2^(scale - 127), and max representable FP4 value is 6.0
-                // So we need: max_abs <= 6.0 * 2^(scale - 127)
-                // scale = floor(log2(max_abs / 6.0)) + 127
-                let scale = if max_abs == 0.0 {
-                    127u8 // 2^0 = 1.0, all zeros stay zero
-                } else {
-                    let raw = (max_abs / 6.0).log2().floor() as i32 + 127;
-                    raw.clamp(0, 254) as u8 // 255 is NaN in E8M0
-                };
-                scales[row * num_blocks_per_row + blk] = scale;
+                    let max_abs = block.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
 
-                let scale_factor = 2.0f32.powi(scale as i32 - 127);
-                let inv_scale = if scale_factor == 0.0 {
-                    0.0
-                } else {
-                    1.0 / scale_factor
-                };
-
-                for (elem, &val) in block.iter().enumerate() {
-                    let scaled = val * inv_scale;
-
-                    // Find nearest FP4 value using the LUT
-                    let nibble = Self::quantize_to_fp4(scaled);
-
-                    let k_idx = blk * MXFP4_BLOCK_SIZE + elem;
-                    let byte_idx = row * (k / 2) + k_idx / 2;
-                    if k_idx.is_multiple_of(2) {
-                        packed[byte_idx] |= nibble;
+                    let scale = if max_abs == 0.0 {
+                        127u8
                     } else {
-                        packed[byte_idx] |= nibble << 4;
+                        let raw = (max_abs / 6.0).log2().floor() as i32 + 127;
+                        raw.clamp(0, 254) as u8
+                    };
+                    *row_scale = scale;
+
+                    let scale_factor = 2.0f32.powi(scale as i32 - 127);
+                    let inv_scale = if scale_factor == 0.0 {
+                        0.0
+                    } else {
+                        1.0 / scale_factor
+                    };
+
+                    for (elem, &val) in block.iter().enumerate() {
+                        let nibble = Self::quantize_to_fp4(val * inv_scale);
+                        let k_idx = blk * MXFP4_BLOCK_SIZE + elem;
+                        let byte_idx = k_idx / 2;
+                        if k_idx.is_multiple_of(2) {
+                            row_packed[byte_idx] |= nibble;
+                        } else {
+                            row_packed[byte_idx] |= nibble << 4;
+                        }
                     }
                 }
-            }
+                (row_packed, row_scales)
+            })
+            .collect();
+
+        let mut packed = Vec::with_capacity(n * k_half);
+        let mut scales = Vec::with_capacity(n * num_blocks_per_row);
+        for (row_packed, row_scales) in row_results {
+            packed.extend_from_slice(&row_packed);
+            scales.extend_from_slice(&row_scales);
         }
 
         let blocks = Tensor::from_vec(packed, (n, k / 2), &Device::Cpu)?
@@ -612,51 +618,104 @@ impl MXFP4Layer {
         Ok(result)
     }
 
+    /// CPU MoE forward: blocked dequant per (token, expert) pair.
+    /// Avoids dequantizing all experts — only touches the needed weight blocks.
     fn gather_forward_dequantize(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
         let x_dims = x.dims();
         let indices_dims = indices.dims();
 
-        let (num_tokens, topk, _k, x_has_topk) = if x_dims.len() == 2 {
+        let (num_tokens, topk, k, x_has_topk) = if x_dims.len() == 2 {
             (x_dims[0], indices_dims[1], x_dims[1], false)
         } else {
             (x_dims[0], x_dims[1], x_dims[2], true)
         };
 
-        let weights = self.dequantize_weights()?;
-        let weight_dims = weights.dims();
-        let n = weight_dims[1];
+        let blocks_dims = self.blocks.dims();
+        let n = blocks_dims[1];
+        let k_half = k / 2;
+        let num_blocks_per_row = k / MXFP4_BLOCK_SIZE;
+        let half_block = MXFP4_BLOCK_SIZE / 2;
+
+        let blocks_cpu = self.blocks.to_device(&Device::Cpu)?;
+        let scales_cpu = self.scales.to_device(&Device::Cpu)?;
+        let blocks_data: Vec<u8> = blocks_cpu.flatten_all()?.to_vec1()?;
+        let scales_data: Vec<u8> = scales_cpu.flatten_all()?.to_vec1()?;
+
+        let x_f32 = x.to_dtype(DType::F32)?.to_device(&Device::Cpu)?;
+        let x_data: Vec<f32> = x_f32.flatten_all()?.to_vec1()?;
 
         let indices_cpu = indices.to_device(&Device::Cpu)?.to_dtype(DType::U32)?;
         let indices_data: Vec<u32> = indices_cpu.flatten_all()?.to_vec1()?;
 
-        let mut outputs = Vec::with_capacity(num_tokens * topk);
+        let bias_data: Option<Vec<f32>> = self
+            .bias
+            .as_ref()
+            .map(|b| {
+                b.to_dtype(DType::F32)?
+                    .to_device(&Device::Cpu)?
+                    .flatten_all()?
+                    .to_vec1()
+            })
+            .transpose()?;
+
+        // output: [num_tokens * topk, n]
+        let mut output = vec![0f32; num_tokens * topk * n];
 
         for token_idx in 0..num_tokens {
             for slot_idx in 0..topk {
                 let expert_idx = indices_data[token_idx * topk + slot_idx] as usize;
+                let out_row = token_idx * topk + slot_idx;
 
-                let input = if x_has_topk {
-                    x.i((token_idx, slot_idx))?
+                // Get input row
+                let x_offset = if x_has_topk {
+                    (token_idx * topk + slot_idx) * k
                 } else {
-                    x.i(token_idx)?
+                    token_idx * k
                 };
 
-                let weight = weights.i(expert_idx)?;
-                let input_2d = input.unsqueeze(0)?;
-                let weight_t = weight.t()?;
-                let mut output = input_2d.matmul(&weight_t)?.squeeze(0)?;
+                // Blocked dequant + matmul for this (token, expert) pair
+                let expert_blocks_base = expert_idx * n * k_half;
+                let expert_scales_base = expert_idx * n * num_blocks_per_row;
 
-                if let Some(bias) = &self.bias {
-                    let expert_bias = bias.i(expert_idx)?;
-                    output = output.broadcast_add(&expert_bias)?;
+                for blk in 0..num_blocks_per_row {
+                    let col_start = blk * MXFP4_BLOCK_SIZE;
+
+                    // Load input block
+                    let x_blk = &x_data[x_offset + col_start..x_offset + col_start + MXFP4_BLOCK_SIZE];
+
+                    for row in 0..n {
+                        let scale =
+                            scales_data[expert_scales_base + row * num_blocks_per_row + blk]
+                                as usize;
+                        let dequant = &Self::DEQUANT_LUT[scale];
+                        let blk_bytes =
+                            &blocks_data[expert_blocks_base + row * k_half + blk * half_block..];
+
+                        let mut dot = 0f32;
+                        for byte_i in 0..half_block {
+                            let packed = blk_bytes[byte_i];
+                            let w0 = dequant[(packed & 0x0F) as usize];
+                            let w1 = dequant[((packed >> 4) & 0x0F) as usize];
+                            dot += x_blk[byte_i * 2] * w0 + x_blk[byte_i * 2 + 1] * w1;
+                        }
+                        output[out_row * n + row] += dot;
+                    }
                 }
 
-                outputs.push(output);
+                // Add bias
+                if let Some(ref bias) = bias_data {
+                    let bias_offset = expert_idx * n;
+                    for row in 0..n {
+                        output[out_row * n + row] += bias[bias_offset + row];
+                    }
+                }
             }
         }
 
-        let stacked = Tensor::stack(&outputs, 0)?;
-        stacked.reshape((num_tokens, topk, n))
+        let result = Tensor::from_vec(output, (num_tokens * topk, n), &Device::Cpu)?
+            .to_device(x.device())?
+            .to_dtype(x.dtype())?;
+        result.reshape((num_tokens, topk, n))
     }
 }
 
