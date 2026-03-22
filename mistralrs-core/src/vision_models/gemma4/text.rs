@@ -743,7 +743,13 @@ impl Attention {
                     if let Some(mask) = noflash_mask {
                         att = att.broadcast_add(mask)?;
                     }
-                    let att = candle_nn::ops::softmax_last_dim(&att)?;
+                    // Upcast to F32 for softmax (BF16 softmax is numerically
+                    // unstable for long sequences, matching HF's behavior)
+                    let att_dtype = att.dtype();
+                    let att = candle_nn::ops::softmax_last_dim(
+                        &att.to_dtype(DType::F32)?,
+                    )?
+                    .to_dtype(att_dtype)?;
                     MatMul.matmul(&att, &v)?
                 }
             }
@@ -1292,17 +1298,13 @@ impl TextModel {
                 (None, None, None)
             };
 
+        // Use Normal cache for ALL layers (not RotatingCache for sliding layers).
+        // The flash attention kernel handles the sliding window via its
+        // window_size_left parameter. RotatingCache reorders entries which
+        // breaks flash attention's positional assumptions.
         let cache_types = (0..cfg.num_hidden_layers)
-            .map(|layer_idx| {
-                if is_sliding!(layer_idx, cfg) {
-                    NormalCacheType::SlidingWindow {
-                        window: cfg.sliding_window,
-                    }
-                } else {
-                    NormalCacheType::Normal {
-                        max_seq_len: cfg.max_position_embeddings,
-                    }
-                }
+            .map(|_layer_idx| NormalCacheType::Normal {
+                max_seq_len: cfg.max_position_embeddings,
             })
             .collect::<Vec<_>>();
 
