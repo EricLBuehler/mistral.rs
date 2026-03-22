@@ -18,17 +18,26 @@
 
 const THINK_OPEN_TAG: &str = "<think>";
 const THINK_CLOSE_TAG: &str = "</think>";
+const CHANNEL_OPEN_TAG: &str = "<|channel>thought\n";
+const CHANNEL_CLOSE_TAG: &str = "<channel|>";
 
-/// Context for tracking `<think>...</think>` tag parsing state within a sequence.
+/// Context for tracking reasoning tag parsing state within a sequence.
 ///
-/// This provides incremental parsing of token streams containing think tags,
+/// Supports both `<think>...</think>` tags (DeepSeek, QwQ, SmolLM3) and
+/// `<|channel>thought\n...<channel|>` tags (Gemma 4).
+///
+/// This provides incremental parsing of token streams containing reasoning tags,
 /// with delta extraction for streaming responses.
 pub struct ThinkTagContext {
+    /// Opening tag string (e.g., `<think>` or `<|channel>thought\n`)
+    open_tag: String,
+    /// Closing tag string (e.g., `</think>` or `<channel|>`)
+    close_tag: String,
     /// Accumulated final content (outside think blocks)
     accumulated_content: String,
     /// Accumulated reasoning content (inside think blocks)
     accumulated_reasoning: String,
-    /// Whether we're currently inside a `<think>` block
+    /// Whether we're currently inside a reasoning block
     in_think_block: bool,
     /// Buffer for handling partial tags split across token boundaries
     buffer: String,
@@ -41,9 +50,21 @@ pub struct ThinkTagContext {
 }
 
 impl ThinkTagContext {
-    /// Create a new ThinkTagContext
+    /// Create a new ThinkTagContext for `<think>...</think>` tags.
     pub fn new() -> Self {
+        Self::with_tags(THINK_OPEN_TAG, THINK_CLOSE_TAG)
+    }
+
+    /// Create a new ThinkTagContext for Gemma 4 `<|channel>thought...<channel|>` tags.
+    pub fn new_channel() -> Self {
+        Self::with_tags(CHANNEL_OPEN_TAG, CHANNEL_CLOSE_TAG)
+    }
+
+    /// Create a new ThinkTagContext with custom open/close tags.
+    pub fn with_tags(open_tag: &str, close_tag: &str) -> Self {
         Self {
+            open_tag: open_tag.to_string(),
+            close_tag: close_tag.to_string(),
             accumulated_content: String::new(),
             accumulated_reasoning: String::new(),
             in_think_block: false,
@@ -59,15 +80,16 @@ impl ThinkTagContext {
     /// Use this when the chat template hardcodes `<think>` in the generation prompt,
     /// so the model's output starts inside the think block without an opening tag.
     pub fn new_in_think_block() -> Self {
-        Self {
-            accumulated_content: String::new(),
-            accumulated_reasoning: String::new(),
-            in_think_block: true,
-            buffer: String::new(),
-            sent_content_len: 0,
-            sent_reasoning_len: 0,
-            utf8_buffer: Vec::new(),
-        }
+        let mut ctx = Self::new();
+        ctx.in_think_block = true;
+        ctx
+    }
+
+    /// Create a new channel ThinkTagContext that starts inside a think block.
+    pub fn new_channel_in_think_block() -> Self {
+        let mut ctx = Self::new_channel();
+        ctx.in_think_block = true;
+        ctx
     }
 
     /// Process incremental bytes from the model output.
@@ -114,17 +136,17 @@ impl ThinkTagContext {
         loop {
             if self.in_think_block {
                 // Looking for </think>
-                if let Some(end_pos) = self.buffer.find(THINK_CLOSE_TAG) {
+                if let Some(end_pos) = self.buffer.find(&*self.close_tag) {
                     // Found closing tag - extract reasoning content before it
                     let reasoning = &self.buffer[..end_pos];
                     self.accumulated_reasoning.push_str(reasoning);
                     self.in_think_block = false;
                     // Remove processed part including the tag
-                    self.buffer = self.buffer[end_pos + THINK_CLOSE_TAG.len()..].to_string();
+                    self.buffer = self.buffer[end_pos + self.close_tag.len()..].to_string();
                 } else {
                     // No complete closing tag found
                     // Check if buffer might contain a partial closing tag at the end
-                    let partial_len = self.potential_partial_tag_len(THINK_CLOSE_TAG);
+                    let partial_len = self.potential_partial_tag_len(&self.close_tag.clone());
                     if partial_len > 0 {
                         // Keep the potential partial tag in buffer, process the rest
                         let safe_len = self.buffer.len() - partial_len;
@@ -142,17 +164,17 @@ impl ThinkTagContext {
                 }
             } else {
                 // Looking for <think>
-                if let Some(start_pos) = self.buffer.find(THINK_OPEN_TAG) {
+                if let Some(start_pos) = self.buffer.find(&*self.open_tag) {
                     // Found opening tag - extract content before it
                     let content = &self.buffer[..start_pos];
                     self.accumulated_content.push_str(content);
                     self.in_think_block = true;
                     // Remove processed part including the tag
-                    self.buffer = self.buffer[start_pos + THINK_OPEN_TAG.len()..].to_string();
+                    self.buffer = self.buffer[start_pos + self.open_tag.len()..].to_string();
                 } else {
                     // No complete opening tag found
                     // Check if buffer might contain a partial opening tag at the end
-                    let partial_len = self.potential_partial_tag_len(THINK_OPEN_TAG);
+                    let partial_len = self.potential_partial_tag_len(&self.open_tag.clone());
                     if partial_len > 0 {
                         // Keep the potential partial tag in buffer, process the rest
                         let safe_len = self.buffer.len() - partial_len;
@@ -284,11 +306,17 @@ impl Default for ThinkTagContext {
     }
 }
 
-/// Check if a chat template uses `<think>...</think>` tags.
+/// Check if a chat template uses reasoning tags (either `<think>` or `<|channel>`).
 ///
-/// Returns true if the template contains both `<think>` and `</think>` markers.
+/// Returns true if the template contains matched reasoning delimiters.
 pub fn is_think_tag_template(template: &str) -> bool {
-    template.contains(THINK_OPEN_TAG) && template.contains(THINK_CLOSE_TAG)
+    (template.contains(THINK_OPEN_TAG) && template.contains(THINK_CLOSE_TAG))
+        || is_channel_tag_template(template)
+}
+
+/// Check if a chat template uses Gemma 4 channel-based reasoning tags.
+pub fn is_channel_tag_template(template: &str) -> bool {
+    template.contains("<|channel>") && template.contains("<channel|>")
 }
 
 #[cfg(test)]

@@ -114,6 +114,13 @@ impl ChatTemplate {
             .any(|t| crate::think_tags::is_think_tag_template(t))
     }
 
+    /// Check if the template uses Gemma 4 channel-based reasoning tags.
+    pub fn uses_channel_tags(&self) -> bool {
+        self.get_template_contents()
+            .iter()
+            .any(|t| crate::think_tags::is_channel_tag_template(t))
+    }
+
     pub fn eos_tok(&self) -> Option<String> {
         match self.eos_token.as_ref()?.0 {
             Either::Left(ref lit) => Some(lit.clone()),

@@ -1240,6 +1240,13 @@ impl Sequence {
         }
     }
 
+    /// Enable think tag mode with a custom ThinkTagContext (e.g., for Gemma 4 channel tags).
+    pub fn enable_think_tag_mode_with(&mut self, ctx: ThinkTagContext) {
+        if self.think_tag_context.is_none() {
+            self.think_tag_context = Some(ctx);
+        }
+    }
+
     /// Check if this sequence is in think tag mode
     pub fn is_think_tag_mode(&self) -> bool {
         self.think_tag_context.is_some()

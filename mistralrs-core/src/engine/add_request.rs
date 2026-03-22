@@ -589,8 +589,16 @@ impl Engine {
                             warn!("Failed to enable Harmony mode: {e}");
                         }
                     } else if chat_template.uses_think_tags() {
-                        // Enable think tag mode if the chat template uses <think> tags
-                        seq.enable_think_tag_mode();
+                        // Enable think tag mode with the appropriate tag format
+                        if chat_template.uses_channel_tags() {
+                            // Gemma 4: <|channel>thought\n...<channel|>
+                            seq.enable_think_tag_mode_with(
+                                crate::think_tags::ThinkTagContext::new_channel(),
+                            );
+                        } else {
+                            // DeepSeek, QwQ, SmolLM3: <think>...</think>
+                            seq.enable_think_tag_mode();
+                        }
                     }
                 }
             }
