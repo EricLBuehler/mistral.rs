@@ -1,4 +1,5 @@
 use crate::{
+    gemma_channel::GemmaChannelContext,
     get_mut_arcmutex, get_mut_group,
     harmony::HarmonyContext,
     paged_attention::block_hash::MultiModalFeature,
@@ -81,6 +82,17 @@ pub enum SequenceRecognizer {
 pub enum SeqStepType {
     PromptAndDecode,
     OneShot,
+}
+
+/// The active reasoning format for a sequence, if any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningMode {
+    /// OpenAI Harmony format (GPT-OSS models)
+    Harmony,
+    /// Gemma 4 channel format (`<|channel>thought...<channel|>`)
+    GemmaChannel,
+    /// Think tags (`<think>...</think>`)
+    ThinkTags,
 }
 
 pub struct SequenceImages {
@@ -476,6 +488,9 @@ pub struct Sequence {
 
     // Think tag parsing context (for models using <think>...</think> tags)
     think_tag_context: Option<ThinkTagContext>,
+
+    // Gemma 4 channel parsing context (for <|channel>thought...<channel|> tags)
+    gemma_channel_context: Option<GemmaChannelContext>,
 }
 
 impl Sequence {
@@ -578,6 +593,7 @@ impl Sequence {
             step_start_instant: None,
             harmony_context: None,
             think_tag_context: None,
+            gemma_channel_context: None,
         }
     }
 
@@ -833,8 +849,14 @@ impl Sequence {
         // Process token through think tag parser if in think tag mode
         if let Some(ref mut think_ctx) = self.think_tag_context {
             if !stopped_by_token {
-                // Use process_bytes to handle incomplete UTF-8 sequences (e.g., emojis split across tokens)
                 think_ctx.process_bytes(&completion_bytes);
+            }
+        }
+
+        // Process token through Gemma channel parser if in Gemma channel mode
+        if let Some(ref mut gemma_ctx) = self.gemma_channel_context {
+            if !stopped_by_token {
+                gemma_ctx.process_bytes(&completion_bytes);
             }
         }
 
@@ -1143,6 +1165,26 @@ impl Sequence {
         &self.eos_tokens
     }
 
+    // === Unified Reasoning Mode ===
+
+    /// Get the active reasoning mode, if any. Checked in priority order.
+    pub fn reasoning_mode(&self) -> Option<ReasoningMode> {
+        if self.harmony_context.is_some() {
+            Some(ReasoningMode::Harmony)
+        } else if self.gemma_channel_context.is_some() {
+            Some(ReasoningMode::GemmaChannel)
+        } else if self.think_tag_context.is_some() {
+            Some(ReasoningMode::ThinkTags)
+        } else {
+            None
+        }
+    }
+
+    /// Whether any reasoning parser needs special tokens in decoded text.
+    pub fn needs_special_tokens(&self) -> bool {
+        self.reasoning_mode().is_some()
+    }
+
     // === Harmony Format Support ===
 
     /// Enable Harmony format parsing for this sequence.
@@ -1240,13 +1282,6 @@ impl Sequence {
         }
     }
 
-    /// Enable think tag mode with a custom ThinkTagContext (e.g., for Gemma 4 channel tags).
-    pub fn enable_think_tag_mode_with(&mut self, ctx: ThinkTagContext) {
-        if self.think_tag_context.is_none() {
-            self.think_tag_context = Some(ctx);
-        }
-    }
-
     /// Check if this sequence is in think tag mode
     pub fn is_think_tag_mode(&self) -> bool {
         self.think_tag_context.is_some()
@@ -1295,6 +1330,62 @@ impl Sequence {
     /// Handles unclosed `<think>` blocks.
     pub fn think_tag_finalize(&mut self) {
         if let Some(ref mut ctx) = self.think_tag_context {
+            ctx.finalize();
+        }
+    }
+
+    // === Gemma 4 Channel Format Support ===
+
+    /// Enable Gemma 4 channel parsing for this sequence.
+    pub fn enable_gemma_channel_mode(&mut self) {
+        if self.gemma_channel_context.is_none() {
+            self.gemma_channel_context = Some(GemmaChannelContext::new());
+        }
+    }
+
+    /// Check if this sequence is in Gemma channel mode
+    pub fn is_gemma_channel_mode(&self) -> bool {
+        self.gemma_channel_context.is_some()
+    }
+
+    /// Process text through the Gemma channel parser (if enabled).
+    pub fn process_gemma_channel_text(&mut self, text: &str) {
+        if let Some(ref mut ctx) = self.gemma_channel_context {
+            ctx.process_text(text);
+        }
+    }
+
+    /// Get the latest Gemma channel reasoning delta (for streaming).
+    pub fn get_gemma_channel_reasoning_delta(&mut self) -> Option<String> {
+        self.gemma_channel_context
+            .as_mut()
+            .and_then(|ctx| ctx.get_reasoning_delta())
+    }
+
+    /// Get the latest Gemma channel content delta (for streaming).
+    pub fn get_gemma_channel_content_delta(&mut self) -> Option<String> {
+        self.gemma_channel_context
+            .as_mut()
+            .and_then(|ctx| ctx.get_content_delta())
+    }
+
+    /// Get accumulated Gemma channel reasoning content (for non-streaming).
+    pub fn get_gemma_channel_reasoning_content(&self) -> Option<String> {
+        self.gemma_channel_context
+            .as_ref()
+            .and_then(|ctx| ctx.reasoning_content())
+    }
+
+    /// Get accumulated Gemma channel content (for non-streaming).
+    pub fn get_gemma_channel_content(&self) -> Option<String> {
+        self.gemma_channel_context
+            .as_ref()
+            .and_then(|ctx| ctx.content())
+    }
+
+    /// Finalize Gemma channel parsing at end of stream.
+    pub fn gemma_channel_finalize(&mut self) {
+        if let Some(ref mut ctx) = self.gemma_channel_context {
             ctx.finalize();
         }
     }

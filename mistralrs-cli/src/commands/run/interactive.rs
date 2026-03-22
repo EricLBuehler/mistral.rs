@@ -417,6 +417,7 @@ async fn stream_assistant_response(
 
     const GRAY: &str = "\x1b[90m";
     const RESET: &str = "\x1b[0m";
+    let mut was_reasoning = false;
 
     while let Some(resp) = rx.recv().await {
         match resp {
@@ -433,9 +434,14 @@ async fn stream_assistant_response(
                 if let Some(ref reasoning) = choice.delta.reasoning_content {
                     print!("{GRAY}{reasoning}{RESET}");
                     io::stdout().flush().unwrap();
+                    was_reasoning = true;
                 }
 
                 if let Some(ref content) = choice.delta.content {
+                    if was_reasoning {
+                        println!();
+                        was_reasoning = false;
+                    }
                     assistant_output.push_str(content);
                     print!("{content}");
                     io::stdout().flush().unwrap();

@@ -118,7 +118,7 @@ impl ChatTemplate {
     pub fn uses_channel_tags(&self) -> bool {
         self.get_template_contents()
             .iter()
-            .any(|t| crate::think_tags::is_channel_tag_template(t))
+            .any(|t| crate::gemma_channel::is_channel_tag_template(t))
     }
 
     pub fn eos_tok(&self) -> Option<String> {

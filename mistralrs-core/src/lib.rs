@@ -58,6 +58,7 @@ mod diagnostics;
 mod diffusion_models;
 pub mod distributed;
 mod gguf;
+pub mod gemma_channel;
 pub mod harmony;
 pub mod layers;
 mod layers_masker;
