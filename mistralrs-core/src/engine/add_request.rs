@@ -577,23 +577,42 @@ impl Engine {
                         // Pre-warm the Harmony encoding if not already done.
                         // This must be done in a blocking context because openai-harmony
                         // uses reqwest::blocking which creates its own tokio runtime.
-                        if !crate::harmony::is_harmony_encoding_ready() {
+                        if !crate::reasoning_parsers::harmony::is_harmony_encoding_ready() {
                             if let Err(e) = tokio::task::block_in_place(|| {
-                                crate::harmony::prewarm_harmony_encoding();
+                                crate::reasoning_parsers::harmony::prewarm_harmony_encoding();
                                 Ok::<(), anyhow::Error>(())
                             }) {
                                 warn!("Failed to initialize Harmony encoding: {e}");
                             }
                         }
-                        if let Err(e) = seq.enable_harmony_mode() {
-                            warn!("Failed to enable Harmony mode: {e}");
+                        match crate::reasoning_parsers::HarmonyContext::new() {
+                            Ok(ctx) => seq.enable_reasoning(
+                                crate::reasoning_parsers::ReasoningMode::Harmony,
+                                Box::new(ctx),
+                            ),
+                            Err(e) => warn!("Failed to enable Harmony mode: {e}"),
                         }
                     } else if chat_template.uses_channel_tags() {
                         // Gemma 4: <|channel>thought\n...<channel|>
-                        seq.enable_gemma_channel_mode();
+                        seq.enable_reasoning(
+                            crate::reasoning_parsers::ReasoningMode::TagBased,
+                            Box::new(crate::reasoning_parsers::TagReasoningContext::new_gemma_channel()),
+                        );
                     } else if chat_template.uses_think_tags() {
                         // DeepSeek, QwQ, SmolLM3: <think>...</think>
-                        seq.enable_think_tag_mode();
+                        let starts_in_block = seq
+                            .get_initial_prompt()
+                            .trim_end()
+                            .ends_with(crate::reasoning_parsers::tag_based::THINK_OPEN_TAG);
+                        let ctx = if starts_in_block {
+                            crate::reasoning_parsers::TagReasoningContext::new_in_think_block()
+                        } else {
+                            crate::reasoning_parsers::TagReasoningContext::new_think_tags()
+                        };
+                        seq.enable_reasoning(
+                            crate::reasoning_parsers::ReasoningMode::TagBased,
+                            Box::new(ctx),
+                        );
                     }
                 }
             }

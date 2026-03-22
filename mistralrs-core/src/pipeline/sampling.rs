@@ -88,29 +88,16 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 let delta_result = seq.get_delta();
                 if let Some(delta) = crate::handle_seq_error_ok!(delta_result, seq.responder()) {
                     if seq.get_mut_group().is_chat {
-                        use crate::sequence::ReasoningMode;
-                        let (content_delta, reasoning_delta) = match seq.reasoning_mode() {
-                            Some(ReasoningMode::Harmony) => {
-                                let final_delta = seq.get_harmony_final_delta();
-                                let reasoning = seq.get_harmony_reasoning_delta();
-                                (final_delta, reasoning)
-                            }
-                            Some(ReasoningMode::GemmaChannel) => {
-                                let content = seq.get_gemma_channel_content_delta();
-                                let reasoning = seq.get_gemma_channel_reasoning_delta();
-                                (content, reasoning)
-                            }
-                            Some(ReasoningMode::ThinkTags) => {
-                                let content = seq.get_think_tag_content_delta();
-                                let reasoning = seq.get_think_tag_reasoning_delta();
-                                (content, reasoning)
-                            }
-                            None => {
-                                let (text_new, _) =
-                                    parse_text_tools(this, delta.as_str(), seq.tools.clone())
-                                        .map_err(candle_core::Error::msg)?;
-                                (text_new.map(ToString::to_string), None)
-                            }
+                        let (content_delta, reasoning_delta) = if seq.reasoning_mode().is_some() {
+                            (
+                                seq.get_response_content_delta(),
+                                seq.get_reasoning_content_delta(),
+                            )
+                        } else {
+                            let (text_new, _) =
+                                parse_text_tools(this, delta.as_str(), seq.tools.clone())
+                                    .map_err(candle_core::Error::msg)?;
+                            (text_new.map(ToString::to_string), None)
                         };
 
                         // Detect tool calls
@@ -269,10 +256,8 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 None
             };
 
-            // Signal EOS to parsers
-            seq.harmony_process_eos();
-            seq.think_tag_finalize();
-            seq.gemma_channel_finalize();
+            // Signal EOS to all reasoning parsers
+            seq.finalize_reasoning();
 
             let text = match reason {
                 crate::sequence::StopReason::Length(_)
@@ -299,13 +284,15 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             };
 
             if seq.get_mut_group().is_chat {
-                use crate::sequence::ReasoningMode;
-                let (text_new, tool_calls, reasoning_content) = match seq.reasoning_mode() {
-                    Some(ReasoningMode::Harmony) => {
-                        let final_content = seq.get_harmony_final_content();
-                        let reasoning = seq.get_harmony_reasoning_content();
+                let (text_new, tool_calls, reasoning_content) = if let Some(mode) =
+                    seq.reasoning_mode()
+                {
+                    let final_content = seq.get_response_content();
+                    let reasoning = seq.get_reasoning_content();
+
+                    let tool_calls = if mode == crate::reasoning_parsers::ReasoningMode::Harmony {
                         let harmony_tool_calls = seq.get_harmony_tool_calls();
-                        let tool_calls: Vec<ToolCallResponse> = harmony_tool_calls
+                        harmony_tool_calls
                             .into_iter()
                             .enumerate()
                             .map(|(i, tc)| ToolCallResponse {
@@ -317,47 +304,26 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                                     arguments: tc.arguments,
                                 },
                             })
-                            .collect();
-                        (final_content, tool_calls, reasoning)
-                    }
-                    Some(ReasoningMode::GemmaChannel) => {
-                        seq.gemma_channel_finalize();
-                        let final_content = seq.get_gemma_channel_content();
-                        let reasoning = seq.get_gemma_channel_reasoning_content();
-                        let (text_new, tool_calls) = if let Some(ref content) = final_content {
+                            .collect()
+                    } else if let Some(ref content) = final_content {
+                        let (_, tc) =
                             parse_text_tools(this, content.as_str(), seq.tools.clone())
-                                .map_err(candle_core::Error::msg)?
-                        } else {
-                            (None, vec![])
-                        };
-                        (
-                            text_new.map(ToString::to_string).or(final_content),
-                            tool_calls,
-                            reasoning,
-                        )
-                    }
-                    Some(ReasoningMode::ThinkTags) => {
-                        seq.think_tag_finalize();
-                        let final_content = seq.get_think_tag_content();
-                        let reasoning = seq.get_think_tag_reasoning_content();
-                        let (text_new, tool_calls) = if let Some(ref content) = final_content {
-                            parse_text_tools(this, content.as_str(), seq.tools.clone())
-                                .map_err(candle_core::Error::msg)?
-                        } else {
-                            (None, vec![])
-                        };
-                        (
-                            text_new.map(ToString::to_string).or(final_content),
-                            tool_calls,
-                            reasoning,
-                        )
-                    }
-                    None => {
-                        let (text_new, tool_calls) =
-                            parse_text_tools(this, text.as_str(), seq.tools.clone())
                                 .map_err(candle_core::Error::msg)?;
-                        (text_new.map(ToString::to_string), tool_calls, None)
-                    }
+                        tc
+                    } else {
+                        vec![]
+                    };
+
+                    (
+                        final_content,
+                        tool_calls,
+                        reasoning,
+                    )
+                } else {
+                    let (text_new, tool_calls) =
+                        parse_text_tools(this, text.as_str(), seq.tools.clone())
+                            .map_err(candle_core::Error::msg)?;
+                    (text_new.map(ToString::to_string), tool_calls, None)
                 };
 
                 if !tool_calls.is_empty() {

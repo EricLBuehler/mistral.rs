@@ -1,12 +1,10 @@
 use crate::{
-    gemma_channel::GemmaChannelContext,
     get_mut_arcmutex, get_mut_group,
-    harmony::HarmonyContext,
     paged_attention::block_hash::MultiModalFeature,
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
+    reasoning_parsers::{ReasoningMode, ReasoningParser},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
-    think_tags::ThinkTagContext,
     AudioInput, ChatCompletionResponse, Usage,
 };
 use crate::{
@@ -82,17 +80,6 @@ pub enum SequenceRecognizer {
 pub enum SeqStepType {
     PromptAndDecode,
     OneShot,
-}
-
-/// The active reasoning format for a sequence, if any.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReasoningMode {
-    /// OpenAI Harmony format (GPT-OSS models)
-    Harmony,
-    /// Gemma 4 channel format (`<|channel>thought...<channel|>`)
-    GemmaChannel,
-    /// Think tags (`<think>...</think>`)
-    ThinkTags,
 }
 
 pub struct SequenceImages {
@@ -483,14 +470,9 @@ pub struct Sequence {
     // Tool calls
     pub tools: Option<Arc<ToolCallingMatcher>>,
 
-    // Harmony format parsing context (for GPT-OSS models)
-    harmony_context: Option<HarmonyContext>,
-
-    // Think tag parsing context (for models using <think>...</think> tags)
-    think_tag_context: Option<ThinkTagContext>,
-
-    // Gemma 4 channel parsing context (for <|channel>thought...<channel|> tags)
-    gemma_channel_context: Option<GemmaChannelContext>,
+    // Unified reasoning parser (think tags, channel tags, or Harmony)
+    reasoning_parser: Option<Box<dyn ReasoningParser>>,
+    reasoning_mode: Option<ReasoningMode>,
 }
 
 impl Sequence {
@@ -591,9 +573,8 @@ impl Sequence {
             eos_tokens,
             total_prompt_time: None,
             step_start_instant: None,
-            harmony_context: None,
-            think_tag_context: None,
-            gemma_channel_context: None,
+            reasoning_parser: None,
+            reasoning_mode: None,
         }
     }
 
@@ -841,22 +822,13 @@ impl Sequence {
         self.last_logprob = tok.logprob;
         self.last_is_done = *is_done;
 
-        // Process token through Harmony parser if in Harmony mode
-        if let Some(ref mut harmony_ctx) = self.harmony_context {
-            let _ = harmony_ctx.process_token(tok.token);
-        }
-
-        // Process token through think tag parser if in think tag mode
-        if let Some(ref mut think_ctx) = self.think_tag_context {
-            if !stopped_by_token {
-                think_ctx.process_bytes(&completion_bytes);
+        // Process token through reasoning parser if enabled
+        if let Some(ref mut parser) = self.reasoning_parser {
+            if self.reasoning_mode == Some(ReasoningMode::Harmony) {
+                parser.process_token(tok.token);
             }
-        }
-
-        // Process token through Gemma channel parser if in Gemma channel mode
-        if let Some(ref mut gemma_ctx) = self.gemma_channel_context {
             if !stopped_by_token {
-                gemma_ctx.process_bytes(&completion_bytes);
+                parser.process_bytes(&completion_bytes);
             }
         }
 
@@ -1165,229 +1137,69 @@ impl Sequence {
         &self.eos_tokens
     }
 
-    // === Unified Reasoning Mode ===
+    // === Unified Reasoning Support ===
 
-    /// Get the active reasoning mode, if any. Checked in priority order.
+    /// Get the active reasoning mode, if any.
     pub fn reasoning_mode(&self) -> Option<ReasoningMode> {
-        if self.harmony_context.is_some() {
-            Some(ReasoningMode::Harmony)
-        } else if self.gemma_channel_context.is_some() {
-            Some(ReasoningMode::GemmaChannel)
-        } else if self.think_tag_context.is_some() {
-            Some(ReasoningMode::ThinkTags)
-        } else {
-            None
-        }
+        self.reasoning_mode
     }
 
     /// Whether any reasoning parser needs special tokens in decoded text.
     pub fn needs_special_tokens(&self) -> bool {
-        self.reasoning_mode().is_some()
+        self.reasoning_parser.is_some()
     }
 
-    // === Harmony Format Support ===
-
-    /// Enable Harmony format parsing for this sequence.
-    /// Should be called when the model uses Harmony format (GPT-OSS models).
-    pub fn enable_harmony_mode(&mut self) -> Result<(), anyhow::Error> {
-        if self.harmony_context.is_none() {
-            self.harmony_context = Some(HarmonyContext::new()?);
-        }
-        Ok(())
+    /// Enable reasoning with the given parser and mode.
+    pub fn enable_reasoning(&mut self, mode: ReasoningMode, parser: Box<dyn ReasoningParser>) {
+        self.reasoning_parser = Some(parser);
+        self.reasoning_mode = Some(mode);
     }
 
     /// Check if this sequence is in Harmony mode
     pub fn is_harmony_mode(&self) -> bool {
-        self.harmony_context.is_some()
+        self.reasoning_mode == Some(ReasoningMode::Harmony)
     }
 
-    /// Process a token through the Harmony parser (if enabled).
-    /// Returns the Harmony delta if in Harmony mode.
-    pub fn process_harmony_token(&mut self, token_id: u32) -> Option<crate::harmony::HarmonyDelta> {
-        self.harmony_context
-            .as_mut()
-            .map(|ctx| ctx.process_token(token_id))
+    /// Get the reasoning content delta since last call (for streaming).
+    pub fn get_reasoning_content_delta(&mut self) -> Option<String> {
+        self.reasoning_parser.as_mut()?.get_reasoning_delta()
     }
 
-    /// Get the latest Harmony reasoning delta (for streaming).
-    /// Returns None if not in Harmony mode or no new reasoning content.
-    pub fn get_harmony_reasoning_delta(&mut self) -> Option<String> {
-        self.harmony_context
-            .as_mut()
-            .and_then(|ctx| ctx.get_reasoning_delta())
+    /// Get the response content delta since last call (for streaming).
+    pub fn get_response_content_delta(&mut self) -> Option<String> {
+        self.reasoning_parser.as_mut()?.get_content_delta()
     }
 
-    /// Get the latest Harmony final content delta (for streaming).
-    /// Returns None if not in Harmony mode or no new final content.
-    pub fn get_harmony_final_delta(&mut self) -> Option<String> {
-        self.harmony_context
-            .as_mut()
-            .and_then(|ctx| ctx.get_final_delta())
+    /// Get accumulated reasoning content (for non-streaming).
+    pub fn get_reasoning_content(&self) -> Option<String> {
+        self.reasoning_parser.as_ref()?.reasoning_content()
     }
 
-    /// Get accumulated Harmony reasoning content (for non-streaming).
-    /// Returns None if not in Harmony mode or no reasoning content.
-    pub fn get_harmony_reasoning_content(&self) -> Option<String> {
-        self.harmony_context
-            .as_ref()
-            .and_then(|ctx| ctx.reasoning_content())
+    /// Get accumulated response content (for non-streaming).
+    pub fn get_response_content(&self) -> Option<String> {
+        self.reasoning_parser.as_ref()?.content()
     }
 
-    /// Get accumulated Harmony final content.
-    /// Returns None if not in Harmony mode or no final content.
-    pub fn get_harmony_final_content(&self) -> Option<String> {
-        self.harmony_context
-            .as_ref()
-            .and_then(|ctx| ctx.final_content())
-    }
-
-    /// Signal end of stream to the Harmony parser
-    pub fn harmony_process_eos(&mut self) {
-        if let Some(ref mut ctx) = self.harmony_context {
-            ctx.process_eos();
+    /// Finalize all reasoning parsers at end of stream.
+    pub fn finalize_reasoning(&mut self) {
+        if let Some(ref mut p) = self.reasoning_parser {
+            p.finalize();
         }
     }
 
-    /// Check if Harmony mode has detected any tool calls
+    /// Check if the reasoning parser has detected any tool calls
     pub fn has_harmony_tool_calls(&self) -> bool {
-        self.harmony_context
+        self.reasoning_parser
             .as_ref()
-            .is_some_and(|ctx| ctx.has_tool_call())
+            .is_some_and(|p| p.has_tool_calls())
     }
 
-    /// Get all Harmony tool calls (finalizes any pending tool call)
-    pub fn get_harmony_tool_calls(&mut self) -> Vec<crate::harmony::HarmonyToolCall> {
-        self.harmony_context
+    /// Get all tool calls from the reasoning parser (finalizes any pending tool call)
+    pub fn get_harmony_tool_calls(&mut self) -> Vec<crate::reasoning_parsers::HarmonyToolCall> {
+        self.reasoning_parser
             .as_mut()
-            .map(|ctx| ctx.finalize_tool_calls())
+            .map(|p| p.finalize_tool_calls())
             .unwrap_or_default()
-    }
-
-    // === Think Tag Format Support ===
-
-    /// Enable think tag parsing for this sequence.
-    /// Should be called when the model uses `<think>...</think>` tags.
-    ///
-    /// If the prompt ends with `<think>`, the context will start inside a think block
-    /// since the chat template hardcoded the opening tag.
-    pub fn enable_think_tag_mode(&mut self) {
-        if self.think_tag_context.is_none() {
-            // Check if the prompt ends with <think> (template hardcoded the opening tag)
-            let starts_in_think_block = self.prompt.trim_end().ends_with("<think>");
-            self.think_tag_context = Some(if starts_in_think_block {
-                ThinkTagContext::new_in_think_block()
-            } else {
-                ThinkTagContext::new()
-            });
-        }
-    }
-
-    /// Check if this sequence is in think tag mode
-    pub fn is_think_tag_mode(&self) -> bool {
-        self.think_tag_context.is_some()
-    }
-
-    /// Process text through the think tag parser (if enabled).
-    pub fn process_think_tag_text(&mut self, text: &str) {
-        if let Some(ref mut ctx) = self.think_tag_context {
-            ctx.process_text(text);
-        }
-    }
-
-    /// Get the latest think tag reasoning delta (for streaming).
-    /// Returns None if not in think tag mode or no new reasoning content.
-    pub fn get_think_tag_reasoning_delta(&mut self) -> Option<String> {
-        self.think_tag_context
-            .as_mut()
-            .and_then(|ctx| ctx.get_reasoning_delta())
-    }
-
-    /// Get the latest think tag content delta (for streaming).
-    /// Returns None if not in think tag mode or no new content.
-    pub fn get_think_tag_content_delta(&mut self) -> Option<String> {
-        self.think_tag_context
-            .as_mut()
-            .and_then(|ctx| ctx.get_content_delta())
-    }
-
-    /// Get accumulated think tag reasoning content (for non-streaming).
-    /// Returns None if not in think tag mode or no reasoning content.
-    pub fn get_think_tag_reasoning_content(&self) -> Option<String> {
-        self.think_tag_context
-            .as_ref()
-            .and_then(|ctx| ctx.reasoning_content())
-    }
-
-    /// Get accumulated think tag content (for non-streaming).
-    /// Returns None if not in think tag mode or no content.
-    pub fn get_think_tag_content(&self) -> Option<String> {
-        self.think_tag_context
-            .as_ref()
-            .and_then(|ctx| ctx.content())
-    }
-
-    /// Finalize think tag parsing at end of stream.
-    /// Handles unclosed `<think>` blocks.
-    pub fn think_tag_finalize(&mut self) {
-        if let Some(ref mut ctx) = self.think_tag_context {
-            ctx.finalize();
-        }
-    }
-
-    // === Gemma 4 Channel Format Support ===
-
-    /// Enable Gemma 4 channel parsing for this sequence.
-    pub fn enable_gemma_channel_mode(&mut self) {
-        if self.gemma_channel_context.is_none() {
-            self.gemma_channel_context = Some(GemmaChannelContext::new());
-        }
-    }
-
-    /// Check if this sequence is in Gemma channel mode
-    pub fn is_gemma_channel_mode(&self) -> bool {
-        self.gemma_channel_context.is_some()
-    }
-
-    /// Process text through the Gemma channel parser (if enabled).
-    pub fn process_gemma_channel_text(&mut self, text: &str) {
-        if let Some(ref mut ctx) = self.gemma_channel_context {
-            ctx.process_text(text);
-        }
-    }
-
-    /// Get the latest Gemma channel reasoning delta (for streaming).
-    pub fn get_gemma_channel_reasoning_delta(&mut self) -> Option<String> {
-        self.gemma_channel_context
-            .as_mut()
-            .and_then(|ctx| ctx.get_reasoning_delta())
-    }
-
-    /// Get the latest Gemma channel content delta (for streaming).
-    pub fn get_gemma_channel_content_delta(&mut self) -> Option<String> {
-        self.gemma_channel_context
-            .as_mut()
-            .and_then(|ctx| ctx.get_content_delta())
-    }
-
-    /// Get accumulated Gemma channel reasoning content (for non-streaming).
-    pub fn get_gemma_channel_reasoning_content(&self) -> Option<String> {
-        self.gemma_channel_context
-            .as_ref()
-            .and_then(|ctx| ctx.reasoning_content())
-    }
-
-    /// Get accumulated Gemma channel content (for non-streaming).
-    pub fn get_gemma_channel_content(&self) -> Option<String> {
-        self.gemma_channel_context
-            .as_ref()
-            .and_then(|ctx| ctx.content())
-    }
-
-    /// Finalize Gemma channel parsing at end of stream.
-    pub fn gemma_channel_finalize(&mut self) {
-        if let Some(ref mut ctx) = self.gemma_channel_context {
-            ctx.finalize();
-        }
     }
 }
 

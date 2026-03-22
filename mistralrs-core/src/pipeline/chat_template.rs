@@ -96,7 +96,7 @@ impl ChatTemplate {
     pub fn is_harmony_format(&self) -> bool {
         self.get_template_contents()
             .iter()
-            .any(|t| crate::harmony::is_harmony_template(t))
+            .any(|t| crate::reasoning_parsers::harmony::is_harmony_template(t))
     }
 
     /// Check if this chat template uses `<think>...</think>` tags for reasoning.
@@ -111,14 +111,14 @@ impl ChatTemplate {
 
         self.get_template_contents()
             .iter()
-            .any(|t| crate::think_tags::is_think_tag_template(t))
+            .any(|t| crate::reasoning_parsers::tag_based::is_think_tag_template(t))
     }
 
     /// Check if the template uses Gemma 4 channel-based reasoning tags.
     pub fn uses_channel_tags(&self) -> bool {
         self.get_template_contents()
             .iter()
-            .any(|t| crate::gemma_channel::is_channel_tag_template(t))
+            .any(|t| crate::reasoning_parsers::tag_based::is_channel_tag_template(t))
     }
 
     pub fn eos_tok(&self) -> Option<String> {
