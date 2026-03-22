@@ -334,11 +334,11 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
         // Remove finished sequences
         self.running.retain(|seq| !seq.is_finished_paged_attn());
     }
-    fn get_finished_mamba_indices(&self) -> Vec<usize> {
+    fn get_finished_recurrent_indices(&self) -> Vec<usize> {
         self.running
             .iter()
             .filter(|seq| seq.is_finished_paged_attn())
-            .filter_map(|seq| seq.mamba_state_idx())
+            .filter_map(|seq| seq.recurrent_state_idx())
             .collect()
     }
     fn kv_cache_manager(&self) -> Option<Arc<tokio::sync::Mutex<KVCacheManager>>> {

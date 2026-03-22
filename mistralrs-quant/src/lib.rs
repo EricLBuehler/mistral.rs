@@ -541,6 +541,101 @@ pub enum IsqType {
     AFQ3,
     AFQ2,
     F8Q8,
+    MXFP4,
+}
+
+/// Target bit width for automatic ISQ quantization.
+///
+/// On Metal, these select AFQ variants; on CUDA/CPU, they select Q*K variants.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum IsqBits {
+    /// 2-bit quantization (AFQ2 on Metal, Q2K otherwise).
+    Two,
+    /// 3-bit quantization (AFQ3 on Metal, Q3K otherwise).
+    Three,
+    /// 4-bit quantization (AFQ4 on Metal, Q4K otherwise).
+    Four,
+    /// 5-bit quantization (Q5K on all platforms).
+    Five,
+    /// 6-bit quantization (AFQ6 on Metal, Q6K otherwise).
+    Six,
+    /// 8-bit quantization (AFQ8 on Metal, Q8_0 otherwise).
+    Eight,
+}
+
+impl IsqBits {
+    /// Resolve to the platform-appropriate `IsqType` for the given device.
+    pub fn resolve(self, device: &Device) -> IsqType {
+        match (self, device.is_metal()) {
+            (Self::Two, true) => IsqType::AFQ2,
+            (Self::Two, false) => IsqType::Q2K,
+            (Self::Three, true) => IsqType::AFQ3,
+            (Self::Three, false) => IsqType::Q3K,
+            (Self::Four, true) => IsqType::AFQ4,
+            (Self::Four, false) => IsqType::Q4K,
+            (Self::Five, _) => IsqType::Q5K,
+            (Self::Six, true) => IsqType::AFQ6,
+            (Self::Six, false) => IsqType::Q6K,
+            (Self::Eight, true) => IsqType::AFQ8,
+            (Self::Eight, false) => IsqType::Q8_0,
+        }
+    }
+
+    /// Return all platform variants (non-Metal first, then Metal if different).
+    pub fn expand(self) -> Vec<IsqType> {
+        match self {
+            Self::Two => vec![IsqType::Q2K, IsqType::AFQ2],
+            Self::Three => vec![IsqType::Q3K, IsqType::AFQ3],
+            Self::Four => vec![IsqType::Q4K, IsqType::AFQ4],
+            Self::Five => vec![IsqType::Q5K],
+            Self::Six => vec![IsqType::Q6K, IsqType::AFQ6],
+            Self::Eight => vec![IsqType::Q8_0, IsqType::AFQ8],
+        }
+    }
+}
+
+impl TryFrom<&str> for IsqBits {
+    type Error = ();
+    fn try_from(s: &str) -> std::result::Result<Self, ()> {
+        match s {
+            "2" => Ok(Self::Two),
+            "3" => Ok(Self::Three),
+            "4" => Ok(Self::Four),
+            "5" => Ok(Self::Five),
+            "6" => Ok(Self::Six),
+            "8" => Ok(Self::Eight),
+            _ => Err(()),
+        }
+    }
+}
+
+impl std::fmt::Display for IsqType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Q4_0 => write!(f, "q4_0"),
+            Self::Q4_1 => write!(f, "q4_1"),
+            Self::Q5_0 => write!(f, "q5_0"),
+            Self::Q5_1 => write!(f, "q5_1"),
+            Self::Q8_0 => write!(f, "q8_0"),
+            Self::Q8_1 => write!(f, "q8_1"),
+            Self::Q2K => write!(f, "q2k"),
+            Self::Q3K => write!(f, "q3k"),
+            Self::Q4K => write!(f, "q4k"),
+            Self::Q5K => write!(f, "q5k"),
+            Self::Q6K => write!(f, "q6k"),
+            Self::Q8K => write!(f, "q8k"),
+            Self::HQQ8 => write!(f, "hqq8"),
+            Self::HQQ4 => write!(f, "hqq4"),
+            Self::F8E4M3 => write!(f, "fp8"),
+            Self::AFQ8 => write!(f, "afq8"),
+            Self::AFQ6 => write!(f, "afq6"),
+            Self::AFQ4 => write!(f, "afq4"),
+            Self::AFQ3 => write!(f, "afq3"),
+            Self::AFQ2 => write!(f, "afq2"),
+            Self::F8Q8 => write!(f, "f8q8"),
+            Self::MXFP4 => write!(f, "mxfp4"),
+        }
+    }
 }
 
 impl IsqType {
@@ -578,6 +673,9 @@ impl IsqType {
             Self::HQQ4 => 4,
             Self::HQQ8 => 2,
             Self::F8E4M3 => 2,
+            // MXFP4: 4 bits per value + 1 byte scale per 32 values
+            // For BF16 (2 bytes): (2*32)/(16+1) ≈ 3.76 → 3
+            Self::MXFP4 => 3,
         }
     }
 
@@ -590,7 +688,8 @@ impl IsqType {
             | IsqType::AFQ3
             | IsqType::AFQ4
             | IsqType::AFQ6
-            | IsqType::AFQ8 => {
+            | IsqType::AFQ8
+            | IsqType::MXFP4 => {
                 // Use 1 because our HQQ quantizes on the GPU
                 Some(1.try_into().unwrap())
             }
@@ -684,6 +783,7 @@ pub enum QuantizedSerdeType {
     Fp8 = 3,
     Afq = 4,
     F8Q8 = 5,
+    Mxfp4 = 6,
 }
 
 impl TryFrom<usize> for QuantizedSerdeType {
@@ -696,6 +796,7 @@ impl TryFrom<usize> for QuantizedSerdeType {
             3 => Ok(Self::Fp8),
             4 => Ok(Self::Afq),
             5 => Ok(Self::F8Q8),
+            6 => Ok(Self::Mxfp4),
             other => candle_core::bail!("QuantizedSerdeType {other} is invalid."),
         }
     }

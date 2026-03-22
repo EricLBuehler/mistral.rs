@@ -8,7 +8,7 @@ use indexmap::IndexMap;
 use mistralrs_core::{
     speech_utils, Constraint, DiffusionGenerationParams, DrySamplingParams,
     ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory, NormalRequest,
-    Request, RequestMessage, Response, ResponseOk, SamplingParams, WebSearchOptions,
+    Request, RequestMessage, Response, ResponseOk, SamplingParams, Usage, WebSearchOptions,
     TERMINATE_ALL_NEXT_STEP,
 };
 use regex::Regex;
@@ -21,7 +21,7 @@ use std::{
     sync::{atomic::Ordering, Arc, LazyLock, Mutex},
     time::Instant,
 };
-use tokio::sync::mpsc::channel;
+use tokio::sync::mpsc::{channel, Receiver};
 use tracing::{error, info};
 
 use mistralrs_server_core::util;
@@ -340,71 +340,14 @@ async fn text_interactive_mode(
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
-        let mut first_token_duration: Option<std::time::Duration> = None;
-
-        let mut assistant_output = String::new();
-
-        // ANSI escape codes for gray (muted) and reset
-        const GRAY: &str = "\x1b[90m";
-        const RESET: &str = "\x1b[0m";
-
-        let mut last_usage = None;
-        while let Some(resp) = rx.recv().await {
-            match resp {
-                Response::Chunk(chunk) => {
-                    last_usage = chunk.usage.clone();
-                    let choice = &chunk.choices[0];
-
-                    // Track first token timing
-                    let has_any_content =
-                        choice.delta.content.is_some() || choice.delta.reasoning_content.is_some();
-                    if has_any_content && first_token_duration.is_none() {
-                        let ttft = Instant::now().duration_since(start_ttft);
-                        first_token_duration = Some(ttft);
-                    }
-
-                    // Display reasoning content in gray (muted)
-                    if let Some(ref reasoning) = choice.delta.reasoning_content {
-                        print!("{GRAY}{reasoning}{RESET}");
-                        io::stdout().flush().unwrap();
-                    }
-
-                    // Display final content normally
-                    if let Some(ref content) = choice.delta.content {
-                        assistant_output.push_str(content);
-                        print!("{content}");
-                        io::stdout().flush().unwrap();
-                    }
-
-                    if let Some(ref finish_reason) = choice.finish_reason {
-                        if matches!(finish_reason.as_str(), "length") {
-                            print!("...");
-                        }
-                        break;
-                    }
-                }
-                Response::InternalError(e) => {
-                    error!("Got an internal error: {e:?}");
+        let (assistant_output, first_token_duration, last_usage) =
+            match stream_assistant_response(&mut rx, start_ttft).await {
+                Ok(response) => response,
+                Err(e) => {
+                    error!("{e}");
                     break 'outer;
                 }
-                Response::ModelError(e, resp) => {
-                    error!("Got a model error: {e:?}, response: {resp:?}");
-                    break 'outer;
-                }
-                Response::ValidationError(e) => {
-                    error!("Got a validation error: {e:?}");
-                    break 'outer;
-                }
-                Response::Done(_) => unreachable!(),
-                Response::CompletionDone(_) => unreachable!(),
-                Response::CompletionModelError(_, _) => unreachable!(),
-                Response::CompletionChunk(_) => unreachable!(),
-                Response::ImageGeneration(_) => unreachable!(),
-                Response::Speech { .. } => unreachable!(),
-                Response::Raw { .. } => unreachable!(),
-                Response::Embeddings { .. } => unreachable!(),
-            }
-        }
+            };
 
         if let Some(last_usage) = last_usage {
             println!();
@@ -464,6 +407,66 @@ fn parse_files_and_message(input: &str, regex: &Regex) -> (Vec<String>, String) 
     (urls, text)
 }
 
+async fn stream_assistant_response(
+    rx: &mut Receiver<Response>,
+    start_ttft: Instant,
+) -> Result<(String, Option<std::time::Duration>, Option<Usage>), String> {
+    let mut assistant_output = String::new();
+    let mut first_token_duration = None;
+    let mut last_usage = None;
+
+    const GRAY: &str = "\x1b[90m";
+    const RESET: &str = "\x1b[0m";
+
+    while let Some(resp) = rx.recv().await {
+        match resp {
+            Response::Chunk(chunk) => {
+                last_usage = chunk.usage.clone();
+                let choice = &chunk.choices[0];
+
+                let has_any_content =
+                    choice.delta.content.is_some() || choice.delta.reasoning_content.is_some();
+                if has_any_content && first_token_duration.is_none() {
+                    first_token_duration = Some(Instant::now().duration_since(start_ttft));
+                }
+
+                if let Some(ref reasoning) = choice.delta.reasoning_content {
+                    print!("{GRAY}{reasoning}{RESET}");
+                    io::stdout().flush().unwrap();
+                }
+
+                if let Some(ref content) = choice.delta.content {
+                    assistant_output.push_str(content);
+                    print!("{content}");
+                    io::stdout().flush().unwrap();
+                }
+
+                if let Some(ref finish_reason) = choice.finish_reason {
+                    if matches!(finish_reason.as_str(), "length") {
+                        print!("...");
+                    }
+                    break;
+                }
+            }
+            Response::InternalError(e) => return Err(format!("Got an internal error: {e:?}")),
+            Response::ModelError(e, resp) => {
+                return Err(format!("Got a model error: {e:?}, response: {resp:?}"));
+            }
+            Response::ValidationError(e) => return Err(format!("Got a validation error: {e:?}")),
+            Response::Done(_) => unreachable!(),
+            Response::CompletionDone(_) => unreachable!(),
+            Response::CompletionModelError(_, _) => unreachable!(),
+            Response::CompletionChunk(_) => unreachable!(),
+            Response::ImageGeneration(_) => unreachable!(),
+            Response::Speech { .. } => unreachable!(),
+            Response::Raw { .. } => unreachable!(),
+            Response::Embeddings { .. } => unreachable!(),
+        }
+    }
+
+    Ok((assistant_output, first_token_duration, last_usage))
+}
+
 async fn vision_interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
@@ -487,6 +490,8 @@ async fn vision_interactive_mode(
     };
 
     let mut sampling_params = interactive_sample_parameters();
+    let mut prev_encoder_hits: usize = 0;
+    let mut prev_encoder_misses: usize = 0;
 
     info!("Starting interactive loop with sampling params: {sampling_params:?}");
     println!(
@@ -665,71 +670,14 @@ async fn vision_interactive_mode(
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
-        let mut first_token_duration: Option<std::time::Duration> = None;
-
-        let mut assistant_output = String::new();
-
-        // ANSI escape codes for gray (muted) and reset
-        const GRAY: &str = "\x1b[90m";
-        const RESET: &str = "\x1b[0m";
-
-        let mut last_usage = None;
-        while let Some(resp) = rx.recv().await {
-            match resp {
-                Response::Chunk(chunk) => {
-                    last_usage = chunk.usage.clone();
-                    let choice = &chunk.choices[0];
-
-                    // Track first token timing
-                    let has_any_content =
-                        choice.delta.content.is_some() || choice.delta.reasoning_content.is_some();
-                    if has_any_content && first_token_duration.is_none() {
-                        let ttft = Instant::now().duration_since(start_ttft);
-                        first_token_duration = Some(ttft);
-                    }
-
-                    // Display reasoning content in gray (muted)
-                    if let Some(ref reasoning) = choice.delta.reasoning_content {
-                        print!("{GRAY}{reasoning}{RESET}");
-                        io::stdout().flush().unwrap();
-                    }
-
-                    // Display final content normally
-                    if let Some(ref content) = choice.delta.content {
-                        assistant_output.push_str(content);
-                        print!("{content}");
-                        io::stdout().flush().unwrap();
-                    }
-
-                    if let Some(ref finish_reason) = choice.finish_reason {
-                        if matches!(finish_reason.as_str(), "length") {
-                            print!("...");
-                        }
-                        break;
-                    }
-                }
-                Response::InternalError(e) => {
-                    error!("Got an internal error: {e:?}");
+        let (assistant_output, first_token_duration, last_usage) =
+            match stream_assistant_response(&mut rx, start_ttft).await {
+                Ok(response) => response,
+                Err(e) => {
+                    error!("{e}");
                     break 'outer;
                 }
-                Response::ModelError(e, resp) => {
-                    error!("Got a model error: {e:?}, response: {resp:?}");
-                    break 'outer;
-                }
-                Response::ValidationError(e) => {
-                    error!("Got a validation error: {e:?}");
-                    break 'outer;
-                }
-                Response::Done(_) => unreachable!(),
-                Response::CompletionDone(_) => unreachable!(),
-                Response::CompletionModelError(_, _) => unreachable!(),
-                Response::CompletionChunk(_) => unreachable!(),
-                Response::ImageGeneration(_) => unreachable!(),
-                Response::Speech { .. } => unreachable!(),
-                Response::Raw { .. } => unreachable!(),
-                Response::Embeddings { .. } => unreachable!(),
-            }
-        }
+            };
 
         if let Some(last_usage) = last_usage {
             println!();
@@ -755,10 +703,13 @@ async fn vision_interactive_mode(
                     );
                 }
                 if let Some((hits, misses)) = logger.encoder_cache_stats() {
-                    let total = hits + misses;
-                    if total > 0 {
-                        println!("Encoder cache: {} hits / {} turns", hits, total);
+                    let turn_hits = hits - prev_encoder_hits;
+                    let turn_lookups = (hits + misses) - (prev_encoder_hits + prev_encoder_misses);
+                    if turn_lookups > 0 {
+                        println!("Encoder cache: {}/{} hits", turn_hits, turn_lookups);
                     }
+                    prev_encoder_hits = hits;
+                    prev_encoder_misses = misses;
                 }
             }
         }

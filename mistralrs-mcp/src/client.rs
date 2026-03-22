@@ -39,6 +39,129 @@ pub trait McpServerConnection: Send + Sync {
     async fn close(&self) -> Result<()>;
 }
 
+fn initialize_params() -> Value {
+    serde_json::json!({
+        "protocolVersion": rust_mcp_schema::ProtocolVersion::latest().to_string(),
+        "capabilities": {
+            "tools": {}
+        },
+        "clientInfo": {
+            "name": "mistral.rs",
+            "version": env!("CARGO_PKG_VERSION"),
+        }
+    })
+}
+
+async fn initialize_transport(transport: &Arc<dyn McpTransport>) -> Result<()> {
+    transport
+        .send_request("initialize", initialize_params())
+        .await?;
+    transport.send_initialization_notification().await
+}
+
+async fn list_tools_via_transport(
+    transport: &Arc<dyn McpTransport>,
+    server_id: &str,
+    server_name: &str,
+) -> Result<Vec<McpToolInfo>> {
+    let result = transport.send_request("tools/list", Value::Null).await?;
+
+    let tools = result
+        .get("tools")
+        .and_then(|t| t.as_array())
+        .ok_or_else(|| anyhow::anyhow!("Invalid tools response format"))?;
+
+    let mut tool_infos = Vec::new();
+    for tool in tools {
+        let name = tool
+            .get("name")
+            .and_then(|n| n.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Tool missing name"))?
+            .to_string();
+
+        let description = tool
+            .get("description")
+            .and_then(|d| d.as_str())
+            .map(|s| s.to_string());
+
+        let input_schema = tool
+            .get("inputSchema")
+            .cloned()
+            .unwrap_or(Value::Object(serde_json::Map::new()));
+
+        tool_infos.push(McpToolInfo {
+            name,
+            description,
+            input_schema,
+            server_id: server_id.to_string(),
+            server_name: server_name.to_string(),
+        });
+    }
+
+    Ok(tool_infos)
+}
+
+async fn call_tool_via_transport(
+    transport: &Arc<dyn McpTransport>,
+    name: &str,
+    arguments: Value,
+) -> Result<String> {
+    let params = serde_json::json!({
+        "name": name,
+        "arguments": arguments
+    });
+
+    let result = transport.send_request("tools/call", params).await?;
+    let tool_result: McpToolResult = serde_json::from_value(result)?;
+
+    if tool_result.is_error.unwrap_or(false) {
+        return Err(anyhow::anyhow!("Tool execution failed: {tool_result}"));
+    }
+
+    Ok(tool_result.to_string())
+}
+
+async fn list_resources_via_transport(transport: &Arc<dyn McpTransport>) -> Result<Vec<Resource>> {
+    let result = transport
+        .send_request("resources/list", Value::Null)
+        .await?;
+
+    let resources = result
+        .get("resources")
+        .and_then(|r| r.as_array())
+        .ok_or_else(|| anyhow::anyhow!("Invalid resources response format"))?;
+
+    let mut resource_list = Vec::new();
+    for resource in resources {
+        resource_list.push(serde_json::from_value(resource.clone())?);
+    }
+
+    Ok(resource_list)
+}
+
+async fn read_resource_via_transport(
+    transport: &Arc<dyn McpTransport>,
+    uri: &str,
+) -> Result<String> {
+    let params = serde_json::json!({ "uri": uri });
+    let result = transport.send_request("resources/read", params).await?;
+
+    if let Some(contents) = result.get("contents").and_then(|c| c.as_array()) {
+        if let Some(first_content) = contents.first() {
+            if let Some(text) = first_content.get("text").and_then(|t| t.as_str()) {
+                return Ok(text.to_string());
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!("No readable content found in resource"))
+}
+
+async fn ping_transport(transport: &Arc<dyn McpTransport>) -> Result<()> {
+    transport.send_request("ping", Value::Null).await?;
+    Ok(())
+}
+
 /// MCP client that manages connections to multiple MCP servers
 ///
 /// The main interface for interacting with Model Context Protocol servers.
@@ -1063,22 +1186,7 @@ impl HttpMcpConnection {
     }
 
     async fn initialize(&self) -> Result<()> {
-        let init_params = serde_json::json!({
-            "protocolVersion": rust_mcp_schema::ProtocolVersion::latest().to_string(),
-            "capabilities": {
-                "tools": {}
-            },
-            "clientInfo": {
-                "name": "mistral.rs",
-                "version": env!("CARGO_PKG_VERSION"),
-            }
-        });
-
-        self.transport
-            .send_request("initialize", init_params)
-            .await?;
-        self.transport.send_initialization_notification().await?;
-        Ok(())
+        initialize_transport(&self.transport).await
     }
 }
 
@@ -1093,108 +1201,23 @@ impl McpServerConnection for HttpMcpConnection {
     }
 
     async fn list_tools(&self) -> Result<Vec<McpToolInfo>> {
-        let result = self
-            .transport
-            .send_request("tools/list", Value::Null)
-            .await?;
-
-        let tools = result
-            .get("tools")
-            .and_then(|t| t.as_array())
-            .ok_or_else(|| anyhow::anyhow!("Invalid tools response format"))?;
-
-        let mut tool_infos = Vec::new();
-        for tool in tools {
-            let name = tool
-                .get("name")
-                .and_then(|n| n.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Tool missing name"))?
-                .to_string();
-
-            let description = tool
-                .get("description")
-                .and_then(|d| d.as_str())
-                .map(|s| s.to_string());
-
-            let input_schema = tool
-                .get("inputSchema")
-                .cloned()
-                .unwrap_or(Value::Object(serde_json::Map::new()));
-
-            tool_infos.push(McpToolInfo {
-                name,
-                description,
-                input_schema,
-                server_id: self.server_id.clone(),
-                server_name: self.server_name.clone(),
-            });
-        }
-
-        Ok(tool_infos)
+        list_tools_via_transport(&self.transport, &self.server_id, &self.server_name).await
     }
 
     async fn call_tool(&self, name: &str, arguments: Value) -> Result<String> {
-        let params = serde_json::json!({
-            "name": name,
-            "arguments": arguments
-        });
-
-        let result = self.transport.send_request("tools/call", params).await?;
-
-        // Parse the MCP tool result
-        let tool_result: McpToolResult = serde_json::from_value(result)?;
-
-        // Check if the result indicates an error
-        if tool_result.is_error.unwrap_or(false) {
-            return Err(anyhow::anyhow!("Tool execution failed: {tool_result}"));
-        }
-
-        Ok(tool_result.to_string())
+        call_tool_via_transport(&self.transport, name, arguments).await
     }
 
     async fn list_resources(&self) -> Result<Vec<Resource>> {
-        let result = self
-            .transport
-            .send_request("resources/list", Value::Null)
-            .await?;
-
-        let resources = result
-            .get("resources")
-            .and_then(|r| r.as_array())
-            .ok_or_else(|| anyhow::anyhow!("Invalid resources response format"))?;
-
-        let mut resource_list = Vec::new();
-        for resource in resources {
-            let mcp_resource: Resource = serde_json::from_value(resource.clone())?;
-            resource_list.push(mcp_resource);
-        }
-
-        Ok(resource_list)
+        list_resources_via_transport(&self.transport).await
     }
 
     async fn read_resource(&self, uri: &str) -> Result<String> {
-        let params = serde_json::json!({ "uri": uri });
-        let result = self
-            .transport
-            .send_request("resources/read", params)
-            .await?;
-
-        // Extract content from the response
-        if let Some(contents) = result.get("contents").and_then(|c| c.as_array()) {
-            if let Some(first_content) = contents.first() {
-                if let Some(text) = first_content.get("text").and_then(|t| t.as_str()) {
-                    return Ok(text.to_string());
-                }
-            }
-        }
-
-        Err(anyhow::anyhow!("No readable content found in resource"))
+        read_resource_via_transport(&self.transport, uri).await
     }
 
     async fn ping(&self) -> Result<()> {
-        // Send a simple ping to check if the server is responsive
-        self.transport.send_request("ping", Value::Null).await?;
-        Ok(())
+        ping_transport(&self.transport).await
     }
 
     async fn close(&self) -> Result<()> {
@@ -1233,22 +1256,7 @@ impl ProcessMcpConnection {
     }
 
     async fn initialize(&self) -> Result<()> {
-        let init_params = serde_json::json!({
-            "protocolVersion": rust_mcp_schema::ProtocolVersion::latest().to_string(),
-            "capabilities": {
-                "tools": {}
-            },
-            "clientInfo": {
-                "name": "mistral.rs",
-                "version": env!("CARGO_PKG_VERSION"),
-            }
-        });
-
-        self.transport
-            .send_request("initialize", init_params)
-            .await?;
-        self.transport.send_initialization_notification().await?;
-        Ok(())
+        initialize_transport(&self.transport).await
     }
 }
 
@@ -1263,108 +1271,23 @@ impl McpServerConnection for ProcessMcpConnection {
     }
 
     async fn list_tools(&self) -> Result<Vec<McpToolInfo>> {
-        let result = self
-            .transport
-            .send_request("tools/list", Value::Null)
-            .await?;
-
-        let tools = result
-            .get("tools")
-            .and_then(|t| t.as_array())
-            .ok_or_else(|| anyhow::anyhow!("Invalid tools response format"))?;
-
-        let mut tool_infos = Vec::new();
-        for tool in tools {
-            let name = tool
-                .get("name")
-                .and_then(|n| n.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Tool missing name"))?
-                .to_string();
-
-            let description = tool
-                .get("description")
-                .and_then(|d| d.as_str())
-                .map(|s| s.to_string());
-
-            let input_schema = tool
-                .get("inputSchema")
-                .cloned()
-                .unwrap_or(Value::Object(serde_json::Map::new()));
-
-            tool_infos.push(McpToolInfo {
-                name,
-                description,
-                input_schema,
-                server_id: self.server_id.clone(),
-                server_name: self.server_name.clone(),
-            });
-        }
-
-        Ok(tool_infos)
+        list_tools_via_transport(&self.transport, &self.server_id, &self.server_name).await
     }
 
     async fn call_tool(&self, name: &str, arguments: Value) -> Result<String> {
-        let params = serde_json::json!({
-            "name": name,
-            "arguments": arguments
-        });
-
-        let result = self.transport.send_request("tools/call", params).await?;
-
-        // Parse the MCP tool result
-        let tool_result: McpToolResult = serde_json::from_value(result)?;
-
-        // Check if the result indicates an error
-        if tool_result.is_error.unwrap_or(false) {
-            return Err(anyhow::anyhow!("Tool execution failed: {tool_result}"));
-        }
-
-        Ok(tool_result.to_string())
+        call_tool_via_transport(&self.transport, name, arguments).await
     }
 
     async fn list_resources(&self) -> Result<Vec<Resource>> {
-        let result = self
-            .transport
-            .send_request("resources/list", Value::Null)
-            .await?;
-
-        let resources = result
-            .get("resources")
-            .and_then(|r| r.as_array())
-            .ok_or_else(|| anyhow::anyhow!("Invalid resources response format"))?;
-
-        let mut resource_list = Vec::new();
-        for resource in resources {
-            let mcp_resource: Resource = serde_json::from_value(resource.clone())?;
-            resource_list.push(mcp_resource);
-        }
-
-        Ok(resource_list)
+        list_resources_via_transport(&self.transport).await
     }
 
     async fn read_resource(&self, uri: &str) -> Result<String> {
-        let params = serde_json::json!({ "uri": uri });
-        let result = self
-            .transport
-            .send_request("resources/read", params)
-            .await?;
-
-        // Extract content from the response
-        if let Some(contents) = result.get("contents").and_then(|c| c.as_array()) {
-            if let Some(first_content) = contents.first() {
-                if let Some(text) = first_content.get("text").and_then(|t| t.as_str()) {
-                    return Ok(text.to_string());
-                }
-            }
-        }
-
-        Err(anyhow::anyhow!("No readable content found in resource"))
+        read_resource_via_transport(&self.transport, uri).await
     }
 
     async fn ping(&self) -> Result<()> {
-        // Send a simple ping to check if the server is responsive
-        self.transport.send_request("ping", Value::Null).await?;
-        Ok(())
+        ping_transport(&self.transport).await
     }
 
     async fn close(&self) -> Result<()> {
@@ -1402,22 +1325,7 @@ impl WebSocketMcpConnection {
     }
 
     async fn initialize(&self) -> Result<()> {
-        let init_params = serde_json::json!({
-            "protocolVersion": rust_mcp_schema::ProtocolVersion::latest().to_string(),
-            "capabilities": {
-                "tools": {}
-            },
-            "clientInfo": {
-                "name": "mistral.rs",
-                "version": env!("CARGO_PKG_VERSION"),
-            }
-        });
-
-        self.transport
-            .send_request("initialize", init_params)
-            .await?;
-        self.transport.send_initialization_notification().await?;
-        Ok(())
+        initialize_transport(&self.transport).await
     }
 }
 
@@ -1432,108 +1340,23 @@ impl McpServerConnection for WebSocketMcpConnection {
     }
 
     async fn list_tools(&self) -> Result<Vec<McpToolInfo>> {
-        let result = self
-            .transport
-            .send_request("tools/list", Value::Null)
-            .await?;
-
-        let tools = result
-            .get("tools")
-            .and_then(|t| t.as_array())
-            .ok_or_else(|| anyhow::anyhow!("Invalid tools response format"))?;
-
-        let mut tool_infos = Vec::new();
-        for tool in tools {
-            let name = tool
-                .get("name")
-                .and_then(|n| n.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Tool missing name"))?
-                .to_string();
-
-            let description = tool
-                .get("description")
-                .and_then(|d| d.as_str())
-                .map(|s| s.to_string());
-
-            let input_schema = tool
-                .get("inputSchema")
-                .cloned()
-                .unwrap_or(Value::Object(serde_json::Map::new()));
-
-            tool_infos.push(McpToolInfo {
-                name,
-                description,
-                input_schema,
-                server_id: self.server_id.clone(),
-                server_name: self.server_name.clone(),
-            });
-        }
-
-        Ok(tool_infos)
+        list_tools_via_transport(&self.transport, &self.server_id, &self.server_name).await
     }
 
     async fn call_tool(&self, name: &str, arguments: Value) -> Result<String> {
-        let params = serde_json::json!({
-            "name": name,
-            "arguments": arguments
-        });
-
-        let result = self.transport.send_request("tools/call", params).await?;
-
-        // Parse the MCP tool result
-        let tool_result: McpToolResult = serde_json::from_value(result)?;
-
-        // Check if the result indicates an error
-        if tool_result.is_error.unwrap_or(false) {
-            return Err(anyhow::anyhow!("Tool execution failed: {tool_result}"));
-        }
-
-        Ok(tool_result.to_string())
+        call_tool_via_transport(&self.transport, name, arguments).await
     }
 
     async fn list_resources(&self) -> Result<Vec<Resource>> {
-        let result = self
-            .transport
-            .send_request("resources/list", Value::Null)
-            .await?;
-
-        let resources = result
-            .get("resources")
-            .and_then(|r| r.as_array())
-            .ok_or_else(|| anyhow::anyhow!("Invalid resources response format"))?;
-
-        let mut resource_list = Vec::new();
-        for resource in resources {
-            let mcp_resource: Resource = serde_json::from_value(resource.clone())?;
-            resource_list.push(mcp_resource);
-        }
-
-        Ok(resource_list)
+        list_resources_via_transport(&self.transport).await
     }
 
     async fn read_resource(&self, uri: &str) -> Result<String> {
-        let params = serde_json::json!({ "uri": uri });
-        let result = self
-            .transport
-            .send_request("resources/read", params)
-            .await?;
-
-        // Extract content from the response
-        if let Some(contents) = result.get("contents").and_then(|c| c.as_array()) {
-            if let Some(first_content) = contents.first() {
-                if let Some(text) = first_content.get("text").and_then(|t| t.as_str()) {
-                    return Ok(text.to_string());
-                }
-            }
-        }
-
-        Err(anyhow::anyhow!("No readable content found in resource"))
+        read_resource_via_transport(&self.transport, uri).await
     }
 
     async fn ping(&self) -> Result<()> {
-        // Send a simple ping to check if the server is responsive
-        self.transport.send_request("ping", Value::Null).await?;
-        Ok(())
+        ping_transport(&self.transport).await
     }
 
     async fn close(&self) -> Result<()> {

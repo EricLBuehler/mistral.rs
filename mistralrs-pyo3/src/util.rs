@@ -1,12 +1,20 @@
 use std::{
+    cell::RefCell,
     fs::{self, File},
     io::Read,
+    sync::{Arc, Mutex},
 };
 
+use either::Either;
 use image::DynamicImage;
-use mistralrs_core::AudioInput;
-use mistralrs_core::ResponseErr;
+use mistralrs_core::{
+    AudioInput, ChatCompletionResponse, CompletionResponse, MistralRs, Request, Response,
+    ResponseErr,
+};
 use pyo3::{exceptions::PyValueError, PyErr};
+use tokio::sync::mpsc::Receiver;
+
+static NEXT_REQUEST_ID: Mutex<RefCell<usize>> = Mutex::new(RefCell::new(0));
 
 pub(crate) struct PyApiErr(pub(crate) PyErr);
 pub(crate) type PyApiResult<T> = Result<T, PyApiErr>;
@@ -82,6 +90,95 @@ impl From<PyApiErr> for PyErr {
 impl From<Box<ResponseErr>> for PyApiErr {
     fn from(value: Box<ResponseErr>) -> Self {
         Self(PyValueError::new_err(value.to_string()))
+    }
+}
+
+pub(crate) fn next_request_id() -> usize {
+    let next_id = NEXT_REQUEST_ID.lock().unwrap();
+    let last = &mut *next_id.borrow_mut();
+    let id = *last;
+    *last += 1;
+    id
+}
+
+pub(crate) fn send_request_with_optional_stream(
+    runner: Arc<MistralRs>,
+    model_id: Option<String>,
+    request: Request,
+    mut rx: Receiver<Response>,
+    debug_repr: String,
+    is_streaming: bool,
+) -> Result<Either<Response, Receiver<Response>>, String> {
+    MistralRs::maybe_log_request(runner.clone(), debug_repr);
+    let sender = runner
+        .get_sender(model_id.as_deref())
+        .map_err(|e| e.to_string())?;
+    sender.blocking_send(request).map_err(|e| e.to_string())?;
+
+    if is_streaming {
+        Ok(Either::Right(rx))
+    } else {
+        rx.blocking_recv()
+            .ok_or_else(|| "Response channel closed unexpectedly".to_string())
+            .map(Either::Left)
+    }
+}
+
+pub(crate) fn send_request_and_wait(
+    runner: Arc<MistralRs>,
+    model_id: Option<String>,
+    request: Request,
+    rx: Receiver<Response>,
+    debug_repr: String,
+) -> Result<Response, String> {
+    match send_request_with_optional_stream(runner, model_id, request, rx, debug_repr, false)? {
+        Either::Left(response) => Ok(response),
+        Either::Right(_) => unreachable!("non-streaming requests must return a single response"),
+    }
+}
+
+pub(crate) fn parse_chat_response(response: Response) -> PyApiResult<ChatCompletionResponse> {
+    match response {
+        Response::ValidationError(e) | Response::InternalError(e) => {
+            Err(PyApiErr::from(e.to_string()))
+        }
+        Response::Done(response) => Ok(response),
+        Response::ModelError(msg, _) => Err(PyApiErr::from(msg.to_string())),
+        Response::Chunk(_) => unreachable!(),
+        Response::CompletionDone(_) => unreachable!(),
+        Response::CompletionModelError(_, _) => unreachable!(),
+        Response::CompletionChunk(_) => unreachable!(),
+        Response::ImageGeneration(_) => unreachable!(),
+        Response::Speech { .. } => unreachable!(),
+        Response::Raw { .. } => unreachable!(),
+        Response::Embeddings { .. } => unreachable!(),
+    }
+}
+
+pub(crate) fn parse_completion_response(response: Response) -> PyApiResult<CompletionResponse> {
+    match response {
+        Response::ValidationError(e) | Response::InternalError(e) => {
+            Err(PyApiErr::from(e.to_string()))
+        }
+        Response::CompletionDone(response) => Ok(response),
+        Response::CompletionModelError(msg, _) => Err(PyApiErr::from(msg.to_string())),
+        Response::Chunk(_) => unreachable!(),
+        Response::Done(_) => unreachable!(),
+        Response::ModelError(_, _) => unreachable!(),
+        Response::CompletionChunk(_) => unreachable!(),
+        Response::ImageGeneration(_) => unreachable!(),
+        Response::Speech { .. } => unreachable!(),
+        Response::Raw { .. } => unreachable!(),
+        Response::Embeddings { .. } => unreachable!(),
+    }
+}
+
+pub(crate) fn parse_embedding_response(response: Response) -> Result<Vec<f32>, String> {
+    match response {
+        Response::Embeddings { embeddings, .. } => Ok(embeddings),
+        Response::ValidationError(e) | Response::InternalError(e) => Err(e.to_string()),
+        Response::ModelError(msg, _) => Err(msg.to_string()),
+        _ => Err("Received unexpected response type from embeddings request.".to_string()),
     }
 }
 
