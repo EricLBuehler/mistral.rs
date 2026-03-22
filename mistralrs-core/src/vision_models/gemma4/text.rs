@@ -187,10 +187,23 @@ impl Gemma4Router {
         let scaled = scaled.broadcast_mul(&scale_f32)?;
 
         let logits = scaled.to_dtype(self.proj.weight().dtype())?.apply(&self.proj)?;
-        let probs = candle_nn::ops::softmax_last_dim(&logits.to_dtype(DType::F32)?)?;
+        let logits_f32 = logits.to_dtype(DType::F32)?;
+        let probs = candle_nn::ops::softmax_last_dim(&logits_f32)?;
 
-        let topk = probs.topk(self.top_k)?;
-        Ok((topk.values, topk.indices))
+        // Select top-k experts by SCORE (logits), not by probability
+        // This matches HF which does topk(expert_scores), then masks probs
+        let topk = logits_f32.topk(self.top_k)?;
+        let topk_indices = topk.indices; // [batch, seq, top_k]
+
+        // Gather the softmax probabilities for the selected experts
+        let topk_probs = probs.gather(&topk_indices, D::Minus1)?;
+
+        // Renormalize: divide by sum of selected probs
+        let renorm = topk_probs.sum_keepdim(D::Minus1)?;
+        let renorm = renorm.clamp(1e-6, f64::INFINITY)?;
+        let topk_weights = topk_probs.broadcast_div(&renorm)?;
+
+        Ok((topk_weights, topk_indices))
     }
 }
 
@@ -281,6 +294,10 @@ impl Gemma4MoeBlock {
         let top_k = topk_ids.dim(D::Minus1)?;
         let is_prefill = seq_len > 1;
 
+        // Flatten to 2D: [num_tokens, top_k] for the MoE GEMM kernel
+        let topk_ids = topk_ids.reshape((num_tokens, top_k))?;
+        let topk_weights = topk_weights.reshape((num_tokens, top_k))?;
+
         let (expert_ids, sorted_token_ids) = if is_prefill {
             topk_ids.flatten_all()?.sort(true)?
         } else {
@@ -323,7 +340,9 @@ impl Gemma4MoeBlock {
             is_prefill,
         )?;
 
-        ys.reshape((num_tokens, (), hidden_dim))?.sum(D::Minus2)
+        ys.reshape((num_tokens, (), hidden_dim))?
+            .sum(D::Minus2)?
+            .reshape((b_size, seq_len, hidden_dim))
     }
 
     fn forward_slow(
@@ -334,6 +353,12 @@ impl Gemma4MoeBlock {
     ) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
+        let num_tokens = xs_flat.dim(0)?;
+        let top_k = topk_ids.dim(D::Minus1)?;
+
+        // Flatten to 2D: [num_tokens, top_k]
+        let topk_weights = topk_weights.reshape((num_tokens, top_k))?;
+        let topk_ids = topk_ids.reshape((num_tokens, top_k))?;
 
         let routing_weights = topk_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
         let expert_ids = topk_ids.to_vec2::<u32>()?;
@@ -990,17 +1015,9 @@ impl DecoderLayer {
 
         // Feedforward
         let residual = xs.clone();
-        let mlp_out = self
-            .mlp
-            .forward(&xs.apply(&self.pre_feedforward_layernorm)?)?
-            .apply(&self.post_feedforward_layernorm)?;
 
-        // MoE parallel path
-        let moe_out = if let (Some(ref moe), Some(ref router)) = (&self.moe_block, &self.router) {
-            let pre_ff_2 = self
-                .pre_feedforward_layernorm_2
-                .as_ref()
-                .expect("pre_feedforward_layernorm_2 required for MoE");
+        if let (Some(ref moe), Some(ref router)) = (&self.moe_block, &self.router) {
+            // MoE path: parallel MLP + MoE with separate norms
             let post_ff_1 = self
                 .post_feedforward_layernorm_1
                 .as_ref()
@@ -1009,22 +1026,35 @@ impl DecoderLayer {
                 .post_feedforward_layernorm_2
                 .as_ref()
                 .expect("post_feedforward_layernorm_2 required for MoE");
+            let pre_ff_2 = self
+                .pre_feedforward_layernorm_2
+                .as_ref()
+                .expect("pre_feedforward_layernorm_2 required for MoE");
 
-            let moe_input = xs.apply(pre_ff_2)?;
-            let (topk_weights, topk_ids) = router.forward(&moe_input)?;
-            let (b, s, h) = moe_input.dims3()?;
-            let moe_input_3d = moe_input.reshape((b, s, h))?;
-            let moe_result = moe.forward(&moe_input_3d, &topk_weights, &topk_ids)?;
-
-            // MLP gets post_feedforward_layernorm_1, MoE gets post_feedforward_layernorm_2
+            // Branch 1: MLP with pre_feedforward_layernorm → post_feedforward_layernorm_1
+            let mlp_out = self
+                .mlp
+                .forward(&xs.apply(&self.pre_feedforward_layernorm)?)?;
             let mlp_normed = mlp_out.apply(post_ff_1)?;
-            let moe_normed = moe_result.apply(post_ff_2)?;
-            (mlp_normed + moe_normed)?
-        } else {
-            mlp_out
-        };
 
-        xs = (&residual + moe_out)?;
+            // Branch 2: MoE with pre_feedforward_layernorm_2 → post_feedforward_layernorm_2
+            let (topk_weights, topk_ids) = router.forward(&xs)?;
+            let moe_input = xs.apply(pre_ff_2)?;
+            let moe_result = moe.forward(&moe_input, &topk_weights, &topk_ids)?;
+            let moe_normed = moe_result.apply(post_ff_2)?;
+
+            // Combine branches, then apply post_feedforward_layernorm
+            let combined = (mlp_normed + moe_normed)?;
+            let combined = combined.apply(&self.post_feedforward_layernorm)?;
+            xs = (&residual + combined)?;
+        } else {
+            // Dense path: MLP only
+            let mlp_out = self
+                .mlp
+                .forward(&xs.apply(&self.pre_feedforward_layernorm)?)?
+                .apply(&self.post_feedforward_layernorm)?;
+            xs = (&residual + mlp_out)?;
+        };
 
         // PLE: per-layer embedding injection (after feedforward, before layer scalar)
         if let (Some(ref gate), Some(ref proj), Some(ref norm)) = (
@@ -1435,6 +1465,7 @@ impl TextModel {
                 kv.reset();
             }
         }
+
 
 
         // Compute PLE per-layer inputs
