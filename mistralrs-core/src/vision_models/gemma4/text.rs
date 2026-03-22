@@ -114,19 +114,27 @@ impl ProportionalRotaryEmbedding {
             candle_nn::rotary_emb::rope_i
         };
 
-        let mut q_embeds = Vec::new();
-        let mut k_embeds = Vec::new();
-        for (seq_idx, offset) in seqlen_offsets.iter().enumerate() {
-            let cos = self.cos.narrow(0, *offset, seq_len)?;
-            let sin = self.sin.narrow(0, *offset, seq_len)?;
-            let q_s = q.i(seq_idx)?;
-            let k_s = k.i(seq_idx)?;
-            let q_embed = rope(&q_s.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-            let k_embed = rope(&k_s.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-            q_embeds.push(q_embed);
-            k_embeds.push(k_embed);
+        if seqlen_offsets.len() == 1 {
+            let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
+            let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
+            let q_embed = rope(&q.contiguous()?, &cos, &sin)?;
+            let k_embed = rope(&k.contiguous()?, &cos, &sin)?;
+            Ok((q_embed, k_embed))
+        } else {
+            let mut q_embeds = Vec::new();
+            let mut k_embeds = Vec::new();
+            for (seq_idx, offset) in seqlen_offsets.iter().enumerate() {
+                let cos = self.cos.narrow(0, *offset, seq_len)?;
+                let sin = self.sin.narrow(0, *offset, seq_len)?;
+                let q_s = q.i(seq_idx)?;
+                let k_s = k.i(seq_idx)?;
+                let q_embed = rope(&q_s.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                let k_embed = rope(&k_s.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                q_embeds.push(q_embed);
+                k_embeds.push(k_embed);
+            }
+            Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
         }
-        Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
     }
 }
 
@@ -532,6 +540,7 @@ impl Attention {
         kv_caches: &mut [KvCache],
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: Option<&FlashParams>,
+        noflash_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -708,35 +717,34 @@ impl Attention {
                         )?,
                     }
                 } else {
-                    // head_dim > 256: must use non-flash path.
-                    // If flash was expected, the mask may be a dummy — build a real
-                    // causal mask on the fly for the non-flash SDPA kernel.
-                    let kv_len = k.dim(2)?;
-                    let q_len = q.dim(2)?;
-                    let real_mask = if mask.as_ref().is_none_or(|m| {
-                        m.dims() == [1, 1] || m.elem_count() < q_len * kv_len
-                    }) {
-                        // Build causal mask: row i can attend to cols 0..=(offset+i)
-                        // where offset = kv_len - q_len
-                        let offset = kv_len as i64 - q_len as i64;
-                        let mut mask_data = vec![f32::NEG_INFINITY; q_len * kv_len];
-                        for i in 0..q_len {
-                            for j in 0..=((i as i64 + offset) as usize).min(kv_len - 1) {
-                                mask_data[i * kv_len + j] = 0.0;
-                            }
-                        }
-                        Some(Tensor::from_vec(mask_data, (q_len, kv_len), q.device())?
-                            .to_dtype(q.dtype())?)
+                    // head_dim > 256: flash attention unsupported.
+                    // Compute attention directly via MatMul to avoid cuBLASLt
+                    // batch_matmul overhead (which is ~8x slower for decode).
+                    let n_rep = self.sdpa_params.n_kv_groups;
+                    let (k, v) = if n_rep > 1 {
+                        let (b_k, nkv, s_k, hd) = k.dims4()?;
+                        (
+                            k.unsqueeze(2)?
+                                .expand((b_k, nkv, n_rep, s_k, hd))?
+                                .reshape((b_k, nkv * n_rep, s_k, hd))?,
+                            v.unsqueeze(2)?
+                                .expand((b_k, nkv, n_rep, s_k, hd))?
+                                .reshape((b_k, nkv * n_rep, s_k, hd))?,
+                        )
                     } else {
-                        mask.as_ref().cloned()
+                        (k, v)
                     };
-                    Sdpa.run_attention_noflash(
+                    let scale = self.sdpa_params.softmax_scale;
+                    let mut att = MatMul.matmul_affine_mul(
                         &q,
-                        &k,
-                        &v,
-                        real_mask.as_ref(),
-                        &self.sdpa_params,
-                    )?
+                        &k.t()?,
+                        scale.into(),
+                    )?;
+                    if let Some(mask) = noflash_mask {
+                        att = att.broadcast_add(mask)?;
+                    }
+                    let att = candle_nn::ops::softmax_last_dim(&att)?;
+                    MatMul.matmul(&att, &v)?
                 }
             }
         };
@@ -953,11 +961,9 @@ impl DecoderLayer {
         kv_caches: &mut [KvCache],
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: Option<&FlashParams>,
+        noflash_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let mut xs = xs.clone();
-
-        // PLE: apply per-layer input after feedforward (done later in forward)
-        // Moved to after feedforward block per HF reference
 
         let residual = xs.clone();
         let normed = self.input_layernorm.forward(&xs)?;
@@ -971,6 +977,7 @@ impl DecoderLayer {
                 kv_caches,
                 metadata,
                 flash_params,
+                noflash_mask,
             )?
             .apply(&self.post_attention_layernorm)?;
         xs = (attn_out + &residual)?;
@@ -1393,10 +1400,13 @@ impl TextModel {
         // 4. Combine: (projection + embedding) * 2^-0.5
         let combined = ((projected + embedded)? * self.per_layer_input_scale)?;
 
-        // 5. Split into per-layer tensors
+        // 5. Split into per-layer tensors via single transpose + contiguous + narrow slices
+        // combined: [b, seq, num_layers, ple_dim] → transpose to [b, num_layers, seq, ple_dim]
+        let combined = combined.transpose(1, 2)?.contiguous()?;
         let mut per_layer_inputs = Vec::with_capacity(self.num_hidden_layers);
         for i in 0..self.num_hidden_layers {
-            let chunk = combined.i((.., .., i, ..))?.contiguous()?;
+            // narrow on dim 1 is zero-copy since combined is contiguous
+            let chunk = combined.narrow(1, i, 1)?.squeeze(1)?;
             per_layer_inputs.push(chunk);
         }
 
@@ -1514,6 +1524,20 @@ impl TextModel {
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
 
+        // Build a real causal mask for head_dim>256 layers that can't use flash attention.
+        // During decode (seq_len==1) this is None since causal masking is a no-op.
+        let noflash_causal_mask = if xs.dim(1)? > 1 {
+            let mask_cache: &dyn PastKvLenCache = metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(cache as &dyn PastKvLenCache);
+            CausalMasker.make_causal_mask_as_attn_bias(input_ids, mask_cache, xs.dtype())?
+        } else {
+            None
+        };
+        let noflash_causal_mask =
+            DeviceMappedMask::new(noflash_causal_mask, &*self.mapper)?;
+
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             let per_layer_input = per_layer_inputs
@@ -1531,6 +1555,7 @@ impl TextModel {
                     .as_ref()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
                 layer_flash_params,
+                noflash_causal_mask.as_ref().map(|m| m.get(xs.device())),
             )?;
         }
         let xs = xs.to_device(&self.device)?;
