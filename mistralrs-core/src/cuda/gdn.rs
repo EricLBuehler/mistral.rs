@@ -115,6 +115,116 @@ pub fn gated_delta_rule_recurrence_cuda(
     candle_core::bail!("gated_delta_rule_recurrence_cuda requires the cuda feature")
 }
 
+/// CUDA-accelerated chunked gated delta rule recurrence (prefill optimization).
+///
+/// Processes prefill tokens in 64-token chunks instead of one at a time.
+/// Same interface as `gated_delta_rule_recurrence_cuda`.
+///
+/// Inputs (all contiguous, f32):
+///   q, k: [BH, S, K]  v: [BH, S, V]  g, beta: [BH, S]
+///   state: [BH, K, V] (mutated in place)
+///
+/// Returns: output [BH, S, V]
+#[cfg(feature = "cuda")]
+pub fn chunked_gated_delta_rule_recurrence_cuda(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state: &mut Tensor,
+) -> Result<Tensor> {
+    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core as candle;
+
+    let (bh, seq_len, k_dim) = q.dims3()?;
+    let v_dim = v.dim(2)?;
+
+    let dev = q.device().as_cuda_device()?;
+
+    let (q_s, q_l) = q.storage_and_layout();
+    let q_s = match &*q_s {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => candle::bail!("q must be a cuda tensor"),
+    };
+    let q_offset = q_l.start_offset();
+
+    let (k_s, k_l) = k.storage_and_layout();
+    let k_s = match &*k_s {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => candle::bail!("k must be a cuda tensor"),
+    };
+    let k_offset = k_l.start_offset();
+
+    let (v_s, v_l) = v.storage_and_layout();
+    let v_s = match &*v_s {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => candle::bail!("v must be a cuda tensor"),
+    };
+    let v_offset = v_l.start_offset();
+
+    let (g_s, g_l) = g.storage_and_layout();
+    let g_s = match &*g_s {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => candle::bail!("g must be a cuda tensor"),
+    };
+    let g_offset = g_l.start_offset();
+
+    let (beta_s, beta_l) = beta.storage_and_layout();
+    let beta_s = match &*beta_s {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => candle::bail!("beta must be a cuda tensor"),
+    };
+    let beta_offset = beta_l.start_offset();
+
+    let (state_s, state_l) = state.storage_and_layout();
+    let state_s = match &*state_s {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => candle::bail!("state must be a cuda tensor"),
+    };
+    let state_offset = state_l.start_offset();
+
+    let output_buf = unsafe { dev.alloc::<f32>(bh * seq_len * v_dim) }?;
+
+    let stream = dev.cuda_stream().cu_stream() as i64;
+
+    unsafe {
+        crate::cuda::ffi::chunked_gated_delta_rule_recurrence(
+            q_s.slice(q_offset..).device_ptr(q_s.stream()).0 as *const f32,
+            k_s.slice(k_offset..).device_ptr(k_s.stream()).0 as *const f32,
+            v_s.slice(v_offset..).device_ptr(v_s.stream()).0 as *const f32,
+            g_s.slice(g_offset..).device_ptr(g_s.stream()).0 as *const f32,
+            beta_s.slice(beta_offset..).device_ptr(beta_s.stream()).0 as *const f32,
+            state_s.slice(state_offset..).device_ptr(state_s.stream()).0 as *mut f32,
+            output_buf.device_ptr(output_buf.stream()).0 as *mut f32,
+            bh as i32,
+            seq_len as i32,
+            k_dim as i32,
+            v_dim as i32,
+            stream,
+        );
+    }
+
+    let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
+    Ok(Tensor::from((
+        candle::Storage::Cuda(output_storage),
+        (bh, seq_len, v_dim),
+    )))
+}
+
+#[cfg(not(feature = "cuda"))]
+#[allow(unused)]
+pub fn chunked_gated_delta_rule_recurrence_cuda(
+    _q: &Tensor,
+    _k: &Tensor,
+    _v: &Tensor,
+    _g: &Tensor,
+    _beta: &Tensor,
+    _state: &mut Tensor,
+) -> Result<Tensor> {
+    candle_core::bail!("chunked_gated_delta_rule_recurrence_cuda requires the cuda feature")
+}
+
 /// CUDA-accelerated causal conv1d (both update and full paths).
 ///
 /// For update (is_update=true):

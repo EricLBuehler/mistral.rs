@@ -1677,6 +1677,10 @@ impl IsqModelLoader for Qwen2Loader {
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            // MLP MoE
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$")?,
         ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
@@ -4530,7 +4534,7 @@ impl NormalModelLoader for GraniteMoeHybridLoader {
         _normal_loading_metadata: NormalLoadingMetadata,
         _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        todo!()
+        anyhow::bail!("GraniteMoeHybrid does not support X-LoRA")
     }
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
@@ -4538,6 +4542,9 @@ impl NormalModelLoader for GraniteMoeHybridLoader {
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: crate::models::granite::Config = serde_json::from_str(config)?;
         Ok(Box::new(cfg))
+    }
+    fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
+        Ok(true)
     }
 }
 
@@ -4932,7 +4939,7 @@ impl NormalModelLoader for Qwen3NextLoader {
         Ok(Box::new(cfg))
     }
     fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
-        Ok(false)
+        Ok(true)
     }
 }
 
@@ -5018,18 +5025,43 @@ impl DeviceMappedModelLoader for Qwen3NextLoader {
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::qwen3_next::Config = serde_json::from_str(config)?;
+        let layer_types = cfg.layer_types();
+        let mut layer_sizes = Vec::with_capacity(cfg.num_hidden_layers);
 
-        let per_layer_elems = {
+        for layer_type in &layer_types {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
 
-            let size_in = cfg.hidden_size;
-            let size_q = cfg.head_dim * cfg.num_attention_heads * 2;
-            let size_kv = cfg.head_dim * cfg.num_key_value_heads;
-            let q_proj = size_in * size_q / weight_pack_factor;
-            let k_proj = size_in * size_kv / weight_pack_factor;
-            let v_proj = size_in * size_kv / weight_pack_factor;
-            let o_proj = (cfg.head_dim * cfg.num_attention_heads) * size_in / weight_pack_factor;
+            let attn_elems = match layer_type {
+                crate::models::qwen3_next::LayerType::FullAttention => {
+                    let hidden = cfg.hidden_size;
+                    let q_dim = cfg.head_dim * cfg.num_attention_heads;
+                    let kv_dim = cfg.head_dim * cfg.num_key_value_heads;
+                    let q_proj = hidden * q_dim * 2 / weight_pack_factor;
+                    let k_proj = hidden * kv_dim / weight_pack_factor;
+                    let v_proj = hidden * kv_dim / weight_pack_factor;
+                    let o_proj = q_dim * hidden / weight_pack_factor;
+                    let q_norm = cfg.head_dim;
+                    let k_norm = cfg.head_dim;
+                    q_proj + k_proj + v_proj + o_proj + q_norm + k_norm
+                }
+                crate::models::qwen3_next::LayerType::LinearAttention => {
+                    let hidden = cfg.hidden_size;
+                    let key_dim = cfg.linear_key_dim();
+                    let value_dim = cfg.linear_value_dim();
+                    let conv_dim = cfg.linear_conv_dim();
+                    // in_proj_qkvz: (2 * key_dim + 2 * value_dim, hidden)
+                    let in_proj_qkvz = hidden * (key_dim * 2 + value_dim * 2);
+                    // in_proj_ba: (2 * num_v_heads, hidden)
+                    let in_proj_ba = hidden * (cfg.linear_num_value_heads * 2);
+                    let out_proj = value_dim * hidden / weight_pack_factor;
+                    let conv1d = conv_dim * cfg.linear_conv_kernel_dim;
+                    let dt_bias = cfg.linear_num_value_heads;
+                    let a_log = cfg.linear_num_value_heads;
+                    let norm = cfg.linear_value_head_dim;
+                    in_proj_qkvz + in_proj_ba + out_proj + conv1d + dt_bias + a_log + norm
+                }
+            };
 
             let moe_gate = cfg.hidden_size * cfg.num_experts;
             let shared_expert =
@@ -5037,20 +5069,17 @@ impl DeviceMappedModelLoader for Qwen3NextLoader {
             let routed_experts = cfg.num_experts * 3 * cfg.hidden_size * cfg.moe_intermediate_size
                 / weight_pack_factor;
 
-            input_layernorm
+            let per_layer_elems = input_layernorm
                 + post_attention_layernorm
-                + q_proj
-                + k_proj
-                + v_proj
-                + o_proj
+                + attn_elems
                 + moe_gate
                 + shared_expert
-                + routed_experts
-        };
-        Ok(vec![
-            per_layer_elems * dtype.size_in_bytes();
-            cfg.num_hidden_layers
-        ])
+                + routed_experts;
+
+            layer_sizes.push(per_layer_elems * dtype.size_in_bytes());
+        }
+
+        Ok(layer_sizes)
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {

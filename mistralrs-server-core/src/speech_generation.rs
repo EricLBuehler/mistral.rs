@@ -16,7 +16,10 @@ use mistralrs_core::{
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
-    handler_core::{create_response_channel, send_request, ErrorToResponse, JsonError},
+    handler_core::{
+        base_process_non_streaming_response, create_response_channel, send_request,
+        ErrorToResponse, JsonError,
+    },
     openai::{AudioResponseFormat, SpeechGenerationRequest},
     types::SharedMistralRsState,
     util::{sanitize_error_message, validate_model_name},
@@ -141,15 +144,13 @@ pub async fn process_non_streaming_response(
     state: SharedMistralRsState,
     response_format: AudioResponseFormat,
 ) -> SpeechGenerationResponder {
-    let response = match rx.recv().await {
-        Some(response) => response,
-        None => {
-            let e = anyhow::Error::msg("No response received from the model.");
-            return handle_error(state, e.into());
-        }
-    };
-
-    match_responses(state, response, response_format)
+    base_process_non_streaming_response(
+        rx,
+        state,
+        |state, response| match_responses(state, response, response_format),
+        handle_error,
+    )
+    .await
 }
 
 /// Matches and processes different types of model responses into appropriate speech generation responses.

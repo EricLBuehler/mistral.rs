@@ -1271,14 +1271,16 @@ impl Qwen3VLRotaryEmbedding {
         let half_dim = head_dim / 2;
         let mut interleave_indices = Vec::new();
         for (dim_idx, offset) in [(1usize, 1usize), (2usize, 2usize)] {
-            let length = mrope_section[dim_idx] * 3;
-            if length <= half_dim {
-                let indices: Vec<u32> = (offset..length).step_by(3).map(|i| i as u32).collect();
-                if !indices.is_empty() {
-                    let num = indices.len();
-                    let idx_tensor = Tensor::from_vec(indices, (num,), device)?;
-                    interleave_indices.push((idx_tensor, dim_idx));
-                }
+            let indices: Vec<u32> = (offset..)
+                .step_by(3)
+                .take(mrope_section[dim_idx])
+                .filter(|&i| i < half_dim)
+                .map(|i| i as u32)
+                .collect();
+            if !indices.is_empty() {
+                let num = indices.len();
+                let idx_tensor = Tensor::from_vec(indices, (num,), device)?;
+                interleave_indices.push((idx_tensor, dim_idx));
             }
         }
 

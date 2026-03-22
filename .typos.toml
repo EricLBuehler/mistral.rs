@@ -35,6 +35,9 @@ extend-ignore-re = [
     "ba",
 ]
 
+[default.extend-words]
+"layrnorm" = "layrnorm"
+
 [type.rust.extend-identifiers]
 "arange" = "arange"
 "arange_step" = "arange_step"
@@ -58,4 +61,5 @@ extend-ignore-re = [
 "depthwise_seperable_out_channel" = "depthwise_seperable_out_channel"
 "default_depthwise_seperable_out_channel" = "default_depthwise_seperable_out_channel"
 "DepthWiseSeperableConv1d" = "DepthWiseSeperableConv1d"
+"layrnorm" = "layrnorm"
 "pre_layrnorm" = "pre_layrnorm"

@@ -655,7 +655,8 @@ impl MistralRsForServerBuilder {
         let isq = self
             .in_situ_quant
             .as_ref()
-            .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
+            .map(|isq| parse_isq_value(isq, Some(&device)).map_err(|e| anyhow::anyhow!("{e}")))
+            .transpose()?;
 
         let pipeline: LoadedPipeline = loader.load_model_from_hf(
             None,
@@ -775,7 +776,8 @@ impl MistralRsForServerBuilder {
             .in_situ_quant
             .as_ref()
             .or(self.in_situ_quant.as_ref())
-            .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
+            .map(|isq| parse_isq_value(isq, Some(&device)).map_err(|e| anyhow::anyhow!("{e}")))
+            .transpose()?;
 
         let mut loaded_model_ids = Vec::new();
         let mut registered_ids = HashSet::new();
@@ -889,7 +891,8 @@ impl MistralRsForServerBuilder {
                 .in_situ_quant
                 .as_ref()
                 .or(self.in_situ_quant.as_ref())
-                .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
+                .map(|isq| parse_isq_value(isq, Some(&device)).map_err(|e| anyhow::anyhow!("{e}")))
+                .transpose()?;
 
             let pipeline: LoadedPipeline = loader.load_model_from_hf(
                 None,

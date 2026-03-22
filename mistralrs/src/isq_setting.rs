@@ -1,36 +1,4 @@
-use mistralrs_core::{parse_isq_value, IsqType};
-
-/// Target bit width for automatic ISQ quantization.
-///
-/// On Metal, these select AFQ variants; on CUDA/CPU, they select Q*K variants.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum IsqBits {
-    /// 2-bit quantization (AFQ2 on Metal, Q2K otherwise).
-    Two,
-    /// 3-bit quantization (AFQ3 on Metal, Q3K otherwise).
-    Three,
-    /// 4-bit quantization (AFQ4 on Metal, Q4K otherwise).
-    Four,
-    /// 5-bit quantization (Q5K on all platforms).
-    Five,
-    /// 6-bit quantization (AFQ6 on Metal, Q6K otherwise).
-    Six,
-    /// 8-bit quantization (AFQ8 on Metal, Q8_0 otherwise).
-    Eight,
-}
-
-impl IsqBits {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Two => "2",
-            Self::Three => "3",
-            Self::Four => "4",
-            Self::Five => "5",
-            Self::Six => "6",
-            Self::Eight => "8",
-        }
-    }
-}
+pub use mistralrs_core::{IsqBits, IsqType};
 
 /// Specifies how ISQ (in-situ quantization) should be configured.
 ///
@@ -72,9 +40,7 @@ pub(crate) fn resolve_isq(
     device: &candle_core::Device,
 ) -> anyhow::Result<IsqType> {
     match setting {
-        IsqSetting::Auto(bits) => {
-            parse_isq_value(bits.as_str(), Some(device)).map_err(|e| anyhow::anyhow!(e))
-        }
+        IsqSetting::Auto(bits) => Ok(bits.resolve(device)),
         IsqSetting::Specific(ty) => Ok(*ty),
     }
 }

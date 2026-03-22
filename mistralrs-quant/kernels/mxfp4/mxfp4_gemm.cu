@@ -608,6 +608,165 @@ __global__ void mxfp4_moe_grouped_gemm_tiled(
   } // end m_tile
 }
 
+// ============================================================================
+// Optimized MXFP4 Vector-Matrix Multiply Kernel (for M <= 4, decode case)
+//
+// For decode (M=1), the tiled GEMM wastes 63/64 of input rows and 15/16 of
+// thread rows. This kernel instead parallelizes all threads along the K
+// dimension for maximum utilization:
+//
+//   - Each block handles VECMAT_COLS output columns for one input row
+//   - 256 threads (8 warps) collaborate on K-reduction per output column
+//   - Vectorized uint4 weight loads + LUT dequant (same as tiled kernel)
+//   - Warp shuffle reduction + cross-warp shared memory reduction
+// ============================================================================
+
+#define VECMAT_COLS 4
+#define VECMAT_THREADS 256
+#define VECMAT_WARPS (VECMAT_THREADS / WARP_SIZE) // 8
+
+template <typename T>
+__global__ void mxfp4_vecmat(const T *__restrict__ input,
+                             const uint8_t *__restrict__ weight,
+                             const uint8_t *__restrict__ weight_scale,
+                             const T *__restrict__ bias, T *__restrict__ output,
+                             int M, int N, int K, bool has_bias) {
+  const int row = blockIdx.y;                            // input row (M dim)
+  const int col_base = blockIdx.x * VECMAT_COLS;         // first output col
+  const int tid = threadIdx.x;
+  const int warp_id = tid / WARP_SIZE;
+  const int lane_id = tid % WARP_SIZE;
+  const int scale_stride = CEILDIV(K, MXFP4_BLOCK_SIZE);
+  const int k_half = K / 2;
+
+  // LUT in registers (same as tiled kernel)
+  const uint32_t LUT0 = 0x03020100;
+  const uint32_t LUT1 = 0x0C080604;
+  const uint32_t LUT2 = 0xFDFEFF00;
+  const uint32_t LUT3 = 0xF4F8FAFC;
+
+  // Shared memory for cross-warp reduction
+  __shared__ float s_reduce[VECMAT_COLS][VECMAT_WARPS];
+
+  // Each thread accumulates over its portion of K for each output column
+  float acc[VECMAT_COLS];
+#pragma unroll
+  for (int c = 0; c < VECMAT_COLS; c++)
+    acc[c] = 0.0f;
+
+  // Each thread processes K elements strided by VECMAT_THREADS
+  // Since MXFP4 blocks are 32 elements, and we have 256 threads,
+  // each thread handles complete 32-element blocks at stride 256*32/32 = 256
+  // Actually: thread tid handles elements starting at tid*32, stride
+  // VECMAT_THREADS*32 But that's wrong - we want each thread to process
+  // contiguous 32-element blocks. Better: stride by number of threads, process
+  // blocks.
+
+  // K is divided into blocks of 32. Total blocks = K/32.
+  // Each thread processes blocks strided by VECMAT_THREADS.
+  const int num_k_blocks = K / MXFP4_BLOCK_SIZE;
+
+  for (int blk = tid; blk < num_k_blocks; blk += VECMAT_THREADS) {
+    const int k_start = blk * MXFP4_BLOCK_SIZE;
+
+    // Load 32 input values for this block
+    float in_vals[MXFP4_BLOCK_SIZE];
+    const T *in_ptr = input + (size_t)row * K + k_start;
+#pragma unroll
+    for (int i = 0; i < MXFP4_BLOCK_SIZE; i += 4) {
+      if constexpr (std::is_same_v<T, half>) {
+        in_vals[i + 0] = __half2float(__ldg(&in_ptr[i + 0]));
+        in_vals[i + 1] = __half2float(__ldg(&in_ptr[i + 1]));
+        in_vals[i + 2] = __half2float(__ldg(&in_ptr[i + 2]));
+        in_vals[i + 3] = __half2float(__ldg(&in_ptr[i + 3]));
+      } else {
+        in_vals[i + 0] = __bfloat162float(__ldg(&in_ptr[i + 0]));
+        in_vals[i + 1] = __bfloat162float(__ldg(&in_ptr[i + 1]));
+        in_vals[i + 2] = __bfloat162float(__ldg(&in_ptr[i + 2]));
+        in_vals[i + 3] = __bfloat162float(__ldg(&in_ptr[i + 3]));
+      }
+    }
+
+    // For each output column in this block's VECMAT_COLS
+#pragma unroll
+    for (int c = 0; c < VECMAT_COLS; c++) {
+      const int col = col_base + c;
+      if (col >= N)
+        continue;
+
+      // Load weight: uint4 = 16 bytes = 32 packed FP4 values
+      uint4 w_vec = *reinterpret_cast<const uint4 *>(
+          &weight[(size_t)col * k_half + k_start / 2]);
+      float scale =
+          e8m0_to_float(
+              __ldg(&weight_scale[(size_t)col * scale_stride + blk])) *
+          0.5f;
+
+      // Dequant + dot product
+      float w_vals[32];
+      dequant_store_8(w_vec.x, scale, LUT0, LUT1, LUT2, LUT3, &w_vals[0]);
+      dequant_store_8(w_vec.y, scale, LUT0, LUT1, LUT2, LUT3, &w_vals[8]);
+      dequant_store_8(w_vec.z, scale, LUT0, LUT1, LUT2, LUT3, &w_vals[16]);
+      dequant_store_8(w_vec.w, scale, LUT0, LUT1, LUT2, LUT3, &w_vals[24]);
+
+      float dot = 0.0f;
+#pragma unroll
+      for (int i = 0; i < MXFP4_BLOCK_SIZE; i++) {
+        dot = fmaf(in_vals[i], w_vals[i], dot);
+      }
+      acc[c] += dot;
+    }
+  }
+
+  // Warp-level reduction (within each warp of 32 threads)
+#pragma unroll
+  for (int c = 0; c < VECMAT_COLS; c++) {
+#pragma unroll
+    for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
+      acc[c] += __shfl_down_sync(0xffffffff, acc[c], offset);
+    }
+  }
+
+  // Cross-warp reduction via shared memory
+  if (lane_id == 0) {
+#pragma unroll
+    for (int c = 0; c < VECMAT_COLS; c++) {
+      s_reduce[c][warp_id] = acc[c];
+    }
+  }
+  __syncthreads();
+
+  // Final reduction by first warp
+  if (warp_id == 0) {
+#pragma unroll
+    for (int c = 0; c < VECMAT_COLS; c++) {
+      float val = (lane_id < VECMAT_WARPS) ? s_reduce[c][lane_id] : 0.0f;
+#pragma unroll
+      for (int offset = VECMAT_WARPS / 2; offset > 0; offset /= 2) {
+        val += __shfl_down_sync(0xffffffff, val, offset);
+      }
+
+      if (lane_id == 0) {
+        const int col = col_base + c;
+        if (col < N) {
+          if (has_bias && bias != nullptr) {
+            if constexpr (std::is_same_v<T, half>) {
+              val += __half2float(__ldg(&bias[col]));
+            } else {
+              val += __bfloat162float(__ldg(&bias[col]));
+            }
+          }
+          if constexpr (std::is_same_v<T, half>) {
+            output[(size_t)row * N + col] = __float2half(val);
+          } else {
+            output[(size_t)row * N + col] = __float2bfloat16(val);
+          }
+        }
+      }
+    }
+  }
+}
+
 } // namespace mxfp4_gemm
 
 // ============================================================================
@@ -620,16 +779,23 @@ extern "C" void launch_mxfp4_matmul_f16(const __half *input,
                                         const __half *bias, __half *output,
                                         int M, int N, int K, bool has_bias,
                                         cudaStream_t stream) {
-  constexpr int BM = 64, BN = 64, BK = 32, TM = 4, TN = 4;
-  constexpr int THREADS_N = BN / TN; // 16
-  constexpr int THREADS_M = BM / TM; // 16
+  if (M <= 4) {
+    dim3 block(VECMAT_THREADS);
+    dim3 grid(CEILDIV(N, VECMAT_COLS), M);
+    mxfp4_gemm::mxfp4_vecmat<half><<<grid, block, 0, stream>>>(
+        input, weight, weight_scale, bias, output, M, N, K, has_bias);
+  } else {
+    constexpr int BM = 64, BN = 64, BK = 32, TM = 4, TN = 4;
+    constexpr int THREADS_N = BN / TN; // 16
+    constexpr int THREADS_M = BM / TM; // 16
 
-  dim3 block(THREADS_N, THREADS_M);
-  dim3 grid(CEILDIV(N, BN), CEILDIV(M, BM));
+    dim3 block(THREADS_N, THREADS_M);
+    dim3 grid(CEILDIV(N, BN), CEILDIV(M, BM));
 
-  mxfp4_gemm::mxfp4_matmul_tiled<half, BM, BN, BK, TM, TN>
-      <<<grid, block, 0, stream>>>(input, weight, weight_scale, bias, output, M,
-                                   N, K, has_bias);
+    mxfp4_gemm::mxfp4_matmul_tiled<half, BM, BN, BK, TM, TN>
+        <<<grid, block, 0, stream>>>(input, weight, weight_scale, bias, output,
+                                     M, N, K, has_bias);
+  }
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -638,16 +804,23 @@ launch_mxfp4_matmul_bf16(const __nv_bfloat16 *input, const uint8_t *weight,
                          const uint8_t *weight_scale, const __nv_bfloat16 *bias,
                          __nv_bfloat16 *output, int M, int N, int K,
                          bool has_bias, cudaStream_t stream) {
-  constexpr int BM = 64, BN = 64, BK = 32, TM = 4, TN = 4;
-  constexpr int THREADS_N = BN / TN; // 16
-  constexpr int THREADS_M = BM / TM; // 16
+  if (M <= 4) {
+    dim3 block(VECMAT_THREADS);
+    dim3 grid(CEILDIV(N, VECMAT_COLS), M);
+    mxfp4_gemm::mxfp4_vecmat<__nv_bfloat16><<<grid, block, 0, stream>>>(
+        input, weight, weight_scale, bias, output, M, N, K, has_bias);
+  } else {
+    constexpr int BM = 64, BN = 64, BK = 32, TM = 4, TN = 4;
+    constexpr int THREADS_N = BN / TN; // 16
+    constexpr int THREADS_M = BM / TM; // 16
 
-  dim3 block(THREADS_N, THREADS_M);
-  dim3 grid(CEILDIV(N, BN), CEILDIV(M, BM));
+    dim3 block(THREADS_N, THREADS_M);
+    dim3 grid(CEILDIV(N, BN), CEILDIV(M, BM));
 
-  mxfp4_gemm::mxfp4_matmul_tiled<__nv_bfloat16, BM, BN, BK, TM, TN>
-      <<<grid, block, 0, stream>>>(input, weight, weight_scale, bias, output, M,
-                                   N, K, has_bias);
+    mxfp4_gemm::mxfp4_matmul_tiled<__nv_bfloat16, BM, BN, BK, TM, TN>
+        <<<grid, block, 0, stream>>>(input, weight, weight_scale, bias, output,
+                                     M, N, K, has_bias);
+  }
   CUDA_CHECK(cudaGetLastError());
 }
 
