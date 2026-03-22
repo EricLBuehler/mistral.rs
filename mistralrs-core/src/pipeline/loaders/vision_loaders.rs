@@ -7316,7 +7316,10 @@ impl VisionModelLoader for Gemma4Loader {
         false
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
-        true
+        // Disabled: Gemma4 has different head_dim per layer type (256 vs 512),
+        // which is incompatible with the current prefix cacher that stores a
+        // single (K, V) pair per sequence for all layers.
+        false
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Gemma4Prefixer)
