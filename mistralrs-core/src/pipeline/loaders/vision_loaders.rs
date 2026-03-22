@@ -39,6 +39,8 @@ use crate::vision_models::gemma3::config::Gemma3Config;
 use crate::vision_models::gemma3::{Gemma3Model, Gemma3Processor};
 use crate::vision_models::gemma3n::config::{Gemma3nConfig, IntermediateSize};
 use crate::vision_models::gemma3n::{Gemma3nModel, Gemma3nProcessor};
+use crate::vision_models::gemma4::config::Gemma4Config;
+use crate::vision_models::gemma4::{Gemma4Model, Gemma4Processor};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::idefics3::{Idefics3Config, Idefics3Model, Idefics3Processor};
@@ -213,6 +215,8 @@ pub enum VisionLoaderType {
     Qwen3_5Moe,
     #[serde(rename = "voxtral")]
     Voxtral,
+    #[serde(rename = "gemma4")]
+    Gemma4,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -233,6 +237,7 @@ impl VisionLoaderType {
             "Mistral3ForConditionalGeneration" => Ok(Self::Mistral3),
             "Llama4ForConditionalGeneration" => Ok(Self::Llama4),
             "Gemma3nForConditionalGeneration" => Ok(Self::Gemma3n),
+            "Gemma4ForConditionalGeneration" => Ok(Self::Gemma4),
             "Qwen3VLForConditionalGeneration" => Ok(Self::Qwen3VL),
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
             "Qwen3_5ForConditionalGeneration" => Ok(Self::Qwen3_5),
@@ -264,6 +269,7 @@ impl FromStr for VisionLoaderType {
             "mistral3" => Ok(Self::Mistral3),
             "llama4" => Ok(Self::Llama4),
             "gemma3n" => Ok(Self::Gemma3n),
+            "gemma4" => Ok(Self::Gemma4),
             "qwen3vl" => Ok(Self::Qwen3VL),
             "qwen3vlmoe" => Ok(Self::Qwen3VLMoE),
             "qwen3_5" => Ok(Self::Qwen3_5),
@@ -296,6 +302,7 @@ impl std::fmt::Display for VisionLoaderType {
             VisionLoaderType::Qwen3_5 => "qwen3_5",
             VisionLoaderType::Qwen3_5Moe => "qwen3_5moe",
             VisionLoaderType::Voxtral => "voxtral",
+            VisionLoaderType::Gemma4 => "gemma4",
         };
         write!(f, "{name}")
     }
@@ -353,6 +360,7 @@ impl AutoVisionLoader {
             VisionLoaderType::Qwen3_5 => Box::new(Qwen3_5Loader),
             VisionLoaderType::Qwen3_5Moe => Box::new(Qwen3_5MoeLoader),
             VisionLoaderType::Voxtral => Box::new(VoxtralLoader),
+            VisionLoaderType::Gemma4 => Box::new(Gemma4Loader),
         })
     }
 }
@@ -7244,6 +7252,263 @@ impl DeviceMappedModelLoader for VoxtralLoader {
             sliding_window: cfg.sliding_window,
             k_head_dim: cfg.head_dim,
             v_head_dim: cfg.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+
+        Ok(Box::new(cfg))
+    }
+}
+
+// ── Gemma4 ─────────────────────────────────────────────────────────────────
+
+pub struct Gemma4Loader;
+
+#[allow(dead_code)]
+pub struct Gemma4Prefixer;
+
+impl MultimodalPromptPrefixer for Gemma4Prefixer {
+    fn prefix_image(&self, _image_indexes: Vec<usize>, prompt: &str) -> String {
+        prompt.to_string()
+    }
+}
+
+impl VisionModelLoader for Gemma4Loader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        let cfg: Gemma4Config = serde_json::from_str(config)?;
+        Ok(Box::new(Gemma4Model::new(
+            &cfg,
+            vb,
+            self.is_gptx(config),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self, _config: &str) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let config: Gemma4Config = serde_json::from_str(config)?;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        config: &str,
+        processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        let cfg: Gemma4Config = serde_json::from_str(config).expect("Failed to parse Gemma4Config");
+        Arc::new(Gemma4Processor::new(
+            processor_config.unwrap_or_default(),
+            cfg.vision_config.patch_size,
+            cfg.vision_config.pooling_kernel_size,
+            cfg.vision_config.default_output_length,
+            true,
+        ))
+    }
+    fn supports_paged_attention(&self, _config: &str) -> bool {
+        false
+    }
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
+        true
+    }
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
+        Arc::new(Gemma4Prefixer)
+    }
+    fn modalities(&self, config: &str) -> Result<Modalities> {
+        let cfg: Gemma4Config = serde_json::from_str(config)?;
+        let mut input = vec![SupportedModality::Text, SupportedModality::Vision];
+        if cfg.audio_config.is_some() {
+            input.push(SupportedModality::Audio);
+        }
+        Ok(Modalities {
+            input,
+            output: vec![SupportedModality::Text],
+        })
+    }
+}
+
+impl IsqModelLoader for Gemma4Loader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            Regex::new(r"per_layer_model_projection\.(weight|bias)$")?,
+            Regex::new(r"embed_vision\.embedding_projection\.(weight|bias)$")?,
+            Regex::new(r"embed_audio\.embedding_projection\.(weight|bias)$")?,
+            Regex::new(r"vision_tower\.encoder\.layers\.(\d+)\.self_attn\.\w+_proj\.(weight|bias)$")?,
+            Regex::new(r"vision_tower\.encoder\.layers\.(\d+)\.mlp\.\w+_proj\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.per_layer_model_projection\.(weight|bias)$")?,
+            Regex::new(r"model\.embed_vision\.embedding_projection\.(weight|bias)$")?,
+            Regex::new(r"model\.embed_audio\.embedding_projection\.(weight|bias)$")?,
+            Regex::new(r"model\.vision_tower\.encoder\.layers\.(\d+)\.self_attn\.\w+_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.vision_tower\.encoder\.layers\.(\d+)\.mlp\.\w+_proj\.(weight|bias)$")?,
+        ])
+    }
+}
+
+impl DeviceMappedModelLoader for Gemma4Loader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Vision {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape: _,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: Gemma4Config = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+
+        let vision_tokens_per_image = cfg.vision_soft_tokens_per_image.unwrap_or(280);
+        let total_seq_len = *max_seq_len + vision_tokens_per_image * max_num_images;
+        let max_text_attn =
+            max_batch_size * tc.num_attention_heads * total_seq_len * total_seq_len;
+
+        Ok(max_text_attn)
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Vision {
+            max_seq_len: _,
+            max_batch_size: _,
+            max_image_shape,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: Gemma4Config = serde_json::from_str(config)?;
+        let vc = &cfg.vision_config;
+
+        let max_patches = vc.default_output_length * vc.pooling_kernel_size * vc.pooling_kernel_size;
+        let max_vision_attn = max_num_images * vc.num_attention_heads * max_patches * max_patches;
+
+        Ok(max_vision_attn)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: Gemma4Config = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+        let elems = tc.vocab_size * tc.hidden_size;
+        Ok(elems * dtype.size_in_bytes() / weight_pack_factor)
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: Gemma4Config = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+        let sizes: Vec<usize> = (0..tc.num_hidden_layers)
+            .map(|layer_idx| {
+                let is_sliding = {
+                    let is_last = layer_idx == tc.num_hidden_layers - 1;
+                    !is_last && (layer_idx + 1) % tc.sliding_window_pattern != 0
+                };
+                let hd = if is_sliding { tc.head_dim } else { tc.global_head_dim };
+                let nkv = if is_sliding {
+                    tc.num_key_value_heads
+                } else {
+                    tc.num_global_key_value_heads.unwrap_or(tc.num_key_value_heads)
+                };
+                let use_k_eq_v = tc.attention_k_eq_v && !is_sliding;
+
+                let mut attn = tc.hidden_size * tc.num_attention_heads * hd
+                    + tc.hidden_size * nkv * hd
+                    + tc.num_attention_heads * hd * tc.hidden_size;
+                if !use_k_eq_v {
+                    attn += tc.hidden_size * nkv * hd;
+                }
+                attn += 2 * hd;
+
+                let mlp = 3 * tc.hidden_size * tc.intermediate_size;
+
+                let moe = if tc.enable_moe_block {
+                    let ne = tc.num_experts.unwrap_or(0);
+                    let ei = tc.expert_intermediate_size.unwrap_or(0);
+                    ne * tc.hidden_size * ei * 2 + ne * ei * tc.hidden_size + ne + ne * tc.hidden_size + tc.hidden_size + 3 * tc.hidden_size
+                } else {
+                    0
+                };
+
+                let ple = if tc.hidden_size_per_layer_input.unwrap_or(0) > 0 {
+                    let pd = tc.hidden_size_per_layer_input.unwrap();
+                    tc.hidden_size * pd + pd * tc.hidden_size + tc.hidden_size
+                } else {
+                    0
+                };
+
+                let norms = 4 * tc.hidden_size + 1;
+
+                (attn + mlp + moe + ple + norms) * dtype.size_in_bytes() / weight_pack_factor
+            })
+            .collect();
+        Ok(sizes)
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: Gemma4Config = serde_json::from_str(config)?;
+        Ok(cfg.text_config.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: Gemma4Config = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: tc.max_position_embeddings,
+            num_layers: tc.num_hidden_layers,
+            hidden_size: tc.hidden_size,
+            num_kv_heads: tc.num_key_value_heads,
+            num_attn_heads: tc.num_attention_heads,
+            sliding_window: Some(tc.sliding_window),
+            k_head_dim: tc.global_head_dim,
+            v_head_dim: tc.global_head_dim,
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 

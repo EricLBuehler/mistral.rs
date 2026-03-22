@@ -29,10 +29,11 @@ pub use normal_loaders::{
 };
 
 pub use vision_loaders::{
-    AutoVisionLoader, Gemma3Loader, Gemma3nLoader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, MiniCpmOLoader, Mistral3Loader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader,
-    Qwen2_5VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader,
-    VLlama4Loader, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader, VoxtralLoader,
+    AutoVisionLoader, Gemma3Loader, Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader,
+    LLaVALoader, LLaVANextLoader, MiniCpmOLoader, Mistral3Loader, Phi3VLoader, Phi4MMLoader,
+    Qwen2VLLoader, Qwen2_5VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader,
+    Qwen3_5MoeLoader, VLlama4Loader, VLlamaLoader, VisionLoaderType, VisionModel,
+    VisionModelLoader, VoxtralLoader,
 };
 
 pub use embedding_loaders::{

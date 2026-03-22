@@ -22,8 +22,8 @@ use crate::{
 
 use self::multimodal_embedding::Gemma3nMultimodalEmbedder;
 
-mod audio;
-mod audio_processing;
+pub(crate) mod audio;
+pub(crate) mod audio_processing;
 pub mod config;
 mod inputs_processor;
 mod multimodal_embedding;

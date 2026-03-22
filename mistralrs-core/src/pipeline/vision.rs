@@ -9,8 +9,8 @@ use super::{
     VLlama4Loader, VLlamaLoader, VisionModel, VisionModelLoader,
 };
 use super::{
-    Gemma3nLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader,
-    Phi3VLoader, Qwen2_5VLLoader, VisionLoaderType, VoxtralLoader,
+    Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader,
+    Mistral3Loader, Phi3VLoader, Qwen2_5VLLoader, VisionLoaderType, VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
@@ -188,6 +188,7 @@ impl VisionLoaderBuilder {
             Some(VisionLoaderType::Qwen3_5) => Box::new(Qwen3_5Loader),
             Some(VisionLoaderType::Qwen3_5Moe) => Box::new(Qwen3_5MoeLoader),
             Some(VisionLoaderType::Voxtral) => Box::new(VoxtralLoader),
+            Some(VisionLoaderType::Gemma4) => Box::new(Gemma4Loader),
             None => Box::new(AutoVisionLoader),
         };
         Box::new(VisionLoader {
