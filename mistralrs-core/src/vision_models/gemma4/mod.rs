@@ -35,6 +35,7 @@ pub struct Gemma4SpecificArgs {
     pub audio_mel: Option<Tensor>,
     pub audio_mel_mask: Option<Tensor>,
     pub image_hashes: Vec<u64>,
+    pub image_sizes: Vec<(u32, u32)>,
     pub audio_hashes: Vec<u64>,
 }
 
@@ -137,6 +138,7 @@ impl Gemma4Model {
         audio_mel: Option<&Tensor>,
         audio_mel_mask: Option<&Tensor>,
         image_hashes: &[u64],
+        image_sizes: &[(u32, u32)],
         audio_hashes: &[u64],
     ) -> Result<Tensor> {
         let mut input_embeds = self.language_model.embed_tokens(input_ids)?;
@@ -158,6 +160,14 @@ impl Gemma4Model {
             let indices = image_mask_expanded.flatten_all()?.nonzero()?.squeeze(1)?;
 
             let n_images = pixel_values.dim(0)?;
+            let crop_image = |pv: Tensor, idx: usize| -> Result<Tensor> {
+                if let Some((h, w)) = image_sizes.get(idx).copied() {
+                    let (h, w) = (h as usize, w as usize);
+                    pv.narrow(2, 0, h)?.narrow(3, 0, w)
+                } else {
+                    Ok(pv)
+                }
+            };
             let image_embeds = if !image_hashes.is_empty() && image_hashes.len() == n_images {
                 let mut per_image: Vec<Option<Tensor>> = vec![None; n_images];
                 let mut miss_indices = Vec::new();
@@ -176,7 +186,7 @@ impl Gemma4Model {
                 }
                 if !miss_indices.is_empty() {
                     for &idx in &miss_indices {
-                        let single_pv = pixel_values.get(idx)?.unsqueeze(0)?;
+                        let single_pv = crop_image(pixel_values.get(idx)?.unsqueeze(0)?, idx)?;
                         // Keep vision features in F32 through embed_vision to avoid
                         // precision loss when converting large values to BF16/F16.
                         // The embed_vision RMSNorm normalizes to std≈1, making the
@@ -203,7 +213,12 @@ impl Gemma4Model {
                 Tensor::cat(&parts, 0)?
             } else {
                 let per_image_tensors: Vec<Tensor> = (0..n_images)
-                    .map(|i| pixel_values.get(i).and_then(|t| t.unsqueeze(0)))
+                    .map(|i| {
+                        pixel_values
+                            .get(i)
+                            .and_then(|t| t.unsqueeze(0))
+                            .and_then(|t| crop_image(t, i))
+                    })
                     .collect::<Result<Vec<_>>>()?;
                 // Keep in F32 through embed_vision to preserve precision
                 let vision_features = self.vision_tower.forward(
@@ -503,6 +518,7 @@ impl VisionModel for Gemma4Model {
             args.audio_mel.as_ref(),
             args.audio_mel_mask.as_ref(),
             &args.image_hashes,
+            &args.image_sizes,
             &args.audio_hashes,
         )
     }

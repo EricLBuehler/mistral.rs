@@ -758,7 +758,13 @@ impl VisionTower {
             let ph = h / self.patch_size;
             let pw = w / self.patch_size;
             let num_patches = ph * pw;
-            let num_padding = self.max_patches - num_patches;
+            let Some(num_padding) = self.max_patches.checked_sub(num_patches) else {
+                candle_core::bail!(
+                    "Gemma4 vision input exceeds max patches: {num_patches} > {} (h={h}, w={w}, patch_size={})",
+                    self.max_patches,
+                    self.patch_size
+                );
+            };
 
             let (positions, padding) = self.patch_positions(pv, &device)?;
 

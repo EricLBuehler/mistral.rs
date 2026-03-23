@@ -387,6 +387,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
             }
 
             let mut pixel_values_accum = Vec::new();
+            let mut image_sizes_accum = Vec::new();
 
             for seq in input_seqs.iter_mut() {
                 let images = seq
@@ -417,7 +418,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                     cols: _,
                     pixel_values_list: _,
                     tgt_sizes: _,
-                    image_sizes_all: _,
+                    image_sizes_all,
                     num_crops: _,
                 } = self
                     .preprocess(
@@ -505,22 +506,28 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 let cached = seq.count_prefix_cached_mm_items();
                 let n_images = pixel_values.dim(0).unwrap_or(0);
                 if cached < n_images {
+                    let image_sizes = image_sizes_all.unwrap_or_default();
                     if cached > 0 {
                         pixel_values_accum
                             .push(pixel_values.narrow(0, cached, n_images - cached).unwrap());
+                        image_sizes_accum.extend(image_sizes[cached..].iter().copied());
                     } else {
                         pixel_values_accum.push(pixel_values.clone());
+                        image_sizes_accum.extend(image_sizes);
                     }
                 }
             }
 
             if pixel_values_accum.is_empty() {
-                None
+                (None, vec![])
             } else {
-                Some(Tensor::cat(&pixel_values_accum, 0).unwrap())
+                (
+                    Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
+                    image_sizes_accum,
+                )
             }
         } else {
-            None
+            (None, vec![])
         };
 
         for seq in input_seqs.iter_mut() {
@@ -570,7 +577,11 @@ impl InputsProcessor for Gemma4ImageProcessor {
             .unwrap()
         };
 
-        let pixel_values = if is_prompt { pixel_values } else { None };
+        let (pixel_values, image_sizes) = if is_prompt {
+            pixel_values
+        } else {
+            (None, vec![])
+        };
 
         let image_hashes: Vec<u64> = if is_prompt {
             input_seqs
@@ -611,6 +622,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 audio_mel,
                 audio_mel_mask,
                 image_hashes,
+                image_sizes,
                 audio_hashes,
             }),
             paged_attn_meta,
