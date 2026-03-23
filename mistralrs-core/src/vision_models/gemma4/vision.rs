@@ -6,6 +6,7 @@ use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
+    attention::{Sdpa, SdpaParams},
     layers::{Activation, GemmaRmsNorm, MatMul},
     pipeline::text_models_inputs_processor::FlashParams,
     utils::unvarbuilder::UnVarBuilder,
@@ -276,7 +277,7 @@ struct VisionAttention {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
-    softmax_scale: f32,
+    sdpa_params: SdpaParams,
 }
 
 impl VisionAttention {
@@ -294,9 +295,6 @@ impl VisionAttention {
         let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
         let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
 
-        // HF Gemma4 vision attention uses scaling=1.0 (Q/K are already normalized by RMSNorm)
-        let softmax_scale = 1.0;
-
         Ok(Self {
             q_proj,
             k_proj,
@@ -308,7 +306,13 @@ impl VisionAttention {
             num_heads,
             num_kv_heads,
             head_dim,
-            softmax_scale,
+            sdpa_params: SdpaParams {
+                n_kv_groups: num_heads / num_kv_heads,
+                sliding_window: None,
+                softcap: None,
+                softmax_scale: 1.0,
+                sinks: None,
+            },
         })
     }
 
@@ -318,7 +322,7 @@ impl VisionAttention {
         cos: &Tensor,
         sin: &Tensor,
         attention_mask: Option<&Tensor>,
-        _flash_params: &FlashParams,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = xs.dims3()?;
 
@@ -343,20 +347,14 @@ impl VisionAttention {
         // Apply 2D RoPE
         q = apply_2d_rope(&q, cos, sin, 2)?;
         k = apply_2d_rope(&k, cos, sin, 2)?;
-
-        // Compute attention in F32 to match PyTorch SDPA's internal precision.
-        // HF's SDPA uses F32 for the QK matmul and softmax even with BF16 inputs.
-        let original_dtype = q.dtype();
-        let q = q.to_dtype(DType::F32)?.contiguous()?;
-        let k = k.to_dtype(DType::F32)?.contiguous()?;
-        let v = v.to_dtype(DType::F32)?.contiguous()?;
-        let scale = self.softmax_scale;
-        let mut att = MatMul.matmul_affine_mul(&q, &k.t()?, scale.into())?;
-        if let Some(mask) = attention_mask {
-            att = att.broadcast_add(&mask.to_dtype(DType::F32)?)?;
-        }
-        let att = candle_nn::ops::softmax_last_dim(&att)?;
-        let attn_output = MatMul.matmul(&att, &v)?.to_dtype(original_dtype)?;
+        let attn_output = Sdpa.run_attention(
+            &q.contiguous()?,
+            &k.contiguous()?,
+            &v.contiguous()?,
+            attention_mask,
+            Some(flash_params),
+            &self.sdpa_params,
+        )?;
 
         // Reshape back: (b, heads, seq, head_dim) -> (b, seq, hidden)
         let attn_output = attn_output.transpose(1, 2)?.reshape((
@@ -746,11 +744,8 @@ impl VisionTower {
             max_k: 0,
         };
 
-        // Build a mask to zero out padding positions after each encoder layer.
-        // With eager attention, all-masked queries (padding) produce uniform attention
-        // over all keys, yielding non-zero values. HF's SDPA handles this by zeroing
-        // the output for fully-masked queries. We replicate this by explicitly zeroing
-        // padding positions after each layer.
+        // Keep padding positions zeroed after each layer so non-flash backends
+        // cannot accumulate values for fully masked queries.
         let valid_mask_3d = padding_positions
             .to_dtype(DType::F32)?
             .eq(0.0)?

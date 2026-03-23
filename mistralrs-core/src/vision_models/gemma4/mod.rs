@@ -60,11 +60,11 @@ impl Gemma4Model {
     ) -> Result<Self> {
         let vb = vb.pp("model");
 
-        // Use F32 for the vision tower for numerical stability.
-        // The vision attention uses scale=1.0 (no division by sqrt(head_dim)),
-        // making attention very peaked. F32 helps avoid compounding errors
-        // through 16 encoder layers.
-        let vision_dtype = DType::F32;
+        let vision_dtype = if vb.dtype() == DType::F16 {
+            DType::F32
+        } else {
+            vb.dtype()
+        };
 
         let vision_tower = vision::VisionTower::new(
             &cfg.vision_config,
@@ -181,10 +181,6 @@ impl Gemma4Model {
                 if !miss_indices.is_empty() {
                     for &idx in &miss_indices {
                         let single_pv = crop_image(pixel_values.get(idx)?.unsqueeze(0)?, idx)?;
-                        // Keep vision features in F32 through embed_vision to avoid
-                        // precision loss when converting large values to BF16/F16.
-                        // The embed_vision RMSNorm normalizes to std≈1, making the
-                        // output safe to convert to lower precision.
                         let vision_features = self
                             .vision_tower
                             .forward(&[single_pv.to_dtype(self.vision_dtype)?])?;
@@ -214,7 +210,6 @@ impl Gemma4Model {
                             .and_then(|t| crop_image(t, i))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                // Keep in F32 through embed_vision to preserve precision
                 let vision_features = self.vision_tower.forward(
                     &per_image_tensors
                         .iter()
