@@ -29,20 +29,121 @@ use super::Gemma4SpecificArgs;
 
 // ── Token constants ────────────────────────────────────────────────────────
 
-const IMAGE_TOKEN: &str = "<image_soft_token>";
-const BOI_TOKEN: &str = "<start_of_image>";
-const EOI_TOKEN: &str = "<end_of_image>";
+const IMAGE_TOKEN: &str = "<|image|>";
+const BOI_TOKEN: &str = "<|image>";
+const EOI_TOKEN: &str = "<image|>";
 pub const IMAGE_TOKEN_ID: u32 = 258880;
 
-const AUDIO_TOKEN: &str = "<audio_soft_token>";
-const BOA_TOKEN: &str = "<start_of_audio>";
-const EOA_TOKEN: &str = "<end_of_audio>";
+const AUDIO_TOKEN: &str = "<|audio|>";
+const BOA_TOKEN: &str = "<|audio>";
+const EOA_TOKEN: &str = "<audio|>";
 pub const AUDIO_TOKEN_ID: u32 = 258881;
 
-const BOI_TOKEN_ID: u32 = 255999;
-const EOI_TOKEN_ID: u32 = 258882;
-const BOA_TOKEN_ID: u32 = 256000;
-const EOA_TOKEN_ID: u32 = 258883;
+fn gemma4_dump_prompt_enabled() -> bool {
+    std::env::var_os("MISTRALRS_GEMMA4_DUMP_PROMPT").is_some()
+}
+
+fn dump_token_window(
+    tokenizer: &Tokenizer,
+    tag: &str,
+    ids: &[u32],
+    window_start: usize,
+    window_end: usize,
+) {
+    if !gemma4_dump_prompt_enabled() {
+        return;
+    }
+
+    let start = window_start.saturating_sub(8);
+    let end = (window_end + 8).min(ids.len());
+    let toks = ids[start..end]
+        .iter()
+        .map(|id| {
+            tokenizer
+                .id_to_token(*id)
+                .unwrap_or_else(|| format!("<id:{id}>"))
+        })
+        .collect::<Vec<_>>();
+
+    eprintln!(
+        "[gemma4-prompt] {tag} window[{start}..{end}] ids={:?}",
+        &ids[start..end]
+    );
+    eprintln!("[gemma4-prompt] {tag} window[{start}..{end}] toks={toks:?}");
+}
+
+fn dump_prompt_state(tokenizer: &Tokenizer, tag: &str, prompt: &str, ids: &[u32]) {
+    if !gemma4_dump_prompt_enabled() {
+        return;
+    }
+
+    let boi_token_id = tokenizer.token_to_id(BOI_TOKEN);
+    let eoi_token_id = tokenizer.token_to_id(EOI_TOKEN);
+    let boa_token_id = tokenizer.token_to_id(BOA_TOKEN);
+    let eoa_token_id = tokenizer.token_to_id(EOA_TOKEN);
+
+    let image_positions = ids
+        .iter()
+        .enumerate()
+        .filter_map(|(i, id)| (*id == IMAGE_TOKEN_ID).then_some(i))
+        .collect::<Vec<_>>();
+    let audio_positions = ids
+        .iter()
+        .enumerate()
+        .filter_map(|(i, id)| (*id == AUDIO_TOKEN_ID).then_some(i))
+        .collect::<Vec<_>>();
+    let boi_positions = boi_token_id
+        .map(|id| {
+            ids.iter()
+                .enumerate()
+                .filter_map(|(i, tok)| (*tok == id).then_some(i))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let eoi_positions = eoi_token_id
+        .map(|id| {
+            ids.iter()
+                .enumerate()
+                .filter_map(|(i, tok)| (*tok == id).then_some(i))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let boa_positions = boa_token_id
+        .map(|id| {
+            ids.iter()
+                .enumerate()
+                .filter_map(|(i, tok)| (*tok == id).then_some(i))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let eoa_positions = eoa_token_id
+        .map(|id| {
+            ids.iter()
+                .enumerate()
+                .filter_map(|(i, tok)| (*tok == id).then_some(i))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    eprintln!(
+        "[gemma4-prompt] {tag} prompt={:?}",
+        prompt.escape_debug().to_string()
+    );
+    eprintln!(
+        "[gemma4-prompt] {tag} len={} image={} boi={:?} eoi={:?} audio={} boa={:?} eoa={:?}",
+        ids.len(),
+        image_positions.len(),
+        boi_positions,
+        eoi_positions,
+        audio_positions.len(),
+        boa_positions,
+        eoa_positions,
+    );
+
+    if let (Some(&first), Some(&last)) = (image_positions.first(), image_positions.last()) {
+        dump_token_window(tokenizer, tag, ids, first, last + 1);
+    }
+}
 
 // ── Processor (public, created by the pipeline loader) ─────────────────────
 
@@ -64,8 +165,7 @@ impl Gemma4Processor {
         default_output_length: usize,
         supports_images: bool,
     ) -> Self {
-        let max_patches =
-            default_output_length * pooling_kernel_size * pooling_kernel_size;
+        let max_patches = default_output_length * pooling_kernel_size * pooling_kernel_size;
         let audio_seq_length = processor_config.audio_seq_length.unwrap_or(188);
 
         Self {
@@ -111,6 +211,7 @@ impl Processor for Gemma4Processor {
 
 // ── Image processor (InputsProcessor + ImagePreProcessor) ──────────────────
 
+#[allow(dead_code)]
 struct Gemma4ImageProcessor {
     patch_size: usize,
     pooling_kernel_size: usize,
@@ -148,17 +249,17 @@ impl Gemma4ImageProcessor {
     }
 
     /// Build the expanded token sequence for a single image:
-    /// `\n\n<start_of_image>{N * <image_soft_token>}<end_of_image>\n\n`
+    /// `<start_of_image>{N * <image_soft_token>}<end_of_image>`
     fn build_image_sequence(&self, num_tokens: usize) -> String {
         let image_tokens = vec![IMAGE_TOKEN.to_string(); num_tokens].join("");
-        format!("\n\n{BOI_TOKEN}{image_tokens}{EOI_TOKEN}\n\n")
+        format!("{BOI_TOKEN}{image_tokens}{EOI_TOKEN}")
     }
 
     /// Build the expanded token sequence for audio:
-    /// `\n\n<start_of_audio>{N * <audio_soft_token>}<end_of_audio>\n\n`
+    /// `<start_of_audio>{N * <audio_soft_token>}<end_of_audio>`
     fn build_audio_sequence(&self) -> String {
         let audio_tokens = vec![AUDIO_TOKEN.to_string(); self.audio_seq_length].join("");
-        format!("\n\n{BOA_TOKEN}{audio_tokens}{EOA_TOKEN}\n\n")
+        format!("{BOA_TOKEN}{audio_tokens}{EOA_TOKEN}")
     }
 }
 
@@ -237,15 +338,22 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         let mut prompt = tokenizer
                             .decode(seq.get_toks(), false)
                             .expect("Detokenization failed!");
+                        dump_prompt_state(
+                            &tokenizer,
+                            "audio-before-expand",
+                            &prompt,
+                            seq.get_toks(),
+                        );
                         let audio_sequence = self.build_audio_sequence();
                         prompt = prompt.replace(AUDIO_TOKEN, &audio_sequence);
 
                         seq.set_initial_prompt(prompt.clone());
                         let toks = tokenizer
-                            .encode_fast(prompt, false)
+                            .encode_fast(prompt.as_str(), false)
                             .expect("Tokenization failed!");
 
                         let ids = toks.get_ids().to_vec();
+                        dump_prompt_state(&tokenizer, "audio-after-expand", &prompt, &ids);
                         seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
 
                         has_changed_prompt = true;
@@ -327,11 +435,14 @@ impl InputsProcessor for Gemma4ImageProcessor {
                     let mut prompt = tokenizer
                         .decode(seq.get_toks(), false)
                         .expect("Detokenization failed!");
+                    dump_prompt_state(&tokenizer, "image-before-expand", &prompt, seq.get_toks());
 
-                    // Replace occurrences of BOI_TOKEN in reverse order so that
-                    // string offsets remain valid after each replacement.
+                    // Replace occurrences of the image placeholder token
+                    // (<|image|>) in reverse order so string offsets stay valid.
+                    // The chat template emits a single <|image|> per image;
+                    // we expand it to <|image>{N × <|image|>}<image|>.
                     let positions: Vec<usize> = prompt
-                        .match_indices(BOI_TOKEN)
+                        .match_indices(IMAGE_TOKEN)
                         .map(|(idx, _)| idx)
                         .collect();
 
@@ -339,7 +450,6 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         let (new_h, new_w) = if i < per_image_dims.len() {
                             per_image_dims[i]
                         } else {
-                            // Fallback: use default_output_length
                             let grid_unit = self.pooling_kernel_size * self.patch_size;
                             (grid_unit, grid_unit)
                         };
@@ -350,16 +460,17 @@ impl InputsProcessor for Gemma4ImageProcessor {
                             "{}{}{}",
                             &prompt[..pos],
                             replacement,
-                            &prompt[pos + BOI_TOKEN.len()..],
+                            &prompt[pos + IMAGE_TOKEN.len()..],
                         );
                     }
 
                     seq.set_initial_prompt(prompt.clone());
                     let toks = tokenizer
-                        .encode_fast(prompt, false)
+                        .encode_fast(prompt.as_str(), false)
                         .expect("Tokenization failed!");
 
                     let ids = toks.get_ids().to_vec();
+                    dump_prompt_state(&tokenizer, "image-after-expand", &prompt, &ids);
 
                     // Build mm_features for position-aware prefix cache hashing
                     if seq.mm_features().is_empty() {
@@ -373,8 +484,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                     // Also include audio features in mm_features for prefix cache hashing
                     if let Some(audio_hashes) = seq.audio_hashes().map(|h| h.to_vec()) {
                         if !audio_hashes.is_empty() {
-                            let audio_ranges =
-                                find_image_placeholder_ranges(&ids, AUDIO_TOKEN_ID);
+                            let audio_ranges = find_image_placeholder_ranges(&ids, AUDIO_TOKEN_ID);
                             let audio_features = build_mm_features_from_ranges(
                                 &audio_ranges,
                                 &audio_hashes,
@@ -578,7 +688,9 @@ impl ImagePreProcessor for Gemma4ImageProcessor {
                 // pv shape: [1, 3, h, w] -> pad height and width
                 let pad_h = max_h - h;
                 let pad_w = max_w - w;
-                let p = pv.pad_with_zeros(2, 0, pad_h)?.pad_with_zeros(3, 0, pad_w)?;
+                let p = pv
+                    .pad_with_zeros(2, 0, pad_h)?
+                    .pad_with_zeros(3, 0, pad_w)?;
                 padded.push(p);
             } else {
                 padded.push(pv.clone());

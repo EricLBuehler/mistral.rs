@@ -3,19 +3,175 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::Module;
 use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use crate::{
-    attention::SdpaParams,
-    layers::{Activation, GemmaRmsNorm, MatMul, Sdpa},
+    layers::{Activation, GemmaRmsNorm, MatMul},
     pipeline::text_models_inputs_processor::FlashParams,
     utils::unvarbuilder::UnVarBuilder,
 };
 
 use super::config::Gemma4VisionConfig;
 
+/// Pure RMS normalization without learned weight (used for V norm).
+fn v_norm(v: &Tensor, eps: f64) -> Result<Tensor> {
+    let original_dtype = v.dtype();
+    let v_f32 = v.to_dtype(DType::F32)?;
+    let mean_sq = v_f32.sqr()?.mean_keepdim(D::Minus1)?;
+    let rms = (mean_sq + eps)?.sqrt()?;
+    v_f32.broadcast_div(&rms)?.to_dtype(original_dtype)
+}
+
+fn gemma4_compare_dir() -> Option<PathBuf> {
+    std::env::var_os("MISTRALRS_GEMMA4_COMPARE_DIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let inject = [
+                "MISTRALRS_GEMMA4_INJECT_ENCODER_OUTPUT",
+                "MISTRALRS_GEMMA4_INJECT_STRIPPED_OUTPUT",
+            ]
+            .iter()
+            .any(|key| std::env::var_os(key).is_some());
+            inject.then(|| PathBuf::from("/tmp/gemma4_compare"))
+        })
+}
+
+fn gemma4_debug_compare(name: &str, ours: &Tensor, dir: &std::path::Path) {
+    let path = dir.join(format!("{name}.npy"));
+    let Ok(theirs) = Tensor::read_npy(path) else {
+        return;
+    };
+    let Ok(o) = ours.to_dtype(DType::F32).and_then(|t| t.flatten_all()) else {
+        return;
+    };
+    let Ok(t) = theirs.to_dtype(DType::F32).and_then(|t| t.flatten_all()) else {
+        return;
+    };
+    let Ok(diff) = (&o - &t).and_then(|d| d.abs()) else {
+        return;
+    };
+    let max_diff = diff
+        .max(0)
+        .and_then(|t| t.to_scalar::<f32>())
+        .unwrap_or(f32::NAN);
+    let mean_diff = diff
+        .mean(0)
+        .and_then(|t| t.to_scalar::<f32>())
+        .unwrap_or(f32::NAN);
+    let cos_sim = {
+        let dot = (&o * &t)
+            .and_then(|x| x.sum(0))
+            .and_then(|t| t.to_scalar::<f32>())
+            .unwrap_or(0.0);
+        let n_o = o
+            .sqr()
+            .and_then(|x| x.sum(0))
+            .and_then(|t| t.to_scalar::<f32>())
+            .map(|x| x.sqrt())
+            .unwrap_or(0.0);
+        let n_t = t
+            .sqr()
+            .and_then(|x| x.sum(0))
+            .and_then(|t| t.to_scalar::<f32>())
+            .map(|x| x.sqrt())
+            .unwrap_or(0.0);
+        if n_o > 0.0 && n_t > 0.0 {
+            dot / (n_o * n_t)
+        } else {
+            0.0
+        }
+    };
+    eprintln!(
+        "[gemma4-cmp] {name:20} cos={cos_sim:.6} max_diff={max_diff:.6} mean_diff={mean_diff:.6}"
+    );
+}
+
+fn gemma4_load_npy(
+    name: &str,
+    dir: &std::path::Path,
+    device: &Device,
+    dtype: DType,
+) -> Option<Tensor> {
+    Tensor::read_npy(dir.join(format!("{name}.npy")))
+        .ok()?
+        .to_device(device)
+        .ok()?
+        .to_dtype(dtype)
+        .ok()
+}
+
+// ── Clippable Linear (Gemma4ClippableLinear equivalent) ─────────────────────
+
+/// Linear layer with optional input/output clamping, matching HF's Gemma4ClippableLinear.
+struct ClippableLinear {
+    inner: Arc<dyn QuantMethod>,
+    input_min: Option<f64>,
+    input_max: Option<f64>,
+    output_min: Option<f64>,
+    output_max: Option<f64>,
+}
+
+impl ClippableLinear {
+    fn new(in_features: usize, out_features: usize, vb: ShardedVarBuilder) -> Result<Self> {
+        let inner = mistralrs_quant::linear_no_bias(in_features, out_features, &None, vb.clone())?;
+
+        // Load clipping buffers if present
+        let input_min = vb
+            .get((), "input_min")
+            .ok()
+            .and_then(|t| t.to_dtype(DType::F32).ok())
+            .and_then(|t| t.to_scalar::<f32>().ok())
+            .map(|v| v as f64);
+        let input_max = vb
+            .get((), "input_max")
+            .ok()
+            .and_then(|t| t.to_dtype(DType::F32).ok())
+            .and_then(|t| t.to_scalar::<f32>().ok())
+            .map(|v| v as f64);
+        let output_min = vb
+            .get((), "output_min")
+            .ok()
+            .and_then(|t| t.to_dtype(DType::F32).ok())
+            .and_then(|t| t.to_scalar::<f32>().ok())
+            .map(|v| v as f64);
+        let output_max = vb
+            .get((), "output_max")
+            .ok()
+            .and_then(|t| t.to_dtype(DType::F32).ok())
+            .and_then(|t| t.to_scalar::<f32>().ok())
+            .map(|v| v as f64);
+
+        Ok(Self {
+            inner,
+            input_min,
+            input_max,
+            output_min,
+            output_max,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let mut x = xs.clone();
+        if let (Some(lo), Some(hi)) = (self.input_min, self.input_max) {
+            x = x.clamp(lo, hi)?;
+        }
+        let mut out = MatMul.qmethod_matmul(&x, &*self.inner)?;
+        if let (Some(lo), Some(hi)) = (self.output_min, self.output_max) {
+            out = out.clamp(lo, hi)?;
+        }
+        Ok(out)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        uvb.add(&self.inner);
+        uvb.to_safetensors()
+    }
+}
+
 // ── 2D Vision Rotary Embedding ──────────────────────────────────────────────
 
+#[allow(dead_code)]
 struct VisionRotaryEmbedding {
     inv_freq: Tensor,
     head_dim: usize,
@@ -68,12 +224,7 @@ fn rotate_half(x: &Tensor) -> Result<Tensor> {
     Tensor::cat(&[&x2.neg()?, &x1], D::Minus1)
 }
 
-fn apply_2d_rope(
-    x: &Tensor,
-    cos: &Tensor,
-    sin: &Tensor,
-    ndim: usize,
-) -> Result<Tensor> {
+fn apply_2d_rope(x: &Tensor, cos: &Tensor, sin: &Tensor, ndim: usize) -> Result<Tensor> {
     // x: [b, heads, seq, head_dim]
     // cos/sin: [b, seq, head_dim]
     let head_dim = x.dim(D::Minus1)?;
@@ -88,8 +239,8 @@ fn apply_2d_rope(
         let x_part = x.narrow(D::Minus1, d * dim_per_dim, dim_per_dim)?;
         let cos_part = cos.narrow(D::Minus1, d * dim_per_dim, dim_per_dim)?;
         let sin_part = sin.narrow(D::Minus1, d * dim_per_dim, dim_per_dim)?;
-        let rotated = (x_part.broadcast_mul(&cos_part)?
-            + rotate_half(&x_part)?.broadcast_mul(&sin_part)?)?;
+        let rotated =
+            (x_part.broadcast_mul(&cos_part)? + rotate_half(&x_part)?.broadcast_mul(&sin_part)?)?;
         parts.push(rotated);
     }
     Tensor::cat(&parts, D::Minus1)
@@ -98,7 +249,7 @@ fn apply_2d_rope(
 // ── PatchEmbedder ───────────────────────────────────────────────────────────
 
 struct PatchEmbedder {
-    input_proj: Arc<dyn QuantMethod>,
+    input_proj: ClippableLinear,
     position_embedding_table: Tensor,
     patch_size: usize,
     position_embedding_size: usize,
@@ -107,12 +258,7 @@ struct PatchEmbedder {
 impl PatchEmbedder {
     fn new(cfg: &Gemma4VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let ps = cfg.patch_size;
-        let input_proj = mistralrs_quant::linear_no_bias(
-            ps * ps * 3,
-            cfg.hidden_size,
-            &None,
-            vb.pp("input_proj"),
-        )?;
+        let input_proj = ClippableLinear::new(ps * ps * 3, cfg.hidden_size, vb.pp("input_proj"))?;
         let position_embedding_table = vb.get(
             (2, cfg.position_embedding_size, cfg.hidden_size),
             "position_embedding_table",
@@ -146,8 +292,8 @@ impl PatchEmbedder {
         // Scale to [-1, 1]
         let patches = ((patches - 0.5)? * 2.0)?;
 
-        // Linear projection
-        let patches = MatMul.qmethod_matmul(&patches, &*self.input_proj)?;
+        // Linear projection (with optional clipping)
+        let patches = self.input_proj.forward(&patches)?;
 
         // Position embeddings via one-hot matmul
         // Clamp -1 positions to 0 (padding), we'll zero them out with the mask
@@ -155,27 +301,19 @@ impl PatchEmbedder {
 
         let pos_emb_0 = {
             let pos_d = clamped_pos.i((.., .., 0usize))?;
-            let one_hot_d = candle_nn::encoding::one_hot(
-                pos_d,
-                self.position_embedding_size,
-                1f32,
-                0f32,
-            )?
-            .to_dtype(self.position_embedding_table.dtype())?;
-            let emb_table_d = self.position_embedding_table.i(0)?;
+            let one_hot_d =
+                candle_nn::encoding::one_hot(pos_d, self.position_embedding_size, 1f32, 0f32)?
+                    .to_dtype(self.position_embedding_table.dtype())?;
+            let emb_table_d = self.position_embedding_table.i(0)?.unsqueeze(0)?;
             one_hot_d.matmul(&emb_table_d)?
         };
 
         let pos_emb_1 = {
             let pos_d = clamped_pos.i((.., .., 1usize))?;
-            let one_hot_d = candle_nn::encoding::one_hot(
-                pos_d,
-                self.position_embedding_size,
-                1f32,
-                0f32,
-            )?
-            .to_dtype(self.position_embedding_table.dtype())?;
-            let emb_table_d = self.position_embedding_table.i(1)?;
+            let one_hot_d =
+                candle_nn::encoding::one_hot(pos_d, self.position_embedding_size, 1f32, 0f32)?
+                    .to_dtype(self.position_embedding_table.dtype())?;
+            let emb_table_d = self.position_embedding_table.i(1)?.unsqueeze(0)?;
             one_hot_d.matmul(&emb_table_d)?
         };
 
@@ -188,13 +326,13 @@ impl PatchEmbedder {
             .to_dtype(DType::U8)?;
         let zeros = Tensor::zeros_like(&pos_emb)?;
         let pos_emb = mask.where_cond(&zeros, &pos_emb)?;
-
         patches + pos_emb
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
-        uvb.pp("input_proj").add(&self.input_proj);
+        uvb.pp("input_proj")
+            .extend(self.input_proj.residual_tensors());
         uvb.add_tensor(
             "position_embedding_table",
             self.position_embedding_table.clone(),
@@ -206,17 +344,17 @@ impl PatchEmbedder {
 // ── VisionAttention ─────────────────────────────────────────────────────────
 
 struct VisionAttention {
-    q_proj: Arc<dyn QuantMethod>,
-    k_proj: Arc<dyn QuantMethod>,
-    v_proj: Arc<dyn QuantMethod>,
-    o_proj: Arc<dyn QuantMethod>,
+    q_proj: ClippableLinear,
+    k_proj: ClippableLinear,
+    v_proj: ClippableLinear,
+    o_proj: ClippableLinear,
     q_norm: GemmaRmsNorm,
     k_norm: GemmaRmsNorm,
+    rms_norm_eps: f64,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
-    hidden_size: usize,
-    sdpa_params: SdpaParams,
+    softmax_scale: f32,
 }
 
 impl VisionAttention {
@@ -226,35 +364,16 @@ impl VisionAttention {
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim;
 
-        let q_proj = mistralrs_quant::linear_no_bias(
-            hidden_size,
-            num_heads * head_dim,
-            &None,
-            vb.pp("q_proj"),
-        )?;
-        let k_proj = mistralrs_quant::linear_no_bias(
-            hidden_size,
-            num_kv_heads * head_dim,
-            &None,
-            vb.pp("k_proj"),
-        )?;
-        let v_proj = mistralrs_quant::linear_no_bias(
-            hidden_size,
-            num_kv_heads * head_dim,
-            &None,
-            vb.pp("v_proj"),
-        )?;
-        let o_proj = mistralrs_quant::linear_no_bias(
-            num_heads * head_dim,
-            hidden_size,
-            &None,
-            vb.pp("o_proj"),
-        )?;
+        let q_proj = ClippableLinear::new(hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
+        let k_proj = ClippableLinear::new(hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?;
+        let v_proj = ClippableLinear::new(hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
+        let o_proj = ClippableLinear::new(num_heads * head_dim, hidden_size, vb.pp("o_proj"))?;
 
         let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
         let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
 
-        let softmax_scale = 1.0 / (head_dim as f32).sqrt();
+        // HF Gemma4 vision attention uses scaling=1.0 (Q/K are already normalized by RMSNorm)
+        let softmax_scale = 1.0;
 
         Ok(Self {
             q_proj,
@@ -263,17 +382,11 @@ impl VisionAttention {
             o_proj,
             q_norm,
             k_norm,
+            rms_norm_eps: cfg.rms_norm_eps,
             num_heads,
             num_kv_heads,
             head_dim,
-            hidden_size,
-            sdpa_params: SdpaParams {
-                n_kv_groups: num_heads / num_kv_heads,
-                sliding_window: None,
-                softcap: None,
-                softmax_scale,
-                sinks: None,
-            },
+            softmax_scale,
         })
     }
 
@@ -283,7 +396,7 @@ impl VisionAttention {
         cos: &Tensor,
         sin: &Tensor,
         attention_mask: Option<&Tensor>,
-        flash_params: &FlashParams,
+        _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = xs.dims3()?;
 
@@ -294,13 +407,12 @@ impl VisionAttention {
         // Reshape to (b, seq, heads, head_dim)
         let mut q = q.reshape((b_sz, seq_len, self.num_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz, seq_len, self.num_kv_heads, self.head_dim))?;
-        let v = v
-            .reshape((b_sz, seq_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
+        let v = v.reshape((b_sz, seq_len, self.num_kv_heads, self.head_dim))?;
 
-        // Apply QK norms (on the head_dim dimension)
+        // Apply QK norms and V norm (RMS without learned weight)
         q = self.q_norm.forward(&q)?;
         k = self.k_norm.forward(&k)?;
+        let v = v_norm(&v, self.rms_norm_eps)?.transpose(1, 2)?;
 
         // Transpose to (b, heads, seq, head_dim) for RoPE
         q = q.transpose(1, 2)?;
@@ -310,24 +422,36 @@ impl VisionAttention {
         q = apply_2d_rope(&q, cos, sin, 2)?;
         k = apply_2d_rope(&k, cos, sin, 2)?;
 
-        // SDPA with bidirectional attention (causal=false)
-        let attn_output =
-            Sdpa.run_attention(&q, &k, &v, attention_mask, Some(flash_params), &self.sdpa_params)?;
+        // Compute attention in F32 to match PyTorch SDPA's internal precision.
+        // HF's SDPA uses F32 for the QK matmul and softmax even with BF16 inputs.
+        let original_dtype = q.dtype();
+        let q = q.to_dtype(DType::F32)?.contiguous()?;
+        let k = k.to_dtype(DType::F32)?.contiguous()?;
+        let v = v.to_dtype(DType::F32)?.contiguous()?;
+        let scale = self.softmax_scale;
+        let mut att = MatMul.matmul_affine_mul(&q, &k.t()?, scale.into())?;
+        if let Some(mask) = attention_mask {
+            att = att.broadcast_add(&mask.to_dtype(DType::F32)?)?;
+        }
+        let att = candle_nn::ops::softmax_last_dim(&att)?;
+        let attn_output = MatMul.matmul(&att, &v)?.to_dtype(original_dtype)?;
 
         // Reshape back: (b, heads, seq, head_dim) -> (b, seq, hidden)
-        let attn_output = attn_output
-            .transpose(1, 2)?
-            .reshape((b_sz, seq_len, self.num_heads * self.head_dim))?;
+        let attn_output = attn_output.transpose(1, 2)?.reshape((
+            b_sz,
+            seq_len,
+            self.num_heads * self.head_dim,
+        ))?;
 
         self.o_proj.forward(&attn_output)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
-        uvb.pp("q_proj").add(&self.q_proj);
-        uvb.pp("k_proj").add(&self.k_proj);
-        uvb.pp("v_proj").add(&self.v_proj);
-        uvb.pp("o_proj").add(&self.o_proj);
+        uvb.pp("q_proj").extend(self.q_proj.residual_tensors());
+        uvb.pp("k_proj").extend(self.k_proj.residual_tensors());
+        uvb.pp("v_proj").extend(self.v_proj.residual_tensors());
+        uvb.pp("o_proj").extend(self.o_proj.residual_tensors());
         uvb.pp("q_norm").add(&self.q_norm);
         uvb.pp("k_norm").add(&self.k_norm);
         uvb.to_safetensors()
@@ -337,32 +461,20 @@ impl VisionAttention {
 // ── VisionMlp ───────────────────────────────────────────────────────────────
 
 struct VisionMlp {
-    gate_proj: Arc<dyn QuantMethod>,
-    up_proj: Arc<dyn QuantMethod>,
-    down_proj: Arc<dyn QuantMethod>,
+    gate_proj: ClippableLinear,
+    up_proj: ClippableLinear,
+    down_proj: ClippableLinear,
     act: Activation,
 }
 
 impl VisionMlp {
     fn new(cfg: &Gemma4VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        let gate_proj = mistralrs_quant::linear_no_bias(
-            cfg.hidden_size,
-            cfg.intermediate_size,
-            &None,
-            vb.pp("gate_proj"),
-        )?;
-        let up_proj = mistralrs_quant::linear_no_bias(
-            cfg.hidden_size,
-            cfg.intermediate_size,
-            &None,
-            vb.pp("up_proj"),
-        )?;
-        let down_proj = mistralrs_quant::linear_no_bias(
-            cfg.intermediate_size,
-            cfg.hidden_size,
-            &None,
-            vb.pp("down_proj"),
-        )?;
+        let gate_proj =
+            ClippableLinear::new(cfg.hidden_size, cfg.intermediate_size, vb.pp("gate_proj"))?;
+        let up_proj =
+            ClippableLinear::new(cfg.hidden_size, cfg.intermediate_size, vb.pp("up_proj"))?;
+        let down_proj =
+            ClippableLinear::new(cfg.intermediate_size, cfg.hidden_size, vb.pp("down_proj"))?;
         Ok(Self {
             gate_proj,
             up_proj,
@@ -379,9 +491,11 @@ impl VisionMlp {
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
-        uvb.pp("gate_proj").add(&self.gate_proj);
-        uvb.pp("up_proj").add(&self.up_proj);
-        uvb.pp("down_proj").add(&self.down_proj);
+        uvb.pp("gate_proj")
+            .extend(self.gate_proj.residual_tensors());
+        uvb.pp("up_proj").extend(self.up_proj.residual_tensors());
+        uvb.pp("down_proj")
+            .extend(self.down_proj.residual_tensors());
         uvb.to_safetensors()
     }
 }
@@ -439,7 +553,9 @@ impl VisionEncoderLayer {
         // Pre-norm attention with post-norm
         let residual = xs.clone();
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.self_attn.forward(&xs, cos, sin, attention_mask, flash_params)?;
+        let xs = self
+            .self_attn
+            .forward(&xs, cos, sin, attention_mask, flash_params)?;
         let xs = self.post_attention_layernorm.forward(&xs)?;
         let xs = (residual + xs)?;
 
@@ -453,7 +569,8 @@ impl VisionEncoderLayer {
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
-        uvb.pp("self_attn").extend(self.self_attn.residual_tensors());
+        uvb.pp("self_attn")
+            .extend(self.self_attn.residual_tensors());
         uvb.pp("mlp").extend(self.mlp.residual_tensors());
         uvb.pp("input_layernorm").add(&self.input_layernorm);
         uvb.pp("post_attention_layernorm")
@@ -508,20 +625,12 @@ impl VisionPooler {
 
         // Build one-hot weights: [b, num_patches, output_length]
         let kernel_idxs = kernel_idxs.to_dtype(DType::I64)?;
-        let weights = candle_nn::encoding::one_hot(
-            kernel_idxs,
-            output_length,
-            1f32,
-            0f32,
-        )?
-        .to_dtype(DType::F32)?;
+        let weights = candle_nn::encoding::one_hot(kernel_idxs, output_length, 1f32, 0f32)?
+            .to_dtype(DType::F32)?;
         let weights = (weights / k_sq as f64)?;
 
         // output = weights^T @ x: [b, output_length, dim]
-        let output = weights
-            .transpose(1, 2)?
-            .to_dtype(x.dtype())?
-            .matmul(x)?;
+        let output = weights.transpose(1, 2)?.to_dtype(x.dtype())?.matmul(x)?;
 
         // mask: True where any weight is nonzero for that output position
         let weight_sum = weights.sum(1)?;
@@ -542,7 +651,9 @@ impl VisionPooler {
         let (pooled, mask) = if hidden_states.dim(1)? == output_length {
             let mask = padding_positions
                 .to_dtype(DType::F32)?
-                .eq(&Tensor::zeros_like(&padding_positions.to_dtype(DType::F32)?)?)?;
+                .eq(&Tensor::zeros_like(
+                    &padding_positions.to_dtype(DType::F32)?,
+                )?)?;
             (hidden_states.clone(), mask)
         } else {
             self.avg_pool_by_positions(hidden_states, patch_positions, output_length)?
@@ -576,12 +687,8 @@ impl VisionTower {
 
         let pooler = VisionPooler::new(cfg);
 
-        let rotary_emb = VisionRotaryEmbedding::new(
-            cfg.head_dim,
-            cfg.rope_theta(),
-            2,
-            vb.device(),
-        )?;
+        let rotary_emb =
+            VisionRotaryEmbedding::new(cfg.head_dim, cfg.rope_theta(), 2, vb.device())?;
 
         let max_patches =
             cfg.default_output_length * cfg.pooling_kernel_size * cfg.pooling_kernel_size;
@@ -597,11 +704,7 @@ impl VisionTower {
         })
     }
 
-    fn patch_positions(
-        &self,
-        pixel_values: &Tensor,
-        device: &Device,
-    ) -> Result<(Tensor, Tensor)> {
+    fn patch_positions(&self, pixel_values: &Tensor, device: &Device) -> Result<(Tensor, Tensor)> {
         let (b, _, h, w) = pixel_values.dims4()?;
         let ph = h / self.patch_size;
         let pw = w / self.patch_size;
@@ -635,9 +738,8 @@ impl VisionTower {
                 padding_data[batch_idx * self.max_patches + i] = 1;
             }
         }
-        let padding =
-            Tensor::from_vec(padding_data, (b, self.max_patches), &Device::Cpu)?
-                .to_device(device)?;
+        let padding = Tensor::from_vec(padding_data, (b, self.max_patches), &Device::Cpu)?
+            .to_device(device)?;
 
         Ok((positions, padding))
     }
@@ -645,6 +747,7 @@ impl VisionTower {
     pub fn forward(&self, pixel_values_list: &[Tensor]) -> Result<Tensor> {
         let device = pixel_values_list[0].device().clone();
         let dtype = pixel_values_list[0].dtype();
+        let compare_dir = gemma4_compare_dir();
 
         let mut all_embeds = Vec::with_capacity(pixel_values_list.len());
         let mut all_positions = Vec::with_capacity(pixel_values_list.len());
@@ -655,22 +758,28 @@ impl VisionTower {
             let ph = h / self.patch_size;
             let pw = w / self.patch_size;
             let num_patches = ph * pw;
+            let num_padding = self.max_patches - num_patches;
 
             let (positions, padding) = self.patch_positions(pv, &device)?;
 
-            // Embed real patches only, then pad
+            // Embed real patches only (no padding through patch embedder)
             let real_positions = positions.narrow(1, 0, num_patches)?;
             let real_padding = padding.narrow(1, 0, num_patches)?;
-            let embeds = self.patch_embedder.forward(pv, &real_positions, &real_padding)?;
+            let embeds = self
+                .patch_embedder
+                .forward(pv, &real_positions, &real_padding)?;
 
-            let num_pad = self.max_patches - num_patches;
-            let embeds = if num_pad > 0 {
-                let pad_embeds = Tensor::zeros((1, num_pad, self.hidden_size), dtype, &device)?;
+            // Pad embeddings to max_patches with zeros (matching HF behavior).
+            // The pooler math requires input_seq_len == max_patches.
+            let embeds = if num_padding > 0 {
+                let pad_embeds =
+                    Tensor::zeros((1, num_padding, self.hidden_size), embeds.dtype(), &device)?;
                 Tensor::cat(&[&embeds, &pad_embeds], 1)?
             } else {
                 embeds
             };
 
+            // Use FULL positions and padding (including -1 padding positions)
             all_embeds.push(embeds);
             all_positions.push(positions);
             all_padding.push(padding);
@@ -680,34 +789,35 @@ impl VisionTower {
         let patch_positions = Tensor::cat(&all_positions, 0)?;
         let padding_positions = Tensor::cat(&all_padding, 0)?;
 
-        // Attention mask: valid patches attend to all valid patches (bidirectional)
-        // padding_positions: [b, max_patches], 1 = padding, 0 = valid
+        if let Some(dir) = compare_dir.as_deref() {
+            gemma4_debug_compare("encoder_input", &inputs_embeds, dir);
+        }
+
+        // Build attention mask: both query AND key must be valid to attend.
+        // Use where_cond to avoid -inf * 0 = NaN.
         let valid_mask = padding_positions
             .to_dtype(DType::F32)?
-            .eq(&Tensor::zeros(
-                padding_positions.shape(),
-                DType::F32,
-                &device,
-            )?)?
-            .to_dtype(DType::F32)?;
-        // valid_mask: [b, max_patches], 1.0 = valid, 0.0 = padding
-        let attn_mask_2d = valid_mask
-            .unsqueeze(2)?
-            .matmul(&valid_mask.unsqueeze(1)?)?;
-        // attn_mask_2d: [b, max_patches, max_patches]
-        // Convert to additive mask: 0.0 for attend, -inf for don't attend
-        let attn_mask = attn_mask_2d
-            .eq(&Tensor::zeros(attn_mask_2d.shape(), DType::F32, &device)?)?
-            .to_dtype(dtype)?;
-        let attention_mask = (attn_mask * f64::NEG_INFINITY)?;
-        let attention_mask = attention_mask.unsqueeze(1)?;
+            .eq(0.0)?
+            .to_dtype(DType::F32)?; // [b, max_patches]: 1=valid, 0=padding
+        let attn_mask_2d = valid_mask.unsqueeze(2)?.matmul(&valid_mask.unsqueeze(1)?)?; // [b, mp, mp]: 1=attend, 0=don't
+        let attend = attn_mask_2d.gt(0.0)?.to_dtype(DType::U8)?;
+        let zeros = Tensor::zeros(attn_mask_2d.shape(), dtype, &device)?;
+        let large_neg = Tensor::try_from(-1e9f32)?
+            .to_dtype(dtype)?
+            .to_device(&device)?
+            .broadcast_as(attn_mask_2d.shape())?;
+        let attention_mask = attend.where_cond(&zeros, &large_neg)?.unsqueeze(1)?;
 
-        // Compute 2D RoPE
-        let (cos, sin) = self
-            .rotary_emb
-            .forward(&inputs_embeds, &patch_positions)?;
+        // Compute 2D RoPE for all positions (padding positions at -1 are fine
+        // since their hidden states are zero, so RoPE values don't matter)
+        let (cos, sin) = self.rotary_emb.forward(&inputs_embeds, &patch_positions)?;
         let cos = cos.to_dtype(dtype)?;
         let sin = sin.to_dtype(dtype)?;
+
+        if let Some(dir) = compare_dir.as_deref() {
+            gemma4_debug_compare("rope_cos", &cos, dir);
+            gemma4_debug_compare("rope_sin", &sin, dir);
+        }
 
         // Bidirectional flash params
         let flash_params = FlashParams {
@@ -718,9 +828,20 @@ impl VisionTower {
             max_k: 0,
         };
 
+        // Build a mask to zero out padding positions after each encoder layer.
+        // With eager attention, all-masked queries (padding) produce uniform attention
+        // over all keys, yielding non-zero values. HF's SDPA handles this by zeroing
+        // the output for fully-masked queries. We replicate this by explicitly zeroing
+        // padding positions after each layer.
+        let valid_mask_3d = padding_positions
+            .to_dtype(DType::F32)?
+            .eq(0.0)?
+            .to_dtype(dtype)?
+            .unsqueeze(2)?; // [b, max_patches, 1]: 1=valid, 0=padding
+
         // Encoder layers
         let mut hidden_states = inputs_embeds;
-        for layer in &self.encoder_layers {
+        for (layer_idx, layer) in self.encoder_layers.iter().enumerate() {
             hidden_states = layer.forward(
                 &hidden_states,
                 &cos,
@@ -728,17 +849,31 @@ impl VisionTower {
                 Some(&attention_mask),
                 &flash_params,
             )?;
+            // Zero out padding positions to prevent value accumulation
+            hidden_states = hidden_states.broadcast_mul(&valid_mask_3d)?;
+            if let Some(dir) = compare_dir.as_deref() {
+                gemma4_debug_compare(&format!("layer{layer_idx}_output"), &hidden_states, dir);
+            }
         }
 
-        // Pool
-        let (pooled, pool_mask) = self.pooler.forward(
-            &hidden_states,
-            &patch_positions,
-            &padding_positions,
-            None,
-        )?;
+        if let Some(dir) = compare_dir.as_deref() {
+            gemma4_debug_compare("encoder_output", &hidden_states, dir);
+        }
+        if std::env::var_os("MISTRALRS_GEMMA4_INJECT_ENCODER_OUTPUT").is_some() {
+            if let Some(dir) = compare_dir.as_deref() {
+                if let Some(injected) = gemma4_load_npy("encoder_output", dir, &device, dtype) {
+                    eprintln!("[gemma4-inject] using HF encoder_output");
+                    hidden_states = injected;
+                }
+            }
+        }
 
-        // Strip padding tokens - keep only valid tokens per image, concat
+        // Pool with full max_patches (k = sqrt(max_patches / output_length) = 3)
+        let (pooled, pool_mask) =
+            self.pooler
+                .forward(&hidden_states, &patch_positions, &padding_positions, None)?;
+
+        // Strip padding tokens — keep only valid (non-padding) tokens
         let batch = pooled.dim(0)?;
         let mut all_real_tokens = Vec::with_capacity(batch);
         for b in 0..batch {
@@ -748,8 +883,18 @@ impl VisionTower {
             let real_tokens = hs.index_select(&indices, 0)?;
             all_real_tokens.push(real_tokens);
         }
-        let result = Tensor::cat(&all_real_tokens, 0)?.unsqueeze(0)?;
-
+        let mut result = Tensor::cat(&all_real_tokens, 0)?.unsqueeze(0)?;
+        if let Some(dir) = compare_dir.as_deref() {
+            gemma4_debug_compare("stripped_output", &result, dir);
+        }
+        if std::env::var_os("MISTRALRS_GEMMA4_INJECT_STRIPPED_OUTPUT").is_some() {
+            if let Some(dir) = compare_dir.as_deref() {
+                if let Some(injected) = gemma4_load_npy("stripped_output", dir, &device, dtype) {
+                    eprintln!("[gemma4-inject] using HF stripped_output");
+                    result = injected;
+                }
+            }
+        }
         Ok(result)
     }
 
@@ -767,6 +912,7 @@ impl VisionTower {
         uvb.to_safetensors()
     }
 
+    #[allow(dead_code)]
     pub fn hidden_size(&self) -> usize {
         self.hidden_size
     }

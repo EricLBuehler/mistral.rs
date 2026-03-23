@@ -346,7 +346,6 @@ pub fn is_channel_tag_template(template: &str) -> bool {
     template.contains(CHANNEL_OPEN_TOKEN) && template.contains(CHANNEL_CLOSE_TOKEN)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -607,10 +606,7 @@ mod tests {
         );
         ctx.finalize();
 
-        assert_eq!(
-            ctx.reasoning_content(),
-            Some("firstsecond".to_string())
-        );
+        assert_eq!(ctx.reasoning_content(), Some("firstsecond".to_string()));
         assert_eq!(ctx.content(), Some("contentmore".to_string()));
     }
 

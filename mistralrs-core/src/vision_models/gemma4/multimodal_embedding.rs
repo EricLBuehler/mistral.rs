@@ -13,14 +13,12 @@ use crate::layers::{MatMul, RmsNorm};
 pub struct Gemma4MultimodalEmbedder {
     pub(crate) embedding_projection: Arc<dyn QuantMethod>,
     pub(crate) embedding_post_projection_norm: RmsNorm,
-    rms_norm_eps: f64,
 }
 
 impl Gemma4MultimodalEmbedder {
     pub fn new(
         multimodal_hidden_size: usize,
         text_hidden_size: usize,
-        rms_norm_eps: f64,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let embedding_projection = mistralrs_quant::linear_no_bias(
@@ -33,7 +31,7 @@ impl Gemma4MultimodalEmbedder {
         // Post-projection normalization without learnable scale (with_scale = false)
         let embedding_post_projection_norm = RmsNorm::new_gemma_3n(
             text_hidden_size,
-            rms_norm_eps,
+            1e-6,
             false,
             vb.pp("embedding_post_projection_norm"),
         )?;
@@ -41,26 +39,26 @@ impl Gemma4MultimodalEmbedder {
         Ok(Self {
             embedding_projection,
             embedding_post_projection_norm,
-            rms_norm_eps,
         })
     }
 
     /// Project soft features (from vision or audio encoder) into language model space.
     pub fn forward(&self, soft_features: &Tensor) -> Result<Tensor> {
-        let original_dtype = soft_features.dtype();
         let mut xs = soft_features.clone();
         if let Some(t) = self.embedding_projection.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
         let mut projected = MatMul.qmethod_matmul(&xs, &*self.embedding_projection)?;
         if self.embedding_projection.quantized_act_type().is_some() {
-            projected = projected.to_dtype(original_dtype)?;
+            projected = projected.to_dtype(soft_features.dtype())?;
+        }
+        // Ensure projected is in the weight dtype for RMSNorm compatibility.
+        // The RMSNorm normalizes to std≈1, so precision loss from conversion
+        // is minimal since the output values are small (~[-8, 8]).
+        let norm_dtype = self.embedding_post_projection_norm.weight().dtype();
+        if projected.dtype() != norm_dtype {
+            projected = projected.to_dtype(norm_dtype)?;
         }
         self.embedding_post_projection_norm.forward(&projected)
-    }
-
-    /// Pure RMS normalization used for V norm (no learnable weight).
-    pub fn rms_norm_eps(&self) -> f64 {
-        self.rms_norm_eps
     }
 }

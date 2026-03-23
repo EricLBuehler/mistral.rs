@@ -72,6 +72,10 @@ name = "vision_models"
 path = "examples/models/vision_models/main.rs"
 
 [[example]]
+name = "gemma4_local_vision"
+path = "examples/models/gemma4_local_vision/main.rs"
+
+[[example]]
 name = "vision_multiturn"
 path = "examples/models/vision_multiturn/main.rs"
 

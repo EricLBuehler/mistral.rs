@@ -186,7 +186,9 @@ impl Gemma4Router {
             .unsqueeze(0)?;
         let scaled = scaled.broadcast_mul(&scale_f32)?;
 
-        let logits = scaled.to_dtype(self.proj.weight().dtype())?.apply(&self.proj)?;
+        let logits = scaled
+            .to_dtype(self.proj.weight().dtype())?
+            .apply(&self.proj)?;
         let logits_f32 = logits.to_dtype(DType::F32)?;
         let probs = candle_nn::ops::softmax_last_dim(&logits_f32)?;
 
@@ -233,11 +235,18 @@ impl Gemma4MoeBlock {
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         // Weights are raw Parameters: [E, hidden, inter]
-        let gate_proj =
-            vb.get((num_experts, hidden_size, expert_intermediate_size), "gate_proj")?;
-        let up_proj = vb.get((num_experts, hidden_size, expert_intermediate_size), "up_proj")?;
-        let down_proj =
-            vb.get((num_experts, expert_intermediate_size, hidden_size), "down_proj")?;
+        let gate_proj = vb.get(
+            (num_experts, hidden_size, expert_intermediate_size),
+            "gate_proj",
+        )?;
+        let up_proj = vb.get(
+            (num_experts, hidden_size, expert_intermediate_size),
+            "up_proj",
+        )?;
+        let down_proj = vb.get(
+            (num_experts, expert_intermediate_size, hidden_size),
+            "down_proj",
+        )?;
         let per_expert_scale = vb.get(num_experts, "per_expert_scale")?;
 
         // Concatenate gate and up: [E, hidden, 2*inter]
@@ -254,12 +263,7 @@ impl Gemma4MoeBlock {
         })
     }
 
-    fn forward(
-        &self,
-        xs: &Tensor,
-        topk_weights: &Tensor,
-        topk_ids: &Tensor,
-    ) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, topk_weights: &Tensor, topk_ids: &Tensor) -> Result<Tensor> {
         // Fold per_expert_scale into routing weights
         let scales = self
             .per_expert_scale
@@ -384,7 +388,10 @@ impl Gemma4MoeBlock {
                 .to_dtype(xs.dtype())?;
             let tokens = xs_flat.index_select(&indices, 0)?;
 
-            let gate_w = self.gate_up_w.i(e)?.narrow(1, 0, self.expert_intermediate_size)?;
+            let gate_w = self
+                .gate_up_w
+                .i(e)?
+                .narrow(1, 0, self.expert_intermediate_size)?;
             let up_w = self.gate_up_w.i(e)?.narrow(
                 1,
                 self.expert_intermediate_size,
@@ -404,6 +411,7 @@ impl Gemma4MoeBlock {
 //  Attention
 // ────────────────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 struct Attention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
@@ -760,21 +768,15 @@ impl Attention {
                         (k, v)
                     };
                     let scale = self.sdpa_params.softmax_scale;
-                    let mut att = MatMul.matmul_affine_mul(
-                        &q,
-                        &k.t()?,
-                        scale.into(),
-                    )?;
+                    let mut att = MatMul.matmul_affine_mul(&q, &k.t()?, scale.into())?;
                     if let Some(mask) = noflash_mask {
                         att = att.broadcast_add(mask)?;
                     }
                     // Upcast to F32 for softmax (BF16 softmax is numerically
                     // unstable for long sequences, matching HF's behavior)
                     let att_dtype = att.dtype();
-                    let att = candle_nn::ops::softmax_last_dim(
-                        &att.to_dtype(DType::F32)?,
-                    )?
-                    .to_dtype(att_dtype)?;
+                    let att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
+                        .to_dtype(att_dtype)?;
                     MatMul.matmul(&att, &v)?
                 }
             }
@@ -800,6 +802,7 @@ impl Attention {
 //  Decoder layer
 // ────────────────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 struct DecoderLayer {
     self_attn: Attention,
     mlp: Box<dyn crate::amoe::MlpLayer>,
@@ -887,50 +890,57 @@ impl DecoderLayer {
         )?;
 
         // MoE components
-        let (moe_block, router, pre_feedforward_layernorm_2, post_feedforward_layernorm_1, post_feedforward_layernorm_2) =
-            if cfg.enable_moe_block {
-                let num_experts = cfg.num_experts.unwrap_or(128);
-                let top_k = cfg.top_k_experts.unwrap_or(2);
-                let expert_inter = cfg.expert_intermediate_size.unwrap_or(cfg.intermediate_size);
+        let (
+            moe_block,
+            router,
+            pre_feedforward_layernorm_2,
+            post_feedforward_layernorm_1,
+            post_feedforward_layernorm_2,
+        ) = if cfg.enable_moe_block {
+            let num_experts = cfg.num_experts.unwrap_or(128);
+            let top_k = cfg.top_k_experts.unwrap_or(2);
+            let expert_inter = cfg
+                .expert_intermediate_size
+                .unwrap_or(cfg.intermediate_size);
 
-                let moe = Gemma4MoeBlock::new(
-                    num_experts,
-                    cfg.hidden_size,
-                    expert_inter,
-                    cfg.hidden_activation,
-                    mapper.set_device(layer_idx, vb.pp("moe"), false),
-                )?;
-                let rtr = Gemma4Router::new(
-                    cfg.hidden_size,
-                    num_experts,
-                    top_k,
-                    mapper.set_device(layer_idx, vb.pp("router"), false),
-                )?;
-                let pre_ff_2 = GemmaRmsNorm::new(
-                    cfg.hidden_size,
-                    cfg.rms_norm_eps,
-                    mapper.set_device(layer_idx, vb.pp("pre_feedforward_layernorm_2"), false),
-                )?;
-                let post_ff_1 = GemmaRmsNorm::new(
-                    cfg.hidden_size,
-                    cfg.rms_norm_eps,
-                    mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm_1"), false),
-                )?;
-                let post_ff_2 = GemmaRmsNorm::new(
-                    cfg.hidden_size,
-                    cfg.rms_norm_eps,
-                    mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm_2"), false),
-                )?;
-                (
-                    Some(moe),
-                    Some(rtr),
-                    Some(pre_ff_2),
-                    Some(post_ff_1),
-                    Some(post_ff_2),
-                )
-            } else {
-                (None, None, None, None, None)
-            };
+            let moe = Gemma4MoeBlock::new(
+                num_experts,
+                cfg.hidden_size,
+                expert_inter,
+                cfg.hidden_activation,
+                mapper.set_device(layer_idx, vb.pp("moe"), false),
+            )?;
+            let rtr = Gemma4Router::new(
+                cfg.hidden_size,
+                num_experts,
+                top_k,
+                mapper.set_device(layer_idx, vb.pp("router"), false),
+            )?;
+            let pre_ff_2 = GemmaRmsNorm::new(
+                cfg.hidden_size,
+                cfg.rms_norm_eps,
+                mapper.set_device(layer_idx, vb.pp("pre_feedforward_layernorm_2"), false),
+            )?;
+            let post_ff_1 = GemmaRmsNorm::new(
+                cfg.hidden_size,
+                cfg.rms_norm_eps,
+                mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm_1"), false),
+            )?;
+            let post_ff_2 = GemmaRmsNorm::new(
+                cfg.hidden_size,
+                cfg.rms_norm_eps,
+                mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm_2"), false),
+            )?;
+            (
+                Some(moe),
+                Some(rtr),
+                Some(pre_ff_2),
+                Some(post_ff_1),
+                Some(post_ff_2),
+            )
+        } else {
+            (None, None, None, None, None)
+        };
 
         // PLE per-layer components
         let ple_dim = cfg.hidden_size_per_layer_input.unwrap_or(0);
@@ -1104,6 +1114,7 @@ impl DecoderLayer {
 //  TextModel
 // ────────────────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub struct TextModel {
     embed_tokens: ScaledEmbedding,
     layers: Vec<DecoderLayer>,
@@ -1159,7 +1170,7 @@ impl TextModel {
         );
 
         // Build RoPE instances per device
-        let partial_rotary_dim =
+        let _partial_rotary_dim =
             (cfg.global_head_dim as f64 * cfg.partial_rotary_factor()) as usize;
 
         let mut global_ropes = HashMap::new();
@@ -1466,8 +1477,6 @@ impl TextModel {
             }
         }
 
-
-
         // Compute PLE per-layer inputs
         let per_layer_inputs = self.compute_ple(ple_input_ids, &xs)?;
 
@@ -1568,8 +1577,7 @@ impl TextModel {
         } else {
             None
         };
-        let noflash_causal_mask =
-            DeviceMappedMask::new(noflash_causal_mask, &*self.mapper)?;
+        let noflash_causal_mask = DeviceMappedMask::new(noflash_causal_mask, &*self.mapper)?;
 
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
@@ -1762,7 +1770,9 @@ impl IsqModel for TextModel {
             if let Some(ref router) = layer.router {
                 let uvb_router = uvb_l.pp("router");
                 uvb_router.add_tensor("scale", router.scale.clone());
-                uvb_router.pp("proj").add_tensor("weight", router.proj.weight().clone());
+                uvb_router
+                    .pp("proj")
+                    .add_tensor("weight", router.proj.weight().clone());
             }
         }
 

@@ -306,19 +306,14 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             })
                             .collect()
                     } else if let Some(ref content) = final_content {
-                        let (_, tc) =
-                            parse_text_tools(this, content.as_str(), seq.tools.clone())
-                                .map_err(candle_core::Error::msg)?;
+                        let (_, tc) = parse_text_tools(this, content.as_str(), seq.tools.clone())
+                            .map_err(candle_core::Error::msg)?;
                         tc
                     } else {
                         vec![]
                     };
 
-                    (
-                        final_content,
-                        tool_calls,
-                        reasoning,
-                    )
+                    (final_content, tool_calls, reasoning)
                 } else {
                     let (text_new, tool_calls) =
                         parse_text_tools(this, text.as_str(), seq.tools.clone())

@@ -8,7 +8,9 @@ use candle_core::{Result, Tensor};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use std::sync::Arc;
 
-use crate::vision_models::gemma3n::{audio::AudioModel as Gemma3nAudioModel, config::Gemma3nAudioConfig};
+use crate::vision_models::gemma3n::{
+    audio::AudioModel as Gemma3nAudioModel, config::Gemma3nAudioConfig,
+};
 
 use super::config::Gemma4AudioConfig;
 
@@ -118,7 +120,10 @@ impl AudioModel {
             tensors.push((&mut block.lconv1d.linear_end, Some(i)));
         }
         // SSCP input projection
-        tensors.push((&mut self.inner.subsample_conv_projection.input_proj_linear, None));
+        tensors.push((
+            &mut self.inner.subsample_conv_projection.input_proj_linear,
+            None,
+        ));
         // Output projection
         if let Some(ref mut proj) = self.output_proj {
             tensors.push((proj, None));

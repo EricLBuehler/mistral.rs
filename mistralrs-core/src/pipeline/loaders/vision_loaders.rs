@@ -7351,7 +7351,9 @@ impl IsqModelLoader for Gemma4Loader {
             Regex::new(r"per_layer_model_projection\.(weight|bias)$")?,
             Regex::new(r"embed_vision\.embedding_projection\.(weight|bias)$")?,
             Regex::new(r"embed_audio\.embedding_projection\.(weight|bias)$")?,
-            Regex::new(r"vision_tower\.encoder\.layers\.(\d+)\.self_attn\.\w+_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"vision_tower\.encoder\.layers\.(\d+)\.self_attn\.\w+_proj\.(weight|bias)$",
+            )?,
             Regex::new(r"vision_tower\.encoder\.layers\.(\d+)\.mlp\.\w+_proj\.(weight|bias)$")?,
         ])
     }
@@ -7368,8 +7370,12 @@ impl IsqModelLoader for Gemma4Loader {
             Regex::new(r"model\.language_model\.per_layer_model_projection\.(weight|bias)$")?,
             Regex::new(r"model\.embed_vision\.embedding_projection\.(weight|bias)$")?,
             Regex::new(r"model\.embed_audio\.embedding_projection\.(weight|bias)$")?,
-            Regex::new(r"model\.vision_tower\.encoder\.layers\.(\d+)\.self_attn\.\w+_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.vision_tower\.encoder\.layers\.(\d+)\.mlp\.\w+_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"model\.vision_tower\.encoder\.layers\.(\d+)\.self_attn\.\w+_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.vision_tower\.encoder\.layers\.(\d+)\.mlp\.\w+_proj\.(weight|bias)$",
+            )?,
         ])
     }
 }
@@ -7395,8 +7401,7 @@ impl DeviceMappedModelLoader for Gemma4Loader {
 
         let vision_tokens_per_image = cfg.vision_soft_tokens_per_image.unwrap_or(280);
         let total_seq_len = *max_seq_len + vision_tokens_per_image * max_num_images;
-        let max_text_attn =
-            max_batch_size * tc.num_attention_heads * total_seq_len * total_seq_len;
+        let max_text_attn = max_batch_size * tc.num_attention_heads * total_seq_len * total_seq_len;
 
         Ok(max_text_attn)
     }
@@ -7409,7 +7414,7 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         let AutoDeviceMapParams::Vision {
             max_seq_len: _,
             max_batch_size: _,
-            max_image_shape,
+            max_image_shape: _,
             max_num_images,
         } = params
         else {
@@ -7419,7 +7424,8 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         let cfg: Gemma4Config = serde_json::from_str(config)?;
         let vc = &cfg.vision_config;
 
-        let max_patches = vc.default_output_length * vc.pooling_kernel_size * vc.pooling_kernel_size;
+        let max_patches =
+            vc.default_output_length * vc.pooling_kernel_size * vc.pooling_kernel_size;
         let max_vision_attn = max_num_images * vc.num_attention_heads * max_patches * max_patches;
 
         Ok(max_vision_attn)
@@ -7453,11 +7459,16 @@ impl DeviceMappedModelLoader for Gemma4Loader {
                     let is_last = layer_idx == tc.num_hidden_layers - 1;
                     !is_last && (layer_idx + 1) % tc.sliding_window_pattern != 0
                 };
-                let hd = if is_sliding { tc.head_dim } else { tc.global_head_dim };
+                let hd = if is_sliding {
+                    tc.head_dim
+                } else {
+                    tc.global_head_dim
+                };
                 let nkv = if is_sliding {
                     tc.num_key_value_heads
                 } else {
-                    tc.num_global_key_value_heads.unwrap_or(tc.num_key_value_heads)
+                    tc.num_global_key_value_heads
+                        .unwrap_or(tc.num_key_value_heads)
                 };
                 let use_k_eq_v = tc.attention_k_eq_v && !is_sliding;
 
@@ -7474,7 +7485,12 @@ impl DeviceMappedModelLoader for Gemma4Loader {
                 let moe = if tc.enable_moe_block {
                     let ne = tc.num_experts.unwrap_or(0);
                     let ei = tc.expert_intermediate_size.unwrap_or(0);
-                    ne * tc.hidden_size * ei * 2 + ne * ei * tc.hidden_size + ne + ne * tc.hidden_size + tc.hidden_size + 3 * tc.hidden_size
+                    ne * tc.hidden_size * ei * 2
+                        + ne * ei * tc.hidden_size
+                        + ne
+                        + ne * tc.hidden_size
+                        + tc.hidden_size
+                        + 3 * tc.hidden_size
                 } else {
                     0
                 };

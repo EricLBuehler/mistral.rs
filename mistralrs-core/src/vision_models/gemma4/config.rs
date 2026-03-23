@@ -5,6 +5,7 @@ use crate::{layers::Activation, serde_default_fn};
 // ── Rope parameter structs ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
 pub struct Gemma4RopeLayerParams {
     pub rope_theta: Option<f64>,
     pub rope_type: Option<String>,
@@ -12,6 +13,7 @@ pub struct Gemma4RopeLayerParams {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
 pub struct Gemma4RopeParameters {
     pub full_attention: Option<Gemma4RopeLayerParams>,
     pub sliding_attention: Option<Gemma4RopeLayerParams>,
@@ -40,6 +42,7 @@ serde_default_fn!(bool, use_double_wide_mlp, false);
 // ── Gemma4TextConfig ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
 pub struct Gemma4TextConfig {
     #[serde(default = "attention_bias")]
     pub attention_bias: bool,
@@ -117,7 +120,11 @@ serde_default_fn!(usize, vision_num_hidden_layers, 16);
 serde_default_fn!(usize, vision_num_attention_heads, 12);
 serde_default_fn!(usize, vision_num_key_value_heads, 12);
 serde_default_fn!(usize, vision_head_dim, 64);
-serde_default_fn!(Activation, vision_hidden_activation, Activation::GeluPytorchTanh);
+serde_default_fn!(
+    Activation,
+    vision_hidden_activation,
+    Activation::GeluPytorchTanh
+);
 serde_default_fn!(f64, vision_rms_norm_eps, 1e-6);
 serde_default_fn!(usize, vision_patch_size, 16);
 serde_default_fn!(usize, vision_position_embedding_size, 10240);
@@ -127,6 +134,7 @@ serde_default_fn!(usize, vision_default_output_length, 280);
 // ── Gemma4VisionConfig ──────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
 pub struct Gemma4VisionConfig {
     #[serde(default = "vision_hidden_size")]
     pub hidden_size: usize,
@@ -200,6 +208,7 @@ serde_default_fn!(f64, embedding_norm_eps, 1e-6);
 // ── Gemma4AudioConfig ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
 pub struct Gemma4AudioConfig {
     #[serde(default = "audio_input_feat_size")]
     pub input_feat_size: usize,
@@ -260,6 +269,7 @@ serde_default_fn!(usize, eoa_token_id, 258883);
 // ── Gemma4Config ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
 pub struct Gemma4Config {
     pub text_config: Gemma4TextConfig,
     pub vision_config: Gemma4VisionConfig,

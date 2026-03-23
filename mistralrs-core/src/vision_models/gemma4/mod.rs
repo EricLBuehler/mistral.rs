@@ -59,11 +59,11 @@ impl Gemma4Model {
     ) -> Result<Self> {
         let vb = vb.pp("model");
 
-        let vision_dtype = if vb.dtype() == DType::F16 {
-            DType::F32
-        } else {
-            vb.dtype()
-        };
+        // Use F32 for the vision tower for numerical stability.
+        // The vision attention uses scale=1.0 (no division by sqrt(head_dim)),
+        // making attention very peaked. F32 helps avoid compounding errors
+        // through 16 encoder layers.
+        let vision_dtype = DType::F32;
 
         let vision_tower = vision::VisionTower::new(
             &cfg.vision_config,
@@ -78,10 +78,10 @@ impl Gemma4Model {
         let embed_vision = multimodal_embedding::Gemma4MultimodalEmbedder::new(
             vis_hidden,
             text_hidden,
-            cfg.text_config.rms_norm_eps,
             normal_loading_metadata
                 .mapper
-                .set_nm_device(vb.pp("embed_vision"), false),
+                .set_nm_device(vb.pp("embed_vision"), false)
+                .set_dtype(vision_dtype),
         )?;
 
         let (audio_tower, embed_audio) = if let Some(ref audio_cfg) = cfg.audio_config {
@@ -95,7 +95,6 @@ impl Gemma4Model {
             let embed = multimodal_embedding::Gemma4MultimodalEmbedder::new(
                 audio_hidden,
                 text_hidden,
-                cfg.text_config.rms_norm_eps,
                 normal_loading_metadata
                     .mapper
                     .set_nm_device(vb.pp("embed_audio"), false),
@@ -141,6 +140,12 @@ impl Gemma4Model {
         audio_hashes: &[u64],
     ) -> Result<Tensor> {
         let mut input_embeds = self.language_model.embed_tokens(input_ids)?;
+        let compare_dir = std::env::var_os("MISTRALRS_GEMMA4_COMPARE_DIR")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("MISTRALRS_GEMMA4_INJECT_PROJECTED_OUTPUT")
+                    .map(|_| std::path::PathBuf::from("/tmp/gemma4_compare"))
+            });
 
         if let Some(ref pixel_values) = pixel_values {
             let image_mask = input_ids
@@ -172,13 +177,17 @@ impl Gemma4Model {
                 if !miss_indices.is_empty() {
                     for &idx in &miss_indices {
                         let single_pv = pixel_values.get(idx)?.unsqueeze(0)?;
+                        // Keep vision features in F32 through embed_vision to avoid
+                        // precision loss when converting large values to BF16/F16.
+                        // The embed_vision RMSNorm normalizes to std≈1, making the
+                        // output safe to convert to lower precision.
                         let vision_features = self
                             .vision_tower
-                            .forward(&[single_pv.to_dtype(self.vision_dtype)?])?
-                            .to_dtype(input_embeds.dtype())?;
+                            .forward(&[single_pv.to_dtype(self.vision_dtype)?])?;
                         let feats = self
                             .embed_vision
                             .forward(&vision_features)?
+                            .to_dtype(input_embeds.dtype())?
                             .squeeze(0)?;
                         {
                             let mut guard = self
@@ -196,17 +205,68 @@ impl Gemma4Model {
                 let per_image_tensors: Vec<Tensor> = (0..n_images)
                     .map(|i| pixel_values.get(i).and_then(|t| t.unsqueeze(0)))
                     .collect::<Result<Vec<_>>>()?;
-                let vision_features = self
-                    .vision_tower
-                    .forward(
-                        &per_image_tensors
-                            .iter()
-                            .map(|t| t.to_dtype(self.vision_dtype))
-                            .collect::<Result<Vec<_>>>()?,
-                    )?
-                    .to_dtype(input_embeds.dtype())?;
-                self.embed_vision.forward(&vision_features)?
+                // Keep in F32 through embed_vision to preserve precision
+                let vision_features = self.vision_tower.forward(
+                    &per_image_tensors
+                        .iter()
+                        .map(|t| t.to_dtype(self.vision_dtype))
+                        .collect::<Result<Vec<_>>>()?,
+                )?;
+                self.embed_vision
+                    .forward(&vision_features)?
+                    .to_dtype(input_embeds.dtype())?
             };
+
+            if let Some(dir) = compare_dir.as_deref() {
+                let path = dir.join("projected_output.npy");
+                if path.exists() {
+                    if let Ok(theirs) = Tensor::read_npy(&path) {
+                        let theirs = if image_embeds.dims().len() == 2 {
+                            theirs.squeeze(0).unwrap_or(theirs)
+                        } else {
+                            theirs
+                        };
+                        let o = image_embeds.to_dtype(DType::F32)?.flatten_all()?;
+                        let t = theirs.to_dtype(DType::F32)?.flatten_all()?;
+                        let diff = (&o - &t)?.abs()?;
+                        let max_diff = diff.max(0)?.to_scalar::<f32>()?;
+                        let mean_diff = diff.mean(0)?.to_scalar::<f32>()?;
+                        let dot = (&o * &t)?.sum(0)?.to_scalar::<f32>()?;
+                        let n_o = o.sqr()?.sum(0)?.to_scalar::<f32>()?.sqrt();
+                        let n_t = t.sqr()?.sum(0)?.to_scalar::<f32>()?.sqrt();
+                        let cos_sim = if n_o > 0.0 && n_t > 0.0 {
+                            dot / (n_o * n_t)
+                        } else {
+                            0.0
+                        };
+                        eprintln!(
+                            "[gemma4-cmp] projected_output      cos={cos_sim:.6} max_diff={max_diff:.6} mean_diff={mean_diff:.6}"
+                        );
+                    }
+                }
+            }
+            let image_embeds =
+                if std::env::var_os("MISTRALRS_GEMMA4_INJECT_PROJECTED_OUTPUT").is_some() {
+                    if let Some(dir) = compare_dir.as_deref() {
+                        if let Ok(theirs) = Tensor::read_npy(dir.join("projected_output.npy")) {
+                            eprintln!("[gemma4-inject] using HF projected_output");
+                            let theirs = if image_embeds.dims().len() == 2 {
+                                theirs.squeeze(0).unwrap_or(theirs)
+                            } else {
+                                theirs
+                            };
+                            theirs
+                                .to_device(input_embeds.device())?
+                                .to_dtype(input_embeds.dtype())?
+                        } else {
+                            image_embeds
+                        }
+                    } else {
+                        image_embeds
+                    }
+                } else {
+                    image_embeds
+                };
 
             if indices.dim(0)? > 0 {
                 let mut x_flat = input_embeds.flatten_all()?;
@@ -223,8 +283,12 @@ impl Gemma4Model {
             Some(audio_mel_mask),
             Some(ref audio_tower),
             Some(ref embed_audio),
-        ) = (audio_mel, audio_mel_mask, &self.audio_tower, &self.embed_audio)
-        {
+        ) = (
+            audio_mel,
+            audio_mel_mask,
+            &self.audio_tower,
+            &self.embed_audio,
+        ) {
             let audio_mask = input_ids
                 .to_dtype(DType::F32)?
                 .eq(self.cfg.audio_token_id as f64)?;
@@ -255,16 +319,13 @@ impl Gemma4Model {
                     for &idx in &miss_indices {
                         let single_mel = audio_mel.get(idx)?.unsqueeze(0)?;
                         let single_mask = audio_mel_mask.get(idx)?.unsqueeze(0)?;
-                        let (audio_features, enc_mask) = audio_tower.forward(
-                            &single_mel.to_dtype(input_embeds.dtype())?,
-                            &single_mask,
-                        )?;
+                        let (audio_features, enc_mask) = audio_tower
+                            .forward(&single_mel.to_dtype(input_embeds.dtype())?, &single_mask)?;
                         let valid = enc_mask.eq(0.0)?;
                         let valid_indices =
                             valid.squeeze(0)?.flatten_all()?.nonzero()?.squeeze(1)?;
-                        let valid_features = audio_features
-                            .squeeze(0)?
-                            .index_select(&valid_indices, 0)?;
+                        let valid_features =
+                            audio_features.squeeze(0)?.index_select(&valid_indices, 0)?;
                         let feats = embed_audio
                             .forward(&valid_features.unsqueeze(0)?)?
                             .squeeze(0)?;
@@ -281,10 +342,8 @@ impl Gemma4Model {
                 let parts: Vec<Tensor> = per_audio.into_iter().map(|t| t.unwrap()).collect();
                 Tensor::cat(&parts, 0)?
             } else {
-                let (audio_features, enc_mask) = audio_tower.forward(
-                    &audio_mel.to_dtype(input_embeds.dtype())?,
-                    audio_mel_mask,
-                )?;
+                let (audio_features, enc_mask) = audio_tower
+                    .forward(&audio_mel.to_dtype(input_embeds.dtype())?, audio_mel_mask)?;
                 let valid = enc_mask.eq(0.0)?;
                 let batch = audio_features.dim(0)?;
                 let mut all_feats = Vec::new();
@@ -307,13 +366,21 @@ impl Gemma4Model {
             }
         }
 
-        let ple_inputs_mask = input_ids.lt(
-            self.cfg
-                .text_config
-                .vocab_size_per_layer_input
-                .unwrap_or(self.cfg.text_config.vocab_size) as f64,
-        )?;
-        let ple_input_ids = ple_inputs_mask.where_cond(input_ids, &input_ids.zeros_like()?)?;
+        let ple_vocab_limit = self
+            .cfg
+            .text_config
+            .vocab_size_per_layer_input
+            .unwrap_or(self.cfg.text_config.vocab_size);
+        let ple_zeros = input_ids.zeros_like()?;
+        let ple_inputs_mask = input_ids.lt(ple_vocab_limit as f64)?;
+        let ple_input_ids = ple_inputs_mask.where_cond(input_ids, &ple_zeros)?;
+        // Match HF: per-layer token embeddings only see hard text tokens.
+        // Soft multimodal placeholder slots are zeroed out before
+        // get_per_layer_inputs(), even though their token ids are in-vocab.
+        let non_image_mask = input_ids.ne(self.cfg.image_token_id as f64)?;
+        let ple_input_ids = non_image_mask.where_cond(&ple_input_ids, &ple_zeros)?;
+        let non_audio_mask = input_ids.ne(self.cfg.audio_token_id as f64)?;
+        let ple_input_ids = non_audio_mask.where_cond(&ple_input_ids, &ple_zeros)?;
 
         self.language_model.forward_embeds(
             input_ids,

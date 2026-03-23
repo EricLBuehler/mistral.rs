@@ -596,7 +596,9 @@ impl Engine {
                         // Gemma 4: <|channel>thought\n...<channel|>
                         seq.enable_reasoning(
                             crate::reasoning_parsers::ReasoningMode::TagBased,
-                            Box::new(crate::reasoning_parsers::TagReasoningContext::new_gemma_channel()),
+                            Box::new(
+                                crate::reasoning_parsers::TagReasoningContext::new_gemma_channel(),
+                            ),
                         );
                     } else if chat_template.uses_think_tags() {
                         // DeepSeek, QwQ, SmolLM3: <think>...</think>
