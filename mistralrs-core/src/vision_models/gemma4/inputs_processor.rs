@@ -39,112 +39,6 @@ const BOA_TOKEN: &str = "<|audio>";
 const EOA_TOKEN: &str = "<audio|>";
 pub const AUDIO_TOKEN_ID: u32 = 258881;
 
-fn gemma4_dump_prompt_enabled() -> bool {
-    std::env::var_os("MISTRALRS_GEMMA4_DUMP_PROMPT").is_some()
-}
-
-fn dump_token_window(
-    tokenizer: &Tokenizer,
-    tag: &str,
-    ids: &[u32],
-    window_start: usize,
-    window_end: usize,
-) {
-    if !gemma4_dump_prompt_enabled() {
-        return;
-    }
-
-    let start = window_start.saturating_sub(8);
-    let end = (window_end + 8).min(ids.len());
-    let toks = ids[start..end]
-        .iter()
-        .map(|id| {
-            tokenizer
-                .id_to_token(*id)
-                .unwrap_or_else(|| format!("<id:{id}>"))
-        })
-        .collect::<Vec<_>>();
-
-    eprintln!(
-        "[gemma4-prompt] {tag} window[{start}..{end}] ids={:?}",
-        &ids[start..end]
-    );
-    eprintln!("[gemma4-prompt] {tag} window[{start}..{end}] toks={toks:?}");
-}
-
-fn dump_prompt_state(tokenizer: &Tokenizer, tag: &str, prompt: &str, ids: &[u32]) {
-    if !gemma4_dump_prompt_enabled() {
-        return;
-    }
-
-    let boi_token_id = tokenizer.token_to_id(BOI_TOKEN);
-    let eoi_token_id = tokenizer.token_to_id(EOI_TOKEN);
-    let boa_token_id = tokenizer.token_to_id(BOA_TOKEN);
-    let eoa_token_id = tokenizer.token_to_id(EOA_TOKEN);
-
-    let image_positions = ids
-        .iter()
-        .enumerate()
-        .filter_map(|(i, id)| (*id == IMAGE_TOKEN_ID).then_some(i))
-        .collect::<Vec<_>>();
-    let audio_positions = ids
-        .iter()
-        .enumerate()
-        .filter_map(|(i, id)| (*id == AUDIO_TOKEN_ID).then_some(i))
-        .collect::<Vec<_>>();
-    let boi_positions = boi_token_id
-        .map(|id| {
-            ids.iter()
-                .enumerate()
-                .filter_map(|(i, tok)| (*tok == id).then_some(i))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let eoi_positions = eoi_token_id
-        .map(|id| {
-            ids.iter()
-                .enumerate()
-                .filter_map(|(i, tok)| (*tok == id).then_some(i))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let boa_positions = boa_token_id
-        .map(|id| {
-            ids.iter()
-                .enumerate()
-                .filter_map(|(i, tok)| (*tok == id).then_some(i))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let eoa_positions = eoa_token_id
-        .map(|id| {
-            ids.iter()
-                .enumerate()
-                .filter_map(|(i, tok)| (*tok == id).then_some(i))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    eprintln!(
-        "[gemma4-prompt] {tag} prompt={:?}",
-        prompt.escape_debug().to_string()
-    );
-    eprintln!(
-        "[gemma4-prompt] {tag} len={} image={} boi={:?} eoi={:?} audio={} boa={:?} eoa={:?}",
-        ids.len(),
-        image_positions.len(),
-        boi_positions,
-        eoi_positions,
-        audio_positions.len(),
-        boa_positions,
-        eoa_positions,
-    );
-
-    if let (Some(&first), Some(&last)) = (image_positions.first(), image_positions.last()) {
-        dump_token_window(tokenizer, tag, ids, first, last + 1);
-    }
-}
-
 // ── Processor (public, created by the pipeline loader) ─────────────────────
 
 pub struct Gemma4Processor {
@@ -325,25 +219,21 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         audio.samples.extend(std::iter::repeat_n(0., pad_len));
                     }
 
+                    let mut seq_audio_mel = Vec::new();
+                    let mut seq_audio_mask = Vec::new();
                     for audio in audios {
                         let (mel, mask) = audio_processor
                             .process_audio(&audio, device)
                             .expect("Audio processing failed");
 
-                        audio_mel_accum.push(mel);
-                        audio_mask_accum.push(mask);
+                        seq_audio_mel.push(mel);
+                        seq_audio_mask.push(mask);
                     }
 
                     if !seq.multimodal.has_changed_prompt {
                         let mut prompt = tokenizer
                             .decode(seq.get_toks(), false)
                             .expect("Detokenization failed!");
-                        dump_prompt_state(
-                            &tokenizer,
-                            "audio-before-expand",
-                            &prompt,
-                            seq.get_toks(),
-                        );
                         let audio_sequence = self.build_audio_sequence();
                         prompt = prompt.replace(AUDIO_TOKEN, &audio_sequence);
 
@@ -353,10 +243,16 @@ impl InputsProcessor for Gemma4ImageProcessor {
                             .expect("Tokenization failed!");
 
                         let ids = toks.get_ids().to_vec();
-                        dump_prompt_state(&tokenizer, "audio-after-expand", &prompt, &ids);
                         seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
 
                         has_changed_prompt = true;
+                    }
+
+                    let cached_audio = seq.count_prefix_cached_mm_items_by_kind("audio");
+                    let n_audio = seq_audio_mel.len();
+                    if cached_audio < n_audio {
+                        audio_mel_accum.extend(seq_audio_mel.into_iter().skip(cached_audio));
+                        audio_mask_accum.extend(seq_audio_mask.into_iter().skip(cached_audio));
                     }
                 }
             }
@@ -436,7 +332,6 @@ impl InputsProcessor for Gemma4ImageProcessor {
                     let mut prompt = tokenizer
                         .decode(seq.get_toks(), false)
                         .expect("Detokenization failed!");
-                    dump_prompt_state(&tokenizer, "image-before-expand", &prompt, seq.get_toks());
 
                     // Replace occurrences of the image placeholder token
                     // (<|image|>) in reverse order so string offsets stay valid.
@@ -471,39 +366,13 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         .expect("Tokenization failed!");
 
                     let ids = toks.get_ids().to_vec();
-                    dump_prompt_state(&tokenizer, "image-after-expand", &prompt, &ids);
-
-                    // Build mm_features for position-aware prefix cache hashing
-                    if seq.mm_features().is_empty() {
-                        if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
-                            let ranges = find_image_placeholder_ranges(&ids, IMAGE_TOKEN_ID);
-                            seq.set_mm_features(build_mm_features_from_ranges(
-                                &ranges, &hashes, "img",
-                            ));
-                        }
-                    }
-                    // Also include audio features in mm_features for prefix cache hashing
-                    if let Some(audio_hashes) = seq.audio_hashes().map(|h| h.to_vec()) {
-                        if !audio_hashes.is_empty() {
-                            let audio_ranges = find_image_placeholder_ranges(&ids, AUDIO_TOKEN_ID);
-                            let audio_features = build_mm_features_from_ranges(
-                                &audio_ranges,
-                                &audio_hashes,
-                                "audio",
-                            );
-                            let mut features = seq.mm_features().to_vec();
-                            features.extend(audio_features);
-                            seq.set_mm_features(features);
-                        }
-                    }
-
                     seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
 
                     has_changed_prompt = true;
                 }
 
                 // Per-sequence prefix cache trimming of pixel_values
-                let cached = seq.count_prefix_cached_mm_items();
+                let cached = seq.count_prefix_cached_mm_items_by_kind("img");
                 let n_images = pixel_values.dim(0).unwrap_or(0);
                 if cached < n_images {
                     let image_sizes = image_sizes_all.unwrap_or_default();
@@ -531,6 +400,30 @@ impl InputsProcessor for Gemma4ImageProcessor {
         };
 
         for seq in input_seqs.iter_mut() {
+            if seq.mm_features().is_empty() {
+                let mut features = Vec::new();
+                if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
+                    if !hashes.is_empty() {
+                        let ranges = find_image_placeholder_ranges(seq.get_toks(), IMAGE_TOKEN_ID);
+                        features.extend(build_mm_features_from_ranges(&ranges, &hashes, "img"));
+                    }
+                }
+                if let Some(audio_hashes) = seq.audio_hashes().map(|h| h.to_vec()) {
+                    if !audio_hashes.is_empty() {
+                        let audio_ranges =
+                            find_image_placeholder_ranges(seq.get_toks(), AUDIO_TOKEN_ID);
+                        features.extend(build_mm_features_from_ranges(
+                            &audio_ranges,
+                            &audio_hashes,
+                            "audio",
+                        ));
+                    }
+                }
+                if !features.is_empty() {
+                    features.sort_by_key(|f| f.offset);
+                    seq.set_mm_features(features);
+                }
+            }
             seq.multimodal.has_changed_prompt = has_changed_prompt;
         }
 
@@ -589,7 +482,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 .flat_map(|seq| {
                     seq.image_hashes()
                         .map(|h| {
-                            let cached = seq.count_prefix_cached_mm_items();
+                            let cached = seq.count_prefix_cached_mm_items_by_kind("img");
                             if cached < h.len() {
                                 h[cached..].to_vec()
                             } else {
@@ -606,7 +499,18 @@ impl InputsProcessor for Gemma4ImageProcessor {
         let audio_hashes: Vec<u64> = if is_prompt {
             input_seqs
                 .iter()
-                .flat_map(|seq| seq.audio_hashes().map(|h| h.to_vec()).unwrap_or_default())
+                .flat_map(|seq| {
+                    seq.audio_hashes()
+                        .map(|h| {
+                            let cached = seq.count_prefix_cached_mm_items_by_kind("audio");
+                            if cached < h.len() {
+                                h[cached..].to_vec()
+                            } else {
+                                vec![]
+                            }
+                        })
+                        .unwrap_or_default()
+                })
                 .collect()
         } else {
             vec![]

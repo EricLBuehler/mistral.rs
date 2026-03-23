@@ -1125,6 +1125,24 @@ impl Sequence {
             .count()
     }
 
+    /// Count the number of multimodal items of a specific kind whose placeholder
+    /// tokens fall entirely within the prefix cache. `kind` should match the
+    /// prefix used in `build_mm_features_from_ranges`, e.g. `"img"` or `"audio"`.
+    pub fn count_prefix_cached_mm_items_by_kind(&self, kind: &str) -> usize {
+        let prefix_len = self.prefix_cache_len();
+        if prefix_len == 0 {
+            return 0;
+        }
+        let identifier_prefix = format!("{kind}:");
+        self.mm_features()
+            .iter()
+            .filter(|f| {
+                f.offset + f.length <= prefix_len
+                    && f.identifier.starts_with(identifier_prefix.as_str())
+            })
+            .count()
+    }
+
     pub fn sequence_stepping_type(&self) -> &SeqStepType {
         &self.sequence_stepping_type
     }

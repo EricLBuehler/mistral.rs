@@ -3,7 +3,7 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::Module;
 use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     layers::{Activation, GemmaRmsNorm, MatMul},
@@ -20,84 +20,6 @@ fn v_norm(v: &Tensor, eps: f64) -> Result<Tensor> {
     let mean_sq = v_f32.sqr()?.mean_keepdim(D::Minus1)?;
     let rms = (mean_sq + eps)?.sqrt()?;
     v_f32.broadcast_div(&rms)?.to_dtype(original_dtype)
-}
-
-fn gemma4_compare_dir() -> Option<PathBuf> {
-    std::env::var_os("MISTRALRS_GEMMA4_COMPARE_DIR")
-        .map(PathBuf::from)
-        .or_else(|| {
-            let inject = [
-                "MISTRALRS_GEMMA4_INJECT_ENCODER_OUTPUT",
-                "MISTRALRS_GEMMA4_INJECT_STRIPPED_OUTPUT",
-            ]
-            .iter()
-            .any(|key| std::env::var_os(key).is_some());
-            inject.then(|| PathBuf::from("/tmp/gemma4_compare"))
-        })
-}
-
-fn gemma4_debug_compare(name: &str, ours: &Tensor, dir: &std::path::Path) {
-    let path = dir.join(format!("{name}.npy"));
-    let Ok(theirs) = Tensor::read_npy(path) else {
-        return;
-    };
-    let Ok(o) = ours.to_dtype(DType::F32).and_then(|t| t.flatten_all()) else {
-        return;
-    };
-    let Ok(t) = theirs.to_dtype(DType::F32).and_then(|t| t.flatten_all()) else {
-        return;
-    };
-    let Ok(diff) = (&o - &t).and_then(|d| d.abs()) else {
-        return;
-    };
-    let max_diff = diff
-        .max(0)
-        .and_then(|t| t.to_scalar::<f32>())
-        .unwrap_or(f32::NAN);
-    let mean_diff = diff
-        .mean(0)
-        .and_then(|t| t.to_scalar::<f32>())
-        .unwrap_or(f32::NAN);
-    let cos_sim = {
-        let dot = (&o * &t)
-            .and_then(|x| x.sum(0))
-            .and_then(|t| t.to_scalar::<f32>())
-            .unwrap_or(0.0);
-        let n_o = o
-            .sqr()
-            .and_then(|x| x.sum(0))
-            .and_then(|t| t.to_scalar::<f32>())
-            .map(|x| x.sqrt())
-            .unwrap_or(0.0);
-        let n_t = t
-            .sqr()
-            .and_then(|x| x.sum(0))
-            .and_then(|t| t.to_scalar::<f32>())
-            .map(|x| x.sqrt())
-            .unwrap_or(0.0);
-        if n_o > 0.0 && n_t > 0.0 {
-            dot / (n_o * n_t)
-        } else {
-            0.0
-        }
-    };
-    eprintln!(
-        "[gemma4-cmp] {name:20} cos={cos_sim:.6} max_diff={max_diff:.6} mean_diff={mean_diff:.6}"
-    );
-}
-
-fn gemma4_load_npy(
-    name: &str,
-    dir: &std::path::Path,
-    device: &Device,
-    dtype: DType,
-) -> Option<Tensor> {
-    Tensor::read_npy(dir.join(format!("{name}.npy")))
-        .ok()?
-        .to_device(device)
-        .ok()?
-        .to_dtype(dtype)
-        .ok()
 }
 
 // ── Clippable Linear (Gemma4ClippableLinear equivalent) ─────────────────────
@@ -747,7 +669,6 @@ impl VisionTower {
     pub fn forward(&self, pixel_values_list: &[Tensor]) -> Result<Tensor> {
         let device = pixel_values_list[0].device().clone();
         let dtype = pixel_values_list[0].dtype();
-        let compare_dir = gemma4_compare_dir();
 
         let mut all_embeds = Vec::with_capacity(pixel_values_list.len());
         let mut all_positions = Vec::with_capacity(pixel_values_list.len());
@@ -795,10 +716,6 @@ impl VisionTower {
         let patch_positions = Tensor::cat(&all_positions, 0)?;
         let padding_positions = Tensor::cat(&all_padding, 0)?;
 
-        if let Some(dir) = compare_dir.as_deref() {
-            gemma4_debug_compare("encoder_input", &inputs_embeds, dir);
-        }
-
         // Build attention mask: both query AND key must be valid to attend.
         // Use where_cond to avoid -inf * 0 = NaN.
         let valid_mask = padding_positions
@@ -819,11 +736,6 @@ impl VisionTower {
         let (cos, sin) = self.rotary_emb.forward(&inputs_embeds, &patch_positions)?;
         let cos = cos.to_dtype(dtype)?;
         let sin = sin.to_dtype(dtype)?;
-
-        if let Some(dir) = compare_dir.as_deref() {
-            gemma4_debug_compare("rope_cos", &cos, dir);
-            gemma4_debug_compare("rope_sin", &sin, dir);
-        }
 
         // Bidirectional flash params
         let flash_params = FlashParams {
@@ -847,7 +759,7 @@ impl VisionTower {
 
         // Encoder layers
         let mut hidden_states = inputs_embeds;
-        for (layer_idx, layer) in self.encoder_layers.iter().enumerate() {
+        for layer in &self.encoder_layers {
             hidden_states = layer.forward(
                 &hidden_states,
                 &cos,
@@ -857,21 +769,6 @@ impl VisionTower {
             )?;
             // Zero out padding positions to prevent value accumulation
             hidden_states = hidden_states.broadcast_mul(&valid_mask_3d)?;
-            if let Some(dir) = compare_dir.as_deref() {
-                gemma4_debug_compare(&format!("layer{layer_idx}_output"), &hidden_states, dir);
-            }
-        }
-
-        if let Some(dir) = compare_dir.as_deref() {
-            gemma4_debug_compare("encoder_output", &hidden_states, dir);
-        }
-        if std::env::var_os("MISTRALRS_GEMMA4_INJECT_ENCODER_OUTPUT").is_some() {
-            if let Some(dir) = compare_dir.as_deref() {
-                if let Some(injected) = gemma4_load_npy("encoder_output", dir, &device, dtype) {
-                    eprintln!("[gemma4-inject] using HF encoder_output");
-                    hidden_states = injected;
-                }
-            }
         }
 
         // Pool with full max_patches (k = sqrt(max_patches / output_length) = 3)
@@ -889,19 +786,7 @@ impl VisionTower {
             let real_tokens = hs.index_select(&indices, 0)?;
             all_real_tokens.push(real_tokens);
         }
-        let mut result = Tensor::cat(&all_real_tokens, 0)?.unsqueeze(0)?;
-        if let Some(dir) = compare_dir.as_deref() {
-            gemma4_debug_compare("stripped_output", &result, dir);
-        }
-        if std::env::var_os("MISTRALRS_GEMMA4_INJECT_STRIPPED_OUTPUT").is_some() {
-            if let Some(dir) = compare_dir.as_deref() {
-                if let Some(injected) = gemma4_load_npy("stripped_output", dir, &device, dtype) {
-                    eprintln!("[gemma4-inject] using HF stripped_output");
-                    result = injected;
-                }
-            }
-        }
-        Ok(result)
+        Ok(Tensor::cat(&all_real_tokens, 0)?.unsqueeze(0)?)
     }
 
     pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {

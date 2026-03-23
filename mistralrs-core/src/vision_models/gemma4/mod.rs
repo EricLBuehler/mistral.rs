@@ -142,12 +142,6 @@ impl Gemma4Model {
         audio_hashes: &[u64],
     ) -> Result<Tensor> {
         let mut input_embeds = self.language_model.embed_tokens(input_ids)?;
-        let compare_dir = std::env::var_os("MISTRALRS_GEMMA4_COMPARE_DIR")
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("MISTRALRS_GEMMA4_INJECT_PROJECTED_OUTPUT")
-                    .map(|_| std::path::PathBuf::from("/tmp/gemma4_compare"))
-            });
 
         if let Some(ref pixel_values) = pixel_values {
             let image_mask = input_ids
@@ -231,57 +225,6 @@ impl Gemma4Model {
                     .forward(&vision_features)?
                     .to_dtype(input_embeds.dtype())?
             };
-
-            if let Some(dir) = compare_dir.as_deref() {
-                let path = dir.join("projected_output.npy");
-                if path.exists() {
-                    if let Ok(theirs) = Tensor::read_npy(&path) {
-                        let theirs = if image_embeds.dims().len() == 2 {
-                            theirs.squeeze(0).unwrap_or(theirs)
-                        } else {
-                            theirs
-                        };
-                        let o = image_embeds.to_dtype(DType::F32)?.flatten_all()?;
-                        let t = theirs.to_dtype(DType::F32)?.flatten_all()?;
-                        let diff = (&o - &t)?.abs()?;
-                        let max_diff = diff.max(0)?.to_scalar::<f32>()?;
-                        let mean_diff = diff.mean(0)?.to_scalar::<f32>()?;
-                        let dot = (&o * &t)?.sum(0)?.to_scalar::<f32>()?;
-                        let n_o = o.sqr()?.sum(0)?.to_scalar::<f32>()?.sqrt();
-                        let n_t = t.sqr()?.sum(0)?.to_scalar::<f32>()?.sqrt();
-                        let cos_sim = if n_o > 0.0 && n_t > 0.0 {
-                            dot / (n_o * n_t)
-                        } else {
-                            0.0
-                        };
-                        eprintln!(
-                            "[gemma4-cmp] projected_output      cos={cos_sim:.6} max_diff={max_diff:.6} mean_diff={mean_diff:.6}"
-                        );
-                    }
-                }
-            }
-            let image_embeds =
-                if std::env::var_os("MISTRALRS_GEMMA4_INJECT_PROJECTED_OUTPUT").is_some() {
-                    if let Some(dir) = compare_dir.as_deref() {
-                        if let Ok(theirs) = Tensor::read_npy(dir.join("projected_output.npy")) {
-                            eprintln!("[gemma4-inject] using HF projected_output");
-                            let theirs = if image_embeds.dims().len() == 2 {
-                                theirs.squeeze(0).unwrap_or(theirs)
-                            } else {
-                                theirs
-                            };
-                            theirs
-                                .to_device(input_embeds.device())?
-                                .to_dtype(input_embeds.dtype())?
-                        } else {
-                            image_embeds
-                        }
-                    } else {
-                        image_embeds
-                    }
-                } else {
-                    image_embeds
-                };
 
             if indices.dim(0)? > 0 {
                 let mut x_flat = input_embeds.flatten_all()?;
