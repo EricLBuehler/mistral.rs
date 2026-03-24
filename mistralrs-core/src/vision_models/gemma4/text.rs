@@ -583,6 +583,55 @@ impl Attention {
         })
     }
 
+    fn adjusted_flash_params_for_sliding(
+        &self,
+        flash_params: &FlashParams,
+        seqlen_offsets: &[usize],
+        q_len: usize,
+        device: &Device,
+    ) -> Result<FlashParams> {
+        if !self.is_sliding {
+            return Ok(flash_params.clone());
+        }
+
+        let sliding_window = self
+            .sdpa_params
+            .sliding_window
+            .expect("sliding Gemma4 layer must have sliding_window");
+        let location = device.location();
+        let cumulative_seqlens_q = flash_params
+            .cumulative_seqlens_q
+            .get(&location)
+            .cloned()
+            .ok_or_else(|| {
+                candle_core::Error::Msg(format!(
+                    "missing flash cumulative_seqlens_q for device {location:?}"
+                ))
+            })?;
+
+        let mut cumulative_k = Vec::with_capacity(seqlen_offsets.len() + 1);
+        cumulative_k.push(0u32);
+        let mut running = 0u32;
+        let mut max_k = 0u32;
+        for &offset in seqlen_offsets {
+            let retained = (offset + q_len).min(sliding_window) as u32;
+            running += retained;
+            max_k = max_k.max(retained);
+            cumulative_k.push(running);
+        }
+
+        let cumulative_seqlens_k =
+            Tensor::new(cumulative_k, &Device::Cpu)?.to_device(device)?;
+
+        Ok(FlashParams {
+            max_q: flash_params.max_q,
+            max_k,
+            cumulative_seqlens_q: HashMap::from([(location, cumulative_seqlens_q)]),
+            cumulative_seqlens_k: HashMap::from([(location, cumulative_seqlens_k)]),
+            causal: flash_params.causal,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
@@ -746,9 +795,14 @@ impl Attention {
                 }
             },
             None => {
+                let flash_params = flash_params
+                    .map(|fp| {
+                        self.adjusted_flash_params_for_sliding(fp, seqlen_offsets, q_len, q.device())
+                    })
+                    .transpose()?;
                 // Flash attention only supports head_dim <= 256; fall back for larger dims
                 if self.head_dim <= 256 {
-                    match flash_params {
+                    match flash_params.as_ref() {
                         Some(fp) => Sdpa.run_attention(
                             &q,
                             &k,
@@ -1461,7 +1515,7 @@ impl TextModel {
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-        has_images: bool,
+        _has_images: bool,
     ) -> Result<Tensor> {
         let cache = &mut self.cache.normal().0;
 
@@ -1475,9 +1529,11 @@ impl TextModel {
         // Compute PLE per-layer inputs
         let per_layer_inputs = self.compute_ple(ple_input_ids, &xs)?;
 
-        // Bidirectional mask handling for image tokens (same as Gemma3)
-        let has_bidirectional =
-            has_images && self.image_token_index.is_some() && input_ids.dim(1)? > 1;
+        // HF Gemma4 does not apply Gemma3-style bidirectional masking in the text decoder
+        // for image placeholder tokens. The text config does not expose a
+        // `use_bidirectional_attention="vision"` mode here, so multimodal prompts should
+        // stay on the normal causal/sliding attention path.
+        let has_bidirectional = false;
 
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
             let image_token_index = self.image_token_index.unwrap();
@@ -1561,14 +1617,25 @@ impl TextModel {
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
 
-        // Build a real causal mask for head_dim>256 layers that can't use flash attention.
+        // Build a real mask for head_dim>256 layers that can't use flash attention.
         // During decode (seq_len==1) this is None since causal masking is a no-op.
+        // For multimodal prompts, full-attention layers must see the same
+        // image-token bidirectional override as the regular masked path.
         let noflash_causal_mask = if xs.dim(1)? > 1 {
             let mask_cache: &dyn PastKvLenCache = metadata
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache);
-            CausalMasker.make_causal_mask_as_attn_bias(input_ids, mask_cache, xs.dtype())?
+            let causal_mask =
+                CausalMasker.make_causal_mask_as_attn_bias(input_ids, mask_cache, xs.dtype())?;
+            if has_bidirectional {
+                let image_token_index = self.image_token_index.unwrap();
+                causal_mask
+                    .map(|m| Self::apply_image_bidirectional_mask(&m, input_ids, image_token_index))
+                    .transpose()?
+            } else {
+                causal_mask
+            }
         } else {
             None
         };
