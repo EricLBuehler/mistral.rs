@@ -471,6 +471,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                     metadata.no_kv_cache,
                     None,
                     false,
+                    metadata.sliding_window,
                     input_processor_cfg.clone(),
                     None, // TODO: get block tables/handle it for PagedAttention
                     None,

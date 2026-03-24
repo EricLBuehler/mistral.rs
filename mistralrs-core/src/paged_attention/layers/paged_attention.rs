@@ -8,7 +8,9 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use crate::{
     attention::SdpaParams,
     layers::Sdpa,
-    pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+    pipeline::text_models_inputs_processor::{
+        FlashKMeta, FlashParams, PagedAttentionInputMetadata,
+    },
 };
 
 pub struct PagedAttention {
@@ -194,9 +196,12 @@ impl PagedAttention {
                     .unwrap_or(0);
                 FlashParams {
                     max_q: fp.max_q,
-                    max_k: max_kv,
                     cumulative_seqlens_q: fp.cumulative_seqlens_q.clone(),
-                    cumulative_seqlens_k: input_metadata.cu_seqlens_kv.as_ref().unwrap().clone(),
+                    logical_k: FlashKMeta {
+                        max: max_kv,
+                        cumulative_seqlens: input_metadata.cu_seqlens_kv.as_ref().unwrap().clone(),
+                    },
+                    sliding_k: None,
                     causal: fp.causal,
                 }
             });

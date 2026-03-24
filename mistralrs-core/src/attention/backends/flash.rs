@@ -18,7 +18,8 @@ pub(crate) fn flash_attn(
     if let Some(params) = flash_params {
         if let Some(cumulative_seqlens_q) = params.cumulative_seqlens_q.get(&q.device().location())
         {
-            let cumulative_seqlens_k = &params.cumulative_seqlens_k[&q.device().location()];
+            let k_meta = params.k_meta(sdpa_params.sliding_window);
+            let cumulative_seqlens_k = &k_meta.cumulative_seqlens[&q.device().location()];
             let window_size_right = if params.causal { Some(0) } else { None };
             let qshape = q.shape();
             let q = q.flatten_to(1)?;
@@ -34,7 +35,7 @@ pub(crate) fn flash_attn(
                     cumulative_seqlens_q,
                     cumulative_seqlens_k,
                     params.max_q as usize,
-                    params.max_k as usize,
+                    k_meta.max as usize,
                     sdpa_params.softmax_scale,
                     window_size_left,
                     window_size_right,
@@ -49,7 +50,7 @@ pub(crate) fn flash_attn(
                     cumulative_seqlens_q,
                     cumulative_seqlens_k,
                     params.max_q as usize,
-                    params.max_k as usize,
+                    k_meta.max as usize,
                     sdpa_params.softmax_scale,
                     window_size_left,
                     window_size_right,
@@ -100,7 +101,8 @@ pub(crate) fn flash_attn(
     if let Some(params) = flash_params {
         if let Some(cumulative_seqlens_q) = params.cumulative_seqlens_q.get(&q.device().location())
         {
-            let cumulative_seqlens_k = &params.cumulative_seqlens_k[&q.device().location()];
+            let k_meta = params.k_meta(sdpa_params.sliding_window);
+            let cumulative_seqlens_k = &k_meta.cumulative_seqlens[&q.device().location()];
             let qshape = q.shape();
             let q = q.flatten_to(1)?;
             let k = k.flatten_to(1)?;
@@ -116,7 +118,7 @@ pub(crate) fn flash_attn(
                 cumulative_seqlens_q,
                 cumulative_seqlens_k,
                 params.max_q as usize,
-                params.max_k as usize,
+                k_meta.max as usize,
                 sdpa_params.softmax_scale,
                 window_size_left,
                 window_size_right,

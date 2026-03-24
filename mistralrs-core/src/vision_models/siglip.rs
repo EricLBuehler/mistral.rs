@@ -3,7 +3,7 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
 use mistralrs_quant::{Convolution, QuantMethod, ShardedVarBuilder};
-use std::{collections::HashMap, ops::Mul, sync::Arc};
+use std::{ops::Mul, sync::Arc};
 
 use crate::{
     attention::SdpaParams,
@@ -296,13 +296,7 @@ impl Attention {
 
         // Build FlashParams with causal=false for bidirectional vision attention.
         // Empty cumulative_seqlens: flash backend uses the non-varlen path with causal=false.
-        let flash_params = FlashParams {
-            max_q: 0,
-            max_k: 0,
-            cumulative_seqlens_q: HashMap::new(),
-            cumulative_seqlens_k: HashMap::new(),
-            causal: false,
-        };
+        let flash_params = FlashParams::empty(false);
 
         let attn_weights = Sdpa.run_attention(
             &q,

@@ -663,6 +663,7 @@ impl Engine {
                     pipeline.get_metadata().no_kv_cache,
                     None,
                     false,
+                    pipeline.get_metadata().sliding_window,
                     pipeline.get_input_processor_config(),
                     None,
                     pipeline.device_mapper(),

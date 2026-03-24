@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{collections::HashMap, ops::Mul, sync::Arc};
+use std::{ops::Mul, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, LayerNormConfig, Module};
@@ -221,13 +221,7 @@ impl MLlamaVisionAttention {
             .reshape((bs, k_sq, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let flash_params = FlashParams {
-            max_q: 0,
-            max_k: 0,
-            cumulative_seqlens_q: HashMap::new(),
-            cumulative_seqlens_k: HashMap::new(),
-            causal: false,
-        };
+        let flash_params = FlashParams::empty(false);
 
         let mut attn_output = Sdpa
             .run_attention(

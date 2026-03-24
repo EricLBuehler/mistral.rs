@@ -585,54 +585,6 @@ impl Attention {
         })
     }
 
-    fn adjusted_flash_params_for_sliding(
-        &self,
-        flash_params: &FlashParams,
-        seqlen_offsets: &[usize],
-        q_len: usize,
-        device: &Device,
-    ) -> Result<FlashParams> {
-        if !self.is_sliding {
-            return Ok(flash_params.clone());
-        }
-
-        let sliding_window = self
-            .sdpa_params
-            .sliding_window
-            .expect("sliding Gemma4 layer must have sliding_window");
-        let location = device.location();
-        let cumulative_seqlens_q = flash_params
-            .cumulative_seqlens_q
-            .get(&location)
-            .cloned()
-            .ok_or_else(|| {
-                candle_core::Error::Msg(format!(
-                    "missing flash cumulative_seqlens_q for device {location:?}"
-                ))
-            })?;
-
-        let mut cumulative_k = Vec::with_capacity(seqlen_offsets.len() + 1);
-        cumulative_k.push(0u32);
-        let mut running = 0u32;
-        let mut max_k = 0u32;
-        for &offset in seqlen_offsets {
-            let retained = (offset + q_len).min(sliding_window) as u32;
-            running += retained;
-            max_k = max_k.max(retained);
-            cumulative_k.push(running);
-        }
-
-        let cumulative_seqlens_k = Tensor::new(cumulative_k, &Device::Cpu)?.to_device(device)?;
-
-        Ok(FlashParams {
-            max_q: flash_params.max_q,
-            max_k,
-            cumulative_seqlens_q: HashMap::from([(location, cumulative_seqlens_q)]),
-            cumulative_seqlens_k: HashMap::from([(location, cumulative_seqlens_k)]),
-            causal: flash_params.causal,
-        })
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
@@ -796,19 +748,9 @@ impl Attention {
                 }
             },
             None => {
-                let flash_params = flash_params
-                    .map(|fp| {
-                        self.adjusted_flash_params_for_sliding(
-                            fp,
-                            seqlen_offsets,
-                            q_len,
-                            q.device(),
-                        )
-                    })
-                    .transpose()?;
                 // Flash attention only supports head_dim <= 256; fall back for larger dims
                 if self.head_dim <= 256 {
-                    match flash_params.as_ref() {
+                    match flash_params {
                         Some(fp) => Sdpa.run_attention(
                             &q,
                             &k,
@@ -1505,7 +1447,7 @@ impl TextModel {
             hidden_size: cfg.hidden_size,
             num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
             num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size()).max(1),
-            sliding_window: None,
+            sliding_window: Some(cfg.sliding_window),
             k_head_dim: cfg.head_dim,
             v_head_dim: cfg.head_dim,
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,

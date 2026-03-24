@@ -744,6 +744,7 @@ impl Loader for VisionLoader {
                     None,
                     None,
                     None,
+                    model.config().sliding_window,
                 )?;
                 let _ = model.forward(
                     &inputs.input,

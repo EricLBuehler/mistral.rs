@@ -3,7 +3,7 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::Module;
 use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use crate::{
     attention::{Sdpa, SdpaParams},
@@ -774,13 +774,7 @@ impl VisionTower {
         let sin = sin.to_dtype(dtype)?;
 
         // Bidirectional flash params
-        let flash_params = FlashParams {
-            causal: false,
-            cumulative_seqlens_q: HashMap::new(),
-            cumulative_seqlens_k: HashMap::new(),
-            max_q: 0,
-            max_k: 0,
-        };
+        let flash_params = FlashParams::empty(false);
 
         // Keep padding positions zeroed after each layer so masked paths cannot
         // accumulate values for fully masked queries.

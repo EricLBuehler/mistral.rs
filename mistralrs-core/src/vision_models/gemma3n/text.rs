@@ -1229,7 +1229,7 @@ impl TextModel {
                 num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
                 num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
                     .max(1),
-                sliding_window: None,
+                sliding_window: Some(cfg.sliding_window),
                 k_head_dim: cfg.head_dim,
                 v_head_dim: cfg.head_dim,
                 kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,

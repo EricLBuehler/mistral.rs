@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{LayerNorm, LayerNormConfig, Linear, Module};
@@ -198,13 +198,7 @@ impl Llama4VisionAttention {
             k = candle_nn::rotary_emb::rope_i(&k, &self.freqs.cos, &self.freqs.sin)?;
         }
 
-        let flash_params = FlashParams {
-            max_q: 0,
-            max_k: 0,
-            cumulative_seqlens_q: HashMap::new(),
-            cumulative_seqlens_k: HashMap::new(),
-            causal: false,
-        };
+        let flash_params = FlashParams::empty(false);
 
         let mut attn_output = Sdpa
             .run_attention(
