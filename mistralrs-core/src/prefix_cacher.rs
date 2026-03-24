@@ -111,7 +111,10 @@ impl PrefixCacheManagerV2 {
         }
         let mut n_on_device = 0;
         for cache in self.caches.values() {
-            let first_non_none = cache.cache.iter().find_or_first(|x| x.is_some());
+            let first_non_none = cache
+                .cache
+                .iter()
+                .find_or_first(|x| x.as_ref().is_some_and(|kv| kv.k().ok().flatten().is_some()));
             let Some(Some(first_non_none)) = first_non_none else {
                 continue;
             };
@@ -123,6 +126,7 @@ impl PrefixCacheManagerV2 {
                 KvCache::Rotating { k, .. } => {
                     k.all_data().as_ref().expect("No KV cache data").device()
                 }
+                KvCache::Shared { .. } => continue,
             };
 
             if !matches!(cache_device, Device::Cpu) {
@@ -135,7 +139,10 @@ impl PrefixCacheManagerV2 {
             if n_on_device - n_evicted <= self.n_on_device {
                 break;
             }
-            let first_non_none = cache.cache.iter().find_or_first(|x| x.is_some());
+            let first_non_none = cache
+                .cache
+                .iter()
+                .find_or_first(|x| x.as_ref().is_some_and(|kv| kv.k().ok().flatten().is_some()));
             let Some(Some(first_non_none)) = first_non_none else {
                 continue;
             };
@@ -147,6 +154,7 @@ impl PrefixCacheManagerV2 {
                 KvCache::Rotating { k, .. } => {
                     k.all_data().as_ref().expect("No KV cache data").device()
                 }
+                KvCache::Shared { .. } => continue,
             };
 
             if !matches!(cache_device, Device::Cpu) {

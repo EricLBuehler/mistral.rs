@@ -36,6 +36,23 @@ macro_rules! is_sliding {
 
 const EPS: f64 = 1e-8;
 
+fn kv_shared_layer_index(cfg: &Gemma3nTextConfig, layer_idx: usize) -> Option<usize> {
+    if cfg.num_kv_shared_layers == 0 {
+        return None;
+    }
+
+    let first_kv_shared_layer_idx = cfg.num_hidden_layers - cfg.num_kv_shared_layers;
+    if first_kv_shared_layer_idx == 0 || layer_idx < first_kv_shared_layer_idx {
+        return None;
+    }
+
+    if is_sliding!(layer_idx, cfg) {
+        Some(first_kv_shared_layer_idx - 2)
+    } else {
+        Some(first_kv_shared_layer_idx - 1)
+    }
+}
+
 #[derive(Clone)]
 pub struct Mlp {
     gate: Arc<dyn QuantMethod>,
@@ -268,18 +285,7 @@ impl Attention {
             mapper.set_device(layer_idx, vb.pp("v_norm"), false),
         )?;
 
-        let first_kv_shared_layer_idx = cfg.num_hidden_layers - cfg.num_kv_shared_layers;
-        let is_kv_shared_layer = layer_idx >= first_kv_shared_layer_idx;
-
-        let kv_shared_layer_index = if !is_kv_shared_layer {
-            None
-        } else if sliding_window.is_some() {
-            // Last layer that computes local sliding attention is always 2 before sharing starts
-            Some(first_kv_shared_layer_idx - 2)
-        } else {
-            // Last layer before sharing starts is always the last that computes global attention layer
-            Some(first_kv_shared_layer_idx - 1)
-        };
+        let kv_shared_layer_index = kv_shared_layer_index(cfg, layer_idx);
         Ok(Self {
             q_proj,
             k_proj,
@@ -1193,13 +1199,17 @@ impl TextModel {
 
         let cache_types = (0..cfg.num_hidden_layers)
             .map(|layer_idx| {
-                is_sliding!(layer_idx, cfg)
-                    .then(|| NormalCacheType::SlidingWindow {
+                if let Some(owner) = kv_shared_layer_index(cfg, layer_idx) {
+                    NormalCacheType::Shared { owner }
+                } else if is_sliding!(layer_idx, cfg) {
+                    NormalCacheType::SlidingWindow {
                         window: cfg.sliding_window,
-                    })
-                    .unwrap_or(NormalCacheType::Normal {
+                    }
+                } else {
+                    NormalCacheType::Normal {
                         max_seq_len: cfg.max_position_embeddings,
-                    })
+                    }
+                }
             })
             .collect::<Vec<_>>();
         Ok(Self {

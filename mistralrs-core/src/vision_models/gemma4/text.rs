@@ -1329,10 +1329,20 @@ impl TextModel {
             };
 
         let cache_types = (0..cfg.num_hidden_layers)
-            .map(|_layer_idx| NormalCacheType::Normal {
-                max_seq_len: cfg.max_position_embeddings,
+            .map(|layer_idx| {
+                if let Some(owner) = kv_shared_layer_index(cfg, layer_idx)? {
+                    Ok(NormalCacheType::Shared { owner })
+                } else if is_sliding!(layer_idx, cfg) {
+                    Ok(NormalCacheType::SlidingWindow {
+                        window: cfg.sliding_window,
+                    })
+                } else {
+                    Ok(NormalCacheType::Normal {
+                        max_seq_len: cfg.max_position_embeddings,
+                    })
+                }
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
             embed_tokens,

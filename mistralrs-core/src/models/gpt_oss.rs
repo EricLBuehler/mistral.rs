@@ -321,33 +321,6 @@ impl Attention {
             None => {
                 let (k, v) = kv_cache.append(&k, &v)?;
 
-                // For sliding window layers with a wrapped RotatingCache, the
-                // returned K/V are in circular buffer order (not temporal).
-                // Reorder to temporal order so the mask columns align correctly:
-                // [past_tokens | new_tokens].
-                let (k, v) = if self.is_sliding && q_len > 1 {
-                    match &*kv_cache {
-                        KvCache::Rotating { k: kc, .. }
-                            if kc.current_seq_len >= kc.max_seq_len && kc.offset > 0 =>
-                        {
-                            let dim = 2; // (batch, heads, seq, head_dim)
-                            let offset = kc.offset;
-                            let max_len = kc.max_seq_len;
-                            let p1_k = k.narrow(dim, offset, max_len - offset)?;
-                            let p2_k = k.narrow(dim, 0, offset)?;
-                            let p1_v = v.narrow(dim, offset, max_len - offset)?;
-                            let p2_v = v.narrow(dim, 0, offset)?;
-                            (
-                                Tensor::cat(&[&p1_k, &p2_k], dim)?,
-                                Tensor::cat(&[&p1_v, &p2_v], dim)?,
-                            )
-                        }
-                        _ => (k, v),
-                    }
-                } else {
-                    (k, v)
-                };
-
                 Sdpa.run_attention(
                     &q,
                     &k,
