@@ -58,6 +58,7 @@ impl Gemma4Processor {
         pooling_kernel_size: usize,
         default_output_length: usize,
         supports_images: bool,
+        supports_audio: bool,
     ) -> Self {
         let max_patches = default_output_length * pooling_kernel_size * pooling_kernel_size;
         let audio_seq_length = processor_config.audio_seq_length.unwrap_or(188);
@@ -69,7 +70,7 @@ impl Gemma4Processor {
             max_patches,
             audio_seq_length,
             supports_images,
-            supports_audio: true,
+            supports_audio,
         }
     }
 }
@@ -149,10 +150,22 @@ impl Gemma4ImageProcessor {
         format!("{BOI_TOKEN}{image_tokens}{EOI_TOKEN}")
     }
 
+    fn compute_audio_num_tokens(&self, num_mel_frames: usize) -> usize {
+        if num_mel_frames == 0 {
+            return 0;
+        }
+
+        let mut t = num_mel_frames;
+        for _ in 0..2 {
+            t = (t + 2 - 3) / 2 + 1;
+        }
+        t.min(self.audio_seq_length)
+    }
+
     /// Build the expanded token sequence for audio:
     /// `<start_of_audio>{N * <audio_soft_token>}<end_of_audio>`
-    fn build_audio_sequence(&self) -> String {
-        let audio_tokens = vec![AUDIO_TOKEN.to_string(); self.audio_seq_length].join("");
+    fn build_audio_sequence(&self, num_tokens: usize) -> String {
+        let audio_tokens = vec![AUDIO_TOKEN.to_string(); num_tokens].join("");
         format!("{BOA_TOKEN}{audio_tokens}{EOA_TOKEN}")
     }
 }
@@ -202,7 +215,13 @@ impl InputsProcessor for Gemma4ImageProcessor {
         let mut has_changed_prompt = false;
 
         // ── Audio processing ───────────────────────────────────────────────
-        let (audio_mel, audio_mel_mask) = if has_audios && self.supports_audio {
+        if has_audios && !self.supports_audio {
+            return Err(anyhow::Error::msg(
+                "This image processor does not support audio.",
+            ));
+        }
+
+        let (audio_mel, audio_mel_mask) = if has_audios {
             let mut audio_mel_accum = Vec::new();
             let mut audio_mask_accum = Vec::new();
             let audio_processor = AudioProcessor::new(preprocessor_config);
@@ -221,11 +240,13 @@ impl InputsProcessor for Gemma4ImageProcessor {
 
                     let mut seq_audio_mel = Vec::new();
                     let mut seq_audio_mask = Vec::new();
+                    let mut seq_audio_num_tokens = Vec::new();
                     for audio in audios {
                         let (mel, mask) = audio_processor
                             .process_audio(&audio, device)
                             .expect("Audio processing failed");
 
+                        seq_audio_num_tokens.push(self.compute_audio_num_tokens(mel.dim(1)?));
                         seq_audio_mel.push(mel);
                         seq_audio_mask.push(mask);
                     }
@@ -234,8 +255,26 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         let mut prompt = tokenizer
                             .decode(seq.get_toks(), false)
                             .expect("Detokenization failed!");
-                        let audio_sequence = self.build_audio_sequence();
-                        prompt = prompt.replace(AUDIO_TOKEN, &audio_sequence);
+
+                        let positions: Vec<usize> = prompt
+                            .match_indices(AUDIO_TOKEN)
+                            .map(|(idx, _)| idx)
+                            .collect();
+
+                        for (i, &pos) in positions.iter().enumerate().rev() {
+                            let num_tokens = seq_audio_num_tokens
+                                .get(i)
+                                .copied()
+                                .unwrap_or(self.audio_seq_length);
+                            let replacement = self.build_audio_sequence(num_tokens);
+
+                            prompt = format!(
+                                "{}{}{}",
+                                &prompt[..pos],
+                                replacement,
+                                &prompt[pos + AUDIO_TOKEN.len()..],
+                            );
+                        }
 
                         seq.set_initial_prompt(prompt.clone());
                         let toks = tokenizer

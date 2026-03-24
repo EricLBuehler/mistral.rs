@@ -347,14 +347,17 @@ impl VisionAttention {
         // Apply 2D RoPE
         q = apply_2d_rope(&q, cos, sin, 2)?;
         k = apply_2d_rope(&k, cos, sin, 2)?;
-        let attn_output = Sdpa.run_attention(
-            &q.contiguous()?,
-            &k.contiguous()?,
-            &v.contiguous()?,
-            attention_mask,
-            Some(flash_params),
-            &self.sdpa_params,
-        )?;
+        let q = q.contiguous()?;
+        let k = k.contiguous()?;
+        let v = v.contiguous()?;
+
+        let attn_output = if attention_mask.is_some() {
+            // CUDA flash-attn in the shared backend does not consume arbitrary
+            // dense masks, so padded vision batches must stay on the masked path.
+            Sdpa.run_attention_noflash(&q, &k, &v, attention_mask, &self.sdpa_params)?
+        } else {
+            Sdpa.run_attention(&q, &k, &v, None, Some(flash_params), &self.sdpa_params)?
+        };
 
         // Reshape back: (b, heads, seq, head_dim) -> (b, seq, hidden)
         let attn_output = attn_output.transpose(1, 2)?.reshape((
@@ -375,6 +378,15 @@ impl VisionAttention {
         uvb.pp("q_norm").add(&self.q_norm);
         uvb.pp("k_norm").add(&self.k_norm);
         uvb.to_safetensors()
+    }
+
+    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
+        vec![
+            &mut self.q_proj.inner,
+            &mut self.k_proj.inner,
+            &mut self.v_proj.inner,
+            &mut self.o_proj.inner,
+        ]
     }
 }
 
@@ -417,6 +429,14 @@ impl VisionMlp {
         uvb.pp("down_proj")
             .extend(self.down_proj.residual_tensors());
         uvb.to_safetensors()
+    }
+
+    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
+        vec![
+            &mut self.gate_proj.inner,
+            &mut self.up_proj.inner,
+            &mut self.down_proj.inner,
+        ]
     }
 }
 
@@ -500,6 +520,12 @@ impl VisionEncoderLayer {
         uvb.pp("post_feedforward_layernorm")
             .add(&self.post_feedforward_layernorm);
         uvb.to_safetensors()
+    }
+
+    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
+        let mut layers = self.self_attn.get_isq_layers();
+        layers.extend(self.mlp.get_isq_layers());
+        layers
     }
 }
 
@@ -714,20 +740,32 @@ impl VisionTower {
         let patch_positions = Tensor::cat(&all_positions, 0)?;
         let padding_positions = Tensor::cat(&all_padding, 0)?;
 
-        // Build attention mask: both query AND key must be valid to attend.
-        // Use where_cond to avoid -inf * 0 = NaN.
-        let valid_mask = padding_positions
-            .to_dtype(DType::F32)?
-            .eq(0.0)?
-            .to_dtype(DType::F32)?; // [b, max_patches]: 1=valid, 0=padding
-        let attn_mask_2d = valid_mask.unsqueeze(2)?.matmul(&valid_mask.unsqueeze(1)?)?; // [b, mp, mp]: 1=attend, 0=don't
-        let attend = attn_mask_2d.gt(0.0)?.to_dtype(DType::U8)?;
-        let zeros = Tensor::zeros(attn_mask_2d.shape(), dtype, &device)?;
-        let large_neg = Tensor::try_from(-1e9f32)?
-            .to_dtype(dtype)?
-            .to_device(&device)?
-            .broadcast_as(attn_mask_2d.shape())?;
-        let attention_mask = attend.where_cond(&zeros, &large_neg)?.unsqueeze(1)?;
+        let has_padding = all_padding.iter().any(|padding| {
+            padding
+                .sum_all()
+                .and_then(|t| t.to_scalar::<u8>())
+                .map(|sum| sum != 0)
+                .unwrap_or(false)
+        });
+
+        // Build attention mask only when padding is present. The shared CUDA flash-attn
+        // path cannot consume this dense padding mask, so masked batches run noflash.
+        let attention_mask = if has_padding {
+            let valid_mask = padding_positions
+                .to_dtype(DType::F32)?
+                .eq(0.0)?
+                .to_dtype(DType::F32)?; // [b, max_patches]: 1=valid, 0=padding
+            let attn_mask_2d = valid_mask.unsqueeze(2)?.matmul(&valid_mask.unsqueeze(1)?)?; // [b, mp, mp]: 1=attend, 0=don't
+            let attend = attn_mask_2d.gt(0.0)?.to_dtype(DType::U8)?;
+            let zeros = Tensor::zeros(attn_mask_2d.shape(), dtype, &device)?;
+            let large_neg = Tensor::try_from(-1e9f32)?
+                .to_dtype(dtype)?
+                .to_device(&device)?
+                .broadcast_as(attn_mask_2d.shape())?;
+            Some(attend.where_cond(&zeros, &large_neg)?.unsqueeze(1)?)
+        } else {
+            None
+        };
 
         // Compute 2D RoPE for all positions (padding positions at -1 are fine
         // since their hidden states are zero, so RoPE values don't matter)
@@ -744,13 +782,19 @@ impl VisionTower {
             max_k: 0,
         };
 
-        // Keep padding positions zeroed after each layer so non-flash backends
-        // cannot accumulate values for fully masked queries.
-        let valid_mask_3d = padding_positions
-            .to_dtype(DType::F32)?
-            .eq(0.0)?
-            .to_dtype(dtype)?
-            .unsqueeze(2)?; // [b, max_patches, 1]: 1=valid, 0=padding
+        // Keep padding positions zeroed after each layer so masked paths cannot
+        // accumulate values for fully masked queries.
+        let valid_mask_3d = if has_padding {
+            Some(
+                padding_positions
+                    .to_dtype(DType::F32)?
+                    .eq(0.0)?
+                    .to_dtype(dtype)?
+                    .unsqueeze(2)?,
+            )
+        } else {
+            None
+        };
 
         // Encoder layers
         let mut hidden_states = inputs_embeds;
@@ -759,11 +803,12 @@ impl VisionTower {
                 &hidden_states,
                 &cos,
                 &sin,
-                Some(&attention_mask),
+                attention_mask.as_ref(),
                 &flash_params,
             )?;
-            // Zero out padding positions to prevent value accumulation
-            hidden_states = hidden_states.broadcast_mul(&valid_mask_3d)?;
+            if let Some(valid_mask_3d) = &valid_mask_3d {
+                hidden_states = hidden_states.broadcast_mul(valid_mask_3d)?;
+            }
         }
 
         // Pool with full max_patches (k = sqrt(max_patches / output_length) = 3)
@@ -796,6 +841,23 @@ impl VisionTower {
         }
 
         uvb.to_safetensors()
+    }
+
+    pub fn get_isq_layers(&mut self) -> Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)> {
+        let mut tensors = Vec::new();
+        for layer in &mut self.encoder_layers {
+            tensors.extend(
+                layer
+                    .get_isq_layers()
+                    .into_iter()
+                    .map(|tensor| (tensor, None)),
+            );
+        }
+        tensors
+    }
+
+    pub fn num_encoder_layers(&self) -> usize {
+        self.encoder_layers.len()
     }
 
     #[allow(dead_code)]

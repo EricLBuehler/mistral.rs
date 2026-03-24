@@ -102,22 +102,23 @@ impl AudioModel {
 
     pub fn get_isq_layers(&mut self) -> Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)> {
         let mut tensors = Vec::new();
-        // Audio conformer layers
-        for (i, block) in self.inner.conformer.iter_mut().enumerate() {
-            tensors.push((&mut block.attention.attn.q_proj, Some(i)));
-            tensors.push((&mut block.attention.attn.k_proj, Some(i)));
-            tensors.push((&mut block.attention.attn.v_proj, Some(i)));
+        // Audio lives in the non-mapped submodel, so these do not correspond to
+        // text repeating-layer indices for device placement.
+        for block in &mut self.inner.conformer {
+            tensors.push((&mut block.attention.attn.q_proj, None));
+            tensors.push((&mut block.attention.attn.k_proj, None));
+            tensors.push((&mut block.attention.attn.v_proj, None));
             tensors.push((
                 &mut block.attention.attn.relative_position_embedding.pos_proj,
-                Some(i),
+                None,
             ));
-            tensors.push((&mut block.attention.post, Some(i)));
-            tensors.push((&mut block.ffw_layer_start.ffw_layer_1, Some(i)));
-            tensors.push((&mut block.ffw_layer_start.ffw_layer_2, Some(i)));
-            tensors.push((&mut block.ffw_layer_end.ffw_layer_1, Some(i)));
-            tensors.push((&mut block.ffw_layer_end.ffw_layer_2, Some(i)));
-            tensors.push((&mut block.lconv1d.linear_start, Some(i)));
-            tensors.push((&mut block.lconv1d.linear_end, Some(i)));
+            tensors.push((&mut block.attention.post, None));
+            tensors.push((&mut block.ffw_layer_start.ffw_layer_1, None));
+            tensors.push((&mut block.ffw_layer_start.ffw_layer_2, None));
+            tensors.push((&mut block.ffw_layer_end.ffw_layer_1, None));
+            tensors.push((&mut block.ffw_layer_end.ffw_layer_2, None));
+            tensors.push((&mut block.lconv1d.linear_start, None));
+            tensors.push((&mut block.lconv1d.linear_end, None));
         }
         // SSCP input projection
         tensors.push((

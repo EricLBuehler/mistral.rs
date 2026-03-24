@@ -7310,6 +7310,7 @@ impl VisionModelLoader for Gemma4Loader {
             cfg.vision_config.pooling_kernel_size,
             cfg.vision_config.default_output_length,
             true,
+            cfg.audio_config.is_some(),
         ))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
@@ -7351,6 +7352,31 @@ impl IsqModelLoader for Gemma4Loader {
             Regex::new(r"per_layer_model_projection\.(weight|bias)$")?,
             Regex::new(r"embed_vision\.embedding_projection\.(weight|bias)$")?,
             Regex::new(r"embed_audio\.embedding_projection\.(weight|bias)$")?,
+            Regex::new(r"audio_tower\.conformer\.(\d+)\.attention\.attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"audio_tower\.conformer\.(\d+)\.attention\.attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"audio_tower\.conformer\.(\d+)\.attention\.attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"audio_tower\.conformer\.(\d+)\.attention\.attn\.relative_position_embedding\.pos_proj\.(weight|bias)$",
+            )?,
+            Regex::new(r"audio_tower\.conformer\.(\d+)\.attention\.post\.(weight|bias)$")?,
+            Regex::new(
+                r"audio_tower\.conformer\.(\d+)\.ffw_layer_start\.ffw_layer_1\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"audio_tower\.conformer\.(\d+)\.ffw_layer_start\.ffw_layer_2\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"audio_tower\.conformer\.(\d+)\.ffw_layer_end\.ffw_layer_1\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"audio_tower\.conformer\.(\d+)\.ffw_layer_end\.ffw_layer_2\.(weight|bias)$",
+            )?,
+            Regex::new(r"audio_tower\.conformer\.(\d+)\.lconv1d\.linear_start\.(weight|bias)$")?,
+            Regex::new(r"audio_tower\.conformer\.(\d+)\.lconv1d\.linear_end\.(weight|bias)$")?,
+            Regex::new(
+                r"audio_tower\.subsample_conv_projection\.input_proj_linear\.(weight|bias)$",
+            )?,
+            Regex::new(r"audio_tower\.output_proj\.(weight|bias)$")?,
             Regex::new(
                 r"vision_tower\.encoder\.layers\.(\d+)\.self_attn\.\w+_proj\.(weight|bias)$",
             )?,
@@ -7370,6 +7396,41 @@ impl IsqModelLoader for Gemma4Loader {
             Regex::new(r"model\.language_model\.per_layer_model_projection\.(weight|bias)$")?,
             Regex::new(r"model\.embed_vision\.embedding_projection\.(weight|bias)$")?,
             Regex::new(r"model\.embed_audio\.embedding_projection\.(weight|bias)$")?,
+            Regex::new(
+                r"model\.audio_tower\.conformer\.(\d+)\.attention\.attn\.q_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.audio_tower\.conformer\.(\d+)\.attention\.attn\.k_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.audio_tower\.conformer\.(\d+)\.attention\.attn\.v_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.audio_tower\.conformer\.(\d+)\.attention\.attn\.relative_position_embedding\.pos_proj\.(weight|bias)$",
+            )?,
+            Regex::new(r"model\.audio_tower\.conformer\.(\d+)\.attention\.post\.(weight|bias)$")?,
+            Regex::new(
+                r"model\.audio_tower\.conformer\.(\d+)\.ffw_layer_start\.ffw_layer_1\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.audio_tower\.conformer\.(\d+)\.ffw_layer_start\.ffw_layer_2\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.audio_tower\.conformer\.(\d+)\.ffw_layer_end\.ffw_layer_1\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.audio_tower\.conformer\.(\d+)\.ffw_layer_end\.ffw_layer_2\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.audio_tower\.conformer\.(\d+)\.lconv1d\.linear_start\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.audio_tower\.conformer\.(\d+)\.lconv1d\.linear_end\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.audio_tower\.subsample_conv_projection\.input_proj_linear\.(weight|bias)$",
+            )?,
+            Regex::new(r"model\.audio_tower\.output_proj\.(weight|bias)$")?,
             Regex::new(
                 r"model\.vision_tower\.encoder\.layers\.(\d+)\.self_attn\.\w+_proj\.(weight|bias)$",
             )?,
@@ -7400,7 +7461,8 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         let tc = &cfg.text_config;
 
         let vision_tokens_per_image = cfg.vision_soft_tokens_per_image.unwrap_or(280);
-        let total_seq_len = *max_seq_len + vision_tokens_per_image * max_num_images;
+        let audio_tokens = if cfg.audio_config.is_some() { 188 } else { 0 };
+        let total_seq_len = *max_seq_len + vision_tokens_per_image * max_num_images + audio_tokens;
         let max_text_attn = max_batch_size * tc.num_attention_heads * total_seq_len * total_seq_len;
 
         Ok(max_text_attn)
@@ -7413,7 +7475,7 @@ impl DeviceMappedModelLoader for Gemma4Loader {
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len: _,
-            max_batch_size: _,
+            max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
@@ -7426,9 +7488,36 @@ impl DeviceMappedModelLoader for Gemma4Loader {
 
         let max_patches =
             vc.default_output_length * vc.pooling_kernel_size * vc.pooling_kernel_size;
-        let max_vision_attn = max_num_images * vc.num_attention_heads * max_patches * max_patches;
+        let max_vision_attn =
+            max_batch_size * max_num_images * vc.num_attention_heads * max_patches * max_patches;
+        let max_vision_hidden = max_batch_size
+            * max_num_images
+            * max_patches
+            * vc.hidden_size.max(vc.intermediate_size);
 
-        Ok(max_vision_attn)
+        let max_audio_activation = cfg.audio_config.as_ref().map_or(0, |audio_cfg| {
+            let max_audio_frames = 1280;
+            let subsample_factor: usize = audio_cfg
+                .sscp_conv_stride_size
+                .iter()
+                .map(|stride| stride[0])
+                .product();
+            let audio_seq_after_subsample = max_audio_frames / subsample_factor.max(1);
+
+            let audio_encoder_act = audio_seq_after_subsample * (audio_cfg.hidden_size * 4);
+            let chunk_size = audio_cfg.conf_attention_chunk_size;
+            let context_size = chunk_size + audio_cfg.conf_attention_context_left - 1
+                + audio_cfg.conf_attention_context_right;
+            let num_chunks = audio_seq_after_subsample.div_ceil(chunk_size);
+            let audio_attn_act =
+                audio_cfg.conf_num_attention_heads * num_chunks * chunk_size * context_size;
+
+            max_batch_size * audio_encoder_act.max(audio_attn_act)
+        });
+
+        Ok(max_vision_attn
+            .max(max_vision_hidden)
+            .max(max_audio_activation))
     }
 
     fn non_mapped_size_in_bytes(
@@ -7440,8 +7529,130 @@ impl DeviceMappedModelLoader for Gemma4Loader {
     ) -> Result<usize> {
         let cfg: Gemma4Config = serde_json::from_str(config)?;
         let tc = &cfg.text_config;
-        let elems = tc.vocab_size * tc.hidden_size;
-        Ok(elems * dtype.size_in_bytes() / weight_pack_factor)
+        let vc = &cfg.vision_config;
+
+        let text_elems = {
+            let embed_tokens = tc.hidden_size * tc.vocab_size;
+            let lm_head = if !tc.tie_word_embeddings || weight_pack_factor != 1 {
+                tc.hidden_size * tc.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = tc.hidden_size;
+
+            let ple_dim = tc.hidden_size_per_layer_input.unwrap_or(0);
+            let ple_vocab = tc.vocab_size_per_layer_input.unwrap_or(tc.vocab_size);
+            let embed_tokens_per_layer = if ple_dim > 0 {
+                ple_vocab * tc.num_hidden_layers * ple_dim
+            } else {
+                0
+            };
+            let per_layer_model_projection = if ple_dim > 0 {
+                tc.hidden_size * tc.num_hidden_layers * ple_dim / weight_pack_factor
+            } else {
+                0
+            };
+            let per_layer_projection_norm = ple_dim;
+
+            embed_tokens
+                + lm_head
+                + norm
+                + embed_tokens_per_layer
+                + per_layer_model_projection
+                + per_layer_projection_norm
+        };
+
+        let vision_layer_elems = {
+            let quantized = vc.hidden_size * vc.num_attention_heads * vc.head_dim
+                + 3 * (vc.hidden_size * vc.num_key_value_heads * vc.head_dim)
+                + 2 * (vc.hidden_size * vc.intermediate_size)
+                + vc.intermediate_size * vc.hidden_size;
+            let norms = 2 * vc.head_dim + 4 * vc.hidden_size;
+            quantized / weight_pack_factor + norms
+        };
+        let vision_elems = {
+            let patch_embed = vc.patch_size * vc.patch_size * 3 * vc.hidden_size;
+            let position_embedding_table = 2 * vc.position_embedding_size * vc.hidden_size;
+            let patch_embedder = patch_embed / weight_pack_factor + position_embedding_table;
+            let encoder = vc.num_hidden_layers * vision_layer_elems;
+            let embed_vision = vc.hidden_size * tc.hidden_size / weight_pack_factor;
+
+            patch_embedder + encoder + embed_vision
+        };
+
+        let audio_elems = cfg.audio_config.as_ref().map_or(0, |audio_cfg| {
+            let mut f_out = audio_cfg.input_feat_size;
+            for i in 0..2 {
+                let kernel_w = audio_cfg.sscp_conv_kernel_size[i][1];
+                let stride_w = audio_cfg.sscp_conv_stride_size[i][1];
+                let pad_left = 1;
+                let pad_right = 1;
+                f_out = (f_out + pad_left + pad_right + stride_w - kernel_w) / stride_w;
+            }
+
+            let subsample_conv_projection = {
+                let conv_0 = audio_cfg.sscp_conv_channel_size[0]
+                    * audio_cfg.sscp_conv_kernel_size[0][0]
+                    * audio_cfg.sscp_conv_kernel_size[0][1];
+                let conv_1 = audio_cfg.sscp_conv_channel_size[0]
+                    * audio_cfg.sscp_conv_channel_size[1]
+                    * audio_cfg.sscp_conv_kernel_size[1][0]
+                    * audio_cfg.sscp_conv_kernel_size[1][1];
+                let norms =
+                    audio_cfg.sscp_conv_channel_size[0] + audio_cfg.sscp_conv_channel_size[1];
+                let input_proj =
+                    audio_cfg.sscp_conv_channel_size[1] * f_out * audio_cfg.hidden_size
+                        / weight_pack_factor;
+                conv_0 + conv_1 + norms + input_proj
+            };
+
+            let conformer_block = {
+                let attention = 5 * (audio_cfg.hidden_size * audio_cfg.hidden_size)
+                    / weight_pack_factor
+                    + 2 * audio_cfg.hidden_size
+                    + audio_cfg.hidden_size / audio_cfg.conf_num_attention_heads
+                    + audio_cfg.hidden_size / 2
+                    + (audio_cfg.conf_attention_context_left
+                        + audio_cfg.conf_attention_context_right
+                        + 1)
+                    + (audio_cfg.conf_attention_chunk_size
+                        * (audio_cfg.conf_attention_chunk_size
+                            + audio_cfg.conf_attention_context_left
+                            - 1
+                            + audio_cfg.conf_attention_context_right))
+                    + 1;
+                let ffw = 2
+                    * (2 * audio_cfg.hidden_size
+                        + 2 * (audio_cfg.hidden_size * (audio_cfg.hidden_size * 4))
+                            / weight_pack_factor);
+                let conv = 2 * audio_cfg.hidden_size
+                    + audio_cfg.hidden_size * (audio_cfg.hidden_size * 2) / weight_pack_factor
+                    + audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor
+                    + audio_cfg.hidden_size * audio_cfg.conf_conv_kernel_size;
+                attention + ffw + conv + audio_cfg.hidden_size
+            };
+
+            let output_proj = audio_cfg.output_proj_dims.map_or(0, |output_dim| {
+                audio_cfg.hidden_size * output_dim / weight_pack_factor + output_dim
+            });
+            let audio_embed_hidden = audio_cfg.output_proj_dims.unwrap_or(audio_cfg.hidden_size);
+            let embed_audio = audio_embed_hidden * tc.hidden_size / weight_pack_factor;
+
+            subsample_conv_projection
+                + audio_cfg.conf_num_hidden_layers * conformer_block
+                + output_proj
+                + embed_audio
+        });
+
+        let vision_dtype = if dtype == DType::F16 {
+            DType::F32
+        } else {
+            dtype
+        };
+
+        Ok(text_elems * dtype.size_in_bytes()
+            + vision_elems * vision_dtype.size_in_bytes()
+            + audio_elems * dtype.size_in_bytes())
     }
 
     fn layer_sizes_in_bytes(
@@ -7513,6 +7724,10 @@ impl DeviceMappedModelLoader for Gemma4Loader {
     fn num_layers(&self, config: &str) -> Result<usize> {
         let cfg: Gemma4Config = serde_json::from_str(config)?;
         Ok(cfg.text_config.num_hidden_layers)
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision, NonMappedSubModel::Audio])
     }
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {

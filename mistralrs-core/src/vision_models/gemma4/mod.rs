@@ -277,8 +277,10 @@ impl Gemma4Model {
                         let valid = enc_mask.eq(0.0)?;
                         let valid_indices =
                             valid.squeeze(0)?.flatten_all()?.nonzero()?.squeeze(1)?;
-                        let valid_features =
-                            audio_features.squeeze(0)?.index_select(&valid_indices, 0)?;
+                        let valid_features = audio_features
+                            .squeeze(0)?
+                            .contiguous()?
+                            .index_select(&valid_indices, 0)?;
                         let feats = embed_audio
                             .forward(&valid_features.unsqueeze(0)?)?
                             .squeeze(0)?;
@@ -302,7 +304,10 @@ impl Gemma4Model {
                 let mut all_feats = Vec::new();
                 for b in 0..batch {
                     let valid_indices = valid.get(b)?.flatten_all()?.nonzero()?.squeeze(1)?;
-                    let feats = audio_features.get(b)?.index_select(&valid_indices, 0)?;
+                    let feats = audio_features
+                        .get(b)?
+                        .contiguous()?
+                        .index_select(&valid_indices, 0)?;
                     all_feats.push(feats);
                 }
                 let audio_feats = Tensor::cat(&all_feats, 0)?.unsqueeze(0)?;
@@ -357,6 +362,8 @@ impl IsqModel for Gemma4Model {
     ) {
         let (mut tensors, mapper) = self.language_model.get_layers();
 
+        tensors.extend(self.vision_tower.get_isq_layers());
+
         if let Some(ref mut audio) = self.audio_tower {
             tensors.extend(audio.get_isq_layers());
         }
@@ -402,6 +409,14 @@ impl IsqModel for Gemma4Model {
     fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
         // Start with text model names
         let mut names = self.language_model.imatrix_names()?;
+
+        // Vision tower layers
+        for _ in 0..self.vision_tower.num_encoder_layers() {
+            // q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj
+            for _ in 0..7 {
+                names.push(None);
+            }
+        }
 
         // Audio tower layers
         if let Some(ref audio) = self.audio_tower {
