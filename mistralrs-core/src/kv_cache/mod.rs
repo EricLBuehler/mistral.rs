@@ -604,12 +604,30 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 };
                 if let Some(layer_devices) = &layer_devices {
                     let layer_dev = &layer_devices[layer_idx];
-                    k_preallocated_cache = k_preallocated_cache
-                        .to_device(layer_dev)
+                    if k_preallocated_cache.device().same_device(layer_dev) {
+                        k_preallocated_cache = k_preallocated_cache
+                            .to_device(layer_dev)
+                            .expect("Could not prepare cache");
+                    } else {
+                        k_preallocated_cache = Tensor::zeros(
+                            k_preallocated_cache.dims(),
+                            k_preallocated_cache.dtype(),
+                            layer_dev,
+                        )
                         .expect("Could not prepare cache");
-                    v_preallocated_cache = v_preallocated_cache
-                        .to_device(layer_dev)
+                    }
+                    if v_preallocated_cache.device().same_device(layer_dev) {
+                        v_preallocated_cache = v_preallocated_cache
+                            .to_device(layer_dev)
+                            .expect("Could not prepare cache");
+                    } else {
+                        v_preallocated_cache = Tensor::zeros(
+                            v_preallocated_cache.dims(),
+                            v_preallocated_cache.dtype(),
+                            layer_dev,
+                        )
                         .expect("Could not prepare cache");
+                    }
                 }
                 k_caches.push(k_preallocated_cache);
                 v_caches.push(v_preallocated_cache);
