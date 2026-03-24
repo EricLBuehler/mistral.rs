@@ -617,6 +617,7 @@ impl MistralRsForServerBuilder {
             self.paged_cache_type,
             !paged_attn,
             max_seq_len,
+            &device,
         )?;
 
         // Configure this last to prevent arg moves
@@ -732,6 +733,7 @@ impl MistralRsForServerBuilder {
             self.paged_cache_type,
             !paged_attn,
             max_seq_len,
+            &device,
         )?;
 
         let isq = first_model
@@ -1011,6 +1013,7 @@ fn init_cache_config(
     cache_type: PagedCacheType,
     no_paged_attn: bool,
     max_seq_len: usize,
+    device: &Device,
 ) -> Result<Option<PagedAttentionConfig>> {
     match (
         paged_attn_block_size,
@@ -1020,11 +1023,18 @@ fn init_cache_config(
         paged_attn_supported(),
         no_paged_attn,
     ) {
-        (block_size, None, None, None, true, false) => Ok(Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::ContextSize(max_seq_len),
-            cache_type,
-        )?)),
+        (block_size, None, None, None, true, false) => {
+            let memory_config = if device.is_cuda() {
+                MemoryGpuConfig::Utilization(0.9)
+            } else {
+                MemoryGpuConfig::ContextSize(max_seq_len)
+            };
+            Ok(Some(PagedAttentionConfig::new(
+                block_size,
+                memory_config,
+                cache_type,
+            )?))
+        }
         (block_size, None, None, Some(ctxt), true, false) => Ok(Some(PagedAttentionConfig::new(
             block_size,
             MemoryGpuConfig::ContextSize(ctxt),
