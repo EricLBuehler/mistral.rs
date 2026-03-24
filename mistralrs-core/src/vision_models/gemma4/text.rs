@@ -37,6 +37,29 @@ macro_rules! is_sliding {
     }};
 }
 
+fn first_kv_shared_layer_idx(cfg: &Gemma4TextConfig) -> usize {
+    cfg.num_hidden_layers
+        .saturating_sub(cfg.num_kv_shared_layers)
+}
+
+fn kv_shared_layer_index(cfg: &Gemma4TextConfig, layer_idx: usize) -> Result<Option<usize>> {
+    let first_kv_shared_layer_idx = first_kv_shared_layer_idx(cfg);
+    if first_kv_shared_layer_idx == 0 || layer_idx < first_kv_shared_layer_idx {
+        return Ok(None);
+    }
+
+    let attention_type = &cfg.layer_types[layer_idx];
+    cfg.layer_types[..first_kv_shared_layer_idx]
+        .iter()
+        .rposition(|ty| ty == attention_type)
+        .map(Some)
+        .ok_or_else(|| {
+            candle_core::Error::Msg(format!(
+                "Gemma4 layer {layer_idx} is configured to share KV without a prior `{attention_type}` donor layer."
+            ))
+        })
+}
+
 /// Pure RMS normalization without learned weight (used for V norm).
 fn v_norm(v: &Tensor, eps: f64) -> Result<Tensor> {
     let original_dtype = v.dtype();
@@ -429,7 +452,6 @@ struct Attention {
     sdpa_params: SdpaParams,
     q_norm: GemmaRmsNorm,
     k_norm: GemmaRmsNorm,
-    is_kv_shared: bool,
     kv_shared_layer_index: Option<usize>,
     rms_norm_eps: f64,
     layer_idx: usize,
@@ -446,7 +468,6 @@ impl Attention {
         vb: ShardedVarBuilder,
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
-        is_kv_shared: bool,
         kv_shared_layer_index: Option<usize>,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
@@ -556,7 +577,6 @@ impl Attention {
             },
             q_norm,
             k_norm,
-            is_kv_shared,
             kv_shared_layer_index,
             rms_norm_eps: cfg.rms_norm_eps,
             layer_idx,
@@ -633,17 +653,13 @@ impl Attention {
             k = k_rot;
         }
 
-        // KV sharing: if this layer is shared, read from donor layer's cache directly
-        let (k, v, is_shared_kv) = if self.is_kv_shared {
-            if let Some(donor_idx) = self.kv_shared_layer_index {
-                let donor_cache = &kv_caches[donor_idx];
-                let dk = donor_cache.k()?.unwrap().to_device(q.device())?;
-                let dv = donor_cache.v()?.unwrap().to_device(q.device())?;
-                (dk, dv, true)
-            } else {
-                let (k, v) = kv_caches[self.layer_idx].append(&k, &v)?;
-                (k, v, false)
-            }
+        // KV sharing: shared layers reuse the last non-shared donor cache of the
+        // same attention type, matching Gemma3n and HF Gemma4.
+        let (k, v, is_shared_kv) = if let Some(donor_idx) = self.kv_shared_layer_index {
+            let donor_cache = &kv_caches[donor_idx];
+            let dk = donor_cache.k()?.unwrap().to_device(q.device())?;
+            let dv = donor_cache.v()?.unwrap().to_device(q.device())?;
+            (dk, dv, true)
         } else {
             let (k, v) = kv_caches[self.layer_idx].append(&k, &v)?;
             (k, v, false)
@@ -838,7 +854,6 @@ impl DecoderLayer {
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
-        is_kv_shared: bool,
         kv_shared_layer_index: Option<usize>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
@@ -850,11 +865,10 @@ impl DecoderLayer {
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
             paged_attn,
             comm,
-            is_kv_shared,
             kv_shared_layer_index,
         )?;
 
-        let mlp_intermediate = if cfg.use_double_wide_mlp {
+        let mlp_intermediate = if cfg.use_double_wide_mlp && kv_shared_layer_index.is_some() {
             cfg.intermediate_size * 2
         } else {
             cfg.intermediate_size
@@ -1213,14 +1227,6 @@ impl TextModel {
                 )
             });
         }
-
-        // KV sharing setup
-        let first_kv_shared_layer_idx = if cfg.num_kv_shared_layers > 0 {
-            cfg.num_hidden_layers - cfg.num_kv_shared_layers
-        } else {
-            cfg.num_hidden_layers
-        };
-
         let vb_l = vb_m.pp("layers");
         let layers = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
@@ -1251,23 +1257,7 @@ impl TextModel {
                 }
             };
             let comm = mapper.get_comm_for(layer_idx)?;
-
-            let is_kv_shared = layer_idx >= first_kv_shared_layer_idx;
-            let kv_shared_layer_index = if is_kv_shared {
-                // Find the last non-shared layer of the SAME attention type
-                // (sliding → last sliding donor, full → last full donor)
-                let current_is_sliding = is_sliding!(layer_idx, cfg);
-                let mut donor = None;
-                for i in (0..first_kv_shared_layer_idx).rev() {
-                    if is_sliding!(i, cfg) == current_is_sliding {
-                        donor = Some(i);
-                        break;
-                    }
-                }
-                donor
-            } else {
-                None
-            };
+            let kv_shared_layer_index = kv_shared_layer_index(cfg, layer_idx)?;
 
             DecoderLayer::new(
                 rotary_emb_global,
@@ -1279,7 +1269,6 @@ impl TextModel {
                 normal_loading_metadata.loading_isq,
                 paged_attn,
                 &comm,
-                is_kv_shared,
                 kv_shared_layer_index,
             )
         })?;
@@ -1339,10 +1328,6 @@ impl TextModel {
                 (None, None, None)
             };
 
-        // Use Normal cache for ALL layers (not RotatingCache for sliding layers).
-        // The flash attention kernel handles the sliding window via its
-        // window_size_left parameter. RotatingCache reorders entries which
-        // breaks flash attention's positional assumptions.
         let cache_types = (0..cfg.num_hidden_layers)
             .map(|_layer_idx| NormalCacheType::Normal {
                 max_seq_len: cfg.max_position_embeddings,
