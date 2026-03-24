@@ -606,6 +606,7 @@ impl Sequence {
         self.prefill_prompt_toks = Some(toks);
         self.set_state(SequenceState::RunningPrefillPrompt);
         self.token_offset = offset;
+        self.prefix_cache_len = offset;
         self
     }
 
@@ -1460,5 +1461,78 @@ impl SequenceGroup {
             sender.send(Response::CompletionDone(response)).await?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc::channel;
+
+    fn make_test_sequence() -> Sequence {
+        let (tx, _rx) = channel(1);
+        let sampler =
+            Sampler::new(None, 0, None, None, None, None, None, 32, 1.0, 0.0, vec![]).unwrap();
+        let group = Arc::new(Mutex::new(SequenceGroup::new(1, false, true, None)));
+
+        Sequence::new_waiting(
+            vec![1, 2, 3, 4, 5, 6, 7, 8],
+            "prompt".to_string(),
+            0,
+            0,
+            0,
+            tx,
+            sampler,
+            vec![],
+            vec![],
+            None,
+            false,
+            false,
+            group,
+            0,
+            0,
+            SequenceRecognizer::None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SeqStepType::PromptAndDecode,
+            None,
+            None,
+            None,
+            false,
+            vec![],
+        )
+    }
+
+    #[test]
+    fn prefill_v2_normal_sets_prefix_cache_len_for_multimodal_trimming() {
+        let mut seq = make_test_sequence();
+        seq.set_mm_features(vec![
+            MultiModalFeature {
+                identifier: "img:123".to_string(),
+                offset: 0,
+                length: 3,
+            },
+            MultiModalFeature {
+                identifier: "img:456".to_string(),
+                offset: 4,
+                length: 3,
+            },
+            MultiModalFeature {
+                identifier: "audio:789".to_string(),
+                offset: 7,
+                length: 1,
+            },
+        ]);
+
+        let seq = seq.prefill_v2_normal(vec![], vec![7, 8], 4);
+
+        assert_eq!(seq.prefix_cache_len(), 4);
+        assert_eq!(seq.count_prefix_cached_mm_items_by_kind("img"), 1);
+        assert_eq!(seq.count_prefix_cached_mm_items_by_kind("audio"), 0);
     }
 }
