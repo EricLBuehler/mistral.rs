@@ -11,7 +11,8 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     paged_attention::{
-        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigLike,
+        ModelConfigMetadata,
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -111,7 +112,6 @@ impl Gemma4Model {
             is_gptx,
             normal_loading_metadata,
             attention_mechanism,
-            Some(cfg.image_token_id),
         )?;
 
         Ok(Self {
@@ -348,7 +348,6 @@ impl Gemma4Model {
             context_lens,
             metadata,
             flash_params,
-            pixel_values.is_some(),
         )
     }
 }
@@ -498,6 +497,10 @@ impl VisionModel for Gemma4Model {
 
     fn config(&self) -> &ModelConfigMetadata {
         self.language_model.config()
+    }
+
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        self.language_model.model_config_like()
     }
 
     fn encoder_cache_counters(

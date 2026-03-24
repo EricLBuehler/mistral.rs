@@ -837,6 +837,7 @@ impl Loader for VisionLoader {
             )?;
         }
 
+        let model_metadata = model.model_config();
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             anyhow::ensure!(
                 !matches!(self.kind, ModelKind::Adapter { .. }),
@@ -847,15 +848,20 @@ impl Loader for VisionLoader {
                 paged_attn_config.block_size,
                 dtype,
                 paged_attn_config.cache_type,
-                model.config(),
+                model_metadata.as_ref(),
                 &device,
                 &layer_devices,
                 silent,
                 None,
                 max_kv_tokens,
             )?;
-            let cache_engine =
-                CacheEngine::new(model.config(), &cache_config, dtype, &device, layer_devices)?;
+            let cache_engine = CacheEngine::new(
+                model_metadata.as_ref(),
+                &cache_config,
+                dtype,
+                &device,
+                layer_devices,
+            )?;
             (Some(cache_config), Some(cache_engine))
         } else {
             (None, None)
@@ -870,7 +876,6 @@ impl Loader for VisionLoader {
         };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;
-        let model_metadata = Arc::new(model.config().clone());
         Ok(Arc::new(Mutex::new(VisionPipeline {
             model,
             tokenizer: tokenizer.into(),

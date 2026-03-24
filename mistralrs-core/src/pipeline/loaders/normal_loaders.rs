@@ -70,6 +70,9 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
     fn cache_mut(&mut self) -> &mut EitherCache;
     fn max_seq_len(&self) -> usize;
     fn config(&self) -> &ModelConfigMetadata;
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        Arc::new(self.config().clone())
+    }
 }
 
 /// Metadata for loading a model with ISQ or device mapping.

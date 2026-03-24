@@ -935,13 +935,14 @@ impl Loader for NormalLoader {
             paged_attn_config
         };
 
+        let model_metadata = model.model_config();
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
                 paged_attn_config.block_size,
                 dtype,
                 paged_attn_config.cache_type,
-                model.config(),
+                model_metadata.as_ref(),
                 &device,
                 &pipeline_mapper
                     .get_unique_devices()
@@ -959,7 +960,7 @@ impl Loader for NormalLoader {
                 layer_devices.push(device);
             }
             let cache_engine = CacheEngine::new(
-                model.config(),
+                model_metadata.as_ref(),
                 &cache_config,
                 dtype,
                 model.device(),
@@ -980,8 +981,6 @@ impl Loader for NormalLoader {
         };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;
-        let model_metadata = Arc::new(model.config().clone());
-
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
             tokenizer: tokenizer.into(),

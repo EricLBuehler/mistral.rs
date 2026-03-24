@@ -18,7 +18,9 @@ use crate::{
     },
     layers_masker::PastKvLenCache,
     ops::TopKLastDimOp,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        AttentionImplementation, ModelConfigLike, ModelConfigMetadata, PagedAttention,
+    },
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -620,8 +622,7 @@ impl Attention {
             cumulative_k.push(running);
         }
 
-        let cumulative_seqlens_k =
-            Tensor::new(cumulative_k, &Device::Cpu)?.to_device(device)?;
+        let cumulative_seqlens_k = Tensor::new(cumulative_k, &Device::Cpu)?.to_device(device)?;
 
         Ok(FlashParams {
             max_q: flash_params.max_q,
@@ -797,7 +798,12 @@ impl Attention {
             None => {
                 let flash_params = flash_params
                     .map(|fp| {
-                        self.adjusted_flash_params_for_sliding(fp, seqlen_offsets, q_len, q.device())
+                        self.adjusted_flash_params_for_sliding(
+                            fp,
+                            seqlen_offsets,
+                            q_len,
+                            q.device(),
+                        )
                     })
                     .transpose()?;
                 // Flash attention only supports head_dim <= 256; fall back for larger dims
@@ -1182,6 +1188,77 @@ impl DecoderLayer {
 //  TextModel
 // ────────────────────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
+struct Gemma4ModelConfigLike {
+    base: ModelConfigMetadata,
+    per_layer_num_kv_heads: Vec<usize>,
+    per_layer_k_head_dim: Vec<usize>,
+    per_layer_v_head_dim: Vec<usize>,
+    per_layer_uses_own_kv_cache: Vec<bool>,
+}
+
+impl ModelConfigLike for Gemma4ModelConfigLike {
+    fn max_seq_len(&self) -> usize {
+        self.base.max_seq_len
+    }
+
+    fn num_layers(&self) -> usize {
+        self.base.num_layers
+    }
+
+    fn hidden_size(&self) -> usize {
+        self.base.hidden_size
+    }
+
+    fn num_kv_heads(&self) -> usize {
+        self.base.num_kv_heads
+    }
+
+    fn num_attn_heads(&self) -> usize {
+        self.base.num_attn_heads
+    }
+
+    fn k_head_dim(&self) -> usize {
+        self.base.k_head_dim
+    }
+
+    fn v_head_dim(&self) -> usize {
+        self.base.v_head_dim
+    }
+
+    fn num_kv_heads_for_layer(&self, layer_idx: usize) -> usize {
+        self.per_layer_num_kv_heads
+            .get(layer_idx)
+            .copied()
+            .unwrap_or(self.base.num_kv_heads)
+    }
+
+    fn k_head_dim_for_layer(&self, layer_idx: usize) -> usize {
+        self.per_layer_k_head_dim
+            .get(layer_idx)
+            .copied()
+            .unwrap_or(self.base.k_head_dim)
+    }
+
+    fn v_head_dim_for_layer(&self, layer_idx: usize) -> usize {
+        self.per_layer_v_head_dim
+            .get(layer_idx)
+            .copied()
+            .unwrap_or(self.base.v_head_dim)
+    }
+
+    fn uses_own_kv_cache_for_layer(&self, layer_idx: usize) -> bool {
+        self.per_layer_uses_own_kv_cache
+            .get(layer_idx)
+            .copied()
+            .unwrap_or(true)
+    }
+
+    fn kv_cache_layout(&self) -> crate::paged_attention::KvCacheLayout {
+        self.base.kv_cache_layout
+    }
+}
+
 #[allow(dead_code)]
 pub struct TextModel {
     embed_tokens: ScaledEmbedding,
@@ -1205,7 +1282,7 @@ pub struct TextModel {
     sliding_window: usize,
     final_logit_softcapping: Option<f64>,
     cfg: ModelConfigMetadata,
-    image_token_index: Option<usize>,
+    model_config: Arc<dyn ModelConfigLike + Send + Sync>,
 }
 
 impl TextModel {
@@ -1215,7 +1292,6 @@ impl TextModel {
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        image_token_index: Option<usize>,
     ) -> Result<Self> {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
@@ -1382,21 +1458,66 @@ impl TextModel {
                 (None, None, None)
             };
 
+        let mut per_layer_num_kv_heads = Vec::with_capacity(cfg.num_hidden_layers);
+        let mut per_layer_k_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
+        let mut per_layer_v_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
+        let mut per_layer_uses_own_kv_cache = Vec::with_capacity(cfg.num_hidden_layers);
         let cache_types = (0..cfg.num_hidden_layers)
             .map(|layer_idx| {
+                let world_size = mapper.get_comm_for(layer_idx)?.world_size();
+                let is_sliding = is_sliding!(layer_idx, cfg);
+                let head_dim = if is_sliding {
+                    cfg.head_dim
+                } else {
+                    cfg.global_head_dim
+                };
+                let num_kv_heads = if is_sliding {
+                    cfg.num_key_value_heads
+                } else {
+                    cfg.num_global_key_value_heads
+                        .unwrap_or(cfg.num_key_value_heads)
+                };
+
+                per_layer_num_kv_heads.push((num_kv_heads / world_size).max(1));
+                per_layer_k_head_dim.push(head_dim);
+                per_layer_v_head_dim.push(head_dim);
+
                 if let Some(owner) = kv_shared_layer_index(cfg, layer_idx)? {
+                    per_layer_uses_own_kv_cache.push(false);
                     Ok(NormalCacheType::Shared { owner })
-                } else if is_sliding!(layer_idx, cfg) {
+                } else if is_sliding {
+                    per_layer_uses_own_kv_cache.push(true);
                     Ok(NormalCacheType::SlidingWindow {
                         window: cfg.sliding_window,
                     })
                 } else {
+                    per_layer_uses_own_kv_cache.push(true);
                     Ok(NormalCacheType::Normal {
                         max_seq_len: cfg.max_position_embeddings,
                     })
                 }
             })
             .collect::<Result<Vec<_>>>()?;
+
+        let cfg_metadata = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
+            num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size()).max(1),
+            sliding_window: None,
+            k_head_dim: cfg.head_dim,
+            v_head_dim: cfg.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+        let model_config: Arc<dyn ModelConfigLike + Send + Sync> =
+            Arc::new(Gemma4ModelConfigLike {
+                base: cfg_metadata.clone(),
+                per_layer_num_kv_heads,
+                per_layer_k_head_dim,
+                per_layer_v_head_dim,
+                per_layer_uses_own_kv_cache,
+            });
 
         Ok(Self {
             embed_tokens,
@@ -1416,25 +1537,18 @@ impl TextModel {
             max_seq_len: cfg.max_position_embeddings,
             sliding_window: cfg.sliding_window,
             final_logit_softcapping: cfg.final_logit_softcapping,
-            cfg: ModelConfigMetadata {
-                max_seq_len: cfg.max_position_embeddings,
-                num_layers: cfg.num_hidden_layers,
-                hidden_size: cfg.hidden_size,
-                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
-                num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
-                    .max(1),
-                sliding_window: None,
-                k_head_dim: cfg.head_dim,
-                v_head_dim: cfg.head_dim,
-                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
-            },
+            cfg: cfg_metadata,
+            model_config,
             mapper,
-            image_token_index,
         })
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
         self.embed_tokens.forward(input_ids)
+    }
+
+    pub fn model_config_like(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        self.model_config.clone()
     }
 
     /// Compute PLE per-layer inputs from both token embeddings and hidden state projection.
@@ -1515,112 +1629,52 @@ impl TextModel {
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-        _has_images: bool,
     ) -> Result<Tensor> {
         let cache = &mut self.cache.normal().0;
-
-        // Force-reset caches when starting a fresh prompt (offset 0)
-        if seqlen_offsets[0] == 0 {
-            for kv in cache.iter_mut() {
-                kv.reset();
-            }
-        }
 
         // Compute PLE per-layer inputs
         let per_layer_inputs = self.compute_ple(ple_input_ids, &xs)?;
 
-        // HF Gemma4 does not apply Gemma3-style bidirectional masking in the text decoder
-        // for image placeholder tokens. The text config does not expose a
-        // `use_bidirectional_attention="vision"` mode here, so multimodal prompts should
-        // stay on the normal causal/sliding attention path.
-        let has_bidirectional = false;
-
-        let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
-            let image_token_index = self.image_token_index.unwrap();
-            let mask_cache: &dyn PastKvLenCache = metadata
+        let attention_mask = CausalMasker.make_causal_mask_matrix(
+            input_ids,
+            metadata
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(cache as &dyn PastKvLenCache);
-            let causal_mask =
-                CausalMasker.make_causal_mask_as_attn_bias(input_ids, mask_cache, xs.dtype())?;
-            let sliding_mask = CausalMasker.make_sliding_window_causal_mask_as_attn_bias(
-                input_ids,
-                mask_cache,
-                Some(self.sliding_window),
-                xs.dtype(),
-            )?;
-
-            let attention_mask = causal_mask
-                .map(|m| Self::apply_image_bidirectional_mask(&m, input_ids, image_token_index))
-                .transpose()?;
-            let sliding_attention_mask = sliding_mask
-                .map(|m| Self::apply_image_bidirectional_mask(&m, input_ids, image_token_index))
-                .transpose()?;
-
-            let attention_mask = attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
-            let sliding_attention_mask =
-                sliding_attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
-
-            let attention_mask = attention_mask.filter(|_| {
-                metadata
-                    .as_ref()
-                    .map(|(_, meta)| meta.is_first_prompt_chunk)
-                    .unwrap_or(true)
-            });
-            let sliding_attention_mask = sliding_attention_mask.filter(|_| {
-                metadata
-                    .as_ref()
-                    .map(|(_, meta)| meta.is_first_prompt_chunk)
-                    .unwrap_or(true)
-            });
-
-            (attention_mask, sliding_attention_mask, None)
-        } else {
-            let attention_mask = CausalMasker.make_causal_mask_matrix(
-                input_ids,
-                metadata
-                    .as_ref()
-                    .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                    .unwrap_or(cache as &dyn PastKvLenCache),
-                xs.dtype(),
-                self.cfg.num_attn_heads,
-            )?;
-            let attention_mask = attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
-            let attention_mask = attention_mask.filter(|_| {
-                metadata
-                    .as_ref()
-                    .map(|(_, meta)| meta.is_first_prompt_chunk)
-                    .unwrap_or(true)
-            });
-            let sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
-                input_ids,
-                metadata
-                    .as_ref()
-                    .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                    .unwrap_or(cache as &dyn PastKvLenCache),
-                Some(self.sliding_window),
-                xs.dtype(),
-                self.cfg.num_attn_heads,
-            )?;
-            let sliding_attention_mask =
-                sliding_attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
-            let sliding_attention_mask = sliding_attention_mask.filter(|_| {
-                metadata
-                    .as_ref()
-                    .map(|(_, meta)| meta.is_first_prompt_chunk)
-                    .unwrap_or(true)
-            });
-
-            (attention_mask, sliding_attention_mask, Some(flash_params))
-        };
+                .unwrap_or(cache as &dyn PastKvLenCache),
+            xs.dtype(),
+            self.cfg.num_attn_heads,
+        )?;
+        let attention_mask = attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
+        let attention_mask = attention_mask.filter(|_| {
+            metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true)
+        });
+        let sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+            input_ids,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(cache as &dyn PastKvLenCache),
+            Some(self.sliding_window),
+            xs.dtype(),
+            self.cfg.num_attn_heads,
+        )?;
+        let sliding_attention_mask =
+            sliding_attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
+        let sliding_attention_mask = sliding_attention_mask.filter(|_| {
+            metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true)
+        });
 
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
 
         // Build a real mask for head_dim>256 layers that can't use flash attention.
         // During decode (seq_len==1) this is None since causal masking is a no-op.
-        // For multimodal prompts, full-attention layers must see the same
-        // image-token bidirectional override as the regular masked path.
         let noflash_causal_mask = if xs.dim(1)? > 1 {
             let mask_cache: &dyn PastKvLenCache = metadata
                 .as_ref()
@@ -1628,14 +1682,7 @@ impl TextModel {
                 .unwrap_or(cache as &dyn PastKvLenCache);
             let causal_mask =
                 CausalMasker.make_causal_mask_as_attn_bias(input_ids, mask_cache, xs.dtype())?;
-            if has_bidirectional {
-                let image_token_index = self.image_token_index.unwrap();
-                causal_mask
-                    .map(|m| Self::apply_image_bidirectional_mask(&m, input_ids, image_token_index))
-                    .transpose()?
-            } else {
-                causal_mask
-            }
+            causal_mask
         } else {
             None
         };
@@ -1657,7 +1704,7 @@ impl TextModel {
                 metadata
                     .as_ref()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
-                layer_flash_params,
+                Some(flash_params),
                 noflash_causal_mask.as_ref().map(|m| m.get(xs.device())),
             )?;
         }
@@ -1677,55 +1724,6 @@ impl TextModel {
         }
 
         Ok(xs)
-    }
-
-    /// Apply bidirectional attention override for image tokens within the same image group.
-    fn apply_image_bidirectional_mask(
-        causal_mask: &Tensor,
-        input_ids: &Tensor,
-        image_token_index: usize,
-    ) -> Result<Tensor> {
-        let (_, seq_len) = input_ids.dims2()?;
-        let total_len = causal_mask.dim(1)?;
-        let past_kv_len = total_len - seq_len;
-
-        let input_ids_1d = input_ids.squeeze(0)?;
-        let is_image = input_ids_1d
-            .eq(image_token_index as f64)?
-            .to_dtype(candle_core::DType::U32)?;
-        let is_image_vec: Vec<u32> = is_image.to_vec1()?;
-
-        let mut group_ids = vec![-1i64; seq_len];
-        let mut current_group: i64 = -1;
-        for i in 0..seq_len {
-            if is_image_vec[i] == 1 {
-                if i == 0 || is_image_vec[i - 1] == 0 {
-                    current_group += 1;
-                }
-                group_ids[i] = current_group;
-            }
-        }
-
-        let device = causal_mask.device();
-        let dtype = causal_mask.dtype();
-
-        let mut override_vals = vec![0f32; seq_len * total_len];
-        for qi in 0..seq_len {
-            if group_ids[qi] < 0 {
-                continue;
-            }
-            for ki in 0..seq_len {
-                if group_ids[ki] >= 0 && group_ids[qi] == group_ids[ki] {
-                    let col = ki + past_kv_len;
-                    override_vals[qi * total_len + col] = 1.0;
-                }
-            }
-        }
-
-        let override_mask = Tensor::from_vec(override_vals, (seq_len, total_len), device)?;
-        let zero = Tensor::zeros((seq_len, total_len), dtype, device)?;
-        let override_bool = override_mask.to_dtype(candle_core::DType::U8)?;
-        override_bool.where_cond(&zero, causal_mask)
     }
 }
 
@@ -1905,6 +1903,9 @@ impl VisionModel for TextModel {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        self.model_config_like()
     }
 }
 

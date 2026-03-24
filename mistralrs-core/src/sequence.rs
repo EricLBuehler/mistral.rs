@@ -27,6 +27,8 @@ use tokio::sync::{
     Mutex, MutexGuard,
 };
 
+pub type SeqPreallocatedCache = Vec<Option<(Tensor, Tensor)>>;
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum StopReason {
     Eos,
@@ -444,8 +446,8 @@ pub struct Sequence {
     /// For hybrid models: index into the recurrent state pool
     recurrent_state_idx: Option<usize>,
 
-    // Preallocated KV cache (k,v)
-    seq_preallocated_cache: Option<(Tensor, Tensor)>,
+    // Preallocated KV cache templates, keyed by layer.
+    seq_preallocated_cache: Option<SeqPreallocatedCache>,
 
     // Mutables
     tokens: Vec<u32>,
@@ -506,8 +508,8 @@ impl Sequence {
         sequence_stepping_type: SeqStepType,
         diffusion_params: Option<DiffusionGenerationParams>,
         image_gen_save_file: Option<PathBuf>,
-        // Preallocated KV cache (k,v)
-        seq_preallocated_cache: Option<(Tensor, Tensor)>,
+        // Preallocated KV cache templates, keyed by layer.
+        seq_preallocated_cache: Option<SeqPreallocatedCache>,
         //
         return_raw_logits: bool,
         eos_tokens: Vec<u32>,
@@ -737,7 +739,7 @@ impl Sequence {
         &self.completion_bytes
     }
 
-    pub fn preallocated_cache(&self) -> Option<&(Tensor, Tensor)> {
+    pub fn preallocated_cache(&self) -> Option<&SeqPreallocatedCache> {
         self.seq_preallocated_cache.as_ref()
     }
 

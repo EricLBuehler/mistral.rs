@@ -531,11 +531,46 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 continue;
             }
 
+            match &old_caches[layer_idx] {
+                KvCache::Rotating { k, .. } => {
+                    *layer = KvCache::Rotating {
+                        k: RotatingCache {
+                            all_data: None,
+                            dim: k.dim,
+                            current_seq_len: 0,
+                            max_seq_len: k.max_seq_len,
+                            capacity_seq_len: k.capacity_seq_len,
+                        },
+                        v: RotatingCache {
+                            all_data: None,
+                            dim: k.dim,
+                            current_seq_len: 0,
+                            max_seq_len: k.max_seq_len,
+                            capacity_seq_len: k.capacity_seq_len,
+                        },
+                    };
+                    continue;
+                }
+                KvCache::Shared { owner } => {
+                    *layer = KvCache::Shared { owner: *owner };
+                    continue;
+                }
+                KvCache::Normal { .. } => {}
+            }
+
             let mut k_caches = Vec::new();
             let mut v_caches = Vec::new();
+            let mut missing_preallocated = false;
             for seq in seqs.iter_mut() {
-                let (mut k_preallocated_cache, mut v_preallocated_cache) =
-                    (*seq.preallocated_cache().as_ref().unwrap()).clone();
+                let Some((mut k_preallocated_cache, mut v_preallocated_cache)) = seq
+                    .preallocated_cache()
+                    .and_then(|cache| cache.get(layer_idx))
+                    .cloned()
+                    .flatten()
+                else {
+                    missing_preallocated = true;
+                    break;
+                };
                 if let Some(layer_devices) = &layer_devices {
                     let layer_dev = &layer_devices[layer_idx];
                     k_preallocated_cache = k_preallocated_cache
@@ -547,6 +582,10 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 }
                 k_caches.push(k_preallocated_cache);
                 v_caches.push(v_preallocated_cache);
+            }
+            if missing_preallocated {
+                layer.reset();
+                continue;
             }
             let k_cache = if k_caches.len() > 1 {
                 Tensor::cat(&k_caches, 0).unwrap()
@@ -583,28 +622,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     };
                     *layer = cache;
                 }
-                KvCache::Rotating { k, .. } => {
-                    let cache = KvCache::Rotating {
-                        k: RotatingCache {
-                            all_data: None,
-                            dim: k.dim,
-                            current_seq_len: 0,
-                            max_seq_len: k.max_seq_len,
-                            capacity_seq_len: k.capacity_seq_len,
-                        },
-                        v: RotatingCache {
-                            all_data: None,
-                            dim: k.dim,
-                            current_seq_len: 0,
-                            max_seq_len: k.max_seq_len,
-                            capacity_seq_len: k.capacity_seq_len,
-                        },
-                    };
-                    *layer = cache;
-                }
-                KvCache::Shared { owner } => {
-                    *layer = KvCache::Shared { owner: *owner };
-                }
+                KvCache::Rotating { .. } | KvCache::Shared { .. } => unreachable!(),
             }
         }
     }

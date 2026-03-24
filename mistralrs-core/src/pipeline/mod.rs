@@ -209,9 +209,6 @@ pub trait CacheManagerMixin {
         load_preallocated_cache: bool,
     );
     fn cache(&self) -> &EitherCache;
-    fn do_preallocated_cache(&self) -> bool {
-        matches!(self.cache(), EitherCache::Normal(_))
-    }
 }
 
 pub trait MetadataMixin {

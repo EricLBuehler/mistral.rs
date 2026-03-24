@@ -96,6 +96,9 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     fn cache_mut(&mut self) -> &mut EitherCache;
     fn max_seq_len(&self) -> usize;
     fn config(&self) -> &ModelConfigMetadata;
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        Arc::new(self.config().clone())
+    }
     /// For a prompt without images. Requires batch size of 1!
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any>;
     /// Return encoder cache hit/miss counters (hits, misses) if this model has an encoder cache.

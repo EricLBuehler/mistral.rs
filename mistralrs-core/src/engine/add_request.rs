@@ -1,5 +1,5 @@
 use crate::{
-    pipeline::NormalCache,
+    pipeline::{KvCache, NormalCache},
     prefix_cacher::MatchingCache,
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     sequence::SeqStepType,
@@ -449,10 +449,25 @@ impl Engine {
             let seq_preallocated_cache = if matches!(
                 get_mut_arcmutex!(self.pipeline).category(),
                 ModelCategory::Text | ModelCategory::Vision { .. }
-            ) && get_mut_arcmutex!(self.pipeline)
-                .do_preallocated_cache()
-            {
-                let metadata = get_mut_arcmutex!(self.pipeline).get_metadata();
+            ) {
+                let (metadata, device, needs_preallocated_cache) = {
+                    let pipeline = get_mut_arcmutex!(self.pipeline);
+                    let needs_preallocated_cache = match pipeline.cache() {
+                        crate::pipeline::EitherCache::Normal(normal) => normal
+                            .lock()
+                            .unwrap()
+                            .0
+                            .iter()
+                            .map(|cache| matches!(cache, KvCache::Normal { .. }))
+                            .collect(),
+                        _ => Vec::new(),
+                    };
+                    (
+                        pipeline.get_metadata(),
+                        pipeline.device(),
+                        needs_preallocated_cache,
+                    )
+                };
                 let model_metadata = metadata
                     .model_metadata
                     .as_ref()
@@ -460,26 +475,33 @@ impl Engine {
                 let n_tokens = prompt_tokens.len();
                 let required_blocks = n_tokens.div_ceil(NormalCache::CACHE_GROW_SIZE);
                 let max_seq_len = required_blocks * NormalCache::CACHE_GROW_SIZE;
-                let k_shape = (
-                    1usize,
-                    model_metadata.num_kv_heads(),
-                    max_seq_len,
-                    model_metadata.k_head_dim(),
-                );
-                let v_shape = (
-                    1usize,
-                    model_metadata.num_kv_heads(),
-                    max_seq_len,
-                    model_metadata.v_head_dim(),
-                );
-                let dtype = get_mut_arcmutex!(self.pipeline)
-                    .get_metadata()
-                    .activation_dtype;
+                let dtype = metadata.activation_dtype;
+                let mut layer_caches = Vec::with_capacity(model_metadata.num_layers());
+                for layer_idx in 0..model_metadata.num_layers() {
+                    if !needs_preallocated_cache
+                        .get(layer_idx)
+                        .copied()
+                        .unwrap_or(false)
+                        || !model_metadata.uses_own_kv_cache_for_layer(layer_idx)
+                    {
+                        layer_caches.push(None);
+                        continue;
+                    }
 
-                let k_seq_cache = {
-                    let k_seq_cache =
-                        Tensor::zeros(k_shape, dtype, &get_mut_arcmutex!(self.pipeline).device());
-                    match k_seq_cache {
+                    let k_shape = (
+                        1usize,
+                        model_metadata.num_kv_heads_for_layer(layer_idx),
+                        max_seq_len,
+                        model_metadata.k_head_dim_for_layer(layer_idx),
+                    );
+                    let v_shape = (
+                        1usize,
+                        model_metadata.num_kv_heads_for_layer(layer_idx),
+                        max_seq_len,
+                        model_metadata.v_head_dim_for_layer(layer_idx),
+                    );
+
+                    let k_seq_cache = match Tensor::zeros(k_shape, dtype, &device) {
                         Ok(x) => x,
                         Err(_) => {
                             request
@@ -493,30 +515,29 @@ impl Engine {
                                 .unwrap_or_else(|_| warn!("Receiver disconnected"));
                             return;
                         }
-                    }
-                };
-                let v_seq_cache = if k_shape == v_shape {
-                    k_seq_cache.clone()
-                } else {
-                    let v_seq_cache =
-                        Tensor::zeros(v_shape, dtype, &get_mut_arcmutex!(self.pipeline).device());
-                    match v_seq_cache {
-                        Ok(x) => x,
-                        Err(_) => {
-                            request
-                                .response
-                                .send(Response::InternalError(
-                                    "Failed to allocate preallocated KV cache."
-                                        .to_string()
-                                        .into(),
-                                ))
-                                .await
-                                .unwrap_or_else(|_| warn!("Receiver disconnected"));
-                            return;
+                    };
+                    let v_seq_cache = if k_shape == v_shape {
+                        k_seq_cache.clone()
+                    } else {
+                        match Tensor::zeros(v_shape, dtype, &device) {
+                            Ok(x) => x,
+                            Err(_) => {
+                                request
+                                    .response
+                                    .send(Response::InternalError(
+                                        "Failed to allocate preallocated KV cache."
+                                            .to_string()
+                                            .into(),
+                                    ))
+                                    .await
+                                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                                return;
+                            }
                         }
-                    }
-                };
-                Some((k_seq_cache, v_seq_cache))
+                    };
+                    layer_caches.push(Some((k_seq_cache, v_seq_cache)));
+                }
+                Some(layer_caches)
             } else {
                 None
             };

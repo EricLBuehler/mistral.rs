@@ -376,10 +376,6 @@ impl CacheManagerMixin for SpeculativePipeline {
     fn cache(&self) -> &EitherCache {
         &self.target_cache
     }
-    fn do_preallocated_cache(&self) -> bool {
-        // KV cache size is not the same (necessarily)
-        false
-    }
 }
 
 impl MetadataMixin for SpeculativePipeline {
