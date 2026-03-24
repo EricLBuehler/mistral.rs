@@ -14,7 +14,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{self, Activation, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -133,6 +133,7 @@ impl Attention {
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: cfg.sliding_window,
+                sinks: None,
             },
         })
     }
@@ -297,9 +298,10 @@ impl Module for BlockSparseTop2MLP {
         if let Some(t) = self.w1.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        let lhs = MatMul.qmethod_matmul(&xs, &*self.w1)?.apply(&self.act_fn)?;
-        let rhs = MatMul.qmethod_matmul(&xs, &*self.w3)?;
-        let mut res = MatMul.qmethod_matmul(&(lhs * rhs)?, &*self.w2)?;
+        let w1_out = MatMul.qmethod_matmul(&xs, &*self.w1)?;
+        let w3_out = MatMul.qmethod_matmul(&xs, &*self.w3)?;
+        let activated = crate::ops::mul_and_act(&w1_out, &w3_out, self.act_fn)?;
+        let mut res = MatMul.qmethod_matmul(&activated, &*self.w2)?;
         if self.w1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
@@ -616,6 +618,7 @@ impl Model {
                 sliding_window: cfg.sliding_window,
                 k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
                 v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
         })
@@ -648,14 +651,12 @@ impl Model {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+        let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                attention_mask.as_ref().map(|m| m.get(xs.device())),
                 seqlen_offsets,
                 &mut cache[i],
                 metadata
@@ -665,11 +666,12 @@ impl Model {
             )?;
         }
         let xs = xs.to_device(&self.device)?;
-        let mut xs = xs.apply(&self.norm)?;
+        let xs = xs.apply(&self.norm)?;
+        let mut xs = extract_logits(&xs, context_lens)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
+        MatMul.qmethod_matmul(&xs, &*self.lm_head)
     }
 }
 

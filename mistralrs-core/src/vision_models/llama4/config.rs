@@ -82,4 +82,16 @@ pub struct Llama4Config {
     pub text_config: TextConfig,
     pub vision_config: VisionConfig,
     pub image_token_index: usize,
+    /// Top-level quantization config that should be applied to text_config
+    #[serde(default)]
+    pub quantization_config: Option<QuantizedConfig>,
+}
+
+impl Llama4Config {
+    /// Propagate top-level quantization_config to text_config if text_config doesn't have one
+    pub fn propagate_quantization_config(&mut self) {
+        if self.text_config.quantization_config.is_none() && self.quantization_config.is_some() {
+            self.text_config.quantization_config = self.quantization_config.clone();
+        }
+    }
 }

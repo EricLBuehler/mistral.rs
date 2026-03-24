@@ -11,7 +11,7 @@ use mistralrs_core::{
 use std::fmt::Display;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
-use tracing::info;
+use tracing::{info, warn};
 
 enum TestName {
     Prompt(usize),
@@ -347,6 +347,10 @@ async fn main() -> anyhow::Result<()> {
     let mut args = Args::parse();
     initialize_logging();
 
+    warn!(
+        "mistralrs-bench is deprecated. Please use `mistralrs bench` from mistralrs-cli instead."
+    );
+
     args.concurrency = Some(args.concurrency.unwrap_or(vec![1]));
 
     let dtype = get_model_dtype(&args.model)?;
@@ -483,7 +487,8 @@ async fn main() -> anyhow::Result<()> {
     let isq = args
         .in_situ_quant
         .as_ref()
-        .and_then(|isq| parse_isq_value(isq, Some(&device)).ok());
+        .map(|isq| parse_isq_value(isq, Some(&device)).map_err(|e| anyhow::anyhow!("{e}")))
+        .transpose()?;
 
     let pipeline = loader.load_model_from_hf(
         None,

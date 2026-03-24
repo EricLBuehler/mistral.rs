@@ -9,8 +9,8 @@ use mistralrs_quant::{
 use super::config::TextConfig;
 use crate::{
     attention::SdpaParams,
-    device_map::DeviceMapper,
-    layers::{self, Activation, F32RmsNorm, RmsNorm, RotaryEmbedding, Sdpa},
+    device_map::{DeviceMappedMask, DeviceMapper},
+    layers::{self, Activation, F32RmsNorm, Qwen3VLRotaryEmbedding, RmsNorm, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -91,7 +91,7 @@ struct Attention {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
-    rotary_emb: Arc<RotaryEmbedding>,
+    rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
 }
@@ -99,7 +99,7 @@ struct Attention {
 impl Attention {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        rotary_emb: Arc<RotaryEmbedding>,
+        rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
         cfg: &TextConfig,
         vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
@@ -181,6 +181,7 @@ impl Attention {
                 softcap: None,
                 softmax_scale: 1.0 / (cfg.head_dim as f32).sqrt(),
                 sliding_window: None,
+                sinks: None,
             },
         })
     }
@@ -190,7 +191,7 @@ impl Attention {
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        seqlen_offsets: &[usize],
+        cos_sin: &(Tensor, Tensor),
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -232,7 +233,7 @@ impl Attention {
         q = q.apply(&self.q_norm)?;
         k = k.apply(&self.k_norm)?;
 
-        (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        self.rotary_emb.forward(cos_sin, &mut q, &mut k)?;
 
         let q = q.contiguous()?;
         let k = k.contiguous()?;
@@ -309,7 +310,7 @@ pub struct DecoderLayer {
 impl DecoderLayer {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        rotary_emb: Arc<RotaryEmbedding>,
+        rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
         cfg: &TextConfig,
         vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
@@ -356,7 +357,7 @@ impl DecoderLayer {
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        seqlen_offsets: &[usize],
+        cos_sin: &(Tensor, Tensor),
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -366,7 +367,7 @@ impl DecoderLayer {
         let xs = self.self_attn.forward(
             &xs,
             attention_mask,
-            seqlen_offsets,
+            cos_sin,
             kv_cache,
             metadata,
             flash_params,
@@ -423,13 +424,11 @@ impl Qwen3VLTextModel {
                 .unwrap_or(&normal_loading_metadata.real_device);
             ropes.insert(
                 device.location(),
-                Arc::new(RotaryEmbedding::new(
+                Arc::new(Qwen3VLRotaryEmbedding::new(
                     cfg.rope_theta as f32,
                     cfg.head_dim,
-                    cfg.max_position_embeddings,
                     device,
-                    true,
-                    vb_m.dtype(),
+                    cfg.rope_scaling.mrope_section.clone(),
                 )?),
             );
         }
@@ -507,6 +506,7 @@ impl Qwen3VLTextModel {
                 sliding_window: cfg.sliding_window,
                 k_head_dim: cfg.head_dim,
                 v_head_dim: cfg.head_dim,
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             device: normal_loading_metadata.real_device.clone(),
             dtype: vb.dtype(),
@@ -523,8 +523,7 @@ impl Qwen3VLTextModel {
         &self,
         mut xs: Tensor,
         attention_mask: Option<&Tensor>,
-        seqlen_offsets: &[usize],
-        _position_ids: &Tensor,
+        position_ids: &Tensor,
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -532,16 +531,18 @@ impl Qwen3VLTextModel {
         deepstack_visual_embeds: Option<&[Tensor]>,
     ) -> Result<Tensor> {
         let cache = &mut self.cache.normal().0;
+        let cos_sin = self.layers[0]
+            .self_attn
+            .rotary_emb
+            .compute_cos_sin(position_ids, xs.dtype())?;
 
+        let attention_mask = DeviceMappedMask::new(attention_mask.cloned(), &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
-                seqlen_offsets,
+                attention_mask.as_ref().map(|m| m.get(xs.device())),
+                &cos_sin,
                 &mut cache[i],
                 metadata
                     .as_ref()
@@ -559,13 +560,17 @@ impl Qwen3VLTextModel {
             }
         }
         let xs = xs.to_device(&self.device)?;
-        let mut xs = xs.apply(&self.norm)?;
+        let xs = xs.apply(&self.norm)?;
+        let mut xs = extract_logits(&xs, context_lens)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        extract_logits(&self.lm_head.forward(&xs)?, context_lens)
+        self.lm_head.forward(&xs)
     }
 
+    /// Matches transformers `_deepstack_process`:
+    ///   hidden_states = hidden_states.clone()
+    ///   hidden_states[visual_pos_masks, :] += visual_embeds
     fn deepstack_process(
         &self,
         hidden_states: Tensor,
@@ -574,51 +579,40 @@ impl Qwen3VLTextModel {
     ) -> Result<Tensor> {
         let device = hidden_states.device();
         let dtype = hidden_states.dtype();
-
-        let mask = visual_pos_masks.to_device(device)?.to_dtype(DType::F32)?;
-        let mask_flat = mask.flatten_all()?;
-
-        let masked_count = mask_flat.sum_all()?.to_scalar::<f32>()? as usize;
         let visual_embeds = visual_embeds.to_device(device)?.to_dtype(dtype)?;
 
-        if masked_count == 0 {
-            if visual_embeds.dim(0)? != 0 {
-                candle_core::bail!(
-                    "DeepStack visual embeds ({}) provided but mask is empty",
-                    visual_embeds.dim(0)?
-                );
-            }
+        let (batch, seq, hidden) = hidden_states.dims3()?;
+        let total = batch * seq;
+        let hidden_flat = hidden_states.reshape((total, hidden))?;
+
+        // Get flat boolean mask and find nonzero positions
+        let mask_flat: Vec<f32> = visual_pos_masks
+            .to_device(device)?
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1()?;
+        let indices: Vec<u32> = mask_flat
+            .iter()
+            .enumerate()
+            .filter(|(_, &v)| v > 0.0)
+            .map(|(i, _)| i as u32)
+            .collect();
+
+        if indices.is_empty() {
             return Ok(hidden_states);
         }
-
-        if visual_embeds.dim(0)? != masked_count {
+        if indices.len() != visual_embeds.dim(0)? {
             candle_core::bail!(
                 "Mismatch between DeepStack visual embeds ({}) and mask positions ({})",
                 visual_embeds.dim(0)?,
-                masked_count
+                indices.len()
             );
         }
 
-        let (batch, seq, hidden) = hidden_states.dims3()?;
-        let total_positions = batch * seq;
-        let mut hidden_flat = hidden_states.reshape((total_positions, hidden))?;
-
-        let prefix = mask_flat.cumsum(0)?;
-        let rank = (prefix - &mask_flat)?.mul(&mask_flat)?;
-        let rank_u32 = rank.to_dtype(DType::U32)?;
-
-        let positions = Tensor::arange(0u32, total_positions as u32, device)?;
-        let positions_f32 = positions.to_dtype(DType::F32)?;
-        let masked_positions = positions_f32.mul(&mask_flat)?;
-
-        let mut position_per_rank = Tensor::zeros((masked_count,), DType::F32, device)?;
-        position_per_rank = position_per_rank.scatter_add(&rank_u32, &masked_positions, 0)?;
-        let position_per_rank = position_per_rank.to_dtype(DType::U32)?;
-
-        let linear_index = position_per_rank.unsqueeze(1)?.repeat((1, hidden))?;
-
-        hidden_flat = hidden_flat.scatter_add(&linear_index, &visual_embeds, 0)?;
-        hidden_flat.reshape((batch, seq, hidden))
+        let idx = Tensor::from_vec(indices, (visual_embeds.dim(0)?,), device)?;
+        let idx_expanded = idx.unsqueeze(1)?.repeat((1, hidden))?;
+        let result = hidden_flat.scatter_add(&idx_expanded, &visual_embeds, 0)?;
+        result.reshape((batch, seq, hidden))
     }
 }
 

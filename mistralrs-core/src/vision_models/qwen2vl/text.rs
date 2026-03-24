@@ -8,7 +8,7 @@ use mistralrs_quant::{
 
 use crate::{
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{self, Activation, F32RmsNorm, Qwen2VLRotaryEmbedding, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -157,6 +157,7 @@ impl Attention {
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
+                sinks: None,
             },
         })
     }
@@ -430,6 +431,7 @@ impl Qwen2VLTextModel {
                 sliding_window: cfg.sliding_window,
                 k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
                 v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             device: normal_loading_metadata.real_device.clone(),
             dtype: vb.dtype(),
@@ -455,25 +457,24 @@ impl Qwen2VLTextModel {
             .rotary_emb
             .compute_cos_sin(position_ids, xs.dtype())?;
 
+        let attention_mask = DeviceMappedMask::new(attention_mask.cloned(), &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                attention_mask.as_ref().map(|m| m.get(xs.device())),
                 &cos_sin,
                 &mut cache[i],
                 flash_params,
             )?
         }
         let xs = xs.to_device(&self.device)?;
-        let mut xs = xs.apply(&self.norm)?;
+        let xs = xs.apply(&self.norm)?;
+        let mut xs = extract_logits(&xs, context_lens)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        extract_logits(&self.lm_head.forward(&xs)?, context_lens)
+        self.lm_head.forward(&xs)
     }
 }
 

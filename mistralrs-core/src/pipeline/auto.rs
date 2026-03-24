@@ -1,26 +1,28 @@
+use super::hf::{hf_access_error, remote_issue_from_api_error, RemoteAccessIssue};
 use super::{
-    EmbeddingLoaderBuilder, EmbeddingLoaderType, EmbeddingSpecificConfig, Loader, ModelKind,
-    ModelPaths, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, TokenSource,
-    VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoaderBuilder, EmbeddingLoaderType,
+    EmbeddingSpecificConfig, Loader, ModelKind, ModelPaths, NormalLoaderBuilder, NormalLoaderType,
+    NormalSpecificConfig, SpeechLoader, TokenSource, VisionLoaderBuilder, VisionLoaderType,
+    VisionSpecificConfig,
 };
-use crate::api_get_file;
 use crate::utils::{progress::ProgressScopeGuard, tokens::get_token};
 use crate::Ordering;
 use crate::{DeviceMapSetting, IsqType, PagedAttentionConfig, Pipeline, TryIntoDType};
 use anyhow::Result;
 use candle_core::Device;
 use hf_hub::{
-    api::sync::{ApiBuilder, ApiRepo},
+    api::sync::{ApiBuilder, ApiError, ApiRepo},
     Cache, Repo, RepoType,
 };
 use serde::Deserialize;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
-/// Automatically selects between a normal or vision loader based on the `architectures` field.
+/// Automatically selects the appropriate loader based on repository/config metadata.
 pub struct AutoLoader {
     model_id: String,
     normal_builder: Mutex<Option<NormalLoaderBuilder>>,
@@ -176,24 +178,86 @@ struct AutoConfig {
 }
 
 struct ConfigArtifacts {
-    contents: String,
+    contents: Option<String>,
     sentence_transformers_present: bool,
+    repo_files: Vec<String>,
+    remote_access_issue: Option<RemoteAccessIssue>,
 }
 
 enum Detected {
     Normal(NormalLoaderType),
     Vision(VisionLoaderType),
     Embedding(Option<EmbeddingLoaderType>),
+    Diffusion(DiffusionLoaderType),
+    Speech(crate::speech_models::SpeechLoaderType),
 }
 
 impl AutoLoader {
+    fn try_get_file(
+        api: &ApiRepo,
+        model_id: &Path,
+        file: &str,
+    ) -> std::result::Result<Option<PathBuf>, ApiError> {
+        if model_id.exists() {
+            let path = model_id.join(file);
+            if path.exists() {
+                info!("Loading `{}` locally at `{}`", file, path.display());
+                Ok(Some(path))
+            } else {
+                Ok(None)
+            }
+        } else {
+            api.get(file).map(Some)
+        }
+    }
+
+    fn list_local_repo_files(model_root: &Path) -> Vec<String> {
+        fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> io::Result<()> {
+            for entry in std::fs::read_dir(dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    collect_files(root, &path, out)?;
+                } else if let Ok(rel) = path.strip_prefix(root) {
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+            Ok(())
+        }
+
+        if !model_root.is_dir() {
+            return Vec::new();
+        }
+
+        let mut files = Vec::new();
+        if collect_files(model_root, model_root, &mut files).is_err() {
+            return Vec::new();
+        }
+        files
+    }
+
     fn read_config_from_path(&self, paths: &dyn ModelPaths) -> Result<ConfigArtifacts> {
         let config_path = paths.get_config_filename();
-        let contents = std::fs::read_to_string(config_path)?;
-        let sentence_transformers_present = Self::has_sentence_transformers_sibling(config_path);
+        let contents = match std::fs::read_to_string(config_path) {
+            Ok(contents) => Some(contents),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err.into()),
+        };
+        let model_root = Path::new(&self.model_id);
+        let repo_files = if model_root.exists() {
+            Self::list_local_repo_files(model_root)
+        } else {
+            Vec::new()
+        };
+        let sentence_transformers_present = Self::has_sentence_transformers_sibling(config_path)
+            || repo_files
+                .iter()
+                .any(|f| f == "config_sentence_transformers.json");
         Ok(ConfigArtifacts {
             contents,
             sentence_transformers_present,
+            repo_files,
+            remote_access_issue: None,
         })
     }
 
@@ -211,8 +275,8 @@ impl AutoLoader {
         let mut api = ApiBuilder::from_cache(cache)
             .with_progress(!silent)
             .with_token(get_token(token_source)?);
-        if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-            api = api.with_cache_dir(x.into());
+        if let Some(cache_dir) = crate::hf_hub_cache_dir() {
+            api = api.with_cache_dir(cache_dir);
         }
         let api = api.build()?;
         let revision = revision.unwrap_or_else(|| "main".to_string());
@@ -222,14 +286,33 @@ impl AutoLoader {
             revision,
         ));
         let model_id = Path::new(&self.model_id);
-        let config_filename = api_get_file!(api, "config.json", model_id);
-        let contents = std::fs::read_to_string(&config_filename)?;
+        let mut remote_access_issue = None;
+        let contents = match Self::try_get_file(&api, model_id, "config.json") {
+            Ok(Some(path)) => Some(std::fs::read_to_string(&path)?),
+            Ok(None) => None,
+            Err(err) => {
+                let issue = remote_issue_from_api_error(model_id, Some("config.json"), &err);
+                warn!(
+                    "Auto loader could not fetch `config.json` for `{}`: {}",
+                    self.model_id, issue.message
+                );
+                remote_access_issue = Some(issue);
+                None
+            }
+        };
         let sentence_transformers_present =
-            Self::has_sentence_transformers_sibling(&config_filename)
+            model_id.join("config_sentence_transformers.json").exists()
                 || Self::fetch_sentence_transformers_config(&api, model_id);
+        let repo_files = if model_id.exists() {
+            Self::list_local_repo_files(model_id)
+        } else {
+            crate::api_dir_list!(api, model_id, false).collect::<Vec<_>>()
+        };
         Ok(ConfigArtifacts {
             contents,
             sentence_transformers_present,
+            repo_files,
+            remote_access_issue,
         })
     }
 
@@ -256,15 +339,34 @@ impl AutoLoader {
         }
     }
 
-    fn detect(&self, config: &str, allow_embedding: bool) -> Result<Detected> {
-        let cfg: AutoConfig = serde_json::from_str(config)?;
-        if allow_embedding {
-            if let Some(name) = cfg.architectures.first() {
-                if let Ok(tp) = EmbeddingLoaderType::from_causal_lm_name(name) {
-                    info!(
-                        "Detected `config_sentence_transformers.json`; using embedding loader `{tp}`."
-                    );
-                    return Ok(Detected::Embedding(Some(tp)));
+    fn detect(&self, artifacts: &ConfigArtifacts) -> Result<Detected> {
+        if let Some(tp) = DiffusionLoaderType::auto_detect_from_files(&artifacts.repo_files) {
+            return Ok(Detected::Diffusion(tp));
+        }
+
+        if let Some(ref config) = artifacts.contents {
+            if let Some(tp) =
+                crate::speech_models::SpeechLoaderType::auto_detect_from_config(config)
+            {
+                return Ok(Detected::Speech(tp));
+            }
+        }
+
+        if artifacts.sentence_transformers_present {
+            if let Some(ref config) = artifacts.contents {
+                let cfg: AutoConfig = serde_json::from_str(config)?;
+                if let Some(name) = cfg.architectures.first() {
+                    if let Ok(tp) = EmbeddingLoaderType::from_causal_lm_name(name) {
+                        info!(
+                            "Detected `config_sentence_transformers.json`; using embedding loader `{tp}`."
+                        );
+                        return Ok(Detected::Embedding(Some(tp)));
+                    }
+                }
+            }
+            if artifacts.contents.is_none() {
+                if let Some(issue) = artifacts.remote_access_issue.as_ref() {
+                    return Err(hf_access_error(Path::new(&self.model_id), issue));
                 }
             }
             info!(
@@ -272,6 +374,24 @@ impl AutoLoader {
             );
             return Ok(Detected::Embedding(None));
         }
+
+        // Detect Mistral-native models that use params.json instead of config.json
+        if artifacts.contents.is_none() && artifacts.repo_files.iter().any(|f| f == "params.json") {
+            // Voxtral uses params.json with a "multimodal" key containing "whisper_model_args"
+            info!("Detected `params.json` in repo; routing as Voxtral.");
+            return Ok(Detected::Vision(VisionLoaderType::Voxtral));
+        }
+
+        let config = artifacts.contents.as_ref().ok_or_else(|| {
+            if let Some(issue) = artifacts.remote_access_issue.as_ref() {
+                hf_access_error(Path::new(&self.model_id), issue)
+            } else {
+                anyhow::anyhow!(
+                    "Auto loader could not determine model type: missing `config.json` and no diffusion/speech markers found."
+                )
+            }
+        })?;
+        let cfg: AutoConfig = serde_json::from_str(config)?;
         if cfg.architectures.len() != 1 {
             anyhow::bail!("Expected exactly one architecture in config");
         }
@@ -283,12 +403,12 @@ impl AutoLoader {
         Ok(Detected::Normal(tp))
     }
 
-    fn ensure_loader(&self, config: &str, allow_embedding: bool) -> Result<()> {
+    fn ensure_loader(&self, artifacts: &ConfigArtifacts) -> Result<()> {
         let mut guard = self.loader.lock().unwrap();
         if guard.is_some() {
             return Ok(());
         }
-        match self.detect(config, allow_embedding)? {
+        match self.detect(artifacts)? {
             Detected::Normal(tp) => {
                 let builder = self
                     .normal_builder
@@ -319,6 +439,19 @@ impl AutoLoader {
                 let loader = builder.build(tp);
                 *guard = Some(loader);
             }
+            Detected::Diffusion(tp) => {
+                let loader = DiffusionLoaderBuilder::new(Some(self.model_id.clone())).build(tp);
+                *guard = Some(loader);
+            }
+            Detected::Speech(tp) => {
+                let loader: Box<dyn Loader> = Box::new(SpeechLoader {
+                    model_id: self.model_id.clone(),
+                    dac_model_id: None,
+                    arch: tp,
+                    cfg: None,
+                });
+                *guard = Some(loader);
+            }
         }
         Ok(())
     }
@@ -339,7 +472,7 @@ impl Loader for AutoLoader {
     ) -> Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         let config = self.read_config_from_hf(revision.clone(), &token_source, silent)?;
-        self.ensure_loader(&config.contents, config.sentence_transformers_present)?;
+        self.ensure_loader(&config)?;
         self.loader
             .lock()
             .unwrap()
@@ -370,7 +503,7 @@ impl Loader for AutoLoader {
     ) -> Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         let config = self.read_config_from_path(paths.as_ref())?;
-        self.ensure_loader(&config.contents, config.sentence_transformers_present)?;
+        self.ensure_loader(&config)?;
         self.loader
             .lock()
             .unwrap()

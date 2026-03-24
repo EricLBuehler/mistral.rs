@@ -10,6 +10,7 @@ use super::{
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
+use crate::distributed::WorkerTransferData;
 use crate::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
@@ -32,8 +33,8 @@ use crate::utils::progress::ProgressScopeGuard;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
-    get_mut_arcmutex, get_paths_gguf, DeviceMapSetting, LocalModelPaths, PagedAttentionConfig,
-    Pipeline, Topology, TryIntoDType,
+    distributed, get_mut_arcmutex, get_paths_gguf, DeviceMapSetting, LocalModelPaths,
+    PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
@@ -53,10 +54,10 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
-use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -282,6 +283,7 @@ impl Loader for GGUFLoader {
             self.quantized_filenames.clone(),
             silent
         );
+
         self.load_model_from_path(
             &paths?,
             dtype,
@@ -318,15 +320,19 @@ impl Loader for GGUFLoader {
             readers.push(std::fs::File::open(filename)?);
         }
         let mut readers = readers.iter_mut().collect::<Vec<_>>();
-
         let model = Content::from_readers(&mut readers)?;
+
         if !silent {
             model.print_metadata()?;
         }
+
         let arch = model.arch();
 
         // If auto, convert to Map
         let num_layers = model.get_metadata()[&format!("{arch}.block_count")].to_u32()? as usize;
+
+        let mut max_kv_tokens: Option<usize> = None;
+
         if let DeviceMapSetting::Auto(params) = mapper.clone() {
             let devices = device_map::get_all_similar_devices(device)?;
             // Initial dtype
@@ -355,6 +361,7 @@ impl Loader for GGUFLoader {
                 &params,
                 paged_attn_config.as_ref(),
             )?;
+            max_kv_tokens = Some(params.max_seq_len() * params.max_batch_size());
             mapper = DeviceMapSetting::Map(new);
         }
 
@@ -363,9 +370,29 @@ impl Loader for GGUFLoader {
             unsafe { dev.disable_event_tracking() };
         }
 
-        let pipeline_mapper =
-            mapper.into_mapper(num_layers, device, self.config.topology.as_ref())?;
-        let mapper = mapper.into_mapper(num_layers, device, self.config.topology.as_ref())?;
+        let use_nccl = mistralrs_quant::distributed::use_nccl();
+        let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
+            let payload: WorkerTransferData = serde_json::from_str(&payload)?;
+            let WorkerTransferData::Init { id: _, worker_rank } = payload;
+            vec![candle_core::Device::new_cuda(worker_rank + 1)?]
+        } else if use_nccl {
+            vec![candle_core::Device::new_cuda(0)?]
+        } else {
+            device_map::get_all_similar_devices(device)?
+        };
+
+        let pipeline_mapper = mapper.into_mapper(
+            num_layers,
+            device,
+            self.config.topology.as_ref(),
+            &available_devices,
+        )?;
+        let mapper = mapper.into_mapper(
+            num_layers,
+            device,
+            self.config.topology.as_ref(),
+            &available_devices,
+        )?;
         let mut layer_devices = Vec::new();
         for layer in 0..num_layers {
             let device = mapper.device_for(layer, false).cloned();
@@ -444,7 +471,9 @@ impl Loader for GGUFLoader {
         // Config into model:
         let model = match self.kind {
             ModelKind::GgufQuantized { .. } => match arch {
-                GGUFArchitecture::Llama => Model::Llama(QLlama::try_from(model_config)?),
+                GGUFArchitecture::Llama | GGUFArchitecture::Mistral3 => {
+                    Model::Llama(QLlama::try_from(model_config)?)
+                }
                 GGUFArchitecture::Phi2 => Model::Phi2(QPhi::try_from(model_config)?),
                 GGUFArchitecture::Phi3 => Model::Phi3(QPhi3::try_from(model_config)?),
                 GGUFArchitecture::Starcoder2 => {
@@ -456,7 +485,9 @@ impl Loader for GGUFLoader {
                 a => bail!("Unsupported architecture `{a:?}` for GGUF"),
             },
             ModelKind::GgufAdapter { adapter, .. } => match arch {
-                GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
+                GGUFArchitecture::Llama | GGUFArchitecture::Mistral3 => {
+                    Model::XLoraLlama(XLoraQLlama::try_from(model_config)?)
+                }
                 GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::try_from(model_config)?),
                 a => bail!(
                     "Unsupported architecture `{a:?}` for GGUF {kind}",
@@ -477,6 +508,8 @@ impl Loader for GGUFLoader {
                 device,
                 &layer_devices,
                 silent,
+                None,
+                max_kv_tokens,
             )?;
             let cache_engine = CacheEngine::new(
                 model_config,

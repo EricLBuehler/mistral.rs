@@ -440,6 +440,9 @@ pub enum TomlModelSelected {
 
         /// Cache path for Hugging Face models downloaded locally
         hf_cache_path: Option<PathBuf>,
+
+        /// ISQ organization: `default` or `moqe`.
+        organization: Option<IsqOrganization>,
     },
 
     /// Select an embedding model, without quantization or adapters
@@ -943,6 +946,7 @@ fn loader_from_selected(
             max_image_length: _,
             imatrix,
             hf_cache_path,
+            organization,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
@@ -959,6 +963,7 @@ fn loader_from_selected(
                 hf_cache_path,
                 matformer_config_path: None,
                 matformer_slice_name: None,
+                organization: organization.unwrap_or_default(),
             },
             args.chat_template,
             args.tokenizer_json,

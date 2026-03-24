@@ -14,9 +14,9 @@ use mistralrs_server_core::{
 
 // Import your existing types
 use rust_mcp_sdk::schema::{
-    schema_utils::CallToolError, CallToolResult, CallToolResultContentItem, Implementation,
-    InitializeResult, ListToolsResult, ServerCapabilities, ServerCapabilitiesTools, TextContent,
-    Tool, ToolInputSchema, LATEST_PROTOCOL_VERSION,
+    schema_utils::CallToolError, CallToolResult, ContentBlock, Implementation, InitializeResult,
+    ListToolsResult, ServerCapabilities, ServerCapabilitiesTools, TextContent, Tool,
+    ToolInputSchema, LATEST_PROTOCOL_VERSION,
 };
 
 mod errors {
@@ -70,6 +70,11 @@ pub trait McpTool: Send + Sync {
             description: self.description().map(|s| s.to_string()),
             input_schema: self.input_schema().clone(),
             annotations: None,
+            execution: None,
+            icons: Vec::new(),
+            meta: None,
+            output_schema: None,
+            title: None,
         }
     }
 
@@ -130,7 +135,7 @@ impl ChatTool {
             .clone(),
         );
 
-        let input_schema = ToolInputSchema::new(required, Some(properties));
+        let input_schema = ToolInputSchema::new(required, Some(properties), None);
         Self { input_schema }
     }
 }
@@ -178,11 +183,12 @@ impl McpTool for ChatTool {
                     .join("\n");
 
                 Ok(CallToolResult {
-                    content: vec![CallToolResultContentItem::TextContent(TextContent::new(
-                        content, None,
+                    content: vec![ContentBlock::TextContent(TextContent::new(
+                        content, None, None,
                     ))],
                     is_error: None,
                     meta: None,
+                    structured_content: None,
                 })
             }
             Some(mistralrs_core::Response::ModelError(msg, _)) => {
@@ -220,6 +226,10 @@ impl HttpMcpHandler {
             server_info: Implementation {
                 name: "mistralrs".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
+                description: None,
+                icons: Vec::new(),
+                title: None,
+                website_url: None,
             },
             capabilities: ServerCapabilities {
                 tools: Some(ServerCapabilitiesTools { list_changed: None }),

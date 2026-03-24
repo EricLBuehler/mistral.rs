@@ -92,6 +92,7 @@ impl Config {
             max_position_embeddings: self.text_config.max_position_embeddings,
             rms_norm_eps: self.text_config.rms_norm_eps,
             rope_theta: self.text_config.rope_theta as f64,
+            rope_parameters: None,
             sliding_window: self.text_config.sliding_window,
             head_dim: None,
             quantization_config: None,

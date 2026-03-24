@@ -2,7 +2,7 @@
 
 #![allow(unused_variables, unused_imports, dead_code)]
 
-use candle_core::{Device, Result, Tensor};
+use candle_core::{Device, DeviceLocation, Result, Tensor};
 use candle_nn::Activation as CandleActivation;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, Once};
@@ -11,6 +11,10 @@ use std::sync::{LazyLock, Mutex, Once};
 pub struct CublasLtController {
     handle: Mutex<Option<&'static CublasLtWrapper>>,
     inhibit: AtomicBool,
+    /// The device location where cuBLASLt was initialized. This is important
+    /// because cuBLASLt handles are device-specific and using them with tensors
+    /// on different devices will cause CUBLAS errors.
+    device_location: Mutex<Option<DeviceLocation>>,
 }
 
 impl CublasLtController {
@@ -33,12 +37,32 @@ impl CublasLtController {
         let handle_opt = self.handle.lock().unwrap();
         *handle_opt
     }
+
+    /// Get the handle only if the given device matches the device where cuBLASLt
+    /// was initialized. This is important for multi-GPU setups where using a
+    /// cuBLASLt handle with tensors on a different device causes CUBLAS errors.
+    pub fn get_for_device(&self, device: &Device) -> Option<&'static CublasLtWrapper> {
+        // Check inhibit first to prevent TOCTOU race condition
+        if self.inhibit.load(Ordering::SeqCst) {
+            return None;
+        }
+        // Check if the device matches the initialized device
+        let device_loc = self.device_location.lock().unwrap();
+        if let Some(init_loc) = *device_loc {
+            if device.location() != init_loc {
+                return None;
+            }
+        }
+        let handle_opt = self.handle.lock().unwrap();
+        *handle_opt
+    }
 }
 
 pub static CUBLASLT_CONTROLLER: LazyLock<CublasLtController> =
     LazyLock::new(|| CublasLtController {
         handle: Mutex::new(None),
         inhibit: AtomicBool::new(false),
+        device_location: Mutex::new(None),
     });
 
 #[cfg(feature = "cuda")]
@@ -65,9 +89,11 @@ pub fn maybe_init_cublas_lt_wrapper(device: Device) {
                     });
                     let wrapper_ptr = Box::leak(wrapper) as &'static CublasLtWrapper;
 
-                    // Set the controller handle
+                    // Set the controller handle and store the device location
                     let mut handle_lock = CUBLASLT_CONTROLLER.handle.lock().unwrap();
                     *handle_lock = Some(wrapper_ptr);
+                    let mut device_loc = CUBLASLT_CONTROLLER.device_location.lock().unwrap();
+                    *device_loc = Some(device.location());
                 }
                 _ => {
                     let mut handle_lock = CUBLASLT_CONTROLLER.handle.lock().unwrap();

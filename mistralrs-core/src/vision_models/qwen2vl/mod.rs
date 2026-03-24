@@ -1,6 +1,9 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{any::Any, sync::Arc};
+use std::{
+    any::Any,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
@@ -12,7 +15,9 @@ use crate::{
     device_map::DeviceMapper,
     layers::CausalMasker,
     layers_masker::{masked_fill, PastKvLenCache},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
@@ -33,6 +38,7 @@ pub struct Qwen2VLModel {
     spatial_merge_size: usize,
     image_token_id: u32,
     video_token_id: u32,
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
 impl Qwen2VLModel {
@@ -71,6 +77,7 @@ impl Qwen2VLModel {
             spatial_merge_size: cfg.vision_config.spatial_merge_size,
             image_token_id: cfg.image_token_id,
             video_token_id: cfg.video_token_id,
+            encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
     }
 
@@ -275,6 +282,8 @@ impl Qwen2VLModel {
         pixel_values_videos: Option<Tensor>,
         image_grid_thw: Option<Tensor>,
         video_grid_thw: Option<Tensor>,
+        rope_img_grid_thw: Option<Tensor>,
+        rope_vid_grid_thw: Option<Tensor>,
         seqlens: Vec<usize>,
         continuous_img_pad: Vec<Vec<(usize, usize)>>,
         continuous_vid_pad: Vec<Vec<(usize, usize)>>,
@@ -283,6 +292,7 @@ impl Qwen2VLModel {
         video_nums: Vec<usize>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
+        image_hashes: &[u64],
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
@@ -297,15 +307,97 @@ impl Qwen2VLModel {
             let mut xs = self.text.embed_tokens(input_ids)?;
 
             if let Some(pixel_values) = pixel_values {
-                let image_embeds = self
-                    .vision
-                    .forward(
-                        &pixel_values,
-                        image_grid_thw
-                            .as_ref()
-                            .context("pixel_values require image_grid_thw")?,
-                    )?
-                    .to_dtype(self.text.dtype)?;
+                let mut pixel_values = pixel_values;
+                let ndim = pixel_values.dims().len();
+                if ndim > 2 {
+                    let last_dim = pixel_values.dim(ndim - 1)?;
+                    pixel_values = pixel_values.reshape(((), last_dim))?;
+                }
+                let grid_thw = image_grid_thw
+                    .as_ref()
+                    .context("pixel_values require image_grid_thw")?;
+
+                let image_embeds = if !image_hashes.is_empty() {
+                    let n_images = image_hashes.len();
+                    let grid_data = grid_thw.to_vec2::<u32>()?;
+                    let patches_per_image: Vec<usize> = grid_data
+                        .iter()
+                        .map(|row| row[0] as usize * row[1] as usize * row[2] as usize)
+                        .collect();
+
+                    let mut per_image: Vec<Option<Tensor>> = vec![None; n_images];
+                    let mut miss_indices = Vec::new();
+                    {
+                        let mut guard = self
+                            .encoder_cache
+                            .lock()
+                            .expect("encoder cache lock poisoned");
+                        for (i, &hash) in image_hashes.iter().enumerate() {
+                            if let Some(cached) = guard.get(hash) {
+                                per_image[i] = Some(cached[0].clone());
+                            } else {
+                                miss_indices.push(i);
+                            }
+                        }
+                    }
+
+                    if miss_indices.is_empty() {
+                        let parts: Vec<Tensor> =
+                            per_image.into_iter().map(|t| t.unwrap()).collect();
+                        Tensor::cat(&parts, 0)?
+                    } else {
+                        // Collect miss pixel slices and grid rows
+                        let mut miss_pixel_slices = Vec::new();
+                        let mut miss_grid_rows = Vec::new();
+                        let mut offset = 0usize;
+                        for (i, &n_patches) in patches_per_image.iter().enumerate() {
+                            if miss_indices.contains(&i) {
+                                miss_pixel_slices.push(pixel_values.narrow(0, offset, n_patches)?);
+                                miss_grid_rows.push(grid_thw.i(i)?);
+                            }
+                            offset += n_patches;
+                        }
+                        let miss_pixels = Tensor::cat(&miss_pixel_slices, 0)?;
+                        let miss_grid = Tensor::stack(&miss_grid_rows, 0)?;
+
+                        let encoded = self.vision.forward(&miss_pixels, &miss_grid)?;
+
+                        // Compute output tokens per miss image (after spatial merge)
+                        let merge = self.spatial_merge_size as u32;
+                        let miss_output_tokens: Vec<usize> = miss_indices
+                            .iter()
+                            .map(|&i| {
+                                let row = &grid_data[i];
+                                (row[0] as usize)
+                                    * (row[1] as usize / merge as usize)
+                                    * (row[2] as usize / merge as usize)
+                            })
+                            .collect();
+
+                        // Split encoded output and cache per-image
+                        let mut enc_offset = 0usize;
+                        {
+                            let mut guard = self
+                                .encoder_cache
+                                .lock()
+                                .expect("encoder cache lock poisoned");
+                            for (j, &orig_idx) in miss_indices.iter().enumerate() {
+                                let n_out = miss_output_tokens[j];
+                                let single = encoded.narrow(0, enc_offset, n_out)?;
+                                enc_offset += n_out;
+                                guard.insert(image_hashes[orig_idx], vec![single.clone()]);
+                                per_image[orig_idx] = Some(single);
+                            }
+                        }
+
+                        let parts: Vec<Tensor> =
+                            per_image.into_iter().map(|t| t.unwrap()).collect();
+                        Tensor::cat(&parts, 0)?
+                    }
+                } else {
+                    self.vision.forward(&pixel_values, grid_thw)?
+                }
+                .to_dtype(self.text.dtype)?;
 
                 for (batch, batch_ids) in continuous_img_pad.into_iter().enumerate() {
                     let mut last_end = 0;
@@ -374,8 +466,8 @@ impl Qwen2VLModel {
         };
         let (position_ids, mrope_position_deltas) = self.get_rope_index(
             ropeidx_input_ids,
-            image_grid_thw.as_ref(),
-            video_grid_thw.as_ref(),
+            rope_img_grid_thw.as_ref(),
+            rope_vid_grid_thw.as_ref(),
             Some(&ropeidx_attn_mask),
             Some(&ropeidx_attn_mask_indices),
             input_ids_searching,
@@ -413,12 +505,18 @@ pub(crate) struct Qwen2VLVisionSpecificArgs {
     input_ids_full: Tensor,
     image_grid_thw: Option<Tensor>, // Some when pixel values are provided
     video_grid_thw: Option<Tensor>, // Some when pixel values are provided
+    /// Complete image grid THW for ALL images in the full sequence (including prefix-cached ones).
+    /// Used for MRoPE position computation. Falls back to `image_grid_thw` if None.
+    pub rope_img_grid_thw: Option<Tensor>,
+    /// Complete video grid THW for ALL videos in the full sequence (including prefix-cached ones).
+    pub rope_vid_grid_thw: Option<Tensor>,
     seqlens: Vec<usize>,
     continuous_img_pad: Vec<Vec<(usize, usize)>>,
     continuous_vid_pad: Vec<Vec<(usize, usize)>>,
     input_ids_searching: Vec<Vec<u32>>,
     image_nums: Vec<usize>,
     video_nums: Vec<usize>,
+    pub image_hashes: Vec<u64>,
 }
 
 impl VisionModel for Qwen2VLModel {
@@ -437,12 +535,15 @@ impl VisionModel for Qwen2VLModel {
             input_ids_full,
             image_grid_thw,
             video_grid_thw,
+            rope_img_grid_thw,
+            rope_vid_grid_thw,
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
             input_ids_searching,
             image_nums,
             video_nums,
+            image_hashes,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Qwen2VLVisionSpecificArgs`");
@@ -454,6 +555,10 @@ impl VisionModel for Qwen2VLModel {
                 candle_core::bail!("Images and videos cannot be provided together.")
             }
         };
+        // Use the complete grid (covering all images/videos including prefix-cached ones)
+        // for MRoPE position computation. Falls back to current-frame grid.
+        let rope_img = rope_img_grid_thw.or(image_grid_thw.clone());
+        let rope_vid = rope_vid_grid_thw.or(video_grid_thw.clone());
         self.forward(
             input_ids,
             &input_ids_full,
@@ -461,6 +566,8 @@ impl VisionModel for Qwen2VLModel {
             pixel_values_video,
             image_grid_thw,
             video_grid_thw,
+            rope_img,
+            rope_vid,
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
@@ -469,6 +576,7 @@ impl VisionModel for Qwen2VLModel {
             video_nums,
             seqlen_offsets,
             context_lens,
+            &image_hashes,
             flash_params,
         )
     }
@@ -493,13 +601,29 @@ impl VisionModel for Qwen2VLModel {
             input_ids_full: input_ids.clone(),
             image_grid_thw: None,
             video_grid_thw: None,
+            rope_img_grid_thw: None,
+            rope_vid_grid_thw: None,
             seqlens: vec![input_ids.dims()[1]],
             continuous_img_pad: vec![],
             continuous_vid_pad: vec![],
             input_ids_searching: vec![vec![]; input_ids.dims()[0]],
             image_nums: vec![0; input_ids.dims()[0]],
             video_nums: vec![0; input_ids.dims()[0]],
+            image_hashes: vec![],
         })
+    }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
     }
 }
 

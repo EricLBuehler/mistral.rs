@@ -11,7 +11,7 @@ use std::sync::Arc;
 fn convert_slice<T: WithDType>(data: &[u8], shape: &[usize], device: &Device) -> Result<Tensor> {
     let size_in_bytes = T::DTYPE.size_in_bytes();
     let elem_count = data.len() / size_in_bytes;
-    if (data.as_ptr() as usize) % size_in_bytes == 0 {
+    if (data.as_ptr() as usize).is_multiple_of(size_in_bytes) {
         // SAFETY This is safe because we just checked that this
         // was correctly aligned.
         let data: &[T] =
@@ -41,7 +41,7 @@ fn convert_slice_with_cast<T: Sized + Copy, U: WithDType, F: Fn(T) -> Result<U>>
 ) -> Result<Tensor> {
     let size_in_bytes = std::mem::size_of::<T>();
     let elem_count = data.len() / size_in_bytes;
-    if (data.as_ptr() as usize) % size_in_bytes == 0 {
+    if (data.as_ptr() as usize).is_multiple_of(size_in_bytes) {
         // SAFETY This is safe because we just checked that this
         // was correctly aligned.
         let data: &[T] =

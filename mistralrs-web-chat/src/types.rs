@@ -35,7 +35,7 @@ pub struct Cli {
     #[arg(long = "search-embedding-model")]
     pub search_embedding_model: Option<SearchEmbeddingModel>,
 
-    /// Port to listen on (default: 8080)
+    /// Port to listen on (default: 1234)
     #[arg(long = "port", short = 'p')]
     pub port: Option<u16>,
 

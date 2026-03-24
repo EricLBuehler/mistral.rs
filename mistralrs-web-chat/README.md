@@ -1,5 +1,18 @@
 # Mistral.rs Web Chat App
 
+> **Deprecated:** The standalone `mistralrs-web-chat` binary is deprecated. Use `mistralrs serve --ui` instead for the same functionality.
+>
+> **Migration:**
+> ```bash
+> # Old
+> cargo run --release --features cuda --bin mistralrs-web-chat -- --text-model Qwen/Qwen3-4B
+>
+> # New
+> mistralrs serve --ui -m Qwen/Qwen3-4B
+> ```
+>
+> The new built-in UI provides the same features and is accessible at `/ui` when running the server.
+
 A minimal, fast, and modern web chat interface for [mistral.rs](https://github.com/EricBuehler/mistral.rs), supporting text, vision, and speech models with drag-and-drop image and file upload, markdown rendering, and multi-model selection.
 
 <img src="../res/chat.gif" alt="Demonstration" />
@@ -41,13 +54,13 @@ cargo run --release --features <specify feature(s) here> --bin mistralrs-web-cha
 
 - At least one model is required (text, vision, or speech).
 - Multiple `--text-model`, `--vision-model`, or `--speech-model` can be specified.
-- `--port` is optional (defaults to 8080).
+- `--port` is optional (defaults to 1234).
 
 ---
 
 2) Access the app!
 
-- Open http://localhost:8080 (or your chosen port).
+- Open http://localhost:1234 (or your chosen port).
 
 ---
 
@@ -63,7 +76,7 @@ Options:
   --speech-model <MODEL>         Speech/TTS models (HuggingFace ID or local path). Can be repeated.
   --enable-search                Enable web search tool (requires embedding model)
   --search-embedding-model <M>   Built-in search embedding model (e.g., embedding_gemma)
-  -p, --port <PORT>              Port to listen on (default: 8080)
+  -p, --port <PORT>              Port to listen on (default: 1234)
   --host <HOST>                  IP address to serve on (default: 0.0.0.0)
   --cpu                          Use CPU only (disable GPU acceleration)
   --temperature <TEMP>           Default temperature for generation (0.0-2.0). Default: 0.7

@@ -7,19 +7,15 @@ The Python and HTTP APIs support sending images as:
 - Path to a local image
 - [Base64](https://en.wikipedia.org/wiki/Base64) encoded string
 
-The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
+The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
 > Note: The Phi 3 Vision model works best with one image although it is supported to send multiple images.
 
 > Note: when sending multiple images, they will be resized to the minimum dimension by which all will fit without cropping.
 > Aspect ratio is not preserved in that case.
 
-> [!NOTE]
-> The Phi 3 vision model does not automatically add the image tokens!
-> They should be added to messages manually, and are of the format `<|image_{N}|>` where N starts from 1.
-
 ## HTTP server
-You can find this example [here](../examples/server/phi3v.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -33,7 +29,7 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 **Prompt:**
 ```
-<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.
+What is shown in this image? Write a detailed response analyzing the scene.
 ```
 
 **Output:**
@@ -47,11 +43,8 @@ The perspective from which this photo is taken offers an expansive view of the m
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 vision-plain -m microsoft/Phi-3.5-vision-instruct
+mistralrs serve vision -p 1234 -m microsoft/Phi-3.5-vision-instruct
 ```
 
 2) Send a request
@@ -75,7 +68,7 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.",
+                    "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                 },
             ],
         },
@@ -90,13 +83,13 @@ print(resp)
 
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
 
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/phi3v/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
 
 This is a minimal example of running the Phi 3 Vision model with a dummy image.
 
@@ -140,7 +133,7 @@ async fn main() -> Result<()> {
 ```
 
 ## Python
-You can find this example [here](../examples/python/phi3v.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -171,7 +164,7 @@ res = runner.send_chat_completion_request(
                     },
                     {
                         "type": "text",
-                        "text": "<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.",
+                        "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                     },
                 ],
             }
@@ -186,5 +179,5 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).

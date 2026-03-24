@@ -1,38 +1,12 @@
-use std::{
-    hash::{DefaultHasher, Hash, Hasher},
-    sync::Arc,
-};
-
 use candle_core::{Device, Result};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use tracing::info;
 
 use crate::{
-    get_mut_arcmutex,
-    paged_attention::{BlockEngine, LogicalTokenBlock, PhysicalTokenBlock},
-    pipeline::KvCache,
-    sequence::{self, Sequence},
+    kv_cache::RecurrentStateSnapshot, paged_attention::block_hash::BlockHash, pipeline::KvCache,
+    sequence::Sequence,
 };
-
-type BlockBestMatch<'a> = (
-    usize,                         // matched_len
-    &'a [LogicalTokenBlock],       // logical blocks
-    &'a [Arc<PhysicalTokenBlock>], // physical blocks
-    usize,                         // audios_match_until
-    usize,                         // images_match_until
-);
-
-fn hash_logical_blocks(logical_blocks: &[LogicalTokenBlock]) -> Vec<u64> {
-    logical_blocks
-        .iter()
-        .map(|block| {
-            let mut hasher = DefaultHasher::new();
-            block.hash(&mut hasher);
-            hasher.finish()
-        })
-        .collect::<Vec<_>>()
-}
 
 #[derive(PartialEq, Eq, Debug, Hash)]
 struct Tokens(Vec<u32>);
@@ -57,98 +31,71 @@ impl From<Vec<u32>> for Tokens {
 #[derive(Clone)]
 struct CacheElement {
     cache: Vec<Option<KvCache>>,
+    /// Recurrent state snapshots for hybrid models (one per recurrent layer)
+    recurrent_snapshots: Option<Vec<RecurrentStateSnapshot>>,
     audio_hashes: Option<Vec<u64>>,
     image_hashes: Option<Vec<u64>>,
-}
-
-#[derive(Clone)]
-struct BlockCacheElement {
-    logical_blocks: Vec<LogicalTokenBlock>,
-    physical_blocks: Vec<Arc<PhysicalTokenBlock>>,
-    image_hashes: Option<Vec<u64>>,
-    audio_hashes: Option<Vec<u64>>,
 }
 
 pub struct PrefixCacheManagerV2 {
     caches: IndexMap<Tokens, CacheElement>,
-    block_caches: IndexMap<Vec<u64>, BlockCacheElement>, // (hashed logical blocks) => BlockCacheElement
+    paged_recurrent_caches: IndexMap<Vec<BlockHash>, Vec<RecurrentStateSnapshot>>,
     n_on_device: usize,
     no_prefix_cache: bool,
-    block_engine: Option<Arc<tokio::sync::Mutex<BlockEngine>>>,
+    has_paged_attention: bool,
 }
 
 #[derive(Clone)]
 pub enum MatchingCache {
     Normal {
         normal: Vec<Option<KvCache>>,
+        recurrent_snapshots: Option<Vec<RecurrentStateSnapshot>>,
         images_to_keep: usize,
         audios_to_keep: usize,
         toks: Vec<u32>,
         offset: usize,
-    },
-    Paged {
-        logical_blocks: Vec<LogicalTokenBlock>,
-        physical_blocks: Vec<Arc<PhysicalTokenBlock>>,
-        toks: Vec<u32>,
-        offset: usize,
-        images_to_keep: usize,
-        audios_to_keep: usize,
     },
 }
 
 impl PrefixCacheManagerV2 {
-    pub fn new(
-        n_on_device: usize,
-        no_prefix_cache: bool,
-        block_engine: Option<Arc<tokio::sync::Mutex<BlockEngine>>>,
-    ) -> Self {
-        if !no_prefix_cache {
-            info!("PrefixCacherV2 is enabled. Expect higher multi-turn throughput for both text and multimodal.");
+    pub fn new(n_on_device: usize, no_prefix_cache: bool, has_paged_attention: bool) -> Self {
+        if !no_prefix_cache && !has_paged_attention {
+            info!("Prefix caching enabled (sequence-level, non-paged attention). Expect higher multi-turn throughput for both text and multimodal.");
         }
         PrefixCacheManagerV2 {
             caches: IndexMap::new(),
-            block_caches: IndexMap::new(),
+            paged_recurrent_caches: IndexMap::new(),
             n_on_device,
             no_prefix_cache,
-            block_engine,
+            has_paged_attention,
         }
     }
 
+    fn paged_recurrent_capacity(&self) -> usize {
+        self.n_on_device.max(1).saturating_mul(8)
+    }
+
     /// This always keeps the cache on the device.
-    pub fn add_sequence(&mut self, seq: &mut Sequence) {
+    pub fn add_sequence(
+        &mut self,
+        seq: &mut Sequence,
+        recurrent_snapshots: Option<Vec<RecurrentStateSnapshot>>,
+    ) {
         // Do not cache if prefix caching disabled
         if self.no_prefix_cache {
             return;
         }
 
-        if let Some(_block_engine) = &self.block_engine {
-            // let logical_token_blocks = seq.logical_token_blocks();
-            // let block_engine = get_mut_arcmutex!(block_engine);
-            // let block_table = &block_engine.block_tables[seq.id()];
-            // let hashed_logical_blocks = hash_logical_blocks(logical_token_blocks);
-
-            // if !self.block_caches.contains_key(&hashed_logical_blocks) {
-            //     for block in block_table {
-            //         block.deref_mut().increment_refcount();
-            //     }
-
-            //     self.block_caches.insert(
-            //         hashed_logical_blocks,
-            //         BlockCacheElement {
-            //             logical_blocks: logical_token_blocks.to_vec(),
-            //             physical_blocks: block_table.clone(),
-            //             image_hashes: seq.image_hashes().map(|x| x.to_vec()),
-            //             audio_hashes: seq.audio_hashes().map(|x| x.to_vec()),
-            //         },
-            //     );
-            // }
-        } else {
+        // For paged attention, prefix caching is handled by the KVCacheManager.
+        // PrefixCacheManagerV2 only handles non-paged attention caching.
+        if !self.has_paged_attention {
             let cache = seq.normal_cache().to_vec();
 
             self.caches.insert(
                 seq.get_toks().to_vec().into(),
                 CacheElement {
                     cache,
+                    recurrent_snapshots,
                     image_hashes: seq.image_hashes().map(|x| x.to_vec()),
                     audio_hashes: seq.audio_hashes().map(|x| x.to_vec()),
                 },
@@ -182,12 +129,6 @@ impl PrefixCacheManagerV2 {
                 n_on_device += 1;
             }
         }
-        // Count block‑caches that still reside on‑device.
-        for cache in self.block_caches.values() {
-            if !cache.physical_blocks.is_empty() {
-                n_on_device += 1;
-            }
-        }
         let mut n_evicted = 0;
         // Intentionally evict the first ones first, as they are the oldest
         for cache in self.caches.values_mut() {
@@ -214,25 +155,7 @@ impl PrefixCacheManagerV2 {
             }
         }
 
-        // Now evict block‑caches if we still exceed the on‑device limit.
-        for cache in self.block_caches.values_mut() {
-            if n_on_device - n_evicted <= self.n_on_device {
-                break;
-            }
-            if !cache.physical_blocks.is_empty() {
-                // Drop our strong references and decrement ref‑counts so the
-                // BlockEngine can reclaim the KV blocks.
-                for block in &cache.physical_blocks {
-                    block.deref_mut().decrement_refcount();
-                }
-                cache.physical_blocks.clear();
-                n_evicted += 1;
-            }
-        }
-
         self.caches.retain(|_tokens, cache| !cache.cache.is_empty());
-        self.block_caches
-            .retain(|_key, cache| !cache.physical_blocks.is_empty());
 
         Ok(n_evicted)
     }
@@ -240,16 +163,50 @@ impl PrefixCacheManagerV2 {
     /// Evict all the caches.
     pub fn evict_all_caches(&mut self) -> Result<usize> {
         let len = self.caches.len();
-
         self.caches.clear();
-
-        for cache in self.block_caches.values_mut() {
-            for block in &cache.physical_blocks {
-                block.deref_mut().decrement_refcount();
-            }
-        }
-        self.block_caches.clear();
+        self.paged_recurrent_caches.clear();
         Ok(len)
+    }
+
+    /// Add a recurrent-state snapshot for a paged-attention block-hash prefix key.
+    /// This is used by hybrid models to restore recurrent states alongside paged KV prefix hits.
+    pub fn add_paged_recurrent_prefix(
+        &mut self,
+        key: Vec<BlockHash>,
+        snapshots: Vec<RecurrentStateSnapshot>,
+    ) {
+        if self.no_prefix_cache
+            || !self.has_paged_attention
+            || key.is_empty()
+            || snapshots.is_empty()
+        {
+            return;
+        }
+
+        // Maintain LRU order by reinserting on update.
+        let _ = self.paged_recurrent_caches.shift_remove(&key);
+        self.paged_recurrent_caches.insert(key, snapshots);
+
+        while self.paged_recurrent_caches.len() > self.paged_recurrent_capacity() {
+            let _ = self.paged_recurrent_caches.shift_remove_index(0);
+        }
+    }
+
+    /// Lookup a recurrent-state snapshot for a paged-attention block-hash prefix key.
+    /// Returns a cloned snapshot and updates LRU order.
+    pub fn get_paged_recurrent_prefix(
+        &mut self,
+        key: &[BlockHash],
+    ) -> Option<Vec<RecurrentStateSnapshot>> {
+        if self.no_prefix_cache || !self.has_paged_attention || key.is_empty() {
+            return None;
+        }
+
+        let key = key.to_vec();
+        let snapshots = self.paged_recurrent_caches.shift_remove(&key)?;
+        let out = snapshots.clone();
+        self.paged_recurrent_caches.insert(key, snapshots);
+        Some(out)
     }
 
     /// Search for a matching cache given some tokens. Image-containing sequences are now cached too.
@@ -264,126 +221,10 @@ impl PrefixCacheManagerV2 {
             return Ok(None);
         }
 
-        if let Some(block_engine) = &self.block_engine {
-            let block_engine = get_mut_arcmutex!(block_engine);
-            let block_size = block_engine.block_size();
-            let mut test_logical_blocks = Vec::new();
-            for tok in toks {
-                sequence::util_append_token_to_blocks(
-                    *tok as usize,
-                    &mut test_logical_blocks,
-                    block_size,
-                );
-            }
-            let hashed_logical_blocks = hash_logical_blocks(&test_logical_blocks);
-
-            let mut best_match: Option<BlockBestMatch> = None;
-            for (logical, cache_elem) in &self.block_caches {
-                let logical_matches_until = logical
-                    .iter()
-                    .zip(&hashed_logical_blocks)
-                    .take_while(|(a, b)| **a == **b)
-                    .count();
-                let matched_len: usize = cache_elem.logical_blocks[..logical_matches_until]
-                    .iter()
-                    .map(|block| block.num_tokens())
-                    .sum();
-
-                let images_match_until = if let (Some(input_hashes), Some(cached_hashes)) =
-                    (image_hashes, cache_elem.image_hashes.as_ref())
-                {
-                    input_hashes
-                        .iter()
-                        .zip(cached_hashes)
-                        .take_while(|(a, b)| a == b)
-                        .count()
-                } else {
-                    0
-                };
-
-                let audios_match_until = if let (Some(input_hashes), Some(cached_hashes)) =
-                    (audio_hashes, cache_elem.audio_hashes.as_ref())
-                {
-                    input_hashes
-                        .iter()
-                        .zip(cached_hashes)
-                        .take_while(|(a, b)| a == b)
-                        .count()
-                } else {
-                    0
-                };
-
-                if best_match
-                    .is_some_and(|(best_match_len, _, _, _, _)| best_match_len < matched_len)
-                    || best_match.is_none()
-                {
-                    best_match = Some((
-                        matched_len,
-                        &cache_elem.logical_blocks,
-                        &cache_elem.physical_blocks,
-                        images_match_until,
-                        audios_match_until,
-                    ))
-                }
-            }
-
-            let Some((
-                match_len,
-                logical_blocks,
-                physical_blocks,
-                images_match_until,
-                audios_match_until,
-            )) = best_match
-            else {
-                return Ok(None);
-            };
-
-            // Determine how many blocks cover the matched prefix
-            let mut n_blocks = match_len.div_ceil(block_size);
-            n_blocks = n_blocks.min(logical_blocks.len());
-
-            if n_blocks == 0 {
-                return Ok(None);
-            }
-
-            // Take the first n_blocks of both logical and physical blocks
-            let mut logical_prefix = logical_blocks[..n_blocks].to_vec();
-            let physical_prefix = physical_blocks[..n_blocks].to_vec();
-            for block in &physical_prefix {
-                block.deref_mut().increment_refcount();
-            }
-
-            // If the last reused block is full, reserve an extra empty block for new tokens
-            let new_toks = toks[match_len..].to_vec();
-            logical_prefix.push(LogicalTokenBlock::new(block_size));
-            for tok in &new_toks {
-                sequence::util_append_token_to_blocks(
-                    *tok as usize,
-                    &mut logical_prefix,
-                    block_size,
-                );
-            }
-            if logical_prefix.last().is_some_and(|last| last.is_full()) {
-                logical_prefix.push(LogicalTokenBlock::new(block_size));
-            }
-            let images_to_keep = if let Some(input_hashes) = image_hashes {
-                input_hashes.len().saturating_sub(images_match_until)
-            } else {
-                0
-            };
-            let audios_to_keep = if let Some(input_hashes) = audio_hashes {
-                input_hashes.len().saturating_sub(audios_match_until)
-            } else {
-                0
-            };
-            return Ok(Some(MatchingCache::Paged {
-                logical_blocks: logical_prefix,
-                physical_blocks: physical_prefix,
-                toks: new_toks,
-                offset: match_len,
-                images_to_keep,
-                audios_to_keep,
-            }));
+        if self.has_paged_attention {
+            // For paged attention, prefix caching is handled by the KVCacheManager.
+            // PrefixCacheManagerV2 only handles non-paged attention caching.
+            return Ok(None);
         }
 
         let toks = Tokens(toks.to_vec());
@@ -418,6 +259,23 @@ impl PrefixCacheManagerV2 {
                 },
                 None => 0,
             };
+
+            // Vision/audio models can use repeated placeholder tokens (e.g. <image_soft_token>)
+            // that are identical regardless of the actual image/audio content. This means
+            // token-level matching can extend through image/audio regions even when the
+            // underlying content differs, leaving stale vision/audio encoder outputs in the
+            // KV cache. Skip entries where any overlapping images or audios diverge.
+            let cached_image_count = v.image_hashes.as_ref().map_or(0, |h| h.len());
+            let input_image_count = image_hashes.map_or(0, |h| h.len());
+            if images_match_until < input_image_count.min(cached_image_count) {
+                continue;
+            }
+
+            let cached_audio_count = v.audio_hashes.as_ref().map_or(0, |h| h.len());
+            let input_audio_count = audio_hashes.map_or(0, |h| h.len());
+            if audios_match_until < input_audio_count.min(cached_audio_count) {
+                continue;
+            }
 
             if best_match
                 .as_ref()
@@ -456,6 +314,7 @@ impl PrefixCacheManagerV2 {
             }
             return Ok(Some(MatchingCache::Normal {
                 normal: cache.cache,
+                recurrent_snapshots: cache.recurrent_snapshots,
                 images_to_keep,
                 audios_to_keep,
                 toks: new_toks,

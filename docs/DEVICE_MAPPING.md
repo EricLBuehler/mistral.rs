@@ -1,7 +1,7 @@
 # Device mapping
 
 In mistral.rs, device mapping is **automatically managed** to be as performant and easy as possible. Automatic device mapping is enabled
-by default in the CLI/server and Python API and does not make any changes when the model fits entirely on the GPU.
+by default in the CLI/server and Python SDK and does not make any changes when the model fits entirely on the GPU.
 
 > [!NOTE]
 > If your system has more than one CUDA device, mistral.rs will automatically use [tensor parallelism](DISTRIBUTED/DISTRIBUTED.md). If the model does not
@@ -20,24 +20,28 @@ To control the mapping across devices, you can set the following maximum paramet
 
 These parameters do not translate to hard limits during runtime, they only control the mapping.
 
+### Unified memory systems
+
+On integrated GPU systems (e.g. Apple Silicon, NVIDIA Grace Blackwell, Jetson) where GPU and CPU share the same physical RAM, the auto device mapper caps the GPU memory budget to a fraction of system RAM (75% by default for CUDA iGPUs, configurable via `MISTRALRS_IGPU_MEMORY_FRACTION`; Metal uses the `iogpu.wired_limit_mb` sysctl). CPU offload capacity is limited to the remaining fraction to prevent over-subscription of shared memory. Use `mistralrs doctor` to check whether your device is detected as unified memory.
+
 > [!NOTE]
 > The maximum sequence length is also used to ensure that a KV cache will fit for with and without PagedAttention.
 
 ## Examples
 - Python
-    - Text models [text_auto_device_map.py](../examples/python/text_auto_device_map.py)
-    - Vision models [vision_auto_device_map.py](../examples/python/vision_auto_device_map.py)
+    - Text models [text_auto_device_map.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/text_auto_device_map.py)
+    - Vision models [vision_auto_device_map.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/vision_auto_device_map.py)
 - Rust
-    - Text models [text_auto_device_map/main.rs](../mistralrs/examples/text_auto_device_map/main.rs)
-    - Vision models [vision_auto_device_map/main.rs](../mistralrs/examples/vision_auto_device_map/main.rs)
+    - Text models [text_auto_device_map/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs)
+    - Vision models [vision_auto_device_map/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs)
 - Server
-    - Text models: 
-    ```
-    ./mistralrs-server -i --isq 4 plain -m meta-llama/Llama-3.3-70B-Instruct --max-seq-len 4096 --max-batch-size 2
+    - Text models:
+    ```bash
+    mistralrs run --isq 4 -m meta-llama/Llama-3.3-70B-Instruct --max-seq-len 4096 --max-batch-size 2
     ```
     - Vision models:
-    ```
-    ./mistralrs-server -i --isq 4 vision-plain -m meta-llama/Llama-3.2-11B-Vision-Instruct --max-seq-len 4096 --max-batch-size 2 --max-num-images 2 --max-image-length 1024
+    ```bash
+    mistralrs run --isq 4 -m meta-llama/Llama-3.2-11B-Vision-Instruct --max-seq-len 4096 --max-batch-size 2 --max-num-images 2 --max-image-length 1024
     ```
 
 ---
@@ -59,12 +63,12 @@ The format for the ordinals and number of layers is `ORD:NUM;...` where ORD is t
 
 ## Example of specifying ordinals
 ```
-cargo run --release --features cuda -- -n "0:16;1:16" -i plain -m gradientai/Llama-3-8B-Instruct-262k
+mistralrs run -n "0:16;1:16" -m gradientai/Llama-3-8B-Instruct-262k
 ```
 
-> Note: In the Python API, the "0:16;1:16" string is passed as the list `["0:16", "1:16"]`.
+> Note: In the Python SDK, the "0:16;1:16" string is passed as the list `["0:16", "1:16"]`.
 
 ## Example of specifying the number of GPU layers
 ```
-cargo run --release --features cuda -- -n 16 -i plain -m gradientai/Llama-3-8B-Instruct-262k
+mistralrs run -n 16 -m gradientai/Llama-3-8B-Instruct-262k
 ```

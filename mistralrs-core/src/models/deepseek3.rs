@@ -2,23 +2,28 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
-    ColumnParallelLayer, NonZeroOp, QuantMethod, QuantizedConfig, ReplicatedLayer,
-    RowParallelLayer, ShardedVarBuilder, SumAllReduce,
+    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
+    ShardedVarBuilder,
 };
 use serde::Deserialize;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
         embedding, Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling,
         DeepSeekV2RotaryEmbedding, Mlp, RmsNorm, Sdpa,
     },
     layers_masker::{masked_fill, PastKvLenCache},
+    mla::{
+        mla_cache_forward, mla_decode_forward, should_use_mla_cache, should_use_mla_decode,
+        MlaWeights,
+    },
+    moe::{MoEExperts, MoEExpertsConfig},
     ops::{SplitOp, TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -29,9 +34,6 @@ use crate::{
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
-
-use std::collections::HashSet;
-use std::iter::FromIterator;
 serde_default_fn!(f64, routed_scaling_factor, 1.0);
 serde_default_fn!(TopkMethod, topk_method, TopkMethod::Greedy);
 serde_default_fn!(usize, moe_layer_freq, 1);
@@ -151,6 +153,7 @@ struct Attention {
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     num_attention_heads: usize,
+    mla_weights: MlaWeights,
 }
 
 impl Attention {
@@ -230,6 +233,11 @@ impl Attention {
             mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
         )?;
 
+        let mla_weights = MlaWeights::new(
+            paged_attn.is_some(),
+            mapper.device_for(layer_idx, loading_isq),
+        );
+
         Ok(Self {
             q,
             kv_a_proj_with_mqa,
@@ -246,7 +254,9 @@ impl Attention {
                 softcap: None,
                 softmax_scale: cfg.softmax_scale(),
                 sliding_window: None,
+                sinks: None,
             },
+            mla_weights,
         })
     }
 
@@ -282,86 +292,149 @@ impl Attention {
         k_pe = k_pe
             .reshape((bs, seq_len, 1, self.cfg.qk_rope_head_dim))?
             .transpose(1, 2)?;
-        let mut kv = self
-            .kv_b_proj
-            .forward_autocast(&self.kv_a_layernorm.forward(&compressed_kv)?)?;
-        kv = kv
-            .reshape((
-                bs,
-                seq_len,
-                self.num_attention_heads,
-                self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
-            ))?
-            .transpose(1, 2)?;
 
-        let kv_split = kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
-        let k_nope = kv_split[0].clone();
-        let mut v = kv_split[1].clone();
+        let ckv = self.kv_a_layernorm.forward(&compressed_kv)?;
 
         (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
 
-        let q = Tensor::cat(&[&q_nope, &q_pe], D::Minus1)?.contiguous()?;
-        let mut k = Tensor::cat(
-            &[&k_nope, &k_pe.repeat((1, self.num_attention_heads, 1, 1))?],
-            D::Minus1,
-        )?
-        .contiguous()?;
+        let use_mla_decode = should_use_mla_decode(
+            attention_mask,
+            seq_len,
+            self.paged_attn.is_some(),
+            q_nope.device(),
+            &metadata,
+        );
 
-        let mut attn_out = match &self.paged_attn {
-            Some(paged_attn) => match metadata {
-                Some(((key_cache, value_cache), input_metadata)) => {
-                    let v = v
-                        .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
-                        .contiguous()?;
-                    paged_attn
-                        .forward(
-                            &q,
-                            &k,
-                            &v,
-                            attention_mask,
-                            Some(key_cache),
-                            Some(value_cache),
-                            input_metadata,
-                            &self.sdpa_params,
-                            Some(flash_params),
-                        )?
-                        .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
-                }
-                None => {
-                    // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
-                    // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
-                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                    // Sanity check.
-                    assert!(attention_mask.is_some());
-                    let v = v
-                        .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
-                        .contiguous()?;
-                    paged_attn
-                        .forward(
-                            &q,
-                            &k,
-                            &v,
-                            attention_mask,
-                            None,
-                            None,
-                            &input_metadata,
-                            &self.sdpa_params,
-                            Some(flash_params),
-                        )?
-                        .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
-                }
-            },
-            None => {
-                (k, v) = kv_cache.append(&k, &v)?;
+        let mut attn_out = if use_mla_decode {
+            mla_decode_forward(
+                &q_nope,
+                &q_pe,
+                &ckv,
+                &k_pe,
+                &metadata,
+                &self.mla_weights,
+                self.kv_b_proj.as_ref(),
+                &self.sdpa_params,
+                self.num_attention_heads,
+                self.cfg.kv_lora_rank,
+                self.cfg.qk_rope_head_dim,
+                self.cfg.qk_nope_head_dim,
+                self.cfg.v_head_dim,
+                bs,
+                seq_len,
+            )?
+        } else {
+            let mut kv = self.kv_b_proj.forward_autocast(&ckv)?;
+            kv = kv
+                .reshape((
+                    bs,
+                    seq_len,
+                    self.num_attention_heads,
+                    self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
+                ))?
+                .transpose(1, 2)?;
 
-                Sdpa.run_attention(
+            let kv_split =
+                kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
+            let k_nope = kv_split[0].clone();
+            let mut v = kv_split[1].clone();
+
+            let q = Tensor::cat(&[&q_nope, &q_pe], D::Minus1)?.contiguous()?;
+            let mut k = Tensor::cat(
+                &[&k_nope, &k_pe.repeat((1, self.num_attention_heads, 1, 1))?],
+                D::Minus1,
+            )?
+            .contiguous()?;
+
+            let use_mla_cache = should_use_mla_cache(self.paged_attn.is_some(), q.device());
+
+            if use_mla_cache {
+                mla_cache_forward(
                     &q,
                     &k,
                     &v,
+                    &ckv,
+                    &k_pe,
                     attention_mask,
-                    Some(flash_params),
+                    seqlen_offsets,
+                    &metadata,
+                    flash_params,
+                    self.kv_b_proj.as_ref(),
                     &self.sdpa_params,
+                    self.num_attention_heads,
+                    self.cfg.kv_lora_rank,
+                    self.cfg.qk_rope_head_dim,
+                    self.cfg.qk_nope_head_dim,
+                    self.cfg.v_head_dim,
+                    bs,
+                    seq_len,
                 )?
+            } else {
+                match &self.paged_attn {
+                    Some(paged_attn) => match metadata {
+                        Some(((key_cache, value_cache), input_metadata)) => {
+                            let v = v
+                                .pad_with_zeros(
+                                    D::Minus1,
+                                    0,
+                                    self.q_head_dim - self.cfg.v_head_dim,
+                                )?
+                                .contiguous()?;
+                            paged_attn
+                                .forward(
+                                    &q,
+                                    &k,
+                                    &v,
+                                    attention_mask,
+                                    Some(key_cache),
+                                    Some(value_cache),
+                                    input_metadata,
+                                    &self.sdpa_params,
+                                    Some(flash_params),
+                                )?
+                                .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
+                        }
+                        None => {
+                            // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
+                            // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
+                            let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                            // Sanity check.
+                            assert!(attention_mask.is_some());
+                            let v = v
+                                .pad_with_zeros(
+                                    D::Minus1,
+                                    0,
+                                    self.q_head_dim - self.cfg.v_head_dim,
+                                )?
+                                .contiguous()?;
+                            paged_attn
+                                .forward(
+                                    &q,
+                                    &k,
+                                    &v,
+                                    attention_mask,
+                                    None,
+                                    None,
+                                    &input_metadata,
+                                    &self.sdpa_params,
+                                    Some(flash_params),
+                                )?
+                                .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
+                        }
+                    },
+                    None => {
+                        (k, v) = kv_cache.append(&k, &v)?;
+
+                        Sdpa.run_attention(
+                            &q,
+                            &k,
+                            &v,
+                            attention_mask,
+                            Some(flash_params),
+                            &self.sdpa_params,
+                        )?
+                    }
+                }
             }
         };
 
@@ -372,67 +445,6 @@ impl Attention {
         };
 
         self.o_proj.forward_autocast(&attn_out)
-    }
-}
-
-struct Expert {
-    gate: Arc<dyn QuantMethod>,
-    up: Arc<dyn QuantMethod>,
-    down: Arc<dyn QuantMethod>,
-    act: Activation,
-}
-
-impl Expert {
-    fn new(
-        cfg: &DeepSeekV3Config,
-        vb: ShardedVarBuilder,
-        hidden_size: Option<usize>,
-        intermediate_size: Option<usize>,
-    ) -> Result<Self> {
-        let hidden_size = hidden_size.unwrap_or(cfg.hidden_size);
-        let intermediate_size = intermediate_size.unwrap_or(cfg.intermediate_size);
-
-        Ok(Self {
-            gate: ReplicatedLayer::new(
-                hidden_size,
-                intermediate_size,
-                &cfg.quantization_config,
-                false,
-                vb.pp("gate_proj"),
-            )?,
-            up: ReplicatedLayer::new(
-                hidden_size,
-                intermediate_size,
-                &cfg.quantization_config,
-                false,
-                vb.pp("up_proj"),
-            )?,
-            down: ReplicatedLayer::new(
-                intermediate_size,
-                hidden_size,
-                &cfg.quantization_config,
-                false,
-                vb.pp("down_proj"),
-            )?,
-            act: cfg.hidden_act,
-        })
-    }
-
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let lhs = self.gate.forward(&xs)?;
-        let rhs = self.up.forward(&xs)?;
-        let mut res = self
-            .down
-            .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?)?;
-        if self.gate.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
-        Ok(res)
     }
 }
 
@@ -568,13 +580,9 @@ impl MoeGate {
 }
 
 struct Moe {
-    experts: Vec<Option<Expert>>,
+    experts: MoEExperts,
     shared_experts: Option<Mlp>,
     gate: MoeGate,
-    all_reduce: SumAllReduce,
-    experts_start_idx: usize,
-    experts_end_idx: usize,
-    world_size: usize,
 }
 
 impl Moe {
@@ -588,24 +596,31 @@ impl Moe {
         n_shared_experts: Option<usize>,
         n_routed_experts: usize,
         comm: &Arc<mistralrs_quant::Comm>,
+        real_device: Device,
     ) -> Result<Self> {
-        let mut experts = Vec::with_capacity(n_routed_experts);
-        let n_local_experts = n_routed_experts / comm.world_size();
-        let experts_start_idx = comm.rank() * n_local_experts;
-        let experts_end_idx = experts_start_idx + n_local_experts;
-        for i in 0..n_routed_experts {
-            if i >= experts_start_idx && i < experts_end_idx {
-                let vb_e = vb.pp("experts").pp(i);
-                experts.push(Some(Expert::new(
-                    cfg,
-                    mapper.set_device(layer_idx, vb_e, loading_isq),
-                    None,
-                    Some(cfg.moe_intermediate_size),
-                )?));
-            } else {
-                experts.push(None);
-            }
-        }
+        let layer_device = mapper
+            .device_for(layer_idx, false)
+            .cloned()
+            .unwrap_or(real_device);
+
+        let moe_cfg = MoEExpertsConfig {
+            num_experts: n_routed_experts,
+            num_experts_per_tok: cfg.num_experts_per_tok.unwrap(),
+            hidden_size: cfg.hidden_size,
+            moe_intermediate_size: cfg.moe_intermediate_size,
+        };
+
+        // Use the optimized MoEExperts with automatic backend selection
+        let experts = MoEExperts::new(
+            &moe_cfg,
+            mapper.set_device(layer_idx, vb.clone(), loading_isq),
+            layer_device,
+            comm,
+            loading_isq,
+            &cfg.quantization_config,
+            cfg.hidden_act,
+        )?;
+
         let shared_experts = if let Some(n_shared_experts) = n_shared_experts {
             let intermediate_size = cfg.moe_intermediate_size * n_shared_experts;
             Some(Mlp::new(
@@ -628,67 +643,36 @@ impl Moe {
             experts,
             shared_experts,
             gate,
-            all_reduce: SumAllReduce::new(comm),
-            experts_end_idx,
-            experts_start_idx,
-            world_size: comm.world_size(),
         })
-    }
-
-    fn moe_infer(&self, xs: &Tensor, topk_ids: &Tensor, topk_weight: &Tensor) -> Result<Tensor> {
-        let mut y = xs.zeros_like()?;
-        let topk_weight = if topk_weight.dtype() != xs.dtype() {
-            topk_weight.to_dtype(xs.dtype())?
-        } else {
-            topk_weight.to_owned()
-        };
-        let unique_ids: HashSet<u32> =
-            HashSet::from_iter(topk_ids.to_device(&Device::Cpu)?.flatten_all()?.to_vec1()?);
-        for i in self.experts_start_idx..self.experts_end_idx {
-            if !unique_ids.contains(&(i as u32)) {
-                continue;
-            }
-            let idx_top = topk_ids.eq(i as f64)?.nonzero()?.t()?;
-            let idx = &idx_top.i(0)?.contiguous()?;
-            let top = &idx_top.i(1)?.contiguous()?;
-
-            let expert = self.experts[i]
-                .as_ref()
-                .context("Expert is not present for this rank.")?;
-
-            y = y.index_add(
-                idx,
-                &expert.forward(&xs.index_select(idx, 0)?)?.broadcast_mul(
-                    &topk_weight
-                        .index_select(idx, 0)?
-                        .gather(&top.unsqueeze(1)?, 1)?
-                        .squeeze(1)?
-                        .unsqueeze(D::Minus1)?,
-                )?,
-                0,
-            )?;
-        }
-
-        if self.world_size > 1 {
-            y = self.all_reduce.sum_all_reduce(&y)?;
-        }
-
-        Ok(y)
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let identity = xs.clone();
-        let orig_shape = xs.shape();
-        let (topk_idx, topk_weight) = self.gate.forward(xs)?;
-        let xs = xs.reshape(((), xs.dim(D::Minus1)?))?;
+        let (b_size, seq_len, hidden_dim) = xs.dims3()?;
 
-        let mut y = self
-            .moe_infer(&xs, &topk_idx, &topk_weight)?
-            .reshape(orig_shape)?;
+        // Get routing weights from gate
+        let (topk_idx, topk_weight) = self.gate.forward(xs)?;
+
+        // Forward through routed experts using optimized MoEExperts
+        let mut y = self.experts.forward(xs, topk_weight, &topk_idx)?;
+        y = y.reshape((b_size, seq_len, hidden_dim))?;
+
+        // Add shared expert output
         if let Some(ref shared_experts) = self.shared_experts {
             y = (y + shared_experts.forward(&identity)?)?;
         }
+
         Ok(y)
+    }
+
+    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
+        let mut layers = self.experts.get_isq_layers();
+        if let Some(ref mut shared) = self.shared_experts {
+            layers.push(&mut shared.gate);
+            layers.push(&mut shared.up);
+            layers.push(&mut shared.down);
+        }
+        layers
     }
 }
 
@@ -724,6 +708,7 @@ impl DecoderLayer {
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
+        real_device: Device,
     ) -> Result<Self> {
         let attn = Attention::new(
             rotary_emb,
@@ -745,10 +730,9 @@ impl DecoderLayer {
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
-        let moe_or_mlp = if cfg.n_routed_experts.is_some()
-            && layer_idx >= cfg.first_k_dense_replace
-            && layer_idx % cfg.moe_layer_freq == 0
-        {
+        let moe_or_mlp = if let Some(n_routed_experts) = cfg.n_routed_experts.filter(|_| {
+            layer_idx >= cfg.first_k_dense_replace && layer_idx.is_multiple_of(cfg.moe_layer_freq)
+        }) {
             MoeOrMlp::Moe(Box::new(Moe::new(
                 cfg,
                 vb.pp("mlp"),
@@ -756,8 +740,9 @@ impl DecoderLayer {
                 layer_idx,
                 loading_isq,
                 cfg.n_shared_experts,
-                cfg.n_routed_experts.unwrap(),
+                n_routed_experts,
                 comm,
+                real_device,
             )?))
         } else {
             MoeOrMlp::Mlp(Mlp::new(
@@ -911,6 +896,7 @@ impl DeepSeekV3 {
                 normal_loading_metadata.loading_isq,
                 paged_attn,
                 &comm,
+                normal_loading_metadata.real_device.clone(),
             )
         })?;
 
@@ -943,6 +929,20 @@ impl DeepSeekV3 {
                 } else {
                     cfg.v_head_dim
                 },
+                #[cfg(all(feature = "cuda", target_family = "unix"))]
+                kv_cache_layout: if matches!(
+                    attention_mechanism,
+                    AttentionImplementation::PagedAttention
+                ) {
+                    crate::paged_attention::KvCacheLayout::Mla {
+                        kv_lora_rank: cfg.kv_lora_rank,
+                        kpe_head_dim: cfg.qk_rope_head_dim,
+                    }
+                } else {
+                    crate::paged_attention::KvCacheLayout::Standard
+                },
+                #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
         })
@@ -975,14 +975,12 @@ impl DeepSeekV3 {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+        let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                attention_mask.as_ref().map(|m| m.get(xs.device())),
                 seqlen_offsets,
                 &mut cache[i],
                 metadata
@@ -993,7 +991,8 @@ impl DeepSeekV3 {
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        extract_logits(&self.lm_head.forward_autocast(&xs)?, context_lens)
+        let xs = extract_logits(&xs, context_lens)?;
+        self.lm_head.forward_autocast(&xs)
     }
 }
 
@@ -1026,15 +1025,8 @@ impl IsqModel for DeepSeekV3 {
                     tensors.push((&mut mlp.down, Some(i)));
                 }
                 MoeOrMlp::Moe(moe) => {
-                    for mlp in moe.experts.iter_mut().filter_map(|e| e.as_mut()) {
-                        tensors.push((&mut mlp.gate, Some(i)));
-                        tensors.push((&mut mlp.up, Some(i)));
-                        tensors.push((&mut mlp.down, Some(i)));
-                    }
-                    if let Some(mlp) = &mut moe.shared_experts {
-                        tensors.push((&mut mlp.gate, Some(i)));
-                        tensors.push((&mut mlp.up, Some(i)));
-                        tensors.push((&mut mlp.down, Some(i)));
+                    for layer in moe.get_isq_layers() {
+                        tensors.push((layer, Some(i)));
                     }
                 }
             }
@@ -1058,15 +1050,8 @@ impl IsqModel for DeepSeekV3 {
                     tensors.push((&mut mlp.down, Some(i)));
                 }
                 MoeOrMlp::Moe(moe) => {
-                    for mlp in moe.experts.iter_mut().filter_map(|e| e.as_mut()) {
-                        tensors.push((&mut mlp.gate, Some(i)));
-                        tensors.push((&mut mlp.up, Some(i)));
-                        tensors.push((&mut mlp.down, Some(i)));
-                    }
-                    if let Some(mlp) = &mut moe.shared_experts {
-                        tensors.push((&mut mlp.gate, Some(i)));
-                        tensors.push((&mut mlp.up, Some(i)));
-                        tensors.push((&mut mlp.down, Some(i)));
+                    for layer in moe.get_isq_layers() {
+                        tensors.push((layer, Some(i)));
                     }
                 }
             }

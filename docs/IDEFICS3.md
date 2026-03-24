@@ -9,7 +9,7 @@ The Python and HTTP APIs support sending images as:
 - Path to a local image
 - [Base64](https://en.wikipedia.org/wiki/Base64) encoded string
 
-The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
+The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
 > Note: When using device mapping or model topology, only the text model and its layers will be managed. This is because it contains most of the model parameters. Check the Hugging Face text model config for more information or raise an issue.
 
@@ -33,11 +33,8 @@ Mistral.rs supports interactive mode for vision models! It is an easy way to int
 
 1) Start up interactive mode with the Idefics 3 model
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --features ... --release -- -i --isq 4 vision-plain -m HuggingFaceM4/Idefics3-8B-Llama3
+mistralrs run vision --isq 4 -m HuggingFaceM4/Idefics3-8B-Llama3
 ```
 
 2) Ask a question
@@ -71,7 +68,7 @@ The mountain is Mount Washington.
 ```
 
 ## HTTP server
-You can find this example [here](../examples/server/idefics3.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/idefics3.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -105,11 +102,8 @@ On closer inspection near one side of this grandeur scene stands tall trees with
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 --isq 4 vision-plain -m HuggingFaceM4/Idefics3-8B-Llama3
+mistralrs serve vision -p 1234 --isq 4 -m HuggingFaceM4/Idefics3-8B-Llama3
 ```
 
 2) Send a request
@@ -147,13 +141,13 @@ resp = completion.choices[0].message.content
 print(resp)
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
 
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/idefics3/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -180,9 +174,8 @@ async fn main() -> Result<()> {
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
-        image,
-        &model,
-    )?;
+        vec![image],
+    );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -199,7 +192,7 @@ async fn main() -> Result<()> {
 ---
 
 ## Python
-You can find this example [here](../examples/python/idefics3.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/idefics3.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -246,8 +239,8 @@ print(res.usage)
 
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).
 
 ## UQFF models
 Coming soon!

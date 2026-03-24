@@ -15,7 +15,7 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::Sequence,
+    sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::{PreProcessorConfig, ToFilter},
@@ -147,14 +147,11 @@ impl InputsProcessor for Mistral3ImageProcessor {
                 let image_sizes_all = image_sizes_all.unwrap();
 
                 // Deliberately no .unsqueeze here
-                pixel_values_accum.push(pixel_values.clone());
-                image_sizes_accum.extend_from_slice(&image_sizes_all);
-
                 let mut prompt = tokenizer
                     .decode(seq.get_toks(), false)
                     .expect("Detokenization failed!");
 
-                let mut image_sizes_all_iter = image_sizes_all.into_iter();
+                let mut image_sizes_all_iter = image_sizes_all.iter().copied();
                 let mut replace_strings = Vec::new();
                 while prompt.contains(&self.image_token) {
                     let (height, width) = image_sizes_all_iter.next().unwrap();
@@ -193,15 +190,47 @@ impl InputsProcessor for Mistral3ImageProcessor {
                         .expect("Detokenization failed!");
 
                     let ids = toks.get_ids().to_vec();
+
+                    // Build mm_features for position-aware prefix cache hashing
+                    if seq.mm_features().is_empty() {
+                        if let (Some(hashes), Some(img_tok_id)) = (
+                            seq.image_hashes().map(|h| h.to_vec()),
+                            tokenizer.token_to_id(&self.image_token),
+                        ) {
+                            let ranges = find_image_placeholder_ranges(&ids, img_tok_id);
+                            seq.set_mm_features(build_mm_features_from_ranges(
+                                &ranges, &hashes, "img",
+                            ));
+                        }
+                    }
+
                     seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
                     seq.multimodal.has_changed_prompt = true;
                 }
+
+                // Per-sequence prefix cache trimming of pixel_values and image_sizes
+                let cached = seq.count_prefix_cached_mm_items();
+                let n_images = pixel_values.dim(0).unwrap_or(0);
+                if cached < n_images {
+                    if cached > 0 {
+                        pixel_values_accum
+                            .push(pixel_values.narrow(0, cached, n_images - cached).unwrap());
+                        image_sizes_accum.extend_from_slice(&image_sizes_all[cached..]);
+                    } else {
+                        pixel_values_accum.push(pixel_values.clone());
+                        image_sizes_accum.extend_from_slice(&image_sizes_all);
+                    }
+                }
             }
 
-            (
-                Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
-                Some(image_sizes_accum),
-            )
+            if pixel_values_accum.is_empty() {
+                (None, None)
+            } else {
+                (
+                    Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
+                    Some(image_sizes_accum),
+                )
+            }
         } else {
             (None, None)
         };
@@ -248,13 +277,39 @@ impl InputsProcessor for Mistral3ImageProcessor {
             .unwrap()
         };
 
+        let pixel_values = if is_prompt { pixel_values } else { None };
+        let image_sizes = if is_prompt { image_sizes } else { None };
+
+        let image_hashes: Vec<u64> = if is_prompt {
+            input_seqs
+                .iter()
+                .flat_map(|seq| {
+                    seq.image_hashes()
+                        .map(|h| {
+                            let cached = seq.count_prefix_cached_mm_items();
+                            if cached < h.len() {
+                                h[cached..].to_vec()
+                            } else {
+                                vec![]
+                            }
+                        })
+                        .unwrap_or_default()
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
             context_lens,
             position_ids,
             pixel_values,
-            model_specific_args: Box::new(Mistral3SpecificArgs { image_sizes }),
+            model_specific_args: Box::new(Mistral3SpecificArgs {
+                image_sizes,
+                image_hashes,
+            }),
             paged_attn_meta,
             flash_meta,
         });

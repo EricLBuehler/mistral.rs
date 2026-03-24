@@ -68,6 +68,7 @@ impl SamplingParams {
     }
 }
 
+/// Parameters for DRY (Don't Repeat Yourself) sampling to reduce repetition.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DrySamplingParams {
     pub sequence_breakers: Vec<String>,

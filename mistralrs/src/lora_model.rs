@@ -1,6 +1,11 @@
-use mistralrs_core::*;
+use mistralrs_core::{NormalLoaderBuilder, NormalSpecificConfig};
 
-use crate::{best_device, Model, TextModelBuilder};
+use crate::{
+    model_builder_trait::{
+        build_model_from_pipeline, build_pipeline_from_text_loader, maybe_initialize_logging,
+    },
+    Model, TextModelBuilder,
+};
 
 /// Wrapper of [`TextModelBuilder`] for LoRA models.
 pub struct LoraModelBuilder {
@@ -9,6 +14,7 @@ pub struct LoraModelBuilder {
 }
 
 impl LoraModelBuilder {
+    /// Create a LoRA builder from a [`TextModelBuilder`] and LoRA adapter IDs.
     pub fn from_text_model_builder(
         text_model: TextModelBuilder,
         lora_adapter_ids: impl IntoIterator<Item = impl ToString>,
@@ -22,7 +28,9 @@ impl LoraModelBuilder {
         }
     }
 
+    /// Load the LoRA model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
+        let text_model = self.text_model.clone();
         let config = NormalSpecificConfig {
             topology: self.text_model.topology,
             organization: self.text_model.organization,
@@ -35,9 +43,7 @@ impl LoraModelBuilder {
             matformer_slice_name: None,
         };
 
-        if self.text_model.with_logging {
-            initialize_logging();
-        }
+        maybe_initialize_logging(self.text_model.with_logging);
 
         let loader = NormalLoaderBuilder::new(
             config,
@@ -50,61 +56,9 @@ impl LoraModelBuilder {
         .with_lora(self.lora_adapter_ids)
         .build(self.text_model.loader_type)?;
 
-        // Load, into a Pipeline
-        let pipeline = loader.load_model_from_hf(
-            self.text_model.hf_revision,
-            self.text_model.token_source,
-            &self.text_model.dtype,
-            &best_device(self.text_model.force_cpu)?,
-            !self.text_model.with_logging,
-            self.text_model
-                .device_mapping
-                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
-            self.text_model.isq,
-            self.text_model.paged_attn_cfg,
-        )?;
+        let (pipeline, scheduler_config, add_model_config) =
+            build_pipeline_from_text_loader(text_model, loader).await?;
 
-        let scheduler_method = match self.text_model.paged_attn_cfg {
-            Some(_) => {
-                let config = pipeline
-                    .lock()
-                    .await
-                    .get_metadata()
-                    .cache_config
-                    .as_ref()
-                    .unwrap()
-                    .clone();
-
-                SchedulerConfig::PagedAttentionMeta {
-                    max_num_seqs: self.text_model.max_num_seqs,
-                    config,
-                }
-            }
-            None => SchedulerConfig::DefaultScheduler {
-                method: DefaultSchedulerMethod::Fixed(self.text_model.max_num_seqs.try_into()?),
-            },
-        };
-
-        let mut runner = MistralRsBuilder::new(
-            pipeline,
-            scheduler_method,
-            self.text_model.throughput_logging,
-            self.text_model.search_embedding_model,
-        );
-        if let Some(cb) = self.text_model.search_callback.clone() {
-            runner = runner.with_search_callback(cb);
-        }
-        for (name, cb) in &self.text_model.tool_callbacks {
-            runner = runner.with_tool_callback(name.clone(), cb.clone());
-        }
-        runner = runner
-            .with_no_kv_cache(self.text_model.no_kv_cache)
-            .with_no_prefix_cache(self.text_model.prefix_cache_n.is_none());
-
-        if let Some(n) = self.text_model.prefix_cache_n {
-            runner = runner.with_prefix_cache_n(n)
-        }
-
-        Ok(Model::new(runner.build().await))
+        Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)
     }
 }

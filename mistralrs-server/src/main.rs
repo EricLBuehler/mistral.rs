@@ -7,7 +7,7 @@ use mistralrs_core::{
 use rust_mcp_sdk::schema::LATEST_PROTOCOL_VERSION;
 use std::collections::HashMap;
 use tokio::join;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use mistralrs_server_core::{
     mistralrs_for_server_builder::{
@@ -276,6 +276,8 @@ struct ModelConfigParsed {
     /// Model selector
     #[serde(flatten)]
     model: ModelSelected,
+    /// Optional alias used as the API model ID
+    alias: Option<String>,
     /// Model-specific chat template
     chat_template: Option<String>,
     /// Model-specific JINJA template
@@ -307,6 +309,7 @@ fn load_multi_model_config(config_path: &str) -> Result<Vec<ModelConfig>> {
     for (model_id, parsed_config) in configs_parsed {
         let config = ModelConfig {
             model_id,
+            alias: parsed_config.alias,
             model: parsed_config.model,
             chat_template: parsed_config.chat_template,
             jinja_explicit: parsed_config.jinja_explicit,
@@ -328,6 +331,10 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     initialize_logging();
+
+    warn!(
+        "mistralrs-server is deprecated. Please use `mistralrs serve` from mistralrs-cli instead."
+    );
 
     // Load MCP configuration if provided
     let mcp_config = load_mcp_config(args.mcp_config.as_deref())?;

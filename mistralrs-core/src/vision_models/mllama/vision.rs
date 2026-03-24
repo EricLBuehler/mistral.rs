@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{ops::Mul, sync::Arc};
+use std::{collections::HashMap, ops::Mul, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, LayerNormConfig, Module};
@@ -11,7 +11,7 @@ use mistralrs_quant::{
 use crate::{
     attention::SdpaParams,
     layers::{conv2d_no_bias, embedding, layer_norm, GetFloatInfo, Sdpa},
-    pipeline::IsqModel,
+    pipeline::{text_models_inputs_processor::FlashParams, IsqModel},
     utils::unvarbuilder::UnVarBuilder,
 };
 
@@ -184,6 +184,7 @@ impl MLlamaVisionAttention {
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
+                sinks: None,
             },
             num_heads: cfg.num_attention_heads,
             head_dim,
@@ -220,13 +221,21 @@ impl MLlamaVisionAttention {
             .reshape((bs, k_sq, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
 
+        let flash_params = FlashParams {
+            max_q: 0,
+            max_k: 0,
+            cumulative_seqlens_q: HashMap::new(),
+            cumulative_seqlens_k: HashMap::new(),
+            causal: false,
+        };
+
         let mut attn_output = Sdpa
             .run_attention(
                 &q.contiguous()?,
                 &k.contiguous()?,
                 &v.contiguous()?,
                 attention_mask,
-                None,
+                Some(&flash_params),
                 &self.sdpa_params,
             )?
             .transpose(1, 2)?

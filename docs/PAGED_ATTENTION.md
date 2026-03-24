@@ -22,7 +22,7 @@ When using FP8 quantization, the memory usage for KV cache is approximately halv
 
 > Note: Paged Attention is not enabled on Windows platforms, only Unix-based platforms.
 
-> Note: In the CLI and Python API, Paged Attention is disabled by default for Metal. It can be enabled with the `--paged-attn`/`paged_attn` flags.
+> Note: In the CLI and Python SDK, Paged Attention is disabled by default for Metal. It can be enabled with the `--paged-attn`/`paged_attn` flags.
 
 **There are more features being added to this:**
 - GGML model support
@@ -60,10 +60,16 @@ Prefix caching is a technique to reuse computed KV cache blocks across requests 
 Prefix caching is **enabled by default** when using PagedAttention and controlled by the same `prefix_cache_n` setting that controls the sequence-level prefix cacher:
 
 - **CLI**: `--prefix-cache-n <N>` (default 16). Set to 0 to disable prefix caching.
-- **Python API**: `prefix_cache_n=<N>` (default 16). Set to `None` or `0` to disable.
-- **Rust API**: `.with_prefix_cache_n(Some(N))` (default 16). Pass `None` to disable.
+- **Python SDK**: `prefix_cache_n=<N>` (default 16). Set to `None` or `0` to disable.
+- **Rust SDK**: `.with_prefix_cache_n(Some(N))` (default 16). Pass `None` to disable.
 
-Both PagedAttention block-level prefix caching and the sequence-level prefix cacher are controlled by this single setting - users don't need to know which backend is being used.
+**Important:** The two prefix caching systems are mutually exclusive:
+- **PagedAttention** uses block-level prefix caching (handled by `PrefixCacher` in `BlockEngine`)
+- **Non-PagedAttention** uses sequence-level prefix caching (handled by `PrefixCacheManagerV2`)
+
+The `prefix_cache_n` setting controls both systems, but only one is active depending on whether PagedAttention is enabled. You'll see one of these log messages at startup indicating which system is active:
+- `Prefix caching enabled (block-level, PagedAttention).`
+- `Prefix caching enabled (sequence-level, non-paged attention).`
 
 ### Implementation Details
 
@@ -90,8 +96,16 @@ The prefix cache operates at the block level (not token level) for efficiency:
 
 > Note: Prefix caching is supported when using PagedAttention. Configure the number of sequences to cache on the device with:
 > - CLI: `--prefix-cache-n <N>` (default 16)
-> - Python API: `prefix_cache_n=<N>` (default 16)
-> - Rust API: `.with_prefix_cache_n(Some(N))` (default 16)
+> - Python SDK: `prefix_cache_n=<N>` (default 16)
+> - Rust SDK: `.with_prefix_cache_n(Some(N))` (default 16)
+
+## Metal Memory Behavior
+
+On Metal (macOS Apple Silicon), the GPU and CPU share the same physical RAM (unified memory). Unlike CUDA GPUs with dedicated VRAM where unused memory would otherwise be wasted, allocating large KV caches on Metal wires physical RAM away from the OS and CPU, which can cause system-wide memory pressure and thrashing.
+
+To avoid this, mistral.rs automatically caps the PagedAttention KV cache on Metal to `max_seq_len * max_batch_size` tokens — just enough for the configured context length. On CUDA, the full available memory is used for maximum request concurrency (following the vLLM approach).
+
+You can override this behavior on any platform with `--pa-memory-mb` to set an explicit KV cache budget in megabytes.
 
 ## FlashAttention V2/V3 + PagedAttention in mistral.rs
 
@@ -105,20 +119,20 @@ Add the `--pa-gpu-mem`/`--pa-gpu-mem-usage` and `--pa-blk-size` parameters befor
 To enable KV cache quantization, use the `--pa-cache-type` parameter with either `auto` (default) or `f8e4m3`.
 
 ```
-cargo run --release --features cuda -- -i --pa-gpu-mem 8192 --pa-blk-size 32 --isq 4 plain -m microsoft/Phi-3-mini-128k-instruct
+mistralrs run --pa-memory-mb 8192 --pa-block-size 32 --isq 4 -m microsoft/Phi-3-mini-128k-instruct
 ```
 
 ```
-cargo run --release --features cuda -- -i --pa-gpu-mem-usage .95 --pa-blk-size 32 gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
+mistralrs run --pa-memory-fraction 0.95 --pa-block-size 32 --format gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
 ```
 
 Example with FP8 KV cache quantization:
 ```
-cargo run --release --features metal -- -i --pa-gpu-mem 4096 --pa-blk-size 32 --pa-cache-type f8e4m3 plain -m microsoft/Phi-3-mini-128k-instruct
+mistralrs run --paged-attn on --pa-memory-mb 4096 --pa-block-size 32 --pa-cache-type f8e4m3 -m microsoft/Phi-3-mini-128k-instruct
 ```
 
-## Using the Rust API
-You can find this example [here](../mistralrs/examples/paged_attn/main.rs).
+## Using the Rust SDK
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/paged_attn/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -132,12 +146,12 @@ async fn main() -> Result<()> {
     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
         .with_isq(IsqType::Q8_0)
         .with_logging()
-        .with_paged_attn(|| {
+        .with_paged_attn(
             PagedAttentionMetaBuilder::default()
                 .with_block_size(32)
                 .with_gpu_memory(MemoryGpuConfig::ContextSize(1024))
-                .build()
-        })?
+                .build()?,
+        )
         .build()
         .await?;
 
@@ -176,13 +190,13 @@ async fn main() -> Result<()> {
     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
         .with_isq(IsqType::Q8_0)
         .with_logging()
-        .with_paged_attn(|| {
+        .with_paged_attn(
             PagedAttentionMetaBuilder::default()
                 .with_block_size(32)
                 .with_gpu_memory(MemoryGpuConfig::ContextSize(1024))
                 .with_cache_type(PagedCacheType::F8E4M3)
-                .build()
-        })?
+                .build()?,
+        )
         .build()
         .await?;
 
@@ -190,7 +204,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-## Using the Python API
+## Using the Python SDK
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 

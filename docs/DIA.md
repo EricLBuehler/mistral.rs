@@ -15,7 +15,7 @@ The OpenAI HTTP server provides a drop-in compatible way to easily use Dia local
 > Note: we only support `pcm` and `wav` outputs.
 
 ```
-cargo run --features ... --release -- -i speech -m nari-labs/Dia-1.6B -a dia
+mistralrs run speech -m nari-labs/Dia-1.6B -a dia
 ```
 
 After this, you can send requests via the HTTP server:
@@ -26,7 +26,7 @@ from openai import OpenAI
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 # text_to_speak = "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face."
-text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and vision models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python API. [S2] Check it out on github."
+text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and vision models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python SDK. [S2] Check it out on github."
 
 response = client.audio.speech.create(
     model="default", voice="N/A", input=text_to_speak, response_format="wav"
@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
     let start = Instant::now();
 
     // let text_to_speak = "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face.";
-    let text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and vision models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python API. [S2] Check it out on github.";
+    let text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and vision models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python SDK. [S2] Check it out on github.";
 
     let (pcm, rate, channels) = model.generate_speech(text_to_speak).await?;
 
@@ -83,7 +83,7 @@ from pathlib import Path
 import wave, struct
 
 # text_to_speak = "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face."
-text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and vision models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python API. [S2] Check it out on github."
+text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and vision models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python SDK. [S2] Check it out on github."
 
 runner = Runner(
     which=Which.Speech(

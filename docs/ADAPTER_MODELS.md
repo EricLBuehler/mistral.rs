@@ -25,7 +25,7 @@ When using an adapter model with a quantized base model, if the ordering file sp
 
 ## Adapter ordering file
 **Preparing the X-LoRA/LoRA Ordering File**
-The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X-LoRA model. However, it is easy with a provided [`script`](../scripts/create_ordering.py)!
+The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X-LoRA model. However, it is easy with a provided [`script`](https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/create_ordering.py)!
 
 ### X-LoRA case
 An ordering JSON file for X-LoRA contains 2 major parts. 
@@ -46,7 +46,7 @@ adapters = {
 
 The specified order would be `["math", "reasoning", "biology"]`.
 
-We provide an [ordering file](../orderings/xlora-paper-ordering.json) which contains the ordering for the X-LoRA model associated with [the paper](https://arxiv.org/abs/2402.07148) and the Huggingface repository: https://huggingface.co/lamm-mit/x-lora.
+We provide an [ordering file](https://github.com/EricLBuehler/mistral.rs/blob/master/orderings/xlora-paper-ordering.json) which contains the ordering for the X-LoRA model associated with [the paper](https://arxiv.org/abs/2402.07148) and the Huggingface repository: https://huggingface.co/lamm-mit/x-lora.
 
 ### LoRA case
 An ordering JSON file for LoRA contains 2 major parts:
@@ -63,11 +63,11 @@ There are 2 scripts to prepare the ordering file and which work for both X-LoRA 
 
 1) From scratch: No ordering file for the architecture and target modules
 
-    A script [`create_ordering.py`](../scripts/create_ordering.py) is provided which prompts the user for the model ID, target modules, and adapter names. The user is prompted for an output file location, relative to the working directory.
+    A script [`create_ordering.py`](https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/create_ordering.py) is provided which prompts the user for the model ID, target modules, and adapter names. The user is prompted for an output file location, relative to the working directory.
 
 2) Create a new ordering file from an existing ordering file for an architecture and target modules
 
-    A script [`set_names.py`](../scripts/set_names.py) is provided which prompts the user for the adapter names and the old ordering file. The user is prompted for an output file location, relative to the working directory.
+    A script [`set_names.py`](https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/set_names.py) is provided which prompts the user for the adapter names and the old ordering file. The user is prompted for an output file location, relative to the working directory.
 
 ### Quantized X-LoRA or LoRA models
 
@@ -86,9 +86,9 @@ Please see [this page](NON_GRANULAR.md) for more details and examples.
 
 We support dynamic adapter activation for LoRA models, allowing you to activate a set of adapters at runtime. There is a Python, Rust and HTTP API:
 
-- Rust: [example](../mistralrs/examples/lora/main.rs)
-- Python: [example](../examples/python/lora_zephyr.py)
-- HTTP: [example](../examples/server/adapter_chat.py)
+- Rust: [example](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/lora/main.rs)
+- Python: [example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/lora_zephyr.py)
+- HTTP: [example](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/adapter_chat.py)
 
 To use this feature, you should add a `preload_adapters` key to your ordering file:
 ```diff
@@ -101,5 +101,3 @@ To use this feature, you should add a `preload_adapters` key to your ordering fi
 ```
 
 This allows mistral.rs to preload the adapter and enable runtime activation.
-
-We also provide a script to add this key to your existing order file: [`load_add_preload_adapters.py`](../scripts/lora_add_preload_adapters.py).

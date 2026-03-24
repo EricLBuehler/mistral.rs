@@ -2,9 +2,7 @@
 
 The Qwen 3 VL models are the successors to the Qwen 2.5 VL models, featuring a diverse lineup of increased performance, flexible sizes, and reasoning-capable models.
 
-> Note: Support for the MoE variants is not yet implemented. This is coming very soon!
-
-Mistral.rs supports the Qwen 3 VL vision model family, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.
+Mistral.rs supports the Qwen 3 VL vision model family (including MoE variants), with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements. MoE variants also support [MoQE](ISQ.md) via the `--organization moqe` flag.
 
 UQFF quantizations are also available.
 
@@ -13,7 +11,7 @@ The Python and HTTP APIs support sending images as:
 - Path to a local image
 - [Base64](https://en.wikipedia.org/wiki/Base64) encoded string
 
-The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
+The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
 > Note: When using device mapping or model topology, only the text model and its layers will be managed. This is because it contains most of the model parameters.
 
@@ -31,15 +29,12 @@ Mistral.rs supports interactive mode for vision models! It is an easy way to int
 
 Start up interactive mode with the Qwen3 VL model:
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --features ... --release -- -i vision-plain -m Qwen/Qwen3-VL-4B-Instruct
+mistralrs run vision -m Qwen/Qwen3-VL-4B-Instruct
 ```
 
 ## HTTP server
-You can find this example [here](../examples/server/qwen3_vl.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_vl.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -47,11 +42,8 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 1) Start the server
 
-> [!NOTE]
-> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
-
 ```
-cargo run --release --features ... -- --port 1234 -m Qwen/Qwen3-VL-4B-Instruct
+mistralrs serve vision -p 1234 -m Qwen/Qwen3-VL-4B-Instruct
 ```
 
 2) Send a request
@@ -90,13 +82,13 @@ print(resp)
 
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/server/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
 
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/qwen3_vl/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -122,8 +114,7 @@ async fn main() -> Result<()> {
         TextMessageRole::User,
         "What is this?",
         vec![image],
-        &model,
-    )?;
+    );
 
     let response = model.send_chat_request(messages).await?;
 
@@ -140,7 +131,7 @@ async fn main() -> Result<()> {
 ---
 
 ## Python
-You can find this example [here](../examples/python/qwen3_vl.py).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_vl.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -188,5 +179,5 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-- You can find an example of encoding the [image via base64 here](../examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](../examples/python/phi3v_local_img.py).
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).

@@ -13,7 +13,7 @@ use crate::moe::{MoEExperts, MoEExpertsConfig};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{self, embedding, Activation, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -178,6 +178,7 @@ impl Attention {
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window,
+                sinks: None,
             },
         })
     }
@@ -349,11 +350,9 @@ impl Mlp {
         if let Some(t) = self.gate_proj.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        let mut current_hidden_states = MatMul
-            .qmethod_matmul(&xs, &*self.gate_proj)?
-            .apply(&self.act_fn)?;
-        let rhs = MatMul.qmethod_matmul(&xs, &*self.up_proj)?;
-        current_hidden_states = current_hidden_states.broadcast_mul(&rhs)?;
+        let gate_out = MatMul.qmethod_matmul(&xs, &*self.gate_proj)?;
+        let up_out = MatMul.qmethod_matmul(&xs, &*self.up_proj)?;
+        let current_hidden_states = crate::ops::mul_and_act(&gate_out, &up_out, self.act_fn)?;
         let mut res = MatMul.qmethod_matmul(&current_hidden_states, &*self.down_proj)?;
         if self.gate_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
@@ -411,7 +410,7 @@ impl MoeMlp {
         })
     }
 
-    fn forward(&self, xs: &Tensor, is_prefill: bool) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
@@ -432,10 +431,8 @@ impl MoeMlp {
             topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;
         }
 
-        // Forward through experts
-        let ys = self
-            .experts
-            .forward(xs, topk_weights, &topk_ids, is_prefill)?;
+        // Forward through experts (is_prefill determined internally based on seq_len)
+        let ys = self.experts.forward(xs, topk_weights, &topk_ids)?;
 
         ys.reshape((b_size, seq_len, hidden_dim))
     }
@@ -455,10 +452,10 @@ enum MoeOrMlp {
 }
 
 impl MoeOrMlp {
-    fn forward(&self, xs: &Tensor, is_prefill: bool) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::Mlp(m) => m.forward(xs),
-            Self::Moe(m) => m.forward(xs, is_prefill),
+            Self::Moe(m) => m.forward(xs),
         }
     }
 }
@@ -495,7 +492,7 @@ impl DecoderLayer {
         )?;
 
         let mlp = if !cfg.mlp_only_layers.contains(&layer_idx)
-            && (cfg.num_experts > 0 && (layer_idx + 1) % cfg.decoder_sparse_step == 0)
+            && (cfg.num_experts > 0 && (layer_idx + 1).is_multiple_of(cfg.decoder_sparse_step))
         {
             let vb = mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq);
             let layer_device = mapper
@@ -552,10 +549,9 @@ impl DecoderLayer {
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let xs = self.mlp.forward(
-            &xs.apply(&self.post_attention_layernorm)?,
-            flash_params.causal,
-        )?;
+        let xs = self
+            .mlp
+            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
         residual + xs
     }
 }
@@ -724,6 +720,7 @@ impl Model {
                 sliding_window: cfg.sliding_window,
                 k_head_dim: cfg.head_dim(),
                 v_head_dim: cfg.head_dim(),
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
         })
@@ -776,14 +773,12 @@ impl Model {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+        let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                attention_mask.as_ref().map(|m| m.get(xs.device())),
                 seqlen_offsets,
                 &mut cache[i],
                 metadata
@@ -794,11 +789,12 @@ impl Model {
             // dbg!(&i);
         }
         let xs = xs.to_device(&self.device)?;
-        let mut xs = xs.apply(&self.norm)?;
+        let xs = xs.apply(&self.norm)?;
+        let mut xs = extract_logits(&xs, context_lens)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
+        MatMul.qmethod_matmul(&xs, &*self.lm_head)
     }
 }
 

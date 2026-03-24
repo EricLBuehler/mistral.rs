@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-mistral.rs is a blazing-fast LLM inference engine written in Rust. It supports text, vision, image generation, and speech models with multiple APIs (Rust, Python, OpenAI HTTP, MCP).
+mistral.rs is a blazing-fast LLM inference engine written in Rust. It supports text, vision, image generation, and speech models with Rust and Python SDKs, plus OpenAI HTTP and MCP APIs.
 
 ## Essential Commands
 
@@ -19,8 +19,8 @@ cargo build --release --features "cuda flash-attn cudnn"
 # With Metal support (macOS)
 cargo build --release --features metal
 
-# Install server binary
-cargo install --path mistralrs-server --features <features>
+# Install CLI binary
+cargo install --path mistralrs-cli --features <features>
 ```
 
 ### Testing & Quality
@@ -40,14 +40,20 @@ cargo clippy --workspace --tests --examples -- -D warnings
 
 ### Running Models
 ```bash
-# Run interactive mode with plain model
-cargo run --release --features <features> -- -i plain -m <model_id> -a <arch>
+# Run interactive mode (model type auto-detected)
+mistralrs run -m <model_id>
 
 # Run with GGUF quantized model
-cargo run --release --features <features> -- -i gguf -f <file> -t <tokenizer>
+mistralrs run --format gguf -m <repo> -f <file>
 
 # Run server
-cargo run --release --features <features> -- --port 1234 <model_args>
+mistralrs serve -p 1234 -m <model_id>
+
+# Run server with web UI
+mistralrs serve --ui -m <model_id>
+
+# Run benchmarks
+mistralrs bench -m <model_id>
 ```
 
 ## Models
@@ -60,16 +66,16 @@ You should also look for a model.safetensors.index.json file for the model at ha
 
 ### Workspace Structure
 - `mistralrs-core/` - Core inference engine, model implementations, pipelines
-- `mistralrs-server/` - CLI binary entry point
+- `mistralrs-cli/` - Unified CLI binary (commands: run, serve, bench, from-config)
 - `mistralrs-server-core/` - HTTP server routing, OpenAI API implementation
-- `mistralrs-pyo3/` - Python bindings (PyO3)
-- `mistralrs/` - High-level Rust API
+- `mistralrs-pyo3/` - Python SDK (PyO3 bindings)
+- `mistralrs/` - Rust SDK (high-level crate)
 - `mistralrs-vision/` - Vision model support
 - `mistralrs-quant/` - Quantization implementations (ISQ, GGUF, GPTQ, etc.)
 - `mistralrs-paged-attn/` - PagedAttention implementation
 - `mistralrs-audio/` - Audio processing
 - `mistralrs-mcp/` - Model Context Protocol client
-- `mistralrs-bench/` - Benchmarking tools
+- `mistralrs-bench/` - (Deprecated) Use `mistralrs bench` instead
 
 ### Key Design Patterns
 
@@ -88,7 +94,7 @@ When adding new model architectures:
 2. Add pipeline support in `mistralrs-core/src/pipeline/`
 3. Update model detection in `mistralrs-core/src/pipeline/normal.rs`
 4. Add architecture enum variant in `mistralrs-core/src/lib.rs`
-5. Update CLI args in `mistralrs-server/src/main.rs`
+5. Update CLI args in `mistralrs-cli/src/main.rs`
 
 When adding new quantization methods:
 1. Implement in `mistralrs-quant/src/`
@@ -100,8 +106,12 @@ When adding new quantization methods:
 - `mistralrs-core/src/engine/mod.rs` - Main engine orchestration
 - `mistralrs-core/src/pipeline/mod.rs` - Pipeline trait and common logic
 - `mistralrs-server-core/src/routes.rs` - HTTP API endpoints
-- `mistralrs-pyo3/src/lib.rs` - Python API entry point
-- `mistralrs/examples/` - Usage examples for Rust API
+- `mistralrs-pyo3/src/lib.rs` - Python SDK entry point
+- `mistralrs/examples/` - Usage examples for Rust SDK
+
+### Pull Requests
+
+Never include a "Test plan" section in PR descriptions.
 
 ### Testing Approach
 
@@ -120,3 +130,14 @@ Avoid returning TODOs.
 2. **Device Indices**: CUDA device selection uses 0-based indexing
 3. **Chat Templates**: Models may need specific chat templates - check `chat_templates/` directory
 4. **Quantization**: Different quantization methods have different hardware requirements
+5. **Never use `Tensor::{from_vec,arange}` in hot loops**: `Tensor::{from_vec,arange}` with a GPU device causes a CPU-to-GPU sync. If you need a small tensor on GPU during forward, either precompute it at model init or start of forward pass.
+
+### Vision/Audio Model Pitfalls
+
+6. **Vision encoder attention must be bidirectional (non-causal)**:  `Sdpa.run_attention` with `flash_params: None` defaults to `causal = seq_len > 1` on the CUDA flash-attn path, which silently breaks vision/audio encoders. Always pass `FlashParams { causal: false, cumulative_seqlens_q: HashMap::new(), cumulative_seqlens_k: HashMap::new(), max_q: 0, max_k: 0 }` with `Some(&flash_params)` for any encoder that needs bidirectional attention. The empty `cumulative_seqlens` cause the flash backend to use the non-varlen kernel path, avoiding any tensor allocation in the forward pass.
+
+7. **`torch.bucketize(right=True)` requires `Ok(i) => i + 1`**: Rust's `binary_search_by` returns `Ok(i)` at the found position (bisect_left semantics). For `right=True` (bisect_right), you must use `Ok(i) => i + 1` to insert after equal elements. `Err(i) => i` is correct for both.
+
+8. **Mistral `consolidated.safetensors` stores Q/K weights with interleaved head dimensions**: When loading from Mistral-native `consolidated.safetensors` (as opposed to HF-converted `model.safetensors`), the Q and K projection weights use an interleaved layout within each head: `[x0, x_{d/2}, x1, x_{d/2+1}, ...]` instead of the sequential HF layout `[x0, x1, ..., x_{d/2-1}, x_{d/2}, ...]`. This means you must use `is_gptx=false` (GPT-J/adjacent-pair style) for `RotaryEmbedding`, NOT `is_gptx=true` (GPT-NeoX/half-split style). Using the wrong RoPE style produces completely wrong attention outputs (cosine similarity ~0.02 with reference). To diagnose: compare a Q or K weight tensor between `consolidated.safetensors` and `model.safetensors` — if they differ (cosine ~0.02), apply the un-interleave: `reshape(n_heads, head_dim/2, 2, dim).permute(0,2,1,3)` and verify cosine ~1.0.
+
+9. **Causal Conv1d padding formula**: For causal convolution (left-pad only, no right-pad), the correct left padding is `effective_kernel_size - stride`, NOT `(kernel_size - 1) * dilation` (which is the total padding for non-causal). For example, with kernel_size=3, stride=2, dilation=1: left_pad = 3 - 2 = 1, not 2. Verify against the HF model's `VoxtralRealtimeCausalConv1d` or equivalent source.

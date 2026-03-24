@@ -20,7 +20,7 @@ use tqdm::Iter;
 use tracing::info;
 
 use crate::{
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{embedding, CausalMasker, RmsNorm},
     models::llama::Config,
     pipeline::{self, extract_logits, LayerCaches, NormalLoadingMetadata, NormalModel},
@@ -204,6 +204,7 @@ impl CausalSelfAttention {
                 softcap: None,
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
                 sliding_window: None,
+                sinks: None,
             },
         })
     }
@@ -448,11 +449,12 @@ impl XLoraLlama {
             x.dtype(),
             self.cfg.num_attn_heads,
         )?;
+        let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
             x = block.forward(
                 &x,
-                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                &mask.as_ref().map(|m| m.get(x.device()).clone()),
                 seqlen_offsets,
                 block_idx,
                 &mut cache,
@@ -496,7 +498,7 @@ impl XLoraLlama {
             )?;
 
             if no_kv_cache {
-                let mut res = self
+                let res = self
                     .inner_forward(
                         input_ids_full,
                         seqlen_offsets_full,
@@ -507,16 +509,14 @@ impl XLoraLlama {
                         flash_params_full,
                     )?
                     .contiguous()?;
+                let mut res = extract_logits(&res, context_lens)?;
                 if let Some(t) = self.lm_head.quantized_act_type() {
                     res = res.to_dtype(t)?;
                 }
-                extract_logits(
-                    &self.lm_head.lora_forward(&res, None, 1.0, None)?,
-                    context_lens,
-                )
+                self.lm_head.lora_forward(&res, None, 1.0, None)
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
-                let mut res = self
+                let res = self
                     .inner_forward(
                         input_ids,
                         seqlen_offsets,
@@ -527,16 +527,14 @@ impl XLoraLlama {
                         flash_params,
                     )?
                     .contiguous()?;
+                let mut res = extract_logits(&res, context_lens)?;
                 if let Some(t) = self.lm_head.quantized_act_type() {
                     res = res.to_dtype(t)?;
                 }
-                extract_logits(
-                    &self.lm_head.lora_forward(&res, None, 1.0, None)?,
-                    context_lens,
-                )
+                self.lm_head.lora_forward(&res, None, 1.0, None)
             }
         } else {
-            let mut res = self
+            let res = self
                 .inner_forward(
                     input_ids,
                     seqlen_offsets,
@@ -547,13 +545,11 @@ impl XLoraLlama {
                     flash_params,
                 )?
                 .contiguous()?;
+            let mut res = extract_logits(&res, context_lens)?;
             if let Some(t) = self.lm_head.quantized_act_type() {
                 res = res.to_dtype(t)?;
             }
-            extract_logits(
-                &self.lm_head.lora_forward(&res, None, 1.0, None)?,
-                context_lens,
-            )
+            self.lm_head.lora_forward(&res, None, 1.0, None)
         }
     }
 
@@ -698,6 +694,7 @@ impl XLoraLlama {
                 sliding_window: None,
                 k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
                 v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
         })
     }

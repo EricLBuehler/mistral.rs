@@ -128,25 +128,15 @@ impl Engine {
         }
 
         let images = match request.messages {
-            RequestMessage::VisionChat {
-                ref images,
-                messages: _,
-                enable_thinking: _,
-                audios: _,
-            } => Some(images.clone()),
+            RequestMessage::VisionChat { ref images, .. } => Some(images.clone()),
             _ => None,
         };
 
         let audios = match request.messages {
-            RequestMessage::VisionChat {
-                images: _,
-                messages: _,
-                enable_thinking: _,
-                ref audios,
-            } => Some(audios.clone()),
+            RequestMessage::VisionChat { ref audios, .. } => Some(audios.clone()),
             _ => None,
         };
-
+        let has_tools = request.tools.as_ref().is_some_and(|t| !t.is_empty());
         let matcher = Arc::new(handle_seq_error!(
             ToolCallingMatcher::new(request.tool_choice.unwrap_or(ToolChoice::Auto),),
             request.response
@@ -171,18 +161,25 @@ impl Engine {
             } => Some(generation_params.clone()),
             _ => None,
         };
+
+        let image_gen_save_file = match &request.messages {
+            RequestMessage::ImageGeneration { save_file, .. } => save_file.clone(),
+            _ => None,
+        };
         let mut added_seq = false;
 
         let (mut prompt_tokens, prompt_text) = match request.messages {
             RequestMessage::Chat {
                 messages,
                 enable_thinking,
+                reasoning_effort,
             }
             | RequestMessage::VisionChat {
                 images: _,
                 audios: _,
                 messages,
                 enable_thinking,
+                reasoning_effort,
             } => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
                 let tools = request.tools.unwrap_or_default();
@@ -192,6 +189,7 @@ impl Engine {
                     true,
                     true,
                     enable_thinking,
+                    reasoning_effort,
                     tools,
                 );
                 handle_seq_error!(template, request.response)
@@ -552,10 +550,15 @@ impl Engine {
                 images.clone(),
                 audios.clone(),
                 block_size,
-                Some(matcher.clone()),
+                if has_tools {
+                    Some(matcher.clone())
+                } else {
+                    None
+                },
                 image_generation_format,
                 seq_step_type,
                 diffusion_params.clone(),
+                image_gen_save_file.clone(),
                 seq_preallocated_cache,
                 request.return_raw_logits,
                 eos_toks,
@@ -566,13 +569,39 @@ impl Engine {
                 self.logger.add_new_sequence();
             }
 
-            // Allocate Mamba state pool slot for hybrid models
+            // Enable Harmony mode if the chat template uses Harmony format
+            {
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                if let Some(chat_template) = pipeline.get_chat_template() {
+                    if chat_template.is_harmony_format() {
+                        // Pre-warm the Harmony encoding if not already done.
+                        // This must be done in a blocking context because openai-harmony
+                        // uses reqwest::blocking which creates its own tokio runtime.
+                        if !crate::harmony::is_harmony_encoding_ready() {
+                            if let Err(e) = tokio::task::block_in_place(|| {
+                                crate::harmony::prewarm_harmony_encoding();
+                                Ok::<(), anyhow::Error>(())
+                            }) {
+                                warn!("Failed to initialize Harmony encoding: {e}");
+                            }
+                        }
+                        if let Err(e) = seq.enable_harmony_mode() {
+                            warn!("Failed to enable Harmony mode: {e}");
+                        }
+                    } else if chat_template.uses_think_tags() {
+                        // Enable think tag mode if the chat template uses <think> tags
+                        seq.enable_think_tag_mode();
+                    }
+                }
+            }
+
+            // Allocate recurrent state pool slot for hybrid models
             {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
                 if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
                     let mut hybrid_cache = pipeline.cache().hybrid();
                     if let Some(slot_idx) = hybrid_cache.allocate_seq() {
-                        seq.set_mamba_state_idx(Some(slot_idx));
+                        seq.set_recurrent_state_idx(Some(slot_idx));
                     }
                 }
             }
@@ -607,30 +636,34 @@ impl Engine {
             seq = match prefill_cache.clone() {
                 Some(MatchingCache::Normal {
                     normal,
+                    recurrent_snapshots,
                     images_to_keep,
                     audios_to_keep,
                     toks,
                     offset,
                 }) => {
                     self.logger.add_prefix_cache_hit();
+
+                    // Restore recurrent state for hybrid models
+                    if let Some(snapshots) = recurrent_snapshots {
+                        if let Some(slot_idx) = seq.recurrent_state_idx() {
+                            let pipeline = get_mut_arcmutex!(self.pipeline);
+                            if pipeline.cache().is_hybrid() {
+                                let mut hybrid_cache = pipeline.cache().hybrid();
+                                if let Err(e) =
+                                    hybrid_cache.restore_recurrent_state(slot_idx, &snapshots)
+                                {
+                                    tracing::warn!(
+                                        "Failed to restore recurrent state from prefix cache: {e}"
+                                    );
+                                }
+                            }
+                        }
+                    }
 
                     seq.keep_num_images(images_to_keep);
                     seq.keep_num_audios(audios_to_keep);
                     seq.prefill_v2_normal(normal, toks, offset)
-                }
-                Some(MatchingCache::Paged {
-                    logical_blocks,
-                    physical_blocks,
-                    images_to_keep,
-                    audios_to_keep,
-                    toks,
-                    offset,
-                }) => {
-                    self.logger.add_prefix_cache_hit();
-
-                    seq.keep_num_images(images_to_keep);
-                    seq.keep_num_audios(audios_to_keep);
-                    seq.prefill_v2_paged(logical_blocks, physical_blocks, toks, offset)
                 }
                 None => seq,
             };
@@ -655,6 +688,7 @@ impl Engine {
                     request.add_generation_prompt,
                     request.add_special_tokens,
                     request.enable_thinking,
+                    request.reasoning_effort,
                     tools,
                 );
                 let toks = match template {

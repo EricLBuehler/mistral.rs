@@ -9,7 +9,7 @@ For a catalog of all embedding backends, see [EMBEDDINGS.md](EMBEDDINGS.md).
 Serve the model with the OpenAI-compatible endpoint enabled:
 
 ```bash
-./mistralrs-server --port 1234 run -m Qwen/Qwen3-Embedding-0.6B
+mistralrs serve -p 1234 -m Qwen/Qwen3-Embedding-0.6B
 ```
 
 Call the endpoint via `curl` or the OpenAI SDK:
@@ -21,7 +21,7 @@ curl http://localhost:1234/v1/embeddings \
   -d '{"model": "default", "input": ["Graphene conductivity", "Explain superconductors in simple terms."]}'
 ```
 
-An example with the OpenAI client can be found [here](../examples/server/embedding.py).
+An example with the OpenAI client can be found [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/embedding.py).
 
 To expose the model alongside chat models, register it in your selector configuration using the
 `qwen3embedding` architecture tag:
@@ -39,7 +39,7 @@ To expose the model alongside chat models, register it in your selector configur
 
 See [docs/HTTP.md](HTTP.md#post-v1embeddings) for the full request schema.
 
-## Python API
+## Python SDK
 
 Instantiate `Runner` with the embedding selector and request Qwen3 explicitly. The output mirrors the
 OpenAI embeddings array shape:
@@ -63,9 +63,9 @@ embeddings = runner.send_embedding_request(request)
 print(len(embeddings), len(embeddings[0]))
 ```
 
-A ready-to-run version can be found at [`examples/python/qwen3_embedding.py`](../examples/python/qwen3_embedding.py).
+A ready-to-run version can be found at [`examples/python/qwen3_embedding.py`](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_embedding.py).
 
-## Rust API
+## Rust SDK
 
 Use the `EmbeddingModelBuilder` helper just like with EmbeddingGemma. The example below mirrors the
 repository sample:
@@ -94,4 +94,4 @@ async fn main() -> Result<()> {
 }
 ```
 
-You can find the full example at [`mistralrs/examples/qwen3_embedding/main.rs`](../mistralrs/examples/qwen3_embedding/main.rs).
+You can find the full example at [`mistralrs/examples/advanced/embeddings/main.rs`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/embeddings/main.rs).

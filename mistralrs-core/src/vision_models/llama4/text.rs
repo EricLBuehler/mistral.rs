@@ -11,7 +11,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{embedding, Activation, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     moe::{MoEExperts, MoEExpertsConfig},
@@ -100,7 +100,7 @@ impl CausalSelfAttention {
             comm,
             mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
         )?;
-        let use_rope = (layer_idx + 1) % 4 != 0;
+        let use_rope = !(layer_idx + 1).is_multiple_of(4);
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let norm = if cfg.use_qk_norm && use_rope {
             let vb = mapper.set_device(layer_idx, vb, false);
@@ -132,6 +132,7 @@ impl CausalSelfAttention {
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
+                sinks: None,
             },
             norm,
             use_rope,
@@ -356,7 +357,7 @@ impl TextMoe {
         })
     }
 
-    fn forward(&self, xs: &Tensor, is_prefill: bool) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (bs, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
         let router_logits = self.router.forward_autocast(&xs_flat)?;
@@ -369,10 +370,10 @@ impl TextMoe {
         let router_scores = candle_nn::ops::sigmoid(&router_top_value.to_dtype(DType::F32)?)?
             .to_dtype(router_top_value.dtype())?;
 
-        // Forward through routed experts
+        // Forward through routed experts (is_prefill determined internally)
         let routed_out = self
             .experts
-            .forward(xs, router_scores, &router_indices, is_prefill)?
+            .forward(xs, router_scores, &router_indices)?
             .reshape((bs, seq_len, hidden_dim))?;
 
         // Forward through shared expert and add
@@ -388,10 +389,10 @@ enum MoeOrMlp {
 }
 
 impl MoeOrMlp {
-    fn forward(&self, xs: &Tensor, is_prefill: bool) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::Mlp(l) => l.forward(xs),
-            Self::Moe(l) => l.forward(xs, is_prefill),
+            Self::Moe(l) => l.forward(xs),
         }
     }
 }
@@ -417,7 +418,7 @@ impl Block {
         comm: &Arc<mistralrs_quant::Comm>,
         real_device: Device,
     ) -> Result<Self> {
-        let use_chunked_attention = (layer_idx + 1) % 4 != 0;
+        let use_chunked_attention = !(layer_idx + 1).is_multiple_of(4);
         let attn = CausalSelfAttention::new(
             vb.pp("self_attn"),
             cfg,
@@ -502,10 +503,7 @@ impl Block {
             flash_params,
         )? + residual)?;
         let residual = &x;
-        let x = (self
-            .ff
-            .forward(&self.rms_2.forward(&x)?, flash_params.causal)?
-            + residual)?;
+        let x = (self.ff.forward(&self.rms_2.forward(&x)?)? + residual)?;
         Ok(x)
     }
 }
@@ -653,6 +651,7 @@ impl TextModel {
                 sliding_window: None,
                 k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
                 v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
             attention_chunk_size: cfg.attention_chunk_size,
@@ -712,15 +711,17 @@ impl TextModel {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+        let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
+        let chunked_mask = DeviceMappedMask::new(chunked_mask, &*self.mapper)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
+            let mask_for_layer = mask.as_ref().map(|m| m.get(x.device()).clone());
+            let chunked_mask_for_layer = chunked_mask.as_ref().map(|m| m.get(x.device()).clone());
             x = block.forward(
                 &x,
                 &position_ids.to_device(x.device())?,
-                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
-                &chunked_mask
-                    .clone()
-                    .map(|m| m.to_device(x.device()).unwrap()),
+                &mask_for_layer,
+                &chunked_mask_for_layer,
                 seqlen_offsets,
                 &mut cache[block_idx],
                 metadata
@@ -729,10 +730,10 @@ impl TextModel {
                 flash_params,
             )?;
         }
-        let mut x = x.to_device(&self.device)?;
-        x = self.ln_f.forward(&x)?;
-        x = self.lm_head.forward_autocast(&x)?;
-        extract_logits(&x, context_lens)
+        let x = x.to_device(&self.device)?;
+        let x = self.ln_f.forward(&x)?;
+        let x = extract_logits(&x, context_lens)?;
+        self.lm_head.forward_autocast(&x)
     }
 
     pub fn residual_tensors_m(&self, uvb_m: UnVarBuilder) -> Vec<(String, Tensor)> {

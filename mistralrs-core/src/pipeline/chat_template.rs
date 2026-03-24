@@ -16,6 +16,11 @@ const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
     "<|im_end|>",      // Handle ChatML case
     "<end_of_turn>",   // Handle Gemma2 chat case
     "<|end_of_text|>", // Hermes
+    "<|end|>",         // Phi-3, Phi-3.5, Harmony
+    "<|eot_id|>",      // Llama 3
+    "<|message|>",     // Harmony
+    "<|start|>",       // Harmony
+    "<|channel|>",     // Harmony
 ];
 
 #[allow(dead_code)]
@@ -77,6 +82,38 @@ impl ChatTemplate {
         self.chat_template.is_some()
     }
 
+    pub(crate) fn get_template_contents(&self) -> Vec<String> {
+        match self.chat_template.as_ref() {
+            Some(t) => match &t.0 {
+                Either::Left(s) => vec![s.clone()],
+                Either::Right(vec) => vec.iter().flat_map(|m| m.values().cloned()).collect(),
+            },
+            None => vec![],
+        }
+    }
+
+    /// Check if this chat template uses OpenAI Harmony format.
+    pub fn is_harmony_format(&self) -> bool {
+        self.get_template_contents()
+            .iter()
+            .any(|t| crate::harmony::is_harmony_template(t))
+    }
+
+    /// Check if this chat template uses `<think>...</think>` tags for reasoning.
+    ///
+    /// This is mutually exclusive with Harmony format - if the template uses
+    /// Harmony format, this returns false even if think tags are present.
+    pub fn uses_think_tags(&self) -> bool {
+        // Don't enable if Harmony format is detected (mutual exclusivity)
+        if self.is_harmony_format() {
+            return false;
+        }
+
+        self.get_template_contents()
+            .iter()
+            .any(|t| crate::think_tags::is_think_tag_template(t))
+    }
+
     pub fn eos_tok(&self) -> Option<String> {
         match self.eos_token.as_ref()?.0 {
             Either::Left(ref lit) => Some(lit.clone()),
@@ -107,8 +144,12 @@ pub fn calculate_eos_tokens(
     let mut eos_tok_ids = chat_template.eos_tok().map(|x| vec![x]).unwrap_or_default();
     let mut bos_tok_ids = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
 
+    let templates = chat_template.get_template_contents();
+
     for alternate in SUPPORTED_ALTERNATE_EOS {
-        if tokenizer.get_vocab(true).contains_key(*alternate) {
+        if tokenizer.get_vocab(true).contains_key(*alternate)
+            && templates.iter().any(|t| t.contains(*alternate))
+        {
             eos_tok_ids.push(alternate.to_string())
         }
     }
@@ -228,11 +269,14 @@ fn strftime_now(fmt: String) -> Result<String, minijinja::Error> {
     Ok(date_string)
 }
 
+use crate::request::ReasoningEffort;
+
 #[allow(clippy::too_many_arguments)]
 pub fn apply_chat_template_to(
     messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
     enable_thinking: Option<bool>,
+    reasoning_effort: Option<ReasoningEffort>,
     template: &ChatTemplateValue,
     bos_tok: Option<String>,
     eos_tok: Option<String>,
@@ -330,6 +374,32 @@ pub fn apply_chat_template_to(
     let date = chrono::Utc::now();
     let date_string = date.format("%d, %B, %Y").to_string();
 
+    // Convert reasoning effort to string for template
+    let reasoning_effort_str = reasoning_effort.map(|r| r.as_str()).unwrap_or("medium");
+
+    // Detect builtin tools from the tools list
+    // Known builtin tools for GPT-OSS/Harmony format: "browser", "python"
+    // Known builtin tools for Llama 3.x: "wolfram_alpha", "web_search", "brave_search", "python", "code_interpreter"
+    let builtin_tool_names = [
+        "browser",
+        "python",
+        "code_interpreter",
+        "web_search",
+        "brave_search",
+        "wolfram_alpha",
+    ];
+    let builtin_tools: Vec<&str> = tools
+        .iter()
+        .filter_map(|t| {
+            let name = t.function.name.as_str();
+            if builtin_tool_names.contains(&name) {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+
     if tools.is_empty() {
         Ok(tmpl.render(context! {
             messages => new_messages,
@@ -339,6 +409,7 @@ pub fn apply_chat_template_to(
             unk_token => unk_tok,
             date_string => date_string,
             enable_thinking => enable_thinking.unwrap_or(true),
+            reasoning_effort => reasoning_effort_str,
         })?)
     } else {
         Ok(tmpl.render(context! {
@@ -349,8 +420,10 @@ pub fn apply_chat_template_to(
             unk_token => unk_tok,
             xml_tools => tools.clone(), // SmolLM3
             tools => tools,
+            builtin_tools => builtin_tools,
             date_string => date_string,
             enable_thinking => enable_thinking.unwrap_or(true),
+            reasoning_effort => reasoning_effort_str,
         })?)
     }
 }

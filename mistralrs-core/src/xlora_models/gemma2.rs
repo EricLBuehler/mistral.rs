@@ -10,8 +10,8 @@ use tracing::info;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    device_map::DeviceMapper,
-    layers::{self, Activation, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
+    device_map::{DeviceMappedMask, DeviceMapper},
+    layers::{self, Activation, CausalMasker, GemmaRmsNorm, RotaryEmbedding, Sdpa},
     lora::{linear_b, linear_no_bias, LinearLayerLike, LoraConfig},
     models::gemma2::Config,
     paged_attention::ModelConfigMetadata,
@@ -208,7 +208,7 @@ impl Attention {
             ord,
             preload_adapters,
         )?;
-        let sliding_window = if layer_idx % 2 == 0 {
+        let sliding_window = if layer_idx.is_multiple_of(2) {
             // ^ Order is SWA, global, SWA
             Some(cfg.sliding_window)
         } else {
@@ -223,13 +223,14 @@ impl Attention {
             num_kv_heads,
             head_dim,
             rotary_emb,
-            use_sliding_window: layer_idx % 2 == 0, // Order is SWA, global, SWA
+            use_sliding_window: layer_idx.is_multiple_of(2), // Order is SWA, global, SWA
             sliding_window,
             sdpa_params: SdpaParams {
                 n_kv_groups: num_heads / num_kv_heads,
                 softcap: cfg.attn_logit_softcapping.map(|x| x as f32),
                 softmax_scale: 1.0 / (cfg.query_pre_attn_scalar as f32).sqrt(),
                 sliding_window,
+                sinks: None,
             },
         })
     }
@@ -336,10 +337,10 @@ impl Attention {
 struct DecoderLayer {
     self_attn: Attention,
     mlp: MLP,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
-    pre_feedforward_layernorm: RmsNorm,
-    post_feedforward_layernorm: RmsNorm,
+    input_layernorm: GemmaRmsNorm,
+    post_attention_layernorm: GemmaRmsNorm,
+    pre_feedforward_layernorm: GemmaRmsNorm,
+    post_feedforward_layernorm: GemmaRmsNorm,
 }
 
 impl DecoderLayer {
@@ -379,22 +380,22 @@ impl DecoderLayer {
             loading_isq,
             preload_adapters,
         )?;
-        let input_layernorm = RmsNorm::new_gemma(
+        let input_layernorm = GemmaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
-        let post_attention_layernorm = RmsNorm::new_gemma(
+        let post_attention_layernorm = GemmaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
-        let pre_feedforward_layernorm = RmsNorm::new_gemma(
+        let pre_feedforward_layernorm = GemmaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("pre_feedforward_layernorm"), false),
         )?;
-        let post_feedforward_layernorm = RmsNorm::new_gemma(
+        let post_feedforward_layernorm = GemmaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm"), false),
@@ -456,7 +457,7 @@ impl DecoderLayer {
 pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
-    norm: RmsNorm,
+    norm: GemmaRmsNorm,
     lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
     hidden_size: usize,
     device: Device,
@@ -572,7 +573,7 @@ impl Model {
                     .merge_weights()?;
             }
         }
-        let norm = RmsNorm::new_gemma(
+        let norm = GemmaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
@@ -618,6 +619,7 @@ impl Model {
                 sliding_window: None,
                 k_head_dim: cfg.head_dim,
                 v_head_dim: cfg.head_dim,
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
         })
     }
@@ -661,18 +663,14 @@ impl Model {
             xs.dtype(),
             self.cfg.num_attn_heads,
         )?;
+        let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
+        let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
-                sliding_attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                attention_mask.as_ref().map(|m| m.get(xs.device())),
+                sliding_attention_mask.as_ref().map(|m| m.get(xs.device())),
                 seqlen_offsets,
                 &mut cache[i],
                 scalings.clone(),
@@ -728,7 +726,7 @@ impl Model {
             )?;
 
             if no_kv_cache {
-                let mut res = self
+                let res = self
                     .inner_forward(
                         input_ids_full,
                         seqlen_offsets_full,
@@ -739,16 +737,14 @@ impl Model {
                         flash_params_full,
                     )?
                     .contiguous()?;
+                let mut res = extract_logits(&res, context_lens)?;
                 if let Some(t) = self.lm_head.quantized_act_type() {
                     res = res.to_dtype(t)?;
                 }
-                extract_logits(
-                    &self.lm_head.lora_forward(&res, None, 1.0, None)?,
-                    context_lens,
-                )
+                self.lm_head.lora_forward(&res, None, 1.0, None)
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
-                let mut res = self
+                let res = self
                     .inner_forward(
                         input_ids,
                         seqlen_offsets,
@@ -759,16 +755,14 @@ impl Model {
                         flash_params,
                     )?
                     .contiguous()?;
+                let mut res = extract_logits(&res, context_lens)?;
                 if let Some(t) = self.lm_head.quantized_act_type() {
                     res = res.to_dtype(t)?;
                 }
-                extract_logits(
-                    &self.lm_head.lora_forward(&res, None, 1.0, None)?,
-                    context_lens,
-                )
+                self.lm_head.lora_forward(&res, None, 1.0, None)
             }
         } else {
-            let mut res = self
+            let res = self
                 .inner_forward(
                     input_ids,
                     seqlen_offsets,
@@ -779,13 +773,11 @@ impl Model {
                     flash_params,
                 )?
                 .contiguous()?;
+            let mut res = extract_logits(&res, context_lens)?;
             if let Some(t) = self.lm_head.quantized_act_type() {
                 res = res.to_dtype(t)?;
             }
-            extract_logits(
-                &self.lm_head.lora_forward(&res, None, 1.0, None)?,
-                context_lens,
-            )
+            self.lm_head.lora_forward(&res, None, 1.0, None)
         }
     }
 }

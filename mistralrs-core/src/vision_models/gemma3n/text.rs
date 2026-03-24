@@ -10,7 +10,7 @@ use statrs::distribution::{ContinuousCDF, Normal};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
         self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, MatMul, RmsNorm,
         RotaryEmbedding, ScaledEmbedding, Sdpa,
@@ -300,6 +300,7 @@ impl Attention {
                 softcap: None,
                 softmax_scale: 1.0,
                 sliding_window,
+                sinks: None,
             },
             q_norm,
             k_norm,
@@ -1221,6 +1222,7 @@ impl TextModel {
                 sliding_window: None,
                 k_head_dim: cfg.head_dim,
                 v_head_dim: cfg.head_dim,
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
             per_layer_input_scale: 1. / (2f64.sqrt()),
@@ -1365,20 +1367,16 @@ impl TextModel {
         }
         xs = Tensor::stack(&temp_hidden_states, 0)?;
 
+        let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
+        let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             let per_layer_input = per_layer_inputs.i((.., .., i, ..))?;
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
                 &per_layer_input.to_device(xs.device())?,
-                attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
-                sliding_attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                attention_mask.as_ref().map(|m| m.get(xs.device())),
+                sliding_attention_mask.as_ref().map(|m| m.get(xs.device())),
                 seqlen_offsets,
                 &mut *cache,
                 flash_params,
@@ -1416,6 +1414,7 @@ impl TextModel {
         xs = stacked_f32.mean(0)?.to_dtype(stacked.dtype())?;
 
         xs = xs.apply(&self.norm)?;
+        let mut xs = extract_logits(&xs, context_lens)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
@@ -1430,7 +1429,7 @@ impl TextModel {
             xs = (tanh_capped * final_logit_softcapping)?.to_dtype(xs.dtype())?;
         }
 
-        extract_logits(&xs, context_lens)
+        Ok(xs)
     }
 }
 

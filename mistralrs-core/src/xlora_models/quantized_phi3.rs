@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::attention::SdpaParams;
-use crate::device_map::DeviceMapper;
+use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
 use crate::layers::CausalMasker;
 use crate::layers::RmsNorm;
@@ -338,6 +338,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                     softcap: None,
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: Some(context_window),
+                    sinks: None,
                 },
                 dtype,
             })
@@ -418,6 +419,10 @@ impl ModelWeights {
             self.dtype,
             self.layers[0].n_head,
         )?;
+        let mask = match self.mapper {
+            Some(ref mapper) => DeviceMappedMask::new(mask, &**mapper)?,
+            None => DeviceMappedMask::from_single(mask),
+        };
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 xs = mapper.map(xs, i)?;
@@ -426,9 +431,7 @@ impl ModelWeights {
             let ys = xs.apply(&layer.attn_norm)?;
             let ys = layer.forward_attn(
                 &ys,
-                mask.as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                mask.as_ref().map(|m| m.get(xs.device())),
                 seqlen_offsets,
                 &mut cache[i],
                 scalings.clone(),
@@ -484,67 +487,49 @@ impl ModelWeights {
             )?;
 
             if no_kv_cache {
-                extract_logits(
-                    &self.output.lora_forward(
-                        &self
-                            .inner_forward(
-                                input_ids_full,
-                                seqlen_offsets_full,
-                                Some(scalings),
-                                true,
-                                no_kv_cache,
-                                None,
-                                flash_params_full,
-                            )?
-                            .contiguous()?,
+                let hidden = self
+                    .inner_forward(
+                        input_ids_full,
+                        seqlen_offsets_full,
+                        Some(scalings),
+                        true,
+                        no_kv_cache,
                         None,
-                        1.0,
-                        None,
-                    )?,
-                    context_lens,
-                )
+                        flash_params_full,
+                    )?
+                    .contiguous()?;
+                let hidden = extract_logits(&hidden, context_lens)?;
+                self.output.lora_forward(&hidden, None, 1.0, None)
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
-                extract_logits(
-                    &self.output.lora_forward(
-                        &self
-                            .inner_forward(
-                                input_ids,
-                                seqlen_offsets,
-                                Some(scalings),
-                                true,
-                                no_kv_cache,
-                                None,
-                                flash_params,
-                            )?
-                            .contiguous()?,
+                let hidden = self
+                    .inner_forward(
+                        input_ids,
+                        seqlen_offsets,
+                        Some(scalings),
+                        true,
+                        no_kv_cache,
                         None,
-                        1.0,
-                        None,
-                    )?,
-                    context_lens,
-                )
+                        flash_params,
+                    )?
+                    .contiguous()?;
+                let hidden = extract_logits(&hidden, context_lens)?;
+                self.output.lora_forward(&hidden, None, 1.0, None)
             }
         } else {
-            extract_logits(
-                &self.output.lora_forward(
-                    &self
-                        .inner_forward(
-                            input_ids,
-                            seqlen_offsets,
-                            None,
-                            false,
-                            no_kv_cache,
-                            None,
-                            flash_params,
-                        )?
-                        .contiguous()?,
+            let hidden = self
+                .inner_forward(
+                    input_ids,
+                    seqlen_offsets,
                     None,
-                    1.0,
+                    false,
+                    no_kv_cache,
                     None,
-                )?,
-                context_lens,
-            )
+                    flash_params,
+                )?
+                .contiguous()?;
+            let hidden = extract_logits(&hidden, context_lens)?;
+            self.output.lora_forward(&hidden, None, 1.0, None)
         }
     }
 }

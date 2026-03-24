@@ -413,6 +413,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                             true,
                             true,
                             None,
+                            None,
                             Vec::new(),
                         )
                         .map_err(candle_core::Error::msg)?;
@@ -587,6 +588,7 @@ fn new_dummy_seq(
         None,
         None,
         SeqStepType::PromptAndDecode,
+        None,
         None,
         None,
         false,

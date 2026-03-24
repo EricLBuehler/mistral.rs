@@ -2,8 +2,8 @@
 
 The DeepSeek V3 is a mixture of expert (MoE) model.
 
-```
-./mistralrs-server --isq 4 -i plain -m deepseek-ai/DeepSeek-R1
+```bash
+mistralrs run --isq 4 -m deepseek-ai/DeepSeek-R1
 ```
 
 > [!NOTE]
@@ -12,23 +12,23 @@ The DeepSeek V3 is a mixture of expert (MoE) model.
 > [!NOTE]
 > This model supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
 
-```
-./mistralrs-server --isq 4 -i plain -m deepseek-ai/DeepSeek-R1 --organization moqe
+```bash
+mistralrs run --isq 4 -m deepseek-ai/DeepSeek-R1 --isq-organization moqe
 ```
 
 ## Running the distill models
 
 The various [distillation](https://huggingface.co/collections/deepseek-ai/deepseek-r1-678e1e131c0169c0bc89728d) models can be run out of the box.
-```
-./mistralrs-server -i --isq 4 plain -m deepseek-ai/DeepSeek-R1-Distill-Llama-8B
-./mistralrs-server -i --isq 4 plain -m deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
-./mistralrs-server -i --isq 4 plain -m deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+```bash
+mistralrs run --isq 4 -m deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+mistralrs run --isq 4 -m deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+mistralrs run --isq 4 -m deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
 ```
 
 ## HTTP API
 
-```
-./mistralrs-server --isq 4 --port 1234 plain -m deepseek-ai/DeepSeek-R1
+```bash
+mistralrs serve --isq 4 -p 1234 -m deepseek-ai/DeepSeek-R1
 ```
 
 ```py
@@ -56,7 +56,7 @@ while True:
     messages.append({"role": "assistant", "content": resp})
 ```
 
-## Python API
+## Python SDK
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 
@@ -83,8 +83,8 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-## Rust API
-You can find this example [here](../mistralrs/examples/deepseekr1/main.rs).
+## Rust SDK
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs).
 
 ```rust
 use anyhow::Result;

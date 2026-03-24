@@ -1,8 +1,9 @@
 use mistralrs_core::*;
 
-use crate::{best_device, Model};
+use crate::model_builder_trait::{build_diffusion_pipeline, build_model_from_pipeline};
+use crate::Model;
 
-/// Configure a text model with the various parameters for loading, running, and other inference behaviors.
+/// Configure a diffusion model (image generation) with the various parameters for loading, running, and other inference behaviors.
 pub struct DiffusionModelBuilder {
     // Loading model
     pub(crate) model_id: String,
@@ -72,31 +73,9 @@ impl DiffusionModelBuilder {
         self
     }
 
+    /// Load the diffusion model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
-        if self.with_logging {
-            initialize_logging();
-        }
-
-        let loader = DiffusionLoaderBuilder::new(Some(self.model_id)).build(self.loader_type);
-
-        // Load, into a Pipeline
-        let pipeline = loader.load_model_from_hf(
-            self.hf_revision,
-            self.token_source,
-            &self.dtype,
-            &best_device(self.force_cpu)?,
-            !self.with_logging,
-            DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()),
-            None,
-            None,
-        )?;
-
-        let scheduler_method = SchedulerConfig::DefaultScheduler {
-            method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
-        };
-
-        let runner = MistralRsBuilder::new(pipeline, scheduler_method, false, None);
-
-        Ok(Model::new(runner.build().await))
+        let (pipeline, scheduler_config, add_model_config) = build_diffusion_pipeline(self).await?;
+        Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)
     }
 }

@@ -139,26 +139,27 @@ fn extract_vocab_merges_from_model(model_bytes: &[u8]) -> Result<(Vocab, Merges)
     Ok((vocab, merges))
 }
 
-fn bytes_to_unicode() -> AHashMap<u8, char> {
-    // Create the mapping from bytes to unicode characters
+pub(super) fn bytes_to_unicode() -> AHashMap<u8, char> {
+    // Create the mapping from bytes to unicode characters.
+    // Matches Python's openai/tiktoken bytes_to_unicode().
     let mut bs: Vec<u8> = vec![];
 
     // Add printable ASCII range
     bs.extend((b'!'..=b'~').collect::<Vec<_>>());
     // Add extended Latin range 1
-    bs.extend((0xA1..=0xAC).collect::<Vec<_>>());
+    bs.extend((0xA1u8..=0xACu8).collect::<Vec<_>>());
     // Add extended Latin range 2
-    bs.extend((0xAE..=0xFF).collect::<Vec<_>>());
+    bs.extend((0xAEu8..=0xFFu8).collect::<Vec<_>>());
 
-    let mut cs = bs.clone();
-    let mut n = 0;
+    // cs stores the unicode codepoints (may be > 255 for non-printable bytes)
+    let mut cs: Vec<u32> = bs.iter().map(|&b| b as u32).collect();
+    let mut n: u32 = 0;
 
-    // Add remaining bytes not in the initial ranges
+    // Add remaining bytes not in the initial ranges, mapping them to 256+
     for b in 0u8..=255 {
         if !bs.contains(&b) {
             bs.push(b);
-            #[allow(clippy::cast_possible_truncation)]
-            cs.push((256 + n) as u8);
+            cs.push(256 + n);
             n += 1;
         }
     }
@@ -166,13 +167,13 @@ fn bytes_to_unicode() -> AHashMap<u8, char> {
     // Create the mapping
     let mut byte_encoder = AHashMap::new();
     for (b, c) in bs.iter().zip(cs.iter()) {
-        byte_encoder.insert(*b, char::from_u32(*c as u32).unwrap());
+        byte_encoder.insert(*b, char::from_u32(*c).unwrap());
     }
 
     byte_encoder
 }
 
-fn token_bytes_to_string(bytes: &[u8]) -> String {
+pub(super) fn token_bytes_to_string(bytes: &[u8]) -> String {
     let byte_encoder = bytes_to_unicode();
     bytes.iter().map(|&b| byte_encoder[&b]).collect()
 }

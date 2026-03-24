@@ -1,4 +1,4 @@
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::{channel, Receiver};
 
 use mistralrs_core::{ChatCompletionChunkResponse, Response};
 use pyo3::{exceptions::PyValueError, pyclass, pymethods, PyRef, PyRefMut, PyResult};
@@ -24,7 +24,14 @@ impl ChatCompletionStreamer {
         if this.is_done {
             return None;
         }
-        match this.rx.blocking_recv() {
+        let py = this.py();
+        // Temporarily take ownership of `rx` so it can be moved into the
+        // `allow_threads` closure (`&mut` through `PyRefMut` is not `Ungil`).
+        let mut rx = std::mem::replace(&mut this.rx, channel(1).1);
+        let recv_result = py.allow_threads(|| rx.blocking_recv());
+        this.rx = rx;
+
+        match recv_result {
             Some(resp) => match resp {
                 Response::ModelError(msg, _) => Some(Err(PyValueError::new_err(msg.to_string()))),
                 Response::ValidationError(e) => Some(Err(PyValueError::new_err(e.to_string()))),

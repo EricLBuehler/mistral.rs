@@ -90,6 +90,30 @@ macro_rules! handle_pipeline_forward_error {
         match $fallible {
             Ok(v) => v,
             Err(e) => {
+                // Auto-retry on iOS Metal background GPU error: when the iOS app
+                // goes to background, Metal rejects command buffers. We detect this,
+                // reset cache, sleep, and let the engine loop retry. Sequences stay
+                // in the scheduler (still in Running state) and are re-scheduled.
+                #[cfg(feature = "metal")]
+                {
+                    let err_str = e.to_string();
+                    if err_str.contains("Insufficient Permission")
+                        || err_str.contains("BackgroundExecutionNotPermitted")
+                    {
+                        tracing::warn!(
+                            "Metal GPU background error detected (iOS app likely in background). \
+                             Pausing 1s before retry..."
+                        );
+                        {
+                            let p = get_mut_arcmutex!($pipeline);
+                            p.set_none_cache($seq_slice, true, true, false);
+                        }
+                        get_mut_arcmutex!($prefix_cacher).evict_all_caches().unwrap();
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        continue $label;
+                    }
+                }
+
                 let (tokenizer, pipeline_name) = {
                     let pipeline = get_mut_arcmutex!($pipeline);
                     let pipeline_name = pipeline.name();
@@ -120,6 +144,7 @@ macro_rules! handle_pipeline_forward_error {
                                 content: Some(res),
                                 role: "assistant".to_string(),
                                 tool_calls: None,
+                                reasoning_content: None,
                             },
                             logprobs: None,
                         };

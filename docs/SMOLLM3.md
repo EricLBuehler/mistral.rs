@@ -4,12 +4,12 @@ SmolLM3 is a 3B parameter long-context hybrid reasoning language model. It suppo
 
 **Default, easiest:**
 ```bash
-./mistralrs-server -i --isq 8 run -m HuggingFaceTB/SmolLM3-3B
+mistralrs run --isq 8 -m HuggingFaceTB/SmolLM3-3B
 ```
 
 **UQFF prequantized:**
 ```bash
-./mistralrs-server -i run -m EricB/SmolLM3-3B-UQFF -f smollm33b-q4k-0.uqff
+mistralrs run -m EricB/SmolLM3-3B-UQFF --from-uqff smollm33b-q4k-0.uqff
 ```
 
 > Note: tool calling support is fully implemented for the SmolLM3 models, including agentic web search.
@@ -20,10 +20,10 @@ SmolLM3 is a 3B parameter long-context hybrid reasoning language model. It suppo
 The SmolLM3 models are hybrid reasoning models which can be controlled at inference-time. **By default, reasoning is enabled for these models.** To dynamically control this, it is recommended to either add `/no_think` or `/think` to your prompt. Alternatively, you can specify the `enable_thinking` flag as detailed by the API-specific examples.
 
 ## HTTP API
-You can find a more detailed example demonstrating enabling/disabling thinking [here](../examples/server/smollm3.py).
+You can find a more detailed example demonstrating enabling/disabling thinking [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/smollm3.py).
 
-```
-./mistralrs-server --isq 8 --port 1234 plain -m HuggingFaceTB/SmolLM3-3B
+```bash
+mistralrs serve --isq 8 -p 1234 -m HuggingFaceTB/SmolLM3-3B
 ```
 
 ```py
@@ -52,8 +52,8 @@ while True:
     messages.append({"role": "assistant", "content": resp})
 ```
 
-## Python API
-You can find a more detailed example demonstrating enabling/disabling thinking [here](../examples/python/smollm3.py).
+## Python SDK
+You can find a more detailed example demonstrating enabling/disabling thinking [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/smollm3.py).
 
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
@@ -82,8 +82,8 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-## Rust API
-You can find a more detailed example demonstrating enabling/disabling thinking [here](../mistralrs/examples/smollm3/main.rs).
+## Rust SDK
+You can find a more detailed example demonstrating enabling/disabling thinking [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs).
 
 ```rust
 use anyhow::Result;

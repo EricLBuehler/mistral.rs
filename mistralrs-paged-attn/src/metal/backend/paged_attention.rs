@@ -18,6 +18,7 @@ struct PagedAttention {
 
     k_scale: Option<Tensor>,
     v_scale: Option<Tensor>,
+    sinks: Option<Tensor>,
 }
 
 impl candle_core::CustomOp1 for PagedAttention {
@@ -182,6 +183,20 @@ impl candle_core::CustomOp1 for PagedAttention {
             None
         };
 
+        let sinks_storage_and_offset = if let Some(sinks) = self.sinks.as_ref() {
+            let (s, s_l) = sinks.storage_and_layout();
+            let s = match &*s {
+                Storage::Metal(s) => s,
+                _ => candle_core::bail!("sinks must be a metal tensor"),
+            };
+            Some((
+                s.buffer().clone(),
+                s_l.start_offset() * s.dtype().size_in_bytes(),
+            ))
+        } else {
+            None
+        };
+
         let q_stride = q_l.stride()[0];
         let kv_block_stride = kc_l.stride()[0];
         let kv_head_stride = kc_l.stride()[1];
@@ -230,6 +245,9 @@ impl candle_core::CustomOp1 for PagedAttention {
                 q_stride as i32,
                 kv_block_stride as i32,
                 kv_head_stride as i32,
+                sinks_storage_and_offset
+                    .as_ref()
+                    .map(|(b, o)| (b as &_, *o)),
             )
             .map_err(candle_core::Error::wrap)?;
         } else {
@@ -285,6 +303,9 @@ impl candle_core::CustomOp1 for PagedAttention {
                 q_stride as i32,
                 kv_block_stride as i32,
                 kv_head_stride as i32,
+                sinks_storage_and_offset
+                    .as_ref()
+                    .map(|(b, o)| (b as &_, *o)),
             )
             .map_err(candle_core::Error::wrap)?;
         }
@@ -328,6 +349,7 @@ pub fn paged_attention(
     max_context_len: usize,
     softmax_scale: f32,
     softcapping: f32,
+    sinks: Option<&Tensor>,
 ) -> Result<Tensor> {
     let op = PagedAttention {
         softmax_scale,
@@ -340,6 +362,9 @@ pub fn paged_attention(
         alibi_slopes: alibi_slopes.cloned(),
         k_scale: k_scale.cloned(),
         v_scale: v_scale.cloned(),
+        sinks: sinks
+            .map(|s| s.to_dtype(candle_core::DType::F32))
+            .transpose()?,
     };
     q.apply_op1(op)
 }

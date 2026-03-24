@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::attention::SdpaParams;
-use crate::device_map::DeviceMapper;
+use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
 use crate::layers::{CausalMasker, MatMul, RmsNorm, Sdpa};
 use crate::layers_masker::PastKvLenCache;
@@ -31,7 +31,8 @@ impl Module for Mlp {
         let up_states = MatMul.qmethod_matmul(xs, &*self.ffn_up)?;
         let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
         let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
-        let up_states = (up_states * gate.silu()?)?;
+        let up_states =
+            crate::ops::mul_and_act(&gate, &up_states, crate::layers::Activation::Silu)?;
         MatMul.qmethod_matmul(&up_states, &*self.ffn_down)
     }
 }
@@ -337,6 +338,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     softcap: None,
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: Some(context_window),
+                    sinks: None,
                 },
                 dtype,
             })
@@ -385,6 +387,7 @@ impl ModelWeights {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+        let mask = DeviceMappedMask::new(mask, &**self.mapper.as_ref().unwrap())?;
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 xs = mapper.map(xs, i)?;
@@ -393,9 +396,7 @@ impl ModelWeights {
             let ys = xs.apply(&layer.attn_norm)?;
             let ys = layer.forward_attn(
                 &ys,
-                mask.as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                mask.as_ref().map(|m| m.get(xs.device())),
                 seqlen_offsets,
                 &mut cache[i],
                 metadata
@@ -408,7 +409,10 @@ impl ModelWeights {
             let ys = layer.mlp.forward(&ys)?;
             xs = (ys + residual)?
         }
-        let xs = xs.apply(&self.output_norm)?.i((.., seq_len - 1, ..))?;
+        let xs = xs
+            .apply(&self.output_norm)?
+            .i((.., seq_len - 1, ..))?
+            .contiguous()?;
         MatMul.qmatmul(&xs, &self.output)
     }
 }

@@ -11,19 +11,27 @@ use either::Either;
 use mistralrs_quant::{
     BitWiseOp, NonZeroOp, QuantMethod, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder,
 };
-use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
+use std::{
+    any::Any,
+    collections::HashMap,
+    fmt::Debug,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
     layers::{
         self, Activation, CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig,
         PhiRotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        PagedAttention,
+    },
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -139,7 +147,7 @@ fn hole_size(el_count: usize, prod_d: usize, s: &dyn std::fmt::Debug) -> Result<
     if prod_d == 0 {
         candle_core::bail!("cannot reshape tensor of {el_count} elements to {s:?}")
     }
-    if el_count % prod_d != 0 {
+    if !el_count.is_multiple_of(prod_d) {
         candle_core::bail!("cannot reshape tensor with {el_count} elements to {s:?}")
     }
     Ok(el_count / prod_d)
@@ -206,6 +214,7 @@ impl Attention {
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: cfg.sliding_window,
+                sinks: None,
             },
         })
     }
@@ -720,6 +729,8 @@ impl ImageEmbedding {
         input_ids: &Tensor,
         pixel_values: &Tensor,
         image_sizes: Option<Vec<(usize, usize)>>,
+        image_hashes: &[u64],
+        encoder_cache: &Mutex<EncoderCacheManager>,
     ) -> Result<Tensor> {
         let input_ids = input_ids.reshape(((), input_ids.dim(D::Minus1)?))?;
 
@@ -734,6 +745,7 @@ impl ImageEmbedding {
         // If some, use hd transform case and it contains num_img_toks
         let mut hd_transform = None;
         let mut image_set_tensor = None;
+        let n_hashes = image_hashes.len();
         if positions.dim(0)? > 0 {
             select = true;
             // input_ids[positions[:, 0], positions[:, 1]]
@@ -741,25 +753,71 @@ impl ImageEmbedding {
                 if let Some(image_sizes_ref) = image_sizes.as_ref() {
                     assert_eq!(pixel_values.dims().len(), 5);
                     let bs = pixel_values.dim(0)?;
-                    let img_features = self.get_image_features(&pixel_values.flatten(0, 1)?)?;
-                    let base_feat_dim = (img_features.dims()[1] as f32).sqrt() as usize;
-                    assert_eq!(base_feat_dim, 24);
 
-                    // bs x max_num_crops x (24x24) x C
-                    let img_features =
-                        img_features.reshape((bs, (), base_feat_dim.pow(2), self.image_dim_out))?;
+                    // Check cache for each image
+                    let mut per_image_cached: Vec<Option<Tensor>> = vec![None; bs];
+                    let mut miss_indices = Vec::new();
+                    if n_hashes > 0 && n_hashes == bs {
+                        let mut guard = encoder_cache.lock().expect("encoder cache lock poisoned");
+                        for (i, &hash) in image_hashes.iter().enumerate() {
+                            if let Some(cached) = guard.get(hash) {
+                                per_image_cached[i] = Some(cached[0].clone());
+                            } else {
+                                miss_indices.push(i);
+                            }
+                        }
+                    } else {
+                        miss_indices = (0..bs).collect();
+                    }
+
+                    // Only run CLIP on miss images
+                    let mut img_features_per_image: Vec<Option<Tensor>> = vec![None; bs];
+                    if !miss_indices.is_empty() {
+                        // We need CLIP features for all miss images
+                        let miss_pv: Vec<Tensor> = miss_indices
+                            .iter()
+                            .map(|&i| pixel_values.get(i))
+                            .collect::<Result<Vec<_>>>()?;
+                        let miss_pv = Tensor::stack(&miss_pv, 0)?;
+                        let miss_features = self.get_image_features(&miss_pv.flatten(0, 1)?)?;
+                        let base_feat_dim = (miss_features.dims()[1] as f32).sqrt() as usize;
+                        assert_eq!(base_feat_dim, 24);
+                        let miss_bs = miss_indices.len();
+                        let miss_features = miss_features.reshape((
+                            miss_bs,
+                            (),
+                            base_feat_dim.pow(2),
+                            self.image_dim_out,
+                        ))?;
+                        for (batch_idx, &orig_idx) in miss_indices.iter().enumerate() {
+                            img_features_per_image[orig_idx] = Some(miss_features.get(batch_idx)?);
+                        }
+                    }
+
                     let C = self.image_dim_out;
-                    let H = base_feat_dim;
+                    let H = 24usize; // base_feat_dim
 
-                    let mut output_imgs = Vec::new();
+                    let mut image_set_tensor_inner = Vec::new();
                     let mut output_len = Vec::new();
                     for (bs_, &(h, w)) in image_sizes_ref.iter().enumerate().take(bs) {
+                        // Check if we have a cache hit for this image
+                        if let Some(ref cached_tensor) = per_image_cached[bs_] {
+                            let cnt = cached_tensor.dim(1)?;
+                            output_len.push(cnt);
+                            image_set_tensor_inner.push(cached_tensor.clone());
+                            continue;
+                        }
+
+                        let img_feats = img_features_per_image[bs_]
+                            .as_ref()
+                            .expect("miss image should have features");
+
                         let h = h / 336;
                         let w = w / 336;
                         let B_ = h * w;
 
                         // 1 x (24x24) x 1024
-                        let global_img_feature = img_features.i((bs_, ..1))?;
+                        let global_img_feature = img_feats.i(..1)?;
 
                         // 1 x 12 x 12 x 4096
                         let glb_img = global_img_feature
@@ -780,9 +838,8 @@ impl ImageEmbedding {
                             Tensor::cat(&[glb_img, temp_glbl_gn], 2)?.reshape((1, (), 4 * C))?;
 
                         // (max_num_crops-1) x (12x12) x C
-                        let sub_img = img_features.i((bs_, 1..))?;
+                        let sub_img = img_feats.i(1..)?;
 
-                        // 16x574x1024
                         // Get rid of padding sub_img
                         let sub_img = sub_img.i(..B_)?;
 
@@ -809,61 +866,103 @@ impl ImageEmbedding {
 
                         // (1, num_img_tokens, 1024*4)
 
-                        match self.hd_transform_order.as_str() {
-                            "glb_sub" => {
-                                output_imgs.push(Tensor::cat(
-                                    &[
-                                        glb_img,
-                                        self.glb_gn
-                                            .as_ref()
-                                            .expect("Need `glb_gn` if `use_hd_transform`")
-                                            .clone(),
-                                        sub_img,
-                                    ],
-                                    1,
-                                )?);
-                            }
-                            "sub_glb" => {
-                                output_imgs.push(Tensor::cat(
-                                    &[
-                                        sub_img,
-                                        self.glb_gn
-                                            .as_ref()
-                                            .expect("Need `glb_gn` if `use_hd_transform`")
-                                            .clone(),
-                                        glb_img,
-                                    ],
-                                    1,
-                                )?);
-                            }
+                        let img = match self.hd_transform_order.as_str() {
+                            "glb_sub" => Tensor::cat(
+                                &[
+                                    glb_img,
+                                    self.glb_gn
+                                        .as_ref()
+                                        .expect("Need `glb_gn` if `use_hd_transform`")
+                                        .clone(),
+                                    sub_img,
+                                ],
+                                1,
+                            )?,
+                            "sub_glb" => Tensor::cat(
+                                &[
+                                    sub_img,
+                                    self.glb_gn
+                                        .as_ref()
+                                        .expect("Need `glb_gn` if `use_hd_transform`")
+                                        .clone(),
+                                    glb_img,
+                                ],
+                                1,
+                            )?,
                             other => {
                                 candle_core::bail!("Invalid hd_transform_order=`{other}`");
                             }
-                        }
+                        };
 
                         let temp_len = (h * w + 1) * 144 + 1 + (h + 1) * 12;
-                        assert_eq!(temp_len, output_imgs.last().unwrap().dims()[1]);
+                        assert_eq!(temp_len, img.dims()[1]);
                         output_len.push(temp_len);
-                    }
 
-                    hd_transform = Some(output_len);
-                    let mut image_set_tensor_inner = Vec::new();
-                    for img in output_imgs {
                         let layerout = self
                             .layers
                             .forward(&img.to_device(&target_dev)?.to_dtype(target_dtype)?)?;
+
+                        // Cache the projected features for this image
+                        if n_hashes > 0 && bs_ < n_hashes {
+                            let mut guard =
+                                encoder_cache.lock().expect("encoder cache lock poisoned");
+                            guard.insert(image_hashes[bs_], vec![layerout.clone()]);
+                        }
+
                         image_set_tensor_inner.push(layerout);
                     }
+
+                    hd_transform = Some(output_len);
                     image_set_tensor = Some(Either::Left(image_set_tensor_inner));
                 }
             } else if pixel_values.dims().len() == 4 {
-                let tt = self
-                    .get_image_features(pixel_values)?
-                    .to_device(&target_dev)?
-                    .to_dtype(target_dtype)?
-                    .reshape(((), self.image_dim_out))?;
-                let image_set_tensor_inner = self.layers.forward(&tt)?;
-                image_set_tensor = Some(Either::Right(image_set_tensor_inner));
+                let n_imgs = pixel_values.dim(0)?;
+                if n_hashes > 0 && n_hashes == n_imgs {
+                    // Per-image caching for non-HD path
+                    let mut per_image_features: Vec<Option<Tensor>> = vec![None; n_imgs];
+                    let mut miss_indices = Vec::new();
+                    {
+                        let mut guard = encoder_cache.lock().expect("encoder cache lock poisoned");
+                        for (i, &hash) in image_hashes.iter().enumerate() {
+                            if let Some(cached) = guard.get(hash) {
+                                per_image_features[i] = Some(cached[0].clone());
+                            } else {
+                                miss_indices.push(i);
+                            }
+                        }
+                    }
+                    if !miss_indices.is_empty() {
+                        for &idx in &miss_indices {
+                            let single_pv = pixel_values.get(idx)?.unsqueeze(0)?;
+                            let tt = self
+                                .get_image_features(&single_pv)?
+                                .to_device(&target_dev)?
+                                .to_dtype(target_dtype)?
+                                .reshape(((), self.image_dim_out))?;
+                            let feats = self.layers.forward(&tt)?;
+                            {
+                                let mut guard =
+                                    encoder_cache.lock().expect("encoder cache lock poisoned");
+                                guard.insert(image_hashes[idx], vec![feats.clone()]);
+                            }
+                            per_image_features[idx] = Some(feats);
+                        }
+                    }
+                    let all_feats: Vec<Tensor> = per_image_features
+                        .into_iter()
+                        .map(|f| f.expect("all images should be resolved"))
+                        .collect();
+                    let image_set_tensor_inner = Tensor::cat(&all_feats, 0)?;
+                    image_set_tensor = Some(Either::Right(image_set_tensor_inner));
+                } else {
+                    let tt = self
+                        .get_image_features(pixel_values)?
+                        .to_device(&target_dev)?
+                        .to_dtype(target_dtype)?
+                        .reshape(((), self.image_dim_out))?;
+                    let image_set_tensor_inner = self.layers.forward(&tt)?;
+                    image_set_tensor = Some(Either::Right(image_set_tensor_inner));
+                }
             } else if pixel_values.dims().len() == 3 {
                 let tt = pixel_values
                     .to_device(&target_dev)?
@@ -954,6 +1053,7 @@ pub struct Model {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: Option<usize>,
     cfg: ModelConfigMetadata,
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
 }
 
 impl Model {
@@ -1066,8 +1166,10 @@ impl Model {
                 sliding_window: cfg.sliding_window,
                 k_head_dim: cfg.head_dim(),
                 v_head_dim: cfg.head_dim(),
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
+            encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
     }
 
@@ -1080,12 +1182,18 @@ impl Model {
         position_ids: &[usize],
         context_lens: Vec<(usize, usize)>,
         image_sizes: Option<Vec<(usize, usize)>>,
+        image_hashes: &[u64],
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = if let Some(ref pixel_values) = pixel_values {
-            self.vision_embed_tokens
-                .forward(input_ids, pixel_values, image_sizes)?
+            self.vision_embed_tokens.forward(
+                input_ids,
+                pixel_values,
+                image_sizes,
+                image_hashes,
+                &self.encoder_cache,
+            )?
         } else {
             self.embed_tokens.forward(input_ids)?
         };
@@ -1106,15 +1214,13 @@ impl Model {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+        let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
 
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
+                attention_mask.as_ref().map(|m| m.get(xs.device())),
                 seqlen_offsets,
                 position_ids,
                 &mut cache[i],
@@ -1125,11 +1231,12 @@ impl Model {
             )?
         }
         let xs = xs.to_device(&self.device)?;
-        let mut xs = xs.apply(&self.norm)?;
+        let xs = xs.apply(&self.norm)?;
+        let mut xs = extract_logits(&xs, context_lens)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
+        MatMul.qmethod_matmul(&xs, &*self.lm_head)
     }
 }
 
@@ -1182,6 +1289,7 @@ impl IsqModel for Model {
 #[derive(Default)]
 pub(crate) struct Phi3VisionSpecificArgs {
     pub image_sizes: Option<Vec<(usize, usize)>>,
+    pub image_hashes: Vec<u64>,
 }
 
 impl VisionModel for Model {
@@ -1196,7 +1304,10 @@ impl VisionModel for Model {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let Phi3VisionSpecificArgs { image_sizes } = *model_specific_args
+        let Phi3VisionSpecificArgs {
+            image_sizes,
+            image_hashes,
+        } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Phi3VisionSpecificArgs`");
         self.forward(
@@ -1206,6 +1317,7 @@ impl VisionModel for Model {
             &position_ids,
             context_lens,
             image_sizes,
+            &image_hashes,
             metadata,
             flash_params,
         )
@@ -1227,6 +1339,19 @@ impl VisionModel for Model {
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
         Box::new(Phi3VisionSpecificArgs::default())
+    }
+    fn encoder_cache_counters(
+        &self,
+    ) -> Option<(
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        Some(
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache poisoned")
+                .counters(),
+        )
     }
 }
 

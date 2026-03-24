@@ -42,12 +42,18 @@ impl MoEExpertsBackend {
         loading_isq: bool,
         quantization_config: &Option<QuantizedConfig>,
     ) -> Self {
+        let has_immediate_isq = mistralrs_quant::get_immediate_isq().is_some();
         let use_fast = device.is_metal()
-            || (device.is_cuda() && (loading_isq || quantization_config.is_some()));
+            || (device.is_cuda()
+                && (loading_isq || quantization_config.is_some() || has_immediate_isq));
 
         if use_fast {
             Self::Fast
-        } else if quantization_config.is_none() && !loading_isq && device.is_cuda() {
+        } else if quantization_config.is_none()
+            && !loading_isq
+            && !has_immediate_isq
+            && device.is_cuda()
+        {
             Self::Fused
         } else {
             Self::Slow
@@ -234,19 +240,41 @@ impl MoEExperts {
     ) -> Result<FusedExpertsWeights> {
         let num_experts = cfg.num_experts;
 
-        // Load stacked gate_up_proj: [num_experts, hidden, inter*2]
-        let gate_up_w = experts_vb.get_with_hints(
-            (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
-            "gate_up_proj",
-            shard(2, comm.rank(), comm.world_size()),
-        )?;
+        // Stacked format has two conventions:
+        // Convention A: [num_experts, hidden, inter*2] (CUDA kernel format)
+        // Convention B (nn.Linear): [num_experts, inter*2, hidden]
+        // Try A first, fall back to B with transpose.
+        let gate_up_w = experts_vb
+            .get_with_hints(
+                (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
+                "gate_up_proj",
+                shard(2, comm.rank(), comm.world_size()),
+            )
+            .or_else(|_| {
+                experts_vb
+                    .get_with_hints(
+                        (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
+                        "gate_up_proj",
+                        shard(1, comm.rank(), comm.world_size()),
+                    )
+                    .and_then(|t| t.transpose(1, 2)?.contiguous())
+            })?;
 
-        // Load stacked down_proj: [num_experts, inter, hidden]
-        let down_w = experts_vb.get_with_hints(
-            (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
-            "down_proj",
-            shard(1, comm.rank(), comm.world_size()),
-        )?;
+        let down_w = experts_vb
+            .get_with_hints(
+                (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
+                "down_proj",
+                shard(1, comm.rank(), comm.world_size()),
+            )
+            .or_else(|_| {
+                experts_vb
+                    .get_with_hints(
+                        (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
+                        "down_proj",
+                        shard(2, comm.rank(), comm.world_size()),
+                    )
+                    .and_then(|t| t.transpose(1, 2)?.contiguous())
+            })?;
 
         let w_size_n = gate_up_w.dim(2)? / 2;
 
@@ -335,18 +363,13 @@ impl MoEExperts {
     /// * `xs` - Input tensor of shape [batch, seq_len, hidden_dim]
     /// * `topk_weights` - Top-k routing weights of shape [num_tokens, num_experts_per_tok]
     /// * `topk_ids` - Top-k expert indices of shape [num_tokens, num_experts_per_tok]
-    /// * `is_prefill` - Whether this is a prefill (prompt processing) or decode step
     ///
     /// # Returns
     /// Output tensor of shape [batch, seq_len, hidden_dim]
-    pub fn forward(
-        &self,
-        xs: &Tensor,
-        topk_weights: Tensor,
-        topk_ids: &Tensor,
-        is_prefill: bool,
-    ) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor, topk_weights: Tensor, topk_ids: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
+        // Prefill = processing multiple tokens; Decode = single token generation
+        let is_prefill = seq_len > 1;
 
         let mut ys = match &self.backend {
             MoEExpertsBackendImpl::Fused(weights) => {

@@ -24,8 +24,8 @@ See the following environment variables:
 
 Set the number of ranks using `MISTRALRS_MN_LOCAL_WORLD_SIZE`, e.g.,
 
-```
-MISTRALRS_MN_LOCAL_WORLD_SIZE=2 ./mistralrs-server --port 8000 run -m Qwen/Qwen3-30B-A3B-Instruct-2507
+```bash
+MISTRALRS_MN_LOCAL_WORLD_SIZE=2 mistralrs serve -p 8000 -m Qwen/Qwen3-30B-A3B-Instruct-2507
 ```
 
 where, if no `MISTRALRS_MN_LOCAL_WORLD_SIZE` env given, mistral.rs will split the model across all available devices.
@@ -34,12 +34,12 @@ where, if no `MISTRALRS_MN_LOCAL_WORLD_SIZE` env given, mistral.rs will split th
 
 ```
 # Head node:
-MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_HEAD_NUM_WORKERS=1 MISTRALRS_MN_HEAD_PORT=<PORT> cargo run --release --features cuda -- -i plain -m ...
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_HEAD_NUM_WORKERS=1 MISTRALRS_MN_HEAD_PORT=<PORT> mistralrs run -m ...
 
 # For the worker nodes:
-MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=0 MISTRALRS_WORKER_SERVER_ADDR=<HEAD ADDR>:<PORT> cargo run --release --features cuda -- -i plain -m ...
-MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=1 MISTRALRS_WORKER_SERVER_ADDR=<HEAD ADDR>:<PORT> cargo run --release --features cuda -- -i plain -m ...
-MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=2 MISTRALRS_WORKER_SERVER_ADDR=<HEAD ADDR>:<PORT> cargo run --release --features cuda -- -i plain -m ...
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=0 MISTRALRS_WORKER_SERVER_ADDR=<HEAD ADDR>:<PORT> mistralrs run -m ...
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=1 MISTRALRS_WORKER_SERVER_ADDR=<HEAD ADDR>:<PORT> mistralrs run -m ...
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=2 MISTRALRS_WORKER_SERVER_ADDR=<HEAD ADDR>:<PORT> mistralrs run -m ...
 ```
 
 Multi-node support in mistral.rs divides the nodes into two groups: a "head" node, and multiple "worker" nodes. Head node choice is arbitrary.

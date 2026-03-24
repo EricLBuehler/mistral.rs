@@ -5,21 +5,21 @@ The DeepSeek V2 is a mixture of expert (MoE) model featuring ["Multi-head Latent
 - Context length of **32k tokens** (Lite model), **128k tokens** (full model)
 - 64 routed experts (Lite model), 160 routed experts (full model)
 
-```
-./mistralrs-server --isq 4 -i plain -m deepseek-ai/DeepSeek-V2-Lite
+```bash
+mistralrs run --isq 4 -m deepseek-ai/DeepSeek-V2-Lite
 ```
 
 > [!NOTE]
 > This model supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
 
-```
-./mistralrs-server --isq 4 -i plain -m deepseek-ai/DeepSeek-V2-Lite --organization moqe
+```bash
+mistralrs run --isq 4 -m deepseek-ai/DeepSeek-V2-Lite --isq-organization moqe
 ```
 
 ## HTTP API
 
-```
-./mistralrs-server --isq 4 --port 1234 plain -m deepseek-ai/DeepSeek-V2-Lite
+```bash
+mistralrs serve --isq 4 -p 1234 -m deepseek-ai/DeepSeek-V2-Lite
 ```
 
 ```py
@@ -47,7 +47,7 @@ while True:
     messages.append({"role": "assistant", "content": resp})
 ```
 
-## Python API
+## Python SDK
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 
@@ -74,8 +74,8 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-## Rust API
-You can find this example [here](../mistralrs/examples/deepseekv2/main.rs).
+## Rust SDK
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/text_models/main.rs).
 
 ```rust
 use anyhow::Result;

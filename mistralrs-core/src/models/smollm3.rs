@@ -12,7 +12,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
     attention::SdpaParams,
-    device_map::DeviceMapper,
+    device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
     layers::{
         embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, Sdpa, SmolLm3RopeConfig,
@@ -258,6 +258,7 @@ impl CausalSelfAttention {
                 softcap: None,
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
                 sliding_window: None,
+                sinks: None,
             },
         })
     }
@@ -489,6 +490,7 @@ impl SmolLm3 {
                 sliding_window: None,
                 k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
                 v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,
         })
@@ -540,11 +542,13 @@ impl SmolLm3 {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+        let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
+            let mask_for_layer = mask.as_ref().map(|m| m.get(x.device()).clone());
             x = block.forward(
                 &x,
-                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                &mask_for_layer,
                 seqlen_offsets,
                 &mut cache[block_idx],
                 metadata
@@ -554,12 +558,12 @@ impl SmolLm3 {
             )?;
         }
         let x = x.to_device(&self.device)?;
-        let mut x = self.ln_f.forward(&x)?;
+        let x = self.ln_f.forward(&x)?;
+        let mut x = extract_logits(&x, context_lens)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
             x = x.to_dtype(t)?;
         }
-        let xs = MatMul.qmethod_matmul(&x, &*self.lm_head)?;
-        extract_logits(&xs, context_lens)
+        MatMul.qmethod_matmul(&x, &*self.lm_head)
     }
 
     pub fn residual_tensors_m(&self, uvb_m: UnVarBuilder) -> Vec<(String, Tensor)> {

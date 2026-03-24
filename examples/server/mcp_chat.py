@@ -10,7 +10,7 @@ This example shows how to:
 
 Usage:
 1. First, start the mistral.rs server with MCP config:
-   cargo run --release --bin mistralrs-server -- --port 1234 --mcp-config examples/mcp-simple-config.json plain -m Qwen/Qwen3-4B -a qwen3
+   mistralrs serve -p 1234 --mcp-config examples/mcp-simple-config.json -m Qwen/Qwen3-4B
 
 2. Then run this script:
    python examples/server/mcp_chat.py
@@ -36,11 +36,11 @@ def main():
     )
     print("The server should be started with MCP configuration like:")
     print(
-        "cargo run --release --bin mistralrs-server -- --port 1234 --mcp-config examples/mcp-simple-config.json plain -m Qwen/Qwen3-4B -a qwen3"
+        "mistralrs serve -p 1234 --mcp-config examples/mcp-simple-config.json -m Qwen/Qwen3-4B"
     )
     print("or for more advanced configuration:")
     print(
-        "cargo run --release --bin mistralrs-server -- --port 1234 --mcp-config examples/mcp-server-config.json plain -m Qwen/Qwen3-4B -a qwen3"
+        "mistralrs serve -p 1234 --mcp-config examples/mcp-server-config.json -m Qwen/Qwen3-4B"
     )
     print(
         "Note: Install filesystem server with: npx @modelcontextprotocol/server-filesystem . -y"
@@ -112,11 +112,11 @@ def main():
         print()
         print("Make sure the mistral.rs server is running with MCP configuration:")
         print(
-            "cargo run --release --bin mistralrs-server -- --port 1234 --mcp-config examples/mcp-simple-config.json plain -m Qwen/Qwen3-4B -a qwen3"
+            "mistralrs serve -p 1234 --mcp-config examples/mcp-simple-config.json -m Qwen/Qwen3-4B"
         )
         print("or for advanced configuration:")
         print(
-            "cargo run --release --bin mistralrs-server -- --port 1234 --mcp-config examples/mcp-server-config.json plain -m Qwen/Qwen3-4B -a qwen3"
+            "mistralrs serve -p 1234 --mcp-config examples/mcp-server-config.json -m Qwen/Qwen3-4B"
         )
         print()
         print("And that the MCP configuration file exists and is properly configured.")
