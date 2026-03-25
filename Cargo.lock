@@ -634,7 +634,6 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 [[package]]
 name = "candle-core"
 version = "0.9.2"
-source = "git+https://github.com/huggingface/candle.git?rev=c3bb5bf#c3bb5bfb90c9cb5e003a803e3d8941067f32d880"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -658,6 +657,7 @@ dependencies = [
  "rayon",
  "safetensors 0.7.0",
  "thiserror 2.0.18",
+ "tokenizers 0.22.2",
  "yoke 0.8.1",
  "zip 7.2.0",
 ]
@@ -665,7 +665,6 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.9.2"
-source = "git+https://github.com/huggingface/candle.git?rev=c3bb5bf#c3bb5bfb90c9cb5e003a803e3d8941067f32d880"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -676,7 +675,6 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.9.2"
-source = "git+https://github.com/huggingface/candle.git?rev=c3bb5bf#c3bb5bfb90c9cb5e003a803e3d8941067f32d880"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -689,7 +687,6 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.9.2"
-source = "git+https://github.com/huggingface/candle.git?rev=c3bb5bf#c3bb5bfb90c9cb5e003a803e3d8941067f32d880"
 dependencies = [
  "cudaforge",
 ]
@@ -697,7 +694,6 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.9.2"
-source = "git+https://github.com/huggingface/candle.git?rev=c3bb5bf#c3bb5bfb90c9cb5e003a803e3d8941067f32d880"
 dependencies = [
  "half",
  "objc2",
@@ -711,7 +707,6 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.9.2"
-source = "git+https://github.com/huggingface/candle.git?rev=c3bb5bf#c3bb5bfb90c9cb5e003a803e3d8941067f32d880"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -730,7 +725,6 @@ dependencies = [
 [[package]]
 name = "candle-ug"
 version = "0.9.2"
-source = "git+https://github.com/huggingface/candle.git?rev=c3bb5bf#c3bb5bfb90c9cb5e003a803e3d8941067f32d880"
 dependencies = [
  "ug",
  "ug-cuda",
@@ -3583,7 +3577,7 @@ dependencies = [
  "symphonia",
  "sysinfo",
  "thiserror 2.0.18",
- "tokenizers",
+ "tokenizers 0.21.4",
  "tokio",
  "tokio-rayon",
  "tokio-tungstenite",
@@ -4197,6 +4191,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "onig"
+version = "6.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "336b9c63443aceef14bea841b899035ae3abe89b7c486aaf4c5bd8aafedac3f0"
+dependencies = [
+ "bitflags 2.10.0",
+ "libc",
+ "once_cell",
+ "onig_sys",
+]
+
+[[package]]
+name = "onig_sys"
+version = "69.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7f86c6eef3d6df15f23bcfb6af487cbd2fed4e5581d58d5bf1f5f8b7f6727dc"
+dependencies = [
+ "cc",
+ "pkg-config",
+]
+
+[[package]]
 name = "openai-harmony"
 version = "0.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4373,6 +4389,12 @@ name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
+
+[[package]]
+name = "pkg-config"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
 name = "png"
@@ -6487,6 +6509,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokenizers"
+version = "0.22.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b238e22d44a15349529690fb07bd645cf58149a1b1e44d6cb5bd1641ff1a6223"
+dependencies = [
+ "ahash",
+ "aho-corasick",
+ "compact_str",
+ "dary_heap",
+ "derive_builder",
+ "esaxx-rs",
+ "getrandom 0.3.4",
+ "itertools",
+ "log",
+ "macro_rules_attribute",
+ "monostate",
+ "onig",
+ "paste",
+ "rand 0.9.2",
+ "rayon",
+ "rayon-cond",
+ "regex",
+ "regex-syntax",
+ "serde",
+ "serde_json",
+ "spm_precompiled",
+ "thiserror 2.0.18",
+ "unicode-normalization-alignments",
+ "unicode-segmentation",
+ "unicode_categories",
+]
+
+[[package]]
 name = "tokio"
 version = "1.49.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6604,7 +6659,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
- "tokenizers",
+ "tokenizers 0.21.4",
  "toktrie",
 ]
 

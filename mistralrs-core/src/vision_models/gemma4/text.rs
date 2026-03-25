@@ -398,7 +398,6 @@ impl Attention {
         kv_caches: &mut [KvCache],
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: Option<&FlashParams>,
-        noflash_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -551,55 +550,7 @@ impl Attention {
                 }
             },
             None => {
-                // Flash attention only supports head_dim <= 256; fall back for larger dims
-                if self.head_dim <= 256 {
-                    match flash_params {
-                        Some(fp) => Sdpa.run_attention(
-                            &q,
-                            &k,
-                            &v,
-                            mask.as_ref(),
-                            Some(fp),
-                            &self.sdpa_params,
-                        )?,
-                        None => Sdpa.run_attention_noflash(
-                            &q,
-                            &k,
-                            &v,
-                            mask.as_ref(),
-                            &self.sdpa_params,
-                        )?,
-                    }
-                } else {
-                    // head_dim > 256: flash attention unsupported.
-                    // Compute attention directly via MatMul to avoid cuBLASLt
-                    // batch_matmul overhead (which is ~8x slower for decode).
-                    let n_rep = self.sdpa_params.n_kv_groups;
-                    let (k, v) = if n_rep > 1 {
-                        let (b_k, nkv, s_k, hd) = k.dims4()?;
-                        (
-                            k.unsqueeze(2)?
-                                .expand((b_k, nkv, n_rep, s_k, hd))?
-                                .reshape((b_k, nkv * n_rep, s_k, hd))?,
-                            v.unsqueeze(2)?
-                                .expand((b_k, nkv, n_rep, s_k, hd))?
-                                .reshape((b_k, nkv * n_rep, s_k, hd))?,
-                        )
-                    } else {
-                        (k, v)
-                    };
-                    let scale = self.sdpa_params.softmax_scale;
-                    let mut att = MatMul.matmul_affine_mul(&q, &k.t()?, scale.into())?;
-                    if let Some(mask) = noflash_mask {
-                        att = att.broadcast_add(mask)?;
-                    }
-                    // Upcast to F32 for softmax (BF16 softmax is numerically
-                    // unstable for long sequences, matching HF's behavior)
-                    let att_dtype = att.dtype();
-                    let att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
-                        .to_dtype(att_dtype)?;
-                    MatMul.matmul(&att, &v)?
-                }
+                Sdpa.run_attention(&q, &k, &v, mask.as_ref(), flash_params, &self.sdpa_params)?
             }
         };
 
@@ -834,7 +785,6 @@ impl DecoderLayer {
         kv_caches: &mut [KvCache],
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: Option<&FlashParams>,
-        noflash_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let mut xs = xs.clone();
 
@@ -850,7 +800,6 @@ impl DecoderLayer {
                 kv_caches,
                 metadata,
                 flash_params,
-                noflash_mask,
             )?
             .apply(&self.post_attention_layernorm)?;
         xs = (attn_out + &residual)?;
@@ -1448,21 +1397,6 @@ impl TextModel {
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
 
-        // Build a real mask for head_dim>256 layers that can't use flash attention.
-        // During decode (seq_len==1) this is None since causal masking is a no-op.
-        let noflash_causal_mask = if xs.dim(1)? > 1 {
-            let mask_cache: &dyn PastKvLenCache = metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(cache as &dyn PastKvLenCache);
-            let causal_mask =
-                CausalMasker.make_causal_mask_as_attn_bias(input_ids, mask_cache, xs.dtype())?;
-            causal_mask
-        } else {
-            None
-        };
-        let noflash_causal_mask = DeviceMappedMask::new(noflash_causal_mask, &*self.mapper)?;
-
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             let per_layer_input = per_layer_inputs
@@ -1480,7 +1414,6 @@ impl TextModel {
                     .as_ref()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
                 Some(flash_params),
-                noflash_causal_mask.as_ref().map(|m| m.get(xs.device())),
             )?;
         }
         let xs = xs.to_device(&self.device)?;

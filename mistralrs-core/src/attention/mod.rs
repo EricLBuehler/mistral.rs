@@ -184,11 +184,9 @@ impl Sdpa {
                 && sdpa_params.softcap.is_none_or(|x| x == 1.0)
         });
         let valid_head_dims: &[usize] = if seq_len == 1 {
-            &[32, 64, 72, 80, 96, 128, 256]
+            &[32, 64, 72, 80, 96, 128, 256, 512]
         } else {
-            // Not sure why the full kernel doesn't like 256.
-            // [32, 64, 72, 80, 96, 128, 256]
-            &[32, 64, 72, 80, 96, 128]
+            &[32, 64, 72, 80, 96, 128, 256, 512]
         };
         if [q, k, v].into_iter().all(|x| x.device().is_metal())
             && all_head_dims_match
