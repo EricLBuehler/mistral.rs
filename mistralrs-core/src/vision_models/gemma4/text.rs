@@ -17,6 +17,7 @@ use crate::{
         ScaledEmbedding, Sdpa,
     },
     layers_masker::PastKvLenCache,
+    moe::{MoEExperts, MoEExpertsConfig},
     ops::TopKLastDimOp,
     paged_attention::{
         AttentionImplementation, ModelConfigLike, ModelConfigMetadata, PagedAttention,
@@ -231,204 +232,6 @@ impl Gemma4Router {
         let topk_weights = topk_probs.broadcast_div(&renorm)?;
 
         Ok((topk_weights, topk_indices))
-    }
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-//  MoE block
-// ────────────────────────────────────────────────────────────────────────────
-
-struct Gemma4MoeBlock {
-    /// [E, hidden, 2 * expert_inter]
-    gate_up_w: Tensor,
-    /// [E, expert_inter, hidden]
-    down_w: Tensor,
-    per_expert_scale: Tensor,
-    num_experts: usize,
-    expert_intermediate_size: usize,
-    #[allow(dead_code)]
-    hidden_size: usize,
-    activation: crate::layers::Activation,
-}
-
-impl Gemma4MoeBlock {
-    fn new(
-        num_experts: usize,
-        hidden_size: usize,
-        expert_intermediate_size: usize,
-        activation: crate::layers::Activation,
-        vb: ShardedVarBuilder,
-    ) -> Result<Self> {
-        // Weights are raw Parameters: [E, hidden, inter]
-        let gate_proj = vb.get(
-            (num_experts, hidden_size, expert_intermediate_size),
-            "gate_proj",
-        )?;
-        let up_proj = vb.get(
-            (num_experts, hidden_size, expert_intermediate_size),
-            "up_proj",
-        )?;
-        let down_proj = vb.get(
-            (num_experts, expert_intermediate_size, hidden_size),
-            "down_proj",
-        )?;
-        let per_expert_scale = vb.get(num_experts, "per_expert_scale")?;
-
-        // Concatenate gate and up: [E, hidden, 2*inter]
-        let gate_up_w = Tensor::cat(&[&gate_proj, &up_proj], 2)?;
-
-        Ok(Self {
-            gate_up_w,
-            down_w: down_proj,
-            per_expert_scale,
-            num_experts,
-            expert_intermediate_size,
-            hidden_size,
-            activation,
-        })
-    }
-
-    fn forward(&self, xs: &Tensor, topk_weights: &Tensor, topk_ids: &Tensor) -> Result<Tensor> {
-        // Fold per_expert_scale into routing weights
-        let scales = self
-            .per_expert_scale
-            .to_dtype(DType::F32)?
-            .index_select(&topk_ids.flatten_all()?.to_dtype(DType::U32)?, 0)?
-            .reshape(topk_ids.shape())?;
-        let topk_weights = (topk_weights.to_dtype(DType::F32)? * scales)?;
-
-        // Try fused CUDA path, fall back to loop-based
-        #[cfg(feature = "cuda")]
-        {
-            if xs.device().is_cuda() {
-                return self.forward_fused(xs, &topk_weights, topk_ids);
-            }
-        }
-        self.forward_slow(xs, &topk_weights, topk_ids)
-    }
-
-    #[cfg(feature = "cuda")]
-    fn forward_fused(
-        &self,
-        xs: &Tensor,
-        topk_weights: &Tensor,
-        topk_ids: &Tensor,
-    ) -> Result<Tensor> {
-        use crate::cuda::moe;
-        use crate::ops::ArgSortOp;
-
-        let (b_size, seq_len, hidden_dim) = xs.dims3()?;
-        let xs_flat = xs.reshape(((), hidden_dim))?;
-        let num_tokens = xs_flat.dim(0)?;
-        let top_k = topk_ids.dim(D::Minus1)?;
-        let is_prefill = seq_len > 1;
-
-        // Flatten to 2D: [num_tokens, top_k] for the MoE GEMM kernel
-        let topk_ids = topk_ids.reshape((num_tokens, top_k))?;
-        let topk_weights = topk_weights.reshape((num_tokens, top_k))?;
-
-        let (expert_ids, sorted_token_ids) = if is_prefill {
-            topk_ids.flatten_all()?.sort(true)?
-        } else {
-            topk_ids.flatten_all()?.sort_last_dim(true)?
-        };
-
-        // First GEMM: gate_up [E, hidden, 2*inter] (stacked/transposed format)
-        let gate_up = moe::moe_gemm_transposed(
-            &xs_flat,
-            &self.gate_up_w,
-            &None,
-            &sorted_token_ids,
-            &expert_ids,
-            top_k,
-            is_prefill,
-        )?;
-
-        let gate = gate_up
-            .narrow(D::Minus1, 0, self.expert_intermediate_size)?
-            .contiguous()?;
-        let up = gate_up
-            .narrow(
-                D::Minus1,
-                self.expert_intermediate_size,
-                self.expert_intermediate_size,
-            )?
-            .contiguous()?;
-
-        let down_inputs =
-            (up * gate.apply(&self.activation)?)?.reshape(((), self.expert_intermediate_size))?;
-
-        // Second GEMM: down [E, inter, hidden] with weight aggregation
-        let ys = moe::moe_gemm_transposed(
-            &down_inputs,
-            &self.down_w,
-            &Some(topk_weights.clone()),
-            &sorted_token_ids,
-            &expert_ids,
-            top_k,
-            is_prefill,
-        )?;
-
-        ys.reshape((num_tokens, (), hidden_dim))?
-            .sum(D::Minus2)?
-            .reshape((b_size, seq_len, hidden_dim))
-    }
-
-    fn forward_slow(
-        &self,
-        xs: &Tensor,
-        topk_weights: &Tensor,
-        topk_ids: &Tensor,
-    ) -> Result<Tensor> {
-        let (b_size, seq_len, hidden_dim) = xs.dims3()?;
-        let xs_flat = xs.reshape(((), hidden_dim))?;
-        let num_tokens = xs_flat.dim(0)?;
-        let top_k = topk_ids.dim(D::Minus1)?;
-
-        // Flatten to 2D: [num_tokens, top_k]
-        let topk_weights = topk_weights.reshape((num_tokens, top_k))?;
-        let topk_ids = topk_ids.reshape((num_tokens, top_k))?;
-
-        let routing_weights = topk_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
-        let expert_ids = topk_ids.to_vec2::<u32>()?;
-
-        let mut top_x: Vec<Vec<u32>> = vec![vec![]; self.num_experts];
-        let mut selected_weights: Vec<Vec<f32>> = vec![vec![]; self.num_experts];
-
-        for (row, (rw, eids)) in routing_weights.iter().zip(expert_ids.iter()).enumerate() {
-            for (&w, &eid) in rw.iter().zip(eids.iter()) {
-                top_x[eid as usize].push(row as u32);
-                selected_weights[eid as usize].push(w);
-            }
-        }
-
-        let mut ys = xs_flat.zeros_like()?;
-        for e in 0..self.num_experts {
-            if top_x[e].is_empty() {
-                continue;
-            }
-            let indices = Tensor::new(top_x[e].as_slice(), xs.device())?;
-            let weights = Tensor::new(selected_weights[e].as_slice(), xs.device())?
-                .reshape(((), 1))?
-                .to_dtype(xs.dtype())?;
-            let tokens = xs_flat.index_select(&indices, 0)?;
-
-            let gate_w = self
-                .gate_up_w
-                .i(e)?
-                .narrow(1, 0, self.expert_intermediate_size)?;
-            let up_w = self.gate_up_w.i(e)?.narrow(
-                1,
-                self.expert_intermediate_size,
-                self.expert_intermediate_size,
-            )?;
-            let gate = tokens.matmul(&gate_w)?;
-            let up = tokens.matmul(&up_w)?;
-            let out = (gate.apply(&self.activation)? * up)?.matmul(&self.down_w.i(e)?)?;
-            let out = out.broadcast_mul(&weights)?;
-            ys = ys.index_add(&indices, &out, 0)?;
-        }
-        Ok(ys.reshape((b_size, seq_len, hidden_dim))?)
     }
 }
 
@@ -829,7 +632,8 @@ struct DecoderLayer {
     pre_feedforward_layernorm: GemmaRmsNorm,
     post_feedforward_layernorm: GemmaRmsNorm,
     // MoE
-    moe_block: Option<Gemma4MoeBlock>,
+    moe_block: Option<MoEExperts>,
+    per_expert_scale: Option<Tensor>,
     router: Option<Gemma4Router>,
     pre_feedforward_layernorm_2: Option<GemmaRmsNorm>,
     post_feedforward_layernorm_1: Option<GemmaRmsNorm>,
@@ -908,6 +712,7 @@ impl DecoderLayer {
         // MoE components
         let (
             moe_block,
+            per_expert_scale,
             router,
             pre_feedforward_layernorm_2,
             post_feedforward_layernorm_1,
@@ -919,13 +724,22 @@ impl DecoderLayer {
                 .expert_intermediate_size
                 .unwrap_or(cfg.intermediate_size);
 
-            let moe = Gemma4MoeBlock::new(
+            let moe_vb = mapper.set_device(layer_idx, vb.pp("moe"), false);
+            let moe_cfg = MoEExpertsConfig {
                 num_experts,
-                cfg.hidden_size,
-                expert_inter,
+                num_experts_per_tok: top_k,
+                hidden_size: cfg.hidden_size,
+                moe_intermediate_size: expert_inter,
+            };
+            let moe = MoEExperts::new_direct(
+                &moe_cfg,
+                moe_vb.clone(),
+                comm,
+                loading_isq,
+                &cfg.quantization_config,
                 cfg.hidden_activation,
-                mapper.set_device(layer_idx, vb.pp("moe"), false),
             )?;
+            let scale = moe_vb.get(num_experts, "per_expert_scale")?;
             let rtr = Gemma4Router::new(
                 cfg.hidden_size,
                 num_experts,
@@ -949,13 +763,14 @@ impl DecoderLayer {
             )?;
             (
                 Some(moe),
+                Some(scale),
                 Some(rtr),
                 Some(pre_ff_2),
                 Some(post_ff_1),
                 Some(post_ff_2),
             )
         } else {
-            (None, None, None, None, None)
+            (None, None, None, None, None, None)
         };
 
         // PLE per-layer components
@@ -994,6 +809,7 @@ impl DecoderLayer {
             pre_feedforward_layernorm,
             post_feedforward_layernorm,
             moe_block,
+            per_expert_scale,
             router,
             pre_feedforward_layernorm_2,
             post_feedforward_layernorm_1,
@@ -1042,7 +858,9 @@ impl DecoderLayer {
         // Feedforward
         let residual = xs.clone();
 
-        if let (Some(ref moe), Some(ref router)) = (&self.moe_block, &self.router) {
+        if let (Some(ref moe), Some(ref per_expert_scale), Some(ref router)) =
+            (&self.moe_block, &self.per_expert_scale, &self.router)
+        {
             // MoE path: parallel MLP + MoE with separate norms
             let post_ff_1 = self
                 .post_feedforward_layernorm_1
@@ -1065,8 +883,16 @@ impl DecoderLayer {
 
             // Branch 2: MoE with pre_feedforward_layernorm_2 → post_feedforward_layernorm_2
             let (topk_weights, topk_ids) = router.forward(&xs)?;
+
+            // Fold per_expert_scale into routing weights
+            let scales = per_expert_scale
+                .to_dtype(DType::F32)?
+                .index_select(&topk_ids.flatten_all()?.to_dtype(DType::U32)?, 0)?
+                .reshape(topk_ids.shape())?;
+            let topk_weights = (topk_weights.to_dtype(DType::F32)? * scales)?;
+
             let moe_input = xs.apply(pre_ff_2)?;
-            let moe_result = moe.forward(&moe_input, &topk_weights, &topk_ids)?;
+            let moe_result = moe.forward(&moe_input, topk_weights, &topk_ids)?;
             let moe_normed = moe_result.apply(post_ff_2)?;
 
             // Combine branches, then apply post_feedforward_layernorm
@@ -1700,6 +1526,14 @@ impl IsqModel for TextModel {
                     .map(|m| (m, Some(i)))
                     .collect::<Vec<_>>(),
             );
+            if let Some(ref mut moe) = layer.moe_block {
+                tensors.extend(
+                    moe.get_isq_layers()
+                        .into_iter()
+                        .map(|m| (m, Some(i)))
+                        .collect::<Vec<_>>(),
+                );
+            }
             if let Some(ref mut gate) = layer.per_layer_input_gate {
                 tensors.push((gate, Some(i)));
             }
@@ -1762,12 +1596,11 @@ impl IsqModel for TextModel {
                 uvb_l.add_tensor("layer_scalar", scalar.clone());
             }
 
-            // MoE weights are not quantizable, store as residual
-            if let Some(ref moe) = layer.moe_block {
-                let uvb_moe = uvb_l.pp("moe");
-                uvb_moe.add_tensor("gate_up_w", moe.gate_up_w.clone());
-                uvb_moe.add_tensor("down_w", moe.down_w.clone());
-                uvb_moe.add_tensor("per_expert_scale", moe.per_expert_scale.clone());
+            // per_expert_scale is not quantizable, store as residual
+            if let Some(ref scale) = layer.per_expert_scale {
+                uvb_l
+                    .pp("moe")
+                    .add_tensor("per_expert_scale", scale.clone());
             }
             if let Some(ref router) = layer.router {
                 let uvb_router = uvb_l.pp("router");

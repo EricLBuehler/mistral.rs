@@ -6,10 +6,10 @@
 //! - Handles backend selection (fused/fast/slow)
 //! - Manages tensor parallelism with all-reduce
 
-use candle_core::{DType, Device, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use mistralrs_quant::{
-    FusedExperts, MatMul, PackedExperts, QuantMethod, QuantizedConfig, ShardedVarBuilder,
-    SumAllReduce,
+    FusedExperts, MatMul, PackedExperts, QuantMethod, QuantMethodConfig, QuantizedConfig,
+    ShardedVarBuilder, SumAllReduce, UnquantLinear,
 };
 use std::sync::Arc;
 
@@ -185,6 +185,96 @@ impl MoEExperts {
         })
     }
 
+    /// Create MoEExperts from a VarBuilder already at the experts level.
+    ///
+    /// Unlike `new` which does `vb.pp("experts")` internally, this takes the VB
+    /// already pointing at the experts-level path. Use this when the model's weight
+    /// structure doesn't have an "experts" sublevel (e.g., Gemma 4 uses `moe.*` directly).
+    ///
+    /// Supports three weight formats:
+    /// - Combined stacked: `gate_up_proj` [E, hidden, 2*inter]
+    /// - Separate stacked: `gate_proj` [E, hidden, inter] + `up_proj` [E, hidden, inter]
+    /// - Per-expert: `{i}/gate_proj/weight` [inter, hidden]
+    pub fn new_direct(
+        cfg: &MoEExpertsConfig,
+        experts_vb: ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+        loading_isq: bool,
+        quantization_config: &Option<QuantizedConfig>,
+        act: Activation,
+    ) -> Result<Self> {
+        let layer_device = experts_vb.device().clone();
+        let backend = MoEExpertsBackend::select(&layer_device, loading_isq, quantization_config);
+
+        let is_stacked_combined = experts_vb.contains_tensor("gate_up_proj");
+        let is_stacked_separate = !is_stacked_combined && experts_vb.contains_tensor("gate_proj");
+
+        let backend_impl = match backend {
+            MoEExpertsBackend::Fused => {
+                if is_stacked_combined {
+                    MoEExpertsBackendImpl::Fused(Self::load_fused_stacked(
+                        cfg,
+                        experts_vb,
+                        comm,
+                    )?)
+                } else if is_stacked_separate {
+                    MoEExpertsBackendImpl::Fused(Self::load_fused_separate_stacked(
+                        cfg,
+                        experts_vb,
+                        comm,
+                    )?)
+                } else {
+                    MoEExpertsBackendImpl::Fused(Self::load_fused_standard(
+                        cfg,
+                        experts_vb,
+                        comm,
+                    )?)
+                }
+            }
+            MoEExpertsBackend::Fast => {
+                if is_stacked_separate {
+                    MoEExpertsBackendImpl::Fast(Self::load_fast_separate_stacked(
+                        cfg,
+                        experts_vb,
+                    )?)
+                } else {
+                    // For combined stacked or per-expert, FusedExperts auto-detects.
+                    // We must construct a parent VB that FusedExperts can use
+                    // (it does pp("experts") internally). This only works if the
+                    // experts_vb was created from a parent with pp("experts").
+                    // For direct use, prefer the separate stacked format detection above.
+                    candle_core::bail!(
+                        "new_direct Fast backend requires separate stacked format \
+                         (gate_proj + up_proj) or use new() with standard VB paths"
+                    )
+                }
+            }
+            MoEExpertsBackend::Slow => {
+                if is_stacked_separate {
+                    MoEExpertsBackendImpl::Slow(Self::load_slow_from_stacked(
+                        cfg,
+                        experts_vb,
+                    )?)
+                } else {
+                    MoEExpertsBackendImpl::Slow(Self::load_slow(
+                        cfg,
+                        experts_vb,
+                        comm,
+                        quantization_config,
+                    )?)
+                }
+            }
+        };
+
+        Ok(Self {
+            backend: backend_impl,
+            act,
+            num_experts_per_tok: cfg.num_experts_per_tok,
+            all_reduce: SumAllReduce::new(comm),
+            world_size: comm.world_size(),
+        })
+    }
+
     /// Load fused weights in standard per-expert format
     fn load_fused_standard(
         cfg: &MoEExpertsConfig,
@@ -283,6 +373,210 @@ impl MoEExperts {
             down_w,
             w_size_n,
             stacked_format: true,
+        })
+    }
+
+    /// Load fused weights from separate stacked gate_proj + up_proj tensors.
+    ///
+    /// Gemma 4 format: separate `gate_proj` [E, hidden, inter] and `up_proj` [E, hidden, inter]
+    /// instead of a combined `gate_up_proj`.
+    fn load_fused_separate_stacked(
+        cfg: &MoEExpertsConfig,
+        experts_vb: ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<FusedExpertsWeights> {
+        let num_experts = cfg.num_experts;
+
+        // gate_proj: [E, hidden, inter] (Convention A) or [E, inter, hidden] (Convention B)
+        let gate_proj = experts_vb
+            .get_with_hints(
+                (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
+                "gate_proj",
+                shard(2, comm.rank(), comm.world_size()),
+            )
+            .or_else(|_| {
+                experts_vb
+                    .get_with_hints(
+                        (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
+                        "gate_proj",
+                        shard(1, comm.rank(), comm.world_size()),
+                    )
+                    .and_then(|t| t.transpose(1, 2)?.contiguous())
+            })?;
+
+        let up_proj = experts_vb
+            .get_with_hints(
+                (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
+                "up_proj",
+                shard(2, comm.rank(), comm.world_size()),
+            )
+            .or_else(|_| {
+                experts_vb
+                    .get_with_hints(
+                        (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
+                        "up_proj",
+                        shard(1, comm.rank(), comm.world_size()),
+                    )
+                    .and_then(|t| t.transpose(1, 2)?.contiguous())
+            })?;
+
+        // Concatenate gate + up on last dim: [E, hidden, 2*inter]
+        let gate_up_w = Tensor::cat(&[&gate_proj, &up_proj], 2)?;
+
+        let down_w = experts_vb
+            .get_with_hints(
+                (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
+                "down_proj",
+                shard(1, comm.rank(), comm.world_size()),
+            )
+            .or_else(|_| {
+                experts_vb
+                    .get_with_hints(
+                        (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
+                        "down_proj",
+                        shard(2, comm.rank(), comm.world_size()),
+                    )
+                    .and_then(|t| t.transpose(1, 2)?.contiguous())
+            })?;
+
+        let w_size_n = gate_up_w.dim(2)? / 2;
+
+        Ok(FusedExpertsWeights {
+            gate_up_w,
+            down_w,
+            w_size_n,
+            stacked_format: true,
+        })
+    }
+
+    /// Load fast (gather-based) weights from separate stacked tensors.
+    ///
+    /// Creates UnquantLinear wrappers for each projection, transposing from
+    /// [E, hidden, inter] to [E, inter, hidden] (nn.Linear format).
+    fn load_fast_separate_stacked(
+        cfg: &MoEExpertsConfig,
+        experts_vb: ShardedVarBuilder,
+    ) -> Result<FastExpertsWeights> {
+        let num_experts = cfg.num_experts;
+
+        // Load and transpose to [E, inter, hidden] (nn.Linear format for gather_forward)
+        let gate_proj = experts_vb
+            .get(
+                (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
+                "gate_proj",
+            )
+            .or_else(|_| {
+                experts_vb.get(
+                    (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
+                    "gate_proj",
+                )
+            })?;
+        let gate_proj = if gate_proj.dim(1)? == cfg.hidden_size {
+            gate_proj.transpose(1, 2)?.contiguous()?
+        } else {
+            gate_proj
+        };
+
+        let up_proj = experts_vb
+            .get(
+                (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
+                "up_proj",
+            )
+            .or_else(|_| {
+                experts_vb.get(
+                    (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
+                    "up_proj",
+                )
+            })?;
+        let up_proj = if up_proj.dim(1)? == cfg.hidden_size {
+            up_proj.transpose(1, 2)?.contiguous()?
+        } else {
+            up_proj
+        };
+
+        let down_proj = experts_vb
+            .get(
+                (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
+                "down_proj",
+            )
+            .or_else(|_| {
+                experts_vb.get(
+                    (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
+                    "down_proj",
+                )
+            })?;
+        let down_proj = if down_proj.dim(1)? == cfg.moe_intermediate_size {
+            down_proj.transpose(1, 2)?.contiguous()?
+        } else {
+            down_proj
+        };
+
+        let fused_gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(candle_nn::Linear::new(gate_proj, None)),
+        )?);
+        let fused_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(candle_nn::Linear::new(up_proj, None)),
+        )?);
+        let fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(candle_nn::Linear::new(down_proj, None)),
+        )?);
+
+        Ok(FastExpertsWeights {
+            fused_gate_proj,
+            fused_up_proj,
+            fused_down_proj,
+        })
+    }
+
+    /// Load slow (loop-based) weights from stacked tensors by slicing per-expert.
+    fn load_slow_from_stacked(
+        cfg: &MoEExpertsConfig,
+        experts_vb: ShardedVarBuilder,
+    ) -> Result<SlowExpertsWeights> {
+        let num_experts = cfg.num_experts;
+
+        // Load stacked tensors
+        let gate_proj_stacked = experts_vb.get(
+            (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
+            "gate_proj",
+        )?;
+        let up_proj_stacked = experts_vb.get(
+            (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
+            "up_proj",
+        )?;
+        let down_proj_stacked = experts_vb.get(
+            (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
+            "down_proj",
+        )?;
+
+        // Slice per-expert and wrap in UnquantLinear
+        // Transpose to [inter, hidden] / [hidden, inter] (nn.Linear format)
+        let mut gate_proj = Vec::with_capacity(num_experts);
+        let mut up_proj = Vec::with_capacity(num_experts);
+        let mut down_proj = Vec::with_capacity(num_experts);
+
+        for i in 0..num_experts {
+            let g = gate_proj_stacked.i(i)?.transpose(0, 1)?.contiguous()?;
+            let u = up_proj_stacked.i(i)?.transpose(0, 1)?.contiguous()?;
+            let d = down_proj_stacked.i(i)?.transpose(0, 1)?.contiguous()?;
+
+            gate_proj.push(Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(candle_nn::Linear::new(g, None)),
+            )?) as Arc<dyn QuantMethod>);
+            up_proj.push(Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(candle_nn::Linear::new(u, None)),
+            )?) as Arc<dyn QuantMethod>);
+            down_proj.push(Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(candle_nn::Linear::new(d, None)),
+            )?) as Arc<dyn QuantMethod>);
+        }
+
+        Ok(SlowExpertsWeights {
+            experts: PackedExperts {
+                gate_proj,
+                up_proj,
+                down_proj,
+            },
         })
     }
 
