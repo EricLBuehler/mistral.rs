@@ -11,36 +11,179 @@ use candle_nn::{Conv1d, Conv2d, Conv2dConfig, LayerNorm, LayerNormConfig, Module
 use mistralrs_quant::{Convolution, QuantMethod, ShardedVarBuilder};
 use std::sync::Arc;
 
-use crate::{
-    layers::{conv1d_no_bias, conv2d_no_bias, layer_norm, RmsNorm},
-    vision_models::gemma3n::{
-        audio::Gemma3nAudioRelativePositionEmbedding, config::Gemma3nAudioConfig,
-    },
-};
+use crate::layers::{conv1d_no_bias, conv2d_no_bias, layer_norm, RmsNorm};
 
 use super::config::Gemma4AudioConfig;
 
-fn to_gemma3n_audio_config(cfg: &Gemma4AudioConfig) -> Gemma3nAudioConfig {
-    Gemma3nAudioConfig {
-        input_feat_size: cfg.input_feat_size,
-        hidden_size: cfg.hidden_size,
-        conf_attention_chunk_size: cfg.conf_attention_chunk_size,
-        conf_attention_context_left: cfg.conf_attention_context_left,
-        conf_attention_context_right: cfg.conf_attention_context_right,
-        conf_attention_invalid_logits_value: cfg.conf_attention_invalid_logits_value,
-        conf_attention_logit_cap: cfg.conf_attention_logit_cap,
-        conf_num_attention_heads: cfg.conf_num_attention_heads,
-        conf_num_hidden_layers: cfg.conf_num_hidden_layers,
-        conf_conv_kernel_size: cfg.conf_conv_kernel_size,
-        conf_reduction_factor: cfg.conf_reduction_factor,
-        conf_residual_weight: cfg.conf_residual_weight,
-        sscp_conv_channel_size: cfg.sscp_conv_channel_size.clone(),
-        sscp_conv_kernel_size: cfg.sscp_conv_kernel_size.clone(),
-        sscp_conv_stride_size: cfg.sscp_conv_stride_size.clone(),
-        vocab_size: cfg.vocab_size,
-        sscp_conv_group_norm_eps: cfg.sscp_conv_group_norm_eps,
-        rms_norm_eps: cfg.rms_norm_eps,
-        vocab_offset: cfg.vocab_offset,
+pub struct Gemma4AudioRelativePositionEmbedding {
+    num_heads: usize,
+    head_dim: usize,
+    pub(crate) pos_proj: Arc<dyn QuantMethod>,
+    inv_timescales: Tensor,
+    pos_indices: Tensor,
+}
+
+impl Gemma4AudioRelativePositionEmbedding {
+    fn new(cfg: &Gemma4AudioConfig, vb: ShardedVarBuilder) -> Result<Self> {
+        let num_heads = cfg.conf_num_attention_heads;
+        let channels = cfg.hidden_size;
+        let head_dim = channels / num_heads;
+        let max_backward = cfg.conf_attention_context_left.saturating_sub(1);
+        let max_forward = cfg.conf_attention_context_right;
+
+        let pos_proj = mistralrs_quant::linear_no_bias(
+            channels,
+            num_heads * head_dim,
+            &None,
+            vb.pp("pos_proj"),
+        )?;
+
+        let inv_timescales = Tensor::ones((1, 1, channels / 2), DType::F32, vb.device())?;
+        let pos_values = (-(max_forward as i64)..=max_backward as i64)
+            .rev()
+            .collect::<Vec<_>>();
+        let pos_indices =
+            Tensor::from_vec(pos_values, (1, max_backward + max_forward + 1), vb.device())?;
+
+        Ok(Self {
+            num_heads,
+            head_dim,
+            pos_proj,
+            inv_timescales,
+            pos_indices,
+        })
+    }
+
+    fn get_timing_signal_1d_pos(&self, position: &Tensor, dtype: DType) -> Result<Tensor> {
+        let position = position.to_dtype(DType::F32)?.unsqueeze(D::Minus1)?;
+        let inv_timescales = self.inv_timescales.to_device(position.device())?;
+        let scaled_time = position.broadcast_mul(&inv_timescales)?;
+        let sin_emb = scaled_time.sin()?;
+        let cos_emb = scaled_time.cos()?;
+        Tensor::cat(&[sin_emb, cos_emb], D::Minus1)?.to_dtype(dtype)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn relative_shift(
+        &self,
+        term_bd_before_shift: &Tensor,
+        batch_size: usize,
+        num_heads: usize,
+        num_query_blocks: usize,
+        query_block_size: usize,
+        key_context_size: usize,
+        max_span_plus_1: usize,
+    ) -> Result<Tensor> {
+        let pad_amount_last_dim = (key_context_size + 1) - max_span_plus_1;
+        let term_bd_padded =
+            term_bd_before_shift.pad_with_zeros(D::Minus1, 0, pad_amount_last_dim)?;
+        let term_bd_reshaped = term_bd_padded.reshape((
+            batch_size,
+            num_heads,
+            num_query_blocks,
+            query_block_size * (key_context_size + 1),
+        ))?;
+        let term_bd_sliced =
+            term_bd_reshaped.narrow(D::Minus1, 0, query_block_size * key_context_size)?;
+        term_bd_sliced.reshape((
+            batch_size,
+            num_heads,
+            num_query_blocks,
+            query_block_size,
+            key_context_size,
+        ))
+    }
+
+    fn forward(&self, queries: &Tensor, keys: &Tensor) -> Result<Tensor> {
+        let (batch_size, num_query_blocks, query_block_size, num_heads, head_dim) =
+            match queries.dims() {
+                &[b, u, w, n, h] => (b, u, w, n, h),
+                _ => bail!("Expected queries to have 5 dimensions"),
+            };
+
+        let keys = if keys.dim(1)? != num_query_blocks {
+            if keys.dim(1)? > num_query_blocks {
+                keys.narrow(1, 0, num_query_blocks)?
+            } else {
+                bail!(
+                    "Keys have fewer blocks than queries: {} < {}",
+                    keys.dim(1)?,
+                    num_query_blocks
+                )
+            }
+        } else {
+            keys.clone()
+        };
+
+        let key_context_size = keys.dim(2)?;
+        let input_device = queries.device();
+        let pos_indices = self.pos_indices.to_device(input_device)?;
+        let max_span_plus_1 = pos_indices.dim(1)?;
+
+        let sin_emb_timing_signal = self.get_timing_signal_1d_pos(&pos_indices, queries.dtype())?;
+        let projected_sin_emb = self.pos_proj.forward_autocast(&sin_emb_timing_signal)?;
+        let sin_emb = projected_sin_emb
+            .reshape((1, max_span_plus_1, self.num_heads, self.head_dim))?
+            .squeeze(0)?
+            .to_dtype(queries.dtype())?;
+
+        let queries_p = queries.transpose(1, 3)?.transpose(2, 3)?.contiguous()?;
+        let keys_p_t = keys
+            .transpose(1, 3)?
+            .transpose(2, 3)?
+            .transpose(3, 4)?
+            .contiguous()?;
+
+        let queries_3d = queries_p.reshape((
+            batch_size * num_heads * num_query_blocks,
+            query_block_size,
+            head_dim,
+        ))?;
+        let keys_3d = keys_p_t.reshape((
+            batch_size * num_heads * num_query_blocks,
+            head_dim,
+            key_context_size,
+        ))?;
+        let term_ac_3d = queries_3d.matmul(&keys_3d)?;
+        let term_ac = term_ac_3d.reshape((
+            batch_size,
+            num_heads,
+            num_query_blocks,
+            query_block_size,
+            key_context_size,
+        ))?;
+
+        let q_transposed = queries.transpose(1, 3)?.transpose(2, 3)?;
+        let s_transposed = sin_emb.transpose(0, 2)?.transpose(0, 1)?;
+        let q_reshaped = q_transposed.reshape((
+            batch_size,
+            num_heads,
+            num_query_blocks * query_block_size,
+            head_dim,
+        ))?;
+        let s_broadcast = s_transposed
+            .unsqueeze(0)?
+            .broadcast_as((batch_size, num_heads, head_dim, max_span_plus_1))?
+            .contiguous()?;
+        let term_bd_unshifted_matmul = q_reshaped.contiguous()?.matmul(&s_broadcast)?;
+        let term_bd_unshifted = term_bd_unshifted_matmul.reshape((
+            batch_size,
+            num_heads,
+            num_query_blocks,
+            query_block_size,
+            max_span_plus_1,
+        ))?;
+        let term_bd_shifted = self.relative_shift(
+            &term_bd_unshifted,
+            batch_size,
+            num_heads,
+            num_query_blocks,
+            query_block_size,
+            key_context_size,
+            max_span_plus_1,
+        )?;
+
+        term_ac.broadcast_add(&term_bd_shifted)
     }
 }
 
@@ -296,7 +439,7 @@ pub struct Gemma4AudioAttention {
     max_future_horizon: usize,
     max_past_horizon: usize,
     context_size: usize,
-    pub(crate) relative_position_embedding: Gemma3nAudioRelativePositionEmbedding,
+    pub(crate) relative_position_embedding: Gemma4AudioRelativePositionEmbedding,
     _per_dim_scale: Tensor,
     _per_dim_key_scale: Tensor,
     q_proj: ClippableLinear,
@@ -321,10 +464,8 @@ impl Gemma4AudioAttention {
         let max_past_horizon = cfg.conf_attention_context_left.saturating_sub(1);
         let context_size = chunk_size + max_past_horizon + max_future_horizon;
 
-        let relative_position_embedding = Gemma3nAudioRelativePositionEmbedding::new(
-            &to_gemma3n_audio_config(cfg),
-            vb.pp("relative_position_embedding"),
-        )?;
+        let relative_position_embedding =
+            Gemma4AudioRelativePositionEmbedding::new(cfg, vb.pp("relative_position_embedding"))?;
         let per_dim_scale = vb.get(head_dim, "per_dim_scale")?;
         let per_dim_key_scale = vb.get(head_dim, "per_dim_key_scale")?;
         let q_proj =
@@ -848,6 +989,7 @@ impl AudioModel {
 
         if self.conf_reduction_factor > 1 {
             let stride = self.conf_reduction_factor;
+            let reduced_len = audio_encodings.dim(1)?.div_ceil(stride);
             let indices = Tensor::arange(
                 0f32,
                 audio_encodings.dim(1)? as f32,
@@ -857,11 +999,7 @@ impl AudioModel {
             .to_dtype(DType::I64)?;
             let max_idx = audio_encodings.dim(1)? as i64 - 1;
             let indices = indices
-                .narrow(
-                    0,
-                    0,
-                    (audio_encodings.dim(1)? / stride).min(indices.dim(0)?),
-                )?
+                .narrow(0, 0, reduced_len.min(indices.dim(0)?))?
                 .clamp(0, max_idx)?;
 
             audio_encodings = audio_encodings.index_select(&indices, 1)?;

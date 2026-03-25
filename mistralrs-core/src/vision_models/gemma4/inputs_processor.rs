@@ -61,7 +61,7 @@ impl Gemma4Processor {
         supports_audio: bool,
     ) -> Self {
         let max_patches = default_output_length * pooling_kernel_size * pooling_kernel_size;
-        let audio_seq_length = processor_config.audio_seq_length.unwrap_or(188);
+        let audio_seq_length = processor_config.audio_seq_length.unwrap_or(750);
 
         Self {
             patch_size,
@@ -658,5 +658,17 @@ impl ImagePreProcessor for Gemma4ImageProcessor {
             image_sizes_all: Some(image_sizes),
             num_crops: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Gemma4Processor;
+    use crate::vision_models::processor_config::ProcessorConfig;
+
+    #[test]
+    fn defaults_audio_seq_length_to_reference_cap() {
+        let processor = Gemma4Processor::new(ProcessorConfig::default(), 16, 3, 280, true, true);
+        assert_eq!(processor.audio_seq_length, 750);
     }
 }

@@ -185,7 +185,7 @@ serde_default_fn!(f64, conf_attention_logit_cap, 50.0);
 serde_default_fn!(usize, conf_num_attention_heads, 8);
 serde_default_fn!(usize, conf_num_hidden_layers, 12);
 serde_default_fn!(usize, conf_conv_kernel_size, 5);
-serde_default_fn!(usize, conf_reduction_factor, 4);
+serde_default_fn!(usize, conf_reduction_factor, 1);
 serde_default_fn!(f64, conf_residual_weight, 0.5);
 serde_default_fn!(Vec<usize>, sscp_conv_channel_size, vec![128, 32]);
 serde_default_fn!(
@@ -199,7 +199,7 @@ serde_default_fn!(
     vec![vec![2, 2], vec![2, 2]]
 );
 serde_default_fn!(usize, audio_vocab_size, 128);
-serde_default_fn!(f64, sscp_conv_group_norm_eps, 1e-3);
+serde_default_fn!(f64, sscp_conv_group_norm_eps, 1e-6);
 serde_default_fn!(f64, audio_rms_norm_eps, 1e-6);
 serde_default_fn!(i64, audio_vocab_offset, 262272);
 serde_default_fn!(f64, gradient_clipping, 1e10);

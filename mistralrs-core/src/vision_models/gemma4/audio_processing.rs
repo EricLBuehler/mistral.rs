@@ -275,6 +275,8 @@ impl AudioProcessor {
             return Ok(samples.to_vec());
         }
 
+        let expected_len = samples.len() * to_rate as usize / from_rate as usize;
+
         let sinc = rubato::SincInterpolationParameters {
             sinc_len: 256,
             f_cutoff: 0.95,
@@ -291,8 +293,27 @@ impl AudioProcessor {
             1,
         )?;
 
-        let result = resampler.process(&vec![samples.to_vec()], None)?;
-        Ok(result[0].clone())
+        let delay = resampler.output_delay();
+        let mut result = resampler.process(&[samples.to_vec()], None)?[0].clone();
+        let target_len_with_delay = expected_len + delay;
+
+        while result.len() < target_len_with_delay {
+            let flushed = resampler.process_partial::<Vec<f32>>(None, None)?;
+            let tail = &flushed[0];
+            if tail.is_empty() {
+                break;
+            }
+            result.extend_from_slice(tail);
+        }
+
+        if delay >= result.len() {
+            return Ok(Vec::new());
+        }
+
+        let start = delay;
+        let available = result.len() - start;
+        let keep = expected_len.min(available);
+        Ok(result[start..start + keep].to_vec())
     }
 
     fn create_mel_filterbank(
@@ -384,5 +405,18 @@ mod tests {
             .iter()
             .skip(valid_frame_counts[1])
             .all(|&value| value == 1.0));
+    }
+
+    #[test]
+    fn resampling_flushes_tail_and_trims_delay() {
+        let processor = AudioProcessor::new(&PreProcessorConfig {
+            sampling_rate: Some(16_000),
+            ..Default::default()
+        });
+
+        let samples = vec![0.0f32; 400_384];
+        let resampled = processor.resample(&samples, 44_100, 16_000).unwrap();
+
+        assert_eq!(resampled.len(), 145_264);
     }
 }
