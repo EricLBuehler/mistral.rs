@@ -66,6 +66,7 @@ impl Gemma4Model {
         } else {
             vb.dtype()
         };
+        let audio_dtype = DType::F32;
 
         let vision_tower = vision::VisionTower::new(
             &cfg.vision_config,
@@ -91,7 +92,8 @@ impl Gemma4Model {
                 audio_cfg,
                 normal_loading_metadata
                     .mapper
-                    .set_nm_device(vb.pp("audio_tower"), false),
+                    .set_nm_device(vb.pp("audio_tower"), false)
+                    .set_dtype(audio_dtype),
             )?;
             let audio_hidden = audio_cfg.output_proj_dims.unwrap_or(audio_cfg.hidden_size);
             let embed = multimodal_embedding::Gemma4MultimodalEmbedder::new(
@@ -99,7 +101,8 @@ impl Gemma4Model {
                 text_hidden,
                 normal_loading_metadata
                     .mapper
-                    .set_nm_device(vb.pp("embed_audio"), false),
+                    .set_nm_device(vb.pp("embed_audio"), false)
+                    .set_dtype(audio_dtype),
             )?;
             (Some(tower), Some(embed))
         } else {
@@ -272,8 +275,8 @@ impl Gemma4Model {
                     for &idx in &miss_indices {
                         let single_mel = audio_mel.get(idx)?.unsqueeze(0)?;
                         let single_mask = audio_mel_mask.get(idx)?.unsqueeze(0)?;
-                        let (audio_features, enc_mask) = audio_tower
-                            .forward(&single_mel.to_dtype(input_embeds.dtype())?, &single_mask)?;
+                        let (audio_features, enc_mask) =
+                            audio_tower.forward(&single_mel, &single_mask)?;
                         let valid = enc_mask.eq(0.0)?;
                         let valid_indices =
                             valid.squeeze(0)?.flatten_all()?.nonzero()?.squeeze(1)?;
@@ -283,6 +286,7 @@ impl Gemma4Model {
                             .index_select(&valid_indices, 0)?;
                         let feats = embed_audio
                             .forward(&valid_features.unsqueeze(0)?)?
+                            .to_dtype(input_embeds.dtype())?
                             .squeeze(0)?;
                         {
                             let mut guard = self
@@ -297,8 +301,7 @@ impl Gemma4Model {
                 let parts: Vec<Tensor> = per_audio.into_iter().map(|t| t.unwrap()).collect();
                 Tensor::cat(&parts, 0)?
             } else {
-                let (audio_features, enc_mask) = audio_tower
-                    .forward(&audio_mel.to_dtype(input_embeds.dtype())?, audio_mel_mask)?;
+                let (audio_features, enc_mask) = audio_tower.forward(audio_mel, audio_mel_mask)?;
                 let valid = enc_mask.eq(0.0)?;
                 let batch = audio_features.dim(0)?;
                 let mut all_feats = Vec::new();
@@ -311,7 +314,11 @@ impl Gemma4Model {
                     all_feats.push(feats);
                 }
                 let audio_feats = Tensor::cat(&all_feats, 0)?.unsqueeze(0)?;
-                embed_audio.forward(&audio_feats)?.squeeze(0)?
+                let embeds = embed_audio
+                    .forward(&audio_feats)?
+                    .to_dtype(input_embeds.dtype())?
+                    .squeeze(0)?;
+                embeds
             };
 
             if indices.dim(0)? > 0 {
@@ -419,7 +426,7 @@ impl IsqModel for Gemma4Model {
 
         // Audio tower layers
         if let Some(ref audio) = self.audio_tower {
-            for _block in audio.inner.conformer.iter() {
+            for _block in audio.conformer.iter() {
                 // 11 quantized layers per conformer block
                 for _ in 0..11 {
                     names.push(None);

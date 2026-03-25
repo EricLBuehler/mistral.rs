@@ -1774,7 +1774,7 @@ impl VisionModelLoader for VLlamaLoader {
         Arc::new(MLlamaProcessor::new())
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        false
+        true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
@@ -7461,7 +7461,7 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         let tc = &cfg.text_config;
 
         let vision_tokens_per_image = cfg.vision_soft_tokens_per_image.unwrap_or(280);
-        let audio_tokens = if cfg.audio_config.is_some() { 188 } else { 0 };
+        let audio_tokens = if cfg.audio_config.is_some() { 750 } else { 0 };
         let total_seq_len = *max_seq_len + vision_tokens_per_image * max_num_images + audio_tokens;
         let max_text_attn = max_batch_size * tc.num_attention_heads * total_seq_len * total_seq_len;
 
@@ -7496,12 +7496,12 @@ impl DeviceMappedModelLoader for Gemma4Loader {
             * vc.hidden_size.max(vc.intermediate_size);
 
         let max_audio_activation = cfg.audio_config.as_ref().map_or(0, |audio_cfg| {
-            let max_audio_frames = 1280;
             let subsample_factor: usize = audio_cfg
                 .sscp_conv_stride_size
                 .iter()
                 .map(|stride| stride[0])
                 .product();
+            let max_audio_frames = 750 * subsample_factor.max(1);
             let audio_seq_after_subsample = max_audio_frames / subsample_factor.max(1);
 
             let audio_encoder_act = audio_seq_after_subsample * (audio_cfg.hidden_size * 4);

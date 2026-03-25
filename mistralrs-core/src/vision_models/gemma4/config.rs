@@ -204,6 +204,11 @@ serde_default_fn!(f64, audio_rms_norm_eps, 1e-6);
 serde_default_fn!(i64, audio_vocab_offset, 262272);
 serde_default_fn!(f64, gradient_clipping, 1e10);
 serde_default_fn!(f64, embedding_norm_eps, 1e-6);
+serde_default_fn!(f64, sscp_conv_eps, 1e-6);
+serde_default_fn!(String, sscp_conv_norm_type, "layer_norm".to_string());
+serde_default_fn!(String, sscp_conv_padding_type, "semicausal".to_string());
+serde_default_fn!(bool, streaming, false);
+serde_default_fn!(bool, use_clipped_linears, true);
 
 // ── Gemma4AudioConfig ───────────────────────────────────────────────────────
 
@@ -247,6 +252,16 @@ pub struct Gemma4AudioConfig {
     pub vocab_size: usize,
     #[serde(default = "sscp_conv_group_norm_eps")]
     pub sscp_conv_group_norm_eps: f64,
+    #[serde(default = "sscp_conv_eps")]
+    pub sscp_conv_eps: f64,
+    #[serde(default = "sscp_conv_norm_type")]
+    pub sscp_conv_norm_type: String,
+    #[serde(default = "sscp_conv_padding_type")]
+    pub sscp_conv_padding_type: String,
+    pub sscp_conv_time_pad_top: Option<usize>,
+    pub sscp_conv_time_pad_bottom: Option<usize>,
+    #[serde(default = "streaming")]
+    pub streaming: bool,
     #[serde(default = "audio_rms_norm_eps")]
     pub rms_norm_eps: f64,
     #[serde(default = "audio_vocab_offset")]
@@ -255,6 +270,8 @@ pub struct Gemma4AudioConfig {
     pub gradient_clipping: f64,
     #[serde(default = "embedding_norm_eps")]
     pub embedding_norm_eps: f64,
+    #[serde(default = "use_clipped_linears")]
+    pub use_clipped_linears: bool,
 }
 
 // ── Top-level config defaults ───────────────────────────────────────────────

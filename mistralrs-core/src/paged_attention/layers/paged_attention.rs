@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use candle_core::{DType, Device, Result, Tensor};
 #[allow(unused_imports)]
 use mistralrs_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
@@ -8,10 +10,98 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use crate::{
     attention::SdpaParams,
     layers::Sdpa,
+    paged_attention::_PAD_SLOT_ID,
     pipeline::text_models_inputs_processor::{
         FlashKMeta, FlashParams, PagedAttentionInputMetadata,
     },
 };
+
+fn resolve_tensor_for_device(
+    tensors: &HashMap<candle_core::DeviceLocation, Tensor>,
+    device: &Device,
+    what: &str,
+) -> Result<Tensor> {
+    if let Some(tensor) = tensors.get(&device.location()) {
+        return Ok(tensor.clone());
+    }
+    if let Some(tensor) = tensors.values().next() {
+        return tensor.to_device(device);
+    }
+    candle_core::bail!("Missing {what} tensor for {:?}", device.location())
+}
+
+fn cumulative_seqlens_from_lengths(lengths: &[usize], device: &Device) -> Result<Tensor> {
+    let mut cumulative = Vec::with_capacity(lengths.len() + 1);
+    cumulative.push(0u32);
+    for &len in lengths {
+        cumulative.push(cumulative.last().copied().unwrap_or(0) + len as u32);
+    }
+    Tensor::new(&cumulative[..], &Device::Cpu)?.to_device(device)
+}
+
+fn new_token_lens_from_slot_mapping(
+    slot_mapping: &Tensor,
+    batch_size: usize,
+    seq_len: usize,
+) -> Result<Vec<usize>> {
+    let slot_mapping_cpu = slot_mapping.to_device(&Device::Cpu)?;
+    let slot_mapping_cpu = if slot_mapping_cpu.dims().len() == 2 {
+        slot_mapping_cpu
+    } else {
+        slot_mapping_cpu.reshape((batch_size, seq_len))?
+    };
+    Ok(slot_mapping_cpu
+        .to_vec2::<i64>()?
+        .into_iter()
+        .map(|row| row.into_iter().filter(|&slot| slot != _PAD_SLOT_ID).count())
+        .collect())
+}
+
+fn unpack_gathered_kv(
+    packed: &Tensor,
+    kv_lens: &[usize],
+    num_kv_heads: usize,
+    head_size: usize,
+    device: &Device,
+) -> Result<Tensor> {
+    let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
+    let mut start = 0;
+    let mut unpacked = Vec::with_capacity(kv_lens.len());
+
+    for &kv_len in kv_lens {
+        let mut seq = packed
+            .narrow(0, start, kv_len)?
+            .transpose(0, 1)?
+            .unsqueeze(0)?;
+        if kv_len < max_kv {
+            let pad = Tensor::zeros(
+                (1, num_kv_heads, max_kv - kv_len, head_size),
+                packed.dtype(),
+                device,
+            )?;
+            seq = Tensor::cat(&[&seq, &pad], 2)?;
+        }
+        unpacked.push(seq);
+        start += kv_len;
+    }
+
+    Tensor::cat(&unpacked, 0)
+}
+
+fn adjust_kv_mask(mask: &Tensor, kv_seq_len: usize) -> Result<Tensor> {
+    let mask_dims = mask.dims();
+    match mask.rank() {
+        2 if mask_dims[1] > kv_seq_len => mask.narrow(1, 0, kv_seq_len),
+        3 if mask_dims[2] > kv_seq_len => mask.narrow(2, 0, kv_seq_len),
+        4 if mask_dims[3] > kv_seq_len => mask.narrow(3, 0, kv_seq_len),
+        _ => Ok(mask.clone()),
+    }
+}
+
+fn supports_packed_varlen_sdpa(query: &Tensor) -> bool {
+    query.device().is_cpu()
+        || (query.device().is_cuda() && crate::using_flash_attn() && query.dtype() != DType::F32)
+}
 
 pub struct PagedAttention {
     alibi_slopes: Option<Tensor>,
@@ -36,7 +126,11 @@ impl PagedAttention {
         })
     }
 
-    #[allow(clippy::too_many_arguments, clippy::cast_possible_truncation, unused_variables)]
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::cast_possible_truncation,
+        unused_variables
+    )]
     fn forward_impl(
         &self,
         query: &Tensor,
@@ -63,15 +157,15 @@ impl PagedAttention {
             }
         }
 
-        let slot_mapping = input_metadata
+        let slot_mapping_full = input_metadata
             .slot_mappings
             .get(&query.device().location())
             .unwrap();
-        let dims = slot_mapping.dims();
+        let dims = slot_mapping_full.dims();
         let slot_mapping = if dims.len() > 1 {
-            &slot_mapping.flatten(0, dims.len())?
+            &slot_mapping_full.flatten(0, dims.len())?
         } else {
-            slot_mapping
+            slot_mapping_full
         };
 
         // For models with per-layer sliding windows (GPT-OSS, Gemma2):
@@ -158,18 +252,29 @@ impl PagedAttention {
 
             let device = query.device();
 
-            // Resolve cu_seqlens_kv: scheduler-provided for prefix cache
-            // hits, or fall back to cumulative_seqlens_q on first prompt
-            // (donor path only — the donor's KV matches Q exactly).
-            let cu_kv = if let Some(map) = input_metadata.cu_seqlens_kv.as_ref() {
-                map.get(&device.location()).unwrap().clone()
+            let new_token_lens =
+                new_token_lens_from_slot_mapping(slot_mapping_full, batch_size, seq_len)?;
+            let query_lens = input_metadata
+                .query_lens
+                .clone()
+                .unwrap_or_else(|| new_token_lens.clone());
+            let kv_lens = if let Some(num_cached_tokens) = input_metadata.num_cached_tokens.as_ref()
+            {
+                num_cached_tokens
+                    .iter()
+                    .zip(query_lens.iter())
+                    .map(|(&cached, &query_len)| cached + query_len)
+                    .collect::<Vec<_>>()
             } else {
-                flash_params
-                    .expect("flash_params required for gather path without cu_seqlens_kv")
-                    .cumulative_seqlens_q
-                    .get(&device.location())
-                    .unwrap()
-                    .clone()
+                new_token_lens.clone()
+            };
+
+            // Resolve cu_seqlens_kv: scheduler-provided for prefix cache hits,
+            // or synthesize it from the actual slot-mapping lengths on first prompt.
+            let cu_kv = if let Some(map) = input_metadata.cu_seqlens_kv.as_ref() {
+                resolve_tensor_for_device(map, device, "cu_seqlens_kv")?
+            } else {
+                cumulative_seqlens_from_lengths(&kv_lens, device)?
             };
 
             // Gather all K/V from paged cache into contiguous tensors.
@@ -183,48 +288,65 @@ impl PagedAttention {
                 query.dtype(),
             )?;
 
-            // gathered: (total_kv, kv_heads, dim) -> (1, kv_heads, total_kv, dim)
-            let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
-            let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
-
-            // Build FlashParams with packed K cu_seqlens matching the
-            // gathered KV layout.
-            let cu_kv_for_flash = if let Some(map) = input_metadata.cu_seqlens_kv.as_ref() {
-                map.clone()
-            } else {
-                let mut map = std::collections::HashMap::new();
-                map.insert(device.location(), cu_kv.clone());
-                map
-            };
-            let prefix_flash_params = flash_params.map(|fp| {
-                let max_kv = if let Some(nc) = input_metadata.num_cached_tokens.as_ref() {
-                    nc.iter()
-                        .zip(input_metadata.query_lens.as_ref().unwrap().iter())
-                        .map(|(&nc, &ql)| (nc + ql) as u32)
-                        .max()
-                        .unwrap_or(0)
+            if supports_packed_varlen_sdpa(query) {
+                let cu_q = if let Some(fp) = flash_params {
+                    if !fp.cumulative_seqlens_q.is_empty() {
+                        resolve_tensor_for_device(
+                            &fp.cumulative_seqlens_q,
+                            device,
+                            "cumulative_seqlens_q",
+                        )?
+                    } else {
+                        cumulative_seqlens_from_lengths(&query_lens, device)?
+                    }
                 } else {
-                    // First prompt: KV = Q
-                    fp.max_q
+                    cumulative_seqlens_from_lengths(&query_lens, device)?
                 };
-                FlashParams {
-                    max_q: fp.max_q,
-                    cumulative_seqlens_q: fp.cumulative_seqlens_q.clone(),
+
+                // gathered: (total_kv, kv_heads, dim) -> (1, kv_heads, total_kv, dim)
+                let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
+                let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
+
+                let mut cu_q_map = HashMap::new();
+                cu_q_map.insert(device.location(), cu_q);
+                let mut cu_kv_map = HashMap::new();
+                cu_kv_map.insert(device.location(), cu_kv);
+                let prefix_flash_params = FlashParams {
+                    max_q: query_lens.iter().copied().max().unwrap_or(0) as u32,
+                    cumulative_seqlens_q: cu_q_map,
                     logical_k: FlashKMeta {
-                        max: max_kv,
-                        cumulative_seqlens: cu_kv_for_flash,
+                        max: kv_lens.iter().copied().max().unwrap_or(0) as u32,
+                        cumulative_seqlens: cu_kv_map,
                     },
                     sliding_k: None,
-                    causal: fp.causal,
-                }
-            });
+                    causal: flash_params.map_or(attention_mask.is_some(), |fp| fp.causal),
+                };
+
+                return Sdpa.run_attention(
+                    query,
+                    &k_4d,
+                    &v_4d,
+                    attention_mask,
+                    Some(&prefix_flash_params),
+                    sdpa_params,
+                );
+            }
+
+            let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
+            let k_batched =
+                unpack_gathered_kv(&k_gathered, &kv_lens, key_value_heads, head_size, device)?;
+            let v_batched =
+                unpack_gathered_kv(&v_gathered, &kv_lens, key_value_heads, head_size, device)?;
+            let adjusted_mask = attention_mask
+                .map(|mask| adjust_kv_mask(mask, max_kv))
+                .transpose()?;
 
             return Sdpa.run_attention(
                 query,
-                &k_4d,
-                &v_4d,
-                attention_mask,
-                prefix_flash_params.as_ref(),
+                &k_batched,
+                &v_batched,
+                adjusted_mask.as_ref(),
+                None,
                 sdpa_params,
             );
         }

@@ -228,29 +228,13 @@ impl InputsProcessor for Gemma4ImageProcessor {
             let audio_processor = AudioProcessor::new(preprocessor_config);
 
             for seq in input_seqs.iter_mut() {
-                if let Some(mut audios) = seq.take_audios() {
-                    let max_audio_len = audios
-                        .iter()
-                        .map(|x| x.samples.len())
-                        .max()
-                        .expect("No audios");
-                    for audio in &mut audios {
-                        let pad_len = max_audio_len - audio.samples.len();
-                        audio.samples.extend(std::iter::repeat_n(0., pad_len));
-                    }
-
-                    let mut seq_audio_mel = Vec::new();
-                    let mut seq_audio_mask = Vec::new();
-                    let mut seq_audio_num_tokens = Vec::new();
-                    for audio in audios {
-                        let (mel, mask) = audio_processor
-                            .process_audio(&audio, device)
-                            .expect("Audio processing failed");
-
-                        seq_audio_num_tokens.push(self.compute_audio_num_tokens(mel.dim(1)?));
-                        seq_audio_mel.push(mel);
-                        seq_audio_mask.push(mask);
-                    }
+                if let Some(audios) = seq.take_audios() {
+                    let (seq_audio_mel, seq_audio_mask, seq_audio_frame_counts) =
+                        audio_processor.process_audios(&audios, device)?;
+                    let seq_audio_num_tokens = seq_audio_frame_counts
+                        .into_iter()
+                        .map(|num_frames| self.compute_audio_num_tokens(num_frames))
+                        .collect::<Vec<_>>();
 
                     if !seq.multimodal.has_changed_prompt {
                         let mut prompt = tokenizer
@@ -289,10 +273,12 @@ impl InputsProcessor for Gemma4ImageProcessor {
                     }
 
                     let cached_audio = seq.count_prefix_cached_mm_items_by_kind("audio");
-                    let n_audio = seq_audio_mel.len();
+                    let n_audio = audios.len();
                     if cached_audio < n_audio {
-                        audio_mel_accum.extend(seq_audio_mel.into_iter().skip(cached_audio));
-                        audio_mask_accum.extend(seq_audio_mask.into_iter().skip(cached_audio));
+                        for idx in cached_audio..n_audio {
+                            audio_mel_accum.push(seq_audio_mel.get(idx)?.unsqueeze(0)?);
+                            audio_mask_accum.push(seq_audio_mask.get(idx)?.unsqueeze(0)?);
+                        }
                     }
                 }
             }

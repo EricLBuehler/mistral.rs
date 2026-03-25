@@ -639,18 +639,34 @@ impl Loader for VisionLoader {
             }
         };
 
-        // Handle the Gemma 3 1b case here
+        let processor_config_json = paths
+            .get_processor_config()
+            .as_ref()
+            .map(|f| fs::read_to_string(f).unwrap());
+
+        // Handle models that only ship processor_config.json with nested
+        // image/audio preprocessor settings and no preprocessor_config.json.
         let preprocessor_config: PreProcessorConfig = match paths.get_preprocessor_config().as_ref()
         {
             Some(preprocessor_config) => {
                 serde_json::from_str(&fs::read_to_string(preprocessor_config).unwrap()).unwrap()
             }
-            None => PreProcessorConfig::default(),
+            None => processor_config_json.as_deref().map_or_else(
+                PreProcessorConfig::default,
+                |json| match PreProcessorConfig::from_processor_config_json(json) {
+                    Ok(config) => config,
+                    Err(err) => {
+                        warn!(
+                            "Failed to synthesize preprocessor config from processor_config.json: {err}"
+                        );
+                        PreProcessorConfig::default()
+                    }
+                },
+            ),
         };
-        let processor_config: Option<ProcessorConfig> = paths
-            .get_processor_config()
-            .as_ref()
-            .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
+        let processor_config: Option<ProcessorConfig> = processor_config_json
+            .as_deref()
+            .map(|json| serde_json::from_str(json).unwrap());
 
         let processor = self.inner.get_processor(
             &config,
