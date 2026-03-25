@@ -36,18 +36,8 @@ impl PagedAttention {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    #[allow(unused_variables)]
-    /// query: shape = [batch_size, seq_len, num_heads * head_size]
-    /// key: shape = [batch_size, seq_len, num_kv_heads * head_size]
-    /// value: shape = [batch_size, num_kv_heads * head_size]
-    /// key_cache: shape = [num_blocks, num_kv_heads, head_size/x,
-    ///     block_size, x]
-    /// value_cache: shape = [num_blocks, num_kv_heads, head_size,
-    ///     block_size]
-    /// input_metadata: metadata for paged attention.
-    #[allow(clippy::too_many_arguments, clippy::cast_possible_truncation)]
-    pub fn forward(
+    #[allow(clippy::too_many_arguments, clippy::cast_possible_truncation, unused_variables)]
+    fn forward_impl(
         &self,
         query: &Tensor,
         key: &Tensor,
@@ -58,16 +48,18 @@ impl PagedAttention {
         input_metadata: &PagedAttentionInputMetadata,
         sdpa_params: &SdpaParams,
         flash_params: Option<&FlashParams>,
+        write_cache: bool,
     ) -> Result<Tensor> {
-        if let (Some(k_scale), Some(v_scale), Some(key_cache)) =
-            (&self.k_scale, &self.v_scale, &key_cache)
-        {
-            if self.kv_updated_times.load(Ordering::Relaxed) < KV_SCALE_UPDATE_ITERATION
-                && key_cache.dtype() == DType::F8E4M3
+        if write_cache {
+            if let (Some(k_scale), Some(v_scale), Some(key_cache)) =
+                (&self.k_scale, &self.v_scale, &key_cache)
             {
-                // scale update only used for fp8 kvcache
-                kv_scale_update(key, value, k_scale, v_scale)?;
-                self.kv_updated_times.fetch_add(1, Ordering::Relaxed);
+                if self.kv_updated_times.load(Ordering::Relaxed) < KV_SCALE_UPDATE_ITERATION
+                    && key_cache.dtype() == DType::F8E4M3
+                {
+                    kv_scale_update(key, value, k_scale, v_scale)?;
+                    self.kv_updated_times.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
 
@@ -129,10 +121,19 @@ impl PagedAttention {
         let (batch_size, attention_heads, seq_len, head_size) = query.shape().dims4()?;
         let (_, key_value_heads, _, _) = key.shape().dims4()?;
 
-        // === Prefix cache hit path ===
-        if input_metadata.num_cached_tokens.is_some() && attention_mask.is_some() {
-            // Write new tokens to cache for future decode steps
-            if key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
+        // === Prefix cache / donor-gather prompt path ===
+        // Entered when:
+        //  - write_cache=true  AND num_cached_tokens is set (prefix cache hit)
+        //  - write_cache=false AND attention_mask is set  (donor cache prompt)
+        let use_gather_path = if write_cache {
+            input_metadata.num_cached_tokens.is_some() && attention_mask.is_some()
+        } else {
+            attention_mask.is_some()
+        };
+
+        if use_gather_path {
+            // Write new tokens to cache (skipped for donor/shared layers)
+            if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
                 let k_flat = key
                     .transpose(1, 2)?
                     .reshape(((), key_value_heads, head_size))?;
@@ -157,22 +158,28 @@ impl PagedAttention {
 
             let device = query.device();
 
+            // Resolve cu_seqlens_kv: scheduler-provided for prefix cache
+            // hits, or fall back to cumulative_seqlens_q on first prompt
+            // (donor path only — the donor's KV matches Q exactly).
+            let cu_kv = if let Some(map) = input_metadata.cu_seqlens_kv.as_ref() {
+                map.get(&device.location()).unwrap().clone()
+            } else {
+                flash_params
+                    .expect("flash_params required for gather path without cu_seqlens_kv")
+                    .cumulative_seqlens_q
+                    .get(&device.location())
+                    .unwrap()
+                    .clone()
+            };
+
             // Gather all K/V from paged cache into contiguous tensors.
-            // The gather kernel handles x-unpacking for K, transpose for V,
-            // and FP8 dequantization via k_scale/v_scale when applicable.
-            let cu_kv = input_metadata
-                .cu_seqlens_kv
-                .as_ref()
-                .expect("cu_seqlens_kv required for prefix cache path")
-                .get(&device.location())
-                .unwrap();
             let (k_gathered, v_gathered) = mistralrs_paged_attn::gather_kv_cache(
                 key_cache.as_ref().unwrap(),
                 value_cache.as_ref().unwrap(),
                 self.k_scale.as_ref(),
                 self.v_scale.as_ref(),
                 block_tables,
-                cu_kv,
+                &cu_kv,
                 query.dtype(),
             )?;
 
@@ -180,26 +187,32 @@ impl PagedAttention {
             let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
             let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
 
-            // Build a local FlashParams with packed K cu_seqlens from
-            // cu_seqlens_kv (matching the gathered KV layout). The pipeline's
-            // flash_params uses padded seqlens_k which doesn't match packed KV.
-            // Q seqlens stay padded since Q is still in padded batch layout.
+            // Build FlashParams with packed K cu_seqlens matching the
+            // gathered KV layout.
+            let cu_kv_for_flash = if let Some(map) = input_metadata.cu_seqlens_kv.as_ref() {
+                map.clone()
+            } else {
+                let mut map = std::collections::HashMap::new();
+                map.insert(device.location(), cu_kv.clone());
+                map
+            };
             let prefix_flash_params = flash_params.map(|fp| {
-                let max_kv = input_metadata
-                    .num_cached_tokens
-                    .as_ref()
-                    .unwrap()
-                    .iter()
-                    .zip(input_metadata.query_lens.as_ref().unwrap().iter())
-                    .map(|(&nc, &ql)| (nc + ql) as u32)
-                    .max()
-                    .unwrap_or(0);
+                let max_kv = if let Some(nc) = input_metadata.num_cached_tokens.as_ref() {
+                    nc.iter()
+                        .zip(input_metadata.query_lens.as_ref().unwrap().iter())
+                        .map(|(&nc, &ql)| (nc + ql) as u32)
+                        .max()
+                        .unwrap_or(0)
+                } else {
+                    // First prompt: KV = Q
+                    fp.max_q
+                };
                 FlashParams {
                     max_q: fp.max_q,
                     cumulative_seqlens_q: fp.cumulative_seqlens_q.clone(),
                     logical_k: FlashKMeta {
                         max: max_kv,
-                        cumulative_seqlens: input_metadata.cu_seqlens_kv.as_ref().unwrap().clone(),
+                        cumulative_seqlens: cu_kv_for_flash,
                     },
                     sliding_k: None,
                     causal: fp.causal,
@@ -216,6 +229,7 @@ impl PagedAttention {
             );
         }
 
+        // === Regular prompt path (no prefix cache, write_cache=true only) ===
         #[allow(clippy::cast_possible_truncation)]
         let att = match attention_mask {
             None => None,
@@ -249,12 +263,7 @@ impl PagedAttention {
             (q, k, v)
         };
 
-        // key: Tensor,              // [num_tokens, num_heads, head_size]
-        // value: Tensor,            // [num_tokens, num_heads, head_size]
-        // key_cache: &mut Tensor,   // [num_blocks, num_heads, head_size/x, block_size, x] 48,32,16,16,8
-        // value_cache: &mut Tensor, // [num_blocks, num_heads, head_size, block_size] 48,32,128,16
-        // slot_mapping: Tensor,     // [num_tokens]
-        if key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
+        if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
             reshape_and_cache(
                 &key,
                 &value,
@@ -271,20 +280,7 @@ impl PagedAttention {
             return Ok(att);
         }
 
-        //  Args:
-        //  output: shape = [num_generation_tokens, num_heads, head_size]
-        //
-        //  query: shape = [num_generation_tokens, num_heads, head_size]
-        //
-        //  key_cache: shape = [num_blocks, num_kv_heads, head_size/x,
-        //      block_size, x]
-        //
-        //  value_cache: shape = [num_blocks, num_kv_heads, head_size,
-        //      block_size]
-        //
-        //  input_metadata: metadata for paged attention.
-        //
-        //  alibi_slopes: shape = [num_heads]
+        // === Decode path ===
         #[allow(clippy::cast_possible_truncation)]
         let res = paged_attention(
             &query,
@@ -308,16 +304,40 @@ impl PagedAttention {
         Ok(res)
     }
 
-    /// Run paged attention against a donor layer's cache without writing any
-    /// new key/value entries (no reshape_and_cache). Used by layers that share
-    /// another layer's KV cache.
-    ///
-    /// Handles all three paths:
-    /// - **Prompt / prefix-cache** (`attention_mask.is_some()`): gather donor's
-    ///   K,V from paged cache → Sdpa.
-    /// - **Decode** (`attention_mask.is_none()`): paged-attention kernel against
-    ///   the donor's cache blocks.
-    #[allow(clippy::too_many_arguments, unused_variables)]
+    /// Standard paged attention forward: writes key/value to cache, then
+    /// runs attention (Sdpa for prompt, paged kernel for decode).
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward(
+        &self,
+        query: &Tensor,
+        key: &Tensor,
+        value: &Tensor,
+        attention_mask: Option<&Tensor>,
+        key_cache: Option<Tensor>,
+        value_cache: Option<Tensor>,
+        input_metadata: &PagedAttentionInputMetadata,
+        sdpa_params: &SdpaParams,
+        flash_params: Option<&FlashParams>,
+    ) -> Result<Tensor> {
+        self.forward_impl(
+            query,
+            key,
+            value,
+            attention_mask,
+            key_cache,
+            value_cache,
+            input_metadata,
+            sdpa_params,
+            flash_params,
+            true,
+        )
+    }
+
+    /// Read-only paged attention against a donor layer's cache. Identical to
+    /// [`forward`] but never calls `reshape_and_cache` — the donor layer has
+    /// already written its K,V.  On prompt the donor's cached K,V are
+    /// gathered; on decode the paged-attention kernel reads them directly.
+    #[allow(clippy::too_many_arguments)]
     pub fn forward_donor_cache(
         &self,
         query: &Tensor,
@@ -328,157 +348,20 @@ impl PagedAttention {
         sdpa_params: &SdpaParams,
         flash_params: Option<&FlashParams>,
     ) -> Result<Tensor> {
-        let use_full =
-            sdpa_params.sliding_window.is_none() && input_metadata.full_block_tables.is_some();
-
-        let block_tables = if use_full {
-            input_metadata
-                .full_block_tables
-                .as_ref()
-                .unwrap()
-                .get(&query.device().location())
-                .unwrap()
-        } else {
-            input_metadata
-                .block_tables
-                .as_ref()
-                .unwrap()
-                .get(&query.device().location())
-                .unwrap()
-        };
-        let context_lens = if use_full {
-            input_metadata
-                .full_context_lens
-                .as_ref()
-                .unwrap()
-                .get(&query.device().location())
-                .unwrap()
-        } else {
-            input_metadata
-                .context_lens
-                .as_ref()
-                .unwrap()
-                .get(&query.device().location())
-                .unwrap()
-        };
-
-        let alibi_slopes = if let Some(alibi_slopes) = self.alibi_slopes.as_ref() {
-            Some(alibi_slopes.to_device(query.device())?)
-        } else {
-            None
-        };
-
-        let (batch_size, attention_heads, seq_len, head_size) = query.shape().dims4()?;
-
-        // === Prompt / prefix-cache path ===
-        if attention_mask.is_some() {
-            assert!(
-                alibi_slopes.is_none(),
-                "alibi slopes not supported in donor cache prompt path"
-            );
-
-            let device = query.device();
-
-            // Build cu_seqlens_kv: use scheduler-provided value when
-            // available (prefix-cache hit).  On the very first prompt
-            // the scheduler hasn't built cu_seqlens_kv yet, but the
-            // donor's KV covers exactly the same tokens as Q, so we
-            // reuse cumulative_seqlens_q.
-            let cu_kv = if let Some(map) = input_metadata.cu_seqlens_kv.as_ref() {
-                map.get(&device.location()).unwrap().clone()
-            } else {
-                flash_params
-                    .expect("flash_params required for donor cache first-prompt path")
-                    .cumulative_seqlens_q
-                    .get(&device.location())
-                    .unwrap()
-                    .clone()
-            };
-
-            let (k_gathered, v_gathered) = mistralrs_paged_attn::gather_kv_cache(
-                key_cache,
-                value_cache,
-                self.k_scale.as_ref(),
-                self.v_scale.as_ref(),
-                block_tables,
-                &cu_kv,
-                query.dtype(),
-            )?;
-
-            let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
-            let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
-
-            // Build FlashParams with packed K cu_seqlens matching the
-            // gathered KV layout.
-            let cu_kv_for_flash = if let Some(map) = input_metadata.cu_seqlens_kv.as_ref() {
-                map.clone()
-            } else {
-                let mut map = std::collections::HashMap::new();
-                map.insert(device.location(), cu_kv.clone());
-                map
-            };
-            let prefix_flash_params = flash_params.map(|fp| {
-                let max_kv = if let Some(nc) = input_metadata.num_cached_tokens.as_ref() {
-                    nc.iter()
-                        .zip(input_metadata.query_lens.as_ref().unwrap().iter())
-                        .map(|(&nc, &ql)| (nc + ql) as u32)
-                        .max()
-                        .unwrap_or(0)
-                } else {
-                    // First prompt: KV = Q, so max_kv = max_q
-                    fp.max_q
-                };
-                FlashParams {
-                    max_q: fp.max_q,
-                    cumulative_seqlens_q: fp.cumulative_seqlens_q.clone(),
-                    logical_k: FlashKMeta {
-                        max: max_kv,
-                        cumulative_seqlens: cu_kv_for_flash,
-                    },
-                    sliding_k: None,
-                    causal: fp.causal,
-                }
-            });
-
-            return Sdpa.run_attention(
-                query,
-                &k_4d,
-                &v_4d,
-                attention_mask,
-                prefix_flash_params.as_ref(),
-                sdpa_params,
-            );
-        }
-
-        // === Decode path ===
-        let q = if seq_len > 1 {
-            query
-                .transpose(1, 2)?
-                .reshape(((), attention_heads, head_size))?
-        } else {
-            query.reshape(((), attention_heads, head_size))?
-        };
-
-        #[allow(clippy::cast_possible_truncation)]
-        let res = paged_attention(
-            &q,
-            self.k_scale.as_ref(),
-            self.v_scale.as_ref(),
-            key_cache,
-            value_cache,
-            block_tables,
-            context_lens,
-            alibi_slopes.as_ref(),
-            if use_full {
-                input_metadata.full_max_context_len.unwrap()
-            } else {
-                input_metadata.max_context_len.unwrap()
-            },
-            sdpa_params.softmax_scale,
-            sdpa_params.softcap.unwrap_or(1.0f32),
-            sdpa_params.sinks.as_ref(),
-        )?;
-
-        Ok(res)
+        // key/value are unused (donor's cache already has them), but
+        // forward_impl needs tensors for shape queries. Reuse query as
+        // a placeholder — reshape_and_cache is skipped so they're never read.
+        self.forward_impl(
+            query,
+            query,
+            query,
+            attention_mask,
+            Some(key_cache.clone()),
+            Some(value_cache.clone()),
+            input_metadata,
+            sdpa_params,
+            flash_params,
+            false,
+        )
     }
 }
