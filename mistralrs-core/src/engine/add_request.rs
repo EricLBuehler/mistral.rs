@@ -651,8 +651,11 @@ impl Engine {
                 }
             }
 
-            // Run the inputs processor to update the prompt for multimodal models.
-            if images.is_some() || audios.is_some() {
+            // Run the inputs processor to normalize multimodal prompts before prefix-cache lookup.
+            // Rely on the sequence's attached modalities rather than just the top-level request
+            // fields so historical images/audios in a reconstructed multi-turn conversation
+            // still get their prompt rewrite and mm-feature setup before cache matching.
+            if seq.has_images() || seq.has_audios() {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
                 let _ = pipeline.get_processor().inputs_processor().process_inputs(
                     pipeline.tokenizer(),

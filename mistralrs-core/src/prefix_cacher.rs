@@ -37,6 +37,15 @@ struct CacheElement {
     image_hashes: Option<Vec<u64>>,
 }
 
+impl CacheElement {
+    fn can_rewind_to(&self, len: usize) -> bool {
+        self.cache
+            .iter()
+            .flatten()
+            .all(|layer| layer.try_set_len(len).is_ok())
+    }
+}
+
 pub struct PrefixCacheManagerV2 {
     caches: IndexMap<Tokens, CacheElement>,
     paged_recurrent_caches: IndexMap<Vec<BlockHash>, Vec<RecurrentStateSnapshot>>,
@@ -285,6 +294,14 @@ impl PrefixCacheManagerV2 {
                 continue;
             }
 
+            // Sliding/rotating caches only retain a fixed tail. If a cache has already
+            // truncated older tokens, it can still safely serve an exact extension of the
+            // cached prefix, but it cannot be rewound to an earlier logical length. Skip such
+            // candidates here so a rolled-over cache does not block a shorter valid prefix hit.
+            if !v.can_rewind_to(match_len) {
+                continue;
+            }
+
             if best_match
                 .as_ref()
                 .is_none_or(|(len, _, _, _)| match_len > *len)
@@ -331,5 +348,106 @@ impl PrefixCacheManagerV2 {
         }
 
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use candle_core::{DType, Device, Tensor};
+
+    use super::{CacheElement, MatchingCache, PrefixCacheManagerV2};
+    use crate::kv_cache::{KvCache, RotatingCache, SingleCache};
+
+    fn make_cache_tensor(len: usize) -> candle_core::Result<Tensor> {
+        Tensor::zeros((1, 1, len, 1), DType::F32, &Device::Cpu)
+    }
+
+    fn make_rotating_kv_cache(
+        logical_len: usize,
+        sliding_window: usize,
+    ) -> candle_core::Result<KvCache> {
+        let src = make_cache_tensor(logical_len)?;
+        let mut k = RotatingCache::new(2, sliding_window, sliding_window);
+        let mut v = RotatingCache::new(2, sliding_window, sliding_window);
+        let _ = k.append(&src)?;
+        let _ = v.append(&src)?;
+        Ok(KvCache::Rotating { k, v })
+    }
+
+    fn make_normal_kv_cache(logical_len: usize) -> candle_core::Result<KvCache> {
+        let src = make_cache_tensor(logical_len)?;
+        let mut k = SingleCache::new(2, logical_len, logical_len);
+        let mut v = SingleCache::new(2, logical_len, logical_len);
+        k.append(&src)?;
+        v.append(&src)?;
+        Ok(KvCache::Normal { k, v })
+    }
+
+    #[test]
+    fn skips_rolled_over_rotating_candidate_that_cannot_rewind() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
+
+        prefix_cacher.caches.insert(
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].into(),
+            CacheElement {
+                cache: vec![Some(make_rotating_kv_cache(10, 4)?)],
+                recurrent_snapshots: None,
+                audio_hashes: None,
+                image_hashes: None,
+            },
+        );
+        prefix_cacher.caches.insert(
+            vec![1, 2, 3, 4, 5, 9].into(),
+            CacheElement {
+                cache: vec![Some(make_normal_kv_cache(6)?)],
+                recurrent_snapshots: None,
+                audio_hashes: None,
+                image_hashes: None,
+            },
+        );
+
+        let hit =
+            prefix_cacher.search_for_matching_cache(&[1, 2, 3, 4, 5, 6, 7, 99], None, None)?;
+
+        match hit {
+            Some(MatchingCache::Normal { toks, offset, .. }) => {
+                assert_eq!(offset, 5);
+                assert_eq!(toks, vec![6, 7, 99]);
+            }
+            None => panic!("expected a shorter valid prefix-cache hit"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn allows_exact_extension_from_rolled_over_rotating_cache() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
+
+        prefix_cacher.caches.insert(
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].into(),
+            CacheElement {
+                cache: vec![Some(make_rotating_kv_cache(10, 4)?)],
+                recurrent_snapshots: None,
+                audio_hashes: None,
+                image_hashes: None,
+            },
+        );
+
+        let hit = prefix_cacher.search_for_matching_cache(
+            &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+            None,
+            None,
+        )?;
+
+        match hit {
+            Some(MatchingCache::Normal { toks, offset, .. }) => {
+                assert_eq!(offset, 10);
+                assert_eq!(toks, vec![11]);
+            }
+            None => panic!("expected exact-extension prefix-cache hit"),
+        }
+
+        Ok(())
     }
 }
