@@ -128,8 +128,15 @@ pub async fn re_isq(
 ) -> Result<String, String> {
     let repr = format!("Re ISQ: {:?}", request.ggml_type);
     MistralRs::maybe_log_request(state.clone(), repr.clone());
-    let request = Request::ReIsq(parse_isq_value(&request.ggml_type, None)?);
-    state.get_sender(None).unwrap().send(request).await.unwrap();
+    let request = Request::ReIsq(
+        parse_isq_value(&request.ggml_type, None).map_err(|e| e.to_string())?,
+    );
+    state
+        .get_sender(None)
+        .map_err(|e| e.to_string())?
+        .send(request)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(repr)
 }
 
