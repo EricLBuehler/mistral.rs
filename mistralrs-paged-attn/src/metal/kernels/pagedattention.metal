@@ -1363,6 +1363,9 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES,
                                     partition_size);                           \
   instantiate_paged_attention_inner(type, cache_type, 256, block_size,         \
                                     num_threads, num_simd_lanes,               \
+                                    partition_size);                           \
+  instantiate_paged_attention_inner(type, cache_type, 512, block_size,         \
+                                    num_threads, num_simd_lanes,               \
                                     partition_size);
 
 #define instantiate_paged_attention_v2_reduce_heads(                           \
@@ -1380,6 +1383,8 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES,
   instantiate_paged_attention_v2_reduce_inner(type, 192, num_threads,          \
                                               num_simd_lanes, partition_size); \
   instantiate_paged_attention_v2_reduce_inner(type, 256, num_threads,          \
+                                              num_simd_lanes, partition_size); \
+  instantiate_paged_attention_v2_reduce_inner(type, 512, num_threads,          \
                                               num_simd_lanes, partition_size);
 
 #define instantiate_paged_attention_block_size(type, cache_type, num_threads,  \

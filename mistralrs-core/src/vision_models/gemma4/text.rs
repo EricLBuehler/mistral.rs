@@ -981,6 +981,22 @@ impl ModelConfigLike for Gemma4ModelConfigLike {
     fn kv_cache_layout(&self) -> crate::paged_attention::KvCacheLayout {
         self.base.kv_cache_layout
     }
+
+    fn kv_cache_elements_per_token(&self) -> usize {
+        let num_layers = self.base.num_layers;
+        let total: usize = (0..num_layers)
+            .map(|i| {
+                if !self.uses_own_kv_cache_for_layer(i) {
+                    return 0;
+                }
+                let kv_heads = self.num_kv_heads_for_layer(i);
+                let k_dim = self.k_head_dim_for_layer(i);
+                let v_dim = self.v_head_dim_for_layer(i);
+                kv_heads * (k_dim + v_dim)
+            })
+            .sum();
+        total / num_layers
+    }
 }
 
 #[allow(dead_code)]

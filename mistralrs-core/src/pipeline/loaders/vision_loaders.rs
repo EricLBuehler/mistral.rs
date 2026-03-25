@@ -7317,7 +7317,7 @@ impl VisionModelLoader for Gemma4Loader {
         ))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        false
+        true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
