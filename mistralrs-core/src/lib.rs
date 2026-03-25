@@ -1499,6 +1499,43 @@ impl MistralRs {
             .map_err(|_| MistralRsError::EnginePoisoned)?;
         unloaded.insert(resolved_model_id.to_string(), unloaded_state);
 
+        let device = engine_instance.config.device.clone();
+
+        // The Engine asynchronous worker loop has finished dropping inner variables.
+        let _ = engine_instance.engine_handler.join();
+
+        // We MUST bind to the device context BEFORE dropping the state!
+        // Tensors drop on the HTTP thread naturally here; cudarc requires the CUDA OS context 
+        // to be bounded for cuMemFreeAsync to execute natively without silently aborting into the memory pool void.
+        #[cfg(feature = "cuda")]
+        let _ctx_guard = {
+            if let candle_core::Device::Cuda(dev) = &device {
+                dev.cuda_stream().context().bind_to_thread().ok()
+            } else {
+                None
+            }
+        };
+
+        drop(engine_instance.reboot_state);
+        let _ = device.synchronize();
+
+        // Manually execute a garbage collection pool trim synchronously mapped.
+        #[cfg(feature = "cuda")]
+        if let candle_core::Device::Cuda(dev) = &device {
+            unsafe {
+                use candle_core::cuda::cudarc::driver::sys;
+                if let Ok(_ctx) = dev.cuda_stream().context().bind_to_thread() {
+                    let mut dev_id = 0;
+                    if sys::cuCtxGetDevice(&mut dev_id) == sys::CUresult::CUDA_SUCCESS {
+                        let mut pool: sys::CUmemoryPool = std::ptr::null_mut();
+                        if sys::cuDeviceGetDefaultMemPool(&mut pool, dev_id) == sys::CUresult::CUDA_SUCCESS {
+                            sys::cuMemPoolTrimTo(pool, 0);
+                        }
+                    }
+                }
+            }
+        }
+
         // Update default if needed
         let mut default_lock = self
             .default_engine_id
