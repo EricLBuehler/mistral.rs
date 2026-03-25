@@ -212,31 +212,18 @@ impl MoEExperts {
         let backend_impl = match backend {
             MoEExpertsBackend::Fused => {
                 if is_stacked_combined {
-                    MoEExpertsBackendImpl::Fused(Self::load_fused_stacked(
-                        cfg,
-                        experts_vb,
-                        comm,
-                    )?)
+                    MoEExpertsBackendImpl::Fused(Self::load_fused_stacked(cfg, experts_vb, comm)?)
                 } else if is_stacked_separate {
                     MoEExpertsBackendImpl::Fused(Self::load_fused_separate_stacked(
-                        cfg,
-                        experts_vb,
-                        comm,
+                        cfg, experts_vb, comm,
                     )?)
                 } else {
-                    MoEExpertsBackendImpl::Fused(Self::load_fused_standard(
-                        cfg,
-                        experts_vb,
-                        comm,
-                    )?)
+                    MoEExpertsBackendImpl::Fused(Self::load_fused_standard(cfg, experts_vb, comm)?)
                 }
             }
             MoEExpertsBackend::Fast => {
                 if is_stacked_separate {
-                    MoEExpertsBackendImpl::Fast(Self::load_fast_separate_stacked(
-                        cfg,
-                        experts_vb,
-                    )?)
+                    MoEExpertsBackendImpl::Fast(Self::load_fast_separate_stacked(cfg, experts_vb)?)
                 } else {
                     // For combined stacked or per-expert, FusedExperts auto-detects.
                     // We must construct a parent VB that FusedExperts can use
@@ -251,10 +238,7 @@ impl MoEExperts {
             }
             MoEExpertsBackend::Slow => {
                 if is_stacked_separate {
-                    MoEExpertsBackendImpl::Slow(Self::load_slow_from_stacked(
-                        cfg,
-                        experts_vb,
-                    )?)
+                    MoEExpertsBackendImpl::Slow(Self::load_slow_from_stacked(cfg, experts_vb)?)
                 } else {
                     MoEExpertsBackendImpl::Slow(Self::load_slow(
                         cfg,
@@ -578,15 +562,15 @@ impl MoEExperts {
             let u = up_proj_stacked.i(i)?.transpose(0, 1)?.contiguous()?;
             let d = down_proj_stacked.i(i)?.transpose(0, 1)?.contiguous()?;
 
-            gate_proj.push(Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(candle_nn::Linear::new(g, None)),
-            )?) as Arc<dyn QuantMethod>);
-            up_proj.push(Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(candle_nn::Linear::new(u, None)),
-            )?) as Arc<dyn QuantMethod>);
-            down_proj.push(Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(candle_nn::Linear::new(d, None)),
-            )?) as Arc<dyn QuantMethod>);
+            gate_proj.push(Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(g, None),
+            ))?) as Arc<dyn QuantMethod>);
+            up_proj.push(Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(u, None),
+            ))?) as Arc<dyn QuantMethod>);
+            down_proj.push(Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(d, None),
+            ))?) as Arc<dyn QuantMethod>);
         }
 
         Ok(SlowExpertsWeights {
