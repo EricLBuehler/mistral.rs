@@ -582,8 +582,8 @@ async fn vision_interactive_mode(
                             }
                         }
                     }
-                    // Load audios (clear previous turn's audio — transcription is per-turn)
-                    audios.clear();
+                    // Load audios and retain earlier turns so multimodal history can be
+                    // replayed with stable audio indices and matching payloads.
                     let mut audio_indexes = Vec::new();
                     for url in &urls_audio {
                         match util::parse_audio_url(url).await {
