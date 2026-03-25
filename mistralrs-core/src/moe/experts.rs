@@ -8,8 +8,8 @@
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use mistralrs_quant::{
-    FusedExperts, MatMul, PackedExperts, QuantMethod, QuantMethodConfig, QuantizedConfig,
-    ShardedVarBuilder, SumAllReduce, UnquantLinear,
+    apply_immediate_isq_always, FusedExperts, MatMul, PackedExperts, QuantMethod,
+    QuantMethodConfig, QuantizedConfig, ShardedVarBuilder, SumAllReduce, UnquantLinear,
 };
 use std::sync::Arc;
 
@@ -511,15 +511,33 @@ impl MoEExperts {
             down_proj
         };
 
-        let fused_gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+        // Move weights to CPU if immediate ISQ is active (GGML quantization needs CPU tensors)
+        let target_device = gate_proj.device().clone();
+        let (gate_proj, up_proj, down_proj) =
+            if mistralrs_quant::get_immediate_isq().is_some() && !target_device.is_cpu() {
+                (
+                    gate_proj.to_device(&Device::Cpu)?,
+                    up_proj.to_device(&Device::Cpu)?,
+                    down_proj.to_device(&Device::Cpu)?,
+                )
+            } else {
+                (gate_proj, up_proj, down_proj)
+            };
+
+        let mut fused_gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
             QuantMethodConfig::Unquantized(candle_nn::Linear::new(gate_proj, None)),
         )?);
-        let fused_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+        let mut fused_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
             QuantMethodConfig::Unquantized(candle_nn::Linear::new(up_proj, None)),
         )?);
-        let fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+        let mut fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
             QuantMethodConfig::Unquantized(candle_nn::Linear::new(down_proj, None)),
         )?);
+
+        // Apply immediate ISQ to quantize expert weights
+        fused_gate_proj = apply_immediate_isq_always(fused_gate_proj, &target_device)?;
+        fused_up_proj = apply_immediate_isq_always(fused_up_proj, &target_device)?;
+        fused_down_proj = apply_immediate_isq_always(fused_down_proj, &target_device)?;
 
         Ok(FastExpertsWeights {
             fused_gate_proj,

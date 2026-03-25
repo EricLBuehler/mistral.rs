@@ -50,7 +50,7 @@ pub fn apply_immediate_isq(
     }
 }
 
-pub(crate) fn apply_immediate_isq_always(
+pub fn apply_immediate_isq_always(
     layer: Arc<dyn QuantMethod>,
     device: &Device,
 ) -> Result<Arc<dyn QuantMethod>> {

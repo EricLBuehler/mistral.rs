@@ -139,6 +139,81 @@ fn indexed_moe_forward_fused_q8_1_input(
         let weights_ptr = weight_ptr as *const std::ffi::c_void;
 
         match w_dtype {
+            GgmlDType::Q4_0 => {
+                ffi::launch_indexed_moe_forward_q4_0_q8_1(
+                    weights_ptr,
+                    inputs_ptr as *const std::ffi::c_void,
+                    indices_ptr as *const u32,
+                    outputs_ptr as *mut f32,
+                    n_i32,
+                    k_i32,
+                    batch_i32,
+                    topk_i32,
+                    k_padded_i32,
+                    input_dim1_i32,
+                    stream,
+                );
+            }
+            GgmlDType::Q4_1 => {
+                ffi::launch_indexed_moe_forward_q4_1_q8_1(
+                    weights_ptr,
+                    inputs_ptr as *const std::ffi::c_void,
+                    indices_ptr as *const u32,
+                    outputs_ptr as *mut f32,
+                    n_i32,
+                    k_i32,
+                    batch_i32,
+                    topk_i32,
+                    k_padded_i32,
+                    input_dim1_i32,
+                    stream,
+                );
+            }
+            GgmlDType::Q5_0 => {
+                ffi::launch_indexed_moe_forward_q5_0_q8_1(
+                    weights_ptr,
+                    inputs_ptr as *const std::ffi::c_void,
+                    indices_ptr as *const u32,
+                    outputs_ptr as *mut f32,
+                    n_i32,
+                    k_i32,
+                    batch_i32,
+                    topk_i32,
+                    k_padded_i32,
+                    input_dim1_i32,
+                    stream,
+                );
+            }
+            GgmlDType::Q5_1 => {
+                ffi::launch_indexed_moe_forward_q5_1_q8_1(
+                    weights_ptr,
+                    inputs_ptr as *const std::ffi::c_void,
+                    indices_ptr as *const u32,
+                    outputs_ptr as *mut f32,
+                    n_i32,
+                    k_i32,
+                    batch_i32,
+                    topk_i32,
+                    k_padded_i32,
+                    input_dim1_i32,
+                    stream,
+                );
+            }
+            GgmlDType::Q8_1 => {
+                ffi::launch_indexed_moe_forward_q8_1_q8_1(
+                    weights_ptr,
+                    inputs_ptr as *const std::ffi::c_void,
+                    indices_ptr as *const u32,
+                    outputs_ptr as *mut f32,
+                    n_i32,
+                    k_i32,
+                    batch_i32,
+                    topk_i32,
+                    k_padded_i32,
+                    input_dim1_i32,
+                    stream,
+                );
+            }
             GgmlDType::Q2K => {
                 ffi::launch_indexed_moe_forward_q2k_q8_1(
                     weights_ptr,
@@ -264,7 +339,12 @@ pub fn qtensor_indexed_moe_forward(qtensor: &QTensor, x: &Tensor, ids: &Tensor) 
     // Check supported dtypes
     if !matches!(
         dtype,
-        GgmlDType::Q8_0
+        GgmlDType::Q4_0
+            | GgmlDType::Q4_1
+            | GgmlDType::Q5_0
+            | GgmlDType::Q5_1
+            | GgmlDType::Q8_0
+            | GgmlDType::Q8_1
             | GgmlDType::Q2K
             | GgmlDType::Q3K
             | GgmlDType::Q4K

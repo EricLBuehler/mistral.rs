@@ -892,6 +892,13 @@ impl DecoderLayer {
             let topk_weights = (topk_weights.to_dtype(DType::F32)? * scales)?;
 
             let moe_input = xs.apply(pre_ff_2)?;
+
+            // Flatten topk tensors from [batch, seq, top_k] to [num_tokens, top_k]
+            // for MoEExperts which expects 2D routing tensors
+            let (b, s, _) = moe_input.dims3()?;
+            let topk_weights = topk_weights.reshape((b * s, ()))?;
+            let topk_ids = topk_ids.reshape((b * s, ()))?;
+
             let moe_result = moe.forward(&moe_input, topk_weights, &topk_ids)?;
             let moe_normed = moe_result.apply(post_ff_2)?;
 
