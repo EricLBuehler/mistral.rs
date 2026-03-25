@@ -136,8 +136,8 @@ pub async fn re_isq(
 /// Request for model operations (unload, reload, status)
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ModelOperationRequest {
-    #[schema(example = "my-model")]
-    pub model_id: String,
+    #[schema(example = "default")]
+    pub model_id: Option<String>,
 }
 
 /// Model status enum
@@ -157,7 +157,7 @@ pub enum ModelStatus {
 /// Response for model status operations
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ModelStatusResponse {
-    #[schema(example = "my-model")]
+    #[schema(example = "default")]
     pub model_id: String,
     pub status: ModelStatus,
     /// Error message when status indicates an error condition
@@ -179,7 +179,7 @@ pub async fn unload_model(
     State(state): ExtractedMistralRsState,
     Json(request): Json<ModelOperationRequest>,
 ) -> Json<ModelStatusResponse> {
-    let model_id = request.model_id;
+    let model_id = request.model_id.unwrap_or_else(|| "default".to_string());
     match state.unload_model(&model_id) {
         Ok(()) => Json(ModelStatusResponse {
             model_id,
@@ -216,7 +216,7 @@ pub async fn reload_model(
     State(state): ExtractedMistralRsState,
     Json(request): Json<ModelOperationRequest>,
 ) -> Json<ModelStatusResponse> {
-    let model_id = request.model_id;
+    let model_id = request.model_id.unwrap_or_else(|| "default".to_string());
     match state.reload_model(&model_id).await {
         Ok(()) => Json(ModelStatusResponse {
             model_id,
@@ -256,7 +256,7 @@ pub async fn get_model_status(
     State(state): ExtractedMistralRsState,
     Json(request): Json<ModelOperationRequest>,
 ) -> Json<ModelStatusResponse> {
-    let model_id = request.model_id;
+    let model_id = request.model_id.unwrap_or_else(|| "default".to_string());
     match state.get_model_status(&model_id) {
         Ok(Some(core_status)) => {
             let status = match core_status {
