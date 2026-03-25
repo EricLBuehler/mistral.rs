@@ -457,99 +457,114 @@ impl Attention {
             k = k_rot;
         }
 
-        // KV sharing: shared layers reuse the last non-shared donor cache of the
-        // same attention type, matching Gemma3n and HF Gemma4.
-        let (k, v, is_shared_kv) = if let Some(donor_idx) = self.kv_shared_layer_index {
-            let donor_cache = &kv_caches[donor_idx];
-            let dk = donor_cache.k()?.unwrap().to_device(q.device())?;
-            let dv = donor_cache.v()?.unwrap().to_device(q.device())?;
-            (dk, dv, true)
-        } else {
-            let (k, v) = kv_caches[self.layer_idx].append(&k, &v)?;
-            (k, v, false)
-        };
-
-        let mask = if self.is_sliding {
-            sliding_attention_mask
-        } else {
-            attention_mask
-        };
-
-        let paged_mask = if flash_params.is_some() {
-            attention_mask
-        } else {
-            mask
-        };
-
-        // Adjust mask dimensions if using shared KV cache (donor may have different seq len)
-        let (mask, paged_mask) = if is_shared_kv {
-            let adjust_mask = |m: Option<&Tensor>| -> Result<Option<Tensor>> {
-                if let Some(mask) = m {
-                    let kv_seq_len = k.dims()[2];
-                    let mask_dims = mask.dims();
-                    match mask.rank() {
-                        2 => {
-                            if mask_dims[1] > kv_seq_len {
-                                Ok(Some(mask.narrow(1, 0, kv_seq_len)?))
-                            } else {
-                                Ok(Some(mask.clone()))
-                            }
-                        }
-                        3 => {
-                            if mask_dims[2] > kv_seq_len {
-                                Ok(Some(mask.narrow(2, 0, kv_seq_len)?))
-                            } else {
-                                Ok(Some(mask.clone()))
-                            }
-                        }
-                        4 => {
-                            if mask_dims[3] > kv_seq_len {
-                                Ok(Some(mask.narrow(3, 0, kv_seq_len)?))
-                            } else {
-                                Ok(Some(mask.clone()))
-                            }
-                        }
-                        _ => Ok(Some(mask.clone())),
-                    }
-                } else {
-                    Ok(None)
-                }
-            };
-            (adjust_mask(mask)?, adjust_mask(paged_mask)?)
-        } else {
-            (mask.cloned(), paged_mask.cloned())
-        };
-
         let mut attn_output = match &self.paged_attn {
-            Some(paged_attn) => match metadata {
-                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
-                    &q,
-                    &k,
-                    &v,
-                    paged_mask.as_ref(),
-                    Some(key_cache),
-                    Some(value_cache),
-                    input_metadata,
-                    &self.sdpa_params,
-                    flash_params,
-                )?,
-                None => {
-                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                    assert!(paged_mask.is_some());
-                    paged_attn.forward(
-                        &q,
-                        &k,
-                        &v,
-                        paged_mask.as_ref(),
-                        None,
-                        None,
-                        &input_metadata,
-                        &self.sdpa_params,
-                        flash_params,
-                    )?
+            Some(paged_attn) => {
+                // Paged attention path — do NOT use normal kv_caches.
+                let mask = if self.is_sliding {
+                    sliding_attention_mask
+                } else {
+                    attention_mask
+                };
+                let paged_mask = if flash_params.is_some() {
+                    attention_mask
+                } else {
+                    mask
+                };
+
+                let is_shared = self.kv_shared_layer_index.is_some();
+
+                match metadata {
+                    Some(((key_cache, value_cache), input_metadata)) => {
+                        if is_shared {
+                            // Shared layer: key_cache/value_cache point to the DONOR's paged cache (set up in forward_embeds).
+                            // Read from donor's cache without writing.
+                            paged_attn.forward_donor_cache(
+                                &q,
+                                &key_cache,
+                                &value_cache,
+                                paged_mask,
+                                input_metadata,
+                                &self.sdpa_params,
+                                flash_params,
+                            )?
+                        } else {
+                            // Non-shared: standard paged attention with raw k,v.
+                            paged_attn.forward(
+                                &q,
+                                &k,
+                                &v,
+                                paged_mask,
+                                Some(key_cache),
+                                Some(value_cache),
+                                input_metadata,
+                                &self.sdpa_params,
+                                flash_params,
+                            )?
+                        }
+                    }
+                    None => {
+                        let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                        assert!(paged_mask.is_some());
+                        paged_attn.forward(
+                            &q,
+                            &k,
+                            &v,
+                            paged_mask,
+                            None,
+                            None,
+                            &input_metadata,
+                            &self.sdpa_params,
+                            flash_params,
+                        )?
+                    }
                 }
-            },
+            }
             None => {
+                // Eager attention path — use normal kv_caches.
+                let (k, v, is_shared_kv) = if let Some(donor_idx) = self.kv_shared_layer_index {
+                    let donor_cache = &kv_caches[donor_idx];
+                    let dk = donor_cache.k()?.unwrap().to_device(q.device())?;
+                    let dv = donor_cache.v()?.unwrap().to_device(q.device())?;
+                    (dk, dv, true)
+                } else {
+                    let (k, v) = kv_caches[self.layer_idx].append(&k, &v)?;
+                    (k, v, false)
+                };
+
+                let mask = if self.is_sliding {
+                    sliding_attention_mask
+                } else {
+                    attention_mask
+                };
+
+                // Adjust mask dimensions if using shared KV cache (donor may
+                // have different seq len)
+                let mask = if is_shared_kv {
+                    let adjust_mask = |m: Option<&Tensor>| -> Result<Option<Tensor>> {
+                        if let Some(mask) = m {
+                            let kv_seq_len = k.dims()[2];
+                            let mask_dims = mask.dims();
+                            match mask.rank() {
+                                2 if mask_dims[1] > kv_seq_len => {
+                                    Ok(Some(mask.narrow(1, 0, kv_seq_len)?))
+                                }
+                                3 if mask_dims[2] > kv_seq_len => {
+                                    Ok(Some(mask.narrow(2, 0, kv_seq_len)?))
+                                }
+                                4 if mask_dims[3] > kv_seq_len => {
+                                    Ok(Some(mask.narrow(3, 0, kv_seq_len)?))
+                                }
+                                _ => Ok(Some(mask.clone())),
+                            }
+                        } else {
+                            Ok(None)
+                        }
+                    };
+                    adjust_mask(mask)?
+                } else {
+                    mask.cloned()
+                };
+
                 Sdpa.run_attention(&q, &k, &v, mask.as_ref(), flash_params, &self.sdpa_params)?
             }
         };
@@ -557,7 +572,8 @@ impl Attention {
         if let Some(t) = self.q_proj.quantized_act_type() {
             attn_output = attn_output.to_dtype(t)?;
         }
-        attn_output = if paged_mask.is_some() || mask.is_some() {
+        let has_mask = attention_mask.is_some() || sliding_attention_mask.is_some();
+        attn_output = if has_mask {
             attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
@@ -986,9 +1002,6 @@ impl ModelConfigLike for Gemma4ModelConfigLike {
         let num_layers = self.base.num_layers;
         let total: usize = (0..num_layers)
             .map(|i| {
-                if !self.uses_own_kv_cache_for_layer(i) {
-                    return 0;
-                }
                 let kv_heads = self.num_kv_heads_for_layer(i);
                 let k_dim = self.k_head_dim_for_layer(i);
                 let v_dim = self.v_head_dim_for_layer(i);
@@ -1426,9 +1439,10 @@ impl TextModel {
                 sliding_attention_mask.as_ref().map(|m| m.get(xs.device())),
                 seqlen_offsets,
                 cache,
-                metadata
-                    .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                metadata.as_ref().map(|(kv_cache, metadata)| {
+                    let cache_idx = layer.self_attn.kv_shared_layer_index.unwrap_or(i);
+                    (kv_cache[cache_idx].clone(), *metadata)
+                }),
                 Some(flash_params),
             )?;
         }

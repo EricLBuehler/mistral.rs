@@ -307,4 +307,178 @@ impl PagedAttention {
 
         Ok(res)
     }
+
+    /// Run paged attention against a donor layer's cache without writing any
+    /// new key/value entries (no reshape_and_cache). Used by layers that share
+    /// another layer's KV cache.
+    ///
+    /// Handles all three paths:
+    /// - **Prompt / prefix-cache** (`attention_mask.is_some()`): gather donor's
+    ///   K,V from paged cache → Sdpa.
+    /// - **Decode** (`attention_mask.is_none()`): paged-attention kernel against
+    ///   the donor's cache blocks.
+    #[allow(clippy::too_many_arguments, unused_variables)]
+    pub fn forward_donor_cache(
+        &self,
+        query: &Tensor,
+        key_cache: &Tensor,
+        value_cache: &Tensor,
+        attention_mask: Option<&Tensor>,
+        input_metadata: &PagedAttentionInputMetadata,
+        sdpa_params: &SdpaParams,
+        flash_params: Option<&FlashParams>,
+    ) -> Result<Tensor> {
+        let use_full =
+            sdpa_params.sliding_window.is_none() && input_metadata.full_block_tables.is_some();
+
+        let block_tables = if use_full {
+            input_metadata
+                .full_block_tables
+                .as_ref()
+                .unwrap()
+                .get(&query.device().location())
+                .unwrap()
+        } else {
+            input_metadata
+                .block_tables
+                .as_ref()
+                .unwrap()
+                .get(&query.device().location())
+                .unwrap()
+        };
+        let context_lens = if use_full {
+            input_metadata
+                .full_context_lens
+                .as_ref()
+                .unwrap()
+                .get(&query.device().location())
+                .unwrap()
+        } else {
+            input_metadata
+                .context_lens
+                .as_ref()
+                .unwrap()
+                .get(&query.device().location())
+                .unwrap()
+        };
+
+        let alibi_slopes = if let Some(alibi_slopes) = self.alibi_slopes.as_ref() {
+            Some(alibi_slopes.to_device(query.device())?)
+        } else {
+            None
+        };
+
+        let (batch_size, attention_heads, seq_len, head_size) = query.shape().dims4()?;
+
+        // === Prompt / prefix-cache path ===
+        if attention_mask.is_some() {
+            assert!(
+                alibi_slopes.is_none(),
+                "alibi slopes not supported in donor cache prompt path"
+            );
+
+            let device = query.device();
+
+            // Build cu_seqlens_kv: use scheduler-provided value when
+            // available (prefix-cache hit).  On the very first prompt
+            // the scheduler hasn't built cu_seqlens_kv yet, but the
+            // donor's KV covers exactly the same tokens as Q, so we
+            // reuse cumulative_seqlens_q.
+            let cu_kv = if let Some(map) = input_metadata.cu_seqlens_kv.as_ref() {
+                map.get(&device.location()).unwrap().clone()
+            } else {
+                flash_params
+                    .expect("flash_params required for donor cache first-prompt path")
+                    .cumulative_seqlens_q
+                    .get(&device.location())
+                    .unwrap()
+                    .clone()
+            };
+
+            let (k_gathered, v_gathered) = mistralrs_paged_attn::gather_kv_cache(
+                key_cache,
+                value_cache,
+                self.k_scale.as_ref(),
+                self.v_scale.as_ref(),
+                block_tables,
+                &cu_kv,
+                query.dtype(),
+            )?;
+
+            let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
+            let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
+
+            // Build FlashParams with packed K cu_seqlens matching the
+            // gathered KV layout.
+            let cu_kv_for_flash = if let Some(map) = input_metadata.cu_seqlens_kv.as_ref() {
+                map.clone()
+            } else {
+                let mut map = std::collections::HashMap::new();
+                map.insert(device.location(), cu_kv.clone());
+                map
+            };
+            let prefix_flash_params = flash_params.map(|fp| {
+                let max_kv = if let Some(nc) = input_metadata.num_cached_tokens.as_ref() {
+                    nc.iter()
+                        .zip(input_metadata.query_lens.as_ref().unwrap().iter())
+                        .map(|(&nc, &ql)| (nc + ql) as u32)
+                        .max()
+                        .unwrap_or(0)
+                } else {
+                    // First prompt: KV = Q, so max_kv = max_q
+                    fp.max_q
+                };
+                FlashParams {
+                    max_q: fp.max_q,
+                    cumulative_seqlens_q: fp.cumulative_seqlens_q.clone(),
+                    logical_k: FlashKMeta {
+                        max: max_kv,
+                        cumulative_seqlens: cu_kv_for_flash,
+                    },
+                    sliding_k: None,
+                    causal: fp.causal,
+                }
+            });
+
+            return Sdpa.run_attention(
+                query,
+                &k_4d,
+                &v_4d,
+                attention_mask,
+                prefix_flash_params.as_ref(),
+                sdpa_params,
+            );
+        }
+
+        // === Decode path ===
+        let q = if seq_len > 1 {
+            query
+                .transpose(1, 2)?
+                .reshape(((), attention_heads, head_size))?
+        } else {
+            query.reshape(((), attention_heads, head_size))?
+        };
+
+        #[allow(clippy::cast_possible_truncation)]
+        let res = paged_attention(
+            &q,
+            self.k_scale.as_ref(),
+            self.v_scale.as_ref(),
+            key_cache,
+            value_cache,
+            block_tables,
+            context_lens,
+            alibi_slopes.as_ref(),
+            if use_full {
+                input_metadata.full_max_context_len.unwrap()
+            } else {
+                input_metadata.max_context_len.unwrap()
+            },
+            sdpa_params.softmax_scale,
+            sdpa_params.softcap.unwrap_or(1.0f32),
+            sdpa_params.sinks.as_ref(),
+        )?;
+
+        Ok(res)
+    }
 }
