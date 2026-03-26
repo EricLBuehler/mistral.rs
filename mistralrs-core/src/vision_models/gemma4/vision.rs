@@ -810,7 +810,7 @@ impl VisionTower {
             self.pooler
                 .forward(&hidden_states, &patch_positions, &padding_positions, None)?;
 
-        // Strip padding tokens — keep only valid (non-padding) tokens
+        // Strip padding tokens, keep only valid (non-padding) tokens
         let batch = pooled.dim(0)?;
         let mut all_real_tokens = Vec::with_capacity(batch);
         for b in 0..batch {

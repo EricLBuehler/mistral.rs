@@ -35,7 +35,7 @@ in_situ_quant = "q4k"
 | Option | Commands | Description |
 |--------|----------|-------------|
 | `command` | all | Required. Either `"serve"` or `"run"` |
-| `enable_thinking` | run | Enable thinking mode (default: false) |
+| `enable_thinking` | run | Force thinking mode on. If omitted or `false`, the run command defers to the chat template default instead of forcing thinking off. |
 | `default_model_id` | serve | Default model ID for API requests (must match a model_id in [[models]]) |
 
 ### [global] Section
@@ -208,6 +208,8 @@ max_seqs = 16
 kind = "auto"
 model_id = "Qwen/Qwen3-4B"
 ```
+
+If `enable_thinking` is omitted or set to `false`, `mistralrs from-config` does not force thinking off. It passes through the chat template default instead. Templates with an explicit `enable_thinking` toggle use the repository fallback of `true` when the flag is omitted.
 
 ### GGUF Model
 

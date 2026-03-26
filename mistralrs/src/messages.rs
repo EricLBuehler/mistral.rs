@@ -297,7 +297,7 @@ impl VisionMessages {
                     Value::String("audio".to_string()),
                 )]));
             }
-            // Store raw (unprefixed) text — prefixing happens at send-time
+            // Store raw (unprefixed) text, prefixing happens at send-time
             content_vec.push(IndexMap::from([
                 ("type".to_string(), Value::String("text".to_string())),
                 ("text".to_string(), Value::String(text.to_string())),
@@ -620,7 +620,7 @@ impl RequestBuilder {
                     Value::String("audio".to_string()),
                 )]));
             }
-            // Store raw (unprefixed) text — prefixing happens at send-time
+            // Store raw (unprefixed) text, prefixing happens at send-time
             content_vec.push(IndexMap::from([
                 ("type".to_string(), Value::String("text".to_string())),
                 ("text".to_string(), Value::String(text.to_string())),
@@ -894,7 +894,7 @@ fn resolve_pending(
     let prefixer = match category {
         ModelCategory::Vision { prefixer } => prefixer,
         _ => {
-            // Not a vision model — nothing to prefix.
+            // Not a vision model, nothing to prefix.
             pending.clear();
             return;
         }

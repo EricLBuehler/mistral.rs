@@ -463,7 +463,7 @@ impl VoxtralModel {
             mapper.set_nm_device(vb.pp("norm"), false),
         )?;
 
-        // output (lm_head) — may be tied with tok_embeddings
+        // output (lm_head), may be tied with tok_embeddings
         let output = if cfg.tied_embeddings {
             mistralrs_quant::linear_b(
                 cfg.dim,

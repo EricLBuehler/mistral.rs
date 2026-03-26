@@ -4,7 +4,7 @@
 //! following vLLM's v1 `BlockPool` + `FreeKVCacheBlockQueue` design.
 //!
 //! Key properties:
-//! - O(1) allocation (pop from free list head — LRU eviction order)
+//! - O(1) allocation (pop from free list head, LRU eviction order)
 //! - O(1) free (append to free list tail)
 //! - O(1) remove from middle of free list (for cache hits)
 //! - Freed blocks retain their hash for potential future reuse
@@ -233,7 +233,7 @@ impl BlockHashToBlockMap {
                 if id == block_id {
                     Some(id)
                 } else {
-                    // Put it back — this block_id doesn't match
+                    // Put it back, this block_id doesn't match
                     self.cache.insert(*key, CachedBlocks::Single(id));
                     None
                 }
@@ -264,7 +264,7 @@ impl BlockHashToBlockMap {
 /// The block pool manages all physical KV cache blocks.
 ///
 /// It provides allocation, freeing, and prefix cache operations.
-/// Freed blocks retain their hash for potential reuse — they are only truly
+/// Freed blocks retain their hash for potential reuse, they are only truly
 /// evicted (hash cleared) when they are reallocated to a new request.
 pub struct BlockPool {
     /// All blocks, indexed by block_id. Includes 2 extra sentinel blocks at the end.
@@ -373,7 +373,7 @@ impl BlockPool {
         Some(cached_ids)
     }
 
-    /// Touch blocks — increment ref_cnt and remove from free list if ref_cnt was 0.
+    /// Touch blocks, increment ref_cnt and remove from free list if ref_cnt was 0.
     ///
     /// Called when cached blocks are reused by a new request (prefix cache hit).
     pub fn touch(&mut self, block_ids: &[usize]) {
@@ -389,7 +389,7 @@ impl BlockPool {
         }
     }
 
-    /// Free blocks — decrement ref_cnt, append to free list tail if it hits 0.
+    /// Free blocks, decrement ref_cnt, append to free list tail if it hits 0.
     ///
     /// Blocks retain their hash when freed! They stay in the cache for potential
     /// future reuse. They are only evicted (hash cleared) when reallocated.
@@ -659,7 +659,7 @@ mod tests {
         // Free all
         pool.free_blocks(&block_ids);
 
-        // Now allocate again — should evict the cached block
+        // Now allocate again, should evict the cached block
         let new_ids = pool.get_new_blocks(3).unwrap();
         assert_eq!(new_ids.len(), 3);
 
@@ -677,11 +677,11 @@ mod tests {
         pool.touch(&block_ids);
         assert_eq!(pool.block_ref_cnt(block_ids[0]), 2);
 
-        // Free once — ref_cnt should be 1, not in free list
+        // Free once, ref_cnt should be 1, not in free list
         pool.free_blocks(&block_ids);
         assert_eq!(pool.block_ref_cnt(block_ids[0]), 1);
 
-        // Free again — ref_cnt 0, added to free list
+        // Free again, ref_cnt 0, added to free list
         pool.free_blocks(&block_ids);
         assert_eq!(pool.block_ref_cnt(block_ids[0]), 0);
     }

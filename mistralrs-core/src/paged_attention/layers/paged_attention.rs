@@ -456,7 +456,7 @@ impl PagedAttention {
     }
 
     /// Read-only paged attention against a donor layer's cache. Identical to
-    /// [`forward`] but never calls `reshape_and_cache` — the donor layer has
+    /// [`forward`] but never calls `reshape_and_cache`, the donor layer has
     /// already written its K,V.  On prompt the donor's cached K,V are
     /// gathered; on decode the paged-attention kernel reads them directly.
     #[allow(clippy::too_many_arguments)]
@@ -472,7 +472,7 @@ impl PagedAttention {
     ) -> Result<Tensor> {
         // key/value are unused (donor's cache already has them), but
         // forward_impl needs tensors for shape queries. Reuse query as
-        // a placeholder — reshape_and_cache is skipped so they're never read.
+        // a placeholder, reshape_and_cache is skipped so they're never read.
         self.forward_impl(
             query,
             query,

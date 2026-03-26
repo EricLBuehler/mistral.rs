@@ -298,7 +298,7 @@ impl MultimodalData {
         if let Some(imgs) = self.input_images.as_mut() {
             imgs.keep_num_images(images_to_keep);
         }
-        // Invalidate preprocessed pixel value cache — the trimmed image set
+        // Invalidate preprocessed pixel value cache, the trimmed image set
         // no longer matches the cached tensor dimensions (used by Qwen VL models).
         self.cached_pixel_values = None;
         self.cached_img_thw = None;

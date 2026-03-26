@@ -617,7 +617,7 @@ impl Pipeline for SpeculativePipeline {
             }
             draft_prefill_tokens.push(sample.sample.token);
         }
-        // Clone before move — needed for hybrid cache replay after rejection
+        // Clone before move, needed for hybrid cache replay after rejection
         let draft_prefill_tokens_clone = if draft_is_hybrid || target_is_hybrid {
             Some(draft_prefill_tokens.clone())
         } else {

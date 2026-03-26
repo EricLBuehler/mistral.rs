@@ -1,4 +1,4 @@
-//! # mistralrs — Blazing-Fast LLM Inference in Rust
+//! # mistralrs, Blazing-Fast LLM Inference in Rust
 //!
 //! The Rust SDK for [mistral.rs](https://github.com/EricLBuehler/mistral.rs), a high-performance
 //! LLM inference engine supporting text, vision, speech, image generation, and embedding models.
@@ -184,7 +184,7 @@
 //! | `accelerate` | Apple Accelerate framework |
 //! | `mkl` | Intel MKL acceleration |
 //!
-//! The default feature set (no flags) builds with pure Rust — no C compiler or system
+//! The default feature set (no flags) builds with pure Rust, no C compiler or system
 //! libraries required.
 //!
 //! ## Architecture

@@ -119,10 +119,10 @@ pub mod text_models_inputs_processor {
         pub num_cached_tokens: Option<Vec<usize>>,
         /// Number of new tokens per sequence (query lengths).
         pub query_lens: Option<Vec<usize>>,
-        /// Cumulative query lengths [batch+1], u32 — for Sdpa varlen flash path.
+        /// Cumulative query lengths [batch+1], u32, for Sdpa varlen flash path.
         /// Precomputed to avoid Tensor::new in the forward hot path.
         pub cu_seqlens_q: Option<HashMap<DeviceLocation, Tensor>>,
-        /// Cumulative KV lengths [batch+1], u32 — for gather_kv_cache and flash_attn_varlen.
+        /// Cumulative KV lengths [batch+1], u32, for gather_kv_cache and flash_attn_varlen.
         /// Each entry is sum of (cached + new) tokens.
         pub cu_seqlens_kv: Option<HashMap<DeviceLocation, Tensor>>,
     }
@@ -381,7 +381,7 @@ pub mod text_models_inputs_processor {
             }
 
             if flash_attn {
-                // Padded lengths — see FlashParams doc comment for prefix cache nuance.
+                // Padded lengths, see FlashParams doc comment for prefix cache nuance.
                 seqlens_q.push(padded.len() as u32);
                 seqlens_k.push((padded.len() + chunk_offset_toks + cached) as u32);
             }

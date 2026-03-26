@@ -14,7 +14,7 @@ To support additional features, we have extended the completion and chat complet
 - `top_k`: `int` | `null`. If non null, it is only relevant if positive.
 - `grammar`: `{"type" : "regex" | "lark" | "json_schema" | "llguidance", "value": string}` or `null`. Grammar to use. This is mutually exclusive to the OpenAI-compatible `response_format`.
 - `min_p`: `float` | `null`. If non null, it is only relevant if 1 >= min_p >= 0.
-- `enable_thinking`: `bool`, default to `false`. Enable thinking for models that support it.
+- `enable_thinking`: `bool` | `null`. Enable thinking for models that support it. If omitted or `null`, mistral.rs defers to the chat template's default behavior instead of forcing thinking off. Templates with an explicit `enable_thinking` toggle use the repository fallback of `true` when the flag is omitted.
 - `truncate_sequence`: `bool` | `null`. When `true`, requests that exceed the model context length will be truncated instead of rejected; otherwise the server returns a validation error. Embedding requests truncate tokens at the end of the prompt, while chat/completion requests truncate tokens at the start of the prompt.
 - `repetition_penalty`: `float` | `null`. Penalty for repeating tokens. This is distinct from `frequency_penalty` and `presence_penalty` - it applies a direct multiplicative penalty to repeated token logits.
 - `web_search_options`: `object` | `null`. Enable web search integration (see [WEB_SEARCH.md](WEB_SEARCH.md)). Contains optional fields: `search_context_size` ("low", "medium", "high"), `user_location` (object with location info), `search_description` (override search tool description), `extract_description` (override extraction tool description).

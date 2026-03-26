@@ -793,6 +793,8 @@ Enable thinking/reasoning mode for models that support it (like DeepSeek, Qwen3)
 mistralrs run -m Qwen/Qwen3-4B --enable-thinking
 ```
 
+`--enable-thinking` forces thinking on. If you omit it, `mistralrs run` defers to the chat template's default behavior instead of forcing thinking off. Templates with an explicit `enable_thinking` toggle use the repository fallback of `true` when the flag is omitted.
+
 In interactive mode, thinking content is displayed in gray text before the final response.
 
 ---

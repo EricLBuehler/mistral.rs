@@ -154,7 +154,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
         let (base_model, repo_id) = if no_readme {
             (model_id.clone(), flag_repo_id)
         } else if flag_base_model.is_some() || flag_repo_id.is_some() {
-            // CLI flags provided — skip interactive prompts
+            // CLI flags provided, skip interactive prompts
             (
                 flag_base_model.unwrap_or_else(|| model_id.clone()),
                 flag_repo_id,

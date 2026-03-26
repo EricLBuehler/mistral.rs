@@ -18,7 +18,7 @@ use crate::Model;
 ///
 /// Use this when you don't know (or don't care) whether a model ID corresponds to a text or
 /// vision architecture. For example, `google/gemma-3-4b-it` is detected as vision,
-/// while `Qwen/Qwen3-4B` is detected as text — both work seamlessly.
+/// while `Qwen/Qwen3-4B` is detected as text, both work seamlessly.
 ///
 /// # Example
 ///

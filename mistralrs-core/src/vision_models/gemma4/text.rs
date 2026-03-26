@@ -451,7 +451,7 @@ impl Attention {
             k = k_rot;
         } else {
             // ProportionalRotaryEmbedding handles the full head_dim with zero-padded
-            // inv_freq — cos=1, sin=0 for non-rotated positions, so identity.
+            // inv_freq, cos=1, sin=0 for non-rotated positions, so identity.
             let (q_rot, k_rot) = self.rotary_emb_global.forward(&q, &k, seqlen_offsets)?;
             q = q_rot;
             k = k_rot;
@@ -459,7 +459,7 @@ impl Attention {
 
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => {
-                // Paged attention path — do NOT use normal kv_caches.
+                // Paged attention path, do NOT use normal kv_caches.
                 let mask = if self.is_sliding {
                     sliding_attention_mask
                 } else {
@@ -520,7 +520,7 @@ impl Attention {
                 }
             }
             None => {
-                // Eager attention path — use normal kv_caches.
+                // Eager attention path, use normal kv_caches.
                 let (k, v, is_shared_kv) = if let Some(donor_idx) = self.kv_shared_layer_index {
                     let donor_cache = &kv_caches[donor_idx];
                     let dk = donor_cache.k()?.unwrap().to_device(q.device())?;

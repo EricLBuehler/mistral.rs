@@ -227,7 +227,7 @@ impl PagedAttentionScheduler {
                     self.waiting_counts.remove(&seq_id);
                 }
                 None => {
-                    // Not enough blocks — check starvation
+                    // Not enough blocks, check starvation
                     let count = self.waiting_counts.entry(seq_id).or_insert(0);
                     *count += 1;
 
@@ -291,7 +291,7 @@ impl PagedAttentionScheduler {
 
             let seq = self.waiting.pop_front().unwrap();
             if did_ignore {
-                // Sequence is terminal (FinishedIgnored) — do NOT add to running queue.
+                // Sequence is terminal (FinishedIgnored), do NOT add to running queue.
                 // Clean up associated state and free any allocated blocks.
                 let seq_id = *get_mut_arcmutex!(seq).id();
                 self.waiting_counts.remove(&seq_id);
@@ -482,7 +482,7 @@ impl PagedAttentionScheduler {
             .cloned()
             .unwrap_or_default();
 
-        // Cache all full blocks and free — blocks stay in cache for LRU reuse
+        // Cache all full blocks and free, blocks stay in cache for LRU reuse
         let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
         if self.prefix_caching_enabled {
             kv_mgr.cache_blocks(seq_id, &block_hashes, tokens.len());
