@@ -1079,6 +1079,7 @@ impl AudioModel {
         Vec::new()
     }
 
+    #[allow(dead_code)]
     pub fn get_isq_layers(&mut self) -> Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)> {
         let mut tensors = Vec::new();
         for block in &mut self.conformer {

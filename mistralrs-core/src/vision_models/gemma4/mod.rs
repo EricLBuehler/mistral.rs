@@ -369,18 +369,7 @@ impl IsqModel for Gemma4Model {
         &dyn DeviceMapper,
     ) {
         let (mut tensors, mapper) = self.language_model.get_layers();
-
         tensors.extend(self.vision_tower.get_isq_layers());
-
-        if let Some(ref mut audio) = self.audio_tower {
-            tensors.extend(audio.get_isq_layers());
-        }
-
-        tensors.push((&mut self.embed_vision.embedding_projection, None));
-        if let Some(ref mut embed_audio) = self.embed_audio {
-            tensors.push((&mut embed_audio.embedding_projection, None));
-        }
-
         (tensors, mapper)
     }
 

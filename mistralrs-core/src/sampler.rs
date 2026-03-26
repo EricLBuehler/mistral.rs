@@ -650,7 +650,38 @@ impl Sampler {
         return_logprobs: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<Logprobs> {
-        let distr = WeightedIndex::new(probs).map_err(Error::wrap)?;
+        let distr = match WeightedIndex::new(probs) {
+            Ok(distr) => distr,
+            Err(e) => {
+                if let Some((idx, prob)) = probs
+                    .iter()
+                    .enumerate()
+                    .find(|(_, prob)| !prob.is_finite() || **prob < 0.0)
+                {
+                    return Err(Error::Msg(format!(
+                        "Invalid sampling probability at index {idx}: {prob}. The model likely produced NaN/Inf logits."
+                    )));
+                }
+
+                let positive_weight_sum: f64 = probs
+                    .iter()
+                    .copied()
+                    .filter(|prob| prob.is_finite() && *prob > 0.0)
+                    .map(f64::from)
+                    .sum();
+
+                if positive_weight_sum == 0.0 {
+                    return Err(Error::Msg(
+                        "All sampling probabilities are zero after filtering (top-k/top-p/min-p)."
+                            .to_string(),
+                    ));
+                }
+
+                return Err(Error::Msg(format!(
+                    "Failed to construct multinomial sampler: {e}"
+                )));
+            }
+        };
 
         let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
         let next_token = distr.sample(&mut mut_ref_rng); // "Find the first item which has a weight *higher* than the chosen weight."

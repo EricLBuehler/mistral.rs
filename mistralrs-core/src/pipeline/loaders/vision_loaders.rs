@@ -7340,6 +7340,7 @@ impl VisionModelLoader for Gemma4Loader {
 
 impl IsqModelLoader for Gemma4Loader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        // `embed_vision.embedding_projection` is intentionally excluded.
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
@@ -7350,33 +7351,8 @@ impl IsqModelLoader for Gemma4Loader {
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
             Regex::new(r"per_layer_model_projection\.(weight|bias)$")?,
-            Regex::new(r"embed_vision\.embedding_projection\.(weight|bias)$")?,
-            Regex::new(r"embed_audio\.embedding_projection\.(weight|bias)$")?,
-            Regex::new(r"audio_tower\.conformer\.(\d+)\.attention\.attn\.q_proj\.(weight|bias)$")?,
-            Regex::new(r"audio_tower\.conformer\.(\d+)\.attention\.attn\.k_proj\.(weight|bias)$")?,
-            Regex::new(r"audio_tower\.conformer\.(\d+)\.attention\.attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(
-                r"audio_tower\.conformer\.(\d+)\.attention\.attn\.relative_position_embedding\.pos_proj\.(weight|bias)$",
-            )?,
-            Regex::new(r"audio_tower\.conformer\.(\d+)\.attention\.post\.(weight|bias)$")?,
-            Regex::new(
-                r"audio_tower\.conformer\.(\d+)\.ffw_layer_start\.ffw_layer_1\.(weight|bias)$",
-            )?,
-            Regex::new(
-                r"audio_tower\.conformer\.(\d+)\.ffw_layer_start\.ffw_layer_2\.(weight|bias)$",
-            )?,
-            Regex::new(
-                r"audio_tower\.conformer\.(\d+)\.ffw_layer_end\.ffw_layer_1\.(weight|bias)$",
-            )?,
-            Regex::new(
-                r"audio_tower\.conformer\.(\d+)\.ffw_layer_end\.ffw_layer_2\.(weight|bias)$",
-            )?,
-            Regex::new(r"audio_tower\.conformer\.(\d+)\.lconv1d\.linear_start\.(weight|bias)$")?,
-            Regex::new(r"audio_tower\.conformer\.(\d+)\.lconv1d\.linear_end\.(weight|bias)$")?,
-            Regex::new(
-                r"audio_tower\.subsample_conv_projection\.input_proj_linear\.(weight|bias)$",
-            )?,
-            Regex::new(r"audio_tower\.output_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.per_layer_input_gate\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.per_layer_projection\.(weight|bias)$")?,
             Regex::new(
                 r"vision_tower\.encoder\.layers\.(\d+)\.self_attn\.\w+_proj\.(weight|bias)$",
             )?,
@@ -7394,43 +7370,12 @@ impl IsqModelLoader for Gemma4Loader {
             Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.per_layer_model_projection\.(weight|bias)$")?,
-            Regex::new(r"model\.embed_vision\.embedding_projection\.(weight|bias)$")?,
-            Regex::new(r"model\.embed_audio\.embedding_projection\.(weight|bias)$")?,
             Regex::new(
-                r"model\.audio_tower\.conformer\.(\d+)\.attention\.attn\.q_proj\.(weight|bias)$",
+                r"model\.language_model\.layers\.(\d+)\.per_layer_input_gate\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.audio_tower\.conformer\.(\d+)\.attention\.attn\.k_proj\.(weight|bias)$",
+                r"model\.language_model\.layers\.(\d+)\.per_layer_projection\.(weight|bias)$",
             )?,
-            Regex::new(
-                r"model\.audio_tower\.conformer\.(\d+)\.attention\.attn\.v_proj\.(weight|bias)$",
-            )?,
-            Regex::new(
-                r"model\.audio_tower\.conformer\.(\d+)\.attention\.attn\.relative_position_embedding\.pos_proj\.(weight|bias)$",
-            )?,
-            Regex::new(r"model\.audio_tower\.conformer\.(\d+)\.attention\.post\.(weight|bias)$")?,
-            Regex::new(
-                r"model\.audio_tower\.conformer\.(\d+)\.ffw_layer_start\.ffw_layer_1\.(weight|bias)$",
-            )?,
-            Regex::new(
-                r"model\.audio_tower\.conformer\.(\d+)\.ffw_layer_start\.ffw_layer_2\.(weight|bias)$",
-            )?,
-            Regex::new(
-                r"model\.audio_tower\.conformer\.(\d+)\.ffw_layer_end\.ffw_layer_1\.(weight|bias)$",
-            )?,
-            Regex::new(
-                r"model\.audio_tower\.conformer\.(\d+)\.ffw_layer_end\.ffw_layer_2\.(weight|bias)$",
-            )?,
-            Regex::new(
-                r"model\.audio_tower\.conformer\.(\d+)\.lconv1d\.linear_start\.(weight|bias)$",
-            )?,
-            Regex::new(
-                r"model\.audio_tower\.conformer\.(\d+)\.lconv1d\.linear_end\.(weight|bias)$",
-            )?,
-            Regex::new(
-                r"model\.audio_tower\.subsample_conv_projection\.input_proj_linear\.(weight|bias)$",
-            )?,
-            Regex::new(r"model\.audio_tower\.output_proj\.(weight|bias)$")?,
             Regex::new(
                 r"model\.vision_tower\.encoder\.layers\.(\d+)\.self_attn\.\w+_proj\.(weight|bias)$",
             )?,
