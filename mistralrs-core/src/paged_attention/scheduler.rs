@@ -361,22 +361,11 @@ impl PagedAttentionScheduler {
             }
 
             if !finished_with_break {
-                let new_seq_has_images = get_mut_arcmutex!(seq).has_images();
-                if running.is_empty()
-                    || get_mut_arcmutex!(running[0]).has_images() == new_seq_has_images
-                {
-                    running.push_back(seq);
-                } else {
-                    self.running.push_back(seq);
-                }
+                // Completions natively process variable metadata (vision, tokens, lengths) in parallel; pseudo-separators are obsolete during decode.
+                running.push_back(seq);
             }
         }
         self.running = running;
-
-        // Bucket running completions by sequence length
-        let running_for_bucket = std::mem::take(&mut self.running);
-        let bucketed = self.bucket_and_preempt_sequences(running_for_bucket);
-        self.running = bucketed;
 
         self.running
             .iter()
