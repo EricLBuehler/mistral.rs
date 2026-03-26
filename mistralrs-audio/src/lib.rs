@@ -29,7 +29,9 @@ impl AudioInput {
                 .collect::<std::result::Result<_, _>>()?,
             hound::SampleFormat::Int => reader
                 .samples::<i16>()
-                .map(|s| s.map(|v| v as f32 / i16::MAX as f32))
+                // Match libsndfile/soundfile normalization for PCM16 by
+                // dividing by the full signed range, not by `i16::MAX`.
+                .map(|s| s.map(|v| v as f32 / 32768.0))
                 .collect::<std::result::Result<_, _>>()?,
         };
         Ok(Self {
@@ -166,6 +168,25 @@ mod tests {
         assert_eq!(input.samples.len(), 160);
         assert_eq!(input.sample_rate, 16000);
         std::fs::remove_file("/tmp/test.wav").unwrap();
+    }
+
+    #[test]
+    fn read_wav_matches_pcm16_full_scale_normalization() {
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate: 16000,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        let mut writer = WavWriter::create("/tmp/test_full_scale.wav", spec).unwrap();
+        writer.write_sample::<i16>(i16::MIN).unwrap();
+        writer.write_sample::<i16>(i16::MAX).unwrap();
+        writer.finalize().unwrap();
+
+        let input = AudioInput::read_wav("/tmp/test_full_scale.wav").unwrap();
+        assert_eq!(input.samples, vec![-1.0, 32767.0 / 32768.0]);
+
+        std::fs::remove_file("/tmp/test_full_scale.wav").unwrap();
     }
 
     #[test]

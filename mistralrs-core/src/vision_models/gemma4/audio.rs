@@ -30,6 +30,7 @@ impl Gemma4AudioRelativePositionEmbedding {
         let head_dim = channels / num_heads;
         let max_backward = cfg.conf_attention_context_left.saturating_sub(1);
         let max_forward = cfg.conf_attention_context_right;
+        let num_timescales = channels / 2;
 
         let pos_proj = mistralrs_quant::linear_no_bias(
             channels,
@@ -38,7 +39,15 @@ impl Gemma4AudioRelativePositionEmbedding {
             vb.pp("pos_proj"),
         )?;
 
-        let inv_timescales = Tensor::ones((1, 1, channels / 2), DType::F32, vb.device())?;
+        let log_timescale_increment =
+            (10_000.0_f64).ln() / num_timescales.saturating_sub(1).max(1) as f64;
+        let inv_timescales = Tensor::from_vec(
+            (0..num_timescales)
+                .map(|i| (-log_timescale_increment * i as f64).exp() as f32)
+                .collect::<Vec<_>>(),
+            (1, 1, num_timescales),
+            vb.device(),
+        )?;
         let pos_values = (-(max_forward as i64)..=max_backward as i64)
             .rev()
             .collect::<Vec<_>>();
@@ -156,14 +165,14 @@ impl Gemma4AudioRelativePositionEmbedding {
         let q_transposed = queries.transpose(1, 3)?.transpose(2, 3)?;
         let s_transposed = sin_emb.transpose(0, 2)?.transpose(0, 1)?;
         let q_reshaped = q_transposed.reshape((
-            batch_size,
-            num_heads,
+            batch_size * num_heads,
             num_query_blocks * query_block_size,
             head_dim,
         ))?;
         let s_broadcast = s_transposed
             .unsqueeze(0)?
             .broadcast_as((batch_size, num_heads, head_dim, max_span_plus_1))?
+            .reshape((batch_size * num_heads, head_dim, max_span_plus_1))?
             .contiguous()?;
         let term_bd_unshifted_matmul = q_reshaped.contiguous()?.matmul(&s_broadcast)?;
         let term_bd_unshifted = term_bd_unshifted_matmul.reshape((
@@ -418,7 +427,11 @@ impl Gemma4AudioSubSampleConvProjection {
         })
     }
 
-    fn forward(&self, audio_mel: &Tensor, audio_mel_mask: &Tensor) -> Result<(Tensor, Tensor)> {
+    pub(crate) fn forward(
+        &self,
+        audio_mel: &Tensor,
+        audio_mel_mask: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
         let x = audio_mel.unsqueeze(1)?;
         let (x, mask) = self.conv_0.forward(&x, audio_mel_mask)?;
         let (x, mask) = self.conv_1.forward(&x, &mask)?;
@@ -693,10 +706,10 @@ impl Gemma4AudioAttention {
             .to_dtype(DType::U8)?
             .broadcast_mul(&condition_from_causality.to_dtype(DType::U8)?)?;
 
-        let logits = self
+        let relative_logits = self
             .relative_position_embedding
             .forward(&query_blocks, &key_blocks)?;
-        let logits = ((logits / self.softcap)?.tanh()? * self.softcap)?;
+        let logits = ((&relative_logits / self.softcap)?.tanh()? * self.softcap)?;
 
         let final_condition_for_where = if final_condition_for_where.dims() != logits.dims() {
             let logits_shape = logits.dims();
@@ -725,8 +738,8 @@ impl Gemma4AudioAttention {
         };
 
         let invalid_logits = invalid_logits_tensor.broadcast_as(logits.shape())?;
-        let logits = final_condition_for_where.where_cond(&logits, &invalid_logits)?;
-        let probabilities = candle_nn::ops::softmax_last_dim(&logits.to_dtype(DType::F32)?)?
+        let masked_logits = final_condition_for_where.where_cond(&logits, &invalid_logits)?;
+        let probabilities = candle_nn::ops::softmax_last_dim(&masked_logits.to_dtype(DType::F32)?)?
             .to_dtype(value_blocks.dtype())?;
 
         let (b_dim, n_dim, u_dim, w_dim, c_dim) = probabilities.dims5()?;
@@ -761,6 +774,7 @@ pub struct Gemma4AudioConformerAttention {
     attn: Gemma4AudioAttention,
     post: ClippableLinear,
     post_norm: RmsNorm,
+    gradient_clipping: f64,
     hidden_size: usize,
 }
 
@@ -776,17 +790,22 @@ impl Gemma4AudioConformerAttention {
                 vb.pp("post"),
             )?,
             post_norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("post_norm"))?,
+            gradient_clipping: cfg.gradient_clipping,
             hidden_size: cfg.hidden_size,
         })
     }
 
     fn forward(&self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
         let residual = x;
-        let x = self.pre_attn_norm.forward(x)?;
+        let x = x.clamp(-self.gradient_clipping, self.gradient_clipping)?;
+        let x = self.pre_attn_norm.forward(&x)?;
         let x = self.attn.forward(&x, mask)?;
         let (b, t, _, _) = x.dims4()?;
         let x = x.reshape((b, t, self.hidden_size))?;
-        let x = self.post.forward(&x)?;
+        let x = self
+            .post
+            .forward(&x)?
+            .clamp(-self.gradient_clipping, self.gradient_clipping)?;
         residual.broadcast_add(&self.post_norm.forward(&x)?)
     }
 }
@@ -797,6 +816,7 @@ pub struct Gemma4AudioConformerFeedForward {
     ffw_layer_1: ClippableLinear,
     ffw_layer_2: ClippableLinear,
     post_layer_norm: RmsNorm,
+    gradient_clipping: f64,
 }
 
 impl Gemma4AudioConformerFeedForward {
@@ -825,14 +845,19 @@ impl Gemma4AudioConformerFeedForward {
                 cfg.rms_norm_eps,
                 vb.pp("post_layer_norm"),
             )?,
+            gradient_clipping: cfg.gradient_clipping,
         })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let residual = x;
-        let x = self.pre_layer_norm.forward(x)?;
+        let x = x.clamp(-self.gradient_clipping, self.gradient_clipping)?;
+        let x = self.pre_layer_norm.forward(&x)?;
         let x = candle_nn::ops::silu(&self.ffw_layer_1.forward(&x)?)?;
-        let x = self.ffw_layer_2.forward(&x)?;
+        let x = self
+            .ffw_layer_2
+            .forward(&x)?
+            .clamp(-self.gradient_clipping, self.gradient_clipping)?;
         let x = self.post_layer_norm.forward(&x)?;
         residual.broadcast_add(&(x * self.scale)?)
     }
@@ -845,6 +870,7 @@ pub struct Gemma4AudioConformerLightConv1d {
     linear_start: ClippableLinear,
     linear_end: ClippableLinear,
     causal_padding: usize,
+    gradient_clipping: f64,
 }
 
 impl Gemma4AudioConformerLightConv1d {
@@ -882,6 +908,7 @@ impl Gemma4AudioConformerLightConv1d {
                 vb.pp("linear_end"),
             )?,
             causal_padding: cfg.conf_conv_kernel_size - 1,
+            gradient_clipping: cfg.gradient_clipping,
         })
     }
 
@@ -899,7 +926,8 @@ impl Gemma4AudioConformerLightConv1d {
                 &audio_encodings.to_dtype(DType::F32)?,
             )?
             .to_dtype(audio_encodings.dtype())?
-            .transpose(D::Minus2, D::Minus1)?;
+            .transpose(D::Minus2, D::Minus1)?
+            .clamp(-self.gradient_clipping, self.gradient_clipping)?;
         let audio_encodings = self.conv_norm.forward(&audio_encodings)?;
         let audio_encodings = candle_nn::ops::silu(&audio_encodings)?;
         let audio_encodings = self.linear_end.forward(&audio_encodings)?;
@@ -913,6 +941,7 @@ pub struct Gemma4AudioConformerBlock {
     pub(crate) lconv1d: Gemma4AudioConformerLightConv1d,
     pub(crate) ffw_layer_end: Gemma4AudioConformerFeedForward,
     pub(crate) norm: RmsNorm,
+    gradient_clipping: f64,
 }
 
 impl Gemma4AudioConformerBlock {
@@ -923,10 +952,15 @@ impl Gemma4AudioConformerBlock {
             lconv1d: Gemma4AudioConformerLightConv1d::new(cfg, vb.pp("lconv1d"))?,
             ffw_layer_end: Gemma4AudioConformerFeedForward::new(cfg, vb.pp("ffw_layer_end"))?,
             norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("norm"))?,
+            gradient_clipping: cfg.gradient_clipping,
         })
     }
 
-    fn forward(&self, audio_encodings: &Tensor, audio_mel_mask: &Tensor) -> Result<Tensor> {
+    pub(crate) fn forward(
+        &self,
+        audio_encodings: &Tensor,
+        audio_mel_mask: &Tensor,
+    ) -> Result<Tensor> {
         let audio_encodings = self.ffw_layer_start.forward(audio_encodings)?;
         let audio_encodings = self.attention.forward(&audio_encodings, audio_mel_mask)?;
         let validity_mask_for_lconv = audio_mel_mask.eq(0.0)?;
@@ -936,7 +970,10 @@ impl Gemma4AudioConformerBlock {
                 .to_dtype(audio_encodings.dtype())?,
         )?;
         let audio_encodings = self.lconv1d.forward(&audio_encodings_for_lconv_input)?;
-        let audio_encodings = self.ffw_layer_end.forward(&audio_encodings)?;
+        let audio_encodings = self
+            .ffw_layer_end
+            .forward(&audio_encodings)?
+            .clamp(-self.gradient_clipping, self.gradient_clipping)?;
         self.norm.forward(&audio_encodings)
     }
 }

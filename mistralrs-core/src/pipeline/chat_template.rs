@@ -415,7 +415,7 @@ pub fn apply_chat_template_to(
             eos_token => eos_tok,
             unk_token => unk_tok,
             date_string => date_string,
-            enable_thinking => enable_thinking.unwrap_or(true),
+            enable_thinking => enable_thinking.unwrap_or(false),
             reasoning_effort => reasoning_effort_str,
         })?)
     } else {
@@ -429,8 +429,60 @@ pub fn apply_chat_template_to(
             tools => tools,
             builtin_tools => builtin_tools,
             date_string => date_string,
-            enable_thinking => enable_thinking.unwrap_or(true),
+            enable_thinking => enable_thinking.unwrap_or(false),
             reasoning_effort => reasoning_effort_str,
         })?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use either::Either;
+    use indexmap::IndexMap;
+
+    use super::{apply_chat_template_to, ChatTemplateValue};
+    use crate::MessageContent;
+
+    fn user_text_message(text: &str) -> IndexMap<String, MessageContent> {
+        IndexMap::from([
+            ("role".to_string(), Either::Left("user".to_string())),
+            ("content".to_string(), Either::Left(text.to_string())),
+        ])
+    }
+
+    #[test]
+    fn unspecified_thinking_does_not_enable_template_thinking() {
+        let template = ChatTemplateValue(Either::Left(
+            "{% if enable_thinking is defined and enable_thinking %}<|think|>{% endif %}{{ bos_token }}{{ messages[0]['content'] }}".to_string(),
+        ));
+        let messages = vec![user_text_message("hello")];
+
+        let rendered = apply_chat_template_to(
+            messages.clone(),
+            false,
+            None,
+            None,
+            &template,
+            Some("<bos>".to_string()),
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+        let disabled = apply_chat_template_to(
+            messages,
+            false,
+            Some(false),
+            None,
+            &template,
+            Some("<bos>".to_string()),
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(rendered, "<bos>hello");
+        assert_eq!(rendered, disabled);
     }
 }

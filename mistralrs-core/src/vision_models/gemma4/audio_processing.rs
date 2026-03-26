@@ -306,14 +306,16 @@ impl AudioProcessor {
             result.extend_from_slice(tail);
         }
 
-        if delay >= result.len() {
+        if result.is_empty() {
             return Ok(Vec::new());
         }
 
-        let start = delay;
-        let available = result.len() - start;
-        let keep = expected_len.min(available);
-        Ok(result[start..start + keep].to_vec())
+        // Rubato exposes the filter latency via `output_delay()`, but trimming
+        // it here shifts the waveform earlier than HF's audio loading path
+        // (`librosa`/`soxr`) and causes the downstream Gemma4 mel frames to
+        // drift. For HF parity we keep the leading samples and only truncate
+        // to the expected resampled length.
+        Ok(result.drain(..expected_len.min(result.len())).collect())
     }
 
     fn create_mel_filterbank(
@@ -408,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn resampling_flushes_tail_and_trims_delay() {
+    fn resampling_flushes_tail_and_keeps_expected_length() {
         let processor = AudioProcessor::new(&PreProcessorConfig {
             sampling_rate: Some(16_000),
             ..Default::default()

@@ -634,13 +634,14 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 [[package]]
 name = "candle-core"
 version = "0.9.2"
+source = "git+https://github.com/huggingface/candle.git?rev=5430d32#5430d32c97c687973c53a4e65fac318d9be2a834"
 dependencies = [
  "accelerate-src",
  "byteorder",
  "candle-kernels",
  "candle-metal-kernels",
  "candle-ug",
- "cudarc 0.19.2",
+ "cudarc 0.19.4",
  "float8",
  "gemm 0.19.0",
  "half",
@@ -665,6 +666,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.9.2"
+source = "git+https://github.com/huggingface/candle.git?rev=5430d32#5430d32c97c687973c53a4e65fac318d9be2a834"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -675,6 +677,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.9.2"
+source = "git+https://github.com/huggingface/candle.git?rev=5430d32#5430d32c97c687973c53a4e65fac318d9be2a834"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -687,6 +690,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.9.2"
+source = "git+https://github.com/huggingface/candle.git?rev=5430d32#5430d32c97c687973c53a4e65fac318d9be2a834"
 dependencies = [
  "cudaforge",
 ]
@@ -694,6 +698,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.9.2"
+source = "git+https://github.com/huggingface/candle.git?rev=5430d32#5430d32c97c687973c53a4e65fac318d9be2a834"
 dependencies = [
  "half",
  "objc2",
@@ -707,6 +712,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.9.2"
+source = "git+https://github.com/huggingface/candle.git?rev=5430d32#5430d32c97c687973c53a4e65fac318d9be2a834"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -725,6 +731,7 @@ dependencies = [
 [[package]]
 name = "candle-ug"
 version = "0.9.2"
+source = "git+https://github.com/huggingface/candle.git?rev=5430d32#5430d32c97c687973c53a4e65fac318d9be2a834"
 dependencies = [
  "ug",
  "ug-cuda",
@@ -1232,9 +1239,9 @@ dependencies = [
 
 [[package]]
 name = "cudarc"
-version = "0.19.2"
+version = "0.19.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aed81f178e780f3d5d354d12b4c5c5a484c4a9c329ecd037ac57f2a0e0648397"
+checksum = "f071cd6a7b5d51607df76aa2d426aaabc7a74bc6bdb885b8afa63a880572ad9b"
 dependencies = [
  "float8",
  "half",
