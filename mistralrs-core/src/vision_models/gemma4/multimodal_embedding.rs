@@ -4,7 +4,7 @@ use candle_core::{Module, Result, Tensor};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use std::sync::Arc;
 
-use crate::layers::{MatMul, RmsNorm};
+use crate::layers::RmsNorm;
 
 /// Gemma4 multimodal embedder that projects modality features into language model space.
 ///
@@ -45,17 +45,7 @@ impl Gemma4MultimodalEmbedder {
 
     /// Project soft features (from vision or audio encoder) into language model space.
     pub fn forward(&self, soft_features: &Tensor) -> Result<Tensor> {
-        let mut xs = soft_features.clone();
-        if let Some(t) = self.embedding_projection.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut projected = MatMul.qmethod_matmul(&xs, &*self.embedding_projection)?;
-        if self.embedding_projection.quantized_act_type().is_some() {
-            projected = projected.to_dtype(soft_features.dtype())?;
-        }
-        // Ensure projected is in the weight dtype for RMSNorm compatibility.
-        // The RMSNorm normalizes to std≈1, so precision loss from conversion
-        // is minimal since the output values are small (~[-8, 8]).
+        let mut projected = self.embedding_projection.forward_autocast(soft_features)?;
         let norm_dtype = self.embedding_post_projection_norm.weight().dtype();
         if projected.dtype() != norm_dtype {
             projected = projected.to_dtype(norm_dtype)?;

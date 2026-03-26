@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::{
     attention::{Sdpa, SdpaParams},
-    layers::{Activation, GemmaRmsNorm, MatMul},
+    layers::{Activation, GemmaRmsNorm},
     pipeline::text_models_inputs_processor::FlashParams,
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -78,7 +78,7 @@ impl ClippableLinear {
         if let (Some(lo), Some(hi)) = (self.input_min, self.input_max) {
             x = x.clamp(lo, hi)?;
         }
-        let mut out = MatMul.qmethod_matmul(&x, &*self.inner)?;
+        let mut out = self.inner.forward_autocast(&x)?;
         if let (Some(lo), Some(hi)) = (self.output_min, self.output_max) {
             out = out.clamp(lo, hi)?;
         }
