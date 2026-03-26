@@ -23,6 +23,9 @@ const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
     "<|channel|>",     // Harmony
 ];
 
+/// Repository default for templates that support an explicit thinking toggle.
+const DEFAULT_ENABLE_THINKING: bool = true;
+
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct AddedTokensDecoder {
@@ -415,7 +418,7 @@ pub fn apply_chat_template_to(
             eos_token => eos_tok,
             unk_token => unk_tok,
             date_string => date_string,
-            enable_thinking => enable_thinking.unwrap_or(false),
+            enable_thinking => enable_thinking.unwrap_or(DEFAULT_ENABLE_THINKING),
             reasoning_effort => reasoning_effort_str,
         })?)
     } else {
@@ -429,7 +432,7 @@ pub fn apply_chat_template_to(
             tools => tools,
             builtin_tools => builtin_tools,
             date_string => date_string,
-            enable_thinking => enable_thinking.unwrap_or(false),
+            enable_thinking => enable_thinking.unwrap_or(DEFAULT_ENABLE_THINKING),
             reasoning_effort => reasoning_effort_str,
         })?)
     }
@@ -440,7 +443,7 @@ mod tests {
     use either::Either;
     use indexmap::IndexMap;
 
-    use super::{apply_chat_template_to, ChatTemplateValue};
+    use super::{apply_chat_template_to, ChatTemplateValue, DEFAULT_ENABLE_THINKING};
     use crate::MessageContent;
 
     fn user_text_message(text: &str) -> IndexMap<String, MessageContent> {
@@ -451,14 +454,14 @@ mod tests {
     }
 
     #[test]
-    fn unspecified_thinking_does_not_enable_template_thinking() {
+    fn unspecified_thinking_enables_template_thinking() {
         let template = ChatTemplateValue(Either::Left(
             "{% if enable_thinking is defined and enable_thinking %}<|think|>{% endif %}{{ bos_token }}{{ messages[0]['content'] }}".to_string(),
         ));
         let messages = vec![user_text_message("hello")];
 
         let rendered = apply_chat_template_to(
-            messages.clone(),
+            messages,
             false,
             None,
             None,
@@ -469,10 +472,10 @@ mod tests {
             vec![],
         )
         .unwrap();
-        let disabled = apply_chat_template_to(
-            messages,
+        let enabled = apply_chat_template_to(
+            vec![user_text_message("hello")],
             false,
-            Some(false),
+            Some(true),
             None,
             &template,
             Some("<bos>".to_string()),
@@ -482,7 +485,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(rendered, "<bos>hello");
-        assert_eq!(rendered, disabled);
+        assert!(DEFAULT_ENABLE_THINKING);
+        assert_eq!(rendered, "<|think|><bos>hello");
+        assert_eq!(rendered, enabled);
     }
 }
