@@ -119,6 +119,7 @@ impl PagedAttentionScheduler {
     fn bucket_and_preempt_sequences(
         &mut self,
         sequences: VecDeque<Arc<Mutex<Sequence>>>,
+        is_prompt: bool,
     ) -> VecDeque<Arc<Mutex<Sequence>>> {
         if sequences.len() <= 1 {
             return sequences;
@@ -128,9 +129,6 @@ impl PagedAttentionScheduler {
 
         for seq in sequences {
             let seq_guard = get_mut_arcmutex!(seq);
-            // Use effective length for prompts so sequences with different
-            // prefix cache hits land in separate buckets. The causal offset
-            // (seqlen_k - seqlen_q) is only correct when all Qs are the same.
             let effective_len = if seq_guard.is_prompt() {
                 seq_guard.len().saturating_sub(seq_guard.prefix_cache_len())
             } else {
@@ -164,14 +162,20 @@ impl PagedAttentionScheduler {
         // Preempt sequences from other buckets
         for (_, seqs) in buckets {
             for seq in seqs.into_iter().rev() {
-                ids_to_preempt.push(*get_mut_arcmutex!(seq).id());
-                self._preempt(seq);
+                if is_prompt {
+                    ids_to_preempt.push(*get_mut_arcmutex!(seq).id());
+                    self._preempt(seq);
+                } else {
+                    self.running.push_back(seq);
+                }
             }
         }
 
-        // Remove preempted sequences from self.running
-        self.running
-            .retain(|seq| !ids_to_preempt.contains(get_mut_arcmutex!(seq).id()));
+        if is_prompt {
+            // Remove preempted sequences from self.running
+            self.running
+                .retain(|seq| !ids_to_preempt.contains(get_mut_arcmutex!(seq).id()));
+        }
 
         selected
     }
@@ -309,7 +313,7 @@ impl PagedAttentionScheduler {
         if !scheduled.is_empty() {
             // Bucket scheduled prompts by sequence length to ensure all sequences in a batch
             // have the same length (required for correct flash attention varlen operation).
-            let scheduled = self.bucket_and_preempt_sequences(scheduled);
+            let scheduled = self.bucket_and_preempt_sequences(scheduled, true);
 
             // Rebuild num_cached_tokens from the bucketed sequences.
             // prefix_cache_len was set per-sequence above, so this stays aligned
@@ -334,6 +338,8 @@ impl PagedAttentionScheduler {
         self.sort_running_by_priority_fcfs();
 
         let mut running: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
+        let mut deferred_running: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
+
         while !self.running.is_empty() {
             let seq = self.running.pop_front().unwrap();
             let mut finished_with_break = false;
@@ -353,6 +359,9 @@ impl PagedAttentionScheduler {
                 if !self.running.is_empty() {
                     let seq_to_preempt = self.running.pop_back().unwrap();
                     self._preempt(seq_to_preempt);
+                } else if !deferred_running.is_empty() {
+                    let seq_to_preempt = deferred_running.pop_back().unwrap();
+                    self._preempt(seq_to_preempt);
                 } else {
                     self._preempt(seq.clone());
                     finished_with_break = true;
@@ -367,16 +376,20 @@ impl PagedAttentionScheduler {
                 {
                     running.push_back(seq);
                 } else {
+                    // Safely isolate heterogeneous modalities for the next tick
                     self.running.push_back(seq);
                 }
             }
         }
-        self.running = running;
+        
+        let mut scheduled_completions: VecDeque<Arc<Mutex<Sequence>>> = running.clone();
 
-        // Bucket running completions by sequence length
-        let running_for_bucket = std::mem::take(&mut self.running);
-        let bucketed = self.bucket_and_preempt_sequences(running_for_bucket);
-        self.running = bucketed;
+        // Safely bucket Completion lengths without preempting their KVs
+        let bucketed = self.bucket_and_preempt_sequences(scheduled_completions, false);
+        let scheduled_vec: Vec<Arc<Mutex<Sequence>>> = bucketed.into_iter().collect();
+
+        // Re-integrate the newly successfully expanded sequences into self.running
+        self.running.extend(scheduled_vec.clone());
 
         self.running
             .iter()
@@ -418,7 +431,7 @@ impl PagedAttentionScheduler {
         logger.set_num_waiting(self.waiting.len());
 
         PagedAttentionSchedulerOutput {
-            scheduled: self.running.clone().into_iter().collect(),
+            scheduled: scheduled_vec,
             num_cached_tokens: Vec::new(), // No prefix cache for completion
         }
     }
