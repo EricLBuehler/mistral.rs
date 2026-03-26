@@ -94,10 +94,8 @@ impl ClippableLinear {
 
 // ── 2D Vision Rotary Embedding ──────────────────────────────────────────────
 
-#[allow(dead_code)]
 struct VisionRotaryEmbedding {
     inv_freq: Tensor,
-    head_dim: usize,
     ndim: usize,
 }
 
@@ -109,11 +107,7 @@ impl VisionRotaryEmbedding {
             .map(|i| 1.0 / (theta.powf(2.0 * i as f64 / dim_per_dim as f64)) as f32)
             .collect();
         let inv_freq = Tensor::from_vec(inv_freq, (1, 1, half), device)?;
-        Ok(Self {
-            inv_freq,
-            head_dim,
-            ndim,
-        })
+        Ok(Self { inv_freq, ndim })
     }
 
     fn forward(&self, _x: &Tensor, positions: &Tensor) -> Result<(Tensor, Tensor)> {
@@ -380,7 +374,6 @@ impl VisionAttention {
         uvb.to_safetensors()
     }
 
-    #[allow(dead_code)]
     fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
         vec![
             &mut self.q_proj.inner,
@@ -432,7 +425,6 @@ impl VisionMlp {
         uvb.to_safetensors()
     }
 
-    #[allow(dead_code)]
     fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
         vec![
             &mut self.gate_proj.inner,
@@ -524,7 +516,6 @@ impl VisionEncoderLayer {
         uvb.to_safetensors()
     }
 
-    #[allow(dead_code)]
     fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
         let mut layers = self.self_attn.get_isq_layers();
         layers.extend(self.mlp.get_isq_layers());
@@ -823,7 +814,6 @@ impl VisionTower {
         uvb.to_safetensors()
     }
 
-    #[allow(dead_code)]
     pub fn get_isq_layers(&mut self) -> Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)> {
         let mut tensors = Vec::new();
         for layer in &mut self.encoder_layers {
@@ -839,10 +829,5 @@ impl VisionTower {
 
     pub fn num_encoder_layers(&self) -> usize {
         self.encoder_layers.len()
-    }
-
-    #[allow(dead_code)]
-    pub fn hidden_size(&self) -> usize {
-        self.hidden_size
     }
 }
