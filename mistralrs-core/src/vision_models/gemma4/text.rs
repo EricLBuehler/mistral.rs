@@ -173,6 +173,7 @@ struct Gemma4Router {
     proj: candle_nn::Linear,
     hidden_size: usize,
     top_k: usize,
+    eps: f64,
 }
 
 impl Gemma4Router {
@@ -180,6 +181,7 @@ impl Gemma4Router {
         hidden_size: usize,
         num_experts: usize,
         top_k: usize,
+        eps: f64,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let scale = vb.get(hidden_size, "scale")?;
@@ -190,17 +192,14 @@ impl Gemma4Router {
             proj,
             hidden_size,
             top_k,
+            eps,
         })
     }
 
     /// Returns (topk_weights, topk_ids) both of shape [num_tokens, top_k].
     fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
         let xs_f32 = xs.to_dtype(DType::F32)?;
-        let rms = xs_f32
-            .sqr()?
-            .mean_keepdim(D::Minus1)?
-            .clamp(1e-6, f64::INFINITY)?
-            .sqrt()?;
+        let rms = (xs_f32.sqr()?.mean_keepdim(D::Minus1)? + self.eps)?.sqrt()?;
         let normed = xs_f32.broadcast_div(&rms)?;
 
         let root_size = (self.hidden_size as f64).powf(-0.5);
@@ -339,7 +338,7 @@ impl Attention {
         )?;
 
         let sliding_window = if sliding {
-            Some(cfg.sliding_window)
+            Some(cfg.effective_sliding_window())
         } else {
             None
         };
@@ -711,6 +710,7 @@ impl DecoderLayer {
                 cfg.hidden_size,
                 num_experts,
                 top_k,
+                cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb.pp("router"), false),
             )?;
             let pre_ff_2 = GemmaRmsNorm::new(
@@ -1241,7 +1241,7 @@ impl TextModel {
                 } else if is_sliding {
                     per_layer_uses_own_kv_cache.push(true);
                     Ok(NormalCacheType::SlidingWindow {
-                        window: cfg.sliding_window,
+                        window: cfg.effective_sliding_window(),
                     })
                 } else {
                     per_layer_uses_own_kv_cache.push(true);
@@ -1258,7 +1258,7 @@ impl TextModel {
             hidden_size: cfg.hidden_size,
             num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
             num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size()).max(1),
-            sliding_window: Some(cfg.sliding_window),
+            sliding_window: Some(cfg.effective_sliding_window()),
             k_head_dim: cfg.head_dim,
             v_head_dim: cfg.head_dim,
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
@@ -1288,7 +1288,7 @@ impl TextModel {
             device: normal_loading_metadata.real_device,
             cache: EitherCache::Normal(NormalCache::from_types(cache_types)),
             max_seq_len: cfg.max_position_embeddings,
-            sliding_window: cfg.sliding_window,
+            sliding_window: cfg.effective_sliding_window(),
             final_logit_softcapping: cfg.final_logit_softcapping,
             cfg: cfg_metadata,
             model_config,

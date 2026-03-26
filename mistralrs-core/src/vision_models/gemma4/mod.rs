@@ -81,6 +81,7 @@ impl Gemma4Model {
         let embed_vision = multimodal_embedding::Gemma4MultimodalEmbedder::new(
             vis_hidden,
             text_hidden,
+            cfg.vision_config.rms_norm_eps,
             normal_loading_metadata
                 .mapper
                 .set_nm_device(vb.pp("embed_vision"), false)
@@ -99,6 +100,7 @@ impl Gemma4Model {
             let embed = multimodal_embedding::Gemma4MultimodalEmbedder::new(
                 audio_hidden,
                 text_hidden,
+                audio_cfg.rms_norm_eps,
                 normal_loading_metadata
                     .mapper
                     .set_nm_device(vb.pp("embed_audio"), false)

@@ -92,9 +92,20 @@ pub struct Gemma4TextConfig {
     #[serde(default = "use_double_wide_mlp")]
     pub use_double_wide_mlp: bool,
     pub rope_parameters: Option<Gemma4RopeParameters>,
+    pub use_bidirectional_attention: Option<String>,
 }
 
 impl Gemma4TextConfig {
+    /// Effective sliding window size, adjusted for bidirectional attention.
+    /// `self.sliding_window = (self.sliding_window // 2) + 1` when `use_bidirectional_attention` is truthy.
+    pub fn effective_sliding_window(&self) -> usize {
+        if self.use_bidirectional_attention.is_some() {
+            (self.sliding_window / 2) + 1
+        } else {
+            self.sliding_window
+        }
+    }
+
     pub fn partial_rotary_factor(&self) -> f64 {
         self.rope_parameters
             .as_ref()

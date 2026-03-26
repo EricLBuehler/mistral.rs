@@ -19,6 +19,7 @@ impl Gemma4MultimodalEmbedder {
     pub fn new(
         multimodal_hidden_size: usize,
         text_hidden_size: usize,
+        eps: f64,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let embedding_projection = mistralrs_quant::linear_no_bias(
@@ -31,7 +32,7 @@ impl Gemma4MultimodalEmbedder {
         // Post-projection normalization without learnable scale (with_scale = false)
         let embedding_post_projection_norm = RmsNorm::new_gemma_3n(
             text_hidden_size,
-            1e-6,
+            eps,
             false,
             vb.pp("embedding_post_projection_norm"),
         )?;

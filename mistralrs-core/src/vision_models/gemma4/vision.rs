@@ -776,20 +776,6 @@ impl VisionTower {
         // Bidirectional flash params
         let flash_params = FlashParams::empty(false);
 
-        // Keep padding positions zeroed after each layer so masked paths cannot
-        // accumulate values for fully masked queries.
-        let valid_mask_3d = if has_padding {
-            Some(
-                padding_positions
-                    .to_dtype(DType::F32)?
-                    .eq(0.0)?
-                    .to_dtype(dtype)?
-                    .unsqueeze(2)?,
-            )
-        } else {
-            None
-        };
-
         // Encoder layers
         let mut hidden_states = inputs_embeds;
         for layer in &self.encoder_layers {
@@ -800,9 +786,6 @@ impl VisionTower {
                 attention_mask.as_ref(),
                 &flash_params,
             )?;
-            if let Some(valid_mask_3d) = &valid_mask_3d {
-                hidden_states = hidden_states.broadcast_mul(valid_mask_3d)?;
-            }
         }
 
         // Pool with full max_patches (k = sqrt(max_patches / output_length) = 3)

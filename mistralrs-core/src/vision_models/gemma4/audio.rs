@@ -325,12 +325,20 @@ impl Gemma4AudioSSCPConvBlock {
         let pad_f_left = 1;
         let pad_f_right = 1;
 
+        assert_eq!(
+            kernel_t, kernel_f,
+            "Gemma4 SSCP conv2d requires square kernels (candle limitation), got ({kernel_t}, {kernel_f})"
+        );
+        assert_eq!(
+            stride_t, stride_f,
+            "Gemma4 SSCP conv2d requires square strides (candle limitation), got ({stride_t}, {stride_f})"
+        );
         let conv = conv2d_no_bias(
             in_channels,
             out_channels,
-            kernel_t.min(kernel_f),
+            kernel_t,
             Conv2dConfig {
-                stride: stride_t.min(stride_f),
+                stride: stride_t,
                 padding: 0,
                 dilation: 1,
                 groups: 1,
