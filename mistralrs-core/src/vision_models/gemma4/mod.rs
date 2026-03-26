@@ -369,7 +369,7 @@ impl IsqModel for Gemma4Model {
         &dyn DeviceMapper,
     ) {
         let (mut tensors, mapper) = self.language_model.get_layers();
-        tensors.extend(self.vision_tower.get_isq_layers());
+        // tensors.extend(self.vision_tower.get_isq_layers());
         (tensors, mapper)
     }
 
