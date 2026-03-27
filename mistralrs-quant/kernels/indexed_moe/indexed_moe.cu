@@ -733,8 +733,9 @@ __device__ void indexed_moe_forward(const void *__restrict__ all_weights,
 
   const size_t weight_block_size = sizeof(block_q_t);
   const size_t input_block_size = sizeof(block_q8_1);
+  const size_t weight_blocks_per_row = ((size_t)k + qk - 1) / qk;
   const size_t weight_expert_stride_bytes =
-      (size_t)(n * k) / qk * weight_block_size;
+      (size_t)n * weight_blocks_per_row * weight_block_size;
   const size_t input_task_stride_bytes =
       (size_t)k_padded / QK8_1 * input_block_size;
   const size_t output_task_stride_elems = n;
@@ -756,7 +757,7 @@ __device__ void indexed_moe_forward(const void *__restrict__ all_weights,
     return;
   }
 
-  const int blocks_per_row_x = k / qk;
+  const int blocks_per_row_x = (k + qk - 1) / qk;
   const int blocks_per_col_y = k_padded / QK8_1;
   constexpr int blocks_per_iter = vdr * nwarps * WARP_SIZE / qi;
 

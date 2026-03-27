@@ -257,13 +257,17 @@ pub struct GenerationConfig {
 
 impl GenerationConfig {
     pub fn generation_defaults(&self) -> Option<ModelGenerationDefaults> {
+        // Match Hugging Face GenerationConfig's effective sampling defaults for
+        // omitted fields so interactive/UI behavior lines up with `.generate()`.
+        // Do not force length defaults like `max_length=20`, since that would be
+        // surprising in chat mode and is better left request-local.
         let defaults = ModelGenerationDefaults {
-            do_sample: self.do_sample,
-            temperature: self.temperature,
-            top_k: self.top_k,
-            top_p: self.top_p,
+            do_sample: self.do_sample.or(Some(false)),
+            temperature: self.temperature.or(Some(1.0)),
+            top_k: self.top_k.or(Some(50)),
+            top_p: self.top_p.or(Some(1.0)),
             min_p: self.min_p,
-            repetition_penalty: self.repetition_penalty,
+            repetition_penalty: self.repetition_penalty.or(Some(1.0)),
             max_new_tokens: self.max_new_tokens,
             max_length: self.max_length,
         };
@@ -552,5 +556,25 @@ mod tests {
         assert_eq!(defaults.min_p, Some(0.05));
         assert_eq!(defaults.repetition_penalty, Some(1.1));
         assert_eq!(defaults.max_new_tokens, Some(512));
+    }
+
+    #[test]
+    fn generation_config_uses_hf_sampling_defaults_for_omitted_fields() {
+        let config: GenerationConfig = serde_json::from_str(
+            r#"{
+                "do_sample": true,
+                "temperature": 1.0
+            }"#,
+        )
+        .unwrap();
+
+        let defaults = config.generation_defaults().unwrap();
+        assert_eq!(defaults.do_sample, Some(true));
+        assert_eq!(defaults.temperature, Some(1.0));
+        assert_eq!(defaults.top_k, Some(50));
+        assert_eq!(defaults.top_p, Some(1.0));
+        assert_eq!(defaults.repetition_penalty, Some(1.0));
+        assert_eq!(defaults.max_new_tokens, None);
+        assert_eq!(defaults.max_length, None);
     }
 }

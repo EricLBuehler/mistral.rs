@@ -7,6 +7,7 @@
 //! - Manages tensor parallelism with all-reduce
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_nn::Linear;
 use mistralrs_quant::{
     apply_immediate_isq_always, FusedExperts, MatMul, PackedExperts, QuantMethod,
     QuantMethodConfig, QuantizedConfig, ShardedVarBuilder, SumAllReduce, UnquantLinear,
@@ -224,6 +225,15 @@ impl MoEExperts {
             MoEExpertsBackend::Fast => {
                 if is_stacked_separate {
                     MoEExpertsBackendImpl::Fast(Self::load_fast_separate_stacked(cfg, experts_vb)?)
+                } else if is_stacked_combined && quantization_config.is_none() {
+                    MoEExpertsBackendImpl::Fast(Self::load_fast_combined_stacked(cfg, experts_vb)?)
+                } else if is_stacked_combined {
+                    MoEExpertsBackendImpl::Slow(Self::load_slow(
+                        cfg,
+                        experts_vb,
+                        comm,
+                        quantization_config,
+                    )?)
                 } else {
                     // For combined stacked or per-expert, FusedExperts auto-detects.
                     // We must construct a parent VB that FusedExperts can use
@@ -519,6 +529,87 @@ impl MoEExperts {
         )?);
 
         // Apply immediate ISQ to quantize expert weights
+        fused_gate_proj = apply_immediate_isq_always(fused_gate_proj, &target_device)?;
+        fused_up_proj = apply_immediate_isq_always(fused_up_proj, &target_device)?;
+        fused_down_proj = apply_immediate_isq_always(fused_down_proj, &target_device)?;
+
+        Ok(FastExpertsWeights {
+            fused_gate_proj,
+            fused_up_proj,
+            fused_down_proj,
+        })
+    }
+
+    /// Load fast (gather-based) weights from a combined stacked `gate_up_proj`.
+    ///
+    /// Supports:
+    /// - `gate_up_proj`: [E, hidden, 2*inter] or [E, 2*inter, hidden]
+    /// - `down_proj`: [E, inter, hidden] or [E, hidden, inter]
+    fn load_fast_combined_stacked(
+        cfg: &MoEExpertsConfig,
+        experts_vb: ShardedVarBuilder,
+    ) -> Result<FastExpertsWeights> {
+        let num_experts = cfg.num_experts;
+
+        let gate_up_proj = experts_vb
+            .get(
+                (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
+                "gate_up_proj",
+            )
+            .or_else(|_| {
+                experts_vb
+                    .get(
+                        (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
+                        "gate_up_proj",
+                    )
+                    .and_then(|t| t.transpose(1, 2)?.contiguous())
+            })?;
+        let down_proj_packed = experts_vb
+            .get(
+                (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
+                "down_proj",
+            )
+            .or_else(|_| {
+                experts_vb
+                    .get(
+                        (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
+                        "down_proj",
+                    )
+                    .and_then(|t| t.transpose(1, 2)?.contiguous())
+            })?;
+
+        let gate_proj = gate_up_proj
+            .narrow(2, 0, cfg.moe_intermediate_size)?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let up_proj = gate_up_proj
+            .narrow(2, cfg.moe_intermediate_size, cfg.moe_intermediate_size)?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let down_proj = down_proj_packed.transpose(1, 2)?.contiguous()?;
+
+        let target_device = gate_proj.device().clone();
+        let (gate_proj, up_proj, down_proj) =
+            if mistralrs_quant::get_immediate_isq().is_some() && !target_device.is_cpu() {
+                (
+                    gate_proj.to_device(&Device::Cpu)?,
+                    up_proj.to_device(&Device::Cpu)?,
+                    down_proj.to_device(&Device::Cpu)?,
+                )
+            } else {
+                (gate_proj, up_proj, down_proj)
+            };
+
+        let mut fused_gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
+        )?);
+        let mut fused_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
+        )?);
+        let mut fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
+        )?);
+
         fused_gate_proj = apply_immediate_isq_always(fused_gate_proj, &target_device)?;
         fused_up_proj = apply_immediate_isq_always(fused_up_proj, &target_device)?;
         fused_down_proj = apply_immediate_isq_always(fused_down_proj, &target_device)?;

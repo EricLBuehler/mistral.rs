@@ -1016,6 +1016,7 @@ pub struct TextModel {
     layers: Vec<DecoderLayer>,
     norm: GemmaRmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    lm_head_is_tied: bool,
     // PLE global
     embed_tokens_per_layer: Option<Embedding>,
     per_layer_model_projection: Option<Arc<dyn QuantMethod>>,
@@ -1278,6 +1279,7 @@ impl TextModel {
             layers,
             norm,
             lm_head,
+            lm_head_is_tied: cfg.tie_word_embeddings,
             embed_tokens_per_layer,
             per_layer_model_projection,
             per_layer_projection_norm,
@@ -1578,7 +1580,12 @@ impl IsqModel for TextModel {
         &dyn DeviceMapper,
     ) {
         let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
+        // Keep Gemma 4's tied output projection in BF16. Quantizing the
+        // enormous tied lm_head destabilizes low-bit decoding first, which is
+        // especially visible around rare control tokens.
+        if !self.lm_head_is_tied {
+            tensors.push((&mut self.lm_head, None));
+        }
         if let Some(ref mut proj) = self.per_layer_model_projection {
             tensors.push((proj, None));
         }
@@ -1688,7 +1695,9 @@ impl IsqModel for TextModel {
     fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
         let mut names = Vec::new();
         // lm_head
-        names.push(None);
+        if !self.lm_head_is_tied {
+            names.push(None);
+        }
         // per_layer_model_projection
         if self.per_layer_model_projection.is_some() {
             names.push(None);
