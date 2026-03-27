@@ -36,8 +36,10 @@ pub struct Gemma4SpecificArgs {
     pub audio_mel: Option<Tensor>,
     pub audio_mel_mask: Option<Tensor>,
     pub image_hashes: Vec<u64>,
+    pub image_cached_tokens: Vec<usize>,
     pub image_sizes: Vec<(u32, u32)>,
     pub audio_hashes: Vec<u64>,
+    pub audio_cached_tokens: Vec<usize>,
 }
 
 pub struct Gemma4Model {
@@ -52,6 +54,17 @@ pub struct Gemma4Model {
 }
 
 impl Gemma4Model {
+    fn trim_cached_prefix_tokens(features: Tensor, cached_tokens: usize) -> Result<Tensor> {
+        if cached_tokens == 0 {
+            return Ok(features);
+        }
+        let total_tokens = features.dim(0)?;
+        if cached_tokens >= total_tokens {
+            return features.narrow(0, total_tokens, 0);
+        }
+        features.narrow(0, cached_tokens, total_tokens - cached_tokens)
+    }
+
     pub fn new(
         cfg: &Gemma4Config,
         vb: ShardedVarBuilder,
@@ -143,8 +156,10 @@ impl Gemma4Model {
         audio_mel: Option<&Tensor>,
         audio_mel_mask: Option<&Tensor>,
         image_hashes: &[u64],
+        image_cached_tokens: &[usize],
         image_sizes: &[(u32, u32)],
         audio_hashes: &[u64],
+        audio_cached_tokens: &[usize],
     ) -> Result<Tensor> {
         let mut input_embeds = self.language_model.embed_tokens(input_ids)?;
 
@@ -205,7 +220,10 @@ impl Gemma4Model {
                     }
                 }
                 let parts: Vec<Tensor> = per_image.into_iter().map(|t| t.unwrap()).collect();
-                Tensor::cat(&parts, 0)?
+                Self::trim_cached_prefix_tokens(
+                    Tensor::cat(&parts, 0)?,
+                    image_cached_tokens.first().copied().unwrap_or(0),
+                )?
             } else {
                 let per_image_tensors: Vec<Tensor> = (0..n_images)
                     .map(|i| {
@@ -221,9 +239,15 @@ impl Gemma4Model {
                         .map(|t| t.to_dtype(self.vision_dtype))
                         .collect::<Result<Vec<_>>>()?,
                 )?;
-                self.embed_vision
+                let embeds = self
+                    .embed_vision
                     .forward(&vision_features)?
                     .to_dtype(input_embeds.dtype())?
+                    .squeeze(0)?;
+                Self::trim_cached_prefix_tokens(
+                    embeds,
+                    image_cached_tokens.first().copied().unwrap_or(0),
+                )?
             };
 
             if indices.dim(0)? > 0 {
@@ -301,7 +325,10 @@ impl Gemma4Model {
                     }
                 }
                 let parts: Vec<Tensor> = per_audio.into_iter().map(|t| t.unwrap()).collect();
-                Tensor::cat(&parts, 0)?
+                Self::trim_cached_prefix_tokens(
+                    Tensor::cat(&parts, 0)?,
+                    audio_cached_tokens.first().copied().unwrap_or(0),
+                )?
             } else {
                 let (audio_features, enc_mask) = audio_tower.forward(audio_mel, audio_mel_mask)?;
                 let valid = enc_mask.eq(0.0)?;
@@ -320,7 +347,10 @@ impl Gemma4Model {
                     .forward(&audio_feats)?
                     .to_dtype(input_embeds.dtype())?
                     .squeeze(0)?;
-                embeds
+                Self::trim_cached_prefix_tokens(
+                    embeds,
+                    audio_cached_tokens.first().copied().unwrap_or(0),
+                )?
             };
 
             if indices.dim(0)? > 0 {
@@ -468,8 +498,10 @@ impl VisionModel for Gemma4Model {
             args.audio_mel.as_ref(),
             args.audio_mel_mask.as_ref(),
             &args.image_hashes,
+            &args.image_cached_tokens,
             &args.image_sizes,
             &args.audio_hashes,
+            &args.audio_cached_tokens,
         )
     }
 

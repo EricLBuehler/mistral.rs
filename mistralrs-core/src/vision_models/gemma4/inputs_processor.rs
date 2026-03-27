@@ -170,6 +170,13 @@ impl Gemma4ImageProcessor {
     }
 }
 
+fn cached_tokens_for_ranges(prefix_len: usize, ranges: &[(usize, usize)]) -> Vec<usize> {
+    ranges
+        .iter()
+        .map(|&(offset, length)| prefix_len.saturating_sub(offset).min(length))
+        .collect()
+}
+
 // ── InputsProcessor ────────────────────────────────────────────────────────
 
 impl InputsProcessor for Gemma4ImageProcessor {
@@ -214,6 +221,10 @@ impl InputsProcessor for Gemma4ImageProcessor {
         let has_audios = input_seqs.iter().any(|seq| seq.has_audios());
 
         let mut has_changed_prompt = false;
+        let mut image_hashes_accum = Vec::new();
+        let mut image_cached_tokens_accum = Vec::new();
+        let mut audio_hashes_accum = Vec::new();
+        let mut audio_cached_tokens_accum = Vec::new();
 
         // ── Audio processing ───────────────────────────────────────────────
         if has_audios && !self.supports_audio {
@@ -272,12 +283,37 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         has_changed_prompt = true;
                     }
 
-                    let cached_audio = seq.count_prefix_cached_mm_items_by_kind("audio");
                     let n_audio = audios.len();
-                    if cached_audio < n_audio {
-                        for idx in cached_audio..n_audio {
+                    let audio_ranges =
+                        find_image_placeholder_ranges(seq.get_toks(), AUDIO_TOKEN_ID);
+                    let cached_audio_tokens =
+                        cached_tokens_for_ranges(seq.prefix_cache_len(), &audio_ranges);
+                    let seq_audio_hashes = seq.audio_hashes().unwrap_or(&[]);
+                    if n_audio > 0 {
+                        for idx in 0..n_audio {
+                            let total_tokens = audio_ranges
+                                .get(idx)
+                                .map(|(_, length)| *length)
+                                .unwrap_or_else(|| {
+                                    seq_audio_num_tokens
+                                        .get(idx)
+                                        .copied()
+                                        .unwrap_or(self.audio_seq_length)
+                                });
+                            let cached_tokens = cached_audio_tokens
+                                .get(idx)
+                                .copied()
+                                .unwrap_or(0)
+                                .min(total_tokens);
+                            if cached_tokens >= total_tokens {
+                                continue;
+                            }
                             audio_mel_accum.push(seq_audio_mel.get(idx)?.unsqueeze(0)?);
                             audio_mask_accum.push(seq_audio_mask.get(idx)?.unsqueeze(0)?);
+                            if let Some(&hash) = seq_audio_hashes.get(idx) {
+                                audio_hashes_accum.push(hash);
+                            }
+                            audio_cached_tokens_accum.push(cached_tokens);
                         }
                     }
                 }
@@ -398,18 +434,38 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 }
 
                 // Per-sequence prefix cache trimming of pixel_values
-                let cached = seq.count_prefix_cached_mm_items_by_kind("img");
                 let n_images = pixel_values.dim(0).unwrap_or(0);
-                if cached < n_images {
-                    let image_sizes = image_sizes_all.unwrap_or_default();
-                    if cached > 0 {
-                        pixel_values_accum
-                            .push(pixel_values.narrow(0, cached, n_images - cached).unwrap());
-                        image_sizes_accum.extend(image_sizes[cached..].iter().copied());
-                    } else {
-                        pixel_values_accum.push(pixel_values.clone());
-                        image_sizes_accum.extend(image_sizes);
+                let image_ranges = find_image_placeholder_ranges(seq.get_toks(), IMAGE_TOKEN_ID);
+                let cached_image_tokens =
+                    cached_tokens_for_ranges(seq.prefix_cache_len(), &image_ranges);
+                let seq_image_hashes = seq.image_hashes().unwrap_or(&[]);
+                let image_sizes = image_sizes_all.unwrap_or_default();
+                for idx in 0..n_images {
+                    let total_tokens = image_ranges
+                        .get(idx)
+                        .map(|(_, length)| *length)
+                        .unwrap_or_else(|| {
+                            image_sizes
+                                .get(idx)
+                                .map(|&(h, w)| self.output_tokens_for_size(h as usize, w as usize))
+                                .unwrap_or(0)
+                        });
+                    let cached_tokens = cached_image_tokens
+                        .get(idx)
+                        .copied()
+                        .unwrap_or(0)
+                        .min(total_tokens);
+                    if cached_tokens >= total_tokens {
+                        continue;
                     }
+                    pixel_values_accum.push(pixel_values.get(idx)?.unsqueeze(0)?);
+                    if let Some(&size) = image_sizes.get(idx) {
+                        image_sizes_accum.push(size);
+                    }
+                    if let Some(&hash) = seq_image_hashes.get(idx) {
+                        image_hashes_accum.push(hash);
+                    }
+                    image_cached_tokens_accum.push(cached_tokens);
                 }
             }
 
@@ -504,46 +560,6 @@ impl InputsProcessor for Gemma4ImageProcessor {
             (None, vec![])
         };
 
-        let image_hashes: Vec<u64> = if is_prompt {
-            input_seqs
-                .iter()
-                .flat_map(|seq| {
-                    seq.image_hashes()
-                        .map(|h| {
-                            let cached = seq.count_prefix_cached_mm_items_by_kind("img");
-                            if cached < h.len() {
-                                h[cached..].to_vec()
-                            } else {
-                                vec![]
-                            }
-                        })
-                        .unwrap_or_default()
-                })
-                .collect()
-        } else {
-            vec![]
-        };
-
-        let audio_hashes: Vec<u64> = if is_prompt {
-            input_seqs
-                .iter()
-                .flat_map(|seq| {
-                    seq.audio_hashes()
-                        .map(|h| {
-                            let cached = seq.count_prefix_cached_mm_items_by_kind("audio");
-                            if cached < h.len() {
-                                h[cached..].to_vec()
-                            } else {
-                                vec![]
-                            }
-                        })
-                        .unwrap_or_default()
-                })
-                .collect()
-        } else {
-            vec![]
-        };
-
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
@@ -553,9 +569,27 @@ impl InputsProcessor for Gemma4ImageProcessor {
             model_specific_args: Box::new(Gemma4SpecificArgs {
                 audio_mel,
                 audio_mel_mask,
-                image_hashes,
+                image_hashes: if is_prompt {
+                    image_hashes_accum
+                } else {
+                    vec![]
+                },
+                image_cached_tokens: if is_prompt {
+                    image_cached_tokens_accum
+                } else {
+                    vec![]
+                },
                 image_sizes,
-                audio_hashes,
+                audio_hashes: if is_prompt {
+                    audio_hashes_accum
+                } else {
+                    vec![]
+                },
+                audio_cached_tokens: if is_prompt {
+                    audio_cached_tokens_accum
+                } else {
+                    vec![]
+                },
             }),
             paged_attn_meta,
             flash_meta,
@@ -663,12 +697,22 @@ impl ImagePreProcessor for Gemma4ImageProcessor {
 
 #[cfg(test)]
 mod tests {
-    use super::Gemma4Processor;
+    use super::{cached_tokens_for_ranges, Gemma4Processor};
     use crate::vision_models::processor_config::ProcessorConfig;
 
     #[test]
     fn defaults_audio_seq_length_to_reference_cap() {
         let processor = Gemma4Processor::new(ProcessorConfig::default(), 16, 3, 280, true, true);
         assert_eq!(processor.audio_seq_length, 750);
+    }
+
+    #[test]
+    fn cached_tokens_for_ranges_handles_partial_overlap() {
+        let ranges = vec![(5, 4), (12, 3), (20, 2)];
+
+        assert_eq!(cached_tokens_for_ranges(0, &ranges), vec![0, 0, 0]);
+        assert_eq!(cached_tokens_for_ranges(7, &ranges), vec![2, 0, 0]);
+        assert_eq!(cached_tokens_for_ranges(13, &ranges), vec![4, 1, 0]);
+        assert_eq!(cached_tokens_for_ranges(30, &ranges), vec![4, 3, 2]);
     }
 }

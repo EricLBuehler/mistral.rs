@@ -684,6 +684,19 @@ impl VisionTower {
         Ok((positions, padding))
     }
 
+    fn zero_padded_hidden_states(
+        &self,
+        hidden_states: &Tensor,
+        padding_positions: &Tensor,
+    ) -> Result<Tensor> {
+        let mask = padding_positions
+            .unsqueeze(2)?
+            .broadcast_as(hidden_states.shape())?
+            .to_dtype(DType::U8)?;
+        let zeros = Tensor::zeros_like(hidden_states)?;
+        mask.where_cond(&zeros, hidden_states)
+    }
+
     pub fn forward(&self, pixel_values_list: &[Tensor]) -> Result<Tensor> {
         let device = pixel_values_list[0].device().clone();
         let dtype = pixel_values_list[0].dtype();
@@ -780,6 +793,10 @@ impl VisionTower {
                 attention_mask.as_ref(),
                 &flash_params,
             )?;
+            if has_padding {
+                hidden_states =
+                    self.zero_padded_hidden_states(&hidden_states, &padding_positions)?;
+            }
         }
 
         // Pool with full max_patches (k = sqrt(max_patches / output_length) = 3)
