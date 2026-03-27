@@ -615,11 +615,15 @@ impl Engine {
                         }
                     } else if chat_template.uses_channel_tags() {
                         // Gemma 4: <|channel>thought\n...<channel|>
+                        let prompt_activates_thinking =
+                            seq.get_initial_prompt().contains("<|think|>");
                         seq.enable_reasoning(
                             crate::reasoning_parsers::ReasoningMode::TagBased,
-                            Box::new(
-                                crate::reasoning_parsers::TagReasoningContext::new_gemma_channel(),
-                            ),
+                            Box::new(if prompt_activates_thinking {
+                                crate::reasoning_parsers::TagReasoningContext::new_gemma_channel_with_implicit_thinking()
+                            } else {
+                                crate::reasoning_parsers::TagReasoningContext::new_gemma_channel()
+                            }),
                         );
                     } else if chat_template.uses_think_tags() {
                         // DeepSeek, QwQ, SmolLM3: <think>...</think>

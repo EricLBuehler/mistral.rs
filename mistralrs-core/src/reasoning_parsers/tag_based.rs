@@ -34,6 +34,8 @@ pub const CHANNEL_CLOSE_TAG: &str = "<channel|>";
 pub struct TagReasoningContext {
     open_tag: String,
     close_tag: String,
+    implicit_leading_reasoning_prefix: Option<String>,
+    allow_implicit_leading_reasoning_prefix: bool,
     /// Accumulated final content (outside reasoning blocks)
     accumulated_content: String,
     /// Accumulated reasoning content (inside reasoning blocks)
@@ -66,6 +68,15 @@ impl TagReasoningContext {
         Self::with_tags(CHANNEL_OPEN_TAG, CHANNEL_CLOSE_TAG)
     }
 
+    /// Create a Gemma 4 channel parser that also accepts a leading bare
+    /// `thought\n` prefix before the first `<channel|>`.
+    pub fn new_gemma_channel_with_implicit_thinking() -> Self {
+        let mut ctx = Self::new_gemma_channel();
+        ctx.implicit_leading_reasoning_prefix = Some("thought\n".to_string());
+        ctx.allow_implicit_leading_reasoning_prefix = true;
+        ctx
+    }
+
     /// Create a TagReasoningContext that starts inside a think block.
     ///
     /// Use this when the chat template hardcodes `<think>` in the generation prompt,
@@ -80,6 +91,8 @@ impl TagReasoningContext {
         Self {
             open_tag: open.to_string(),
             close_tag: close.to_string(),
+            implicit_leading_reasoning_prefix: None,
+            allow_implicit_leading_reasoning_prefix: false,
             accumulated_content: String::new(),
             accumulated_reasoning: String::new(),
             in_think_block: false,
@@ -162,6 +175,25 @@ impl TagReasoningContext {
                     break;
                 }
             } else {
+                if self.allow_implicit_leading_reasoning_prefix
+                    && self.accumulated_content.is_empty()
+                {
+                    if let Some(prefix) = &self.implicit_leading_reasoning_prefix {
+                        if self.buffer.starts_with(prefix) {
+                            self.in_think_block = true;
+                            self.allow_implicit_leading_reasoning_prefix = false;
+                            self.buffer = self.buffer[prefix.len()..].to_string();
+                            continue;
+                        }
+
+                        if prefix.starts_with(&self.buffer) {
+                            break;
+                        }
+
+                        self.allow_implicit_leading_reasoning_prefix = false;
+                    }
+                }
+
                 // Looking for open tag
                 if let Some(start_pos) = self.buffer.find(&*self.open_tag) {
                     // Found opening tag - extract content before it
@@ -816,5 +848,43 @@ mod tests {
             Some("line1\nline2\nline3".to_string())
         );
         assert_eq!(ctx.content(), Some("answer".to_string()));
+    }
+
+    #[test]
+    fn test_gemma_implicit_leading_thought_prefix() {
+        let mut ctx = TagReasoningContext::new_gemma_channel_with_implicit_thinking();
+        ctx.process_text("thought\nreasoning here<channel|>final answer");
+        ctx.finalize();
+
+        assert_eq!(ctx.reasoning_content(), Some("reasoning here".to_string()));
+        assert_eq!(ctx.content(), Some("final answer".to_string()));
+    }
+
+    #[test]
+    fn test_gemma_implicit_leading_thought_prefix_incremental() {
+        let mut ctx = TagReasoningContext::new_gemma_channel_with_implicit_thinking();
+        ctx.process_text("tho");
+        assert_eq!(ctx.reasoning_content(), None);
+        assert_eq!(ctx.content(), None);
+
+        ctx.process_text("ught\nreason");
+        ctx.process_text("ing<channel|>answer");
+        ctx.finalize();
+
+        assert_eq!(ctx.reasoning_content(), Some("reasoning".to_string()));
+        assert_eq!(ctx.content(), Some("answer".to_string()));
+    }
+
+    #[test]
+    fn test_gemma_implicit_leading_thought_prefix_falls_back_to_content() {
+        let mut ctx = TagReasoningContext::new_gemma_channel_with_implicit_thinking();
+        ctx.process_text("The answer starts immediately.");
+        ctx.finalize();
+
+        assert_eq!(ctx.reasoning_content(), None);
+        assert_eq!(
+            ctx.content(),
+            Some("The answer starts immediately.".to_string())
+        );
     }
 }
