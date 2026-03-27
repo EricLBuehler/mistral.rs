@@ -32,11 +32,21 @@ struct ClippableLinear {
     input_max: Option<f64>,
     output_min: Option<f64>,
     output_max: Option<f64>,
+    has_linear_prefix: bool,
 }
 
 impl ClippableLinear {
     fn new(in_features: usize, out_features: usize, vb: ShardedVarBuilder) -> Result<Self> {
-        let inner = mistralrs_quant::linear_no_bias(in_features, out_features, &None, vb.clone())?;
+        // Some checkpoints nest the weight under a `.linear.` sub-module,
+        // others store it directly. Probe to pick the right path.
+        let has_linear_prefix = vb.pp("linear").contains_tensor("weight");
+        let linear_vb = if has_linear_prefix {
+            vb.pp("linear")
+        } else {
+            vb.clone()
+        };
+        let inner =
+            mistralrs_quant::linear_no_bias(in_features, out_features, &None, linear_vb)?;
 
         // Load clipping buffers if present
         let input_min = vb
@@ -70,6 +80,7 @@ impl ClippableLinear {
             input_max,
             output_min,
             output_max,
+            has_linear_prefix,
         })
     }
 
@@ -87,7 +98,11 @@ impl ClippableLinear {
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
-        uvb.add(&self.inner);
+        if self.has_linear_prefix {
+            uvb.pp("linear").add(&self.inner);
+        } else {
+            uvb.add(&self.inner);
+        }
         uvb.to_safetensors()
     }
 }
