@@ -5,7 +5,8 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+    ColumnParallelLayer, QuantMethod, QuantMethodConfig, ReplicatedLayer, RowParallelLayer,
+    ShardedVarBuilder, UnquantLinear,
 };
 
 use crate::{
@@ -215,6 +216,12 @@ impl Gemma4Router {
             .to_dtype(self.proj.weight().dtype())?
             .apply(&self.proj)?;
         let logits_f32 = logits.to_dtype(DType::F32)?;
+        // Immediate ISQ can occasionally produce NaN router rows for the 26b
+        // MoE path. Sanitize them before top-k so we never emit invalid expert
+        // ids such as u32::MAX from the CUDA top-k kernel.
+        let finite_mask = logits_f32.eq(&logits_f32)?;
+        let logits_f32 = finite_mask.where_cond(&logits_f32, &Tensor::zeros_like(&logits_f32)?)?;
+        let logits_f32 = logits_f32.clamp(-1e4, 1e4)?;
         let probs = candle_nn::ops::softmax_last_dim(&logits_f32)?;
 
         // Select top-k experts by SCORE (logits), not by probability
@@ -1173,13 +1180,18 @@ impl TextModel {
                 mapper.set_nm_device(vb_m.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
-                None,
-            ))?
+            // Keep Gemma 4's tied output projection in BF16. Quantizing the
+            // enormous tied lm_head destabilizes low-bit decoding first, which is
+            // especially visible around rare control tokens.
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(
+                        embed_tokens.embeddings(),
+                        normal_loading_metadata.loading_isq,
+                    )?,
+                    None,
+                ),
+            ))?)
         };
 
         // PLE global components
