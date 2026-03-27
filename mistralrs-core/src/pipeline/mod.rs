@@ -218,6 +218,9 @@ pub trait MetadataMixin {
     fn name(&self) -> String;
     fn reset_non_granular_state(&self);
     fn get_metadata(&self) -> Arc<GeneralMetadata>;
+    fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
+        None
+    }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper>;
 }
 

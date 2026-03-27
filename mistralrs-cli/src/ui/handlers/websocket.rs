@@ -5,8 +5,8 @@ use axum::{
 };
 use futures_util::stream::StreamExt;
 use mistralrs::{
-    AudioInput, Model, RequestBuilder, TextMessageRole, TextMessages, VisionMessages,
-    WebSearchOptions,
+    AudioInput, Model, RequestBuilder, SamplingParams, TextMessageRole, TextMessages,
+    VisionMessages, WebSearchOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -43,39 +43,43 @@ pub struct RestoreMessage {
 const CLEAR_CMD: &str = "__CLEAR__";
 
 fn apply_gen_params(
-    mut builder: RequestBuilder,
+    builder: RequestBuilder,
     params: &Option<MessageGenerationParams>,
     defaults: &GenerationParams,
 ) -> RequestBuilder {
     let temp = params
         .as_ref()
         .and_then(|p| p.temperature)
-        .unwrap_or(defaults.temperature);
-    let top_p = params
-        .as_ref()
-        .and_then(|p| p.top_p)
-        .unwrap_or(defaults.top_p);
-    let top_k = params
-        .as_ref()
-        .and_then(|p| p.top_k)
-        .unwrap_or(defaults.top_k);
+        .or(defaults.temperature);
+    let top_p = params.as_ref().and_then(|p| p.top_p).or(defaults.top_p);
+    let top_k = params.as_ref().and_then(|p| p.top_k).or(defaults.top_k);
     let max_tokens = params
         .as_ref()
         .and_then(|p| p.max_tokens)
-        .unwrap_or(defaults.max_tokens);
+        .or(defaults.max_tokens);
     let rep_penalty = params
         .as_ref()
         .and_then(|p| p.repetition_penalty)
-        .unwrap_or(defaults.repetition_penalty);
+        .or(defaults.repetition_penalty);
 
-    builder = builder
-        .set_sampler_temperature(temp)
-        .set_sampler_topp(top_p)
-        .set_sampler_topk(top_k)
-        .set_sampler_max_len(max_tokens)
-        .set_sampler_frequency_penalty(rep_penalty);
+    let mut sampling = SamplingParams::neutral();
+    if let Some(temp) = temp {
+        sampling.temperature = if temp == 0.0 { None } else { Some(temp) };
+    }
+    if let Some(top_p) = top_p {
+        sampling.top_p = Some(top_p);
+    }
+    if let Some(top_k) = top_k.filter(|top_k| *top_k > 0) {
+        sampling.top_k = Some(top_k);
+    }
+    if let Some(max_tokens) = max_tokens {
+        sampling.max_len = Some(max_tokens);
+    }
+    if let Some(rep_penalty) = rep_penalty {
+        sampling.repetition_penalty = Some(rep_penalty);
+    }
 
-    builder
+    builder.set_sampling(sampling)
 }
 
 pub async fn ws_handler(
@@ -328,6 +332,11 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             .get(&model_id)
             .map(|m| m.kind.clone())
             .unwrap_or_else(|| "text".to_string());
+        let generation_defaults = app
+            .models
+            .get(&model_id)
+            .map(|m| m.generation_defaults.clone())
+            .unwrap_or_else(|| app.default_params.clone());
 
         let mut gen_params: Option<MessageGenerationParams> = None;
         let mut web_search_opts: Option<WebSearchOptions> = None;
@@ -418,8 +427,11 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             } else {
                 vision_msgs = vision_msgs.add_message(TextMessageRole::User, content.clone());
             }
-            let mut builder =
-                apply_gen_params(vision_msgs.clone().into(), &gen_params, &app.default_params);
+            let mut builder = apply_gen_params(
+                vision_msgs.clone().into(),
+                &gen_params,
+                &generation_defaults,
+            );
             if app.search_enabled {
                 if let Some(opts) = web_search_opts {
                     builder = builder.with_web_search_options(opts);
@@ -446,7 +458,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             audio_buffer.clear();
             text_msgs = text_msgs.add_message(TextMessageRole::User, content.clone());
             let mut builder =
-                apply_gen_params(text_msgs.clone().into(), &gen_params, &app.default_params);
+                apply_gen_params(text_msgs.clone().into(), &gen_params, &generation_defaults);
             if app.search_enabled {
                 if let Some(opts) = web_search_opts {
                     builder = builder.with_web_search_options(opts);

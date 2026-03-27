@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use tracing::info;
 
-use crate::{MessageContent, Tool};
+use crate::{MessageContent, ModelGenerationDefaults, Tool};
 
 const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
     "<|im_end|>",      // Handle ChatML case
@@ -148,7 +148,7 @@ impl ChatTemplate {
 
 pub fn calculate_eos_tokens(
     chat_template: &ChatTemplate,
-    gen_conf: Option<GenerationConfig>,
+    gen_conf: Option<&GenerationConfig>,
     tokenizer: &Tokenizer,
 ) -> Vec<u32> {
     let mut eos_tok_ids = chat_template.eos_tok().map(|x| vec![x]).unwrap_or_default();
@@ -165,10 +165,10 @@ pub fn calculate_eos_tokens(
     }
 
     if let Some(gen_conf) = gen_conf {
-        if let Some(eos_field) = gen_conf.eos_token_id {
+        if let Some(eos_field) = gen_conf.eos_token_id.as_ref() {
             let ids = match eos_field {
-                Either::Left(id) => vec![id],
-                Either::Right(ids) => ids,
+                Either::Left(id) => vec![*id],
+                Either::Right(ids) => ids.clone(),
             };
             for id in ids {
                 let s = tokenizer
@@ -180,10 +180,10 @@ pub fn calculate_eos_tokens(
             }
         }
 
-        if let Some(bos_field) = gen_conf.bos_token_id {
+        if let Some(bos_field) = gen_conf.bos_token_id.as_ref() {
             let ids = match bos_field {
-                Either::Left(id) => vec![id],
-                Either::Right(ids) => ids,
+                Either::Left(id) => vec![*id],
+                Either::Right(ids) => ids.clone(),
             };
             for id in ids {
                 let s = tokenizer
@@ -229,7 +229,7 @@ pub fn calculate_eos_tokens(
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct GenerationConfig {
     #[serde(default)]
     #[serde(with = "either::serde_untagged_optional")]
@@ -237,6 +237,43 @@ pub struct GenerationConfig {
     #[serde(default)]
     #[serde(with = "either::serde_untagged_optional")]
     eos_token_id: Option<Either<u32, Vec<u32>>>,
+    #[serde(default)]
+    do_sample: Option<bool>,
+    #[serde(default)]
+    temperature: Option<f64>,
+    #[serde(default)]
+    top_k: Option<usize>,
+    #[serde(default)]
+    top_p: Option<f64>,
+    #[serde(default)]
+    min_p: Option<f64>,
+    #[serde(default)]
+    repetition_penalty: Option<f32>,
+    #[serde(default)]
+    max_new_tokens: Option<usize>,
+    #[serde(default)]
+    max_length: Option<usize>,
+}
+
+impl GenerationConfig {
+    pub fn generation_defaults(&self) -> Option<ModelGenerationDefaults> {
+        let defaults = ModelGenerationDefaults {
+            do_sample: self.do_sample,
+            temperature: self.temperature,
+            top_k: self.top_k,
+            top_p: self.top_p,
+            min_p: self.min_p,
+            repetition_penalty: self.repetition_penalty,
+            max_new_tokens: self.max_new_tokens,
+            max_length: self.max_length,
+        };
+
+        if defaults.is_empty() {
+            None
+        } else {
+            Some(defaults)
+        }
+    }
 }
 
 fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
@@ -443,7 +480,9 @@ mod tests {
     use either::Either;
     use indexmap::IndexMap;
 
-    use super::{apply_chat_template_to, ChatTemplateValue, DEFAULT_ENABLE_THINKING};
+    use super::{
+        apply_chat_template_to, ChatTemplateValue, GenerationConfig, DEFAULT_ENABLE_THINKING,
+    };
     use crate::MessageContent;
 
     fn user_text_message(text: &str) -> IndexMap<String, MessageContent> {
@@ -488,5 +527,30 @@ mod tests {
         assert!(DEFAULT_ENABLE_THINKING);
         assert_eq!(rendered, "<|think|><bos>hello");
         assert_eq!(rendered, enabled);
+    }
+
+    #[test]
+    fn generation_config_exposes_sampling_defaults() {
+        let config: GenerationConfig = serde_json::from_str(
+            r#"{
+                "do_sample": true,
+                "temperature": 1.0,
+                "top_k": 32,
+                "top_p": 0.9,
+                "min_p": 0.05,
+                "repetition_penalty": 1.1,
+                "max_new_tokens": 512
+            }"#,
+        )
+        .unwrap();
+
+        let defaults = config.generation_defaults().unwrap();
+        assert_eq!(defaults.do_sample, Some(true));
+        assert_eq!(defaults.temperature, Some(1.0));
+        assert_eq!(defaults.top_k, Some(32));
+        assert_eq!(defaults.top_p, Some(0.9));
+        assert_eq!(defaults.min_p, Some(0.05));
+        assert_eq!(defaults.repetition_penalty, Some(1.1));
+        assert_eq!(defaults.max_new_tokens, Some(512));
     }
 }

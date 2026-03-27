@@ -126,7 +126,8 @@ pub use request::{
 };
 pub use response::*;
 pub use sampler::{
-    CustomLogitsProcessor, DrySamplingParams, SamplingParams, StopTokens, TopLogprob,
+    CustomLogitsProcessor, DrySamplingParams, ModelGenerationDefaults, SamplingParams, StopTokens,
+    TopLogprob,
 };
 pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
@@ -217,6 +218,7 @@ pub struct MistralRsConfig {
     pub category: ModelCategory,
     pub modalities: Modalities,
     pub max_seq_len: Option<usize>,
+    pub generation_defaults: Option<ModelGenerationDefaults>,
 }
 
 /// Configuration for recreating a model loader when reloading an unloaded model.
@@ -540,6 +542,7 @@ impl MistralRs {
             ModelCategory::Diffusion | ModelCategory::Speech => None,
             _ => Some(metadata.max_seq_len),
         };
+        let generation_defaults = pipeline_guard.generation_defaults();
         let encoder_cache_counters = pipeline_guard.encoder_cache_counters();
         drop(pipeline_guard);
 
@@ -558,6 +561,7 @@ impl MistralRs {
             category: category.clone(),
             modalities,
             max_seq_len,
+            generation_defaults,
         };
 
         let tx_for_engine = tx.clone();

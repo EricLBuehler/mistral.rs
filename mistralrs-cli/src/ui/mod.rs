@@ -56,11 +56,18 @@ fn build_model_list(mistralrs: &Arc<MistralRs>) -> IndexMap<String, UiModelInfo>
                     ModelCategory::Diffusion => "diffusion",
                 };
                 if matches!(kind, "text" | "vision" | "speech") {
+                    let generation_defaults = mistralrs
+                        .config(Some(&model_id))
+                        .ok()
+                        .and_then(|cfg| cfg.generation_defaults);
                     models.insert(
                         model_id.clone(),
                         UiModelInfo {
                             name: model_id,
                             kind: kind.to_string(),
+                            generation_defaults: GenerationParams::from_model_defaults(
+                                generation_defaults.as_ref(),
+                            ),
                         },
                     );
                 }

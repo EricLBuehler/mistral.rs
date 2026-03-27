@@ -274,7 +274,7 @@ pub use mistralrs_core::{
 pub use mistralrs_core::{Constraint, LlguidanceGrammar, MessageContent, NormalRequest, Request};
 
 // ========== Sampling ==========
-pub use mistralrs_core::{DrySamplingParams, SamplingParams, StopTokens};
+pub use mistralrs_core::{DrySamplingParams, ModelGenerationDefaults, SamplingParams, StopTokens};
 
 // ========== Tool Types ==========
 pub use mistralrs_core::{
@@ -283,8 +283,8 @@ pub use mistralrs_core::{
 
 // ========== Config Types ==========
 pub use mistralrs_core::{
-    DefaultSchedulerMethod, IsqType, MemoryGpuConfig, ModelDType, PagedAttentionConfig,
-    PagedCacheType, SchedulerConfig, WebSearchOptions,
+    DefaultSchedulerMethod, IsqType, MemoryGpuConfig, MistralRsConfig, ModelDType,
+    PagedAttentionConfig, PagedCacheType, SchedulerConfig, WebSearchOptions,
 };
 
 // ========== Audio Types ==========

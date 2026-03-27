@@ -154,7 +154,7 @@ const TOPP_CMD: &str = "\\topp";
 const IMAGE_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:png|jpe?g|bmp|gif|webp)(?:\?\S+?)?)"#;
 const AUDIO_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:wav|mp3|flac|ogg)(?:\?\S+?)?)"#;
 
-fn interactive_sample_parameters() -> SamplingParams {
+fn interactive_fallback_sample_parameters() -> SamplingParams {
     SamplingParams {
         temperature: Some(0.1),
         top_k: Some(32),
@@ -169,6 +169,24 @@ fn interactive_sample_parameters() -> SamplingParams {
         logits_bias: None,
         n_choices: 1,
         dry_params: Some(DrySamplingParams::default()),
+    }
+}
+
+fn interactive_sample_parameters(mistralrs: &Arc<MistralRs>) -> SamplingParams {
+    match mistralrs
+        .config(None)
+        .ok()
+        .and_then(|cfg| cfg.generation_defaults)
+    {
+        Some(defaults) => {
+            let mut params = SamplingParams {
+                dry_params: Some(DrySamplingParams::default()),
+                ..SamplingParams::neutral()
+            };
+            params.apply_model_defaults(&defaults);
+            params
+        }
+        None => interactive_fallback_sample_parameters(),
     }
 }
 
@@ -241,7 +259,7 @@ async fn text_interactive_mode(
     let sender = mistralrs.get_sender(None).unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
 
-    let mut sampling_params = interactive_sample_parameters();
+    let mut sampling_params = interactive_sample_parameters(&mistralrs);
 
     info!("Starting interactive loop with sampling params: {sampling_params:?}");
     println!(
@@ -498,7 +516,7 @@ async fn vision_interactive_mode(
         }
     };
 
-    let mut sampling_params = interactive_sample_parameters();
+    let mut sampling_params = interactive_sample_parameters(&mistralrs);
     let mut prev_encoder_hits: usize = 0;
     let mut prev_encoder_misses: usize = 0;
 

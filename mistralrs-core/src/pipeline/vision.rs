@@ -82,6 +82,7 @@ pub struct VisionPipeline {
     // For full UQFF serialization
     template_filename: Option<PathBuf>,
     generation_config: Option<PathBuf>,
+    generation_defaults: Option<crate::ModelGenerationDefaults>,
     config: String,
     processor_filename: Option<PathBuf>,
     preprocessor_filename: Option<PathBuf>,
@@ -891,7 +892,10 @@ impl Loader for VisionLoader {
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
             EitherCache::Hybrid(hybrid) => hybrid.lock().unwrap().num_layers(),
         };
-        let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
+        let generation_defaults = gen_conf
+            .as_ref()
+            .and_then(GenerationConfig::generation_defaults);
+        let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
         let sliding_window = model.config().sliding_window;
         Ok(Arc::new(Mutex::new(VisionPipeline {
             model,
@@ -922,6 +926,7 @@ impl Loader for VisionLoader {
             organization: self.config.organization,
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
+            generation_defaults,
             config,
             processor_filename: paths.get_processor_config().clone(),
             preprocessor_filename: paths.get_preprocessor_config().clone(),
@@ -1049,6 +1054,9 @@ impl MetadataMixin for VisionPipeline {
     }
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
         Some(self.tokenizer.clone())
+    }
+    fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
+        self.generation_defaults.clone()
     }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
         Some(&*self.mapper)

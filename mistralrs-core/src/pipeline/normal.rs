@@ -80,6 +80,7 @@ pub struct NormalPipeline {
     // For full UQFF serialization
     template_filename: Option<PathBuf>,
     generation_config: Option<PathBuf>,
+    generation_defaults: Option<crate::ModelGenerationDefaults>,
     config: String,
     imatrix: Option<PathBuf>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -980,7 +981,10 @@ impl Loader for NormalLoader {
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
             EitherCache::Hybrid(hybrid) => hybrid.lock().unwrap().num_layers(),
         };
-        let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
+        let generation_defaults = gen_conf
+            .as_ref()
+            .and_then(GenerationConfig::generation_defaults);
+        let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
         let sliding_window = model.config().sliding_window;
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
@@ -1018,6 +1022,7 @@ impl Loader for NormalLoader {
             organization: self.config.organization,
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
+            generation_defaults,
             config,
             imatrix: self.config.imatrix.clone(),
             mapper: pipeline_mapper,
@@ -1137,6 +1142,9 @@ impl MetadataMixin for NormalPipeline {
     }
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
+    }
+    fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
+        self.generation_defaults.clone()
     }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
         Some(&*self.mapper)
