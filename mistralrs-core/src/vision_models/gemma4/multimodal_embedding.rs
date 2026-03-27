@@ -12,7 +12,7 @@ use crate::{layers::RmsNorm, utils::unvarbuilder::UnVarBuilder};
 /// It's simply: linear projection + RMSNorm (no learnable scale).
 pub struct Gemma4MultimodalEmbedder {
     pub(crate) embedding_projection: Arc<dyn QuantMethod>,
-    pub(crate) embedding_post_projection_norm: RmsNorm,
+    pub(crate) embedding_pre_projection_norm: RmsNorm,
 }
 
 impl Gemma4MultimodalEmbedder {
@@ -30,35 +30,36 @@ impl Gemma4MultimodalEmbedder {
         )?;
 
         // Post-projection normalization without learnable scale (with_scale = false)
-        let embedding_post_projection_norm = RmsNorm::new_gemma_3n(
-            text_hidden_size,
+        let embedding_pre_projection_norm = RmsNorm::new_gemma_3n(
+            multimodal_hidden_size,
             eps,
             false,
-            vb.pp("embedding_post_projection_norm"),
+            vb.pp("embedding_pre_projection_norm"),
         )?;
 
         Ok(Self {
             embedding_projection,
-            embedding_post_projection_norm,
+            embedding_pre_projection_norm,
         })
     }
 
     /// Project soft features (from vision or audio encoder) into language model space.
     pub fn forward(&self, soft_features: &Tensor) -> Result<Tensor> {
-        let mut projected = self.embedding_projection.forward_autocast(soft_features)?;
-        let norm_dtype = self.embedding_post_projection_norm.weight().dtype();
-        if projected.dtype() != norm_dtype {
-            projected = projected.to_dtype(norm_dtype)?;
+        let mut normed = soft_features.clone();
+        let norm_dtype = self.embedding_pre_projection_norm.weight().dtype();
+        if normed.dtype() != norm_dtype {
+            normed = normed.to_dtype(norm_dtype)?;
         }
-        self.embedding_post_projection_norm.forward(&projected)
+        let normed = self.embedding_pre_projection_norm.forward(&normed)?;
+        self.embedding_projection.forward_autocast(&normed)
     }
 
     pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
         uvb.pp("embedding_projection")
             .add(&self.embedding_projection);
-        uvb.pp("embedding_post_projection_norm")
-            .add(&self.embedding_post_projection_norm);
+        uvb.pp("embedding_pre_projection_norm")
+            .add(&self.embedding_pre_projection_norm);
         uvb.to_safetensors()
     }
 }

@@ -141,6 +141,8 @@ serde_default_fn!(usize, vision_patch_size, 16);
 serde_default_fn!(usize, vision_position_embedding_size, 10240);
 serde_default_fn!(usize, vision_pooling_kernel_size, 3);
 serde_default_fn!(usize, vision_default_output_length, 280);
+serde_default_fn!(bool, vision_use_clipped_linears, false);
+serde_default_fn!(bool, vision_standardize, false);
 
 // ── Gemma4VisionConfig ──────────────────────────────────────────────────────
 
@@ -171,6 +173,10 @@ pub struct Gemma4VisionConfig {
     pub pooling_kernel_size: usize,
     #[serde(default = "vision_default_output_length")]
     pub default_output_length: usize,
+    #[serde(default = "vision_use_clipped_linears")]
+    pub use_clipped_linears: bool,
+    #[serde(default = "vision_standardize")]
+    pub standardize: bool,
     pub rope_parameters: Option<Gemma4RopeParameters>,
 }
 

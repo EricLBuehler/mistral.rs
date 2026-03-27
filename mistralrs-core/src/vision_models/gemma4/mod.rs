@@ -126,6 +126,7 @@ impl Gemma4Model {
 
         let language_model = TextModel::new(
             &cfg.text_config,
+            Some(cfg.image_token_id as usize),
             vb.pp("language_model"),
             is_gptx,
             normal_loading_metadata,

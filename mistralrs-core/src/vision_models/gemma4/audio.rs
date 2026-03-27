@@ -217,8 +217,7 @@ impl ClippableLinear {
         } else {
             vb.clone()
         };
-        let inner =
-            mistralrs_quant::linear_no_bias(in_features, out_features, &None, linear_vb)?;
+        let inner = mistralrs_quant::linear_no_bias(in_features, out_features, &None, linear_vb)?;
         let (input_min, input_max, output_min, output_max) = if cfg.use_clipped_linears {
             (
                 Self::load_clip_scalar(&vb, "input_min"),

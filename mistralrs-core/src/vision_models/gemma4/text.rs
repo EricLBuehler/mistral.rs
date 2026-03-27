@@ -1032,6 +1032,8 @@ pub struct TextModel {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: usize,
     final_logit_softcapping: Option<f64>,
+    image_token_id: Option<usize>,
+    use_bidirectional_vision_attention: bool,
     cfg: ModelConfigMetadata,
     model_config: Arc<dyn ModelConfigLike + Send + Sync>,
 }
@@ -1039,6 +1041,7 @@ pub struct TextModel {
 impl TextModel {
     pub fn new(
         cfg: &Gemma4TextConfig,
+        image_token_id: Option<usize>,
         vb: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
@@ -1288,6 +1291,11 @@ impl TextModel {
             max_seq_len: cfg.max_position_embeddings,
             sliding_window: cfg.effective_sliding_window(),
             final_logit_softcapping: cfg.final_logit_softcapping,
+            image_token_id,
+            use_bidirectional_vision_attention: matches!(
+                cfg.use_bidirectional_attention.as_deref(),
+                Some("vision")
+            ),
             cfg: cfg_metadata,
             model_config,
             mapper,
@@ -1386,40 +1394,87 @@ impl TextModel {
         // Compute PLE per-layer inputs
         let per_layer_inputs = self.compute_ple(ple_input_ids, &xs)?;
 
-        let attention_mask = CausalMasker.make_causal_mask_matrix(
-            input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(cache as &dyn PastKvLenCache),
-            xs.dtype(),
-            self.cfg.num_attn_heads,
-        )?;
-        let attention_mask = attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
-        let attention_mask = attention_mask.filter(|_| {
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-        });
-        let sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
-            input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(cache as &dyn PastKvLenCache),
-            Some(self.sliding_window),
-            xs.dtype(),
-            self.cfg.num_attn_heads,
-        )?;
-        let sliding_attention_mask =
-            sliding_attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
-        let sliding_attention_mask = sliding_attention_mask.filter(|_| {
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-        });
+        // Larger Gemma 4 variants use a mixed causal/bidirectional mask for
+        // image soft tokens during prefill. Flash attention cannot consume that
+        // per-token override, so we materialize real masks and bypass flash only
+        // for this path.
+        let has_bidirectional = self.use_bidirectional_vision_attention
+            && self.image_token_id.is_some()
+            && input_ids.dim(1)? > 1;
+        let mask_cache: &dyn PastKvLenCache = metadata
+            .as_ref()
+            .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+            .unwrap_or(cache as &dyn PastKvLenCache);
+
+        let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
+            let attention_mask =
+                CausalMasker.make_causal_mask_as_attn_bias(input_ids, mask_cache, xs.dtype())?;
+            let attention_mask = attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
+            let attention_mask = attention_mask.filter(|_| {
+                metadata
+                    .as_ref()
+                    .map(|(_, meta)| meta.is_first_prompt_chunk)
+                    .unwrap_or(true)
+            });
+
+            let sliding_attention_mask = CausalMasker
+                .make_sliding_window_causal_mask_as_attn_bias(
+                    input_ids,
+                    mask_cache,
+                    Some(self.sliding_window),
+                    xs.dtype(),
+                )?;
+            let sliding_attention_mask = sliding_attention_mask
+                .map(|m| {
+                    Self::apply_image_bidirectional_mask(
+                        &m,
+                        input_ids,
+                        self.image_token_id.expect("missing image token id"),
+                    )
+                })
+                .transpose()?;
+            let sliding_attention_mask =
+                sliding_attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
+            let sliding_attention_mask = sliding_attention_mask.filter(|_| {
+                metadata
+                    .as_ref()
+                    .map(|(_, meta)| meta.is_first_prompt_chunk)
+                    .unwrap_or(true)
+            });
+
+            (attention_mask, sliding_attention_mask, None)
+        } else {
+            let attention_mask = CausalMasker.make_causal_mask_matrix(
+                input_ids,
+                mask_cache,
+                xs.dtype(),
+                self.cfg.num_attn_heads,
+            )?;
+            let attention_mask = attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
+            let attention_mask = attention_mask.filter(|_| {
+                metadata
+                    .as_ref()
+                    .map(|(_, meta)| meta.is_first_prompt_chunk)
+                    .unwrap_or(true)
+            });
+            let sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+                input_ids,
+                mask_cache,
+                Some(self.sliding_window),
+                xs.dtype(),
+                self.cfg.num_attn_heads,
+            )?;
+            let sliding_attention_mask =
+                sliding_attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
+            let sliding_attention_mask = sliding_attention_mask.filter(|_| {
+                metadata
+                    .as_ref()
+                    .map(|(_, meta)| meta.is_first_prompt_chunk)
+                    .unwrap_or(true)
+            });
+
+            (attention_mask, sliding_attention_mask, Some(flash_params))
+        };
 
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
@@ -1441,7 +1496,7 @@ impl TextModel {
                     let cache_idx = layer.self_attn.kv_shared_layer_index.unwrap_or(i);
                     (kv_cache[cache_idx].clone(), *metadata)
                 }),
-                Some(flash_params),
+                layer_flash_params,
             )?;
         }
         let xs = xs.to_device(&self.device)?;
@@ -1460,6 +1515,54 @@ impl TextModel {
         }
 
         Ok(xs)
+    }
+
+    fn apply_image_bidirectional_mask(
+        causal_mask: &Tensor,
+        input_ids: &Tensor,
+        image_token_id: usize,
+    ) -> Result<Tensor> {
+        let (_, seq_len) = input_ids.dims2()?;
+        let total_len = causal_mask.dim(1)?;
+        let past_kv_len = total_len - seq_len;
+
+        let input_ids_1d = input_ids.squeeze(0)?;
+        let is_image = input_ids_1d
+            .eq(image_token_id as f64)?
+            .to_dtype(candle_core::DType::U32)?;
+
+        let is_image_vec: Vec<u32> = is_image.to_vec1()?;
+        let mut group_ids = vec![-1i64; seq_len];
+        let mut current_group: i64 = -1;
+        for i in 0..seq_len {
+            if is_image_vec[i] == 1 {
+                if i == 0 || is_image_vec[i - 1] == 0 {
+                    current_group += 1;
+                }
+                group_ids[i] = current_group;
+            }
+        }
+
+        let device = causal_mask.device();
+        let dtype = causal_mask.dtype();
+
+        let mut override_vals = vec![0f32; seq_len * total_len];
+        for qi in 0..seq_len {
+            if group_ids[qi] < 0 {
+                continue;
+            }
+            for ki in 0..seq_len {
+                if group_ids[ki] >= 0 && group_ids[qi] == group_ids[ki] {
+                    let col = ki + past_kv_len;
+                    override_vals[qi * total_len + col] = 1.0;
+                }
+            }
+        }
+
+        let override_mask = Tensor::from_vec(override_vals, (seq_len, total_len), device)?;
+        let zero = Tensor::zeros((seq_len, total_len), dtype, device)?;
+        let override_bool = override_mask.to_dtype(candle_core::DType::U8)?;
+        override_bool.where_cond(&zero, causal_mask)
     }
 }
 

@@ -45,8 +45,7 @@ impl ClippableLinear {
         } else {
             vb.clone()
         };
-        let inner =
-            mistralrs_quant::linear_no_bias(in_features, out_features, &None, linear_vb)?;
+        let inner = mistralrs_quant::linear_no_bias(in_features, out_features, &None, linear_vb)?;
 
         // Load clipping buffers if present
         let input_min = vb
@@ -602,6 +601,8 @@ pub struct VisionTower {
     encoder_layers: Vec<VisionEncoderLayer>,
     pooler: VisionPooler,
     rotary_emb: VisionRotaryEmbedding,
+    std_bias: Option<Tensor>,
+    std_scale: Option<Tensor>,
     max_patches: usize,
     patch_size: usize,
     hidden_size: usize,
@@ -624,12 +625,22 @@ impl VisionTower {
 
         let max_patches =
             cfg.default_output_length * cfg.pooling_kernel_size * cfg.pooling_kernel_size;
+        let (std_bias, std_scale) = if cfg.standardize {
+            (
+                Some(vb.get(cfg.hidden_size, "std_bias")?),
+                Some(vb.get(cfg.hidden_size, "std_scale")?),
+            )
+        } else {
+            (None, None)
+        };
 
         Ok(Self {
             patch_embedder,
             encoder_layers,
             pooler,
             rotary_emb,
+            std_bias,
+            std_scale,
             max_patches,
             patch_size: cfg.patch_size,
             hidden_size: cfg.hidden_size,
@@ -806,7 +817,17 @@ impl VisionTower {
             let real_tokens = hs.index_select(&indices, 0)?;
             all_real_tokens.push(real_tokens);
         }
-        Ok(Tensor::cat(&all_real_tokens, 0)?.unsqueeze(0)?)
+        let mut hidden_states = Tensor::cat(&all_real_tokens, 0)?;
+        if let (Some(std_bias), Some(std_scale)) = (&self.std_bias, &self.std_scale) {
+            let std_bias = std_bias
+                .to_device(hidden_states.device())?
+                .to_dtype(hidden_states.dtype())?;
+            let std_scale = std_scale
+                .to_device(hidden_states.device())?
+                .to_dtype(hidden_states.dtype())?;
+            hidden_states = (hidden_states.broadcast_sub(&std_bias)?).broadcast_mul(&std_scale)?;
+        }
+        Ok(hidden_states.unsqueeze(0)?)
     }
 
     pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
