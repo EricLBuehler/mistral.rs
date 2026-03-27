@@ -371,9 +371,6 @@ impl Gemma4Model {
         let ple_zeros = input_ids.zeros_like()?;
         let ple_inputs_mask = input_ids.lt(ple_vocab_limit as f64)?;
         let ple_input_ids = ple_inputs_mask.where_cond(input_ids, &ple_zeros)?;
-        // Match HF: per-layer token embeddings only see hard text tokens.
-        // Soft multimodal placeholder slots are zeroed out before
-        // get_per_layer_inputs(), even though their token ids are in-vocab.
         let non_image_mask = input_ids.ne(self.cfg.image_token_id as f64)?;
         let ple_input_ids = non_image_mask.where_cond(&ple_input_ids, &ple_zeros)?;
         let non_audio_mask = input_ids.ne(self.cfg.audio_token_id as f64)?;
@@ -398,8 +395,7 @@ impl IsqModel for Gemma4Model {
         Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
         &dyn DeviceMapper,
     ) {
-        let (mut tensors, mapper) = self.language_model.get_layers();
-        // tensors.extend(self.vision_tower.get_isq_layers());
+        let (tensors, mapper) = self.language_model.get_layers();
         (tensors, mapper)
     }
 
@@ -419,56 +415,18 @@ impl IsqModel for Gemma4Model {
         }
 
         let uvb_embed_vision = uvb_model.pp("embed_vision");
-        uvb_embed_vision
-            .pp("embedding_post_projection_norm")
-            .add(&self.embed_vision.embedding_post_projection_norm);
+        uvb_embed_vision.extend(self.embed_vision.residual_tensors());
 
         if let Some(ref embed_audio) = self.embed_audio {
             let uvb_embed_audio = uvb_model.pp("embed_audio");
-            uvb_embed_audio
-                .pp("embedding_post_projection_norm")
-                .add(&embed_audio.embedding_post_projection_norm);
+            uvb_embed_audio.extend(embed_audio.residual_tensors());
         }
 
         uvb.to_safetensors()
     }
 
     fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        // Start with text model names
-        let mut names = self.language_model.imatrix_names()?;
-
-        // Vision tower layers
-        for _ in 0..self.vision_tower.num_encoder_layers() {
-            // q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj
-            for _ in 0..7 {
-                names.push(None);
-            }
-        }
-
-        // Audio tower layers
-        if let Some(ref audio) = self.audio_tower {
-            for _block in audio.conformer.iter() {
-                // 11 quantized layers per conformer block
-                for _ in 0..11 {
-                    names.push(None);
-                }
-            }
-            // SSCP input projection
-            names.push(None);
-            // Output projection
-            if audio.output_proj.is_some() {
-                names.push(None);
-            }
-        }
-
-        // embed_vision projection
-        names.push(None);
-        // embed_audio projection
-        if self.embed_audio.is_some() {
-            names.push(None);
-        }
-
-        Ok(names)
+        self.language_model.imatrix_names()
     }
 }
 

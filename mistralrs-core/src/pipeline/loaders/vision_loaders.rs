@@ -7353,10 +7353,6 @@ impl IsqModelLoader for Gemma4Loader {
             Regex::new(r"per_layer_model_projection\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.per_layer_input_gate\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.per_layer_projection\.(weight|bias)$")?,
-            // Regex::new(
-            //     r"vision_tower\.encoder\.layers\.(\d+)\.self_attn\.\w+_proj\.(weight|bias)$",
-            // )?,
-            // Regex::new(r"vision_tower\.encoder\.layers\.(\d+)\.mlp\.\w+_proj\.(weight|bias)$")?,
         ])
     }
     fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {

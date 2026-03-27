@@ -448,6 +448,9 @@ async fn stream_assistant_response(
                 }
 
                 if let Some(ref finish_reason) = choice.finish_reason {
+                    if was_reasoning {
+                        println!();
+                    }
                     if matches!(finish_reason.as_str(), "length") {
                         print!("...");
                     }

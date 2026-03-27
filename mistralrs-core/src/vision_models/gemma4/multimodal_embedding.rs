@@ -4,7 +4,7 @@ use candle_core::{Module, Result, Tensor};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use std::sync::Arc;
 
-use crate::layers::RmsNorm;
+use crate::{layers::RmsNorm, utils::unvarbuilder::UnVarBuilder};
 
 /// Gemma4 multimodal embedder that projects modality features into language model space.
 ///
@@ -51,5 +51,14 @@ impl Gemma4MultimodalEmbedder {
             projected = projected.to_dtype(norm_dtype)?;
         }
         self.embedding_post_projection_norm.forward(&projected)
+    }
+
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        uvb.pp("embedding_projection")
+            .add(&self.embedding_projection);
+        uvb.pp("embedding_post_projection_norm")
+            .add(&self.embedding_post_projection_norm);
+        uvb.to_safetensors()
     }
 }

@@ -85,6 +85,9 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         // 3. Sequence is done (is_done.is_some()) - send buffered output as text since it wasn't a valid tool call
         if !tool_use_still_possible || tool_use_is_done || is_done.is_some() {
             if send {
+                if is_done.is_some() && seq.reasoning_mode().is_some() {
+                    seq.finalize_reasoning();
+                }
                 let delta_result = seq.get_delta();
                 if let Some(delta) = crate::handle_seq_error_ok!(delta_result, seq.responder()) {
                     if seq.get_mut_group().is_chat {
