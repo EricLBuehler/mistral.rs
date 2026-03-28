@@ -6,7 +6,8 @@
 function initTextareaResize() {
   const input = document.getElementById('input');
   // ✅ FIX: Make consistent with CSS max-height: calc(1.4em * 15)
-  const maxH = parseFloat(getComputedStyle(input).lineHeight) * 15;
+  // Use fontSize * 1.4 because lineHeight can be 'normal' (which is ~1.2-1.4 depending on browser)
+  const maxH = parseFloat(getComputedStyle(input).fontSize) * 1.4 * 15;
   
   function fit() { 
     input.style.height = 'auto'; 
