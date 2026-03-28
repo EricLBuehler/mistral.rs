@@ -49,7 +49,7 @@ use crate::{
     },
     streaming::{get_keep_alive_interval, DoneState},
     types::{ExtractedMistralRsState, OnDoneCallback, SharedMistralRsState},
-    util::sanitize_error_message,
+    util::{sanitize_error_message, sanitize_web_search_options},
 };
 
 /// Input type for OpenResponses API requests
@@ -1463,7 +1463,7 @@ async fn parse_openresponses_request(
         tools: oairequest.tools,
         tool_choice: oairequest.tool_choice,
         response_format,
-        web_search_options: oairequest.web_search_options,
+        web_search_options: sanitize_web_search_options(oairequest.web_search_options),
         top_k: oairequest.top_k,
         grammar: oairequest.grammar,
         min_p: oairequest.min_p,

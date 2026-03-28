@@ -36,7 +36,10 @@ use crate::{
     },
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
-    util::{parse_audio_url, parse_image_url, sanitize_error_message, validate_model_name},
+    util::{
+        parse_audio_url, parse_image_url, sanitize_error_message, sanitize_web_search_options,
+        validate_model_name,
+    },
 };
 
 /// A callback function that processes streaming response chunks before they are sent to the client.
@@ -588,7 +591,7 @@ pub async fn parse_request(
             tools: oairequest.tools,
             logits_processors: None,
             return_raw_logits: false,
-            web_search_options: oairequest.web_search_options,
+            web_search_options: sanitize_web_search_options(oairequest.web_search_options),
             model_id: if oairequest.model == "default" {
                 None
             } else {

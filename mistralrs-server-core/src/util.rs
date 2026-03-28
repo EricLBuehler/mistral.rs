@@ -220,6 +220,16 @@ pub fn sanitize_error_message(error: &(dyn Error + 'static)) -> String {
     current.to_string()
 }
 
+/// Sanitize web search options by clearing client-controlled tool descriptions.
+pub fn sanitize_web_search_options(
+    options: Option<mistralrs_core::WebSearchOptions>,
+) -> Option<mistralrs_core::WebSearchOptions> {
+    options.map(|mut opts| {
+        opts.sanitize();
+        opts
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use image::GenericImageView;
@@ -407,5 +417,25 @@ mod tests {
         assert_eq!(sanitized, "Root cause: Database connection failed");
         assert!(!sanitized.contains("backtrace"));
         assert!(!sanitized.contains("Request failed"));
+    }
+}
+
+#[cfg(test)]
+mod tests_sanitization {
+    use super::*;
+    use mistralrs_core::WebSearchOptions;
+
+    #[test]
+    fn test_sanitize_web_search_options_util() {
+        let options = WebSearchOptions {
+            search_context_size: None,
+            user_location: None,
+            search_description: Some("overridden search description".to_string()),
+            extract_description: Some("overridden extract description".to_string()),
+        };
+
+        let sanitized = sanitize_web_search_options(Some(options)).unwrap();
+        assert!(sanitized.search_description.is_none());
+        assert!(sanitized.extract_description.is_none());
     }
 }

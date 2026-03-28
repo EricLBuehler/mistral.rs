@@ -421,7 +421,8 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             let mut builder =
                 apply_gen_params(vision_msgs.clone().into(), &gen_params, &app.default_params);
             if app.search_enabled {
-                if let Some(opts) = web_search_opts {
+                if let Some(mut opts) = web_search_opts {
+                    opts.sanitize();
                     builder = builder.with_web_search_options(opts);
                 }
             }
@@ -448,7 +449,8 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             let mut builder =
                 apply_gen_params(text_msgs.clone().into(), &gen_params, &app.default_params);
             if app.search_enabled {
-                if let Some(opts) = web_search_opts {
+                if let Some(mut opts) = web_search_opts {
+                    opts.sanitize();
                     builder = builder.with_web_search_options(opts);
                 }
             }

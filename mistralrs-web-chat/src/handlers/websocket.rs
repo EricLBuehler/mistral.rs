@@ -556,7 +556,8 @@ async fn handle_text_model(
     // Apply generation parameters
     request_builder = apply_gen_params(request_builder, &params.gen_params, &app.default_params);
 
-    if let Some(opts) = web_search_opts {
+    if let Some(mut opts) = web_search_opts {
+        opts.sanitize();
         request_builder = request_builder.with_web_search_options(opts);
     }
 
@@ -747,7 +748,8 @@ async fn handle_vision_model(
     // Apply generation parameters
     request_builder = apply_gen_params(request_builder, &params.gen_params, &app.default_params);
 
-    if let Some(opts) = web_search_opts {
+    if let Some(mut opts) = web_search_opts {
+        opts.sanitize();
         request_builder = request_builder.with_web_search_options(opts);
     }
     *streaming = true;

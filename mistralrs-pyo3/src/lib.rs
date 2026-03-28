@@ -1236,7 +1236,11 @@ impl Runner {
                 tools,
                 logits_processors: None,
                 return_raw_logits: false,
-                web_search_options: request.web_search_options.clone(),
+                web_search_options: request.web_search_options.as_ref().map(|opts| {
+                    let mut opts = opts.clone();
+                    opts.sanitize();
+                    opts
+                }),
                 model_id: model_id.clone(),
                 truncate_sequence: request.truncate_sequence,
             }));
@@ -1970,7 +1974,11 @@ impl Runner {
                 tools,
                 logits_processors: None,
                 return_raw_logits: false,
-                web_search_options: request.web_search_options.clone(),
+                web_search_options: request.web_search_options.as_ref().map(|opts| {
+                    let mut opts = opts.clone();
+                    opts.sanitize();
+                    opts
+                }),
                 model_id: Some(model_id.clone()),
                 truncate_sequence: request.truncate_sequence,
             }));

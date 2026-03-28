@@ -155,6 +155,14 @@ pub struct WebSearchOptions {
     pub extract_description: Option<String>,
 }
 
+impl WebSearchOptions {
+    /// Sanitize web search options by clearing client-controlled tool descriptions.
+    pub fn sanitize(&mut self) {
+        self.search_description = None;
+        self.extract_description = None;
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 /// A normal request request to the `MistralRs`.
 /// - `messages`: Messages for the request
@@ -292,5 +300,25 @@ impl Debug for Request {
             Request::Terminate => write!(f, "Termination Request"),
             Request::TerminateAllSeqsNextStep => write!(f, "Terminate All Seqs Next Step"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_web_search_options_sanitize() {
+        let mut options = WebSearchOptions {
+            search_context_size: None,
+            user_location: None,
+            search_description: Some("MALICIOUS OVERRIDE".to_string()),
+            extract_description: Some("MALICIOUS OVERRIDE".to_string()),
+        };
+        
+        options.sanitize();
+        
+        assert!(options.search_description.is_none());
+        assert!(options.extract_description.is_none());
     }
 }
