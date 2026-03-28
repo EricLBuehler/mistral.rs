@@ -18,12 +18,12 @@ jobs:
           # Linux x86_64 (Standard, CUDA, MKL)
           - os: ubuntu-latest
             target: linux-x86_64
-            args: "-p mistralrs"
+            args: "-p mistralrs mistralrs-mkl"
           
           # Windows x86_64 (Standard, CUDA, MKL)
           - os: windows-latest
             target: windows-x86_64
-            args: "-p mistralrs"
+            args: "-p mistralrs mistralrs-mkl"
 
           # macOS aarch64 (Metal / All)
           - os: macos-latest
