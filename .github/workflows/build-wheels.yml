@@ -18,12 +18,12 @@ jobs:
           # Linux x86_64 (Standard, CUDA, MKL)
           - os: ubuntu-latest
             target: linux-x86_64
-            args: "-p mistralrs mistralrs-mkl"
+            args: "-p mistralrs mistralrs-mkl mistralrs-cuda"
           
           # Windows x86_64 (Standard, CUDA, MKL)
           - os: windows-latest
             target: windows-x86_64
-            args: "-p mistralrs mistralrs-mkl"
+            args: "-p mistralrs mistralrs-mkl mistralrs-cuda"
 
           # macOS aarch64 (Metal / All)
           - os: macos-latest
@@ -41,7 +41,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-
+      - name: Install CUDA Toolkit
+        if: matrix.target != 'macos-arm64' # macOS uses Metal, not CUDA
+        uses: Jimver/cuda-toolkit@v0.2.34
+        with:
+          cuda: '12.1.0'
       - name: Install Build Dependencies
         run: |
           python -m pip install --upgrade pip
