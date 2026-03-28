@@ -2,7 +2,7 @@ name: Build and Package Python Wheels
 
 on:
   push:
-    branches: [ '*' ]
+    branches: [ master ]
   pull_request:
     branches: [ master ]
   workflow_dispatch:
