@@ -1,11 +1,13 @@
 use anyhow::Result;
-use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use http::{Request, Uri};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
+use tokio::sync::{oneshot, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 /// Transport layer for MCP communication
@@ -761,12 +763,10 @@ impl McpTransport for ProcessTransport {
 /// This transport implements the Model Context Protocol (MCP) specification over WebSocket,
 /// adhering to JSON-RPC 2.0 message format with proper error handling and response correlation.
 pub struct WebSocketTransport {
-    write: std::sync::Arc<
-        tokio::sync::Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>,
-    >,
-    read:
-        std::sync::Arc<tokio::sync::Mutex<SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>>>,
-    request_id: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    write: Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>,
+    pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value>>>>>,
+    request_id: Arc<std::sync::atomic::AtomicU64>,
+    timeout: Duration,
 }
 
 impl WebSocketTransport {
@@ -775,7 +775,7 @@ impl WebSocketTransport {
     /// # Arguments
     ///
     /// * `url` - WebSocket URL (ws:// or wss://)
-    /// * `_timeout_secs` - Connection timeout (currently unused, reserved for future use)
+    /// * `timeout_secs` - Connection timeout
     /// * `headers` - Optional HTTP headers for WebSocket handshake (e.g., Bearer tokens)
     ///
     /// # Returns
@@ -811,7 +811,7 @@ impl WebSocketTransport {
     /// ```
     pub async fn new(
         url: String,
-        _timeout_secs: Option<u64>,
+        timeout_secs: Option<u64>,
         headers: Option<HashMap<String, String>>,
     ) -> Result<Self> {
         // Create request with headers
@@ -843,12 +843,52 @@ impl WebSocketTransport {
             .map_err(|e| anyhow::anyhow!("WebSocket connection failed: {}", e))?;
 
         // Split the stream
-        let (write, read) = ws_stream.split();
+        let (write, mut read) = ws_stream.split();
+
+        let pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value>>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let pending_requests_clone = pending_requests.clone();
+
+        let timeout = Duration::from_secs(timeout_secs.unwrap_or(30));
+
+        // Spawn background reader task
+        tokio::spawn(async move {
+            while let Some(msg) = read.next().await {
+                match msg {
+                    Ok(Message::Text(text)) => {
+                        if let Ok(response_body) = serde_json::from_str::<Value>(&text) {
+                            if let Some(id) = response_body.get("id").and_then(|v| v.as_u64()) {
+                                let mut pending = pending_requests_clone.lock().await;
+                                if let Some(tx) = pending.remove(&id) {
+                                    let result = if let Some(error) = response_body.get("error") {
+                                        Err(anyhow::anyhow!("MCP server error: {}", error))
+                                    } else {
+                                        response_body.get("result").cloned().ok_or_else(|| {
+                                            anyhow::anyhow!("No result in MCP response")
+                                        })
+                                    };
+                                    let _ = tx.send(result);
+                                }
+                            }
+                        }
+                    }
+                    Ok(Message::Close(_)) => break,
+                    Err(_) => break,
+                    _ => continue,
+                }
+            }
+            // If we are here, the connection is closed or error occurred
+            let mut pending = pending_requests_clone.lock().await;
+            for (_, tx) in pending.drain() {
+                let _ = tx.send(Err(anyhow::anyhow!("WebSocket connection closed")));
+            }
+        });
 
         Ok(Self {
-            write: std::sync::Arc::new(tokio::sync::Mutex::new(write)),
-            read: std::sync::Arc::new(tokio::sync::Mutex::new(read)),
-            request_id: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            write: Arc::new(Mutex::new(write)),
+            pending_requests,
+            request_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            timeout,
         })
     }
 }
@@ -906,6 +946,12 @@ impl McpTransport for WebSocketTransport {
     async fn send_request(&self, method: &str, params: Value) -> Result<Value> {
         let (id, request_body) = build_jsonrpc_request(&self.request_id, method, params);
 
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut pending = self.pending_requests.lock().await;
+            pending.insert(id, tx);
+        }
+
         // Send request
         let message = Message::Text(serde_json::to_string(&request_body)?.into());
 
@@ -917,43 +963,21 @@ impl McpTransport for WebSocketTransport {
                 .map_err(|e| anyhow::anyhow!("Failed to send WebSocket message: {}", e))?;
         }
 
-        // Read response
-        loop {
-            let mut read = self.read.lock().await;
-            let msg = read
-                .next()
-                .await
-                .ok_or_else(|| anyhow::anyhow!("WebSocket connection closed"))?
-                .map_err(|e| anyhow::anyhow!("WebSocket read error: {}", e))?;
-            drop(read);
-
-            match msg {
-                Message::Text(text) => {
-                    let response_body: Value = serde_json::from_str(&text)?;
-
-                    // Check if this is the response to our request
-                    if let Some(response_id) = response_body.get("id").and_then(|v| v.as_u64()) {
-                        if response_id == id {
-                            return extract_jsonrpc_result(response_body);
-                        }
-                    }
-                    // If it's not our response, continue reading
-                }
-                Message::Binary(_) => {
-                    // Handle binary messages if needed, for now skip
-                    continue;
-                }
-                Message::Close(_) => {
-                    return Err(anyhow::anyhow!("WebSocket connection closed by server"));
-                }
-                Message::Ping(_) | Message::Pong(_) => {
-                    // Handle ping/pong frames, continue reading
-                    continue;
-                }
-                Message::Frame(_) => {
-                    // Raw frames, continue reading
-                    continue;
-                }
+        // Wait for response with timeout
+        match tokio::time::timeout(self.timeout, rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => {
+                let mut pending = self.pending_requests.lock().await;
+                pending.remove(&id);
+                Err(anyhow::anyhow!("Response channel closed"))
+            }
+            Err(_) => {
+                let mut pending = self.pending_requests.lock().await;
+                pending.remove(&id);
+                Err(anyhow::anyhow!(
+                    "Request timed out after {} seconds",
+                    self.timeout.as_secs()
+                ))
             }
         }
     }
