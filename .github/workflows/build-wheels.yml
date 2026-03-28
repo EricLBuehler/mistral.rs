@@ -65,7 +65,7 @@ jobs:
         if: matrix.flavor == 'cuda'
         uses: Jimver/cuda-toolkit@v0.2.34
         with:
-          cuda: '12.1.0'
+          cuda: '12.2.0'
       - name: Install Build Dependencies
         run: |
           python -m pip install --upgrade pip
