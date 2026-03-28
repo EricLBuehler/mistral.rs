@@ -150,10 +150,16 @@ impl PagedAttentionScheduler {
             return buckets.into_values().next().unwrap();
         }
 
-        // Find the bucket with the shortest sequence length
+        // Find the bucket containing the OLDEST sequence (lowest timestamp) to ensure FCFS priority
         let min_key = *buckets
-            .keys()
-            .min_by_key(|(len, _, _)| *len)
+            .iter()
+            .min_by_key(|(_, seqs)| {
+                seqs.iter()
+                    .map(|seq| get_mut_arcmutex!(seq).timestamp())
+                    .min()
+                    .unwrap()
+            })
+            .map(|(key, _)| key)
             .expect("No sequence buckets");
 
         let selected = buckets.remove(&min_key).unwrap();
@@ -242,8 +248,9 @@ impl PagedAttentionScheduler {
                     *count += 1;
 
                     if *count > WAITING_TIMEOUT {
-                        // Try to preempt a running sequence
-                        if let Some(seq_to_preempt) = self.running.pop_back() {
+                        // Continuously preempt running sequences until allocation succeeds
+                        let mut success = false;
+                        while let Some(seq_to_preempt) = self.running.pop_back() {
                             self._preempt(seq_to_preempt);
 
                             // Retry allocation
@@ -252,25 +259,28 @@ impl PagedAttentionScheduler {
                                 kv_mgr.allocate_slots(seq_id, num_tokens, &computed.block_ids);
                             drop(kv_mgr);
 
-                            if retry.is_none() {
+                            if retry.is_some() {
+                                self.waiting_counts.remove(&seq_id);
+                                success = true;
+                                break;
+                            }
+                        }
+
+                        if !success {
+                            // Even after emptying `running`, it doesn't fit.
+                            if self.running.is_empty() {
                                 let id = seq_id;
                                 warn!(
-                                    "Sequence {id} with length of {num_tokens} tokens still exceeds KV cache size \
-                                     even after evicting another sequence.",
+                                    "Sequence {id} with length of {num_tokens} tokens is too long and exceeds max KV cache size. \
+                                     Ignored."
                                 );
                                 get_mut_arcmutex!(seq).set_state(SequenceState::FinishedIgnored);
                                 did_ignore = true;
                             } else {
-                                self.waiting_counts.remove(&seq_id);
+                                warn!("Sequence {seq_id} still waiting for memory...");
+                                // Safely break the loop to wait for the next iteration without dropping the request!
+                                break;
                             }
-                        } else {
-                            warn!(
-                                "Sequence {seq_id} with length of {num_tokens} tokens is too long and exceeds KV cache size. \
-                                 To fix, increase the maximum sequence length for the KV cache, for example with \
-                                 `--max-seq-len`/ `max_seq_len` in automatic device mapping parameters.",
-                            );
-                            get_mut_arcmutex!(seq).set_state(SequenceState::FinishedIgnored);
-                            did_ignore = true;
                         }
                     } else {
                         break;
@@ -344,6 +354,7 @@ impl PagedAttentionScheduler {
         self.sort_running_by_priority_fcfs();
 
         let mut running: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
+        let mut deferred_running: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
         while !self.running.is_empty() {
             let seq = self.running.pop_front().unwrap();
             let mut finished_with_break = false;
@@ -377,11 +388,12 @@ impl PagedAttentionScheduler {
                 {
                     running.push_back(seq);
                 } else {
-                    self.running.push_back(seq);
+                    deferred_running.push_back(seq);
                 }
             }
         }
         self.running = running;
+        self.running.extend(deferred_running);
 
         self.running
             .iter()
