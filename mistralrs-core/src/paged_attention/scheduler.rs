@@ -179,6 +179,8 @@ impl PagedAttentionScheduler {
     pub fn schedule(&mut self, logger: &IntervalLogger) -> PagedAttentionSchedulerOutput {
         let mut scheduled: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
         let mut for_waiting_again: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
+        let mut batched_prompt_tokens = 0;
+        let mut batched_sequences = 0;
         while !self.waiting.is_empty() {
             let mut did_ignore = false;
             let seq = self.waiting.front().unwrap().clone();
@@ -192,7 +194,15 @@ impl PagedAttentionScheduler {
             let tokens = seq_guard.get_toks().to_vec();
             let num_tokens = tokens.len();
             let mm_features = seq_guard.mm_features().to_vec();
+            let num_new_tokens = num_tokens.saturating_sub(seq_guard.prefix_cache_len());
             drop(seq_guard);
+
+            // Halt batch mapping if context size approaches CuBLAS engine crash arrays.
+            if (batched_prompt_tokens + num_new_tokens > 16384 || batched_sequences >= 10) && batched_sequences > 0 {
+                break;
+            }
+            batched_prompt_tokens += num_new_tokens;
+            batched_sequences += 1;
 
             // Compute block hashes for prefix cache lookup
             self.ensure_block_hashes(seq_id, &tokens, &mm_features);
@@ -373,11 +383,6 @@ impl PagedAttentionScheduler {
         }
         self.running = running;
 
-        // Bucket running completions by sequence length
-        let running_for_bucket = std::mem::take(&mut self.running);
-        let bucketed = self.bucket_and_preempt_sequences(running_for_bucket);
-        self.running = bucketed;
-
         self.running
             .iter()
             .for_each(|seq| get_mut_arcmutex!(seq).set_state(SequenceState::RunningCompletion));
@@ -497,7 +502,6 @@ impl PagedAttentionScheduler {
         self.running
             .make_contiguous()
             .sort_by_key(|seq| get_mut_arcmutex!(seq).timestamp());
-        self.running.make_contiguous().reverse();
     }
 }
 
