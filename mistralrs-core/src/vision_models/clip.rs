@@ -303,7 +303,7 @@ impl ClipVisionTransformer {
     /// where (for example) `.pp("embeddings")` is valid.
     pub fn new(vb: ShardedVarBuilder, c: &ClipConfig) -> Result<Self> {
         let embeddings = ClipVisionEmbeddings::new(vb.pp("embeddings"), c)?;
-        let pre_layer_norm = layers::layer_norm(c.hidden_size, 1e-5, vb.pp("pre_layrnorm"))?;
+        let pre_layer_norm = layers::layer_norm(c.hidden_size, 1e-5, vb.pp("pre_layernorm"))?;
         let encoder = ClipEncoder::new(vb.pp("encoder"), c)?;
         let final_layer_norm = layers::layer_norm(c.hidden_size, 1e-5, vb.pp("post_layernorm"))?;
         Ok(Self {
@@ -330,7 +330,7 @@ impl ClipVisionTransformer {
     pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
-        uvb.pp("pre_layrnorm").add(&self.pre_layer_norm);
+        uvb.pp("pre_layernorm").add(&self.pre_layer_norm);
         uvb.pp("post_layernorm").add(&self.final_layer_norm);
 
         // vision embeddings
@@ -369,5 +369,167 @@ impl ClipVisionTransformer {
         }
 
         uvb.to_safetensors()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::vision_models::clip::{ClipConfig, ClipVisionTransformer};
+    use candle_core::{DType, Device, Result, Shape, Tensor};
+    use candle_nn::var_builder::SimpleBackend;
+    use mistralrs_quant::ShardedSafeTensors;
+
+    pub struct HashMapBackend {
+        tensors: HashMap<String, Tensor>,
+    }
+
+    impl HashMapBackend {
+        pub fn new(tensors: HashMap<String, Tensor>) -> Self {
+            Self { tensors }
+        }
+    }
+
+    impl SimpleBackend for HashMapBackend {
+        fn get(
+            &self,
+            s: Shape,
+            name: &str,
+            _: candle_nn::Init,
+            dtype: DType,
+            dev: &Device,
+        ) -> Result<Tensor> {
+            let tensor = self.get_unchecked(name, dtype, dev)?;
+            if tensor.shape() != &s {
+                Err(candle_core::Error::UnexpectedShape {
+                    msg: format!("shape mismatch for {name}"),
+                    expected: s,
+                    got: tensor.shape().clone(),
+                }
+                .bt())?
+            }
+            Ok(tensor)
+        }
+
+        fn get_unchecked(&self, name: &str, _dtype: DType, _dev: &Device) -> Result<Tensor> {
+            self.tensors
+                .get(name)
+                .cloned()
+                .ok_or_else(|| candle_core::Error::CannotFindTensor {
+                    path: name.to_string(),
+                })
+        }
+
+        fn contains_tensor(&self, name: &str) -> bool {
+            self.tensors.contains_key(name)
+        }
+    }
+
+    #[test]
+    fn test_clip_residual_tensors_typo() {
+        let config = ClipConfig {
+            hidden_size: 4,
+            intermediate_size: 8,
+            num_hidden_layers: 1,
+            num_attention_heads: 2,
+            num_channels: 3,
+            image_size: 224,
+            patch_size: 32,
+            hidden_act: crate::vision_models::clip::Activation::QuickGelu,
+        };
+        let device = Device::Cpu;
+        let dtype = DType::F32;
+
+        // Create a dummy VarBuilder with the expected tensors
+        let mut tensors = std::collections::HashMap::new();
+        tensors.insert(
+            "embeddings.class_embedding".to_string(),
+            Tensor::zeros(4, dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "embeddings.position_embedding.weight".to_string(),
+            Tensor::zeros((50, 4), dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "embeddings.patch_embedding.weight".to_string(),
+            Tensor::zeros((4, 3, 32, 32), dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "pre_layernorm.weight".to_string(),
+            Tensor::zeros(4, dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "pre_layernorm.bias".to_string(),
+            Tensor::zeros(4, dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "encoder.layers.0.self_attn.q_proj.weight".to_string(),
+            Tensor::zeros((4, 4), dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "encoder.layers.0.self_attn.k_proj.weight".to_string(),
+            Tensor::zeros((4, 4), dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "encoder.layers.0.self_attn.v_proj.weight".to_string(),
+            Tensor::zeros((4, 4), dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "encoder.layers.0.self_attn.out_proj.weight".to_string(),
+            Tensor::zeros((4, 4), dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "encoder.layers.0.layer_norm1.weight".to_string(),
+            Tensor::zeros(4, dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "encoder.layers.0.layer_norm1.bias".to_string(),
+            Tensor::zeros(4, dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "encoder.layers.0.mlp.fc1.weight".to_string(),
+            Tensor::zeros((8, 4), dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "encoder.layers.0.mlp.fc1.bias".to_string(),
+            Tensor::zeros(8, dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "encoder.layers.0.mlp.fc2.weight".to_string(),
+            Tensor::zeros((4, 8), dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "encoder.layers.0.mlp.fc2.bias".to_string(),
+            Tensor::zeros(4, dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "encoder.layers.0.layer_norm2.weight".to_string(),
+            Tensor::zeros(4, dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "encoder.layers.0.layer_norm2.bias".to_string(),
+            Tensor::zeros(4, dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "post_layernorm.weight".to_string(),
+            Tensor::zeros(4, dtype, &device).unwrap(),
+        );
+        tensors.insert(
+            "post_layernorm.bias".to_string(),
+            Tensor::zeros(4, dtype, &device).unwrap(),
+        );
+
+        let backend = Box::new(HashMapBackend::new(tensors));
+        let vb = ShardedSafeTensors::wrap(backend, dtype, device);
+        let model = ClipVisionTransformer::new(vb, &config).unwrap();
+
+        let residual = model.residual_tensors();
+        let names: Vec<_> = residual.iter().map(|(n, _)| n.clone()).collect();
+
+        println!("Tensors in residual_tensors: {:?}", names);
+
+        // This is what we EXPECT (the fix)
+        assert!(names.contains(&"pre_layernorm.weight".to_string()));
     }
 }
