@@ -47,7 +47,15 @@ jobs:
           - os: macos-latest
             target: macos-arm64
             flavor: metal
-            args: "--all"
+            args: "-p mistralrs"
+          - os: macos-latest
+            target: macos-arm64
+            flavor: metal
+            args: "-p mistralrs-metal"
+          - os: macos-latest
+            target: macos-arm64
+            flavor: metal
+            args: "-p mistralrs-accelerate"
 
     steps:
       - name: Checkout repository
