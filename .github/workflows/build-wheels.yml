@@ -45,6 +45,7 @@ jobs:
       - name: Install Build Dependencies
         run: |
           python -m pip install --upgrade pip
+          python -m pip install maturin
       - name: Install patchelf (Linux only)
         if: runner.os == 'Linux'
         run: python -m pip install patchelf
