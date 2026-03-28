@@ -91,12 +91,9 @@ impl Topology {
 
     pub fn with_range(mut self, range: Range<usize>, layer: LayerTopology) -> Self {
         if self.layers.len() < range.end {
-            self.layers
-                .extend(vec![None; range.end - self.layers.len()]);
+            self.layers.resize(range.end, None);
         }
-        for i in range.start..range.end {
-            self.layers[i] = Some(layer.clone());
-        }
+        self.layers[range.start..range.end].fill(Some(layer));
         self
     }
 
@@ -188,9 +185,7 @@ impl Topology {
             Self::with_capacity(capacity)
         };
         for (range, layer) in range_layers {
-            for i in range.start..range.end {
-                this.layers[i] = Some(layer.clone());
-            }
+            this.layers[range.start..range.end].fill(Some(layer));
         }
         this.patterns = pattern_layers;
         Ok(this)

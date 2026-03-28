@@ -9,6 +9,15 @@ use crate::pipeline::KvCache;
 // https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_attn_mask_utils.py
 pub struct CausalMasker;
 
+pub fn get_mask_fill_value(dtype: DType) -> f32 {
+    match dtype {
+        DType::F16 => half::f16::NEG_INFINITY.to_f32(),
+        DType::BF16 => half::bf16::NEG_INFINITY.to_f32(),
+        DType::F32 => f32::NEG_INFINITY,
+        _ => f32::NEG_INFINITY,
+    }
+}
+
 // https://github.com/mokeyish/candle-ext/blob/main/src/masked_fill.rs
 /// xs are on false (0), value is on true (1)
 pub fn masked_fill<D: WithDType>(xs: &Tensor, mask: &Tensor, value: D) -> Result<Tensor> {
@@ -113,11 +122,12 @@ impl CausalMasker {
         device: &Device,
         dtype: DType,
     ) -> Result<Tensor> {
+        let neg_inf = get_mask_fill_value(DType::F32);
         let mask: Vec<_> = (0..tgt_len)
             .flat_map(|i| {
                 (0..tgt_len).map(move |j| {
                     if i < j || j + sliding_window < i {
-                        f32::NEG_INFINITY
+                        neg_inf
                     } else {
                         0.
                     }
@@ -372,13 +382,14 @@ impl BidirectionalMasker {
         device: &Device,
         dtype: DType,
     ) -> Result<Tensor> {
+        let neg_inf = get_mask_fill_value(DType::F32);
         let mask: Vec<_> = (0..tgt_len)
             .flat_map(|i| {
                 (0..tgt_len).map(move |j| {
                     // https://github.com/huggingface/transformers/blob/a0bf5a82eebf88ee9f52145be427f6f1541329f6/src/transformers/models/gemma3/modeling_gemma3.py#L478
                     // A token can attend to any other token if their absolute distance is within the (exclusive) sliding window size (distance < sliding_window)."
                     if (i as isize - j as isize).unsigned_abs() >= sliding_window {
-                        f32::NEG_INFINITY
+                        neg_inf
                     } else {
                         0.
                     }
