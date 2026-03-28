@@ -97,9 +97,9 @@ pub struct Gemma4TextConfig {
 
 impl Gemma4TextConfig {
     /// Effective sliding window size, adjusted for bidirectional attention.
-    /// `self.sliding_window = (self.sliding_window // 2) + 1` when `use_bidirectional_attention` is truthy.
+    /// `self.sliding_window = (self.sliding_window // 2) + 1` only when `use_bidirectional_attention == "all"`.
     pub fn effective_sliding_window(&self) -> usize {
-        if self.use_bidirectional_attention.is_some() {
+        if self.use_bidirectional_attention.as_deref() == Some("all") {
             (self.sliding_window / 2) + 1
         } else {
             self.sliding_window
