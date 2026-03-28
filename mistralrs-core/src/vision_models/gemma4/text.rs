@@ -1424,12 +1424,6 @@ impl TextModel {
             let attention_mask =
                 CausalMasker.make_causal_mask_as_attn_bias(input_ids, mask_cache, xs.dtype())?;
             let attention_mask = attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
-            let attention_mask = attention_mask.filter(|_| {
-                metadata
-                    .as_ref()
-                    .map(|(_, meta)| meta.is_first_prompt_chunk)
-                    .unwrap_or(true)
-            });
 
             let sliding_attention_mask = CausalMasker
                 .make_sliding_window_causal_mask_as_attn_bias(
@@ -1449,12 +1443,6 @@ impl TextModel {
                 .transpose()?;
             let sliding_attention_mask =
                 sliding_attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
-            let sliding_attention_mask = sliding_attention_mask.filter(|_| {
-                metadata
-                    .as_ref()
-                    .map(|(_, meta)| meta.is_first_prompt_chunk)
-                    .unwrap_or(true)
-            });
 
             (attention_mask, sliding_attention_mask, None)
         } else {
