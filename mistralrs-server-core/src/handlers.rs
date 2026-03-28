@@ -129,7 +129,11 @@ pub async fn re_isq(
     let repr = format!("Re ISQ: {:?}", request.ggml_type);
     MistralRs::maybe_log_request(state.clone(), repr.clone());
     let request = Request::ReIsq(parse_isq_value(&request.ggml_type, None)?);
-    state.get_sender(None).unwrap().send(request).await.unwrap();
+    let sender = state.get_sender(None).map_err(|e| e.to_string())?;
+    sender
+        .send(request)
+        .await
+        .map_err(|e| format!("Failed to send request to engine: {e}"))?;
     Ok(repr)
 }
 
