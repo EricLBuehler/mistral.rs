@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Build ${{ matrix.os }} (${{ matrix.target }})
+    name: Build ${{ matrix.os }} (${{ matrix.flavor }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -18,16 +18,35 @@ jobs:
           # Linux x86_64 (Standard, CUDA, MKL)
           - os: ubuntu-22.04
             target: linux-x86_64
-            args: "-p mistralrs mistralrs-mkl mistralrs-cuda"
+            flavor: standard
+            args: "-p mistralrs"
+          - os: ubuntu-22.04
+            target: linux-x86_64
+            flavor: mkl
+            args: "-p mistralrs-mkl"
+          - os: ubuntu-22.04
+            target: linux-x86_64
+            flavor: cuda
+            args: "-p mistralrs-cuda"
           
           # Windows x86_64 (Standard, CUDA, MKL)
           - os: windows-latest
             target: windows-x86_64
-            args: "-p mistralrs mistralrs-mkl mistralrs-cuda"
+            flavor: standard
+            args: "-p mistralrs"
+          - os: windows-latest
+            target: windows-x86_64
+            flavor: mkl
+            args: "-p mistralrs-mkl"
+          - os: windows-latest
+            target: windows-x86_64
+            flavor: cuda
+            args: "-p mistralrs-cuda"
 
           # macOS aarch64 (Metal / All)
           - os: macos-latest
             target: macos-arm64
+            flavor: metal
             args: "--all"
 
     steps:
@@ -41,8 +60,9 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.10"
+
       - name: Install CUDA Toolkit
-        if: matrix.target != 'macos-arm64' # macOS uses Metal, not CUDA
+        if: matrix.flavor == 'cuda'
         uses: Jimver/cuda-toolkit@v0.2.34
         with:
           cuda: '12.1.0'
@@ -62,5 +82,6 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: wheels-${{ matrix.target }}
           path: wheels/**/*.whl
+          archive: false
+          if-no-files-found: error
