@@ -46,7 +46,7 @@ jobs:
           # macOS aarch64 (Metal / All)
           - os: macos-latest
             target: macos-arm64
-            flavor: metal
+            flavor: standard
             args: "-p mistralrs"
           - os: macos-latest
             target: macos-arm64
@@ -54,7 +54,7 @@ jobs:
             args: "-p mistralrs-metal"
           - os: macos-latest
             target: macos-arm64
-            flavor: metal
+            flavor: accelerate
             args: "-p mistralrs-accelerate"
 
     steps:
