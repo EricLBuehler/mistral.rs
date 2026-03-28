@@ -16,7 +16,7 @@ jobs:
       matrix:
         include:
           # Linux x86_64 (Standard, CUDA, MKL)
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: linux-x86_64
             args: "-p mistralrs mistralrs-mkl mistralrs-cuda"
           
