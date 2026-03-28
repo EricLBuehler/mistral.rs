@@ -1402,6 +1402,7 @@ impl TextModel {
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
+        has_images: bool,
     ) -> Result<Tensor> {
         let cache = &mut self.cache.normal().0;
 
@@ -1411,10 +1412,9 @@ impl TextModel {
         // Larger Gemma 4 variants use a mixed causal/bidirectional mask for
         // image soft tokens during prefill. Flash attention cannot consume that
         // per-token override, so we materialize real masks and bypass flash only
-        // for this path.
-        let has_bidirectional = self.use_bidirectional_vision_attention
-            && self.image_token_id.is_some()
-            && input_ids.dim(1)? > 1;
+        // when image tokens are actually present.
+        let has_bidirectional =
+            self.use_bidirectional_vision_attention && has_images && input_ids.dim(1)? > 1;
         let mask_cache: &dyn PastKvLenCache = metadata
             .as_ref()
             .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)

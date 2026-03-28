@@ -385,6 +385,7 @@ impl Gemma4Model {
             context_lens,
             metadata,
             flash_params,
+            pixel_values.is_some(),
         )
     }
 }
