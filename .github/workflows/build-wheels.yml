@@ -1,21 +1,34 @@
-name: Build Python Wheels
+name: Build and Package Python Wheels
 
 on:
   push:
-    branches: [ master ]
+    branches: [ '*' ]
   pull_request:
     branches: [ master ]
   workflow_dispatch:
 
 jobs:
-  build_wheels:
-    name: Build wheels on ${{ matrix.os }}
+  build:
+    name: Build ${{ matrix.os }} (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10"]
+        include:
+          # Linux x86_64 (Standard, CUDA, MKL)
+          - os: ubuntu-latest
+            target: linux-x86_64
+            args: "-p mistralrs"
+          
+          # Windows x86_64 (Standard, CUDA, MKL)
+          - os: windows-latest
+            target: windows-x86_64
+            args: "-p mistralrs"
+
+          # macOS aarch64 (Metal / All)
+          - os: macos-latest
+            target: macos-arm64
+            args: "--all"
 
     steps:
       - name: Checkout repository
@@ -24,23 +37,24 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.10"
 
-      - name: Install dependencies
+      - name: Install Build Dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install maturin patchelf
 
-      - name: Build wheels
-        run: python scripts/build_wheels.py
+      - name: Build Wheels
+        run: python scripts/build_wheels.py ${{ matrix.args }}
         env:
+          MACOSX_DEPLOYMENT_TARGET: "15.0"
           MATURIN_PY_EXE: python
 
-      - name: Upload wheels as artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-${{ matrix.python-version }}
+          name: wheels-${{ matrix.target }}
           path: target/wheels/*.whl
