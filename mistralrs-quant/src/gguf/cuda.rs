@@ -117,9 +117,9 @@ fn indexed_moe_forward_fused_q8_1_input(
 
     quantize_q8_1(input, &mut input_quant, k, total_rows, dev)?;
 
-    // Output buffer
+    // Output buffer - zero-initialize to prevent NaN from uninitialized memory
     let outsize = batch * topk * n;
-    let out = unsafe { dev.alloc::<f32>(outsize)? };
+    let out = dev.alloc_zeros::<f32>(outsize)?;
 
     // Get stream pointer
     let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
