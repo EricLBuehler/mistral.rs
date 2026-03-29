@@ -1420,6 +1420,11 @@ impl TextModel {
             .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
             .unwrap_or(cache as &dyn PastKvLenCache);
 
+        // Non-causal flash params used for the bidirectional-attention path so
+        // that the paged-attention gather path does NOT force causal=true (which
+        // would undo the bidirectional overrides in the materialized masks).
+        let bidir_flash = FlashParams::empty(false);
+
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
             let attention_mask =
                 CausalMasker.make_causal_mask_as_attn_bias(input_ids, mask_cache, xs.dtype())?;
@@ -1444,7 +1449,7 @@ impl TextModel {
             let sliding_attention_mask =
                 sliding_attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
 
-            (attention_mask, sliding_attention_mask, None)
+            (attention_mask, sliding_attention_mask, Some(&bidir_flash))
         } else {
             let attention_mask = CausalMasker.make_causal_mask_matrix(
                 input_ids,

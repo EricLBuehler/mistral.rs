@@ -580,6 +580,11 @@ impl TextModel {
         let has_bidirectional =
             has_images && self.image_token_index.is_some() && input_ids.dim(1)? > 1;
 
+        // Non-causal flash params used for the bidirectional-attention path so
+        // that the paged-attention gather path does NOT force causal=true (which
+        // would undo the bidirectional overrides in the materialized masks).
+        let bidir_flash = FlashParams::empty(false);
+
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
             // Build real masks (not flash-attn dummies) with bidirectional regions for image tokens
             let image_token_index = self.image_token_index.unwrap();
@@ -623,8 +628,7 @@ impl TextModel {
                     .unwrap_or(true)
             });
 
-            // None = bypass flash, use the mask directly
-            (attention_mask, sliding_attention_mask, None)
+            (attention_mask, sliding_attention_mask, Some(&bidir_flash))
         } else {
             // Standard path: use CausalMasker (returns dummy (1,1) when flash-attn on CUDA)
             let attention_mask = CausalMasker.make_causal_mask_matrix(
