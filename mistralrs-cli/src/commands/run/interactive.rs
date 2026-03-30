@@ -46,6 +46,31 @@ fn history_file_path() -> PathBuf {
     config_dir.join("history.txt")
 }
 
+fn format_sampling_params(params: &SamplingParams) -> String {
+    fn fmt_opt<T: std::fmt::Display>(v: &Option<T>) -> String {
+        match v {
+            Some(v) => v.to_string(),
+            None => "off".to_string(),
+        }
+    }
+    let mut parts = vec![
+        format!("temp={}", fmt_opt(&params.temperature)),
+        format!("top_k={}", fmt_opt(&params.top_k)),
+        format!("top_p={}", fmt_opt(&params.top_p)),
+        format!("min_p={}", fmt_opt(&params.min_p)),
+    ];
+    if params.frequency_penalty.is_some() {
+        parts.push(format!("freq_pen={}", fmt_opt(&params.frequency_penalty)));
+    }
+    if params.presence_penalty.is_some() {
+        parts.push(format!("pres_pen={}", fmt_opt(&params.presence_penalty)));
+    }
+    if params.repetition_penalty.is_some() {
+        parts.push(format!("rep_pen={}", fmt_opt(&params.repetition_penalty)));
+    }
+    parts.join(", ")
+}
+
 fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>) -> String {
     let r = editor.readline("> ");
     match r {
@@ -102,15 +127,15 @@ pub async fn interactive_mode(
 
 const COMMAND_COMMANDS: &str = r#"
 Commands:
-- `\help`: Display this message.
-- `\exit`: Quit interactive mode.
-- `\system <system message here>`:
+- `/help`: Display this message.
+- `/exit`: Quit interactive mode.
+- `/system <system message here>`:
     Add a system message to the chat without running the model.
-    Ex: `\system Always respond as a pirate.`
-- `\clear`: Clear the chat history.
-- `\temperature <float>`: Set sampling temperature (0.0 to 2.0).
-- `\topk <int>`: Set top-k sampling value (>0).
-- `\topp <float>`: Set top-p sampling value in (0.0 to 1.0).
+    Ex: `/system Always respond as a pirate.`
+- `/clear`: Clear the chat history.
+- `/temperature <float>`: Set sampling temperature (0.0 to 2.0).
+- `/topk <int>`: Set top-k sampling value (>0).
+- `/topp <float>`: Set top-p sampling value in (0.0 to 1.0).
 "#;
 
 const TEXT_INTERACTIVE_HELP: &str = r#"
@@ -130,25 +155,25 @@ const DIFFUSION_INTERACTIVE_HELP: &str = r#"
 Welcome to interactive mode! Because this model is a diffusion model, you can enter prompts and the model will generate an image.
 
 Commands:
-- `\help`: Display this message.
-- `\exit`: Quit interactive mode.
+- `/help`: Display this message.
+- `/exit`: Quit interactive mode.
 "#;
 
 const SPEECH_INTERACTIVE_HELP: &str = r#"
 Welcome to interactive mode! Because this model is a speech generation model, you can enter prompts and the model will generate audio.
 
 Commands:
-- `\help`: Display this message.
-- `\exit`: Quit interactive mode.
+- `/help`: Display this message.
+- `/exit`: Quit interactive mode.
 "#;
 
-const HELP_CMD: &str = "\\help";
-const EXIT_CMD: &str = "\\exit";
-const SYSTEM_CMD: &str = "\\system";
-const CLEAR_CMD: &str = "\\clear";
-const TEMPERATURE_CMD: &str = "\\temperature";
-const TOPK_CMD: &str = "\\topk";
-const TOPP_CMD: &str = "\\topp";
+const HELP_CMD: &str = "/help";
+const EXIT_CMD: &str = "/exit";
+const SYSTEM_CMD: &str = "/system";
+const CLEAR_CMD: &str = "/clear";
+const TEMPERATURE_CMD: &str = "/temperature";
+const TOPK_CMD: &str = "/topk";
+const TOPP_CMD: &str = "/topp";
 
 /// Regex string used to extract image URLs from prompts.
 const IMAGE_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:png|jpe?g|bmp|gif|webp)(?:\?\S+?)?)"#;
@@ -263,8 +288,9 @@ async fn text_interactive_mode(
 
     info!("Starting interactive loop with sampling params: {sampling_params:?}");
     println!(
-        "{}{TEXT_INTERACTIVE_HELP}{COMMAND_COMMANDS}{}",
+        "{}{TEXT_INTERACTIVE_HELP}{COMMAND_COMMANDS}\nSampling: {}\n{}",
         "=".repeat(20),
+        format_sampling_params(&sampling_params),
         "=".repeat(20)
     );
 
@@ -391,6 +417,7 @@ async fn text_interactive_mode(
                     );
                 }
             }
+            println!("Sampling: {}", format_sampling_params(&sampling_params));
         }
         let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
@@ -522,8 +549,9 @@ async fn vision_interactive_mode(
 
     info!("Starting interactive loop with sampling params: {sampling_params:?}");
     println!(
-        "{}{VISION_INTERACTIVE_HELP}{COMMAND_COMMANDS}{}",
+        "{}{VISION_INTERACTIVE_HELP}{COMMAND_COMMANDS}\nSampling: {}\n{}",
         "=".repeat(20),
+        format_sampling_params(&sampling_params),
         "=".repeat(20)
     );
 
@@ -739,6 +767,7 @@ async fn vision_interactive_mode(
                     prev_encoder_misses = misses;
                 }
             }
+            println!("Sampling: {}", format_sampling_params(&sampling_params));
         }
         let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
