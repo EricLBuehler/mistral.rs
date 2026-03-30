@@ -14,7 +14,7 @@ use crate::{
     attention::SdpaParams,
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        embedding, Activation, CausalMasker, GemmaRmsNorm, MatMul, Mlp, RmsNorm, RotaryEmbedding,
+        embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, RotaryEmbedding,
         ScaledEmbedding, Sdpa,
     },
     layers_masker::PastKvLenCache,
@@ -261,8 +261,8 @@ struct Attention {
     partial_rotary_dim: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
-    q_norm: GemmaRmsNorm,
-    k_norm: GemmaRmsNorm,
+    q_norm: RmsNorm,
+    k_norm: RmsNorm,
     kv_shared_layer_index: Option<usize>,
     rms_norm_eps: f64,
     layer_idx: usize,
@@ -350,12 +350,12 @@ impl Attention {
             None
         };
 
-        let q_norm = GemmaRmsNorm::new(
+        let q_norm = RmsNorm::new(
             head_dim,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("q_norm"), false),
         )?;
-        let k_norm = GemmaRmsNorm::new(
+        let k_norm = RmsNorm::new(
             head_dim,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("k_norm"), false),
@@ -600,21 +600,21 @@ impl Attention {
 struct DecoderLayer {
     self_attn: Attention,
     mlp: Box<dyn crate::amoe::MlpLayer>,
-    input_layernorm: GemmaRmsNorm,
-    post_attention_layernorm: GemmaRmsNorm,
-    pre_feedforward_layernorm: GemmaRmsNorm,
-    post_feedforward_layernorm: GemmaRmsNorm,
+    input_layernorm: RmsNorm,
+    post_attention_layernorm: RmsNorm,
+    pre_feedforward_layernorm: RmsNorm,
+    post_feedforward_layernorm: RmsNorm,
     // MoE
     moe_block: Option<MoEExperts>,
     per_expert_scale: Option<Tensor>,
     router: Option<Gemma4Router>,
-    pre_feedforward_layernorm_2: Option<GemmaRmsNorm>,
-    post_feedforward_layernorm_1: Option<GemmaRmsNorm>,
-    post_feedforward_layernorm_2: Option<GemmaRmsNorm>,
+    pre_feedforward_layernorm_2: Option<RmsNorm>,
+    post_feedforward_layernorm_1: Option<RmsNorm>,
+    post_feedforward_layernorm_2: Option<RmsNorm>,
     // PLE
     per_layer_input_gate: Option<Arc<dyn QuantMethod>>,
     per_layer_projection: Option<Arc<dyn QuantMethod>>,
-    post_per_layer_input_norm: Option<GemmaRmsNorm>,
+    post_per_layer_input_norm: Option<RmsNorm>,
     // Layer scalar
     layer_scalar: Option<Tensor>,
     act: Activation,
@@ -661,22 +661,22 @@ impl DecoderLayer {
             comm,
         )?;
 
-        let input_layernorm = GemmaRmsNorm::new(
+        let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
-        let post_attention_layernorm = GemmaRmsNorm::new(
+        let post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
-        let pre_feedforward_layernorm = GemmaRmsNorm::new(
+        let pre_feedforward_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("pre_feedforward_layernorm"), false),
         )?;
-        let post_feedforward_layernorm = GemmaRmsNorm::new(
+        let post_feedforward_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm"), false),
@@ -720,17 +720,17 @@ impl DecoderLayer {
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb.pp("router"), false),
             )?;
-            let pre_ff_2 = GemmaRmsNorm::new(
+            let pre_ff_2 = RmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb.pp("pre_feedforward_layernorm_2"), false),
             )?;
-            let post_ff_1 = GemmaRmsNorm::new(
+            let post_ff_1 = RmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm_1"), false),
             )?;
-            let post_ff_2 = GemmaRmsNorm::new(
+            let post_ff_2 = RmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm_2"), false),
@@ -763,7 +763,7 @@ impl DecoderLayer {
                 &None,
                 mapper.set_device(layer_idx, vb.pp("per_layer_projection"), loading_isq),
             )?;
-            let norm = GemmaRmsNorm::new(
+            let norm = RmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb.pp("post_per_layer_input_norm"), false),
@@ -1021,7 +1021,7 @@ impl ModelConfigLike for Gemma4ModelConfigLike {
 pub struct TextModel {
     embed_tokens: ScaledEmbedding,
     layers: Vec<DecoderLayer>,
-    norm: GemmaRmsNorm,
+    norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
     lm_head_is_tied: bool,
     // PLE global
@@ -1165,7 +1165,7 @@ impl TextModel {
             )
         })?;
 
-        let norm = GemmaRmsNorm::new(
+        let norm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),

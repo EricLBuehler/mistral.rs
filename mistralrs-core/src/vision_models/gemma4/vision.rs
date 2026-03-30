@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::{
     attention::{Sdpa, SdpaParams},
-    layers::{Activation, GemmaRmsNorm},
+    layers::{Activation, RmsNorm},
     pipeline::text_models_inputs_processor::FlashParams,
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -279,8 +279,8 @@ struct VisionAttention {
     k_proj: ClippableLinear,
     v_proj: ClippableLinear,
     o_proj: ClippableLinear,
-    q_norm: GemmaRmsNorm,
-    k_norm: GemmaRmsNorm,
+    q_norm: RmsNorm,
+    k_norm: RmsNorm,
     rms_norm_eps: f64,
     num_heads: usize,
     num_kv_heads: usize,
@@ -300,8 +300,8 @@ impl VisionAttention {
         let v_proj = ClippableLinear::new(hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
         let o_proj = ClippableLinear::new(num_heads * head_dim, hidden_size, vb.pp("o_proj"))?;
 
-        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
-        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
+        let q_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
+        let k_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
 
         Ok(Self {
             q_proj,
@@ -436,10 +436,10 @@ impl VisionMlp {
 struct VisionEncoderLayer {
     self_attn: VisionAttention,
     mlp: VisionMlp,
-    input_layernorm: GemmaRmsNorm,
-    post_attention_layernorm: GemmaRmsNorm,
-    pre_feedforward_layernorm: GemmaRmsNorm,
-    post_feedforward_layernorm: GemmaRmsNorm,
+    input_layernorm: RmsNorm,
+    post_attention_layernorm: RmsNorm,
+    pre_feedforward_layernorm: RmsNorm,
+    post_feedforward_layernorm: RmsNorm,
 }
 
 impl VisionEncoderLayer {
@@ -447,18 +447,18 @@ impl VisionEncoderLayer {
         let self_attn = VisionAttention::new(cfg, vb.pp("self_attn"))?;
         let mlp = VisionMlp::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
-            GemmaRmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
-        let post_attention_layernorm = GemmaRmsNorm::new(
+            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
         )?;
-        let pre_feedforward_layernorm = GemmaRmsNorm::new(
+        let pre_feedforward_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb.pp("pre_feedforward_layernorm"),
         )?;
-        let post_feedforward_layernorm = GemmaRmsNorm::new(
+        let post_feedforward_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb.pp("post_feedforward_layernorm"),
