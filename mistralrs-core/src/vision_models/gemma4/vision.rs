@@ -752,8 +752,9 @@ impl VisionTower {
 
         let has_padding = all_padding.iter().any(|padding| {
             padding
-                .sum_all()
-                .and_then(|t| t.to_scalar::<u8>())
+                .to_dtype(DType::U32)
+                .and_then(|t| t.sum_all())
+                .and_then(|t| t.to_scalar::<u32>())
                 .map(|sum| sum != 0)
                 .unwrap_or(false)
         });

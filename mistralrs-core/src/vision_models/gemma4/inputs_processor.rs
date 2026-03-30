@@ -131,16 +131,54 @@ impl Gemma4ImageProcessor {
     /// original image size, ensuring that the result is a multiple of
     /// `grid_unit = pooling_kernel_size * patch_size` and does not exceed
     /// `max_patches` patches.
-    fn compute_resize_dims(&self, orig_h: usize, orig_w: usize) -> (usize, usize) {
+    ///
+    /// Matches HuggingFace `get_aspect_ratio_preserving_size` including edge
+    /// case handling for extreme aspect ratios.
+    fn compute_resize_dims(&self, orig_h: usize, orig_w: usize) -> Result<(usize, usize)> {
+        if orig_h == 0 || orig_w == 0 {
+            candle_core::bail!(
+                "Gemma4 image resize: input dimensions must be non-zero, got {orig_h}x{orig_w}"
+            );
+        }
+
         let target_px = self.max_patches * self.patch_size * self.patch_size;
         let grid_unit = self.pooling_kernel_size * self.patch_size; // 48
+        let pool_area = self.pooling_kernel_size * self.pooling_kernel_size;
+        let max_side_length = (self.max_patches / pool_area) * grid_unit;
 
         let factor = (target_px as f64 / (orig_h as f64 * orig_w as f64)).sqrt();
 
-        let new_h = ((orig_h as f64 * factor) as usize / grid_unit).max(1) * grid_unit;
-        let new_w = ((orig_w as f64 * factor) as usize / grid_unit).max(1) * grid_unit;
+        let ideal_h = orig_h as f64 * factor;
+        let ideal_w = orig_w as f64 * factor;
 
-        (new_h, new_w)
+        let mut new_h = (ideal_h / grid_unit as f64).floor() as usize * grid_unit;
+        let mut new_w = (ideal_w / grid_unit as f64).floor() as usize * grid_unit;
+
+        if new_h == 0 && new_w == 0 {
+            candle_core::bail!(
+                "Gemma4 image resize: both dimensions round to 0 for input {orig_h}x{orig_w}"
+            );
+        }
+
+        if new_h == 0 {
+            new_h = grid_unit;
+            new_w = ((orig_w / orig_h) * grid_unit).min(max_side_length);
+            new_w = (new_w / grid_unit).max(1) * grid_unit;
+        } else if new_w == 0 {
+            new_w = grid_unit;
+            new_h = ((orig_h / orig_w) * grid_unit).min(max_side_length);
+            new_h = (new_h / grid_unit).max(1) * grid_unit;
+        }
+
+        if new_h * new_w > target_px {
+            candle_core::bail!(
+                "Gemma4 image resize: {new_h}x{new_w} = {} pixels exceeds patch budget of {target_px} \
+                 for input {orig_h}x{orig_w}",
+                new_h * new_w
+            );
+        }
+
+        Ok((new_h, new_w))
     }
 
     /// Build the expanded token sequence for a single image:
@@ -360,7 +398,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         let (w, h) = img.dimensions();
                         self.compute_resize_dims(h as usize, w as usize)
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>>>()?;
 
                 let PreprocessedImages {
                     pixel_values,
@@ -634,7 +672,7 @@ impl ImagePreProcessor for Gemma4ImageProcessor {
 
         for image in images {
             let (w, h) = image.dimensions();
-            let (new_h, new_w) = self.compute_resize_dims(h as usize, w as usize);
+            let (new_h, new_w) = self.compute_resize_dims(h as usize, w as usize)?;
 
             // resize_exact takes (width, height, filter)
             let resized = image.resize_exact(new_w as u32, new_h as u32, resample);
