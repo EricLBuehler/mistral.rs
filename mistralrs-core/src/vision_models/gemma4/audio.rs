@@ -494,7 +494,9 @@ impl Gemma4AudioAttention {
         let relative_position_embedding =
             Gemma4AudioRelativePositionEmbedding::new(cfg, vb.pp("relative_position_embedding"))?;
         let per_dim_scale = vb.get(head_dim, "per_dim_scale")?;
-        let per_dim_key_scale = vb.get(head_dim, "per_dim_key_scale")?;
+        let per_dim_key_scale = vb
+            .get(head_dim, "per_dim_key_scale")
+            .unwrap_or_else(|_| Tensor::ones(head_dim, vb.dtype(), vb.device()).unwrap());
         let q_proj =
             ClippableLinear::new_no_bias(cfg, hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
         let k_proj =
