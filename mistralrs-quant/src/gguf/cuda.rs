@@ -113,7 +113,7 @@ fn indexed_moe_forward_fused_q8_1_input(
     let num_blocks_per_row = k_padded / q8_1_block_size;
     let dst_row_size_bytes = num_blocks_per_row * q8_1_type_size;
     let y_size_in_bytes = total_rows * dst_row_size_bytes;
-    let mut input_quant = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
+    let mut input_quant = dev.alloc_zeros::<u8>(y_size_in_bytes)?;
 
     quantize_q8_1(input, &mut input_quant, k, total_rows, dev)?;
 

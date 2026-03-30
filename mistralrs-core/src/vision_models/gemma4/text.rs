@@ -1492,6 +1492,14 @@ impl TextModel {
                 .as_ref()
                 .map(|pli| self.mapper.map(pli[i].clone(), i))
                 .transpose()?;
+            // In the bidirectional path, only sliding-attention layers use the
+            // non-causal flash params (matching HF which only applies the
+            // bidirectional mask override to sliding_attention, not full_attention).
+            let this_layer_flash = if has_bidirectional && !layer.self_attn.is_sliding {
+                Some(flash_params)
+            } else {
+                layer_flash_params
+            };
             xs = layer.forward(
                 &xs,
                 per_layer_input.as_ref(),
@@ -1503,7 +1511,7 @@ impl TextModel {
                     let cache_idx = layer.self_attn.kv_shared_layer_index.unwrap_or(i);
                     (kv_cache[cache_idx].clone(), *metadata)
                 }),
-                layer_flash_params,
+                this_layer_flash,
             )?;
         }
         let xs = xs.to_device(&self.device)?;
