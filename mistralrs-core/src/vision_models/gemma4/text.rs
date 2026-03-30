@@ -35,10 +35,9 @@ use crate::{
 use super::config::Gemma4TextConfig;
 
 macro_rules! is_sliding {
-    ($layer_idx:expr, $cfg:expr) => {{
-        let is_last = $layer_idx == $cfg.num_hidden_layers - 1;
-        !is_last && ($layer_idx + 1) % $cfg.sliding_window_pattern != 0
-    }};
+    ($layer_idx:expr, $cfg:expr) => {
+        $cfg.layer_types[$layer_idx] == "sliding_attention"
+    };
 }
 
 fn first_kv_shared_layer_idx(cfg: &Gemma4TextConfig) -> usize {
@@ -1225,6 +1224,23 @@ impl TextModel {
                 (None, None, None)
             };
 
+        // Pre-compute which non-shared layers serve as KV donors for shared layers.
+        // Donor layers must use a full (non-rotating) cache so that shared consumers
+        // see the complete sequence, even when the donor itself is a sliding-window layer.
+        let first_shared = first_kv_shared_layer_idx(cfg);
+        let mut donor_layers = std::collections::HashSet::<usize>::new();
+        if first_shared < cfg.num_hidden_layers {
+            for shared_idx in first_shared..cfg.num_hidden_layers {
+                let attention_type = &cfg.layer_types[shared_idx];
+                if let Some(donor_idx) = cfg.layer_types[..first_shared]
+                    .iter()
+                    .rposition(|ty| ty == attention_type)
+                {
+                    donor_layers.insert(donor_idx);
+                }
+            }
+        }
+
         let mut per_layer_num_kv_heads = Vec::with_capacity(cfg.num_hidden_layers);
         let mut per_layer_k_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
         let mut per_layer_v_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
@@ -1254,9 +1270,18 @@ impl TextModel {
                     Ok(NormalCacheType::Shared { owner })
                 } else if is_sliding {
                     per_layer_uses_own_kv_cache.push(true);
-                    Ok(NormalCacheType::SlidingWindow {
-                        window: cfg.effective_sliding_window(),
-                    })
+                    if donor_layers.contains(&layer_idx) {
+                        // Donor for shared layers: full cache so consumers see
+                        // the entire sequence. SWA masking still applied via
+                        // attention_mask in the forward pass.
+                        Ok(NormalCacheType::Normal {
+                            max_seq_len: cfg.max_position_embeddings,
+                        })
+                    } else {
+                        Ok(NormalCacheType::SlidingWindow {
+                            window: cfg.effective_sliding_window(),
+                        })
+                    }
                 } else {
                     per_layer_uses_own_kv_cache.push(true);
                     Ok(NormalCacheType::Normal {

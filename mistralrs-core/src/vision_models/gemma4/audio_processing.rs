@@ -50,7 +50,7 @@ impl AudioProcessor {
             .unwrap_or(f64::from(target_sample_rate) / 2.0) as f32;
         let arg = std::f32::consts::PI * 2.0 / frame_length as f32;
         let window = (0..frame_length)
-            .map(|idx| 0.5 - 0.5 * (arg * (idx as f32 + 0.5)).cos())
+            .map(|idx| 0.5 - 0.5 * (arg * idx as f32).cos())
             .collect::<Vec<_>>();
         let mel_filters = Self::create_mel_filterbank(
             feature_size,
@@ -192,6 +192,16 @@ impl AudioProcessor {
         waveform: &[f32],
         attention_mask: &[bool],
     ) -> Result<(Vec<Vec<f32>>, Vec<bool>)> {
+        // Semicausal time-padding: prepend frame_length/2 zeros so the first
+        // STFT frame is centered at t=0, matching HF's time_padding='semicausal'.
+        let pad_left = self.frame_length / 2;
+        let mut padded_waveform = vec![0.0f32; pad_left + waveform.len()];
+        padded_waveform[pad_left..].copy_from_slice(waveform);
+        let mut padded_mask = vec![false; pad_left + attention_mask.len()];
+        padded_mask[pad_left..].copy_from_slice(attention_mask);
+        let waveform = &padded_waveform[..];
+        let attention_mask = &padded_mask[..];
+
         let frame_size_for_unfold = self.frame_length + 1;
         if waveform.len() < frame_size_for_unfold {
             return Ok((Vec::new(), Vec::new()));
@@ -242,7 +252,7 @@ impl AudioProcessor {
                 for (freq_idx, &coeff) in filter.iter().enumerate() {
                     sum += magnitude[freq_idx] * coeff;
                 }
-                let mut value = sum.max(self.mel_floor).ln();
+                let mut value = (sum + self.mel_floor).ln();
                 if let Some(mean) = self
                     .per_bin_mean
                     .as_ref()

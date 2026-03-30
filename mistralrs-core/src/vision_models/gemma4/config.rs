@@ -221,7 +221,8 @@ serde_default_fn!(f64, audio_rms_norm_eps, 1e-6);
 serde_default_fn!(i64, audio_vocab_offset, 262272);
 serde_default_fn!(f64, gradient_clipping, 1e10);
 serde_default_fn!(f64, embedding_norm_eps, 1e-6);
-serde_default_fn!(f64, sscp_conv_eps, 1e-6);
+serde_default_fn!(f64, sscp_conv_eps, 1e-3);
+serde_default_fn!(Option<usize>, output_proj_dims_default, Some(1536));
 serde_default_fn!(String, sscp_conv_norm_type, "layer_norm".to_string());
 serde_default_fn!(String, sscp_conv_padding_type, "semicausal".to_string());
 serde_default_fn!(bool, streaming, false);
@@ -236,6 +237,7 @@ pub struct Gemma4AudioConfig {
     pub input_feat_size: usize,
     #[serde(default = "audio_hidden_size")]
     pub hidden_size: usize,
+    #[serde(default = "output_proj_dims_default")]
     pub output_proj_dims: Option<usize>,
     pub conf_hidden_size: Option<usize>,
     pub conf_positional_bias_size: Option<usize>,
