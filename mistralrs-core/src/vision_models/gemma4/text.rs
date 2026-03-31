@@ -215,6 +215,12 @@ impl Gemma4Router {
             .to_dtype(self.proj.weight().dtype())?
             .apply(&self.proj)?;
         let logits_f32 = logits.to_dtype(DType::F32)?;
+        // ISQ can occasionally produce NaN router rows. Sanitize before
+        // softmax so we never emit invalid expert ids from the CUDA top-k
+        // kernel.
+        let finite_mask = logits_f32.eq(&logits_f32)?;
+        let logits_f32 = finite_mask.where_cond(&logits_f32, &Tensor::zeros_like(&logits_f32)?)?;
+        let logits_f32 = logits_f32.clamp(-1e4, 1e4)?;
         let probs = candle_nn::ops::softmax_last_dim(&logits_f32)?;
 
         // Select top-k experts by PROBABILITY
@@ -814,6 +820,7 @@ impl DecoderLayer {
                 flash_params,
             )?
             .apply(&self.post_attention_layernorm)?;
+
         xs = (attn_out + &residual)?;
 
         // Feedforward
@@ -906,6 +913,7 @@ impl DecoderLayer {
                 // post-norm + residual
                 let normed = norm.forward(&projected)?;
                 xs = (residual_ple + normed)?;
+
             }
         }
 
@@ -913,6 +921,12 @@ impl DecoderLayer {
         if let Some(ref scalar) = self.layer_scalar {
             xs = xs.broadcast_mul(scalar)?;
         }
+
+        // ISQ can produce sporadic NaN from BF16 overflow in the MLP
+        // gate/up multiply. Clamp to BF16-safe range to prevent cascade.
+        let xs_f32 = xs.to_dtype(DType::F32)?;
+        let finite_mask = xs_f32.eq(&xs_f32)?; // NaN != NaN
+        xs = finite_mask.where_cond(&xs, &xs.zeros_like()?)?;
 
         Ok(xs)
     }
@@ -1424,6 +1438,7 @@ impl TextModel {
         // Compute PLE per-layer inputs
         let per_layer_inputs = self.compute_ple(ple_input_ids, &xs)?;
 
+
         // Larger Gemma 4 variants use a mixed causal/bidirectional mask for
         // image soft tokens during prefill. Flash attention cannot consume that
         // per-token override, so we materialize real masks and bypass flash only
@@ -1617,9 +1632,11 @@ impl IsqModel for TextModel {
         if !self.lm_head_is_tied {
             tensors.push((&mut self.lm_head, None));
         }
-        if let Some(ref mut proj) = self.per_layer_model_projection {
-            tensors.push((proj, None));
-        }
+        // Keep the global PLE projection in BF16. It maps
+        // hidden_size → (num_layers × ple_dim) and low-bit quantization
+        // produces NaN when the prompt contains rare control tokens (e.g.
+        // tool declarations).
+        // Per-layer PLE gate/projection are small enough to quantize safely.
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((&mut layer.self_attn.q_proj, Some(i)));
             tensors.push((&mut layer.self_attn.k_proj, Some(i)));

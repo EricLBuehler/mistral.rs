@@ -76,6 +76,44 @@ fn extract_matched_braces(s: &str, start: usize) -> Option<(&str, usize)> {
     None
 }
 
+/// Escape literal `"` characters that appear *inside* `<|"|>…<|"|>` delimited
+/// strings so they survive the delimiter-to-quote replacement as `\"`.
+fn escape_inner_quotes(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut rest = input;
+    loop {
+        // Find the next opening delimiter.
+        let Some(open) = rest.find(GEMMA4_STR_DELIM) else {
+            result.push_str(rest);
+            break;
+        };
+        // Copy everything before the delimiter verbatim.
+        result.push_str(&rest[..open]);
+        // Emit the opening delimiter as-is.
+        result.push_str(GEMMA4_STR_DELIM);
+        rest = &rest[open + GEMMA4_STR_DELIM.len()..];
+
+        // Find the closing delimiter.
+        let close = rest.find(GEMMA4_STR_DELIM).unwrap_or(rest.len());
+        // Escape any raw `"` inside the string content.
+        let inner = &rest[..close];
+        for ch in inner.chars() {
+            if ch == '"' {
+                result.push('\\');
+            }
+            result.push(ch);
+        }
+        if close < rest.len() {
+            // Emit the closing delimiter.
+            result.push_str(GEMMA4_STR_DELIM);
+            rest = &rest[close + GEMMA4_STR_DELIM.len()..];
+        } else {
+            rest = &rest[close..];
+        }
+    }
+    result
+}
+
 /// Convert Gemma 4 custom argument format to a JSON string.
 ///
 /// Input:  `key1:<|"|>value<|"|>,key2:42,nested:{k:<|"|>v<|"|>}`
@@ -83,6 +121,9 @@ fn extract_matched_braces(s: &str, start: usize) -> Option<(&str, usize)> {
 fn gemma4_args_to_json(raw: &str) -> std::result::Result<Value, candle_core::Error> {
     // Step 1: wrap in braces so it's a full object
     let with_braces = format!("{{{raw}}}");
+
+    // Step 1b: escape literal `"` chars inside delimited strings
+    let with_braces = escape_inner_quotes(&with_braces);
 
     // Step 2: replace <|"|> with "
     let with_quotes = with_braces.replace(GEMMA4_STR_DELIM, "\"");
@@ -710,6 +751,42 @@ mod tests {
         assert_eq!(
             quote_unquoted_keys(r#"{a:true,b:false,c:null}"#),
             r#"{"a":true,"b":false,"c":null}"#
+        );
+    }
+
+    #[test]
+    fn gemma4_tool_call_inner_quotes_escaped() {
+        // Model generates literal " inside <|"|>…<|"|> delimiters — must survive as \"
+        let msg = "<|tool_call>call:google_search{queries:[<|\"|\x3e\"Review\" stuff<|\"|\x3e,<|\"|\x3eplain<|\"|\x3e]}<tool_call|>";
+        let result = process_model_specific_message(msg).unwrap();
+        let parsed: Vec<CalledFunctionParameters> = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed[0].name, "google_search");
+        let queries = parsed[0].parameters["queries"].as_array().unwrap();
+        assert_eq!(queries[0], "\"Review\" stuff");
+        assert_eq!(queries[1], "plain");
+    }
+
+    #[test]
+    fn gemma4_escape_inner_quotes_basic() {
+        let input = r#"<|"|>hello "world"<|"|>"#;
+        let escaped = escape_inner_quotes(input);
+        assert_eq!(escaped, r#"<|"|>hello \"world\"<|"|>"#);
+    }
+
+    #[test]
+    fn gemma4_escape_inner_quotes_no_quotes() {
+        let input = r#"<|"|>hello world<|"|>"#;
+        let escaped = escape_inner_quotes(input);
+        assert_eq!(escaped, input);
+    }
+
+    #[test]
+    fn gemma4_escape_inner_quotes_multiple_strings() {
+        let input = r#"key:<|"|>"a" and "b"<|"|>,other:<|"|>no quotes<|"|>"#;
+        let escaped = escape_inner_quotes(input);
+        assert_eq!(
+            escaped,
+            r#"key:<|"|>\"a\" and \"b\"<|"|>,other:<|"|>no quotes<|"|>"#
         );
     }
 }
