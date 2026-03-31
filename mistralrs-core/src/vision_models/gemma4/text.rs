@@ -215,12 +215,6 @@ impl Gemma4Router {
             .to_dtype(self.proj.weight().dtype())?
             .apply(&self.proj)?;
         let logits_f32 = logits.to_dtype(DType::F32)?;
-        // Immediate ISQ can occasionally produce NaN router rows for the 26b
-        // MoE path. Sanitize them before top-k so we never emit invalid expert
-        // ids such as u32::MAX from the CUDA top-k kernel.
-        let finite_mask = logits_f32.eq(&logits_f32)?;
-        let logits_f32 = finite_mask.where_cond(&logits_f32, &Tensor::zeros_like(&logits_f32)?)?;
-        let logits_f32 = logits_f32.clamp(-1e4, 1e4)?;
         let probs = candle_nn::ops::softmax_last_dim(&logits_f32)?;
 
         // Select top-k experts by PROBABILITY
