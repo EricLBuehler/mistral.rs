@@ -175,35 +175,19 @@ impl PagedAttention {
         let use_full =
             sdpa_params.sliding_window.is_none() && input_metadata.full_block_tables.is_some();
 
-        let block_tables = if use_full {
-            input_metadata
-                .full_block_tables
-                .as_ref()
-                .unwrap()
-                .get(&query.device().location())
-                .unwrap()
-        } else {
-            input_metadata
-                .block_tables
-                .as_ref()
-                .unwrap()
-                .get(&query.device().location())
-                .unwrap()
+        let resolve_block_tables = |dev: &candle_core::DeviceLocation| -> Option<&Tensor> {
+            if use_full {
+                input_metadata.full_block_tables.as_ref()?.get(dev)
+            } else {
+                input_metadata.block_tables.as_ref()?.get(dev)
+            }
         };
-        let context_lens = if use_full {
-            input_metadata
-                .full_context_lens
-                .as_ref()
-                .unwrap()
-                .get(&query.device().location())
-                .unwrap()
-        } else {
-            input_metadata
-                .context_lens
-                .as_ref()
-                .unwrap()
-                .get(&query.device().location())
-                .unwrap()
+        let resolve_context_lens = |dev: &candle_core::DeviceLocation| -> Option<&Tensor> {
+            if use_full {
+                input_metadata.full_context_lens.as_ref()?.get(dev)
+            } else {
+                input_metadata.context_lens.as_ref()?.get(dev)
+            }
         };
 
         let alibi_slopes = if let Some(alibi_slopes) = self.alibi_slopes.as_ref() {
@@ -219,13 +203,21 @@ impl PagedAttention {
         // Entered when:
         //  - write_cache=true  AND num_cached_tokens is set (prefix cache hit)
         //  - write_cache=false AND attention_mask is set  (donor cache prompt)
+        // The gather path needs block_tables. During calibration forwards
+        // there is no paged cache, so block_tables is None — skip to the
+        // regular prompt path.
+        let has_block_tables = input_metadata.block_tables.is_some();
         let use_gather_path = if write_cache {
-            input_metadata.num_cached_tokens.is_some() && attention_mask.is_some()
+            input_metadata.num_cached_tokens.is_some()
+                && attention_mask.is_some()
+                && has_block_tables
         } else {
-            attention_mask.is_some()
+            attention_mask.is_some() && has_block_tables
         };
 
         if use_gather_path {
+            let block_tables = resolve_block_tables(&query.device().location()).unwrap();
+            let context_lens = resolve_context_lens(&query.device().location()).unwrap();
             // Write new tokens to cache (skipped for donor/shared layers)
             if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
                 let k_flat = key
@@ -404,14 +396,15 @@ impl PagedAttention {
 
         // === Decode path ===
         #[allow(clippy::cast_possible_truncation)]
+        let dev = query.device().location();
         let res = paged_attention(
             &query,
             self.k_scale.as_ref(),
             self.v_scale.as_ref(),
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
-            block_tables,
-            context_lens,
+            resolve_block_tables(&dev).unwrap(),
+            resolve_context_lens(&dev).unwrap(),
             alibi_slopes.as_ref(),
             if use_full {
                 input_metadata.full_max_context_len.unwrap()
