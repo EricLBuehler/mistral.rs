@@ -912,7 +912,6 @@ impl DecoderLayer {
                 // post-norm + residual
                 let normed = norm.forward(&projected)?;
                 xs = (residual_ple + normed)?;
-
             }
         }
 
@@ -1431,7 +1430,6 @@ impl TextModel {
         // Compute PLE per-layer inputs
         let per_layer_inputs = self.compute_ple(ple_input_ids, &xs)?;
 
-
         // Larger Gemma 4 variants use a mixed causal/bidirectional mask for
         // image soft tokens during prefill. Flash attention cannot consume that
         // per-token override, so we materialize real masks and bypass flash only
@@ -1751,6 +1749,11 @@ impl IsqModel for TextModel {
             names.push(Some(format!("blk.{i}.ffn_gate.weight")));
             names.push(Some(format!("blk.{i}.ffn_up.weight")));
             names.push(Some(format!("blk.{i}.ffn_down.weight")));
+            if let Some(ref moe) = self.layers[i].moe_block {
+                for _ in 0..moe.num_isq_layers() {
+                    names.push(None);
+                }
+            }
             if self.layers[i].per_layer_input_gate.is_some() {
                 names.push(None);
             }
