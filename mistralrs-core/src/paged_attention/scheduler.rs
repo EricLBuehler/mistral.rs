@@ -440,6 +440,20 @@ impl PagedAttentionScheduler {
         self.running
             .retain(|seq| !get_mut_arcmutex!(seq).is_finished_paged_attn());
 
+        // Remove aborted/finished sequences from waiting
+        self.waiting.retain(|seq| {
+            let seq_guard = get_mut_arcmutex!(seq);
+            if seq_guard.is_finished_paged_attn() {
+                let id = *seq_guard.id();
+                let tokens = seq_guard.get_toks().to_vec();
+                let mm_features = seq_guard.mm_features().to_vec();
+                finished.push((id, tokens, mm_features));
+                false
+            } else {
+                true
+            }
+        });
+
         // Cache and free blocks for finished sequences
         if self.prefix_caching_enabled {
             for (id, tokens, mm_features) in &finished {
