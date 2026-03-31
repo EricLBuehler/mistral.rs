@@ -874,10 +874,9 @@ impl DecoderLayer {
             xs = (&residual + combined)?;
         } else {
             // Dense path: MLP only
-            let mlp_out = self
-                .mlp
-                .forward(&xs.apply(&self.pre_feedforward_layernorm)?)?
-                .apply(&self.post_feedforward_layernorm)?;
+            let normed_in = xs.apply(&self.pre_feedforward_layernorm)?;
+            let mlp_out = self.mlp.forward(&normed_in)?;
+            let mlp_out = mlp_out.apply(&self.post_feedforward_layernorm)?;
             xs = (&residual + mlp_out)?;
         };
 
@@ -921,12 +920,6 @@ impl DecoderLayer {
         if let Some(ref scalar) = self.layer_scalar {
             xs = xs.broadcast_mul(scalar)?;
         }
-
-        // ISQ can produce sporadic NaN from BF16 overflow in the MLP
-        // gate/up multiply. Clamp to BF16-safe range to prevent cascade.
-        let xs_f32 = xs.to_dtype(DType::F32)?;
-        let finite_mask = xs_f32.eq(&xs_f32)?; // NaN != NaN
-        xs = finite_mask.where_cond(&xs, &xs.zeros_like()?)?;
 
         Ok(xs)
     }
@@ -1632,11 +1625,12 @@ impl IsqModel for TextModel {
         if !self.lm_head_is_tied {
             tensors.push((&mut self.lm_head, None));
         }
-        // Keep the global PLE projection in BF16. It maps
-        // hidden_size → (num_layers × ple_dim) and low-bit quantization
-        // produces NaN when the prompt contains rare control tokens (e.g.
-        // tool declarations).
-        // Per-layer PLE gate/projection are small enough to quantize safely.
+        // PLE layers (per_layer_model_projection, per_layer_input_gate,
+        // per_layer_projection) are intentionally excluded from ISQ.
+        // Low-bit quantization of these layers produces NaN in the MLP when
+        // the prompt contains rare control tokens (tool declarations +
+        // image tokens). The ISQ regex list in vision_loaders.rs must stay
+        // in sync.
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((&mut layer.self_attn.q_proj, Some(i)));
             tensors.push((&mut layer.self_attn.k_proj, Some(i)));
@@ -1659,12 +1653,6 @@ impl IsqModel for TextModel {
                         .map(|m| (m, Some(i)))
                         .collect::<Vec<_>>(),
                 );
-            }
-            if let Some(ref mut gate) = layer.per_layer_input_gate {
-                tensors.push((gate, Some(i)));
-            }
-            if let Some(ref mut proj) = layer.per_layer_projection {
-                tensors.push((proj, Some(i)));
             }
         }
         (tensors, &*self.mapper)

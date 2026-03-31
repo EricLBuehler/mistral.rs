@@ -18,7 +18,11 @@ pub(crate) fn flash_attn(
     if let Some(params) = flash_params {
         if let Some(cumulative_seqlens_q) = params.cumulative_seqlens_q.get(&q.device().location())
         {
-            let k_meta = params.k_meta(sdpa_params.sliding_window);
+            // Always use logical_k (full KV length) for the varlen kernel.
+            // The sliding window is handled by window_size_left/right — using
+            // sliding_k here would truncate the declared KV length, causing
+            // queries beyond the window boundary to attend to wrong positions.
+            let k_meta = &params.logical_k;
             let cumulative_seqlens_k = &k_meta.cumulative_seqlens[&q.device().location()];
             let window_size_right = if params.causal { Some(0) } else { None };
             let qshape = q.shape();
@@ -101,7 +105,11 @@ pub(crate) fn flash_attn(
     if let Some(params) = flash_params {
         if let Some(cumulative_seqlens_q) = params.cumulative_seqlens_q.get(&q.device().location())
         {
-            let k_meta = params.k_meta(sdpa_params.sliding_window);
+            // Always use logical_k (full KV length) for the varlen kernel.
+            // The sliding window is handled by window_size_left/right — using
+            // sliding_k here would truncate the declared KV length, causing
+            // queries beyond the window boundary to attend to wrong positions.
+            let k_meta = &params.logical_k;
             let cumulative_seqlens_k = &k_meta.cumulative_seqlens[&q.device().location()];
             let qshape = q.shape();
             let q = q.flatten_to(1)?;
