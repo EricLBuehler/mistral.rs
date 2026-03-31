@@ -1625,12 +1625,9 @@ impl IsqModel for TextModel {
         if !self.lm_head_is_tied {
             tensors.push((&mut self.lm_head, None));
         }
-        // PLE layers (per_layer_model_projection, per_layer_input_gate,
-        // per_layer_projection) are intentionally excluded from ISQ.
-        // Low-bit quantization of these layers produces NaN in the MLP when
-        // the prompt contains rare control tokens (tool declarations +
-        // image tokens). The ISQ regex list in vision_loaders.rs must stay
-        // in sync.
+        if let Some(ref mut proj) = self.per_layer_model_projection {
+            tensors.push((proj, None));
+        }
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((&mut layer.self_attn.q_proj, Some(i)));
             tensors.push((&mut layer.self_attn.k_proj, Some(i)));
@@ -1653,6 +1650,12 @@ impl IsqModel for TextModel {
                         .map(|m| (m, Some(i)))
                         .collect::<Vec<_>>(),
                 );
+            }
+            if let Some(ref mut gate) = layer.per_layer_input_gate {
+                tensors.push((gate, Some(i)));
+            }
+            if let Some(ref mut proj) = layer.per_layer_projection {
+                tensors.push((proj, Some(i)));
             }
         }
         (tensors, &*self.mapper)

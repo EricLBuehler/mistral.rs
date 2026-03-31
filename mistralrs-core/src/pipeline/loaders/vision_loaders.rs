@@ -7340,11 +7340,7 @@ impl VisionModelLoader for Gemma4Loader {
 
 impl IsqModelLoader for Gemma4Loader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
-        // `embed_vision.embedding_projection` and all PLE layers
-        // (per_layer_model_projection, per_layer_input_gate,
-        // per_layer_projection) are intentionally excluded — low-bit
-        // quantization of PLE produces NaN when the prompt contains rare
-        // control tokens (tool declarations + image tokens).
+        // `embed_vision.embedding_projection` is intentionally excluded.
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
@@ -7354,6 +7350,9 @@ impl IsqModelLoader for Gemma4Loader {
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            Regex::new(r"per_layer_model_projection\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.per_layer_input_gate\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.per_layer_projection\.(weight|bias)$")?,
         ])
     }
     fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
@@ -7366,6 +7365,13 @@ impl IsqModelLoader for Gemma4Loader {
             Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.language_model\.per_layer_model_projection\.(weight|bias)$")?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.per_layer_input_gate\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.per_layer_projection\.(weight|bias)$",
+            )?,
         ])
     }
 }
