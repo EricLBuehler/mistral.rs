@@ -18,6 +18,7 @@ pub trait FcfsBacker: Default {
     fn into_iter(self) -> impl Iterator<Item = Sequence>;
     fn len(&self) -> usize;
     fn sort_ascending_ids(&mut self);
+    fn retain(&mut self, f: impl FnMut(&Sequence) -> bool);
 }
 
 impl FcfsBacker for VecDeque<Sequence> {
@@ -36,6 +37,9 @@ impl FcfsBacker for VecDeque<Sequence> {
     }
     fn len(&self) -> usize {
         VecDeque::len(self)
+    }
+    fn retain(&mut self, f: impl FnMut(&Sequence) -> bool) {
+        VecDeque::retain(self, f)
     }
 }
 
@@ -333,6 +337,7 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
     fn free_finished_sequence_groups(&mut self) {
         // Remove finished sequences
         self.running.retain(|seq| !seq.is_finished_paged_attn());
+        self.waiting.retain(|seq| !seq.is_finished_paged_attn());
     }
     fn get_finished_recurrent_indices(&self) -> Vec<usize> {
         self.running
