@@ -21,8 +21,9 @@ pub const THINK_CLOSE_TAG: &str = "</think>";
 pub const CHANNEL_OPEN_TOKEN: &str = "<|channel>";
 pub const CHANNEL_CLOSE_TOKEN: &str = "<channel|>";
 
-/// Full channel open delimiter including the "thought\n" type marker.
-pub const CHANNEL_OPEN_TAG: &str = "<|channel>thought\n";
+/// Channel open delimiter — just the bare token, since `thought\n` is optional
+/// per the model's `x-regex`: `<\|channel\>(?:thought\n)?(.+?)<channel\|>`.
+pub const CHANNEL_OPEN_TAG: &str = "<|channel>";
 /// Channel close delimiter (same as `CHANNEL_CLOSE_TOKEN`).
 pub const CHANNEL_CLOSE_TAG: &str = "<channel|>";
 
@@ -36,6 +37,11 @@ pub struct TagReasoningContext {
     close_tag: String,
     implicit_leading_reasoning_prefix: Option<String>,
     allow_implicit_leading_reasoning_prefix: bool,
+    /// Optional prefix to strip from the start of each reasoning block
+    /// (e.g., `"thought\n"` for Gemma 4 where it's optional per x-regex).
+    reasoning_strip_prefix: Option<String>,
+    /// Whether we still need to strip the reasoning prefix for the current block.
+    pending_strip: bool,
     /// Accumulated final content (outside reasoning blocks)
     accumulated_content: String,
     /// Accumulated reasoning content (inside reasoning blocks)
@@ -64,8 +70,14 @@ impl TagReasoningContext {
     }
 
     /// Create a TagReasoningContext for Gemma 4 channel tags.
+    ///
+    /// The open tag is `<|channel>` (bare token). The optional `thought\n`
+    /// prefix that may follow is stripped from reasoning content, matching
+    /// the model's `x-regex`: `<\|channel\>(?:thought\n)?(.+?)<channel\|>`.
     pub fn new_gemma_channel() -> Self {
-        Self::with_tags(CHANNEL_OPEN_TAG, CHANNEL_CLOSE_TAG)
+        let mut ctx = Self::with_tags(CHANNEL_OPEN_TAG, CHANNEL_CLOSE_TAG);
+        ctx.reasoning_strip_prefix = Some("thought\n".to_string());
+        ctx
     }
 
     /// Create a Gemma 4 channel parser that also accepts a leading bare
@@ -93,6 +105,8 @@ impl TagReasoningContext {
             close_tag: close.to_string(),
             implicit_leading_reasoning_prefix: None,
             allow_implicit_leading_reasoning_prefix: false,
+            reasoning_strip_prefix: None,
+            pending_strip: false,
             accumulated_content: String::new(),
             accumulated_reasoning: String::new(),
             in_think_block: false,
@@ -146,6 +160,24 @@ impl TagReasoningContext {
         // Process the buffer, looking for complete tags
         loop {
             if self.in_think_block {
+                // Strip optional prefix (e.g., "thought\n") at the start of a
+                // reasoning block. Handles the case where the prefix arrives
+                // across multiple process_text() calls.
+                if self.pending_strip {
+                    if let Some(ref prefix) = self.reasoning_strip_prefix {
+                        if self.buffer.starts_with(prefix.as_str()) {
+                            self.buffer = self.buffer[prefix.len()..].to_string();
+                            self.pending_strip = false;
+                        } else if prefix.starts_with(&self.buffer) {
+                            // Buffer is a prefix of the strip-prefix — wait for more
+                            break;
+                        } else {
+                            // Buffer doesn't match — no prefix to strip
+                            self.pending_strip = false;
+                        }
+                    }
+                }
+
                 // Looking for close tag
                 if let Some(end_pos) = self.buffer.find(&*self.close_tag) {
                     // Found closing tag - extract reasoning content before it
@@ -203,6 +235,10 @@ impl TagReasoningContext {
                     // Remove processed part including the tag
                     let new_start = start_pos + self.open_tag.len();
                     self.buffer = self.buffer[new_start..].to_string();
+                    // Mark that we need to strip the optional prefix (e.g., "thought\n")
+                    if self.reasoning_strip_prefix.is_some() {
+                        self.pending_strip = true;
+                    }
                 } else {
                     // No complete opening tag found
                     // Check if buffer might contain a partial opening tag at the end
