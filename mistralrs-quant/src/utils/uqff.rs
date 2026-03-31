@@ -57,6 +57,7 @@ pub(crate) fn write_dtype(dtype: DType, buffer: &mut Vec<u8>) {
         DType::F6E3M2 => 11,
         DType::F4 => 12,
         DType::F8E8M0 => 13,
+        other => panic!("Unsupported dtype for UQFF serialization: {other:?}"), // non-exhaustive
     };
     buffer.extend(&dtype.to_le_bytes());
 }
@@ -116,6 +117,9 @@ pub(crate) fn serialize_tensor(buffer: &mut Vec<u8>, tensor: &Tensor) -> Result<
         DType::F8E4M3 => data_to_bytes::<F8E4M3>(tensor.to_vec1()?),
         DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 => {
             candle_core::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors cannot be serialized.")
+        }
+        other => {
+            candle_core::bail!("Unsupported dtype for UQFF tensor serialization: {other:?}")
         }
     };
 
@@ -189,6 +193,9 @@ pub(crate) fn deserialize_tensor<R: std::io::Read>(
         DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 => {
             candle_core::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors cannot be deserialized.")
         }
+        other => {
+            candle_core::bail!("Unsupported dtype for UQFF tensor deserialization: {other:?}")
+        }
     }
 }
 
@@ -254,5 +261,42 @@ fn bytes_to_data<T: WithDType>(
             c.set_len(elem_count)
         }
         Tensor::from_slice(&c, shape, device)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Guard against candle adding new `DType` variants without updating our match arms.
+    /// `DType` is `#[non_exhaustive]` now.
+    #[test]
+    fn dtype_variant_count_unchanged() {
+        assert_eq!(
+            std::mem::size_of::<candle_core::DType>(),
+            1,
+            "DType repr size changed, check if the discriminant size is the same"
+        );
+        // If DType grows beyond 14 variants its discriminant may still fit in 1 byte, so also verify the exact count.
+        const EXPECTED_VARIANTS: usize = 14;
+        let count = [
+            candle_core::DType::U8,
+            candle_core::DType::U32,
+            candle_core::DType::I16,
+            candle_core::DType::I32,
+            candle_core::DType::I64,
+            candle_core::DType::BF16,
+            candle_core::DType::F16,
+            candle_core::DType::F32,
+            candle_core::DType::F64,
+            candle_core::DType::F8E4M3,
+            candle_core::DType::F6E2M3,
+            candle_core::DType::F6E3M2,
+            candle_core::DType::F4,
+            candle_core::DType::F8E8M0,
+        ]
+        .len();
+        assert_eq!(
+            count, EXPECTED_VARIANTS,
+            "Update this list and the UQFF match arms when DType variants change"
+        );
     }
 }

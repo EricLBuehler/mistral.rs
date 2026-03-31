@@ -2696,8 +2696,8 @@ impl TensorInfExtend for Tensor {
             DType::F32 => Ok(sum.to_scalar::<f32>()? == 0.),
             DType::F64 => Ok(sum.to_scalar::<f64>()? == 0.),
             DType::F8E4M3 => Ok(sum.to_scalar::<F8E4M3>()? == F8E4M3::ZERO),
-            DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 => {
-                candle_core::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors are not supported with .any")
+            DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 | _ => {
+                candle_core::bail!("dtype {:?} is not supported with .any", self.dtype())
             }
         }
     }
@@ -2715,8 +2715,8 @@ pub fn clamp_for_f16(xs: &Tensor) -> Result<Tensor> {
         DType::F32 => f32::MAX - 1000.,
         DType::F64 => f64::MAX as f32 - 1000.,
         DType::F8E4M3 => F8E4M3::MAX.to_f32() - 1000.,
-        DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 => {
-            candle_core::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors are not supported with .any")
+        DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 | _ => {
+            candle_core::bail!("dtype {:?} is not supported with clamp_for_f16", xs.dtype())
         }
     };
     if xs.is_inf()?.any()? {
