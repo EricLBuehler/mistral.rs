@@ -181,9 +181,10 @@ impl PagedAttentionScheduler {
         let mut for_waiting_again: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
         while !self.waiting.is_empty() {
             let mut did_ignore = false;
-            let seq = self.waiting.front().unwrap().clone();
+            let seq = self.waiting.pop_front().unwrap();
 
             if self.running.len() >= self.config.max_num_seqs {
+                self.waiting.push_front(seq);
                 break;
             }
 
@@ -263,6 +264,7 @@ impl PagedAttentionScheduler {
                             did_ignore = true;
                         }
                     } else {
+                        self.waiting.push_front(seq);
                         break;
                     }
                 }
@@ -278,7 +280,6 @@ impl PagedAttentionScheduler {
                     kv_mgr.free(seq_id);
                     drop(kv_mgr);
                 }
-                let seq = self.waiting.pop_front().unwrap();
                 for_waiting_again.push_back(seq);
                 continue;
             }
@@ -289,7 +290,6 @@ impl PagedAttentionScheduler {
                 get_mut_arcmutex!(seq).set_prefix_cache_len(num_computed);
             }
 
-            let seq = self.waiting.pop_front().unwrap();
             if did_ignore {
                 // Sequence is terminal (FinishedIgnored), do NOT add to running queue.
                 // Clean up associated state and free any allocated blocks.
