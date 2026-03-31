@@ -7350,9 +7350,8 @@ impl IsqModelLoader for Gemma4Loader {
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
-            // MoE expert projections (bare stacked tensors, no .weight suffix)
-            Regex::new(r"layers\.(\d+)\.moe\.gate_up_proj$")?,
-            Regex::new(r"layers\.(\d+)\.moe\.down_proj$")?,
+            Regex::new(r"layers\.(\d+)\.moe\.gate_up_proj\.weight$")?,
+            Regex::new(r"layers\.(\d+)\.moe\.down_proj\.weight$")?,
             Regex::new(r"per_layer_model_projection\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.per_layer_input_gate\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.per_layer_projection\.(weight|bias)$")?,
@@ -7368,9 +7367,8 @@ impl IsqModelLoader for Gemma4Loader {
             Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
-            // MoE expert projections (bare stacked tensors, no .weight suffix)
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.moe\.gate_up_proj$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.moe\.down_proj$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.moe\.gate_up_proj\.weight$")?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.moe\.down_proj\.weight$")?,
             Regex::new(r"model\.language_model\.per_layer_model_projection\.(weight|bias)$")?,
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.per_layer_input_gate\.(weight|bias)$",
