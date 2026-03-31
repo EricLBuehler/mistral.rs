@@ -9,8 +9,9 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    apply_immediate_isq_always, FusedExperts, MatMul, PackedExperts, QuantMethod,
-    QuantMethodConfig, QuantizedConfig, ShardedVarBuilder, SumAllReduce, UnquantLinear,
+    apply_immediate_isq, should_apply_immediate_isq, FusedExperts, MatMul, PackedExperts,
+    QuantMethod, QuantMethodConfig, QuantizedConfig, ShardedVarBuilder, SumAllReduce,
+    UnquantLinear,
 };
 use std::sync::Arc;
 
@@ -404,9 +405,11 @@ impl MoEExperts {
             .contiguous()?;
         let down_proj = down_proj_packed.transpose(1, 2)?.contiguous()?;
 
+        let isq_gate_up = should_apply_immediate_isq(&experts_vb.pp("gate_up_proj"));
+        let isq_down = should_apply_immediate_isq(&experts_vb.pp("down_proj"));
         let target_device = gate_proj.device().clone();
         let (gate_proj, up_proj, down_proj) =
-            if mistralrs_quant::get_immediate_isq().is_some() && !target_device.is_cpu() {
+            if (isq_gate_up || isq_down) && !target_device.is_cpu() {
                 (
                     gate_proj.to_device(&Device::Cpu)?,
                     up_proj.to_device(&Device::Cpu)?,
@@ -426,9 +429,13 @@ impl MoEExperts {
             QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
         )?);
 
-        fused_gate_proj = apply_immediate_isq_always(fused_gate_proj, &target_device)?;
-        fused_up_proj = apply_immediate_isq_always(fused_up_proj, &target_device)?;
-        fused_down_proj = apply_immediate_isq_always(fused_down_proj, &target_device)?;
+        // Pass the original-device VB (not CPU) so apply_immediate_isq targets
+        // the correct device for the quantized weights.
+        let vb_gate_up = experts_vb.pp("gate_up_proj");
+        let vb_down = experts_vb.pp("down_proj");
+        fused_gate_proj = apply_immediate_isq(fused_gate_proj, vb_gate_up.clone())?;
+        fused_up_proj = apply_immediate_isq(fused_up_proj, vb_gate_up)?;
+        fused_down_proj = apply_immediate_isq(fused_down_proj, vb_down)?;
 
         Ok(FastExpertsWeights {
             fused_gate_proj,
@@ -475,9 +482,11 @@ impl MoEExperts {
                     .and_then(|t| t.transpose(1, 2)?.contiguous())
             })?;
 
+        let isq_gate_up = should_apply_immediate_isq(&experts_vb.pp("gate_up_proj"));
+        let isq_down = should_apply_immediate_isq(&experts_vb.pp("down_proj"));
         let target_device = gate_up_proj.device().clone();
         let (gate_up_proj, down_proj_packed) =
-            if mistralrs_quant::get_immediate_isq().is_some() && !target_device.is_cpu() {
+            if (isq_gate_up || isq_down) && !target_device.is_cpu() {
                 (
                     gate_up_proj.to_device(&Device::Cpu)?,
                     down_proj_packed.to_device(&Device::Cpu)?,
@@ -485,6 +494,11 @@ impl MoEExperts {
             } else {
                 (gate_up_proj, down_proj_packed)
             };
+
+        // Pass the original-device VB (not CPU) so apply_immediate_isq targets
+        // the correct device for the quantized weights.
+        let vb_gate_up = experts_vb.pp("gate_up_proj");
+        let vb_down = experts_vb.pp("down_proj");
 
         let mut gate_proj = Vec::with_capacity(num_experts);
         let mut up_proj = Vec::with_capacity(num_experts);
@@ -512,9 +526,9 @@ impl MoEExperts {
                 QuantMethodConfig::Unquantized(candle_nn::Linear::new(down, None)),
             )?);
 
-            gate_layer = apply_immediate_isq_always(gate_layer, &target_device)?;
-            up_layer = apply_immediate_isq_always(up_layer, &target_device)?;
-            down_layer = apply_immediate_isq_always(down_layer, &target_device)?;
+            gate_layer = apply_immediate_isq(gate_layer, vb_gate_up.clone())?;
+            up_layer = apply_immediate_isq(up_layer, vb_gate_up.clone())?;
+            down_layer = apply_immediate_isq(down_layer, vb_down.clone())?;
 
             gate_proj.push(gate_layer);
             up_proj.push(up_layer);

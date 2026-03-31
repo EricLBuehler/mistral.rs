@@ -10,7 +10,7 @@ use crate::{
     lora::merge_lora_weights,
     pertensor_fp8::pertensor_fp8_linear_b,
     should_apply_immediate_isq,
-    utils::isq::{apply_immediate_isq, apply_immediate_isq_always},
+    utils::isq::apply_immediate_isq,
     AfqLayer, BnbLinear, DistributedKind, DummyLayer, F8Q8Linear, FP8Linear, GgufMatMul, HqqLayer,
     MXFP4Layer, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
     QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
@@ -658,16 +658,51 @@ pub struct ReplicatedLayer(Arc<dyn QuantMethod>);
 impl ReplicatedLayer {
     pub fn from_linear(lin: Linear) -> Result<Arc<dyn QuantMethod>> {
         let dev = lin.weight().device().clone();
-        // When immediate ISQ is active, the weight must be on CPU for GGML quantization.
-        // Move it there first, then quantize, which will place the result on `dev`.
-        let lin = if crate::get_immediate_isq().is_some() && !dev.is_cpu() {
-            Linear::new(lin.weight().to_device(&Device::Cpu)?, lin.bias().cloned())
+        if let Some(crate::ImmediateIsqParams {
+            guard,
+            ty: Some(immediate_isq),
+            pool,
+            ..
+        }) = crate::get_immediate_isq()
+        {
+            // Global ISQ type is set — move to CPU for GGML quantization,
+            // then quantize onto the original device.
+            let lin = if !dev.is_cpu() {
+                Linear::new(lin.weight().to_device(&Device::Cpu)?, lin.bias().cloned())
+            } else {
+                lin
+            };
+            let layer: Arc<dyn QuantMethod> =
+                Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
+            if let Some(pool) = &pool {
+                let dev = dev.clone();
+                let (tx, rx) = crate::pending_layer::pending_isq_channel();
+                pool.spawn(move || {
+                    let result = layer.clone().apply_isq(
+                        Some(immediate_isq),
+                        dev,
+                        &std::sync::atomic::AtomicUsize::new(0),
+                        None,
+                        guard,
+                    );
+                    let _ = tx.send(result);
+                });
+                Ok(Arc::new(crate::PendingIsqLayer::new(rx)))
+            } else {
+                layer.clone().apply_isq(
+                    Some(immediate_isq),
+                    dev,
+                    &std::sync::atomic::AtomicUsize::new(0),
+                    None,
+                    guard,
+                )
+            }
         } else {
-            lin
-        };
-        let this_unquant = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
-        let this: Arc<dyn QuantMethod> = apply_immediate_isq_always(this_unquant, &dev)?;
-        Ok(this)
+            // No global ISQ — keep as unquantized on original device.
+            Ok(Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(lin),
+            )?))
+        }
     }
 
     #[allow(clippy::new_ret_no_self)]
@@ -1621,11 +1656,12 @@ impl FusedExperts {
                 let up_proj = up_proj.transpose(1, 2)?.contiguous()?;
                 let down_proj = down_proj_packed.transpose(1, 2)?.contiguous()?;
 
-                // When immediate ISQ is active, the weight must be on CPU for GGML quantization.
-                // Move it there first, then quantize, which will place the result on `target_device`.
+                // When immediate ISQ targets these weights, move to CPU for GGML quantization.
+                let isq_gate_up = should_apply_immediate_isq(&experts_vb.pp("gate_up_proj"));
+                let isq_down = should_apply_immediate_isq(&experts_vb.pp("down_proj"));
                 let target_device = gate_proj.device().clone();
                 let (gate_proj, up_proj, down_proj) =
-                    if crate::get_immediate_isq().is_some() && !target_device.is_cpu() {
+                    if (isq_gate_up || isq_down) && !target_device.is_cpu() {
                         (
                             gate_proj.to_device(&Device::Cpu)?,
                             up_proj.to_device(&Device::Cpu)?,
@@ -1644,10 +1680,13 @@ impl FusedExperts {
                 let mut fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
                     QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
                 )?);
-                // Use apply_immediate_isq_always to ensure ISQ is applied to expert weights
-                fused_gate_proj = apply_immediate_isq_always(fused_gate_proj, &target_device)?;
-                fused_up_proj = apply_immediate_isq_always(fused_up_proj, &target_device)?;
-                fused_down_proj = apply_immediate_isq_always(fused_down_proj, &target_device)?;
+                // Pass the original-device VB so apply_immediate_isq targets
+                // the correct device and respects topology overrides.
+                let vb_gate_up = experts_vb.pp("gate_up_proj");
+                let vb_down = experts_vb.pp("down_proj");
+                fused_gate_proj = apply_immediate_isq(fused_gate_proj, vb_gate_up.clone())?;
+                fused_up_proj = apply_immediate_isq(fused_up_proj, vb_gate_up)?;
+                fused_down_proj = apply_immediate_isq(fused_down_proj, vb_down)?;
 
                 (fused_gate_proj, fused_up_proj, fused_down_proj)
             }
@@ -1739,11 +1778,12 @@ impl FusedExperts {
             // down_proj: [num_experts, intermediate_size, hidden_size] -> [num_experts, hidden_size, intermediate_size]
             let down_proj = down_proj_packed.transpose(1, 2)?.contiguous()?;
 
-            // When immediate ISQ is active, the weight must be on CPU for GGML quantization.
-            // Move it there first, then quantize, which will place the result on `target_device`.
+            // When immediate ISQ targets these weights, move to CPU for GGML quantization.
+            let isq_gate_up = should_apply_immediate_isq(&experts_vb.pp("gate_up_proj"));
+            let isq_down = should_apply_immediate_isq(&experts_vb.pp("down_proj"));
             let target_device = gate_proj.device().clone();
             let (gate_proj, up_proj, down_proj) =
-                if crate::get_immediate_isq().is_some() && !target_device.is_cpu() {
+                if (isq_gate_up || isq_down) && !target_device.is_cpu() {
                     (
                         gate_proj.to_device(&Device::Cpu)?,
                         up_proj.to_device(&Device::Cpu)?,
@@ -1762,10 +1802,13 @@ impl FusedExperts {
             let mut fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
                 QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
             )?);
-            // Use apply_immediate_isq_always to ensure ISQ is applied to expert weights
-            fused_gate_proj = apply_immediate_isq_always(fused_gate_proj, &target_device)?;
-            fused_up_proj = apply_immediate_isq_always(fused_up_proj, &target_device)?;
-            fused_down_proj = apply_immediate_isq_always(fused_down_proj, &target_device)?;
+            // Pass the original-device VB so apply_immediate_isq targets
+            // the correct device and respects topology overrides.
+            let vb_gate_up = experts_vb.pp("gate_up_proj");
+            let vb_down = experts_vb.pp("down_proj");
+            fused_gate_proj = apply_immediate_isq(fused_gate_proj, vb_gate_up.clone())?;
+            fused_up_proj = apply_immediate_isq(fused_up_proj, vb_gate_up)?;
+            fused_down_proj = apply_immediate_isq(fused_down_proj, vb_down)?;
 
             (fused_gate_proj, fused_up_proj, fused_down_proj)
         } else if matches!(&quantization_config, Some(QuantizedConfig::Fp8 { .. })) {

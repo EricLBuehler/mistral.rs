@@ -1,10 +1,10 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use candle_core::{quantized::GgmlDType, Device, Result, Tensor};
+use candle_core::{quantized::GgmlDType, Result, Tensor};
 
 use crate::{
-    get_immediate_isq, pending_layer, ImmediateIsqMatch, ImmediateIsqParams, PendingIsqLayer,
-    QuantMethod, ShardedVarBuilder,
+    get_immediate_isq, pending_layer, ImmediateIsqMatch, PendingIsqLayer, QuantMethod,
+    ShardedVarBuilder,
 };
 
 pub enum QuantizationBehavior {
@@ -43,45 +43,6 @@ pub fn apply_immediate_isq(
                 &AtomicUsize::new(0),
                 None,
                 params.guard.clone(),
-            )
-        }
-    } else {
-        Ok(layer)
-    }
-}
-
-pub fn apply_immediate_isq_always(
-    layer: Arc<dyn QuantMethod>,
-    device: &Device,
-) -> Result<Arc<dyn QuantMethod>> {
-    if let Some(ImmediateIsqParams {
-        guard,
-        ty: Some(immediate_isq),
-        pool,
-        ..
-    }) = get_immediate_isq()
-    {
-        if let Some(pool) = &pool {
-            let device = device.clone();
-            let (tx, rx) = pending_layer::pending_isq_channel();
-            pool.spawn(move || {
-                let result = layer.clone().apply_isq(
-                    Some(immediate_isq),
-                    device,
-                    &AtomicUsize::new(0),
-                    None,
-                    guard,
-                );
-                let _ = tx.send(result);
-            });
-            Ok(Arc::new(PendingIsqLayer::new(rx)))
-        } else {
-            layer.clone().apply_isq(
-                Some(immediate_isq),
-                device.clone(),
-                &AtomicUsize::new(0),
-                None,
-                guard,
             )
         }
     } else {
