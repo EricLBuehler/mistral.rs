@@ -677,7 +677,9 @@ mod tests {
             ("role".to_string(), Either::Left("assistant".to_string())),
             (
                 "content".to_string(),
-                Either::Left(r#"{"name":"get_weather","arguments":"{\"city\":\"Boston\"}"}"#.to_string()),
+                Either::Left(
+                    r#"{"name":"get_weather","arguments":"{\"city\":\"Boston\"}"}"#.to_string(),
+                ),
             ),
             ("tool_calls".to_string(), Either::Right(vec![tc_map])),
         ])

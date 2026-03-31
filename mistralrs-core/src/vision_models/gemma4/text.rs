@@ -1549,9 +1549,12 @@ impl TextModel {
         let mut xs = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
+            let original_dtype = xs.dtype();
+            xs = xs.to_dtype(DType::F32)?;
             xs = (xs / final_logit_softcapping)?;
             xs = xs.tanh()?;
             xs = (xs * final_logit_softcapping)?;
+            xs = xs.to_dtype(original_dtype)?;
         }
 
         Ok(xs)
