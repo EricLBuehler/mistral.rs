@@ -223,18 +223,14 @@ impl Gemma4Router {
         let logits_f32 = logits_f32.clamp(-1e4, 1e4)?;
         let probs = candle_nn::ops::softmax_last_dim(&logits_f32)?;
 
-        // Select top-k experts by SCORE (logits), not by probability
-        // This matches HF which does topk(expert_scores), then masks probs
-        let topk = logits_f32.topk(self.top_k)?;
-        let topk_indices = topk.indices; // [batch, seq, top_k]
-
-        // Gather the softmax probabilities for the selected experts
-        let topk_probs = probs.gather(&topk_indices, D::Minus1)?;
+        // Select top-k experts by PROBABILITY
+        let topk = probs.topk(self.top_k)?;
+        let topk_indices = topk.indices;
+        let topk_weights = topk.values;
 
         // Renormalize: divide by sum of selected probs
-        let renorm = topk_probs.sum_keepdim(D::Minus1)?;
-        let renorm = renorm.clamp(1e-6, f64::INFINITY)?;
-        let topk_weights = topk_probs.broadcast_div(&renorm)?;
+        let renorm = topk_weights.sum_keepdim(D::Minus1)?;
+        let topk_weights = topk_weights.broadcast_div(&renorm)?;
 
         Ok((topk_weights, topk_indices))
     }
@@ -871,7 +867,7 @@ impl DecoderLayer {
             let moe_result = moe.forward(&moe_input, topk_weights, &topk_ids)?;
             let moe_normed = moe_result.apply(post_ff_2)?;
 
-            // Combine branches, then apply post_feedforward_layernorm
+            // Combine branches, then apply post_feedforward_layernorm (matches HF line 1694)
             let combined = (mlp_normed + moe_normed)?;
             let combined = combined.apply(&self.post_feedforward_layernorm)?;
             xs = (&residual + combined)?;
