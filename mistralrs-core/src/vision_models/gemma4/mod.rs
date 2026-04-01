@@ -432,10 +432,11 @@ impl Gemma4Model {
                     }
                 }
                 let parts: Vec<Tensor> = per_frame.into_iter().map(|t| t.unwrap()).collect();
-                Self::trim_cached_prefix_tokens(
-                    Tensor::cat(&parts, 0)?,
-                    video_cached_tokens.first().copied().unwrap_or(0),
-                )?
+                // Sum all per-frame cached counts — unlike images (where fully-cached
+                // ones are skipped), ALL video frames are sent when not fully cached,
+                // so we must trim the total cached prefix from the concatenated features.
+                let total_cached: usize = video_cached_tokens.iter().copied().sum();
+                Self::trim_cached_prefix_tokens(Tensor::cat(&parts, 0)?, total_cached)?
             } else {
                 let per_frame_tensors: Vec<Tensor> = (0..n_frames)
                     .map(|i| {
@@ -456,10 +457,8 @@ impl Gemma4Model {
                     .forward(&vision_features)?
                     .to_dtype(input_embeds.dtype())?
                     .squeeze(0)?;
-                Self::trim_cached_prefix_tokens(
-                    embeds,
-                    video_cached_tokens.first().copied().unwrap_or(0),
-                )?
+                let total_cached: usize = video_cached_tokens.iter().copied().sum();
+                Self::trim_cached_prefix_tokens(embeds, total_cached)?
             };
 
             if indices.dim(0)? > 0 {

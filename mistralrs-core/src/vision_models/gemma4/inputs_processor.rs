@@ -717,16 +717,21 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         video_pixel_values_accum.truncate(start);
                         video_sizes_accum.truncate(start);
                     } else {
-                        // Push per-frame hashes for encoder cache lookups
+                        // Push per-frame hashes and per-frame cached token counts.
+                        // `cached_video_tokens` has one entry per frame range (global
+                        // across all videos), so we track a global index.
+                        let mut global_frame_idx = 0;
                         for video in &videos {
                             let frame_hashes = video.frame_hashes();
-                            for (frame_idx, hash) in frame_hashes.into_iter().enumerate() {
-                                let _ = frame_idx;
+                            for hash in frame_hashes {
                                 video_hashes_accum.push(hash);
-                                // Use the first range's cached_tokens as a proxy
-                                // (all frames share the same cache state)
-                                video_cached_tokens_accum
-                                    .push(cached_video_tokens.first().copied().unwrap_or(0));
+                                video_cached_tokens_accum.push(
+                                    cached_video_tokens
+                                        .get(global_frame_idx)
+                                        .copied()
+                                        .unwrap_or(0),
+                                );
+                                global_frame_idx += 1;
                             }
                         }
                     }
