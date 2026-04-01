@@ -244,6 +244,36 @@ build_features() {
     echo "$features" | xargs
 }
 
+# Check if ffmpeg is installed
+check_ffmpeg() {
+    command -v ffmpeg >/dev/null 2>&1
+}
+
+# Install ffmpeg using the system package manager
+install_ffmpeg() {
+    os="$1"
+    if [ "$os" = "macos" ]; then
+        if command -v brew >/dev/null 2>&1; then
+            info "Installing FFmpeg via Homebrew..."
+            brew install ffmpeg
+        else
+            warn "Homebrew not found. Install FFmpeg manually: https://ffmpeg.org/download.html"
+            return 1
+        fi
+    else
+        if command -v apt-get >/dev/null 2>&1; then
+            info "Installing FFmpeg via apt..."
+            sudo apt-get update && sudo apt-get install -y ffmpeg
+        elif command -v dnf >/dev/null 2>&1; then
+            info "Installing FFmpeg via dnf..."
+            sudo dnf install -y ffmpeg
+        else
+            warn "Could not detect package manager. Install FFmpeg manually: https://ffmpeg.org/download.html"
+            return 1
+        fi
+    fi
+}
+
 # Install mistralrs-cli
 install_mistralrs() {
     features="$1"
@@ -308,6 +338,32 @@ main() {
     # Build features
     features=$(build_features "$os")
 
+    # Check for FFmpeg (optional, needed for video input)
+    FFMPEG_SKIPPED=""
+    if check_ffmpeg; then
+        info "FFmpeg is installed (enables video input support)"
+    else
+        echo ""
+        printf "${YELLOW}(Optional)${NC} FFmpeg is required for video input support.\n"
+        printf "Would you like to install FFmpeg? [y/N] "
+        read_input
+        case "$REPLY" in
+            [Yy]*)
+                install_ffmpeg "$os"
+                if check_ffmpeg; then
+                    success "FFmpeg installed successfully"
+                else
+                    warn "FFmpeg installation failed - you can install it manually later"
+                    FFMPEG_SKIPPED=1
+                fi
+                ;;
+            *)
+                info "Skipping FFmpeg installation"
+                FFMPEG_SKIPPED=1
+                ;;
+        esac
+    fi
+
     echo ""
     printf "${BOLD}Installation Summary${NC}\n"
     echo "===================="
@@ -348,6 +404,11 @@ main() {
     echo ""
     echo "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
     echo ""
+    if [ -n "$FFMPEG_SKIPPED" ]; then
+        printf "${YELLOW}Note:${NC} FFmpeg was not installed. To enable video input support later, see:\n"
+        printf "      https://github.com/EricLBuehler/mistral.rs/blob/master/docs/VIDEO.md\n"
+        echo ""
+    fi
     printf "${YELLOW}Note:${NC} To use 'mistralrs' now, run: ${BOLD}. \"\$HOME/.cargo/env\"${NC}\n"
     printf "      Or restart your terminal.\n"
 }
