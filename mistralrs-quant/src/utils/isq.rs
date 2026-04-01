@@ -24,7 +24,12 @@ pub fn apply_immediate_isq(
         let device = device.unwrap_or_else(|| vb.device().clone());
 
         if let Some(pool) = &params.pool {
-            // Parallel path: spawn quantization on thread pool
+            // Parallel path: spawn quantization on thread pool.
+            // Acquire a backpressure slot to prevent unbounded memory growth
+            // from accumulated BF16 data in queued jobs (critical for MoE models
+            // with many experts on memory-constrained systems like macOS Metal).
+            params.backpressure.acquire();
+            let backpressure = params.backpressure.clone();
             let guard = params.guard.clone();
             let (tx, rx) = pending_layer::pending_isq_channel();
             pool.spawn(move || {
@@ -33,6 +38,7 @@ pub fn apply_immediate_isq(
                         .clone()
                         .apply_isq(Some(ty), device, &AtomicUsize::new(0), None, guard);
                 let _ = tx.send(result);
+                backpressure.release();
             });
             Ok(Arc::new(PendingIsqLayer::new(rx)))
         } else {

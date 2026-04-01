@@ -368,26 +368,38 @@ impl MoEExperts {
     ) -> Result<FastExpertsWeights> {
         let num_experts = cfg.num_experts;
 
-        let gate_up_proj = experts_vb
+        let isq_gate_up = should_apply_immediate_isq(&experts_vb.pp("gate_up_proj"));
+        let isq_down = should_apply_immediate_isq(&experts_vb.pp("down_proj"));
+
+        // When immediate ISQ is active, load directly on CPU to avoid creating
+        // large GPU buffers that will be immediately copied to CPU for quantization.
+        // On unified memory systems (Metal), this prevents doubling memory usage.
+        let load_vb = if (isq_gate_up || isq_down) && !experts_vb.device().is_cpu() {
+            experts_vb.clone().set_device(Device::Cpu)
+        } else {
+            experts_vb.clone()
+        };
+
+        let gate_up_proj = load_vb
             .get(
                 (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
                 "gate_up_proj",
             )
             .or_else(|_| {
-                experts_vb
+                load_vb
                     .get(
                         (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
                         "gate_up_proj",
                     )
                     .and_then(|t| t.transpose(1, 2)?.contiguous())
             })?;
-        let down_proj_packed = experts_vb
+        let down_proj_packed = load_vb
             .get(
                 (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
                 "down_proj",
             )
             .or_else(|_| {
-                experts_vb
+                load_vb
                     .get(
                         (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
                         "down_proj",
@@ -403,21 +415,10 @@ impl MoEExperts {
             .narrow(2, cfg.moe_intermediate_size, cfg.moe_intermediate_size)?
             .transpose(1, 2)?
             .contiguous()?;
+        // Drop gate_up_proj early to free memory before creating more tensors
+        drop(gate_up_proj);
         let down_proj = down_proj_packed.transpose(1, 2)?.contiguous()?;
-
-        let isq_gate_up = should_apply_immediate_isq(&experts_vb.pp("gate_up_proj"));
-        let isq_down = should_apply_immediate_isq(&experts_vb.pp("down_proj"));
-        let target_device = gate_proj.device().clone();
-        let (gate_proj, up_proj, down_proj) =
-            if (isq_gate_up || isq_down) && !target_device.is_cpu() {
-                (
-                    gate_proj.to_device(&Device::Cpu)?,
-                    up_proj.to_device(&Device::Cpu)?,
-                    down_proj.to_device(&Device::Cpu)?,
-                )
-            } else {
-                (gate_proj, up_proj, down_proj)
-            };
+        drop(down_proj_packed);
 
         let mut fused_gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
             QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
@@ -455,45 +456,43 @@ impl MoEExperts {
     ) -> Result<SlowExpertsWeights> {
         let num_experts = cfg.num_experts;
 
-        let gate_up_proj = experts_vb
+        let isq_gate_up = should_apply_immediate_isq(&experts_vb.pp("gate_up_proj"));
+        let isq_down = should_apply_immediate_isq(&experts_vb.pp("down_proj"));
+
+        // When immediate ISQ is active, load directly on CPU to avoid creating
+        // large GPU buffers that will be immediately copied to CPU for quantization.
+        let load_vb = if (isq_gate_up || isq_down) && !experts_vb.device().is_cpu() {
+            experts_vb.clone().set_device(Device::Cpu)
+        } else {
+            experts_vb.clone()
+        };
+
+        let gate_up_proj = load_vb
             .get(
                 (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
                 "gate_up_proj",
             )
             .or_else(|_| {
-                experts_vb
+                load_vb
                     .get(
                         (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
                         "gate_up_proj",
                     )
                     .and_then(|t| t.transpose(1, 2)?.contiguous())
             })?;
-        let down_proj_packed = experts_vb
+        let down_proj_packed = load_vb
             .get(
                 (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
                 "down_proj",
             )
             .or_else(|_| {
-                experts_vb
+                load_vb
                     .get(
                         (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
                         "down_proj",
                     )
                     .and_then(|t| t.transpose(1, 2)?.contiguous())
             })?;
-
-        let isq_gate_up = should_apply_immediate_isq(&experts_vb.pp("gate_up_proj"));
-        let isq_down = should_apply_immediate_isq(&experts_vb.pp("down_proj"));
-        let target_device = gate_up_proj.device().clone();
-        let (gate_up_proj, down_proj_packed) =
-            if (isq_gate_up || isq_down) && !target_device.is_cpu() {
-                (
-                    gate_up_proj.to_device(&Device::Cpu)?,
-                    down_proj_packed.to_device(&Device::Cpu)?,
-                )
-            } else {
-                (gate_up_proj, down_proj_packed)
-            };
 
         // Pass the original-device VB (not CPU) so apply_immediate_isq targets
         // the correct device for the quantized weights.

@@ -662,6 +662,7 @@ impl ReplicatedLayer {
             guard,
             ty: Some(immediate_isq),
             pool,
+            backpressure,
             ..
         }) = crate::get_immediate_isq()
         {
@@ -675,6 +676,8 @@ impl ReplicatedLayer {
             let layer: Arc<dyn QuantMethod> =
                 Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
             if let Some(pool) = &pool {
+                backpressure.acquire();
+                let backpressure = backpressure.clone();
                 let dev = dev.clone();
                 let (tx, rx) = crate::pending_layer::pending_isq_channel();
                 pool.spawn(move || {
@@ -686,6 +689,7 @@ impl ReplicatedLayer {
                         guard,
                     );
                     let _ = tx.send(result);
+                    backpressure.release();
                 });
                 Ok(Arc::new(crate::PendingIsqLayer::new(rx)))
             } else {
