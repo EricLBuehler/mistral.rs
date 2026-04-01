@@ -182,12 +182,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
 
     info!("Model(s) loaded, starting interactive mode...");
 
-    interactive_mode(
-        mistralrs.clone(),
-        runtime.enable_search,
-        thinking,
-    )
-    .await;
+    interactive_mode(mistralrs.clone(), runtime.enable_search, thinking).await;
 
     Ok(())
 }

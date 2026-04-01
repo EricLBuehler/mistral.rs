@@ -620,8 +620,8 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 if !seq.multimodal.has_changed_prompt {
                     let toks = seq.get_toks();
                     let video_ranges = find_image_placeholder_ranges(toks, VIDEO_TOKEN_ID);
-                    let already_expanded = !video_ranges.is_empty()
-                        && video_ranges.iter().all(|(_, len)| *len > 1);
+                    let already_expanded =
+                        !video_ranges.is_empty() && video_ranges.iter().all(|(_, len)| *len > 1);
                     if already_expanded {
                         continue;
                     }

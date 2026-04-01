@@ -419,12 +419,7 @@ async fn main() -> Result<()> {
         get_search_embedding_model(args.enable_search, args.search_embedding_model);
 
     if args.interactive_mode {
-        interactive_mode(
-            mistralrs,
-            search_embedding_model.is_some(),
-            args.thinking,
-        )
-        .await;
+        interactive_mode(mistralrs, search_embedding_model.is_some(), args.thinking).await;
         return Ok(());
     }
 

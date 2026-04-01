@@ -55,14 +55,7 @@ async fn main() -> Result<()> {
         } => {
             let model_type = resolve_model_type(model_type, default_model)?;
             run_interactive(
-                model_type,
-                runtime,
-                cli.global,
-                thinking,
-                input,
-                image,
-                video,
-                audio,
+                model_type, runtime, cli.global, thinking, input, image, video, audio,
             )
             .await?;
         }

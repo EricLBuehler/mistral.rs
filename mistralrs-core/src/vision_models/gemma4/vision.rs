@@ -226,26 +226,31 @@ impl PatchEmbedder {
         // Linear projection (with optional clipping)
         let patches = self.input_proj.forward(&patches)?;
 
-        // Position embeddings via one-hot matmul
+        // Position embeddings via index_select (replaces one_hot + matmul)
         // Clamp -1 positions to 0 (padding), we'll zero them out with the mask
         let clamped_pos = patch_positions.clamp(0i64, self.position_embedding_size as i64 - 1)?;
+        let n = clamped_pos.dim(1)?;
+        let table_dtype = self.position_embedding_table.dtype();
+        let hidden = self.position_embedding_table.dim(2)?;
 
         let pos_emb_0 = {
-            let pos_d = clamped_pos.i((.., .., 0usize))?;
-            let one_hot_d =
-                candle_nn::encoding::one_hot(pos_d, self.position_embedding_size, 1f32, 0f32)?
-                    .to_dtype(self.position_embedding_table.dtype())?;
-            let emb_table_d = self.position_embedding_table.i(0)?.unsqueeze(0)?;
-            one_hot_d.matmul(&emb_table_d)?
+            let pos_d = clamped_pos.i((.., .., 0usize))?; // [b, n]
+            let table_d = self.position_embedding_table.i(0)?; // [pos_emb_size, hidden]
+            let flat_idx = pos_d.flatten_all()?.to_dtype(DType::U32)?;
+            table_d
+                .index_select(&flat_idx, 0)?
+                .reshape((b, n, hidden))?
+                .to_dtype(table_dtype)?
         };
 
         let pos_emb_1 = {
             let pos_d = clamped_pos.i((.., .., 1usize))?;
-            let one_hot_d =
-                candle_nn::encoding::one_hot(pos_d, self.position_embedding_size, 1f32, 0f32)?
-                    .to_dtype(self.position_embedding_table.dtype())?;
-            let emb_table_d = self.position_embedding_table.i(1)?.unsqueeze(0)?;
-            one_hot_d.matmul(&emb_table_d)?
+            let table_d = self.position_embedding_table.i(1)?;
+            let flat_idx = pos_d.flatten_all()?.to_dtype(DType::U32)?;
+            table_d
+                .index_select(&flat_idx, 0)?
+                .reshape((b, n, hidden))?
+                .to_dtype(table_dtype)?
         };
 
         let pos_emb = (pos_emb_0 + pos_emb_1)?;
@@ -519,6 +524,7 @@ impl VisionEncoderLayer {
 struct VisionPooler {
     hidden_size: usize,
     default_output_length: usize,
+    pooling_kernel_size: usize,
 }
 
 impl VisionPooler {
@@ -526,7 +532,12 @@ impl VisionPooler {
         Self {
             hidden_size: cfg.hidden_size,
             default_output_length: cfg.default_output_length,
+            pooling_kernel_size: cfg.pooling_kernel_size,
         }
+    }
+
+    fn pooling_k(&self) -> usize {
+        self.pooling_kernel_size
     }
 
     fn avg_pool_by_positions(
@@ -535,9 +546,10 @@ impl VisionPooler {
         patch_positions: &Tensor,
         output_length: usize,
     ) -> Result<(Tensor, Tensor)> {
-        let (_b, num_patches, _dim) = x.dims3()?;
+        let (b, num_patches, dim) = x.dims3()?;
         let k = ((num_patches as f64 / output_length as f64).sqrt()) as i64;
         let k_sq = k * k;
+        let device = x.device();
 
         // Clamp padding positions (-1) to 0
         let clamped = patch_positions.clamp(0i64, i64::MAX)?;
@@ -547,30 +559,32 @@ impl VisionPooler {
         // max_x per batch: [b, 1]
         let max_x = (pos_x.max_keepdim(D::Minus1)? + 1.0)?;
 
-        // kernel indices: kx + (max_x / k).floor() * ky
+        // kernel indices: kx + (max_x / k).floor() * ky  →  [b, num_patches]
         let kf = k as f64;
         let kx = (pos_x / kf)?.floor()?;
         let ky = (pos_y / kf)?.floor()?;
         let stride = (max_x / kf)?.floor()?;
-        let kernel_idxs = (kx + stride.broadcast_mul(&ky)?)?;
+        let kernel_idxs = (kx + stride.broadcast_mul(&ky)?)?.to_dtype(DType::U32)?;
 
-        // Build one-hot weights: [b, num_patches, output_length]
-        let kernel_idxs = kernel_idxs.to_dtype(DType::I64)?;
-        let weights = candle_nn::encoding::one_hot(kernel_idxs, output_length, 1f32, 0f32)?
-            .to_dtype(DType::F32)?;
-        let weights = (weights / k_sq as f64)?;
-
-        // output = weights^T @ x: [b, output_length, dim] (matmul in f32 for precision)
+        // Scatter-add pooling: accumulate x / k² into output bins
         let original_dtype = x.dtype();
-        let output = weights
-            .transpose(1, 2)?
-            .matmul(&x.to_dtype(DType::F32)?)?
+        let x_scaled = (x.to_dtype(DType::F32)? / k_sq as f64)?;
+        let idx_expanded = kernel_idxs
+            .unsqueeze(2)?
+            .broadcast_as(&[b, num_patches, dim])?
+            .contiguous()?;
+        let output = Tensor::zeros((b, output_length, dim), DType::F32, device)?
+            .scatter_add(&idx_expanded, &x_scaled, 1)?
             .to_dtype(original_dtype)?;
 
-        // mask: True where any weight is nonzero for that output position
-        let weight_sum = weights.sum(1)?;
-        let zeros = Tensor::zeros_like(&weight_sum)?;
-        let mask = weight_sum.ne(&zeros)?;
+        // Mask: which output positions received any contributions
+        let ones = Tensor::ones((b, num_patches), DType::F32, device)?;
+        let weight_sum = Tensor::zeros((b, output_length), DType::F32, device)?.scatter_add(
+            &kernel_idxs,
+            &ones,
+            1,
+        )?;
+        let mask = weight_sum.gt(0.0)?;
 
         Ok((output, mask))
     }
@@ -607,9 +621,7 @@ pub struct VisionTower {
     rotary_emb: VisionRotaryEmbedding,
     std_bias: Option<Tensor>,
     std_scale: Option<Tensor>,
-    max_patches: usize,
     patch_size: usize,
-    hidden_size: usize,
 }
 
 impl VisionTower {
@@ -627,8 +639,6 @@ impl VisionTower {
         let rotary_emb =
             VisionRotaryEmbedding::new(cfg.head_dim, cfg.rope_theta(), 2, vb.device())?;
 
-        let max_patches =
-            cfg.default_output_length * cfg.pooling_kernel_size * cfg.pooling_kernel_size;
         let (std_bias, std_scale) = if cfg.standardize {
             (
                 Some(vb.get(cfg.hidden_size, "std_bias")?),
@@ -645,182 +655,73 @@ impl VisionTower {
             rotary_emb,
             std_bias,
             std_scale,
-            max_patches,
             patch_size: cfg.patch_size,
-            hidden_size: cfg.hidden_size,
         })
     }
 
-    fn patch_positions(&self, pixel_values: &Tensor, device: &Device) -> Result<(Tensor, Tensor)> {
-        let (b, _, h, w) = pixel_values.dims4()?;
+    /// Encode a single image: embed → encoder (flash attention, no padding) → pool.
+    fn encode_single(&self, pv: &Tensor, device: &Device, dtype: DType) -> Result<Tensor> {
+        let (_, _, h, w) = pv.dims4()?;
         let ph = h / self.patch_size;
         let pw = w / self.patch_size;
         let num_patches = ph * pw;
-        let num_padding = self.max_patches - num_patches;
 
-        // Create grid positions on CPU then move to device
-        let mut pos_data = Vec::with_capacity(b * num_patches * 2);
-        for _batch in 0..b {
-            for row in 0..ph {
-                for col in 0..pw {
-                    pos_data.push(col as i64);
-                    pos_data.push(row as i64);
-                }
+        // Position IDs for real patches only (no padding needed)
+        let mut pos_data = Vec::with_capacity(num_patches * 2);
+        for row in 0..ph {
+            for col in 0..pw {
+                pos_data.push(col as i64);
+                pos_data.push(row as i64);
             }
         }
-        let real_positions =
-            Tensor::from_vec(pos_data, (b, num_patches, 2), &Device::Cpu)?.to_device(device)?;
+        let positions =
+            Tensor::from_vec(pos_data, (1, num_patches, 2), &Device::Cpu)?.to_device(device)?;
+        let no_padding = Tensor::zeros((1, num_patches), DType::U8, device)?;
 
-        let positions = if num_padding > 0 {
-            let pad_positions = Tensor::full(-1i64, (b, num_padding, 2), device)?;
-            Tensor::cat(&[&real_positions, &pad_positions], 1)?
+        // Patch embed (no padding → no mask needed)
+        let embeds = self.patch_embedder.forward(pv, &positions, &no_padding)?;
+
+        // 2D RoPE
+        let (cos, sin) = self.rotary_emb.forward(&embeds, &positions)?;
+        let cos = cos.to_dtype(dtype)?;
+        let sin = sin.to_dtype(dtype)?;
+
+        // Encoder layers — no padding mask, so flash attention is used
+        let flash_params = FlashParams::empty(false);
+        let mut hidden_states = embeds;
+        for layer in &self.encoder_layers {
+            hidden_states = layer.forward(&hidden_states, &cos, &sin, None, &flash_params)?;
+        }
+
+        // Pool: output_length = num_patches / k² (computed from actual patches)
+        let k = self.pooler.pooling_k() as usize;
+        let output_length = num_patches / (k * k);
+        let (pooled, pool_mask) =
+            self.pooler
+                .forward(&hidden_states, &positions, &no_padding, Some(output_length))?;
+
+        // Strip any zero-weight output positions (shouldn't happen with
+        // well-aligned patches, but handle gracefully)
+        let mask_u8 = pool_mask.i(0)?.to_dtype(DType::U8)?;
+        let indices = mask_u8.nonzero()?.squeeze(1)?;
+        if indices.dim(0)? < output_length {
+            pooled.i(0)?.index_select(&indices, 0)
         } else {
-            real_positions
-        };
-
-        // Padding mask: true (1) for padding positions, false (0) for valid
-        let mut padding_data = vec![0u8; b * self.max_patches];
-        for batch_idx in 0..b {
-            for i in num_patches..self.max_patches {
-                padding_data[batch_idx * self.max_patches + i] = 1;
-            }
+            pooled.squeeze(0)
         }
-        let padding = Tensor::from_vec(padding_data, (b, self.max_patches), &Device::Cpu)?
-            .to_device(device)?;
-
-        Ok((positions, padding))
-    }
-
-    fn zero_padded_hidden_states(
-        &self,
-        hidden_states: &Tensor,
-        padding_positions: &Tensor,
-    ) -> Result<Tensor> {
-        let mask = padding_positions
-            .unsqueeze(2)?
-            .broadcast_as(hidden_states.shape())?
-            .to_dtype(DType::U8)?;
-        let zeros = Tensor::zeros_like(hidden_states)?;
-        mask.where_cond(&zeros, hidden_states)
     }
 
     pub fn forward(&self, pixel_values_list: &[Tensor]) -> Result<Tensor> {
         let device = pixel_values_list[0].device().clone();
         let dtype = pixel_values_list[0].dtype();
 
-        let mut all_embeds = Vec::with_capacity(pixel_values_list.len());
-        let mut all_positions = Vec::with_capacity(pixel_values_list.len());
-        let mut all_padding = Vec::with_capacity(pixel_values_list.len());
-
+        // Encode each image separately at its natural patch count.
+        // This avoids padding to max_patches, which would disable flash attention
+        // (the dense padding mask forces the noflash path).
+        let mut all_real_tokens = Vec::with_capacity(pixel_values_list.len());
         for pv in pixel_values_list {
-            let (_, _, h, w) = pv.dims4()?;
-            let ph = h / self.patch_size;
-            let pw = w / self.patch_size;
-            let num_patches = ph * pw;
-            let Some(num_padding) = self.max_patches.checked_sub(num_patches) else {
-                candle_core::bail!(
-                    "Gemma4 vision input exceeds max patches: {num_patches} > {} (h={h}, w={w}, patch_size={})",
-                    self.max_patches,
-                    self.patch_size
-                );
-            };
-
-            let (positions, padding) = self.patch_positions(pv, &device)?;
-
-            // Embed real patches only (no padding through patch embedder)
-            let real_positions = positions.narrow(1, 0, num_patches)?;
-            let real_padding = padding.narrow(1, 0, num_patches)?;
-            let embeds = self
-                .patch_embedder
-                .forward(pv, &real_positions, &real_padding)?;
-
-            // Pad embeddings to max_patches with zeros (matching HF behavior).
-            // The pooler math requires input_seq_len == max_patches.
-            let embeds = if num_padding > 0 {
-                let pad_embeds =
-                    Tensor::zeros((1, num_padding, self.hidden_size), embeds.dtype(), &device)?;
-                Tensor::cat(&[&embeds, &pad_embeds], 1)?
-            } else {
-                embeds
-            };
-
-            // Use FULL positions and padding (including -1 padding positions)
-            all_embeds.push(embeds);
-            all_positions.push(positions);
-            all_padding.push(padding);
-        }
-
-        let inputs_embeds = Tensor::cat(&all_embeds, 0)?;
-        let patch_positions = Tensor::cat(&all_positions, 0)?;
-        let padding_positions = Tensor::cat(&all_padding, 0)?;
-
-        let has_padding = all_padding.iter().any(|padding| {
-            padding
-                .to_dtype(DType::U32)
-                .and_then(|t| t.sum_all())
-                .and_then(|t| t.to_scalar::<u32>())
-                .map(|sum| sum != 0)
-                .unwrap_or(false)
-        });
-
-        // Build attention mask only when padding is present. The shared CUDA flash-attn
-        // path cannot consume this dense padding mask, so masked batches run noflash.
-        let attention_mask = if has_padding {
-            let valid_mask = padding_positions
-                .to_dtype(DType::F32)?
-                .eq(0.0)?
-                .to_dtype(DType::F32)?; // [b, max_patches]: 1=valid, 0=padding
-            let attn_mask_2d = valid_mask.unsqueeze(2)?.matmul(&valid_mask.unsqueeze(1)?)?; // [b, mp, mp]: 1=attend, 0=don't
-            let attend = attn_mask_2d.gt(0.0)?.to_dtype(DType::U8)?;
-            let zeros = Tensor::zeros(attn_mask_2d.shape(), dtype, &device)?;
-            let large_neg = Tensor::try_from(-1e9f32)?
-                .to_dtype(dtype)?
-                .to_device(&device)?
-                .broadcast_as(attn_mask_2d.shape())?;
-            Some(attend.where_cond(&zeros, &large_neg)?.unsqueeze(1)?)
-        } else {
-            None
-        };
-
-        // Compute 2D RoPE for all positions (padding positions at -1 are fine
-        // since their hidden states are zero, so RoPE values don't matter)
-        let (cos, sin) = self.rotary_emb.forward(&inputs_embeds, &patch_positions)?;
-        let cos = cos.to_dtype(dtype)?;
-        let sin = sin.to_dtype(dtype)?;
-
-        // Bidirectional flash params
-        let flash_params = FlashParams::empty(false);
-
-        // Encoder layers
-        let mut hidden_states = inputs_embeds;
-        for layer in &self.encoder_layers {
-            hidden_states = layer.forward(
-                &hidden_states,
-                &cos,
-                &sin,
-                attention_mask.as_ref(),
-                &flash_params,
-            )?;
-            if has_padding {
-                hidden_states =
-                    self.zero_padded_hidden_states(&hidden_states, &padding_positions)?;
-            }
-        }
-
-        // Pool with full max_patches (k = sqrt(max_patches / output_length) = 3)
-        let (pooled, pool_mask) =
-            self.pooler
-                .forward(&hidden_states, &patch_positions, &padding_positions, None)?;
-
-        // Strip padding tokens, keep only valid (non-padding) tokens
-        let batch = pooled.dim(0)?;
-        let mut all_real_tokens = Vec::with_capacity(batch);
-        for b in 0..batch {
-            let hs = pooled.i(b)?;
-            let mask = pool_mask.i(b)?;
-            let indices = mask.to_dtype(DType::U8)?.nonzero()?.squeeze(1)?;
-            let real_tokens = hs.index_select(&indices, 0)?;
-            all_real_tokens.push(real_tokens);
+            let tokens = self.encode_single(pv, &device, dtype)?;
+            all_real_tokens.push(tokens);
         }
         let mut hidden_states = Tensor::cat(&all_real_tokens, 0)?;
         if let (Some(std_bias), Some(std_scale)) = (&self.std_bias, &self.std_scale) {

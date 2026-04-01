@@ -100,12 +100,7 @@ pub async fn run_interactive(
         .await;
     } else {
         info!("Model loaded, starting interactive mode...");
-        interactive::interactive_mode(
-            mistralrs.clone(),
-            runtime.enable_search,
-            thinking,
-        )
-        .await;
+        interactive::interactive_mode(mistralrs.clone(), runtime.enable_search, thinking).await;
     }
 
     Ok(())

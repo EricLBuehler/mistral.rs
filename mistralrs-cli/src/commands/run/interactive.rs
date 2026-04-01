@@ -115,7 +115,8 @@ pub async fn oneshot_mode(
     enable_thinking: Option<bool>,
     input: OneshotInput,
 ) {
-    let has_media = !input.images.is_empty() || !input.videos.is_empty() || !input.audios.is_empty();
+    let has_media =
+        !input.images.is_empty() || !input.videos.is_empty() || !input.audios.is_empty();
 
     if has_media {
         oneshot_multimodal(mistralrs, do_search, enable_thinking, input).await;
@@ -166,7 +167,12 @@ async fn oneshot_text(
     let start_ttft = Instant::now();
     match stream_assistant_response(&mut rx, start_ttft).await {
         Ok((_, first_token_duration, last_usage)) => {
-            print_stats(&mistralrs, &sampling_params, first_token_duration, last_usage);
+            print_stats(
+                &mistralrs,
+                &sampling_params,
+                first_token_duration,
+                last_usage,
+            );
         }
         Err(e) => {
             error!("{e}");
@@ -318,7 +324,12 @@ async fn oneshot_multimodal(
     let start_ttft = Instant::now();
     match stream_assistant_response(&mut rx, start_ttft).await {
         Ok((_, first_token_duration, last_usage)) => {
-            print_stats(&mistralrs, &sampling_params, first_token_duration, last_usage);
+            print_stats(
+                &mistralrs,
+                &sampling_params,
+                first_token_duration,
+                last_usage,
+            );
         }
         Err(e) => {
             error!("{e}");

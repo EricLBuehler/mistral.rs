@@ -1592,9 +1592,7 @@ impl TextModel {
         // Only image tokens get bidirectional attention — HF's mask function checks
         // `(token_type_ids == 1)` which is image-only, NOT video (type 2).
         let is_image = input_ids_1d.eq(image_token_id as f64)?;
-        let is_image_vec: Vec<u32> = is_image
-            .to_dtype(candle_core::DType::U32)?
-            .to_vec1()?;
+        let is_image_vec: Vec<u32> = is_image.to_dtype(candle_core::DType::U32)?.to_vec1()?;
         let mut group_ids = vec![-1i64; seq_len];
         let mut current_group: i64 = -1;
         for i in 0..seq_len {

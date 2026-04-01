@@ -185,10 +185,7 @@ impl SequenceVideos {
     fn new(input_videos: Vec<VideoInput>) -> Self {
         // Store per-frame hashes (not per-video) so they align 1:1 with
         // per-frame token ranges from `find_image_placeholder_ranges`.
-        let hashes = input_videos
-            .iter()
-            .flat_map(|v| v.frame_hashes())
-            .collect();
+        let hashes = input_videos.iter().flat_map(|v| v.frame_hashes()).collect();
         Self {
             videos: input_videos,
             hashes,
