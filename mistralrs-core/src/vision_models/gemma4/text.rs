@@ -526,14 +526,13 @@ impl Attention {
             }
             None => {
                 // Eager attention path, use normal kv_caches.
-                let (k, v, is_shared_kv) = if let Some(donor_idx) = self.kv_shared_layer_index {
+                let (k, v) = if let Some(donor_idx) = self.kv_shared_layer_index {
                     let donor_cache = &kv_caches[donor_idx];
                     let dk = donor_cache.k()?.unwrap().to_device(q.device())?;
                     let dv = donor_cache.v()?.unwrap().to_device(q.device())?;
-                    (dk, dv, true)
+                    (dk, dv)
                 } else {
-                    let (k, v) = kv_caches[self.layer_idx].append(&k, &v)?;
-                    (k, v, false)
+                    kv_caches[self.layer_idx].append(&k, &v)?
                 };
 
                 let mask = if self.is_sliding {
@@ -542,33 +541,44 @@ impl Attention {
                     attention_mask
                 };
 
-                // Adjust mask dimensions if using shared KV cache (donor may
-                // have different seq len)
-                let mask = if is_shared_kv {
-                    let adjust_mask = |m: Option<&Tensor>| -> Result<Option<Tensor>> {
-                        if let Some(mask) = m {
-                            let kv_seq_len = k.dims()[2];
-                            let mask_dims = mask.dims();
-                            match mask.rank() {
-                                2 if mask_dims[1] > kv_seq_len => {
-                                    Ok(Some(mask.narrow(1, 0, kv_seq_len)?))
-                                }
-                                3 if mask_dims[2] > kv_seq_len => {
-                                    Ok(Some(mask.narrow(2, 0, kv_seq_len)?))
-                                }
-                                4 if mask_dims[3] > kv_seq_len => {
-                                    Ok(Some(mask.narrow(3, 0, kv_seq_len)?))
-                                }
-                                _ => Ok(Some(mask.clone())),
+                // Adjust mask dimensions to match actual KV cache length.
+                // This is needed when:
+                //   - shared KV cache (donor may have different seq len)
+                //   - sliding/rotating KV cache (cache trimmed to window size
+                //     but mask was created for the full sequence length)
+                let adjust_mask = |m: Option<&Tensor>| -> Result<Option<Tensor>> {
+                    if let Some(mask) = m {
+                        let kv_seq_len = k.dims()[2];
+                        let mask_dims = mask.dims();
+                        match mask.rank() {
+                            2 if mask_dims[1] > kv_seq_len => {
+                                Ok(Some(mask.narrow(
+                                    1,
+                                    mask_dims[1] - kv_seq_len,
+                                    kv_seq_len,
+                                )?))
                             }
-                        } else {
-                            Ok(None)
+                            3 if mask_dims[2] > kv_seq_len => {
+                                Ok(Some(mask.narrow(
+                                    2,
+                                    mask_dims[2] - kv_seq_len,
+                                    kv_seq_len,
+                                )?))
+                            }
+                            4 if mask_dims[3] > kv_seq_len => {
+                                Ok(Some(mask.narrow(
+                                    3,
+                                    mask_dims[3] - kv_seq_len,
+                                    kv_seq_len,
+                                )?))
+                            }
+                            _ => Ok(Some(mask.clone())),
                         }
-                    };
-                    adjust_mask(mask)?
-                } else {
-                    mask.cloned()
+                    } else {
+                        Ok(None)
+                    }
                 };
+                let mask = adjust_mask(mask)?;
 
                 Sdpa.run_attention(&q, &k, &v, mask.as_ref(), flash_params, &self.sdpa_params)?
             }
