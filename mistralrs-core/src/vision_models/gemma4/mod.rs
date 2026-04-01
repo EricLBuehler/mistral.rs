@@ -40,6 +40,10 @@ pub struct Gemma4SpecificArgs {
     pub image_sizes: Vec<(u32, u32)>,
     pub audio_hashes: Vec<u64>,
     pub audio_cached_tokens: Vec<usize>,
+    pub video_pixel_values: Option<Tensor>,
+    pub video_hashes: Vec<u64>,
+    pub video_cached_tokens: Vec<usize>,
+    pub video_sizes: Vec<(u32, u32)>,
 }
 
 pub struct Gemma4Model {
@@ -161,6 +165,10 @@ impl Gemma4Model {
         image_sizes: &[(u32, u32)],
         audio_hashes: &[u64],
         audio_cached_tokens: &[usize],
+        video_pixel_values: Option<&Tensor>,
+        video_hashes: &[u64],
+        video_cached_tokens: &[usize],
+        video_sizes: &[(u32, u32)],
     ) -> Result<Tensor> {
         let mut input_embeds = self.language_model.embed_tokens(input_ids)?;
 
@@ -364,6 +372,106 @@ impl Gemma4Model {
             }
         }
 
+        // ── Video embedding (same vision tower as images) ──────────────
+        if let Some(ref vid_pixel_values) = video_pixel_values {
+            let video_mask = input_ids
+                .to_dtype(DType::F32)?
+                .eq(self.cfg.video_token_id as f64)?;
+            let video_mask_expanded = video_mask
+                .unsqueeze(D::Minus1)?
+                .broadcast_as(input_embeds.shape())?
+                .to_dtype(DType::U32)?;
+            let indices = video_mask_expanded.flatten_all()?.nonzero()?.squeeze(1)?;
+
+            let n_frames = vid_pixel_values.dim(0)?;
+            let crop_frame = |pv: Tensor, idx: usize| -> Result<Tensor> {
+                if let Some((h, w)) = video_sizes.get(idx).copied() {
+                    let (h, w) = (h as usize, w as usize);
+                    pv.narrow(2, 0, h)?.narrow(3, 0, w)
+                } else {
+                    Ok(pv)
+                }
+            };
+
+            let video_embeds = if !video_hashes.is_empty() && video_hashes.len() == n_frames {
+                let mut per_frame: Vec<Option<Tensor>> = vec![None; n_frames];
+                let mut miss_indices = Vec::new();
+                {
+                    let mut guard = self
+                        .encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned");
+                    for (i, &hash) in video_hashes.iter().enumerate() {
+                        if let Some(cached) = guard.get(hash) {
+                            per_frame[i] = Some(cached[0].clone());
+                        } else {
+                            miss_indices.push(i);
+                        }
+                    }
+                }
+                if !miss_indices.is_empty() {
+                    for &idx in &miss_indices {
+                        let single_pv =
+                            crop_frame(vid_pixel_values.get(idx)?.unsqueeze(0)?, idx)?;
+                        let vision_features = self
+                            .vision_tower
+                            .forward(&[single_pv.to_dtype(self.vision_dtype)?])?;
+                        let feats = self
+                            .embed_vision
+                            .forward(&vision_features)?
+                            .to_dtype(input_embeds.dtype())?
+                            .squeeze(0)?;
+                        {
+                            let mut guard = self
+                                .encoder_cache
+                                .lock()
+                                .expect("encoder cache lock poisoned");
+                            guard.insert(video_hashes[idx], vec![feats.clone()]);
+                        }
+                        per_frame[idx] = Some(feats);
+                    }
+                }
+                let parts: Vec<Tensor> = per_frame.into_iter().map(|t| t.unwrap()).collect();
+                Self::trim_cached_prefix_tokens(
+                    Tensor::cat(&parts, 0)?,
+                    video_cached_tokens.first().copied().unwrap_or(0),
+                )?
+            } else {
+                let per_frame_tensors: Vec<Tensor> = (0..n_frames)
+                    .map(|i| {
+                        vid_pixel_values
+                            .get(i)
+                            .and_then(|t| t.unsqueeze(0))
+                            .and_then(|t| crop_frame(t, i))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let vision_features = self.vision_tower.forward(
+                    &per_frame_tensors
+                        .iter()
+                        .map(|t| t.to_dtype(self.vision_dtype))
+                        .collect::<Result<Vec<_>>>()?,
+                )?;
+                let embeds = self
+                    .embed_vision
+                    .forward(&vision_features)?
+                    .to_dtype(input_embeds.dtype())?
+                    .squeeze(0)?;
+                Self::trim_cached_prefix_tokens(
+                    embeds,
+                    video_cached_tokens.first().copied().unwrap_or(0),
+                )?
+            };
+
+            if indices.dim(0)? > 0 {
+                let mut x_flat = input_embeds.flatten_all()?;
+                let src_flat = video_embeds.flatten_all()?;
+                let current_vals = x_flat.gather(&indices, 0)?;
+                let diff = (src_flat - current_vals)?;
+                x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
+                input_embeds = x_flat.reshape(input_embeds.shape())?;
+            }
+        }
+
         let ple_vocab_limit = self
             .cfg
             .text_config
@@ -376,6 +484,8 @@ impl Gemma4Model {
         let ple_input_ids = non_image_mask.where_cond(&ple_input_ids, &ple_zeros)?;
         let non_audio_mask = input_ids.ne(self.cfg.audio_token_id as f64)?;
         let ple_input_ids = non_audio_mask.where_cond(&ple_input_ids, &ple_zeros)?;
+        let non_video_mask = input_ids.ne(self.cfg.video_token_id as f64)?;
+        let ple_input_ids = non_video_mask.where_cond(&ple_input_ids, &ple_zeros)?;
 
         self.language_model.forward_embeds(
             input_ids,
@@ -385,7 +495,7 @@ impl Gemma4Model {
             context_lens,
             metadata,
             flash_params,
-            pixel_values.is_some(),
+            pixel_values.is_some() || video_pixel_values.is_some(),
         )
     }
 }
@@ -462,6 +572,10 @@ impl MultimodalModel for Gemma4Model {
             &args.image_sizes,
             &args.audio_hashes,
             &args.audio_cached_tokens,
+            args.video_pixel_values.as_ref(),
+            &args.video_hashes,
+            &args.video_cached_tokens,
+            &args.video_sizes,
         )
     }
 

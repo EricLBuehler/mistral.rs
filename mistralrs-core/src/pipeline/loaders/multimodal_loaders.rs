@@ -7274,6 +7274,9 @@ impl MultimodalPromptPrefixer for Gemma4Prefixer {
     fn prefix_image(&self, _image_indexes: Vec<usize>, prompt: &str) -> String {
         prompt.to_string()
     }
+    fn prefix_video(&self, _video_indexes: Vec<usize>, prompt: &str) -> String {
+        prompt.to_string()
+    }
 }
 
 impl MultimodalModelLoader for Gemma4Loader {
@@ -7328,7 +7331,11 @@ impl MultimodalModelLoader for Gemma4Loader {
     }
     fn modalities(&self, config: &str) -> Result<Modalities> {
         let cfg: Gemma4Config = serde_json::from_str(config)?;
-        let mut input = vec![SupportedModality::Text, SupportedModality::Vision];
+        let mut input = vec![
+            SupportedModality::Text,
+            SupportedModality::Vision,
+            SupportedModality::Video,
+        ];
         if cfg.audio_config.is_some() {
             input.push(SupportedModality::Audio);
         }

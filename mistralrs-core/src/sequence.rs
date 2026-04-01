@@ -5,7 +5,7 @@ use crate::{
     reasoning_parsers::{ReasoningMode, ReasoningParser},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
-    AudioInput, ChatCompletionResponse, Usage,
+    AudioInput, ChatCompletionResponse, Usage, VideoInput,
 };
 use crate::{
     pipeline::{DiffusionGenerationParams, KvCache},
@@ -176,10 +176,49 @@ impl SequenceImages {
     }
 }
 
+pub struct SequenceVideos {
+    videos: Vec<VideoInput>,
+    hashes: Vec<u64>,
+}
+
+impl SequenceVideos {
+    fn new(input_videos: Vec<VideoInput>) -> Self {
+        let hashes = input_videos.iter().map(|v| v.video_hash()).collect();
+        Self {
+            videos: input_videos,
+            hashes,
+        }
+    }
+
+    fn clone_videos(&self) -> Vec<VideoInput> {
+        self.videos.clone()
+    }
+
+    fn videos(&self) -> &[VideoInput] {
+        &self.videos
+    }
+
+    fn videos_mut(&mut self) -> &mut Vec<VideoInput> {
+        &mut self.videos
+    }
+
+    fn hashes(&self) -> &[u64] {
+        &self.hashes
+    }
+
+    fn keep_num_videos(&mut self, videos_to_keep: usize) {
+        if self.videos.len() > videos_to_keep {
+            let start = self.videos.len() - videos_to_keep;
+            self.videos = self.videos[start..].to_vec();
+        }
+    }
+}
+
 // Holds all multimodal (vision/diffusion) data for a Sequence.
 pub struct MultimodalData {
     pub input_images: Option<SequenceImages>,
     pub input_audios: Option<SequenceAudios>,
+    pub input_videos: Option<SequenceVideos>,
     pub cached_pixel_values: Option<Tensor>,
     pub cached_img_thw: Option<Tensor>,
     pub cached_vid_thw: Option<Tensor>,
@@ -204,6 +243,7 @@ impl MultimodalData {
     pub fn new(
         input_images: Option<Vec<image::DynamicImage>>,
         input_audios: Option<Vec<AudioInput>>,
+        input_videos: Option<Vec<VideoInput>>,
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         diffusion_params: Option<DiffusionGenerationParams>,
         image_gen_save_file: Option<PathBuf>,
@@ -211,6 +251,7 @@ impl MultimodalData {
         MultimodalData {
             input_images: input_images.map(SequenceImages::new),
             input_audios: input_audios.map(SequenceAudios::new),
+            input_videos: input_videos.map(SequenceVideos::new),
             cached_pixel_values: None,
             cached_img_thw: None,
             cached_vid_thw: None,
@@ -291,6 +332,44 @@ impl MultimodalData {
     pub fn keep_num_audios(&mut self, audios_to_keep: usize) {
         if let Some(auds) = self.input_audios.as_mut() {
             auds.keep_num_audios(audios_to_keep)
+        }
+    }
+
+    pub fn take_videos(&mut self) -> Option<Vec<VideoInput>> {
+        if self.has_changed_prompt {
+            if let Some(input_videos) = self.input_videos.as_mut() {
+                let mut videos = Vec::new();
+                std::mem::swap(&mut videos, input_videos.videos_mut());
+                Some(videos)
+            } else {
+                None
+            }
+        } else {
+            self.input_videos.as_ref().map(|v| v.clone_videos())
+        }
+    }
+
+    pub fn clone_videos(&self) -> Option<Vec<VideoInput>> {
+        self.input_videos.as_ref().map(|v| v.clone_videos())
+    }
+
+    pub fn videos(&self) -> Option<&[VideoInput]> {
+        self.input_videos.as_ref().map(|v| v.videos())
+    }
+
+    pub fn video_hashes(&self) -> Option<&[u64]> {
+        self.input_videos.as_ref().map(|v| v.hashes())
+    }
+
+    pub fn has_videos(&self) -> bool {
+        self.input_videos
+            .as_ref()
+            .is_some_and(|v| !v.videos().is_empty())
+    }
+
+    pub fn keep_num_videos(&mut self, videos_to_keep: usize) {
+        if let Some(vids) = self.input_videos.as_mut() {
+            vids.keep_num_videos(videos_to_keep)
         }
     }
 
@@ -500,6 +579,7 @@ impl Sequence {
         prefix: Option<String>,
         input_images: Option<Vec<image::DynamicImage>>,
         input_audios: Option<Vec<AudioInput>>,
+        input_videos: Option<Vec<VideoInput>>,
         // Paged attention
         block_size: Option<usize>,
         //
@@ -564,6 +644,7 @@ impl Sequence {
             multimodal: MultimodalData::new(
                 input_images,
                 input_audios,
+                input_videos,
                 image_gen_response_format,
                 diffusion_params,
                 image_gen_save_file,
@@ -1090,6 +1171,30 @@ impl Sequence {
         self.multimodal.keep_num_audios(audios_to_keep)
     }
 
+    pub fn take_videos(&mut self) -> Option<Vec<VideoInput>> {
+        self.multimodal.take_videos()
+    }
+
+    pub fn clone_videos(&self) -> Option<Vec<VideoInput>> {
+        self.multimodal.clone_videos()
+    }
+
+    pub fn videos(&self) -> Option<&[VideoInput]> {
+        self.multimodal.videos()
+    }
+
+    pub fn video_hashes(&self) -> Option<&[u64]> {
+        self.multimodal.video_hashes()
+    }
+
+    pub fn has_videos(&self) -> bool {
+        self.multimodal.has_videos()
+    }
+
+    pub fn keep_num_videos(&mut self, videos_to_keep: usize) {
+        self.multimodal.keep_num_videos(videos_to_keep)
+    }
+
     /// Keep these last n images
     pub fn keep_num_images(&mut self, images_to_keep: usize) {
         self.multimodal.keep_num_images(images_to_keep)
@@ -1498,6 +1603,7 @@ mod tests {
             None,
             None,
             None,
+            None, // input_videos
             None,
             None,
             None,

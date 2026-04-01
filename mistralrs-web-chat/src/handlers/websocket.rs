@@ -702,6 +702,7 @@ async fn handle_multimodal_model(
                 user_msg,
                 multimodal_ctx.image_buffer.clone(),
                 multimodal_ctx.audio_buffer.clone(),
+                Vec::new(),
             );
             // Keep the *text‑only* conversation in our long‑term state,
             // but build a one‑off request that includes images.

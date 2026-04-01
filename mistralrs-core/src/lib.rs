@@ -41,6 +41,8 @@ mod metal;
 mod model_loader;
 mod moe;
 mod ops;
+mod video_input;
+pub use video_input::{sample_frame_indices, VideoInput};
 pub use model_loader::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
 };

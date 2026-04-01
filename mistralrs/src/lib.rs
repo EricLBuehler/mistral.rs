@@ -290,6 +290,9 @@ pub use mistralrs_core::{
 // ========== Audio Types ==========
 pub use mistralrs_core::AudioInput;
 
+// ========== Video Types ==========
+pub use mistralrs_core::VideoInput;
+
 // ========== Custom Logits ==========
 pub use mistralrs_core::CustomLogitsProcessor;
 

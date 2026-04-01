@@ -38,6 +38,7 @@ async fn main() -> Result<()> {
         "Describe in detail what is happening.",
         vec![image],
         vec![audio],
+        vec![],
     );
 
     let mut stream = model.stream_chat_request(messages).await?;

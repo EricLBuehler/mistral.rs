@@ -13,6 +13,7 @@ Please see docs for the following model types:
 - Phi 4 Multimodal: [PHI4MM.md](PHI4MM.md)
 - Gemma 3: [GEMMA3.md](GEMMA3.md)
 - Gemma 3n: [GEMMA3N.md](GEMMA3N.md)
+- Gemma 4: [GEMMA4.md](GEMMA4.md)
 - Mistral 3: [MISTRAL3.md](MISTRAL3.md)
 - Llama 4: [LLAMA4.md](LLAMA4.md)
 - Qwen 3-VL: [QWEN3VL.md](QWEN3VL.md)

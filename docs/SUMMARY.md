@@ -44,6 +44,7 @@
 
 ## Multimodal Model Guides
 
+- [Gemma 4](GEMMA4.md)
 - [Idefics 2](IDEFICS2.md)
 - [Idefics 3](IDEFICS3.md)
 - [LLaVA](LLaVA.md)
@@ -57,6 +58,7 @@
 - [Qwen 2-VL](QWEN2VL.md)
 - [Qwen 3-VL](QWEN3VL.md)
 - [Qwen 3.5](QWEN3_5.md)
+- [Video Input](VIDEO.md)
 
 ## Other Model Guides
 

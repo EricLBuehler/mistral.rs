@@ -585,6 +585,7 @@ fn new_dummy_seq(
         None,
         images,
         None,
+        None, // input_videos
         None, // TODO incorrect for PagedAttention
         None,
         None,

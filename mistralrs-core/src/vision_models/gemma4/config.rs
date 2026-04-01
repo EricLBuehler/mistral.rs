@@ -319,6 +319,7 @@ pub struct Gemma4AudioConfig {
 
 serde_default_fn!(usize, image_token_id, 258880);
 serde_default_fn!(usize, audio_token_id, 258881);
+serde_default_fn!(usize, video_token_id, 258884);
 serde_default_fn!(usize, boi_token_id, 255999);
 serde_default_fn!(usize, eoi_token_id, 258882);
 serde_default_fn!(usize, boa_token_id, 256000);
@@ -336,6 +337,8 @@ pub struct Gemma4Config {
     pub image_token_id: usize,
     #[serde(default = "audio_token_id")]
     pub audio_token_id: usize,
+    #[serde(default = "video_token_id")]
+    pub video_token_id: usize,
     #[serde(default = "boi_token_id")]
     pub boi_token_id: usize,
     #[serde(default = "eoi_token_id")]

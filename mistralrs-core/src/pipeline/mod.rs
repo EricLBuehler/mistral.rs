@@ -120,6 +120,7 @@ pub enum SupportedModality {
     Text,
     Audio,
     Vision,
+    Video,
     Embedding,
 }
 
@@ -129,6 +130,7 @@ impl Debug for SupportedModality {
             Self::Text => write!(f, "📝 Text"),
             Self::Audio => write!(f, "🔊 Audio"),
             Self::Vision => write!(f, "🖼️ Vision"),
+            Self::Video => write!(f, "🎬 Video"),
             Self::Embedding => write!(f, "🔢 Embedding"),
         }
     }
@@ -337,6 +339,10 @@ pub trait MultimodalPromptPrefixer: Send + Sync {
     }
     /// Prefix for inclusion in messages (may do nothing if the chat template handles it).
     fn prefix_audio(&self, _audio_indexes: Vec<usize>, prompt: &str) -> String {
+        prompt.to_string()
+    }
+    /// Prefix for inclusion in messages (may do nothing if the chat template handles it).
+    fn prefix_video(&self, _video_indexes: Vec<usize>, prompt: &str) -> String {
         prompt.to_string()
     }
 }

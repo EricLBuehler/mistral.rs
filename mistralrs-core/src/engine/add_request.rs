@@ -136,6 +136,10 @@ impl Engine {
             RequestMessage::MultimodalChat { ref audios, .. } => Some(audios.clone()),
             _ => None,
         };
+        let videos = match request.messages {
+            RequestMessage::MultimodalChat { ref videos, .. } => Some(videos.clone()),
+            _ => None,
+        };
         let has_tools = request.tools.as_ref().is_some_and(|t| !t.is_empty());
         let matcher = Arc::new(handle_seq_error!(
             ToolCallingMatcher::new(request.tool_choice.unwrap_or(ToolChoice::Auto),),
@@ -177,6 +181,7 @@ impl Engine {
             | RequestMessage::MultimodalChat {
                 images: _,
                 audios: _,
+                videos: _,
                 messages,
                 enable_thinking,
                 reasoning_effort,
@@ -573,6 +578,7 @@ impl Engine {
                 },
                 images.clone(),
                 audios.clone(),
+                videos.clone(),
                 block_size,
                 if has_tools {
                     Some(matcher.clone())
@@ -685,6 +691,7 @@ impl Engine {
                     seq.get_toks(),
                     seq.image_hashes(),
                     seq.audio_hashes(),
+                    seq.video_hashes(),
                 ),
                 request.response
             );
@@ -695,6 +702,7 @@ impl Engine {
                     recurrent_snapshots,
                     images_to_keep,
                     audios_to_keep,
+                    videos_to_keep,
                     toks,
                     offset,
                 }) => {
@@ -719,6 +727,7 @@ impl Engine {
 
                     seq.keep_num_images(images_to_keep);
                     seq.keep_num_audios(audios_to_keep);
+                    seq.keep_num_videos(videos_to_keep);
                     seq.prefill_v2_normal(normal, toks, offset)
                 }
                 None => seq,

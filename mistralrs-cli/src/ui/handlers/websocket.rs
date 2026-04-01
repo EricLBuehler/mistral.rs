@@ -294,6 +294,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                                     msg.content.clone(),
                                     images,
                                     Vec::new(),
+                                    Vec::new(),
                                 );
                             } else {
                                 multimodal_msgs =
@@ -425,6 +426,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                     content.clone(),
                     images,
                     audios,
+                    Vec::new(),
                 );
             } else {
                 multimodal_msgs =

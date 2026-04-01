@@ -398,7 +398,31 @@ curl http://localhost:1234/v1/responses \
 }'
 ```
 
-The API also supports multimodal inputs (images, audio) and streaming responses by setting `"stream": true` in the request JSON.
+The API also supports multimodal inputs (images, audio, video) and streaming responses by setting `"stream": true` in the request JSON.
+
+### Multimodal Content Types
+
+When sending multimodal messages, the `content` field of a message can be an array of content parts. The following content types are supported:
+
+- **`text`**: Plain text input.
+  ```json
+  { "type": "text", "text": "Describe this image." }
+  ```
+
+- **`image_url`**: Image input. The URL may be a web URL, a local file path, or a base64-encoded data URI.
+  ```json
+  { "type": "image_url", "image_url": { "url": "https://example.com/photo.jpg" } }
+  ```
+
+- **`audio_url`**: Audio input. Supported by models with audio capabilities (e.g., Phi 4 Multimodal, Gemma 3n, Gemma 4).
+  ```json
+  { "type": "audio_url", "audio_url": { "url": "https://example.com/audio.ogg" } }
+  ```
+
+- **`video_url`**: Video input. Supported by models with video capabilities (e.g., Gemma 4). Frames are automatically extracted from the video at a configurable sampling rate.
+  ```json
+  { "type": "video_url", "video_url": { "url": "https://example.com/video.mp4" } }
+  ```
 
 > ℹ️ The Responses API forwards `truncate_sequence` to underlying chat completions. Enable it if you want over-length conversations to be truncated rather than rejected.
 
