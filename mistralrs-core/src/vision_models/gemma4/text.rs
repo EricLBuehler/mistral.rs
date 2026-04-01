@@ -1454,7 +1454,9 @@ impl TextModel {
         // Larger Gemma 4 variants use a mixed causal/bidirectional mask for
         // image soft tokens during prefill. Flash attention cannot consume that
         // per-token override, so we materialize real masks and bypass flash only
-        // when image tokens are actually present.
+        // when image tokens are actually present. `has_images` is true only when
+        // pixel_values (images) were provided — video tokens don't get bidirectional
+        // attention so video-only inputs skip this path and use native flash.
         let has_bidirectional =
             self.use_bidirectional_vision_attention && has_images && input_ids.dim(1)? > 1;
         let mask_cache: &dyn PastKvLenCache = metadata
@@ -1582,22 +1584,27 @@ impl TextModel {
         causal_mask: &Tensor,
         input_ids: &Tensor,
         image_token_id: usize,
-        _video_token_id: Option<usize>,
+        video_token_id: Option<usize>,
     ) -> Result<Tensor> {
         let (_, seq_len) = input_ids.dims2()?;
         let total_len = causal_mask.dim(1)?;
         let past_kv_len = total_len - seq_len;
 
         let input_ids_1d = input_ids.squeeze(0)?;
-        // Only image tokens get bidirectional attention — HF's mask function checks
-        // `(token_type_ids == 1)` which is image-only, NOT video (type 2).
+        // Both image and video tokens get bidirectional attention within their
+        // respective groups.
         let is_image = input_ids_1d.eq(image_token_id as f64)?;
-        let is_image_vec: Vec<u32> = is_image.to_dtype(candle_core::DType::U32)?.to_vec1()?;
+        let is_vision = if let Some(vid_id) = video_token_id {
+            is_image.add(&input_ids_1d.eq(vid_id as f64)?)?
+        } else {
+            is_image
+        };
+        let is_vision_vec: Vec<u32> = is_vision.to_dtype(candle_core::DType::U32)?.to_vec1()?;
         let mut group_ids = vec![-1i64; seq_len];
         let mut current_group: i64 = -1;
         for i in 0..seq_len {
-            if is_image_vec[i] == 1 {
-                if i == 0 || is_image_vec[i - 1] == 0 {
+            if is_vision_vec[i] == 1 {
+                if i == 0 || is_vision_vec[i - 1] == 0 {
                     current_group += 1;
                 }
                 group_ids[i] = current_group;
