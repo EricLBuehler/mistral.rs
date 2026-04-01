@@ -338,7 +338,13 @@ impl PrefixCacheManagerV2 {
             }
         }
 
-        if let Some((match_len, cache_element, images_match_until, audios_match_until, videos_match_until)) = best_match
+        if let Some((
+            match_len,
+            cache_element,
+            images_match_until,
+            audios_match_until,
+            videos_match_until,
+        )) = best_match
         {
             let new_toks = toks.0[match_len..].to_vec();
             if new_toks.is_empty() {
@@ -442,8 +448,12 @@ mod tests {
             },
         );
 
-        let hit =
-            prefix_cacher.search_for_matching_cache(&[1, 2, 3, 4, 5, 6, 7, 99], None, None, None)?;
+        let hit = prefix_cacher.search_for_matching_cache(
+            &[1, 2, 3, 4, 5, 6, 7, 99],
+            None,
+            None,
+            None,
+        )?;
 
         match hit {
             Some(MatchingCache::Normal { toks, offset, .. }) => {

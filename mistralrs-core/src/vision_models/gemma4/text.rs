@@ -551,27 +551,21 @@ impl Attention {
                         let kv_seq_len = k.dims()[2];
                         let mask_dims = mask.dims();
                         match mask.rank() {
-                            2 if mask_dims[1] > kv_seq_len => {
-                                Ok(Some(mask.narrow(
-                                    1,
-                                    mask_dims[1] - kv_seq_len,
-                                    kv_seq_len,
-                                )?))
-                            }
-                            3 if mask_dims[2] > kv_seq_len => {
-                                Ok(Some(mask.narrow(
-                                    2,
-                                    mask_dims[2] - kv_seq_len,
-                                    kv_seq_len,
-                                )?))
-                            }
-                            4 if mask_dims[3] > kv_seq_len => {
-                                Ok(Some(mask.narrow(
-                                    3,
-                                    mask_dims[3] - kv_seq_len,
-                                    kv_seq_len,
-                                )?))
-                            }
+                            2 if mask_dims[1] > kv_seq_len => Ok(Some(mask.narrow(
+                                1,
+                                mask_dims[1] - kv_seq_len,
+                                kv_seq_len,
+                            )?)),
+                            3 if mask_dims[2] > kv_seq_len => Ok(Some(mask.narrow(
+                                2,
+                                mask_dims[2] - kv_seq_len,
+                                kv_seq_len,
+                            )?)),
+                            4 if mask_dims[3] > kv_seq_len => Ok(Some(mask.narrow(
+                                3,
+                                mask_dims[3] - kv_seq_len,
+                                kv_seq_len,
+                            )?)),
                             _ => Ok(Some(mask.clone())),
                         }
                     } else {

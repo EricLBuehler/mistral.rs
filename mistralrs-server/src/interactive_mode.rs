@@ -152,7 +152,8 @@ const TOPP_CMD: &str = "\\topp";
 /// Regex string used to extract image URLs from prompts.
 const IMAGE_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:png|jpe?g|bmp|gif|webp)(?:\?\S+?)?)"#;
 const AUDIO_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:wav|mp3|flac|ogg)(?:\?\S+?)?)"#;
-const VIDEO_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:mp4|avi|mov|mkv|webm|gif|m4v)(?:\?\S+?)?)"#;
+const VIDEO_REGEX: &str =
+    r#"((?:https?://|file://)?\S+?\.(?:mp4|avi|mov|mkv|webm|gif|m4v)(?:\?\S+?)?)"#;
 
 fn interactive_sample_parameters() -> SamplingParams {
     SamplingParams {

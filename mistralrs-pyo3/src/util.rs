@@ -363,8 +363,8 @@ pub(crate) fn parse_video_url(url_unparsed: &str) -> PyApiResult<VideoInput> {
 }
 
 fn decode_gif_frames(bytes: &[u8]) -> anyhow::Result<VideoInput> {
-    let decoder =
-        GifDecoder::new(Cursor::new(bytes)).map_err(|e| anyhow::anyhow!("Failed to decode GIF: {e}"))?;
+    let decoder = GifDecoder::new(Cursor::new(bytes))
+        .map_err(|e| anyhow::anyhow!("Failed to decode GIF: {e}"))?;
 
     let raw_frames: Vec<_> = decoder
         .into_frames()
@@ -379,7 +379,11 @@ fn decode_gif_frames(bytes: &[u8]) -> anyhow::Result<VideoInput> {
         .iter()
         .map(|f| {
             let (num, den) = f.delay().numer_denom_ms();
-            if den == 0 { 100 } else { num * 1000 / den }
+            if den == 0 {
+                100
+            } else {
+                num * 1000 / den
+            }
         })
         .sum();
     let fps = if total_delay_ms > 0 {

@@ -411,8 +411,7 @@ impl Gemma4Model {
                 }
                 if !miss_indices.is_empty() {
                     for &idx in &miss_indices {
-                        let single_pv =
-                            crop_frame(vid_pixel_values.get(idx)?.unsqueeze(0)?, idx)?;
+                        let single_pv = crop_frame(vid_pixel_values.get(idx)?.unsqueeze(0)?, idx)?;
                         let vision_features = self
                             .vision_tower
                             .forward(&[single_pv.to_dtype(self.vision_dtype)?])?;

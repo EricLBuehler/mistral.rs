@@ -117,6 +117,22 @@ impl RotatingCache {
         }
 
         let ad = self.all_data.as_mut().unwrap();
+
+        // During prefill (seq_len > 1), if total tokens exceed the sliding window,
+        // we need the full K/V (retained + new) for correct attention: different
+        // query positions attend to different windows. Read retained BEFORE the
+        // buffer is overwritten below.
+        let prefill_full_kv = if seq_len > 1 && (retained_len + seq_len) > self.max_seq_len {
+            Some(if retained_len > 0 {
+                let retained = ad.narrow(self.dim, 0, retained_len)?.contiguous()?;
+                Tensor::cat(&[&retained, &src.contiguous()?], self.dim)?
+            } else {
+                src.clone()
+            })
+        } else {
+            None
+        };
+
         self.current_seq_len += seq_len;
 
         if seq_len >= self.max_seq_len {
@@ -124,7 +140,11 @@ impl RotatingCache {
                 .narrow(self.dim, seq_len - self.max_seq_len, self.max_seq_len)?
                 .contiguous()?;
             ad.slice_set(&to_copy, self.dim, 0)?;
-            return Ok(ad.clone());
+            return if let Some(full_kv) = prefill_full_kv {
+                Ok(full_kv)
+            } else {
+                Ok(ad.clone())
+            };
         }
 
         let keep_from_old = retained_len.min(self.max_seq_len - seq_len);
@@ -139,7 +159,9 @@ impl RotatingCache {
 
         ad.slice_set(&src.contiguous()?, self.dim, keep_from_old)?;
 
-        if self.current_seq_len >= self.max_seq_len {
+        if let Some(full_kv) = prefill_full_kv {
+            Ok(full_kv)
+        } else if self.current_seq_len >= self.max_seq_len {
             Ok(ad.clone())
         } else {
             Ok(ad.narrow(self.dim, 0, self.current_seq_len)?)
@@ -166,9 +188,11 @@ mod tests {
         assert_eq!(cache.current_seq_len(), 3);
 
         let second = cache.append(&make_src(&[3., 4., 5.])?)?;
+        // During multi-token append (prefill), full K/V is returned so all
+        // query positions can attend to their correct sliding windows.
         assert_eq!(
             second.flatten_all()?.to_vec1::<f32>()?,
-            vec![2., 3., 4., 5.]
+            vec![0., 1., 2., 3., 4., 5.]
         );
         assert_eq!(cache.current_seq_len(), 6);
 
@@ -188,6 +212,64 @@ mod tests {
 
         assert!(cache.try_set_len(4).is_err());
         assert!(cache.set_len(4).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn returns_full_kv_on_large_prefill() -> candle_core::Result<()> {
+        // Sliding window = 4, but prefill has 7 tokens
+        let mut cache = RotatingCache::new(2, 4, 4);
+
+        // Prefill with more tokens than the window
+        let result = cache.append(&make_src(&[0., 1., 2., 3., 4., 5., 6.])?)?;
+        // Should return ALL 7 tokens for correct attention during prefill
+        assert_eq!(
+            result.flatten_all()?.to_vec1::<f32>()?,
+            vec![0., 1., 2., 3., 4., 5., 6.]
+        );
+        assert_eq!(cache.current_seq_len(), 7);
+
+        // Internal buffer should only retain the last 4
+        let current = cache.current_data()?.unwrap();
+        assert_eq!(
+            current.flatten_all()?.to_vec1::<f32>()?,
+            vec![3., 4., 5., 6.]
+        );
+
+        // Subsequent decode (single token) should work normally
+        let decode = cache.append(&make_src(&[7.])?)?;
+        assert_eq!(
+            decode.flatten_all()?.to_vec1::<f32>()?,
+            vec![4., 5., 6., 7.]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn returns_full_kv_on_prefill_with_retained() -> candle_core::Result<()> {
+        // Sliding window = 4, initial small append, then large prefill
+        let mut cache = RotatingCache::new(2, 4, 4);
+
+        // First: small append (fits in window)
+        let first = cache.append(&make_src(&[0., 1., 2.])?)?;
+        assert_eq!(first.flatten_all()?.to_vec1::<f32>()?, vec![0., 1., 2.]);
+
+        // Second: prefill that overflows window (retained=3 + new=3 = 6 > 4)
+        let second = cache.append(&make_src(&[3., 4., 5.])?)?;
+        // Should return retained + new = all 6 tokens
+        assert_eq!(
+            second.flatten_all()?.to_vec1::<f32>()?,
+            vec![0., 1., 2., 3., 4., 5.]
+        );
+
+        // Internal buffer should only retain the last 4
+        let current = cache.current_data()?.unwrap();
+        assert_eq!(
+            current.flatten_all()?.to_vec1::<f32>()?,
+            vec![2., 3., 4., 5.]
+        );
 
         Ok(())
     }

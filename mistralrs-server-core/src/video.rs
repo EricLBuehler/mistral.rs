@@ -51,10 +51,7 @@ See https://ericlbuehler.github.io/mistral.rs/VIDEO/ for details.";
 ///
 /// GIF files are decoded with the `image` crate. All other formats require
 /// FFmpeg.
-pub async fn parse_video_url(
-    url_unparsed: &str,
-    num_frames: Option<usize>,
-) -> Result<VideoInput> {
+pub async fn parse_video_url(url_unparsed: &str, num_frames: Option<usize>) -> Result<VideoInput> {
     let num_frames = num_frames.unwrap_or(DEFAULT_NUM_FRAMES);
 
     let url = if let Ok(url) = url::Url::parse(url_unparsed) {
@@ -109,8 +106,7 @@ pub async fn parse_video_url(
 
 /// Decode a GIF into sampled frames using the `image` crate.
 fn decode_gif_frames(bytes: &[u8], num_frames: usize) -> Result<VideoInput> {
-    let decoder =
-        GifDecoder::new(Cursor::new(bytes)).context("Failed to decode GIF")?;
+    let decoder = GifDecoder::new(Cursor::new(bytes)).context("Failed to decode GIF")?;
 
     let raw_frames: Vec<_> = decoder.into_frames().collect::<Result<Vec<_>, _>>()?;
     let total = raw_frames.len();
@@ -123,7 +119,11 @@ fn decode_gif_frames(bytes: &[u8], num_frames: usize) -> Result<VideoInput> {
         .iter()
         .map(|f| {
             let (num, den) = f.delay().numer_denom_ms();
-            if den == 0 { 100 } else { num * 1000 / den }
+            if den == 0 {
+                100
+            } else {
+                num * 1000 / den
+            }
         })
         .sum();
     let fps = if total_delay_ms > 0 {

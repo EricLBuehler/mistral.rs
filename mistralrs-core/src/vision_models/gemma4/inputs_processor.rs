@@ -66,9 +66,7 @@ impl Gemma4Processor {
     ) -> Self {
         let max_patches = default_output_length * pooling_kernel_size * pooling_kernel_size;
         let audio_seq_length = processor_config.audio_seq_length.unwrap_or(750);
-        let video_max_soft_tokens = processor_config
-            .video_max_soft_tokens
-            .unwrap_or(70);
+        let video_max_soft_tokens = processor_config.video_max_soft_tokens.unwrap_or(70);
 
         Self {
             patch_size,
@@ -619,10 +617,8 @@ impl InputsProcessor for Gemma4ImageProcessor {
 
                         // Compute per-frame resize dimensions using video patch budget
                         let (sample_w, sample_h) = video.frames[0].dimensions();
-                        let (new_h, new_w) = self.compute_video_resize_dims(
-                            sample_h as usize,
-                            sample_w as usize,
-                        )?;
+                        let (new_h, new_w) =
+                            self.compute_video_resize_dims(sample_h as usize, sample_w as usize)?;
                         let tokens_per_frame = self.video_tokens_for_size(new_h, new_w);
                         let timestamps = video.timestamp_strings();
 
@@ -659,13 +655,9 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         let resample = preprocessor_config.resampling.to_filter()?;
 
                         for frame in &video.frames {
-                            let frame_rgb =
-                                DynamicImage::ImageRgb8(frame.to_rgb8());
-                            let resized = frame_rgb.resize_exact(
-                                new_w as u32,
-                                new_h as u32,
-                                resample,
-                            );
+                            let frame_rgb = DynamicImage::ImageRgb8(frame.to_rgb8());
+                            let resized =
+                                frame_rgb.resize_exact(new_w as u32, new_h as u32, resample);
 
                             let transforms = Transforms {
                                 input: &ToTensorNoNorm,
@@ -701,8 +693,9 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         // video so the model doesn't re-encode them.
                         let n_frames_this_video: usize =
                             videos.iter().map(|v| v.frames.len()).sum();
-                        let start =
-                            video_pixel_values_accum.len().saturating_sub(n_frames_this_video);
+                        let start = video_pixel_values_accum
+                            .len()
+                            .saturating_sub(n_frames_this_video);
                         video_pixel_values_accum.truncate(start);
                         video_sizes_accum.truncate(start);
                     } else {
@@ -714,9 +707,8 @@ impl InputsProcessor for Gemma4ImageProcessor {
                                 video_hashes_accum.push(hash);
                                 // Use the first range's cached_tokens as a proxy
                                 // (all frames share the same cache state)
-                                video_cached_tokens_accum.push(
-                                    cached_video_tokens.first().copied().unwrap_or(0),
-                                );
+                                video_cached_tokens_accum
+                                    .push(cached_video_tokens.first().copied().unwrap_or(0));
                             }
                         }
                     }
@@ -731,13 +723,16 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 let max_w = video_sizes_accum.iter().map(|(_, w)| *w).max().unwrap_or(0) as usize;
 
                 let mut padded = Vec::new();
-                for (pv, &(h, w)) in video_pixel_values_accum.iter().zip(video_sizes_accum.iter()) {
+                for (pv, &(h, w)) in video_pixel_values_accum
+                    .iter()
+                    .zip(video_sizes_accum.iter())
+                {
                     let h = h as usize;
                     let w = w as usize;
                     if h < max_h || w < max_w {
-                        let p = pv
-                            .pad_with_zeros(2, 0, max_h - h)?
-                            .pad_with_zeros(3, 0, max_w - w)?;
+                        let p =
+                            pv.pad_with_zeros(2, 0, max_h - h)?
+                                .pad_with_zeros(3, 0, max_w - w)?;
                         padded.push(p);
                     } else {
                         padded.push(pv.clone());
@@ -839,11 +834,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
             (None, vec![])
         };
 
-        let video_pixel_values = if is_prompt {
-            video_pixel_values
-        } else {
-            None
-        };
+        let video_pixel_values = if is_prompt { video_pixel_values } else { None };
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
@@ -886,11 +877,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 } else {
                     vec![]
                 },
-                video_sizes: if is_prompt {
-                    video_sizes_accum
-                } else {
-                    vec![]
-                },
+                video_sizes: if is_prompt { video_sizes_accum } else { vec![] },
             }),
             paged_attn_meta,
             flash_meta,
