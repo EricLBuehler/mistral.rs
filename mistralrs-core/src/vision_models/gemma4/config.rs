@@ -89,6 +89,7 @@ pub struct Gemma4TextConfig {
     pub enable_moe_block: bool,
     pub num_experts: Option<usize>,
     pub top_k_experts: Option<usize>,
+    #[serde(alias = "moe_intermediate_size")]
     pub expert_intermediate_size: Option<usize>,
     #[serde(default = "num_kv_shared_layers")]
     pub num_kv_shared_layers: usize,
@@ -345,7 +346,7 @@ pub struct Gemma4Config {
     pub eoi_token_id: usize,
     #[serde(default = "boa_token_id")]
     pub boa_token_id: usize,
-    #[serde(default = "eoa_token_id")]
+    #[serde(default = "eoa_token_id", alias = "eoa_token_index")]
     pub eoa_token_id: usize,
     pub audio_ms_per_token: Option<usize>,
     pub vision_soft_tokens_per_image: Option<usize>,

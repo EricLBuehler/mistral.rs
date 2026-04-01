@@ -1044,6 +1044,7 @@ pub struct TextModel {
     sliding_window: usize,
     final_logit_softcapping: Option<f64>,
     image_token_id: Option<usize>,
+    video_token_id: Option<usize>,
     use_bidirectional_vision_attention: bool,
     cfg: ModelConfigMetadata,
     model_config: Arc<dyn ModelConfigLike + Send + Sync>,
@@ -1053,6 +1054,7 @@ impl TextModel {
     pub fn new(
         cfg: &Gemma4TextConfig,
         image_token_id: Option<usize>,
+        video_token_id: Option<usize>,
         vb: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
@@ -1335,6 +1337,7 @@ impl TextModel {
             sliding_window: cfg.effective_sliding_window(),
             final_logit_softcapping: cfg.final_logit_softcapping,
             image_token_id,
+            video_token_id,
             use_bidirectional_vision_attention: matches!(
                 cfg.use_bidirectional_attention.as_deref(),
                 Some("vision")
@@ -1472,6 +1475,7 @@ impl TextModel {
                         &m,
                         input_ids,
                         self.image_token_id.expect("missing image token id"),
+                        self.video_token_id,
                     )
                 })
                 .transpose()?;
@@ -1568,6 +1572,7 @@ impl TextModel {
         causal_mask: &Tensor,
         input_ids: &Tensor,
         image_token_id: usize,
+        video_token_id: Option<usize>,
     ) -> Result<Tensor> {
         let (_, seq_len) = input_ids.dims2()?;
         let total_len = causal_mask.dim(1)?;
@@ -1575,10 +1580,15 @@ impl TextModel {
 
         let input_ids_1d = input_ids.squeeze(0)?;
         let is_image = input_ids_1d
-            .eq(image_token_id as f64)?
-            .to_dtype(candle_core::DType::U32)?;
-
-        let is_image_vec: Vec<u32> = is_image.to_vec1()?;
+            .eq(image_token_id as f64)?;
+        let is_vision = if let Some(vid_id) = video_token_id {
+            is_image.add(&input_ids_1d.eq(vid_id as f64)?)?
+        } else {
+            is_image
+        };
+        let is_image_vec: Vec<u32> = is_vision
+            .to_dtype(candle_core::DType::U32)?
+            .to_vec1()?;
         let mut group_ids = vec![-1i64; seq_len];
         let mut current_group: i64 = -1;
         for i in 0..seq_len {

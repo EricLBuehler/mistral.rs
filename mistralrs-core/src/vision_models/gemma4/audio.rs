@@ -359,7 +359,7 @@ impl Gemma4AudioSSCPConvBlock {
         let norm = layer_norm(
             out_channels,
             LayerNormConfig {
-                eps: cfg.sscp_conv_eps,
+                eps: cfg.rms_norm_eps,
                 affine: false,
                 ..Default::default()
             },
@@ -472,7 +472,6 @@ pub struct Gemma4AudioAttention {
     context_size: usize,
     pub(crate) relative_position_embedding: Gemma4AudioRelativePositionEmbedding,
     _per_dim_scale: Tensor,
-    _per_dim_key_scale: Tensor,
     q_proj: ClippableLinear,
     k_proj: ClippableLinear,
     v_proj: ClippableLinear,
@@ -482,7 +481,6 @@ pub struct Gemma4AudioAttention {
     softcap: f64,
     invalid_logits_tensor: Tensor,
     per_dim_scale_softplus: Tensor,
-    per_dim_key_scale_softplus: Tensor,
 }
 
 impl Gemma4AudioAttention {
@@ -498,9 +496,6 @@ impl Gemma4AudioAttention {
         let relative_position_embedding =
             Gemma4AudioRelativePositionEmbedding::new(cfg, vb.clone())?;
         let per_dim_scale = vb.get(head_dim, "per_dim_scale")?;
-        let per_dim_key_scale = vb
-            .get(head_dim, "per_dim_key_scale")
-            .unwrap_or_else(|_| Tensor::ones(head_dim, vb.dtype(), vb.device()).unwrap());
         let q_proj =
             ClippableLinear::new_no_bias(cfg, hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
         let k_proj =
@@ -508,9 +503,8 @@ impl Gemma4AudioAttention {
         let v_proj =
             ClippableLinear::new_no_bias(cfg, hidden_size, num_heads * head_dim, vb.pp("v_proj"))?;
 
-        let inv_softplus_0 = 1.0 / (1.0_f64 + 0.0_f64.exp()).ln();
-        let q_scale = (head_dim as f64).powf(-0.5) * inv_softplus_0;
-        let k_scale = inv_softplus_0;
+        let q_scale = (head_dim as f64).powf(-0.5) / 2.0_f64.ln();
+        let k_scale = (1.0_f64 + std::f64::consts::E).ln() / 2.0_f64.ln();
 
         let lower_causal_mask = {
             let mut mask_vec = vec![0u8; chunk_size * context_size];
@@ -548,11 +542,6 @@ impl Gemma4AudioAttention {
             let exp_scale = per_dim_scale.to_dtype(DType::F32)?.exp()?;
             ones.broadcast_add(&exp_scale)?.log()?
         };
-        let per_dim_key_scale_softplus = {
-            let ones = Tensor::ones_like(&per_dim_key_scale)?.to_dtype(DType::F32)?;
-            let exp_scale = per_dim_key_scale.to_dtype(DType::F32)?.exp()?;
-            ones.broadcast_add(&exp_scale)?.log()?
-        };
 
         Ok(Self {
             num_heads,
@@ -563,7 +552,6 @@ impl Gemma4AudioAttention {
             context_size,
             relative_position_embedding,
             _per_dim_scale: per_dim_scale,
-            _per_dim_key_scale: per_dim_key_scale,
             q_proj,
             k_proj,
             v_proj,
@@ -573,7 +561,6 @@ impl Gemma4AudioAttention {
             softcap: cfg.conf_attention_logit_cap,
             invalid_logits_tensor,
             per_dim_scale_softplus,
-            per_dim_key_scale_softplus,
         })
     }
 
@@ -629,22 +616,18 @@ impl Gemma4AudioAttention {
 
         let input_device = x.device();
         let per_dim_scale_softplus = self.per_dim_scale_softplus.to_device(input_device)?;
-        let per_dim_key_scale_softplus = self.per_dim_key_scale_softplus.to_device(input_device)?;
         let local_causal_valid_mask = self.local_causal_valid_mask.to_device(input_device)?;
         let invalid_logits_tensor = self.invalid_logits_tensor.to_device(input_device)?;
 
         let scale_shape = (1, 1, 1, self.head_dim);
+        // HF: query_states = query_states * q_scale * softplus(per_dim_scale)
         let query_states = query_states.affine(self.q_scale, 0.0)?.broadcast_mul(
             &per_dim_scale_softplus
                 .reshape(scale_shape)?
                 .to_dtype(DType::F32)?,
         )?;
-        let key_states = key_states.broadcast_mul(
-            &per_dim_key_scale_softplus
-                .reshape(scale_shape)?
-                .to_dtype(DType::F32)?
-                .affine(self.k_scale, 0.0)?,
-        )?;
+        // HF: key_states = key_states * k_scale
+        let key_states = key_states.affine(self.k_scale, 0.0)?;
 
         let (batch_size, q_time) = (query_states.dim(0)?, query_states.dim(1)?);
         let query_blocks = self.convert_to_block(&query_states)?;
@@ -993,13 +976,7 @@ impl Gemma4AudioConformerBlock {
     ) -> Result<Tensor> {
         let audio_encodings = self.ffw_layer_start.forward(audio_encodings)?;
         let audio_encodings = self.attention.forward(&audio_encodings, audio_mel_mask)?;
-        let validity_mask_for_lconv = audio_mel_mask.eq(0.0)?;
-        let audio_encodings_for_lconv_input = audio_encodings.broadcast_mul(
-            &validity_mask_for_lconv
-                .unsqueeze(D::Minus1)?
-                .to_dtype(audio_encodings.dtype())?,
-        )?;
-        let audio_encodings = self.lconv1d.forward(&audio_encodings_for_lconv_input)?;
+        let audio_encodings = self.lconv1d.forward(&audio_encodings)?;
         let audio_encodings = self
             .ffw_layer_end
             .forward(&audio_encodings)?
