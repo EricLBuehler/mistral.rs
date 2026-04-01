@@ -700,7 +700,13 @@ impl DecoderLayer {
                 .expert_intermediate_size
                 .unwrap_or(cfg.intermediate_size);
 
-            let moe_vb = mapper.set_device(layer_idx, vb.pp("moe"), false);
+            // Support both old ("moe") and new ("experts") weight paths
+            let moe_prefix = if vb.pp("moe").contains_tensor("gate_up_proj") {
+                "moe"
+            } else {
+                "experts"
+            };
+            let moe_vb = mapper.set_device(layer_idx, vb.pp(moe_prefix), false);
             let moe_cfg = MoEExpertsConfig {
                 num_experts,
                 num_experts_per_tok: top_k,
@@ -715,13 +721,17 @@ impl DecoderLayer {
                 &cfg.quantization_config,
                 cfg.hidden_activation,
             )?;
-            let scale = moe_vb.get(num_experts, "per_expert_scale")?;
+            // per_expert_scale may live under "moe" (old) or "router" (new)
+            let router_vb = mapper.set_device(layer_idx, vb.pp("router"), false);
+            let scale = moe_vb
+                .get(num_experts, "per_expert_scale")
+                .or_else(|_| router_vb.get(num_experts, "per_expert_scale"))?;
             let rtr = Gemma4Router::new(
                 cfg.hidden_size,
                 num_experts,
                 top_k,
                 cfg.rms_norm_eps,
-                mapper.set_device(layer_idx, vb.pp("router"), false),
+                router_vb,
             )?;
             let pre_ff_2 = RmsNorm::new(
                 cfg.hidden_size,

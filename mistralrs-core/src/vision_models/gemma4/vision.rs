@@ -560,8 +560,12 @@ impl VisionPooler {
             .to_dtype(DType::F32)?;
         let weights = (weights / k_sq as f64)?;
 
-        // output = weights^T @ x: [b, output_length, dim]
-        let output = weights.transpose(1, 2)?.to_dtype(x.dtype())?.matmul(x)?;
+        // output = weights^T @ x: [b, output_length, dim] (matmul in f32 for precision)
+        let original_dtype = x.dtype();
+        let output = weights
+            .transpose(1, 2)?
+            .matmul(&x.to_dtype(DType::F32)?)?
+            .to_dtype(original_dtype)?;
 
         // mask: True where any weight is nonzero for that output position
         let weight_sum = weights.sum(1)?;
