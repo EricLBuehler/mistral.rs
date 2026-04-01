@@ -241,27 +241,30 @@ pub struct Gemma4AudioConfig {
     pub output_proj_dims: Option<usize>,
     pub conf_hidden_size: Option<usize>,
     pub conf_positional_bias_size: Option<usize>,
-    #[serde(default = "conf_attention_chunk_size")]
+    #[serde(default = "conf_attention_chunk_size", alias = "attention_chunk_size")]
     pub conf_attention_chunk_size: usize,
-    #[serde(default = "conf_attention_context_left")]
+    #[serde(default = "conf_attention_context_left", alias = "attention_context_left")]
     pub conf_attention_context_left: usize,
-    #[serde(default = "conf_attention_context_right")]
+    #[serde(default = "conf_attention_context_right", alias = "attention_context_right")]
     pub conf_attention_context_right: usize,
-    #[serde(default = "conf_attention_invalid_logits_value")]
+    #[serde(
+        default = "conf_attention_invalid_logits_value",
+        alias = "attention_invalid_logits_value"
+    )]
     pub conf_attention_invalid_logits_value: f64,
-    #[serde(default = "conf_attention_logit_cap")]
+    #[serde(default = "conf_attention_logit_cap", alias = "attention_logit_cap")]
     pub conf_attention_logit_cap: f64,
-    #[serde(default = "conf_num_attention_heads")]
+    #[serde(default = "conf_num_attention_heads", alias = "num_attention_heads")]
     pub conf_num_attention_heads: usize,
-    #[serde(default = "conf_num_hidden_layers")]
+    #[serde(default = "conf_num_hidden_layers", alias = "num_hidden_layers")]
     pub conf_num_hidden_layers: usize,
-    #[serde(default = "conf_conv_kernel_size")]
+    #[serde(default = "conf_conv_kernel_size", alias = "conv_kernel_size")]
     pub conf_conv_kernel_size: usize,
     #[serde(default = "conf_reduction_factor")]
     pub conf_reduction_factor: usize,
-    #[serde(default = "conf_residual_weight")]
+    #[serde(default = "conf_residual_weight", alias = "residual_weight")]
     pub conf_residual_weight: f64,
-    #[serde(default = "sscp_conv_channel_size")]
+    #[serde(default = "sscp_conv_channel_size", alias = "subsampling_conv_channels")]
     pub sscp_conv_channel_size: Vec<usize>,
     #[serde(default = "sscp_conv_kernel_size")]
     pub sscp_conv_kernel_size: Vec<Vec<usize>>,

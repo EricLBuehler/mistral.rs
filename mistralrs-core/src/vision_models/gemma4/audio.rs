@@ -36,7 +36,7 @@ impl Gemma4AudioRelativePositionEmbedding {
             channels,
             num_heads * head_dim,
             &None,
-            vb.pp("pos_proj"),
+            vb.pp("relative_k_proj"),
         )?;
 
         let log_timescale_increment =
@@ -421,9 +421,9 @@ impl Gemma4AudioSubSampleConvProjection {
             current_f_for_block_input = f_out_after_conv;
         }
 
-        let conv_0 = Gemma4AudioSSCPConvBlock::new(cfg, 0, cfg.input_feat_size, vb.pp("conv_0"))?;
+        let conv_0 = Gemma4AudioSSCPConvBlock::new(cfg, 0, cfg.input_feat_size, vb.pp("layer0"))?;
         let conv_1 =
-            Gemma4AudioSSCPConvBlock::new(cfg, 1, calculated_f_out_dims[0], vb.pp("conv_1"))?;
+            Gemma4AudioSSCPConvBlock::new(cfg, 1, calculated_f_out_dims[0], vb.pp("layer1"))?;
         let final_c_out = cfg.sscp_conv_channel_size[1];
         let final_f_out = calculated_f_out_dims[1];
         let input_proj_in_features = final_c_out * final_f_out;
@@ -492,7 +492,7 @@ impl Gemma4AudioAttention {
         let context_size = chunk_size + max_past_horizon + max_future_horizon;
 
         let relative_position_embedding =
-            Gemma4AudioRelativePositionEmbedding::new(cfg, vb.pp("relative_position_embedding"))?;
+            Gemma4AudioRelativePositionEmbedding::new(cfg, vb.clone())?;
         let per_dim_scale = vb.get(head_dim, "per_dim_scale")?;
         let per_dim_key_scale = vb
             .get(head_dim, "per_dim_key_scale")
@@ -795,17 +795,22 @@ pub struct Gemma4AudioConformerAttention {
 }
 
 impl Gemma4AudioConformerAttention {
-    fn new(cfg: &Gemma4AudioConfig, vb: ShardedVarBuilder) -> Result<Self> {
+    fn new(
+        cfg: &Gemma4AudioConfig,
+        attn_vb: ShardedVarBuilder,
+        pre_attn_norm_vb: ShardedVarBuilder,
+        post_norm_vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         Ok(Self {
-            pre_attn_norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("pre_attn_norm"))?,
-            attn: Gemma4AudioAttention::new(cfg, vb.pp("attn"))?,
+            pre_attn_norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, pre_attn_norm_vb)?,
+            attn: Gemma4AudioAttention::new(cfg, attn_vb.clone())?,
             post: ClippableLinear::new_no_bias(
                 cfg,
                 cfg.hidden_size,
                 cfg.hidden_size,
-                vb.pp("post"),
+                attn_vb.pp("post"),
             )?,
-            post_norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("post_norm"))?,
+            post_norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, post_norm_vb)?,
             gradient_clipping: cfg.gradient_clipping,
             hidden_size: cfg.hidden_size,
         })
@@ -963,11 +968,22 @@ pub struct Gemma4AudioConformerBlock {
 impl Gemma4AudioConformerBlock {
     fn new(cfg: &Gemma4AudioConfig, vb: ShardedVarBuilder) -> Result<Self> {
         Ok(Self {
-            ffw_layer_start: Gemma4AudioConformerFeedForward::new(cfg, vb.pp("ffw_layer_start"))?,
-            attention: Gemma4AudioConformerAttention::new(cfg, vb.pp("attention"))?,
+            ffw_layer_start: Gemma4AudioConformerFeedForward::new(
+                cfg,
+                vb.pp("feed_forward1"),
+            )?,
+            attention: Gemma4AudioConformerAttention::new(
+                cfg,
+                vb.pp("self_attn"),
+                vb.pp("norm_pre_attn"),
+                vb.pp("norm_post_attn"),
+            )?,
             lconv1d: Gemma4AudioConformerLightConv1d::new(cfg, vb.pp("lconv1d"))?,
-            ffw_layer_end: Gemma4AudioConformerFeedForward::new(cfg, vb.pp("ffw_layer_end"))?,
-            norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("norm"))?,
+            ffw_layer_end: Gemma4AudioConformerFeedForward::new(
+                cfg,
+                vb.pp("feed_forward2"),
+            )?,
+            norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("norm_out"))?,
             gradient_clipping: cfg.gradient_clipping,
         })
     }
@@ -1006,11 +1022,9 @@ impl AudioModel {
         let subsample_conv_projection =
             Gemma4AudioSubSampleConvProjection::new(cfg, vb.pp("subsample_conv_projection"))?;
         let mut conformer = Vec::with_capacity(cfg.conf_num_hidden_layers);
+        let vb_layers = vb.pp("layers");
         for i in 0..cfg.conf_num_hidden_layers {
-            conformer.push(Gemma4AudioConformerBlock::new(
-                cfg,
-                vb.pp(format!("conformer.{i}")),
-            )?);
+            conformer.push(Gemma4AudioConformerBlock::new(cfg, vb_layers.pp(i))?);
         }
         let output_proj = if let Some(output_dim) = cfg.output_proj_dims {
             Some(mistralrs_quant::linear(
