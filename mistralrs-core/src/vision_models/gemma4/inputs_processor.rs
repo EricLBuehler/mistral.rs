@@ -680,25 +680,45 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         }
                     }
 
-                    // Track video hashes and cached tokens
+                    // Track per-frame video hashes and cached tokens.
+                    // Unlike images (1 hash per image), videos need 1 hash per
+                    // frame so the encoder cache can look up individual frames.
                     let video_ranges =
                         find_image_placeholder_ranges(seq.get_toks(), VIDEO_TOKEN_ID);
                     let cached_video_tokens =
                         cached_tokens_for_ranges(seq.prefix_cache_len(), &video_ranges);
-                    let seq_video_hashes = seq.video_hashes().unwrap_or(&[]);
 
-                    for (idx, &hash) in seq_video_hashes.iter().enumerate() {
-                        let total_tokens = video_ranges
-                            .get(idx)
-                            .map(|(_, length)| *length)
-                            .unwrap_or(0);
-                        let cached_tokens = cached_video_tokens
-                            .get(idx)
-                            .copied()
-                            .unwrap_or(0)
-                            .min(total_tokens);
-                        video_hashes_accum.push(hash);
-                        video_cached_tokens_accum.push(cached_tokens);
+                    // Check if all video tokens are fully covered by prefix cache.
+                    // If so, skip pushing pixel values (the KV cache already has them).
+                    let all_video_cached = !video_ranges.is_empty()
+                        && video_ranges.iter().enumerate().all(|(i, &(_, length))| {
+                            cached_video_tokens.get(i).copied().unwrap_or(0) >= length
+                        });
+
+                    if all_video_cached {
+                        // All video tokens are in the prefix cache — drop the
+                        // pixel values we just accumulated for this sequence's
+                        // video so the model doesn't re-encode them.
+                        let n_frames_this_video: usize =
+                            videos.iter().map(|v| v.frames.len()).sum();
+                        let start =
+                            video_pixel_values_accum.len().saturating_sub(n_frames_this_video);
+                        video_pixel_values_accum.truncate(start);
+                        video_sizes_accum.truncate(start);
+                    } else {
+                        // Push per-frame hashes for encoder cache lookups
+                        for video in &videos {
+                            let frame_hashes = video.frame_hashes();
+                            for (frame_idx, hash) in frame_hashes.into_iter().enumerate() {
+                                let _ = frame_idx;
+                                video_hashes_accum.push(hash);
+                                // Use the first range's cached_tokens as a proxy
+                                // (all frames share the same cache state)
+                                video_cached_tokens_accum.push(
+                                    cached_video_tokens.first().copied().unwrap_or(0),
+                                );
+                            }
+                        }
                     }
                 }
             }
