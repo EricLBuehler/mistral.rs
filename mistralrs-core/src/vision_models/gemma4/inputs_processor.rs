@@ -609,6 +609,24 @@ impl InputsProcessor for Gemma4ImageProcessor {
         // ── Video processing ──────────────────────────────────────────────
         let video_pixel_values = if has_videos {
             for seq in input_seqs.iter_mut() {
+                // If this is a new turn (has_changed_prompt is false) and the video
+                // placeholders have already been expanded into per-frame soft tokens
+                // from a prior turn, skip re-processing.  The KV / encoder caches
+                // already hold the embeddings.
+                //
+                // We must NOT skip when has_changed_prompt is true, because that
+                // means we are on a subsequent chunk of the SAME turn — the frames
+                // still need to be encoded for the tokens in this chunk.
+                if !seq.multimodal.has_changed_prompt {
+                    let toks = seq.get_toks();
+                    let video_ranges = find_image_placeholder_ranges(toks, VIDEO_TOKEN_ID);
+                    let already_expanded = !video_ranges.is_empty()
+                        && video_ranges.iter().all(|(_, len)| *len > 1);
+                    if already_expanded {
+                        continue;
+                    }
+                }
+
                 if let Some(videos) = seq.take_videos() {
                     for video in &videos {
                         if video.frames.is_empty() {
@@ -780,7 +798,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                     seq.set_mm_features(features);
                 }
             }
-            seq.multimodal.has_changed_prompt = has_changed_prompt;
+            seq.multimodal.has_changed_prompt |= has_changed_prompt;
         }
 
         // ── Build final model inputs ───────────────────────────────────────
