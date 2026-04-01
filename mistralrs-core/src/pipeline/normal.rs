@@ -291,14 +291,14 @@ impl Loader for NormalLoader {
             silent,
             self.config.from_uqff.is_some()
         );
-        if let Some(from_uqff) = self.config.from_uqff.clone() {
-            *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
-        }
         *self
             .token_source
             .write()
             .expect("Failed to write to token source") = Some(token_source);
-        *self.revision.write().expect("Failed to write to revision") = revision;
+        *self.revision.write().expect("Failed to write to revision") = revision.clone();
+        if let Some(from_uqff) = self.config.from_uqff.clone() {
+            *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
+        }
         self.load_model_from_path(
             &paths?,
             dtype,
