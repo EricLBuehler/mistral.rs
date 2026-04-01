@@ -246,6 +246,13 @@ fn generate_model_card(
 
     let repo_display = repo_id.unwrap_or("<REPO_ID>");
 
+    let has_afq = groups.keys().any(|k| k.to_lowercase().starts_with("afq"));
+    let afq_note = if has_afq {
+        "**Note:** AFQ variants are optimized for Apple Silicon / Metal."
+    } else {
+        ""
+    };
+
     let mut output = format!(
         r#"---
 tags:
@@ -265,6 +272,8 @@ Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation
 4) **Customizable** 🛠️: Make and publish your own UQFF files in minutes.
 
 ## Examples
+
+{afq_note}
 
 |Quantization|Command|
 |--|--|
