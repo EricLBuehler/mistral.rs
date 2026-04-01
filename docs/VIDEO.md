@@ -72,13 +72,13 @@ Use `--video` with `-i` for one-shot video queries from the command line:
 
 ```bash
 # Describe a local video
-mistralrs run -m google/gemma-4-12b-it --video clip.mp4 -i "What happens in this video?"
+mistralrs run -m google/gemma-4-E4B-it --video clip.mp4 -i "What happens in this video?"
 
 # Use a URL
-mistralrs run -m google/gemma-4-12b-it --video https://example.com/video.mp4 -i "Summarize this video"
+mistralrs run -m google/gemma-4-E4B-it --video https://example.com/video.mp4 -i "Summarize this video"
 
 # Multiple videos
-mistralrs run -m google/gemma-4-12b-it --video clip1.mp4 --video clip2.mp4 -i "Compare these two videos"
+mistralrs run -m google/gemma-4-E4B-it --video clip1.mp4 --video clip2.mp4 -i "Compare these two videos"
 ```
 
 Or use video files directly in interactive mode by including the path in your prompt:

@@ -76,13 +76,13 @@ mistralrs run -m google/gemma-3-4b-it --image photo.jpg -i "Describe this image"
 mistralrs run -m google/gemma-3-4b-it --image img1.jpg --image img2.png -i "Compare these images"
 
 # Video input
-mistralrs run -m google/gemma-4-12b-it --video clip.mp4 -i "What happens in this video?"
+mistralrs run -m google/gemma-4-E4B-it --video clip.mp4 -i "What happens in this video?"
 
 # Audio input
-mistralrs run -m google/gemma-4-12b-it --audio recording.wav -i "Transcribe this audio"
+mistralrs run -m google/gemma-4-E4B-it --audio recording.wav -i "Transcribe this audio"
 
 # Mixed media (image + audio)
-mistralrs run -m google/gemma-4-12b-it --image photo.jpg --audio clip.mp3 -i "Describe the image and transcribe the audio"
+mistralrs run -m google/gemma-4-E4B-it --image photo.jpg --audio clip.mp3 -i "Describe the image and transcribe the audio"
 
 # URLs work too
 mistralrs run -m google/gemma-3-4b-it --image https://example.com/photo.jpg -i "What is in this image?"
