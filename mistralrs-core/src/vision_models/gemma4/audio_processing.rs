@@ -118,8 +118,12 @@ impl AudioProcessor {
         let mut mask_data = Vec::<f32>::with_capacity(batch_size * max_frames);
 
         for (mel, valid_mask) in mel_batches.into_iter().zip(valid_masks.into_iter()) {
-            for frame in &mel {
-                mel_data.extend_from_slice(frame);
+            for (frame, &is_valid) in mel.iter().zip(valid_mask.iter()) {
+                if is_valid {
+                    mel_data.extend_from_slice(frame);
+                } else {
+                    mel_data.extend(std::iter::repeat_n(0.0, self.feature_size));
+                }
             }
             let pad_frames = max_frames.saturating_sub(mel.len());
             mel_data.extend(std::iter::repeat_n(0.0, pad_frames * self.feature_size));
@@ -144,32 +148,38 @@ impl AudioProcessor {
 
     fn prepare_audio(&self, audio_input: &AudioInput) -> Result<Vec<f32>> {
         let mono_samples = audio_input.to_mono();
-        let scaled_samples: Vec<f32> = mono_samples
-            .iter()
-            .map(|&sample| sample * self.input_scale_factor)
-            .collect();
 
+        // HF order: dither first, then scale
         let dithered_samples = if self.dither > 0.0 {
             use rand_distr::{Distribution, Normal};
 
             let mut rng = rand::rng();
             let normal = Normal::new(0.0, self.dither as f64).unwrap();
-            scaled_samples
+            mono_samples
                 .iter()
                 .map(|&sample| sample + normal.sample(&mut rng) as f32)
                 .collect()
         } else {
-            scaled_samples
+            mono_samples
+        };
+
+        let scaled_samples: Vec<f32> = if self.input_scale_factor != 1.0 {
+            dithered_samples
+                .iter()
+                .map(|&sample| sample * self.input_scale_factor)
+                .collect()
+        } else {
+            dithered_samples
         };
 
         let mut resampled = if audio_input.sample_rate != self.target_sample_rate {
             self.resample(
-                &dithered_samples,
+                &scaled_samples,
                 audio_input.sample_rate,
                 self.target_sample_rate,
             )?
         } else {
-            dithered_samples
+            scaled_samples
         };
 
         if resampled.len() > self.max_audio_samples {

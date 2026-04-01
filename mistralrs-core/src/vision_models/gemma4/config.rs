@@ -17,6 +17,11 @@ pub struct Gemma4RopeLayerParams {
 pub struct Gemma4RopeParameters {
     pub full_attention: Option<Gemma4RopeLayerParams>,
     pub sliding_attention: Option<Gemma4RopeLayerParams>,
+    // Flat-dict fields: vision config uses `{"rope_theta": ..., "rope_type": ...}`
+    // instead of the nested `full_attention`/`sliding_attention` structure.
+    pub rope_theta: Option<f64>,
+    pub rope_type: Option<String>,
+    pub partial_rotary_factor: Option<f64>,
 }
 
 // ── Text config defaults ────────────────────────────────────────────────────
@@ -184,8 +189,13 @@ impl Gemma4VisionConfig {
     pub fn rope_theta(&self) -> f64 {
         self.rope_parameters
             .as_ref()
-            .and_then(|rp| rp.full_attention.as_ref())
-            .and_then(|fa| fa.rope_theta)
+            .and_then(|rp| {
+                // Try nested full_attention first, then flat rope_theta
+                rp.full_attention
+                    .as_ref()
+                    .and_then(|fa| fa.rope_theta)
+                    .or(rp.rope_theta)
+            })
             .unwrap_or(100.0)
     }
 }

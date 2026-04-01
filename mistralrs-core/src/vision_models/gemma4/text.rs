@@ -281,12 +281,16 @@ impl Attention {
         let bias = cfg.attention_bias;
         let sliding = is_sliding!(layer_idx, cfg);
 
+        let use_alternative_attention = cfg.attention_k_eq_v && !sliding;
         let (head_dim, num_kv_heads) = if sliding {
             (cfg.head_dim, cfg.num_key_value_heads)
         } else {
-            let global_kv = cfg
-                .num_global_key_value_heads
-                .unwrap_or(cfg.num_key_value_heads);
+            let global_kv = if use_alternative_attention {
+                cfg.num_global_key_value_heads
+                    .unwrap_or(cfg.num_key_value_heads)
+            } else {
+                cfg.num_key_value_heads
+            };
             (cfg.global_head_dim, global_kv)
         };
 
