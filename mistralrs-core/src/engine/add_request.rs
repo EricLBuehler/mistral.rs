@@ -668,7 +668,7 @@ impl Engine {
             // Rely on the sequence's attached modalities rather than just the top-level request
             // fields so historical images/audios in a reconstructed multi-turn conversation
             // still get their prompt rewrite and mm-feature setup before cache matching.
-            if seq.has_images() || seq.has_audios() {
+            if seq.has_images() || seq.has_audios() || seq.has_videos() {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
                 let _ = pipeline.get_processor().inputs_processor().process_inputs(
                     pipeline.tokenizer(),
