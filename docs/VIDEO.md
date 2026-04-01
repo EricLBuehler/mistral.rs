@@ -66,7 +66,28 @@ Video inputs use the `video_url` content type in the OpenAI-compatible chat comp
 
 The `url` field accepts either a local file path or a URL.
 
-## Example
+## CLI example
+
+Use `--video` with `-i` for one-shot video queries from the command line:
+
+```bash
+# Describe a local video
+mistralrs run -m google/gemma-4-12b-it --video clip.mp4 -i "What happens in this video?"
+
+# Use a URL
+mistralrs run -m google/gemma-4-12b-it --video https://example.com/video.mp4 -i "Summarize this video"
+
+# Multiple videos
+mistralrs run -m google/gemma-4-12b-it --video clip1.mp4 --video clip2.mp4 -i "Compare these two videos"
+```
+
+Or use video files directly in interactive mode by including the path in your prompt:
+
+```
+> What happens in this video? clip.mp4
+```
+
+## HTTP API example
 
 ```py
 from openai import OpenAI

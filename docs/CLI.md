@@ -5,7 +5,7 @@ This is the comprehensive CLI reference for `mistralrs`. The CLI provides comman
 ## Table of Contents
 
 - [Commands](#commands)
-  - [run](#run---interactive-mode): run model in interactive mode
+  - [run](#run---interactive--one-shot-mode): run model in interactive or one-shot mode
   - [serve](#serve---http-server): start HTTP/MCP server and (optionally) the UI
   - [from-config](#from-config---toml-configuration): run from a [TOML configuration file](CLI_CONFIG.md)
   - [quantize](#quantize---uqff-generation): generate UQFF quantized model file
@@ -38,9 +38,9 @@ This is the comprehensive CLI reference for `mistralrs`. The CLI provides comman
 
 ## Commands
 
-### run - Interactive Mode
+### run - Interactive & One-Shot Mode
 
-Start a model in interactive mode for conversational use.
+Start a model in interactive mode for conversational use, or run a single one-shot request with `-i`.
 
 ```bash
 mistralrs run [MODEL_TYPE] -m <MODEL_ID> [OPTIONS]
@@ -48,13 +48,10 @@ mistralrs run [MODEL_TYPE] -m <MODEL_ID> [OPTIONS]
 
 Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified. This allows a shorter syntax.
 
-**Examples:**
+**Interactive mode examples:**
 
 ```bash
 # Run a text model interactively (shorthand - auto type is implied)
-mistralrs run -m Qwen/Qwen3-4B
-
-# Explicit auto type (equivalent to above)
 mistralrs run -m Qwen/Qwen3-4B
 
 # Run with thinking mode enabled
@@ -64,11 +61,42 @@ mistralrs run -m Qwen/Qwen3-4B --enable-thinking
 mistralrs run -m google/gemma-3-4b-it
 ```
 
+**One-shot mode examples:**
+
+When `-i` is provided, the model processes a single request and exits. Combine with `--image`, `--video`, or `--audio` for multimodal input.
+
+```bash
+# Text-only one-shot
+mistralrs run -m Qwen/Qwen3-4B -i "What is the capital of France?"
+
+# Describe an image
+mistralrs run -m google/gemma-3-4b-it --image photo.jpg -i "Describe this image"
+
+# Multiple images
+mistralrs run -m google/gemma-3-4b-it --image img1.jpg --image img2.png -i "Compare these images"
+
+# Video input
+mistralrs run -m google/gemma-4-12b-it --video clip.mp4 -i "What happens in this video?"
+
+# Audio input
+mistralrs run -m google/gemma-4-12b-it --audio recording.wav -i "Transcribe this audio"
+
+# Mixed media (image + audio)
+mistralrs run -m google/gemma-4-12b-it --image photo.jpg --audio clip.mp3 -i "Describe the image and transcribe the audio"
+
+# URLs work too
+mistralrs run -m google/gemma-3-4b-it --image https://example.com/photo.jpg -i "What is in this image?"
+```
+
 **Options:**
 
 | Option | Description |
 |--------|-------------|
 | `--enable-thinking` | Enable thinking mode for models that support it |
+| `-i, --input <TEXT>` | One-shot prompt. Sends a single request and exits instead of entering interactive mode |
+| `--image <URL\|PATH>` | Image file path or URL to include (repeatable, requires `-i`) |
+| `--video <URL\|PATH>` | Video file path or URL to include (repeatable, requires `-i`) |
+| `--audio <URL\|PATH>` | Audio file path or URL to include (repeatable, requires `-i`) |
 
 The `run` command also accepts all [runtime options](#runtime-options).
 
@@ -922,7 +950,8 @@ For multimodal models, you can include images in your prompts by specifying file
 > Describe the image and transcribe the audio: photo.jpg recording.mp3
 ```
 
-**Note**: The CLI automatically detects paths to supported image and audio files within your prompt. You do not need special syntax; simply paste the absolute or relative path to the file.
+**Note**: The CLI automatically detects paths to supported image, audio, and video files within your prompt. You do not need special syntax; simply paste the absolute or relative path to the file.
 
 Supported image formats: PNG, JPEG, BMP, GIF, WebP
 Supported audio formats: WAV, MP3, FLAC, OGG
+Supported video formats: MP4, AVI, MOV, MKV, WebM, M4V, GIF (see [VIDEO.md](VIDEO.md))

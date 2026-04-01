@@ -50,7 +50,7 @@ pub enum Command {
         runtime: RuntimeOptions,
     },
 
-    /// Run model in interactive mode
+    /// Run model in interactive mode, or one-shot mode with `-i`
     Run {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -65,6 +65,27 @@ pub enum Command {
         /// Enable thinking mode for models that support it
         #[arg(long)]
         enable_thinking: bool,
+
+        /// One-shot text prompt. When provided, sends a single request and exits
+        /// instead of entering interactive mode.
+        /// Combine with --image, --video, or --audio for multimodal requests.
+        #[arg(short = 'i', long)]
+        input: Option<String>,
+
+        /// Image URL(s) or file path(s) to include in the request (requires -i).
+        /// Can be specified multiple times: --image img1.jpg --image img2.png
+        #[arg(long, requires = "input")]
+        image: Vec<String>,
+
+        /// Video URL(s) or file path(s) to include in the request (requires -i).
+        /// Can be specified multiple times: --video vid1.mp4 --video vid2.webm
+        #[arg(long, requires = "input")]
+        video: Vec<String>,
+
+        /// Audio URL(s) or file path(s) to include in the request (requires -i).
+        /// Can be specified multiple times: --audio audio1.wav --audio audio2.mp3
+        #[arg(long, requires = "input")]
+        audio: Vec<String>,
     },
 
     /// Generate shell completions

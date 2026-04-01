@@ -102,6 +102,270 @@ fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>) -> String {
 static CTRLC_HANDLER: LazyLock<Mutex<&'static (dyn Fn() + Sync)>> =
     LazyLock::new(|| Mutex::new(&exit_handler));
 
+pub struct OneshotInput {
+    pub text: String,
+    pub images: Vec<String>,
+    pub videos: Vec<String>,
+    pub audios: Vec<String>,
+}
+
+pub async fn oneshot_mode(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    enable_thinking: Option<bool>,
+    input: OneshotInput,
+) {
+    let has_media = !input.images.is_empty() || !input.videos.is_empty() || !input.audios.is_empty();
+
+    if has_media {
+        oneshot_multimodal(mistralrs, do_search, enable_thinking, input).await;
+    } else {
+        oneshot_text(mistralrs, do_search, enable_thinking, input.text).await;
+    }
+}
+
+async fn oneshot_text(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    enable_thinking: Option<bool>,
+    text: String,
+) {
+    let sender = mistralrs.get_sender(None).unwrap();
+    let sampling_params = interactive_sample_parameters(&mistralrs);
+
+    let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
+    user_message.insert("role".to_string(), Either::Left("user".to_string()));
+    user_message.insert("content".to_string(), Either::Left(text));
+    let messages = vec![user_message];
+
+    let request_messages = RequestMessage::Chat {
+        messages,
+        enable_thinking,
+        reasoning_effort: None,
+    };
+
+    let (tx, mut rx) = channel(10_000);
+    let req = Request::Normal(Box::new(NormalRequest {
+        id: mistralrs.next_request_id(),
+        messages: request_messages,
+        sampling_params: sampling_params.clone(),
+        response: tx,
+        return_logprobs: false,
+        is_streaming: true,
+        constraint: Constraint::None,
+        suffix: None,
+        tool_choice: None,
+        tools: None,
+        logits_processors: None,
+        return_raw_logits: false,
+        web_search_options: do_search.then(WebSearchOptions::default),
+        model_id: None,
+        truncate_sequence: false,
+    }));
+    sender.send(req).await.unwrap();
+    let start_ttft = Instant::now();
+    match stream_assistant_response(&mut rx, start_ttft).await {
+        Ok((_, first_token_duration, last_usage)) => {
+            print_stats(&mistralrs, &sampling_params, first_token_duration, last_usage);
+        }
+        Err(e) => {
+            error!("{e}");
+        }
+    }
+    println!();
+}
+
+async fn oneshot_multimodal(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    enable_thinking: Option<bool>,
+    input: OneshotInput,
+) {
+    let config = mistralrs.config(None).unwrap();
+    let prefixer = match &config.category {
+        ModelCategory::Multimodal { prefixer } => prefixer,
+        _ => {
+            error!("--image/--video/--audio require a multimodal model, but the loaded model is not multimodal.");
+            return;
+        }
+    };
+
+    let sender = mistralrs.get_sender(None).unwrap();
+    let sampling_params = interactive_sample_parameters(&mistralrs);
+
+    let mut images = Vec::new();
+    let mut audios = Vec::new();
+    let mut videos = Vec::new();
+
+    // Load images
+    let mut image_indexes = Vec::new();
+    for url in &input.images {
+        match util::parse_image_url(url).await {
+            Ok(image) => {
+                info!("Loaded image: {url}");
+                image_indexes.push(images.len());
+                images.push(image);
+            }
+            Err(e) => {
+                error!("Failed to load image {url}: {e}");
+                return;
+            }
+        }
+    }
+
+    // Load audios
+    let mut audio_indexes = Vec::new();
+    for url in &input.audios {
+        match util::parse_audio_url(url).await {
+            Ok(audio) => {
+                info!("Loaded audio: {url}");
+                audio_indexes.push(audios.len());
+                audios.push(audio);
+            }
+            Err(e) => {
+                error!("Failed to load audio {url}: {e}");
+                return;
+            }
+        }
+    }
+
+    // Load videos
+    let mut video_indexes = Vec::new();
+    for url in &input.videos {
+        match parse_video_url(url, None).await {
+            Ok(video) => {
+                info!("Loaded video: {url}");
+                video_indexes.push(videos.len());
+                videos.push(video);
+            }
+            Err(e) => {
+                error!("Failed to load video {url}: {e}");
+                return;
+            }
+        }
+    }
+
+    // Build content parts
+    let mut content_vec: Vec<IndexMap<String, Value>> = Vec::new();
+    for _ in &input.images {
+        content_vec.push(IndexMap::from([(
+            "type".to_string(),
+            Value::String("image".to_string()),
+        )]));
+    }
+    for _ in &input.audios {
+        content_vec.push(IndexMap::from([(
+            "type".to_string(),
+            Value::String("audio".to_string()),
+        )]));
+    }
+    for _ in &input.videos {
+        content_vec.push(IndexMap::from([(
+            "type".to_string(),
+            Value::String("video".to_string()),
+        )]));
+    }
+
+    // Prefix the text with media context
+    let mut prefixed_text = input.text.clone();
+    if !image_indexes.is_empty() {
+        prefixed_text = prefixer.prefix_image(image_indexes, &prefixed_text);
+    }
+    if !audio_indexes.is_empty() {
+        prefixed_text = prefixer.prefix_audio(audio_indexes, &prefixed_text);
+    }
+    if !video_indexes.is_empty() {
+        prefixed_text = prefixer.prefix_video(video_indexes, &prefixed_text);
+    }
+    content_vec.push(IndexMap::from([
+        ("type".to_string(), Value::String("text".to_string())),
+        ("text".to_string(), Value::String(prefixed_text)),
+    ]));
+
+    let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
+    user_message.insert("role".to_string(), Either::Left("user".to_string()));
+    user_message.insert("content".to_string(), Either::Right(content_vec));
+    let messages = vec![user_message];
+
+    let request_messages = RequestMessage::MultimodalChat {
+        images,
+        audios,
+        videos,
+        messages,
+        enable_thinking,
+        reasoning_effort: None,
+    };
+
+    let (tx, mut rx) = channel(10_000);
+    let req = Request::Normal(Box::new(NormalRequest {
+        id: mistralrs.next_request_id(),
+        messages: request_messages,
+        sampling_params: sampling_params.clone(),
+        response: tx,
+        return_logprobs: false,
+        is_streaming: true,
+        constraint: Constraint::None,
+        suffix: None,
+        tool_choice: None,
+        tools: None,
+        logits_processors: None,
+        return_raw_logits: false,
+        web_search_options: do_search.then(WebSearchOptions::default),
+        model_id: None,
+        truncate_sequence: false,
+    }));
+    sender.send(req).await.unwrap();
+    let start_ttft = Instant::now();
+    match stream_assistant_response(&mut rx, start_ttft).await {
+        Ok((_, first_token_duration, last_usage)) => {
+            print_stats(&mistralrs, &sampling_params, first_token_duration, last_usage);
+        }
+        Err(e) => {
+            error!("{e}");
+        }
+    }
+    println!();
+}
+
+fn print_stats(
+    mistralrs: &Arc<MistralRs>,
+    sampling_params: &SamplingParams,
+    first_token_duration: Option<std::time::Duration>,
+    last_usage: Option<Usage>,
+) {
+    if let Some(last_usage) = last_usage {
+        println!();
+        println!();
+        println!("Stats:");
+        if let Some(ttft) = first_token_duration {
+            println!("Time to first token: {:.2?}s", ttft.as_secs_f32());
+        }
+        println!(
+            "Prompt: {} tokens, {:.2} T/s",
+            last_usage.prompt_tokens, last_usage.avg_prompt_tok_per_sec
+        );
+        println!(
+            "Decode: {} tokens, {:.2} T/s",
+            last_usage.completion_tokens, last_usage.avg_compl_tok_per_sec
+        );
+        if let Ok(logger) = mistralrs.get_logger(None) {
+            let (prefix_hits, prefix_total) = logger.prefix_cache_stats();
+            if prefix_total > 0 {
+                println!(
+                    "Prefix cache: {} hits / {} turns",
+                    prefix_hits, prefix_total
+                );
+            }
+            if let Some((hits, misses)) = logger.encoder_cache_stats() {
+                if hits + misses > 0 {
+                    println!("Encoder cache: {}/{} hits", hits, hits + misses);
+                }
+            }
+        }
+        println!("Sampling: {}", format_sampling_params(sampling_params));
+    }
+}
+
 pub async fn interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,

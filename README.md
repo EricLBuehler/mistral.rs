@@ -61,6 +61,12 @@ irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1
 # Interactive chat
 mistralrs run -m Qwen/Qwen3-4B
 
+# One-shot prompt (no interactive session)
+mistralrs run -m Qwen/Qwen3-4B -i "What is the capital of France?"
+
+# One-shot with an image
+mistralrs run -m google/gemma-3-4b-it --image photo.jpg -i "Describe this image"
+
 # Or start a server with web UI
 mistralrs serve --ui -m google/gemma-3-4b-it
 ```
