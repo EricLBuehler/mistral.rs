@@ -25,7 +25,7 @@ Fast, flexible LLM inference.
 
 ## Latest
 
-- **Gemma 4 with video support**: Full multimodal: text, image, video, and audio input. First model with first-class video support in mistral.rs. [Guide](docs/GEMMA4.md) | [Video setup](docs/VIDEO.md)
+- **Gemma 4**: Full multimodal: text, image, video, and audio input. [Guide](docs/GEMMA4.md) | [Video setup](docs/VIDEO.md)
 - **MXFP4 ISQ quantization**: MXFP4 with optimized decode kernels for faster, smaller models. [Quantization docs](docs/QUANTS.md)
 - **Qwen 3.5 model family**: Support for the Qwen 3.5 series including vision. [Guide](docs/QWEN3_5.md)
 

@@ -29,16 +29,16 @@ license = "MIT"
 rust-version = "1.88"
 
 [workspace.dependencies]
-candle-core = { version = "0.10.1" }
-candle-nn = { version = "0.10.1" }
-candle-flash-attn-v3 = { version = "0.10.1" }
-candle-flash-attn = { version = "0.10.1" }
-candle-metal-kernels = { version = "0.10.1" }
-# candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.10.1", rev = "25805ff" }
-# candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.10.1", rev = "25805ff" }
-# candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", version = "0.10.1", rev = "25805ff" }
-# candle-flash-attn = { git = "https://github.com/huggingface/candle.git", version = "0.10.1", rev = "25805ff" }
-# candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.10.1", rev = "25805ff" }
+# candle-core = { version = "0.10.1" }
+# candle-nn = { version = "0.10.1" }
+# candle-flash-attn-v3 = { version = "0.10.1" }
+# candle-flash-attn = { version = "0.10.1" }
+# candle-metal-kernels = { version = "0.10.1" }
+candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.10.1", rev = "1f67d14" }
+candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.10.1", rev = "1f67d14" }
+candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", version = "0.10.1", rev = "1f67d14" }
+candle-flash-attn = { git = "https://github.com/huggingface/candle.git", version = "0.10.1", rev = "1f67d14" }
+candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.10.1", rev = "1f67d14" }
 # candle-core = { path = "../candle/candle-core" }
 # candle-nn = { path = "../candle/candle-nn" }
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }
