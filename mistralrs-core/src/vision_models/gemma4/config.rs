@@ -346,8 +346,11 @@ pub struct Gemma4Config {
     pub eoi_token_id: usize,
     #[serde(default = "boa_token_id")]
     pub boa_token_id: usize,
-    #[serde(default = "eoa_token_id", alias = "eoa_token_index")]
+    #[serde(default = "eoa_token_id")]
     pub eoa_token_id: usize,
+    /// Ignored duplicate of `eoa_token_id` present in some config files.
+    #[serde(default, rename = "eoa_token_index")]
+    _eoa_token_index: Option<usize>,
     pub audio_ms_per_token: Option<usize>,
     pub vision_soft_tokens_per_image: Option<usize>,
 }
