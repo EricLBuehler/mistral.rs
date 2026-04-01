@@ -1582,21 +1582,17 @@ impl TextModel {
         causal_mask: &Tensor,
         input_ids: &Tensor,
         image_token_id: usize,
-        video_token_id: Option<usize>,
+        _video_token_id: Option<usize>,
     ) -> Result<Tensor> {
         let (_, seq_len) = input_ids.dims2()?;
         let total_len = causal_mask.dim(1)?;
         let past_kv_len = total_len - seq_len;
 
         let input_ids_1d = input_ids.squeeze(0)?;
-        let is_image = input_ids_1d
-            .eq(image_token_id as f64)?;
-        let is_vision = if let Some(vid_id) = video_token_id {
-            is_image.add(&input_ids_1d.eq(vid_id as f64)?)?
-        } else {
-            is_image
-        };
-        let is_image_vec: Vec<u32> = is_vision
+        // Only image tokens get bidirectional attention — HF's mask function checks
+        // `(token_type_ids == 1)` which is image-only, NOT video (type 2).
+        let is_image = input_ids_1d.eq(image_token_id as f64)?;
+        let is_image_vec: Vec<u32> = is_image
             .to_dtype(candle_core::DType::U32)?
             .to_vec1()?;
         let mut group_ids = vec![-1i64; seq_len];
