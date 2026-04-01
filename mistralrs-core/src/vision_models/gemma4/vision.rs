@@ -747,6 +747,13 @@ impl VisionTower {
             uvb_enc.pp("layers").pp(i).extend(layer.residual_tensors());
         }
 
+        if let Some(ref std_bias) = self.std_bias {
+            uvb.add_tensor("std_bias", std_bias.clone());
+        }
+        if let Some(ref std_scale) = self.std_scale {
+            uvb.add_tensor("std_scale", std_scale.clone());
+        }
+
         uvb.to_safetensors()
     }
 }

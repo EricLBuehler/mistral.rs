@@ -1452,11 +1452,9 @@ impl TextModel {
         let per_layer_inputs = self.compute_ple(ple_input_ids, &xs)?;
 
         // Larger Gemma 4 variants use a mixed causal/bidirectional mask for
-        // image soft tokens during prefill. Flash attention cannot consume that
-        // per-token override, so we materialize real masks and bypass flash only
-        // when image tokens are actually present. `has_images` is true only when
-        // pixel_values (images) were provided — video tokens don't get bidirectional
-        // attention so video-only inputs skip this path and use native flash.
+        // vision (image + video) soft tokens during prefill. Flash attention
+        // cannot consume per-token overrides, so we materialize real masks when
+        // any vision tokens are present (`has_images` covers both modalities).
         let has_bidirectional =
             self.use_bidirectional_vision_attention && has_images && input_ids.dim(1)? > 1;
         let mask_cache: &dyn PastKvLenCache = metadata
