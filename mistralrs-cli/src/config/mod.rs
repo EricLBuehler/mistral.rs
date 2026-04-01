@@ -47,8 +47,8 @@ pub struct RunConfig {
     pub paged_attn: PagedAttentionOptions,
     #[serde(default)]
     pub models: Vec<ModelEntry>,
-    #[serde(default)]
-    pub enable_thinking: bool,
+    #[serde(default, alias = "enable_thinking")]
+    pub thinking: Option<bool>,
 }
 
 #[derive(Deserialize, Default, Clone)]

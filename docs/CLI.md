@@ -55,7 +55,7 @@ Note: `MODEL_TYPE` is optional and defaults to `auto` if not specified. This all
 mistralrs run -m Qwen/Qwen3-4B
 
 # Run with thinking mode enabled
-mistralrs run -m Qwen/Qwen3-4B --enable-thinking
+mistralrs run -m Qwen/Qwen3-4B --thinking
 
 # Run a multimodal model
 mistralrs run -m google/gemma-3-4b-it
@@ -92,7 +92,7 @@ mistralrs run -m google/gemma-3-4b-it --image https://example.com/photo.jpg -i "
 
 | Option | Description |
 |--------|-------------|
-| `--enable-thinking` | Enable thinking mode for models that support it |
+| `--thinking [true\|false]` | Control thinking mode. `--thinking` forces on, `--thinking false` forces off. Omit to use chat template default. |
 | `-i, --input <TEXT>` | One-shot prompt. Sends a single request and exits instead of entering interactive mode |
 | `--image <URL\|PATH>` | Image file path or URL to include (repeatable, requires `-i`) |
 | `--video <URL\|PATH>` | Video file path or URL to include (repeatable, requires `-i`) |
@@ -815,13 +815,17 @@ mistralrs run -m Qwen/Qwen3-4B --enable-search --search-embedding-model embeddin
 
 ### Thinking Mode
 
-Enable thinking/reasoning mode for models that support it (like DeepSeek, Qwen3).
+Control thinking/reasoning mode for models that support it (like DeepSeek, Qwen3).
 
 ```bash
-mistralrs run -m Qwen/Qwen3-4B --enable-thinking
+# Force thinking on (equivalent to --thinking true)
+mistralrs run -m Qwen/Qwen3-4B --thinking
+
+# Force thinking off
+mistralrs run -m Qwen/Qwen3-4B --thinking false
 ```
 
-`--enable-thinking` forces thinking on. If you omit it, `mistralrs run` defers to the chat template's default behavior instead of forcing thinking off. Templates with an explicit `enable_thinking` toggle use the repository fallback of `true` when the flag is omitted.
+`--thinking` (or `--thinking true`) forces thinking on. `--thinking false` forces thinking off. If you omit the flag entirely, `mistralrs run` defers to the chat template's default behavior. Templates with an explicit thinking toggle use the repository fallback of `true` when no override is provided.
 
 In interactive mode, thinking content is displayed in gray text before the final response.
 

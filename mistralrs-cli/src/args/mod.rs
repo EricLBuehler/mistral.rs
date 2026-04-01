@@ -62,9 +62,11 @@ pub enum Command {
         #[command(flatten)]
         runtime: RuntimeOptions,
 
-        /// Enable thinking mode for models that support it
-        #[arg(long)]
-        enable_thinking: bool,
+        /// Control thinking mode for models that support it.
+        /// Use --thinking or --thinking true to force on, --thinking false to force off.
+        /// Omit to defer to the chat template default.
+        #[arg(long, num_args = 0..=1, default_missing_value = "true", value_parser = clap::value_parser!(bool))]
+        thinking: Option<bool>,
 
         /// One-shot text prompt. When provided, sends a single request and exits
         /// instead of entering interactive mode.

@@ -22,7 +22,7 @@ pub async fn run_interactive(
     model_type: ModelType,
     runtime: RuntimeOptions,
     global: GlobalOptions,
-    enable_thinking: bool,
+    thinking: Option<bool>,
     input: Option<String>,
     images: Vec<String>,
     videos: Vec<String>,
@@ -84,14 +84,12 @@ pub async fn run_interactive(
 
     let mistralrs = builder.build().await?;
 
-    let enable_thinking = if enable_thinking { Some(true) } else { None };
-
     if let Some(text) = input {
         info!("Model loaded, running one-shot mode...");
         interactive::oneshot_mode(
             mistralrs.clone(),
             runtime.enable_search,
-            enable_thinking,
+            thinking,
             OneshotInput {
                 text,
                 images,
@@ -105,7 +103,7 @@ pub async fn run_interactive(
         interactive::interactive_mode(
             mistralrs.clone(),
             runtime.enable_search,
-            enable_thinking,
+            thinking,
         )
         .await;
     }

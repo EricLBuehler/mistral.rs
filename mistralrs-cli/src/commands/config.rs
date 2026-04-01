@@ -125,7 +125,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         runtime,
         paged_attn,
         models,
-        enable_thinking,
+        thinking,
     } = cfg;
 
     let global = global.to_global_options()?;
@@ -185,7 +185,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
     interactive_mode(
         mistralrs.clone(),
         runtime.enable_search,
-        if enable_thinking { Some(true) } else { None },
+        thinking,
     )
     .await;
 

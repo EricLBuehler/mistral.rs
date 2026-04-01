@@ -35,7 +35,7 @@ in_situ_quant = "q4k"
 | Option | Commands | Description |
 |--------|----------|-------------|
 | `command` | all | Required. Either `"serve"` or `"run"` |
-| `enable_thinking` | run | Force thinking mode on. If omitted or `false`, the run command defers to the chat template default instead of forcing thinking off. |
+| `thinking` | run | Control thinking mode. Set to `true` to force on, `false` to force off. Omit to defer to chat template default. |
 | `default_model_id` | serve | Default model ID for API requests (must match a model_id in [[models]]) |
 
 ### [global] Section
@@ -199,7 +199,7 @@ model_id = "google/embeddinggemma-300m"
 
 ```toml
 command = "run"
-enable_thinking = true
+thinking = true
 
 [runtime]
 max_seqs = 16
@@ -209,7 +209,7 @@ kind = "auto"
 model_id = "Qwen/Qwen3-4B"
 ```
 
-If `enable_thinking` is omitted or set to `false`, `mistralrs from-config` does not force thinking off. It passes through the chat template default instead. Templates with an explicit `enable_thinking` toggle use the repository fallback of `true` when the flag is omitted.
+Set `thinking = true` to force thinking on, `thinking = false` to force thinking off. If omitted, `mistralrs from-config` defers to the chat template default. Templates with an explicit thinking toggle use the repository fallback of `true` when no override is provided.
 
 ### GGUF Model
 
