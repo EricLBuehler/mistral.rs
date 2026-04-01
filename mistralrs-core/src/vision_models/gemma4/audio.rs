@@ -39,7 +39,19 @@ impl Gemma4AudioRelativePositionEmbedding {
             vb.pp("relative_k_proj"),
         )?;
 
-        let inv_timescales = Tensor::ones((1, 1, num_timescales), DType::F32, vb.device())?;
+        // HF's _init_weights overwrites the initial ones buffer with the
+        // standard sinusoidal timescale formula (min=1, max=10000).
+        let min_timescale = 1.0_f64;
+        let max_timescale = 10_000.0_f64;
+        let log_timescale_increment =
+            (max_timescale / min_timescale).ln() / num_timescales.saturating_sub(1).max(1) as f64;
+        let inv_timescales = Tensor::from_vec(
+            (0..num_timescales)
+                .map(|i| (min_timescale * (-log_timescale_increment * i as f64).exp()) as f32)
+                .collect::<Vec<_>>(),
+            (1, 1, num_timescales),
+            vb.device(),
+        )?;
         let pos_values = (-(max_forward as i64)..=max_backward as i64)
             .rev()
             .collect::<Vec<_>>();
