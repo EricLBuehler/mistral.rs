@@ -25,7 +25,7 @@ use crate::{
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata, NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
@@ -1310,7 +1310,7 @@ impl AnyMoeBaseModelMixin for Idefics2 {
     }
 }
 
-impl VisionModel for Idefics2 {
+impl MultimodalModel for Idefics2 {
     fn forward(
         &self,
         input_ids: &Tensor,

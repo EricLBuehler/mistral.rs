@@ -6,7 +6,7 @@ use axum::{
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::stream::StreamExt;
 use mistralrs::{
-    Model, RequestBuilder, TextMessageRole, TextMessages, VisionMessages, WebSearchOptions,
+    Model, MultimodalMessages, RequestBuilder, TextMessageRole, TextMessages, WebSearchOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -39,9 +39,9 @@ pub struct MessageGenerationParams {
 }
 
 const CLEAR_CMD: &str = "__CLEAR__";
-/// Context for managing vision messages and image buffer.
-pub struct VisionContext<'a> {
-    pub msgs: &'a mut VisionMessages,
+/// Context for managing multimodal messages and image buffer.
+pub struct MultimodalContext<'a> {
+    pub msgs: &'a mut MultimodalMessages,
     pub image_buffer: &'a mut Vec<image::DynamicImage>,
     pub audio_buffer: &'a mut Vec<AudioInput>,
 }
@@ -205,7 +205,7 @@ fn validate_audio_path(path: &str) -> Result<String, &'static str> {
 /// Per-connection task.
 pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
     let mut text_msgs = TextMessages::new();
-    let mut vision_msgs = VisionMessages::new();
+    let mut multimodal_msgs = MultimodalMessages::new();
     let mut image_buffer: Vec<image::DynamicImage> = Vec::new();
     let mut audio_buffer: Vec<AudioInput> = Vec::new();
     // `true` while we are streaming a reply back to the client.
@@ -224,7 +224,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 if active_chat_id.as_deref() != Some(id) {
                     active_chat_id = Some(id.to_string());
                     text_msgs = TextMessages::new();
-                    vision_msgs = VisionMessages::new();
+                    multimodal_msgs = MultimodalMessages::new();
                     image_buffer.clear();
                     system_prompt_added = false;
                 }
@@ -254,7 +254,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                     .await;
             } else {
                 text_msgs = TextMessages::new();
-                vision_msgs = VisionMessages::new();
+                multimodal_msgs = MultimodalMessages::new();
                 image_buffer.clear();
                 system_prompt_added = false;
                 let _ = socket.send(Message::Text("[Context cleared]".into())).await;
@@ -267,7 +267,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 &user_msg,
                 &app,
                 &mut text_msgs,
-                &mut vision_msgs,
+                &mut multimodal_msgs,
                 &mut image_buffer,
             )
             .await;
@@ -318,7 +318,8 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 if !system_prompt_added {
                     if let Some(ref prompt) = system_prompt {
                         text_msgs = text_msgs.add_message(TextMessageRole::System, prompt);
-                        vision_msgs = vision_msgs.add_message(TextMessageRole::System, prompt);
+                        multimodal_msgs =
+                            multimodal_msgs.add_message(TextMessageRole::System, prompt);
                     }
                     system_prompt_added = true;
                 }
@@ -342,9 +343,9 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                         )
                         .await;
                     }
-                    LoadedModel::Vision(model) => {
-                        let mut vision_ctx = VisionContext {
-                            msgs: &mut vision_msgs,
+                    LoadedModel::Multimodal(model) => {
+                        let mut multimodal_ctx = MultimodalContext {
+                            msgs: &mut multimodal_msgs,
                             image_buffer: &mut image_buffer,
                             audio_buffer: &mut audio_buffer,
                         };
@@ -356,11 +357,11 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                             gen_params: gen_params.clone(),
                             system_prompt: &system_prompt,
                         };
-                        handle_vision_model(
+                        handle_multimodal_model(
                             &model,
                             content,
                             web_search_opts.clone(),
-                            &mut vision_ctx,
+                            &mut multimodal_ctx,
                             &mut params,
                         )
                         .await;
@@ -397,7 +398,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
         if !system_prompt_added {
             if let Some(ref prompt) = system_prompt {
                 text_msgs = text_msgs.add_message(TextMessageRole::System, prompt);
-                vision_msgs = vision_msgs.add_message(TextMessageRole::System, prompt);
+                multimodal_msgs = multimodal_msgs.add_message(TextMessageRole::System, prompt);
             }
             system_prompt_added = true;
         }
@@ -414,9 +415,9 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 };
                 handle_text_model(&model, &user_msg, None, &mut text_msgs, &mut params).await;
             }
-            LoadedModel::Vision(model) => {
-                let mut vision_ctx = VisionContext {
-                    msgs: &mut vision_msgs,
+            LoadedModel::Multimodal(model) => {
+                let mut multimodal_ctx = MultimodalContext {
+                    msgs: &mut multimodal_msgs,
                     image_buffer: &mut image_buffer,
                     audio_buffer: &mut audio_buffer,
                 };
@@ -428,7 +429,8 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                     gen_params: None,
                     system_prompt: &system_prompt,
                 };
-                handle_vision_model(&model, &user_msg, None, &mut vision_ctx, &mut params).await;
+                handle_multimodal_model(&model, &user_msg, None, &mut multimodal_ctx, &mut params)
+                    .await;
             }
             // Speech models should use HTTP endpoint; not handled here
             LoadedModel::Speech(_) => {
@@ -446,7 +448,7 @@ async fn handle_restore_message(
     user_msg: &str,
     app: &Arc<AppState>,
     text_msgs: &mut TextMessages,
-    vision_msgs: &mut VisionMessages,
+    multimodal_msgs: &mut MultimodalMessages,
     image_buffer: &mut Vec<image::DynamicImage>,
 ) {
     if let Ok(val) = serde_json::from_str::<Value>(user_msg) {
@@ -474,7 +476,7 @@ async fn handle_restore_message(
                                     content,
                                 );
                             }
-                            LoadedModel::Vision(_model) => {
+                            LoadedModel::Multimodal(_model) => {
                                 let role_enum = if role == "assistant" {
                                     TextMessageRole::Assistant
                                 } else {
@@ -506,7 +508,7 @@ async fn handle_restore_message(
                                         }
                                     }
                                     // Restore as an image message
-                                    *vision_msgs = vision_msgs.clone().add_image_message(
+                                    *multimodal_msgs = multimodal_msgs.clone().add_image_message(
                                         role_enum,
                                         content,
                                         image_buffer.clone(),
@@ -514,8 +516,8 @@ async fn handle_restore_message(
                                     // Clear buffer after use
                                     image_buffer.clear();
                                 } else {
-                                    *vision_msgs =
-                                        vision_msgs.clone().add_message(role_enum, content);
+                                    *multimodal_msgs =
+                                        multimodal_msgs.clone().add_message(role_enum, content);
                                 }
                             }
                             // Speech models do not support context restore over WebSocket
@@ -583,11 +585,11 @@ async fn handle_text_model(
     }
 }
 
-async fn handle_vision_model(
+async fn handle_multimodal_model(
     model: &Arc<Model>,
     user_msg: &str,
     web_search_opts: Option<WebSearchOptions>,
-    vision_ctx: &mut VisionContext<'_>,
+    multimodal_ctx: &mut MultimodalContext<'_>,
     params: &mut HandlerParams<'_>,
 ) {
     let socket = &mut *params.socket;
@@ -595,8 +597,8 @@ async fn handle_vision_model(
     let streaming = &mut *params.streaming;
     let active_chat_id = params.active_chat_id;
     // Track the exact set of messages that will be sent *this* turn.
-    let msgs_for_stream: Option<VisionMessages>;
-    // --- Vision input routing ---
+    let msgs_for_stream: Option<MultimodalMessages>;
+    // --- Multimodal input routing ---
     if let Ok(val) = serde_json::from_str::<Value>(user_msg) {
         // Case 1a: pure image payload => buffer it and wait for a prompt
         if let Some(url) = val.get("image").and_then(|v| v.as_str()) {
@@ -606,7 +608,7 @@ async fn handle_vision_model(
                     match tokio::fs::read(&safe_path).await {
                         Ok(bytes) => match image::load_from_memory(&bytes) {
                             Ok(img) => {
-                                vision_ctx.image_buffer.push(img);
+                                multimodal_ctx.image_buffer.push(img);
                             }
                             Err(e) => {
                                 error!("image decode error: {}", e);
@@ -640,7 +642,7 @@ async fn handle_vision_model(
                 Ok(safe_path) => match tokio::fs::read(&safe_path).await {
                     Ok(bytes) => match AudioInput::from_bytes(&bytes) {
                         Ok(audio) => {
-                            vision_ctx.audio_buffer.push(audio);
+                            multimodal_ctx.audio_buffer.push(audio);
                         }
                         Err(e) => {
                             error!("audio decode error: {}", e);
@@ -668,11 +670,11 @@ async fn handle_vision_model(
             return;
         } else {
             // Fallback: treat whole JSON as text
-            *vision_ctx.msgs = vision_ctx
+            *multimodal_ctx.msgs = multimodal_ctx
                 .msgs
                 .clone()
                 .add_message(TextMessageRole::User, user_msg);
-            msgs_for_stream = Some(vision_ctx.msgs.clone());
+            msgs_for_stream = Some(multimodal_ctx.msgs.clone());
             if let Some(chat_id) = active_chat_id {
                 if let Err(e) = append_chat_message(app, chat_id, "user", user_msg, None).await {
                     error!("chat save error: {}", e);
@@ -681,13 +683,13 @@ async fn handle_vision_model(
         }
     } else {
         // Plain-text prompt arrives here
-        if vision_ctx.image_buffer.is_empty() && vision_ctx.audio_buffer.is_empty() {
-            *vision_ctx.msgs = vision_ctx
+        if multimodal_ctx.image_buffer.is_empty() && multimodal_ctx.audio_buffer.is_empty() {
+            *multimodal_ctx.msgs = multimodal_ctx
                 .msgs
                 .clone()
                 .add_message(TextMessageRole::User, user_msg);
             // Send the text‑only context to the model
-            msgs_for_stream = Some(vision_ctx.msgs.clone());
+            msgs_for_stream = Some(multimodal_ctx.msgs.clone());
             if let Some(chat_id) = active_chat_id {
                 if let Err(e) = append_chat_message(app, chat_id, "user", user_msg, None).await {
                     error!("chat save error: {}", e);
@@ -695,22 +697,22 @@ async fn handle_vision_model(
             }
         } else {
             // Prepare multimodal message with images and/or audios
-            let temp_msgs = vision_ctx.msgs.clone().add_multimodal_message(
+            let temp_msgs = multimodal_ctx.msgs.clone().add_multimodal_message(
                 TextMessageRole::User,
                 user_msg,
-                vision_ctx.image_buffer.clone(),
-                vision_ctx.audio_buffer.clone(),
+                multimodal_ctx.image_buffer.clone(),
+                multimodal_ctx.audio_buffer.clone(),
             );
             // Keep the *text‑only* conversation in our long‑term state,
             // but build a one‑off request that includes images.
-            *vision_ctx.msgs = vision_ctx
+            *multimodal_ctx.msgs = multimodal_ctx
                 .msgs
                 .clone()
                 .add_message(TextMessageRole::User, user_msg);
             msgs_for_stream = Some(temp_msgs.clone());
             // ---- persist user message with images ----
             let mut imgs_b64 = Vec::new();
-            for img in vision_ctx.image_buffer.iter() {
+            for img in multimodal_ctx.image_buffer.iter() {
                 let mut buf = Vec::new();
                 if img
                     .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
@@ -736,8 +738,8 @@ async fn handle_vision_model(
                     error!("chat save error: {}", e);
                 }
             }
-            vision_ctx.image_buffer.clear();
-            vision_ctx.audio_buffer.clear();
+            multimodal_ctx.image_buffer.clear();
+            multimodal_ctx.audio_buffer.clear();
         }
     }
 
@@ -758,8 +760,8 @@ async fn handle_vision_model(
         socket,
         |tok| {
             assistant_content = tok.to_string();
-            let cur = mem::take(vision_ctx.msgs);
-            *vision_ctx.msgs = cur.add_message(TextMessageRole::Assistant, tok);
+            let cur = mem::take(multimodal_ctx.msgs);
+            *multimodal_ctx.msgs = cur.add_message(TextMessageRole::Assistant, tok);
         },
         || *streaming = false,
     )

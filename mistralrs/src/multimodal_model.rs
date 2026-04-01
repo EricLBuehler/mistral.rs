@@ -10,12 +10,12 @@ use std::{
     sync::Arc,
 };
 
-use crate::model_builder_trait::{build_model_from_pipeline, build_vision_pipeline};
+use crate::model_builder_trait::{build_model_from_pipeline, build_multimodal_pipeline};
 use crate::Model;
 
 #[derive(Clone)]
-/// Configure a vision model with the various parameters for loading, running, and other inference behaviors.
-pub struct VisionModelBuilder {
+/// Configure a multimodal model with the various parameters for loading, running, and other inference behaviors.
+pub struct MultimodalModelBuilder {
     // Loading model
     pub(crate) model_id: String,
     pub(crate) token_source: TokenSource,
@@ -42,7 +42,7 @@ pub struct VisionModelBuilder {
     // Model running
     pub(crate) topology: Option<Topology>,
     pub(crate) topology_path: Option<String>,
-    pub(crate) loader_type: Option<VisionLoaderType>,
+    pub(crate) loader_type: Option<MultimodalLoaderType>,
     pub(crate) dtype: ModelDType,
     pub(crate) force_cpu: bool,
     pub(crate) isq: Option<IsqSetting>,
@@ -55,7 +55,7 @@ pub struct VisionModelBuilder {
     pub(crate) prefix_cache_n: Option<usize>,
 }
 
-impl VisionModelBuilder {
+impl MultimodalModelBuilder {
     /// A few defaults are applied here:
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
@@ -103,13 +103,13 @@ impl VisionModelBuilder {
 
     /// Manually set the model loader type. Otherwise, it will attempt to automatically
     /// determine the loader type.
-    pub fn with_loader_type(mut self, loader_type: VisionLoaderType) -> Self {
+    pub fn with_loader_type(mut self, loader_type: MultimodalLoaderType) -> Self {
         self.loader_type = Some(loader_type);
         self
     }
 
     #[deprecated(
-        note = "Use `UqffVisionModelBuilder` to load a UQFF model instead of the generic `from_uqff`"
+        note = "Use `UqffMultimodalModelBuilder` to load a UQFF model instead of the generic `from_uqff`"
     )]
     /// Path to read a `.uqff` file from. Other necessary configuration files must be present at this location.
     ///
@@ -130,19 +130,20 @@ impl VisionModelBuilder {
         self
     }
 
-    /// Load the vision model and return a ready-to-use [`Model`].
+    /// Load the multimodal model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
-        let (pipeline, scheduler_config, add_model_config) = build_vision_pipeline(self).await?;
+        let (pipeline, scheduler_config, add_model_config) =
+            build_multimodal_pipeline(self).await?;
         Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)
     }
 }
 
 #[derive(Clone)]
-/// Configure a UQFF vision model with the various parameters for loading, running, and other inference behaviors.
-/// This wraps and implements `DerefMut` for the VisionModelBuilder, so users should take care to not call UQFF-related methods.
-pub struct UqffVisionModelBuilder(VisionModelBuilder);
+/// Configure a UQFF multimodal model with the various parameters for loading, running, and other inference behaviors.
+/// This wraps and implements `DerefMut` for the MultimodalModelBuilder, so users should take care to not call UQFF-related methods.
+pub struct UqffMultimodalModelBuilder(MultimodalModelBuilder);
 
-impl UqffVisionModelBuilder {
+impl UqffMultimodalModelBuilder {
     /// A few defaults are applied here:
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
@@ -152,38 +153,38 @@ impl UqffVisionModelBuilder {
     /// (e.g., `q4k-0.uqff`). The remaining shards are auto-discovered from the
     /// same directory or Hugging Face repository.
     pub fn new(model_id: impl ToString, uqff_file: Vec<PathBuf>) -> Self {
-        let mut inner = VisionModelBuilder::new(model_id);
+        let mut inner = MultimodalModelBuilder::new(model_id);
         inner.from_uqff = Some(uqff_file);
         Self(inner)
     }
 
-    /// Load the UQFF vision model and return a ready-to-use [`Model`].
+    /// Load the UQFF multimodal model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         self.0.build().await
     }
 
-    /// Unwrap into the inner [`VisionModelBuilder`]. Take care not to call UQFF-related methods on it.
-    pub fn into_inner(self) -> VisionModelBuilder {
+    /// Unwrap into the inner [`MultimodalModelBuilder`]. Take care not to call UQFF-related methods on it.
+    pub fn into_inner(self) -> MultimodalModelBuilder {
         self.0
     }
 }
 
-impl Deref for UqffVisionModelBuilder {
-    type Target = VisionModelBuilder;
+impl Deref for UqffMultimodalModelBuilder {
+    type Target = MultimodalModelBuilder;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl DerefMut for UqffVisionModelBuilder {
+impl DerefMut for UqffMultimodalModelBuilder {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl From<UqffVisionModelBuilder> for VisionModelBuilder {
-    fn from(value: UqffVisionModelBuilder) -> Self {
+impl From<UqffMultimodalModelBuilder> for MultimodalModelBuilder {
+    fn from(value: UqffMultimodalModelBuilder) -> Self {
         value.0
     }
 }

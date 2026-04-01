@@ -143,7 +143,7 @@ mistralrs doctor
 </details>
 
 <details>
-<summary><b>Vision Models</b></summary>
+<summary><b>Multimodal Models</b></summary>
 
 - Qwen 3.5
 - Qwen 3.5 MoE
@@ -221,11 +221,11 @@ cargo add mistralrs
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, TextMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, TextMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("google/gemma-3-4b-it")
+    let model = MultimodalModelBuilder::new("google/gemma-3-4b-it")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()

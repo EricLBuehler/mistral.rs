@@ -20,7 +20,7 @@ use crate::{
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
     },
 };
 
@@ -519,7 +519,7 @@ pub(crate) struct Qwen2VLVisionSpecificArgs {
     pub image_hashes: Vec<u64>,
 }
 
-impl VisionModel for Qwen2VLModel {
+impl MultimodalModel for Qwen2VLModel {
     fn forward(
         &self,
         input_ids: &Tensor,

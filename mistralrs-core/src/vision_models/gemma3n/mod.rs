@@ -15,7 +15,7 @@ use crate::{
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -85,12 +85,12 @@ impl Gemma3nModel {
         )?;
 
         // Initialize vision tower and embedder
-        let vision_cfg = &cfg.vision_config;
+        let multimodal_cfg = &cfg.vision_config;
         let embed_vision = Gemma3nMultimodalEmbedder::new(
             &cfg.text_config,
-            vision_cfg.vocab_size,
-            vision_cfg.hidden_size,
-            vision_cfg.vocab_offset,
+            multimodal_cfg.vocab_size,
+            multimodal_cfg.hidden_size,
+            multimodal_cfg.vocab_offset,
             normal_loading_metadata
                 .mapper
                 .set_nm_device(vb.pp("embed_vision"), false),
@@ -496,7 +496,7 @@ pub struct Gemma3nSpecificArgs {
     pub audio_hashes: Vec<u64>,
 }
 
-impl VisionModel for Gemma3nModel {
+impl MultimodalModel for Gemma3nModel {
     fn forward(
         &self,
         input_ids: &Tensor,

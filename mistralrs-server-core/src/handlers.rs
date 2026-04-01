@@ -296,10 +296,10 @@ pub struct TuneModelRequest {
     /// Optional max batch size for tuning
     #[serde(default)]
     pub max_batch_size: Option<usize>,
-    /// Optional max num images (vision)
+    /// Optional max num images (multimodal)
     #[serde(default)]
     pub max_num_images: Option<usize>,
-    /// Optional max image length (vision)
+    /// Optional max image length (multimodal)
     #[serde(default)]
     pub max_image_length: Option<usize>,
     /// Optional tuning profile

@@ -1,6 +1,6 @@
 //! Audio utilities for `mistral.rs`.
 //!
-//! This crate mirrors `mistralrs-vision` and focuses on audio specific
+//! This crate mirrors the `mistralrs-vision` crate and focuses on audio specific
 //! functionality such as reading audio data, resampling and computing
 //! mel spectrogram features.
 

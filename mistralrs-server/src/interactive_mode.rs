@@ -82,8 +82,8 @@ pub async fn interactive_mode(
         Ok(ModelCategory::Text) => {
             text_interactive_mode(mistralrs, do_search, enable_thinking).await
         }
-        Ok(ModelCategory::Vision { .. }) => {
-            vision_interactive_mode(mistralrs, do_search, enable_thinking).await
+        Ok(ModelCategory::Multimodal { .. }) => {
+            multimodal_interactive_mode(mistralrs, do_search, enable_thinking).await
         }
         Ok(ModelCategory::Diffusion) => diffusion_interactive_mode(mistralrs, do_search).await,
         Ok(ModelCategory::Audio) => {
@@ -115,7 +115,7 @@ Welcome to interactive mode! Because this model is a text model, you can enter p
 "#;
 
 const VISION_INTERACTIVE_HELP: &str = r#"
-Welcome to interactive mode! Because this model is a vision model, you can enter prompts and chat with the model.
+Welcome to interactive mode! Because this model is a multimodal model, you can enter prompts and chat with the model.
 
 To specify a message with one or more images or audios, simply include the image/audio URL or path:
 
@@ -452,7 +452,7 @@ fn parse_files_and_message(input: &str, regex: &Regex) -> (Vec<String>, String) 
     (urls, text)
 }
 
-async fn vision_interactive_mode(
+async fn multimodal_interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
     enable_thinking: Option<bool>,
@@ -468,9 +468,9 @@ async fn vision_interactive_mode(
 
     let config = mistralrs.config(None).unwrap();
     let prefixer = match &config.category {
-        ModelCategory::Vision { prefixer } => prefixer,
+        ModelCategory::Multimodal { prefixer } => prefixer,
         _ => {
-            panic!("`add_image_message` expects a vision model.")
+            panic!("`add_image_message` expects a multimodal model.")
         }
     };
 
@@ -623,7 +623,7 @@ async fn vision_interactive_mode(
         // Set the handler to terminate all seqs, so allowing cancelling running
         *CTRLC_HANDLER.lock().unwrap() = &terminate_handler;
 
-        let request_messages = RequestMessage::VisionChat {
+        let request_messages = RequestMessage::MultimodalChat {
             images: images.clone(),
             audios: audios.clone(),
             messages: messages.clone(),

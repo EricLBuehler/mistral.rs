@@ -45,7 +45,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Default`
 - `MoQE`: if applicable, only quantize MoE experts. https://arxiv.org/abs/2310.02410
 
-### Architecture for vision models
+### Architecture for multimodal models
 - `Phi3V`
 - `Idefics2`
 - `LLaVaNext`
@@ -212,16 +212,16 @@ class Which(Enum):
         hf_cache_path: str | None = None
 
     @dataclass
-    class VisionPlain:
+    class MultimodalPlain:
         model_id: str
-        arch: VisionArchitecture
+        arch: MultimodalArchitecture
         tokenizer_json: str | None = None
         topology: str | None = None
         from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         max_edge: int | None = None
-        auto_map_params: VisionAutoMapParams | None = (None,)
+        auto_map_params: MultimodalAutoMapParams | None = (None,)
         calibration_file: str | None = None
         imatrix: str | None = None
         hf_cache_path: str | None = None
@@ -249,11 +249,11 @@ The `mistralrs` Python SDK supports running multiple models using the `Runner` c
 ```python
 import mistralrs
 
-# Create a Runner with a vision model (Gemma 3 4B)
+# Create a Runner with a multimodal model (Gemma 3 4B)
 runner = mistralrs.Runner(
-    which=mistralrs.Which.VisionPlain(
+    which=mistralrs.Which.MultimodalPlain(
         model_id="google/gemma-3-4b-it",
-        arch=mistralrs.VisionArchitecture.Gemma3,
+        arch=mistralrs.MultimodalArchitecture.Gemma3,
     ),
     in_situ_quant="Q4K",
 )

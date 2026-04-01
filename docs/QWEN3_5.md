@@ -1,11 +1,11 @@
-# Qwen 3.5 Vision Models
+# Qwen 3.5 Multimodal Models
 
 The Qwen 3.5 models are vision-language models using a hybrid Gated Delta Network (GDN) + full attention architecture. Both dense and MoE (Mixture of Experts) variants are supported:
 
 - **Dense**: `Qwen/Qwen3.5-27B`
 - **MoE**: `Qwen/Qwen3.5-35B-A3B`, `Qwen/Qwen3.5-397B-A17B`
 
-Mistral.rs supports the Qwen 3.5 vision model family with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements. MoE variants also support [MoQE](ISQ.md) via the `--organization moqe` flag.
+Mistral.rs supports the Qwen 3.5 multimodal model family with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements. MoE variants also support [MoQE](ISQ.md) via the `--organization moqe` flag.
 
 UQFF quantizations are also available.
 
@@ -19,7 +19,7 @@ The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/
 > Note: When using device mapping or model topology, only the text model and its layers will be managed. This is because it contains most of the model parameters.
 
 ## ToC
-- [Qwen 3.5 Vision Models](#qwen-35-vision-models)
+- [Qwen 3.5 Multimodal Models](#qwen-35-multimodal-models)
   - [ToC](#toc)
   - [Interactive mode](#interactive-mode)
   - [HTTP server](#http-server)
@@ -28,31 +28,31 @@ The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/
 
 ## Interactive mode
 
-Mistral.rs supports interactive mode for vision models! It is an easy way to interact with the model.
+Mistral.rs supports interactive mode for multimodal models! It is an easy way to interact with the model.
 
 Start up interactive mode with the Qwen 3.5 model (dense):
 
 ```
-mistralrs run vision -m Qwen/Qwen3.5-27B
+mistralrs run multimodal -m Qwen/Qwen3.5-27B
 ```
 
 Or with the MoE variant:
 
 ```
-mistralrs run vision -m Qwen/Qwen3.5-35B-A3B
+mistralrs run multimodal -m Qwen/Qwen3.5-35B-A3B
 ```
 
 ## HTTP server
 You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_5.py).
 
-We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
+We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.
 
 > Note: The image_url may be either a path, URL, or a base64 encoded string.
 
 1) Start the server
 
 ```
-mistralrs serve vision -p 1234 -m Qwen/Qwen3.5-27B
+mistralrs serve multimodal -p 1234 -m Qwen/Qwen3.5-27B
 ```
 
 2) Send a request
@@ -97,15 +97,15 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs).
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("Qwen/Qwen3.5-27B")
+    let model = MultimodalModelBuilder::new("Qwen/Qwen3.5-27B")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()
@@ -119,7 +119,7 @@ async fn main() -> Result<()> {
     };
     let image = image::load_from_memory(&bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is this?",
         vec![image],
@@ -147,24 +147,24 @@ This example demonstrates loading and sending a chat completion request with an 
 > Note: the image_url may be either a path, URL, or a base64 encoded string.
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 # Dense variant
 MODEL_ID = "Qwen/Qwen3.5-27B"
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id=MODEL_ID,
-        arch=VisionArchitecture.Qwen3_5,
+        arch=MultimodalArchitecture.Qwen3_5,
     ),
 )
 
 # For MoE variant, use:
 # MODEL_ID = "Qwen/Qwen3.5-35B-A3B"
 # runner = Runner(
-#     which=Which.VisionPlain(
+#     which=Which.MultimodalPlain(
 #         model_id=MODEL_ID,
-#         arch=VisionArchitecture.Qwen3_5Moe,
+#         arch=MultimodalArchitecture.Qwen3_5Moe,
 #     ),
 # )
 

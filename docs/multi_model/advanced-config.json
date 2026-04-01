@@ -6,9 +6,9 @@
     },
     "in_situ_quant": "8"
   },
-  "gemma3-4b-vision": {
-    "alias": "gemma3-4b-vision",
-    "VisionPlain": {
+  "gemma3-4b-multimodal": {
+    "alias": "gemma3-4b-multimodal",
+    "MultimodalPlain": {
       "model_id": "google/gemma-3-4b-it"
     },
     "in_situ_quant": "4"

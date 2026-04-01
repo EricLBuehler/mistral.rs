@@ -415,12 +415,12 @@ pub async fn parse_request(
                             })
                             .collect::<Vec<_>>();
 
-                        // Apply prefixer to text content if this is a vision model with images/audio
+                        // Apply prefixer to text content if this is a multimodal model with images/audio
                         // This matches the behavior of interactive mode which auto-inserts media tokens
                         let text_content = if !image_urls_iter.is_empty()
                             || !audio_urls_iter.is_empty()
                         {
-                            if let Ok(ModelCategory::Vision { prefixer }) =
+                            if let Ok(ModelCategory::Multimodal { prefixer }) =
                                 state.get_model_category(None)
                             {
                                 let mut prefixed = text_content;
@@ -503,7 +503,7 @@ pub async fn parse_request(
                     audios.push(audio);
                 }
 
-                RequestMessage::VisionChat {
+                RequestMessage::MultimodalChat {
                     messages,
                     images,
                     audios,

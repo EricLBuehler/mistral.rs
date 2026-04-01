@@ -214,7 +214,7 @@ pub struct DefaultModelOptions {
     pub cache: CacheOptions,
 
     #[command(flatten)]
-    pub vision: VisionOptions,
+    pub multimodal: MultimodalOptions,
 }
 
 impl DefaultModelOptions {
@@ -236,7 +236,7 @@ impl DefaultModelOptions {
             quantization: self.quantization,
             device: self.device,
             cache: self.cache,
-            vision: self.vision,
+            multimodal: self.multimodal,
         })
     }
 }
@@ -285,7 +285,7 @@ pub enum ModelType {
         cache: CacheOptions,
 
         #[command(flatten)]
-        vision: VisionOptions,
+        multimodal: MultimodalOptions,
     },
 
     /// Text generation model with explicit configuration
@@ -309,8 +309,8 @@ pub enum ModelType {
         cache: CacheOptions,
     },
 
-    /// Vision-language model
-    Vision {
+    /// Multimodal model
+    Multimodal {
         #[command(flatten)]
         model: ModelSourceOptions,
 
@@ -330,7 +330,7 @@ pub enum ModelType {
         cache: CacheOptions,
 
         #[command(flatten)]
-        vision: VisionOptions,
+        multimodal: MultimodalOptions,
     },
 
     /// Image generation model (diffusion)

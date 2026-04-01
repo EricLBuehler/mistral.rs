@@ -1,9 +1,9 @@
-//! Multi-turn conversation with a vision model across turns.
+//! Multi-turn conversation with a multimodal model across turns.
 //!
-//! Run with: `cargo run --release --example vision_multiturn -p mistralrs`
+//! Run with: `cargo run --release --example multimodal_multiturn -p mistralrs`
 
 use anyhow::Result;
-use mistralrs::{ModelBuilder, RequestBuilder, TextMessageRole, VisionMessages};
+use mistralrs::{ModelBuilder, MultimodalMessages, RequestBuilder, TextMessageRole};
 
 const MODEL_ID: &str = "Qwen/Qwen3-VL-4B-Instruct";
 
@@ -15,7 +15,7 @@ async fn main() -> Result<()> {
         .build()
         .await?;
 
-    let mut messages = VisionMessages::new().add_message(TextMessageRole::User, "Hello!");
+    let mut messages = MultimodalMessages::new().add_message(TextMessageRole::User, "Hello!");
 
     let resp = model
         .send_chat_request(RequestBuilder::from(messages.clone()).set_sampler_max_len(100))

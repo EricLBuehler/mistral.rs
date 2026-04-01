@@ -77,7 +77,7 @@ pub enum RequestMessage {
         best_of: Option<usize>,
     },
     CompletionTokens(Vec<u32>),
-    VisionChat {
+    MultimodalChat {
         #[serde(skip)] // TODO
         images: Vec<image::DynamicImage>,
         #[serde(skip)] // TODO

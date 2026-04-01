@@ -107,7 +107,7 @@ mistralrs run -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instru
 
 Check out the following examples:
 - Normal: [uqff/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/uqff/main.rs)
-- Vision: [uqff_vision/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/uqff_vision/main.rs)
+- Multimodal: [uqff_multimodal/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/quantization/uqff_multimodal/main.rs)
 
 ### Using the Python SDK
 Modify the `Which` instantiation as follows:

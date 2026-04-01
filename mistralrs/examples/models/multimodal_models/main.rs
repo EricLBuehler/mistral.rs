@@ -1,6 +1,6 @@
-/// Unified vision model example.
+/// Unified multimodal model example.
 ///
-/// Change `MODEL_ID` to run any supported vision model. Tested model IDs:
+/// Change `MODEL_ID` to run any supported multimodal model. Tested model IDs:
 ///
 /// | Model                        | MODEL_ID                                                |
 /// |------------------------------|---------------------------------------------------------|
@@ -23,9 +23,9 @@
 ///
 /// * LLaVA 1.5 requires `.with_chat_template("chat_templates/vicuna.json")`.
 ///
-/// Run with: `cargo run --release --example vision_models -p mistralrs`
+/// Run with: `cargo run --release --example multimodal_models -p mistralrs`
 use anyhow::Result;
-use mistralrs::{IsqBits, ModelBuilder, TextMessageRole, VisionMessages};
+use mistralrs::{IsqBits, ModelBuilder, MultimodalMessages, TextMessageRole};
 
 const MODEL_ID: &str = "google/gemma-3-4b-it";
 
@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
     };
     let image = image::load_from_memory(&bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         vec![image],

@@ -20,8 +20,8 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalCacheType, NormalLoadingMetadata,
-        VisionModel,
+        EitherCache, IsqModel, KvCache, MultimodalModel, NormalCache, NormalCacheType,
+        NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -1569,7 +1569,7 @@ impl IsqModel for TextModel {
     }
 }
 
-impl VisionModel for TextModel {
+impl MultimodalModel for TextModel {
     fn forward(
         &self,
         _input_ids: &Tensor,

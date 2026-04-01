@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use crate::args::{
     AdapterOptions, CacheOptions, DeviceOptions, FormatOptions, GlobalOptions, ModelSourceOptions,
-    ModelType, PagedAttentionOptions, QuantizationOptions, RuntimeOptions, ServerOptions,
-    VisionOptions,
+    ModelType, MultimodalOptions, PagedAttentionOptions, QuantizationOptions, RuntimeOptions,
+    ServerOptions,
 };
 use mistralrs_core::{ModelDType, NormalLoaderType, TokenSource};
 
@@ -66,7 +66,7 @@ pub struct GlobalOptionsToml {
 pub enum ModelKind {
     Auto,
     Text,
-    Vision,
+    Multimodal,
     Diffusion,
     Speech,
     Embedding,
@@ -91,7 +91,7 @@ pub struct ModelEntry {
     #[serde(default)]
     pub device: DeviceOptionsToml,
     #[serde(default)]
-    pub vision: VisionOptions,
+    pub multimodal: MultimodalOptions,
     #[serde(default)]
     pub chat_template: Option<PathBuf>,
     #[serde(default)]
@@ -226,7 +226,7 @@ impl ModelEntry {
                 quantization: self.quantization.clone(),
                 device,
                 cache,
-                vision: self.vision.clone(),
+                multimodal: self.multimodal.clone(),
             },
             ModelKind::Text => ModelType::Text {
                 model,
@@ -236,14 +236,14 @@ impl ModelEntry {
                 device,
                 cache,
             },
-            ModelKind::Vision => ModelType::Vision {
+            ModelKind::Multimodal => ModelType::Multimodal {
                 model,
                 format: self.format.clone(),
                 adapter: self.adapter.clone(),
                 quantization: self.quantization.clone(),
                 device,
                 cache,
-                vision: self.vision.clone(),
+                multimodal: self.multimodal.clone(),
             },
             ModelKind::Diffusion => ModelType::Diffusion { model, device },
             ModelKind::Speech => ModelType::Speech { model, device },

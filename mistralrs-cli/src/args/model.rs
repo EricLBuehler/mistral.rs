@@ -139,9 +139,9 @@ pub struct DeviceOptions {
     pub max_batch_size: usize,
 }
 
-/// Vision model specific options
+/// Multimodal model specific options
 #[derive(Args, Clone, Default, Deserialize)]
-pub struct VisionOptions {
+pub struct MultimodalOptions {
     /// Maximum edge length for image resizing (aspect ratio preserved)
     #[arg(long)]
     pub max_edge: Option<u32>,

@@ -73,7 +73,7 @@ pub struct EmbeddingPipeline {
     processor: Arc<dyn Processor + Send + Sync>,
 }
 
-/// A loader for a vision (non-quantized) model.
+/// A loader for an embedding (non-quantized) model.
 pub struct EmbeddingLoader {
     inner: Box<dyn EmbeddingModelLoader>,
     model_id: String,
@@ -88,7 +88,7 @@ pub struct EmbeddingLoader {
 }
 
 #[derive(Default)]
-/// A builder for a loader for a vision (non-quantized) model.
+/// A builder for a loader for an embedding (non-quantized) model.
 pub struct EmbeddingLoaderBuilder {
     model_id: Option<String>,
     config: EmbeddingSpecificConfig,
@@ -99,7 +99,7 @@ pub struct EmbeddingLoaderBuilder {
 }
 
 #[derive(Clone, Default)]
-/// Config specific to loading a vision model.
+/// Config specific to loading an embedding model.
 pub struct EmbeddingSpecificConfig {
     pub topology: Option<Topology>,
     pub write_uqff: Option<PathBuf>,

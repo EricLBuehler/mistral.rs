@@ -40,7 +40,7 @@ pub struct DiffusionPipeline {
     dummy_cache: EitherCache,
 }
 
-/// A loader for a vision (non-quantized) model.
+/// A loader for a diffusion (non-quantized) model.
 pub struct DiffusionLoader {
     inner: Box<dyn DiffusionModelLoader>,
     model_id: String,
@@ -48,7 +48,7 @@ pub struct DiffusionLoader {
 }
 
 #[derive(Default)]
-/// A builder for a loader for a vision (non-quantized) model.
+/// A builder for a loader for a diffusion (non-quantized) model.
 pub struct DiffusionLoaderBuilder {
     model_id: Option<String>,
     kind: ModelKind,

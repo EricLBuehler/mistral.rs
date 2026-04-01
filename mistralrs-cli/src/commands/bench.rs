@@ -33,7 +33,7 @@ fn get_model_id(model_type: &ModelType) -> String {
     match model_type {
         ModelType::Auto { model, .. }
         | ModelType::Text { model, .. }
-        | ModelType::Vision { model, .. }
+        | ModelType::Multimodal { model, .. }
         | ModelType::Diffusion { model, .. }
         | ModelType::Speech { model, .. }
         | ModelType::Embedding { model, .. } => model.model_id.clone(),

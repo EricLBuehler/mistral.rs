@@ -4,8 +4,8 @@ use clap::Subcommand;
 
 use crate::{
     pipeline::{
-        AutoDeviceMapParams, EmbeddingLoaderType, IsqOrganization, NormalLoaderType,
-        VisionLoaderType,
+        AutoDeviceMapParams, EmbeddingLoaderType, IsqOrganization, MultimodalLoaderType,
+        NormalLoaderType,
     },
     DiffusionLoaderType, ModelDType, SpeechLoaderType,
 };
@@ -27,7 +27,7 @@ fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
     x.parse()
 }
 
-fn parse_vision_arch(x: &str) -> Result<VisionLoaderType, String> {
+fn parse_multimodal_arch(x: &str) -> Result<MultimodalLoaderType, String> {
     x.parse()
 }
 
@@ -95,7 +95,7 @@ pub enum ModelSelected {
         calibration_file: Option<PathBuf>,
 
         /// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
-        /// Only supported on specific vision models.
+        /// Only supported on specific multimodal models.
         #[arg(short = 'e', long)]
         max_edge: Option<u32>,
 
@@ -108,13 +108,13 @@ pub enum ModelSelected {
         max_batch_size: usize,
 
         /// Maximum prompt number of images to expect for this model. This affects automatic device mapping but is not a hard limit.
-        /// Only supported on specific vision models.
+        /// Only supported on specific multimodal models.
         #[arg(long)]
         max_num_images: Option<usize>,
 
         /// Maximum expected image size will have this edge length on both edges.
         /// This affects automatic device mapping but is not a hard limit.
-        /// Only supported on specific vision models.
+        /// Only supported on specific multimodal models.
         #[arg(long)]
         max_image_length: Option<usize>,
 
@@ -581,8 +581,8 @@ pub enum ModelSelected {
         max_batch_size: usize,
     },
 
-    /// Select a vision plain model, without quantization or adapters
-    VisionPlain {
+    /// Select a multimodal plain model, without quantization or adapters
+    MultimodalPlain {
         /// Model ID to load from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         model_id: String,
@@ -592,8 +592,8 @@ pub enum ModelSelected {
         tokenizer_json: Option<String>,
 
         /// The architecture of the model.
-        #[arg(short, long, value_parser = parse_vision_arch)]
-        arch: Option<VisionLoaderType>,
+        #[arg(short, long, value_parser = parse_multimodal_arch)]
+        arch: Option<MultimodalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]

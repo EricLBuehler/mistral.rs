@@ -19,7 +19,7 @@ The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/
 ## HTTP server
 You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v.py).
 
-We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
+We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.
 
 > Note: The image_url may be either a path, URL, or a base64 encoded string.
 
@@ -44,7 +44,7 @@ A mountain with snow on it.
 1) Start the server
 
 ```
-mistralrs serve vision -p 1234 -m microsoft/Phi-4-multimodal-instruct
+mistralrs serve multimodal -p 1234 -m microsoft/Phi-4-multimodal-instruct
 ```
 
 2) Send a request
@@ -89,18 +89,18 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs).
 
 This is a minimal example of running the Phi 4 Multimodal model with a dummy image.
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model =
-        VisionModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
+        MultimodalModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
@@ -114,7 +114,7 @@ async fn main() -> Result<()> {
     };
     let image = image::load_from_memory(&bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         vec![image],
@@ -140,12 +140,12 @@ This example demonstrates loading and sending a chat completion request with an 
 > Note: the image_url may be either a path, URL, or a base64 encoded string.
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="microsoft/Phi-4-multimodal-instruct",
-        arch=VisionArchitecture.Phi4MM,
+        arch=MultimodalArchitecture.Phi4MM,
     ),
 )
 
@@ -213,11 +213,11 @@ Audio is delivered with the `audio_url` content-type that mirrors OpenAIʼs offi
 
 ```rust
 use anyhow::Result;
-use mistralrs::{AudioInput, IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{AudioInput, IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
+    let model = MultimodalModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()
@@ -237,7 +237,7 @@ async fn main() -> Result<()> {
     .to_vec();
     let image = image::load_from_memory(&image_bytes)?;
 
-    let messages = VisionMessages::new()
+    let messages = MultimodalMessages::new()
         .add_multimodal_message(
             TextMessageRole::User,
             "Describe in detail what is happening.",

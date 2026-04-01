@@ -1,6 +1,6 @@
 /// Shared builder methods for model builders.
 ///
-/// All methods here are identical across ModelBuilder, TextModelBuilder, and VisionModelBuilder.
+/// All methods here are identical across ModelBuilder, TextModelBuilder, and MultimodalModelBuilder.
 /// Invoke via `common_builder_methods!();` inside an `impl` block.
 macro_rules! common_builder_methods {
     () => {

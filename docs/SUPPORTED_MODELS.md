@@ -28,7 +28,7 @@ Complete reference for model support in mistral.rs.
 - Llama
 - Mistral
 
-### Vision Models
+### Multimodal Models
 
 - Qwen 3-VL
 - Qwen 3-VL MoE
@@ -131,7 +131,7 @@ Complete reference for model support in mistral.rs.
 |Plain|✅|
 |GGUF|✅|
 |GGML| |
-|Vision Plain|✅|
+|Multimodal Plain|✅|
 
 ## X-LoRA and LoRA Support
 

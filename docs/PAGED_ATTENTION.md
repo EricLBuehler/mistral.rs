@@ -92,7 +92,7 @@ The prefix cache operates at the block level (not token level) for efficiency:
 **Supported models:**
 - Normal models
 - GGUF models
-- Vision models
+- Multimodal models
 
 > Note: Prefix caching is supported when using PagedAttention. Configure the number of sequences to cache on the device with:
 > - CLI: `--prefix-cache-n <N>` (default 16)

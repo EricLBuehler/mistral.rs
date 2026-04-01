@@ -1,9 +1,9 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="llava-hf/llava-v1.6-mistral-7b-hf",
-        arch=VisionArchitecture.LLaVANext,
+        arch=MultimodalArchitecture.LLaVANext,
     ),
 )
 

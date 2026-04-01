@@ -1,11 +1,11 @@
-/// Simple vision model "hello world".
+/// Simple multimodal model "hello world".
 ///
-/// For a comprehensive example with all supported vision model IDs,
-/// see `examples/models/vision_models/`.
+/// For a comprehensive example with all supported multimodal model IDs,
+/// see `examples/models/multimodal_models/`.
 ///
-/// Run with: `cargo run --release --example vision -p mistralrs`
+/// Run with: `cargo run --release --example multimodal_basic -p mistralrs`
 use anyhow::Result;
-use mistralrs::{IsqBits, ModelBuilder, TextMessageRole, VisionMessages};
+use mistralrs::{IsqBits, ModelBuilder, MultimodalMessages, TextMessageRole};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
     };
     let image = image::load_from_memory(&bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is this flower?",
         vec![image],

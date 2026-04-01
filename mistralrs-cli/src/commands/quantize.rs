@@ -17,7 +17,7 @@ fn get_isq_values(model_type: &QuantizeModelType) -> &[String] {
     match model_type {
         QuantizeModelType::Auto { quantization, .. } => &quantization.in_situ_quant,
         QuantizeModelType::Text { quantization, .. } => &quantization.in_situ_quant,
-        QuantizeModelType::Vision { quantization, .. } => &quantization.in_situ_quant,
+        QuantizeModelType::Multimodal { quantization, .. } => &quantization.in_situ_quant,
         QuantizeModelType::Embedding { quantization, .. } => &quantization.in_situ_quant,
     }
 }
@@ -27,7 +27,7 @@ fn get_output_path(model_type: &QuantizeModelType) -> &PathBuf {
     match model_type {
         QuantizeModelType::Auto { output, .. } => &output.output_path,
         QuantizeModelType::Text { output, .. } => &output.output_path,
-        QuantizeModelType::Vision { output, .. } => &output.output_path,
+        QuantizeModelType::Multimodal { output, .. } => &output.output_path,
         QuantizeModelType::Embedding { output, .. } => &output.output_path,
     }
 }
@@ -37,7 +37,7 @@ fn get_model_id(model_type: &QuantizeModelType) -> &str {
     match model_type {
         QuantizeModelType::Auto { model, .. } => &model.model_id,
         QuantizeModelType::Text { model, .. } => &model.model_id,
-        QuantizeModelType::Vision { model, .. } => &model.model_id,
+        QuantizeModelType::Multimodal { model, .. } => &model.model_id,
         QuantizeModelType::Embedding { model, .. } => &model.model_id,
     }
 }
@@ -47,7 +47,7 @@ fn get_no_readme(model_type: &QuantizeModelType) -> bool {
     match model_type {
         QuantizeModelType::Auto { output, .. } => output.no_readme,
         QuantizeModelType::Text { output, .. } => output.no_readme,
-        QuantizeModelType::Vision { output, .. } => output.no_readme,
+        QuantizeModelType::Multimodal { output, .. } => output.no_readme,
         QuantizeModelType::Embedding { output, .. } => output.no_readme,
     }
 }
@@ -57,7 +57,7 @@ fn get_readme_overrides(model_type: &QuantizeModelType) -> (Option<String>, Opti
     match model_type {
         QuantizeModelType::Auto { output, .. }
         | QuantizeModelType::Text { output, .. }
-        | QuantizeModelType::Vision { output, .. }
+        | QuantizeModelType::Multimodal { output, .. }
         | QuantizeModelType::Embedding { output, .. } => {
             (output.uqff_base_model.clone(), output.uqff_repo_id.clone())
         }
@@ -72,7 +72,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
     let base_output = get_output_path(&model_type).clone();
     let file_mode = base_output.extension().is_some_and(|ext| ext == "uqff");
     let model_id = get_model_id(&model_type).to_string();
-    let is_vision = matches!(&model_type, QuantizeModelType::Vision { .. });
+    let is_multimodal = matches!(&model_type, QuantizeModelType::Multimodal { .. });
     let no_readme = get_no_readme(&model_type);
     let (flag_base_model, flag_repo_id) = get_readme_overrides(&model_type);
 
@@ -165,7 +165,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
 
         if !no_readme {
             if let Err(e) =
-                generate_model_card(&base_output, &base_model, repo_id.as_deref(), is_vision)
+                generate_model_card(&base_output, &base_model, repo_id.as_deref(), is_multimodal)
             {
                 warn!("Failed to generate README.md: {}", e);
             }
@@ -211,7 +211,7 @@ fn generate_model_card(
     output_dir: &Path,
     base_model: &str,
     repo_id: Option<&str>,
-    is_vision: bool,
+    is_multimodal: bool,
 ) -> Result<()> {
     // Scan the output directory for .uqff files and group by prefix
     let mut groups: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
@@ -271,7 +271,11 @@ Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation
 "#
     );
 
-    let model_type_flag = if is_vision { " vision-plain" } else { "" };
+    let model_type_flag = if is_multimodal {
+        " multimodal-plain"
+    } else {
+        ""
+    };
 
     for (prefix, paths) in &groups {
         // Sort shards by numeric suffix
@@ -339,7 +343,7 @@ fn convert_to_model_selected(
             model,
             quantization,
             device,
-            vision,
+            multimodal,
             ..
         } => {
             let model_selected = ModelSelected::Run {
@@ -358,11 +362,11 @@ fn convert_to_model_selected(
                 from_uqff: None,
                 imatrix: quantization.imatrix.clone(),
                 calibration_file: quantization.calibration_file.clone(),
-                max_edge: vision.max_edge,
+                max_edge: multimodal.max_edge,
                 max_seq_len: device.max_seq_len,
                 max_batch_size: device.max_batch_size,
-                max_num_images: vision.max_num_images,
-                max_image_length: vision.max_image_length,
+                max_num_images: multimodal.max_num_images,
+                max_image_length: multimodal.max_image_length,
                 hf_cache_path: device.hf_cache.clone(),
                 matformer_config_path: None,
                 matformer_slice_name: None,
@@ -403,14 +407,14 @@ fn convert_to_model_selected(
             Ok((model_selected, device.cpu, device.device_layers.clone()))
         }
 
-        QuantizeModelType::Vision {
+        QuantizeModelType::Multimodal {
             model,
             quantization,
             device,
-            vision,
+            multimodal,
             ..
         } => {
-            let model_selected = ModelSelected::VisionPlain {
+            let model_selected = ModelSelected::MultimodalPlain {
                 model_id: model.model_id.clone(),
                 tokenizer_json: model
                     .tokenizer
@@ -424,13 +428,13 @@ fn convert_to_model_selected(
                     .map(|p| p.to_string_lossy().to_string()),
                 write_uqff: Some(output_path),
                 from_uqff: None,
-                max_edge: vision.max_edge,
+                max_edge: multimodal.max_edge,
                 calibration_file: quantization.calibration_file.clone(),
                 imatrix: quantization.imatrix.clone(),
                 max_seq_len: device.max_seq_len,
                 max_batch_size: device.max_batch_size,
-                max_num_images: vision.max_num_images.unwrap_or(1),
-                max_image_length: vision.max_image_length.unwrap_or(1024),
+                max_num_images: multimodal.max_num_images.unwrap_or(1),
+                max_image_length: multimodal.max_image_length.unwrap_or(1024),
                 hf_cache_path: device.hf_cache.clone(),
                 matformer_config_path: None,
                 matformer_slice_name: None,

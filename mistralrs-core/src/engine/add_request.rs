@@ -31,7 +31,7 @@ impl Engine {
             Request::Normal(request) => {
                 let is_chat = matches!(
                     &request.messages,
-                    RequestMessage::Chat { .. } | RequestMessage::VisionChat { .. }
+                    RequestMessage::Chat { .. } | RequestMessage::MultimodalChat { .. }
                 );
                 let has_tooling =
                     !self.tool_callbacks.is_empty() || !self.tool_callbacks_with_tools.is_empty();
@@ -60,7 +60,7 @@ impl Engine {
     pub(super) async fn add_request(&self, request: NormalRequest) {
         let is_chat = matches!(
             request.messages,
-            RequestMessage::Chat { .. } | RequestMessage::VisionChat { .. }
+            RequestMessage::Chat { .. } | RequestMessage::MultimodalChat { .. }
         );
         let echo_prompt = matches!(
             request.messages,
@@ -74,7 +74,7 @@ impl Engine {
             RequestMessage::Completion { best_of, .. } => best_of,
             RequestMessage::Chat { .. }
             | RequestMessage::CompletionTokens(_)
-            | RequestMessage::VisionChat { .. }
+            | RequestMessage::MultimodalChat { .. }
             | RequestMessage::ImageGeneration { .. }
             | RequestMessage::SpeechGeneration { .. }
             | RequestMessage::Embedding { .. }
@@ -103,9 +103,9 @@ impl Engine {
             &request.messages,
         ) {
             (
-                ModelCategory::Text | ModelCategory::Vision { .. },
+                ModelCategory::Text | ModelCategory::Multimodal { .. },
                 RequestMessage::Chat { .. }
-                | RequestMessage::VisionChat { .. }
+                | RequestMessage::MultimodalChat { .. }
                 | RequestMessage::Completion { .. }
                 | RequestMessage::CompletionTokens(_),
             ) => (),
@@ -128,12 +128,12 @@ impl Engine {
         }
 
         let images = match request.messages {
-            RequestMessage::VisionChat { ref images, .. } => Some(images.clone()),
+            RequestMessage::MultimodalChat { ref images, .. } => Some(images.clone()),
             _ => None,
         };
 
         let audios = match request.messages {
-            RequestMessage::VisionChat { ref audios, .. } => Some(audios.clone()),
+            RequestMessage::MultimodalChat { ref audios, .. } => Some(audios.clone()),
             _ => None,
         };
         let has_tools = request.tools.as_ref().is_some_and(|t| !t.is_empty());
@@ -174,7 +174,7 @@ impl Engine {
                 enable_thinking,
                 reasoning_effort,
             }
-            | RequestMessage::VisionChat {
+            | RequestMessage::MultimodalChat {
                 images: _,
                 audios: _,
                 messages,
@@ -249,7 +249,7 @@ impl Engine {
 
         if matches!(
             get_mut_arcmutex!(self.pipeline).category(),
-            ModelCategory::Text | ModelCategory::Vision { .. } | ModelCategory::Embedding
+            ModelCategory::Text | ModelCategory::Multimodal { .. } | ModelCategory::Embedding
         ) && prompt_tokens.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len
         {
             // text/vision => truncate from start
@@ -264,7 +264,10 @@ impl Engine {
                     .await
                     .unwrap_or_else(|_| warn!("Receiver disconnected"));
                 return;
-            } else if matches!(category, ModelCategory::Text | ModelCategory::Vision { .. }) {
+            } else if matches!(
+                category,
+                ModelCategory::Text | ModelCategory::Multimodal { .. }
+            ) {
                 let prompt_len = prompt_tokens.len();
                 let max_len = get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len;
                 let currently_over = prompt_len - max_len;
@@ -448,7 +451,7 @@ impl Engine {
 
             let seq_preallocated_cache = if matches!(
                 get_mut_arcmutex!(self.pipeline).category(),
-                ModelCategory::Text | ModelCategory::Vision { .. }
+                ModelCategory::Text | ModelCategory::Multimodal { .. }
             ) {
                 let (metadata, device, needs_preallocated_cache) = {
                     let pipeline = get_mut_arcmutex!(self.pipeline);

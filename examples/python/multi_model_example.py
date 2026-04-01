@@ -9,7 +9,7 @@ This example shows how to:
 5. Model loading/unloading operations
 
 Models used:
-- Vision: google/gemma-3-4b-it (VisionArchitecture.Gemma3)
+- Multimodal: google/gemma-3-4b-it (MultimodalArchitecture.Gemma3)
 - Text: Qwen/Qwen3-4B (Architecture.Qwen3)
 """
 
@@ -18,7 +18,7 @@ from mistralrs import (
     Which,
     ChatCompletionRequest,
     Architecture,
-    VisionArchitecture,
+    MultimodalArchitecture,
 )
 
 
@@ -26,11 +26,11 @@ from mistralrs import (
 def example_runner_with_model_id():
     """Demonstrate using Runner with model_id in requests."""
 
-    # Create a runner with Gemma 3 4B vision model
+    # Create a runner with Gemma 3 4B multimodal model
     runner = Runner(
-        which=Which.VisionPlain(
+        which=Which.MultimodalPlain(
             model_id="google/gemma-3-4b-it",
-            arch=VisionArchitecture.Gemma3,
+            arch=MultimodalArchitecture.Gemma3,
         ),
         in_situ_quant="Q4K",
     )
@@ -95,9 +95,9 @@ def example_unload_reload():
     """Demonstrate model unloading and reloading."""
 
     runner = Runner(
-        which=Which.VisionPlain(
+        which=Which.MultimodalPlain(
             model_id="google/gemma-3-4b-it",
-            arch=VisionArchitecture.Gemma3,
+            arch=MultimodalArchitecture.Gemma3,
         ),
         in_situ_quant="Q4K",
     )
@@ -156,20 +156,20 @@ def example_streaming_with_models():
         print()  # New line after streaming
 
 
-# Example 5: Multi-model setup with vision and text models
+# Example 5: Multi-model setup with multimodal and text models
 def example_multi_model_setup():
     """
-    Example showing a real multi-model setup with vision and text models.
+    Example showing a real multi-model setup with multimodal and text models.
 
     This example loads:
-    - Vision model: google/gemma-3-4b-it
+    - Multimodal model: google/gemma-3-4b-it
     - Text model: Qwen/Qwen3-4B
     """
-    # Load a vision model first
+    # Load a multimodal model first
     runner = Runner(
-        which=Which.VisionPlain(
+        which=Which.MultimodalPlain(
             model_id="google/gemma-3-4b-it",
-            arch=VisionArchitecture.Gemma3,
+            arch=MultimodalArchitecture.Gemma3,
         ),
         in_situ_quant="Q4K",
     )

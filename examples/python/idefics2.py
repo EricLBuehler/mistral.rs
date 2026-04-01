@@ -1,9 +1,9 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="lamm-mit/Cephalo-Idefics-2-vision-8b-beta",
-        arch=VisionArchitecture.Idefics2,
+        arch=MultimodalArchitecture.Idefics2,
     ),
 )
 

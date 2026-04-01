@@ -32,11 +32,11 @@ use mistralrs_core::{
     DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams, EmbeddingLoaderBuilder,
     EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
     GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar,
-    Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
-    NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, ReasoningEffort,
-    Request as _Request, RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig,
-    SearchEmbeddingModel, SpeculativeConfig, SpeculativeLoader, SpeechLoader, StopTokens,
-    TokenSource, TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
+    Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, MultimodalLoaderBuilder,
+    MultimodalSpecificConfig, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig,
+    PagedAttentionConfig, PagedCacheType, ReasoningEffort, Request as _Request, RequestMessage,
+    Response, ResponseOk, SamplingParams, SchedulerConfig, SearchEmbeddingModel, SpeculativeConfig,
+    SpeculativeLoader, SpeechLoader, StopTokens, TokenSource, TokenizationRequest, Tool, Topology,
 };
 use mistralrs_core::{
     CalledFunction, SearchCallback, SearchFunctionParameters, SearchResult, ToolCallback,
@@ -53,7 +53,7 @@ mod requests;
 mod stream;
 mod util;
 mod which;
-use which::{Architecture, DiffusionArchitecture, SpeechLoaderType, VisionArchitecture, Which};
+use which::{Architecture, DiffusionArchitecture, MultimodalArchitecture, SpeechLoaderType, Which};
 
 /// Parse reasoning effort string to ReasoningEffort enum
 fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
@@ -489,7 +489,7 @@ fn parse_which(
             )?,
         )
         .build(),
-        Which::VisionPlain {
+        Which::MultimodalPlain {
             model_id,
             tokenizer_json,
             arch,
@@ -505,8 +505,8 @@ fn parse_which(
             matformer_config_path,
             matformer_slice_name,
             organization,
-        } => VisionLoaderBuilder::new(
-            VisionSpecificConfig {
+        } => MultimodalLoaderBuilder::new(
+            MultimodalSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
                 from_uqff: from_uqff.map(|x| {
@@ -647,7 +647,7 @@ impl Runner {
             | Which::GGML { .. }
             | Which::LoraGGML { .. }
             | Which::Embedding { .. }
-            | Which::VisionPlain { .. }
+            | Which::MultimodalPlain { .. }
             | Which::DiffusionPlain { .. }
             | Which::Speech { .. } => None,
             Which::XLora {
@@ -671,7 +671,7 @@ impl Runner {
             | Which::GGML { dtype, .. }
             | Which::LoraGGML { dtype, .. }
             | Which::Embedding { dtype, .. }
-            | Which::VisionPlain { dtype, .. }
+            | Which::MultimodalPlain { dtype, .. }
             | Which::DiffusionPlain { dtype, .. }
             | Which::Speech { dtype, .. }
             | Which::XLora { dtype, .. }
@@ -712,17 +712,17 @@ impl Runner {
                     max_batch_size: p.max_batch_size,
                 })
                 .unwrap_or(AutoDeviceMapParams::default_text()),
-            Which::VisionPlain {
+            Which::MultimodalPlain {
                 auto_map_params, ..
             } => auto_map_params
                 .clone()
-                .map(|p| AutoDeviceMapParams::Vision {
+                .map(|p| AutoDeviceMapParams::Multimodal {
                     max_seq_len: p.max_seq_len,
                     max_batch_size: p.max_batch_size,
                     max_image_shape: (p.max_image_length, p.max_image_length),
                     max_num_images: p.max_num_images,
                 })
-                .unwrap_or(AutoDeviceMapParams::default_vision()),
+                .unwrap_or(AutoDeviceMapParams::default_multimodal()),
             Which::Embedding { .. } | Which::DiffusionPlain { .. } | Which::Speech { .. } => {
                 AutoDeviceMapParams::default_text()
             }
@@ -1162,7 +1162,7 @@ impl Runner {
                             let audio = util::parse_audio_url(url_unparsed)?;
                             audios.push(audio);
                         }
-                        RequestMessage::VisionChat {
+                        RequestMessage::MultimodalChat {
                             messages: messages_vec,
                             images,
                             audios,
@@ -1896,7 +1896,7 @@ impl Runner {
                             let audio = util::parse_audio_url(url_unparsed)?;
                             audios.push(audio);
                         }
-                        RequestMessage::VisionChat {
+                        RequestMessage::MultimodalChat {
                             messages: messages_vec,
                             images,
                             audios,
@@ -2317,7 +2317,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<EmbeddingRequest>()?;
     m.add_class::<Architecture>()?;
     m.add_class::<which::EmbeddingArchitecture>()?;
-    m.add_class::<VisionArchitecture>()?;
+    m.add_class::<MultimodalArchitecture>()?;
     m.add_class::<DiffusionArchitecture>()?;
     m.add_class::<AnyMoeConfig>()?;
     m.add_class::<AnyMoeExpertType>()?;

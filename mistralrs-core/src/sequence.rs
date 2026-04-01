@@ -332,7 +332,7 @@ impl MultimodalData {
 /// Scan a token sequence for contiguous runs of a placeholder token ID.
 /// Returns `(offset, length)` pairs for each run, in order of appearance.
 ///
-/// Used by vision model input processors to find where each image's placeholder
+/// Used by multimodal model input processors to find where each image's placeholder
 /// tokens are in the expanded token sequence, so that `MultiModalFeature` entries
 /// can be built for position-aware prefix cache block hashing.
 pub fn find_image_placeholder_ranges(tokens: &[u32], placeholder_id: u32) -> Vec<(usize, usize)> {
@@ -1115,7 +1115,7 @@ impl Sequence {
     }
 
     /// Count the number of multimodal items whose placeholder tokens fall entirely
-    /// within the prefix cache. Used by vision model inputs_processors to trim
+    /// within the prefix cache. Used by multimodal model inputs_processors to trim
     /// pixel_values so they match only the non-cached image placeholder positions.
     pub fn count_prefix_cached_mm_items(&self) -> usize {
         let prefix_len = self.prefix_cache_len();

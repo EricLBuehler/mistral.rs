@@ -614,7 +614,7 @@ macro_rules! normal_model_loader_sharded {
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! vision_normal_model_loader {
+macro_rules! multimodal_normal_model_loader {
     (
         $paths:expr,
         $dtype:expr,
@@ -674,7 +674,7 @@ macro_rules! vision_normal_model_loader {
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! vision_normal_model_loader_sharded {
+macro_rules! multimodal_normal_model_loader_sharded {
     (
         $vb:expr,
         $config:expr,

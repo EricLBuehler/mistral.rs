@@ -77,7 +77,7 @@ use crate::vision_models::voxtral::config::VoxtralConfig;
 use crate::vision_models::voxtral::{VoxtralModel, VoxtralProcessor};
 use crate::vision_models::{minicpmo, phi4};
 
-pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
+pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin {
     // pixel_values and pixel_attention_mask only specified for prompt seqs
     #[allow(clippy::too_many_arguments)]
     fn forward(
@@ -110,14 +110,14 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     fn reset_model_specific_state(&self) {}
 }
 
-pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {
+pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>>;
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>>;
     fn is_gptx(&self, config: &str) -> bool;
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>>;
     fn get_processor(
@@ -136,7 +136,7 @@ pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
     fn prefixer(&self, config: &str) -> Arc<dyn MultimodalPromptPrefixer>;
     /// Return a default chat template (Jinja string) for models that don't ship a
     /// `tokenizer_config.json` or `chat_template.jinja`. Returns `None` by default.
-    /// The `config` parameter is the raw model config JSON, used by `AutoVisionLoader`
+    /// The `config` parameter is the raw model config JSON, used by `AutoMultimodalLoader`
     /// to delegate to the correct concrete loader.
     fn default_chat_template(&self, _config: &str) -> Option<String> {
         None
@@ -178,8 +178,8 @@ pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
 #[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq)]
-/// The architecture to load the vision model as.
-pub enum VisionLoaderType {
+/// The architecture to load the multimodal model as.
+pub enum MultimodalLoaderType {
     #[serde(rename = "phi3v")]
     Phi3V,
     #[serde(rename = "idefics2")]
@@ -223,7 +223,7 @@ pub enum VisionLoaderType {
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
-impl VisionLoaderType {
+impl MultimodalLoaderType {
     pub fn from_causal_lm_name(name: &str) -> Result<Self> {
         match name {
             "Phi3VForCausalLM" => Ok(Self::Phi3V),
@@ -254,7 +254,7 @@ impl VisionLoaderType {
     }
 }
 
-impl FromStr for VisionLoaderType {
+impl FromStr for MultimodalLoaderType {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
@@ -283,36 +283,36 @@ impl FromStr for VisionLoaderType {
     }
 }
 
-impl std::fmt::Display for VisionLoaderType {
+impl std::fmt::Display for MultimodalLoaderType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = match self {
-            VisionLoaderType::Phi3V => "phi3v",
-            VisionLoaderType::Idefics2 => "idefics2",
-            VisionLoaderType::LLaVANext => "llava_next",
-            VisionLoaderType::LLaVA => "llava",
-            VisionLoaderType::VLlama => "vllama",
-            VisionLoaderType::Qwen2VL => "qwen2vl",
-            VisionLoaderType::Idefics3 => "idefics3",
-            VisionLoaderType::MiniCpmO => "minicpmo",
-            VisionLoaderType::Phi4MM => "phi4mm",
-            VisionLoaderType::Qwen2_5VL => "qwen2_5vl",
-            VisionLoaderType::Gemma3 => "gemma3",
-            VisionLoaderType::Mistral3 => "mistral3",
-            VisionLoaderType::Llama4 => "llama4",
-            VisionLoaderType::Gemma3n => "gemma3n",
-            VisionLoaderType::Qwen3VL => "qwen3vl",
-            VisionLoaderType::Qwen3VLMoE => "qwen3vlmoe",
-            VisionLoaderType::Qwen3_5 => "qwen3_5",
-            VisionLoaderType::Qwen3_5Moe => "qwen3_5moe",
-            VisionLoaderType::Voxtral => "voxtral",
-            VisionLoaderType::Gemma4 => "gemma4",
+            MultimodalLoaderType::Phi3V => "phi3v",
+            MultimodalLoaderType::Idefics2 => "idefics2",
+            MultimodalLoaderType::LLaVANext => "llava_next",
+            MultimodalLoaderType::LLaVA => "llava",
+            MultimodalLoaderType::VLlama => "vllama",
+            MultimodalLoaderType::Qwen2VL => "qwen2vl",
+            MultimodalLoaderType::Idefics3 => "idefics3",
+            MultimodalLoaderType::MiniCpmO => "minicpmo",
+            MultimodalLoaderType::Phi4MM => "phi4mm",
+            MultimodalLoaderType::Qwen2_5VL => "qwen2_5vl",
+            MultimodalLoaderType::Gemma3 => "gemma3",
+            MultimodalLoaderType::Mistral3 => "mistral3",
+            MultimodalLoaderType::Llama4 => "llama4",
+            MultimodalLoaderType::Gemma3n => "gemma3n",
+            MultimodalLoaderType::Qwen3VL => "qwen3vl",
+            MultimodalLoaderType::Qwen3VLMoE => "qwen3vlmoe",
+            MultimodalLoaderType::Qwen3_5 => "qwen3_5",
+            MultimodalLoaderType::Qwen3_5Moe => "qwen3_5moe",
+            MultimodalLoaderType::Voxtral => "voxtral",
+            MultimodalLoaderType::Gemma4 => "gemma4",
         };
         write!(f, "{name}")
     }
 }
 
 #[derive(Deserialize)]
-struct AutoVisionLoaderConfig {
+struct AutoMultimodalLoaderConfig {
     #[serde(default)]
     architectures: Vec<String>,
     /// Voxtral params.json uses a `multimodal` key instead of `architectures`.
@@ -320,12 +320,12 @@ struct AutoVisionLoaderConfig {
     multimodal: Option<serde_json::Value>,
 }
 
-/// Automatically selects a VisionModelLoader implementation based on the JSON `architectures` field.
-pub struct AutoVisionLoader;
+/// Automatically selects a MultimodalModelLoader implementation based on the JSON `architectures` field.
+pub struct AutoMultimodalLoader;
 
-impl AutoVisionLoader {
-    fn get_loader(config: &str) -> Result<Box<dyn VisionModelLoader>> {
-        let auto_cfg: AutoVisionLoaderConfig = serde_json::from_str(config)?;
+impl AutoMultimodalLoader {
+    fn get_loader(config: &str) -> Result<Box<dyn MultimodalModelLoader>> {
+        let auto_cfg: AutoMultimodalLoaderConfig = serde_json::from_str(config)?;
 
         // Voxtral: params.json has `multimodal` but no `architectures`
         if auto_cfg.multimodal.is_some() && auto_cfg.architectures.is_empty() {
@@ -338,50 +338,50 @@ impl AutoVisionLoader {
         }
 
         let name = &auto_cfg.architectures[0];
-        let tp = VisionLoaderType::from_causal_lm_name(name)?;
+        let tp = MultimodalLoaderType::from_causal_lm_name(name)?;
 
         once_log_info(format!("Automatic loader type determined to be `{tp}`"));
 
         // Delegate to the concrete loader
         Ok(match tp {
-            VisionLoaderType::Phi3V => Box::new(Phi3VLoader),
-            VisionLoaderType::Idefics2 => Box::new(Idefics2Loader),
-            VisionLoaderType::LLaVANext => Box::new(LLaVANextLoader),
-            VisionLoaderType::LLaVA => Box::new(LLaVALoader),
-            VisionLoaderType::VLlama => Box::new(VLlamaLoader),
-            VisionLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
-            VisionLoaderType::Idefics3 => Box::new(Idefics3Loader),
-            VisionLoaderType::MiniCpmO => Box::new(MiniCpmOLoader),
-            VisionLoaderType::Phi4MM => Box::new(Phi4MMLoader),
-            VisionLoaderType::Qwen2_5VL => Box::new(Qwen2_5VLLoader),
-            VisionLoaderType::Gemma3 => Box::new(Gemma3Loader),
-            VisionLoaderType::Mistral3 => Box::new(Mistral3Loader),
-            VisionLoaderType::Llama4 => Box::new(VLlama4Loader),
-            VisionLoaderType::Gemma3n => Box::new(Gemma3nLoader),
-            VisionLoaderType::Qwen3VL => Box::new(Qwen3VLLoader),
-            VisionLoaderType::Qwen3VLMoE => Box::new(Qwen3VLMoELoader),
-            VisionLoaderType::Qwen3_5 => Box::new(Qwen3_5Loader),
-            VisionLoaderType::Qwen3_5Moe => Box::new(Qwen3_5MoeLoader),
-            VisionLoaderType::Voxtral => Box::new(VoxtralLoader),
-            VisionLoaderType::Gemma4 => Box::new(Gemma4Loader),
+            MultimodalLoaderType::Phi3V => Box::new(Phi3VLoader),
+            MultimodalLoaderType::Idefics2 => Box::new(Idefics2Loader),
+            MultimodalLoaderType::LLaVANext => Box::new(LLaVANextLoader),
+            MultimodalLoaderType::LLaVA => Box::new(LLaVALoader),
+            MultimodalLoaderType::VLlama => Box::new(VLlamaLoader),
+            MultimodalLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
+            MultimodalLoaderType::Idefics3 => Box::new(Idefics3Loader),
+            MultimodalLoaderType::MiniCpmO => Box::new(MiniCpmOLoader),
+            MultimodalLoaderType::Phi4MM => Box::new(Phi4MMLoader),
+            MultimodalLoaderType::Qwen2_5VL => Box::new(Qwen2_5VLLoader),
+            MultimodalLoaderType::Gemma3 => Box::new(Gemma3Loader),
+            MultimodalLoaderType::Mistral3 => Box::new(Mistral3Loader),
+            MultimodalLoaderType::Llama4 => Box::new(VLlama4Loader),
+            MultimodalLoaderType::Gemma3n => Box::new(Gemma3nLoader),
+            MultimodalLoaderType::Qwen3VL => Box::new(Qwen3VLLoader),
+            MultimodalLoaderType::Qwen3VLMoE => Box::new(Qwen3VLMoELoader),
+            MultimodalLoaderType::Qwen3_5 => Box::new(Qwen3_5Loader),
+            MultimodalLoaderType::Qwen3_5Moe => Box::new(Qwen3_5MoeLoader),
+            MultimodalLoaderType::Voxtral => Box::new(VoxtralLoader),
+            MultimodalLoaderType::Gemma4 => Box::new(Gemma4Loader),
         })
     }
 }
 
-impl VisionModelLoader for AutoVisionLoader {
+impl MultimodalModelLoader for AutoMultimodalLoader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         Self::get_loader(config)?.load(config, vb, normal_loading_metadata, attention_mechanism)
     }
 
     fn is_gptx(&self, config: &str) -> bool {
         Self::get_loader(config)
-            .expect("AutoVisionLoader get_loader")
+            .expect("AutoMultimodalLoader get_loader")
             .is_gptx(config)
     }
 
@@ -397,13 +397,13 @@ impl VisionModelLoader for AutoVisionLoader {
         max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
         Self::get_loader(model_config)
-            .expect("AutoVisionLoader get_loader")
+            .expect("AutoMultimodalLoader get_loader")
             .get_processor(model_config, proc_cfg, preproc_cfg, max_edge)
     }
 
     fn supports_paged_attention(&self, config: &str) -> bool {
         Self::get_loader(config)
-            .expect("AutoVisionLoader")
+            .expect("AutoMultimodalLoader")
             .supports_paged_attention(config)
     }
 
@@ -413,13 +413,13 @@ impl VisionModelLoader for AutoVisionLoader {
 
     fn supports_prefix_cacher(&self, config: &str) -> bool {
         Self::get_loader(config)
-            .expect("AutoVisionLoader")
+            .expect("AutoMultimodalLoader")
             .supports_prefix_cacher(config)
     }
 
     fn prefixer(&self, config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Self::get_loader(config)
-            .expect("AutoVisionLoader")
+            .expect("AutoMultimodalLoader")
             .prefixer(config)
     }
 
@@ -441,7 +441,7 @@ impl VisionModelLoader for AutoVisionLoader {
     }
 }
 
-impl IsqModelLoader for AutoVisionLoader {
+impl IsqModelLoader for AutoMultimodalLoader {
     fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
         Self::get_loader(config)?.isq_layer_regexes(config)
     }
@@ -456,7 +456,7 @@ impl IsqModelLoader for AutoVisionLoader {
     }
 }
 
-impl DeviceMappedModelLoader for AutoVisionLoader {
+impl DeviceMappedModelLoader for AutoMultimodalLoader {
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -562,9 +562,9 @@ fn get_clip_vit_num_elems(cfg: &ClipConfig) -> usize {
 
 // ======================== Phi 3 loader
 
-/// [`VisionLoader`] for a Phi 3 Vision model.
+/// [`MultimodalLoader`] for a Phi 3 Vision model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct Phi3VLoader;
 
 pub struct Phi3VPrefixer;
@@ -582,14 +582,14 @@ impl MultimodalPromptPrefixer for Phi3VPrefixer {
     }
 }
 
-impl VisionModelLoader for Phi3VLoader {
+impl MultimodalModelLoader for Phi3VLoader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: crate::vision_models::phi3::Config = serde_json::from_str(config)?;
         Ok(Box::new(Phi3::new(
             &cfg,
@@ -656,14 +656,14 @@ impl DeviceMappedModelLoader for Phi3VLoader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         // NOTE: we ignore max_num_images although it can only be one...
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Phi3Config = serde_json::from_str(config)?;
@@ -688,14 +688,14 @@ impl DeviceMappedModelLoader for Phi3VLoader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         // NOTE: we ignore max_num_images although it can only be one...
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Phi3Config = serde_json::from_str(config)?;
@@ -844,9 +844,9 @@ impl DeviceMappedModelLoader for Phi3VLoader {
 
 // ======================== Idefics 2 loader
 
-/// [`VisionLoader`] for an Idefics 2 Vision model.
+/// [`MultimodalLoader`] for an Idefics 2 Vision model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct Idefics2Loader;
 
 pub struct Idefics2Prefixer;
@@ -858,14 +858,14 @@ impl MultimodalPromptPrefixer for Idefics2Prefixer {
     }
 }
 
-impl VisionModelLoader for Idefics2Loader {
+impl MultimodalModelLoader for Idefics2Loader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: crate::vision_models::idefics2::Config = serde_json::from_str(config)?;
         Ok(Box::new(Idefics2::new(
             &cfg,
@@ -949,14 +949,14 @@ impl DeviceMappedModelLoader for Idefics2Loader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Idefics2Config = serde_json::from_str(config)?;
@@ -978,14 +978,14 @@ impl DeviceMappedModelLoader for Idefics2Loader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Idefics2Config = serde_json::from_str(config)?;
@@ -1195,9 +1195,9 @@ impl DeviceMappedModelLoader for Idefics2Loader {
 
 // ======================== LLaVANext Loader
 
-/// [`VisionLoader`] for an LLaVANext Vision model.
+/// [`MultimodalLoader`] for an LLaVANext Vision model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct LLaVANextLoader;
 
 pub struct LLaVANextPrefixer;
@@ -1208,14 +1208,14 @@ impl MultimodalPromptPrefixer for LLaVANextPrefixer {
     }
 }
 
-impl VisionModelLoader for LLaVANextLoader {
+impl MultimodalModelLoader for LLaVANextLoader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: crate::vision_models::llava::config::Config = serde_json::from_str(config)?;
         Ok(Box::new(LLaVANext::new(
             &cfg,
@@ -1295,14 +1295,14 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let config: LLaVAConfig = serde_json::from_str(config)?;
@@ -1331,14 +1331,14 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let config: LLaVAConfig = serde_json::from_str(config)?;
@@ -1465,9 +1465,9 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
 
 // ======================== LLaVA Loader
 
-/// [`VisionLoader`] for an LLaVA Vision model.
+/// [`MultimodalLoader`] for an LLaVA Vision model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct LLaVALoader;
 
 pub struct LLaVAPrefixer;
@@ -1478,14 +1478,14 @@ impl MultimodalPromptPrefixer for LLaVAPrefixer {
     }
 }
 
-impl VisionModelLoader for LLaVALoader {
+impl MultimodalModelLoader for LLaVALoader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: crate::vision_models::llava::config::Config = serde_json::from_str(config)?;
         Ok(Box::new(LLaVA::new(
             &cfg,
@@ -1565,14 +1565,14 @@ impl DeviceMappedModelLoader for LLaVALoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let config: LLaVAConfig = serde_json::from_str(config)?;
@@ -1597,14 +1597,14 @@ impl DeviceMappedModelLoader for LLaVALoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let config: LLaVAConfig = serde_json::from_str(config)?;
@@ -1727,9 +1727,9 @@ impl DeviceMappedModelLoader for LLaVALoader {
 
 // ======================== MLlama Loader
 
-/// [`VisionLoader`] for an Llama Vision model.
+/// [`MultimodalLoader`] for an Llama Vision model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct VLlamaLoader;
 
 pub struct VLlamaPrefixer;
@@ -1740,14 +1740,14 @@ impl MultimodalPromptPrefixer for VLlamaPrefixer {
     }
 }
 
-impl VisionModelLoader for VLlamaLoader {
+impl MultimodalModelLoader for VLlamaLoader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: crate::vision_models::mllama::MLlamaConfig = serde_json::from_str(config)?;
         Ok(Box::new(MLlamaModel::new(
             &cfg,
@@ -1869,14 +1869,14 @@ impl DeviceMappedModelLoader for VLlamaLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let config: MLlamaConfig = serde_json::from_str(config)?;
@@ -1907,14 +1907,14 @@ impl DeviceMappedModelLoader for VLlamaLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let config: MLlamaConfig = serde_json::from_str(config)?;
@@ -2113,9 +2113,9 @@ impl DeviceMappedModelLoader for VLlamaLoader {
 
 // ======================== Qwen2VL Loader
 
-/// [`VisionLoader`] for an Qwen2-VL model.
+/// [`MultimodalLoader`] for an Qwen2-VL model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct Qwen2VLLoader;
 
 pub struct Qwen2VLPrefixer;
@@ -2135,14 +2135,14 @@ impl MultimodalPromptPrefixer for Qwen2VLPrefixer {
     }
 }
 
-impl VisionModelLoader for Qwen2VLLoader {
+impl MultimodalModelLoader for Qwen2VLLoader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
         Ok(Box::new(Qwen2VLModel::new(
             &cfg,
@@ -2208,14 +2208,14 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
@@ -2245,14 +2245,14 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
@@ -2414,9 +2414,9 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
 
 // ======================== Idefics 3 loader
 
-/// [`VisionLoader`] for an Idefics 3 Vision model.
+/// [`MultimodalLoader`] for an Idefics 3 Vision model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct Idefics3Loader;
 
 pub struct Idefics3Prefixer;
@@ -2428,14 +2428,14 @@ impl MultimodalPromptPrefixer for Idefics3Prefixer {
     }
 }
 
-impl VisionModelLoader for Idefics3Loader {
+impl MultimodalModelLoader for Idefics3Loader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: crate::vision_models::idefics3::Idefics3Config = serde_json::from_str(config)?;
         Ok(Box::new(Idefics3Model::new(
             &cfg,
@@ -2535,14 +2535,14 @@ impl DeviceMappedModelLoader for Idefics3Loader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Idefics3Config = serde_json::from_str(config)?;
@@ -2564,14 +2564,14 @@ impl DeviceMappedModelLoader for Idefics3Loader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Idefics3Config = serde_json::from_str(config)?;
@@ -2732,9 +2732,9 @@ impl DeviceMappedModelLoader for Idefics3Loader {
 
 // ======================== MiniCpm-O loader
 
-/// [`VisionLoader`] for an MiniCpm-O model.
+/// [`MultimodalLoader`] for an MiniCpm-O model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct MiniCpmOLoader;
 
 pub struct MiniCpmOPrefixer;
@@ -2748,14 +2748,14 @@ impl MultimodalPromptPrefixer for MiniCpmOPrefixer {
     }
 }
 
-impl VisionModelLoader for MiniCpmOLoader {
+impl MultimodalModelLoader for MiniCpmOLoader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: crate::vision_models::minicpmo::MiniCpmOConfig = serde_json::from_str(config)?;
         Ok(Box::new(MiniCpmOModel::new(
             &cfg,
@@ -2825,14 +2825,14 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: MiniCpmOConfig = serde_json::from_str(config)?;
@@ -2854,14 +2854,14 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: MiniCpmOConfig = serde_json::from_str(config)?;
@@ -3011,9 +3011,9 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
 
 // ======================== Phi 4MM loader
 
-/// [`VisionLoader`] for a Phi 4MM Vision model.
+/// [`MultimodalLoader`] for a Phi 4MM Vision model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct Phi4MMLoader;
 
 pub struct Phi4MMPrefixer;
@@ -3043,14 +3043,14 @@ impl MultimodalPromptPrefixer for Phi4MMPrefixer {
     }
 }
 
-impl VisionModelLoader for Phi4MMLoader {
+impl MultimodalModelLoader for Phi4MMLoader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: crate::vision_models::phi4::Phi4MMConfig = serde_json::from_str(config)?;
         Ok(Box::new(Phi4MMModel::new(
             &cfg,
@@ -3121,14 +3121,14 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
         // NOTE: we ignore max_num_images although it can only be one...
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Phi4MMConfig = serde_json::from_str(config)?;
@@ -3152,14 +3152,14 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
         _config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let vcfg = &PHI4_MM_VISION_CFG;
@@ -3357,9 +3357,9 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
 
 // ======================== Qwen2_5VL Loader
 
-/// [`VisionLoader`] for an Qwen2_5VL model.
+/// [`MultimodalLoader`] for an Qwen2_5VL model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct Qwen2_5VLLoader;
 
 pub struct Qwen2_5VLPrefixer;
@@ -3379,14 +3379,14 @@ impl MultimodalPromptPrefixer for Qwen2_5VLPrefixer {
     }
 }
 
-impl VisionModelLoader for Qwen2_5VLLoader {
+impl MultimodalModelLoader for Qwen2_5VLLoader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: Qwen2_5VLConfig = serde_json::from_str(config)?;
         Ok(Box::new(Qwen2_5VLModel::new(
             &cfg,
@@ -3452,14 +3452,14 @@ impl DeviceMappedModelLoader for Qwen2_5VLLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Qwen2_5VLConfig = serde_json::from_str(config)?;
@@ -3487,14 +3487,14 @@ impl DeviceMappedModelLoader for Qwen2_5VLLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Qwen2_5VLConfig = serde_json::from_str(config)?;
@@ -3653,9 +3653,9 @@ impl DeviceMappedModelLoader for Qwen2_5VLLoader {
 
 // ======================== Gemma 3 Loader
 
-/// [`VisionLoader`] for an Gemma 3 model.
+/// [`MultimodalLoader`] for an Gemma 3 model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct Gemma3Loader;
 
 pub struct Gemma3Prefixer;
@@ -3666,14 +3666,14 @@ impl MultimodalPromptPrefixer for Gemma3Prefixer {
     }
 }
 
-impl VisionModelLoader for Gemma3Loader {
+impl MultimodalModelLoader for Gemma3Loader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: Gemma3Config = serde_json::from_str(config)?;
         Ok(Box::new(Gemma3Model::new(
             &cfg,
@@ -3758,14 +3758,14 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Gemma3Config = serde_json::from_str(config)?;
@@ -3797,14 +3797,14 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Gemma3Config = serde_json::from_str(config)?;
@@ -3992,9 +3992,9 @@ impl DeviceMappedModelLoader for Gemma3Loader {
 
 // ======================== Mistral 3 Loader
 
-/// [`VisionLoader`] for an Mistral 3 model.
+/// [`MultimodalLoader`] for an Mistral 3 model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct Mistral3Loader;
 
 pub struct Mistral3Prefixer;
@@ -4005,14 +4005,14 @@ impl MultimodalPromptPrefixer for Mistral3Prefixer {
     }
 }
 
-impl VisionModelLoader for Mistral3Loader {
+impl MultimodalModelLoader for Mistral3Loader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let mut cfg: crate::vision_models::mistral3::Mistral3Config = serde_json::from_str(config)?;
         cfg.propagate_quantization_config();
         Ok(Box::new(Mistral3Model::new(
@@ -4098,14 +4098,14 @@ impl DeviceMappedModelLoader for Mistral3Loader {
         let vcfg = &cfg.vision_config;
         let tcfg = &cfg.text_config;
 
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape: (mut height, mut width),
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let img_seq_len = {
@@ -4144,14 +4144,14 @@ impl DeviceMappedModelLoader for Mistral3Loader {
         let cfg: Mistral3Config = serde_json::from_str(config)?;
         let cfg = &cfg.vision_config;
 
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape: (mut height, mut width),
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let img_seq_len = {
@@ -4317,9 +4317,9 @@ impl DeviceMappedModelLoader for Mistral3Loader {
 
 // ======================== Llama 4 Loader
 
-/// [`VisionLoader`] for an Llama Vision model.
+/// [`MultimodalLoader`] for an Llama Vision model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct VLlama4Loader;
 
 pub struct VLlama4Prefixer;
@@ -4333,14 +4333,14 @@ impl MultimodalPromptPrefixer for VLlama4Prefixer {
     }
 }
 
-impl VisionModelLoader for VLlama4Loader {
+impl MultimodalModelLoader for VLlama4Loader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let mut cfg: crate::vision_models::llama4::Llama4Config = serde_json::from_str(config)?;
         cfg.propagate_quantization_config();
         Ok(Box::new(Llama4Model::new(
@@ -4502,14 +4502,14 @@ impl DeviceMappedModelLoader for VLlama4Loader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape: (height, width),
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Llama4Config = serde_json::from_str(config)?;
@@ -4526,14 +4526,14 @@ impl DeviceMappedModelLoader for VLlama4Loader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape: (height, width),
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Llama4Config = serde_json::from_str(config)?;
@@ -4723,9 +4723,9 @@ impl DeviceMappedModelLoader for VLlama4Loader {
 
 // ======================== Gemma 3n Loader
 
-/// [`VisionLoader`] for an Gemma 3n model.
+/// [`MultimodalLoader`] for an Gemma 3n model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct Gemma3nLoader;
 
 #[allow(dead_code)]
@@ -4737,14 +4737,14 @@ impl MultimodalPromptPrefixer for Gemma3nPrefixer {
     }
 }
 
-impl VisionModelLoader for Gemma3nLoader {
+impl MultimodalModelLoader for Gemma3nLoader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: Gemma3nConfig = serde_json::from_str(config)?;
         Ok(Box::new(Gemma3nModel::new(
             &cfg,
@@ -4898,14 +4898,14 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Gemma3nConfig = serde_json::from_str(config)?;
@@ -4945,14 +4945,14 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Gemma3nConfig = serde_json::from_str(config)?;
@@ -5127,7 +5127,7 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
 
         // Vision components
         let vision_elems = {
-            let vision_cfg = &cfg.vision_config;
+            let multimodal_cfg = &cfg.vision_config;
             // Vision tower - calculated from actual Gemma3n architecture
             // NOTE: Vision tower uses only Conv2d layers, NOT Arc<dyn QuantMethod>,
             // so NONE of these should be divided by weight_pack_factor
@@ -5238,14 +5238,15 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
             // Vision multimodal embedder components
             let embed_vision_elems = {
                 // Embedding layer (not quantizable)
-                let embedding = vision_cfg.vocab_size * vision_cfg.hidden_size;
+                let embedding = multimodal_cfg.vocab_size * multimodal_cfg.hidden_size;
 
                 // Normalization layers (not quantizable)
-                let hard_norm = vision_cfg.hidden_size;
-                let soft_norm = vision_cfg.hidden_size;
+                let hard_norm = multimodal_cfg.hidden_size;
+                let soft_norm = multimodal_cfg.hidden_size;
 
                 // Projection from vision to text hidden size (IS Arc<dyn QuantMethod>, so quantizable)
-                let projection = vision_cfg.hidden_size * text_cfg.hidden_size / weight_pack_factor;
+                let projection =
+                    multimodal_cfg.hidden_size * text_cfg.hidden_size / weight_pack_factor;
 
                 // Post-projection norm (not quantizable)
                 let post_norm = text_cfg.hidden_size;
@@ -5598,9 +5599,9 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
 
 // ======================== Qwen3VL Loader
 
-/// [`VisionLoader`] for an Qwen3VL model.
+/// [`MultimodalLoader`] for an Qwen3VL model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct Qwen3VLLoader;
 
 pub struct Qwen3VLPrefixer;
@@ -5610,14 +5611,14 @@ impl MultimodalPromptPrefixer for Qwen3VLPrefixer {
     // when it sees {"type": "image"} entries in the content.
 }
 
-impl VisionModelLoader for Qwen3VLLoader {
+impl MultimodalModelLoader for Qwen3VLLoader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: Qwen3VLConfig = serde_json::from_str(config)?;
         Ok(Box::new(Qwen3VLModel::new(
             &cfg,
@@ -5686,14 +5687,14 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Qwen3VLConfig = serde_json::from_str(config)?;
@@ -5724,14 +5725,14 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Qwen3VLConfig = serde_json::from_str(config)?;
@@ -5920,9 +5921,9 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
 
 // ======================== Qwen3VLMoE Loader
 
-/// [`VisionLoader`] for a Qwen3VLMoE model.
+/// [`MultimodalLoader`] for a Qwen3VLMoE model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct Qwen3VLMoELoader;
 
 pub struct Qwen3VLMoEPrefixer;
@@ -5932,14 +5933,14 @@ impl MultimodalPromptPrefixer for Qwen3VLMoEPrefixer {
     // when it sees {"type": "image"} entries in the content.
 }
 
-impl VisionModelLoader for Qwen3VLMoELoader {
+impl MultimodalModelLoader for Qwen3VLMoELoader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: Qwen3VLMoEConfig = serde_json::from_str(config)?;
         Ok(Box::new(Qwen3VLMoEModel::new(
             &cfg,
@@ -6044,14 +6045,14 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Qwen3VLMoEConfig = serde_json::from_str(config)?;
@@ -6082,14 +6083,14 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Qwen3VLMoEConfig = serde_json::from_str(config)?;
@@ -6300,9 +6301,9 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
 
 // ======================== Qwen3_5 (Dense) Loader
 
-/// [`VisionLoader`] for a Qwen3.5 dense (hybrid GDN + full attention) model.
+/// [`MultimodalLoader`] for a Qwen3.5 dense (hybrid GDN + full attention) model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct Qwen3_5Loader;
 
 pub struct Qwen3_5Prefixer;
@@ -6312,14 +6313,14 @@ impl MultimodalPromptPrefixer for Qwen3_5Prefixer {
     // when it sees {"type": "image"} entries in the content.
 }
 
-impl VisionModelLoader for Qwen3_5Loader {
+impl MultimodalModelLoader for Qwen3_5Loader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: Qwen3_5Config = serde_json::from_str(config)?;
         Ok(Box::new(Qwen3_5Model::new(
             &cfg,
@@ -6392,14 +6393,14 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Qwen3_5Config = serde_json::from_str(config)?;
@@ -6426,14 +6427,14 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Qwen3_5Config = serde_json::from_str(config)?;
@@ -6635,9 +6636,9 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
 
 // ======================== Qwen3_5Moe Loader
 
-/// [`VisionLoader`] for a Qwen3.5 MoE (hybrid GDN + full attention) model.
+/// [`MultimodalLoader`] for a Qwen3.5 MoE (hybrid GDN + full attention) model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct Qwen3_5MoeLoader;
 
 pub struct Qwen3_5MoePrefixer;
@@ -6647,14 +6648,14 @@ impl MultimodalPromptPrefixer for Qwen3_5MoePrefixer {
     // when it sees {"type": "image"} entries in the content.
 }
 
-impl VisionModelLoader for Qwen3_5MoeLoader {
+impl MultimodalModelLoader for Qwen3_5MoeLoader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: Qwen3_5MoeConfig = serde_json::from_str(config)?;
         Ok(Box::new(Qwen3_5MoeModel::new(
             &cfg,
@@ -6771,14 +6772,14 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Qwen3_5MoeConfig = serde_json::from_str(config)?;
@@ -6805,14 +6806,14 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Qwen3_5MoeConfig = serde_json::from_str(config)?;
@@ -7030,9 +7031,9 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
 
 // ─── Voxtral ────────────────────────────────────────────────────────────────
 
-/// [`VisionLoader`] for a Voxtral model.
+/// [`MultimodalLoader`] for a Voxtral model.
 ///
-/// [`VisionLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.VisionLoader.html
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
 pub struct VoxtralLoader;
 
 pub struct VoxtralPrefixer;
@@ -7043,14 +7044,14 @@ impl MultimodalPromptPrefixer for VoxtralPrefixer {
     }
 }
 
-impl VisionModelLoader for VoxtralLoader {
+impl MultimodalModelLoader for VoxtralLoader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: VoxtralConfig = serde_json::from_str(config)?;
         Ok(Box::new(VoxtralModel::new(
             &cfg,
@@ -7142,13 +7143,13 @@ impl DeviceMappedModelLoader for VoxtralLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             ..
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: VoxtralConfig = serde_json::from_str(config)?;
@@ -7165,8 +7166,8 @@ impl DeviceMappedModelLoader for VoxtralLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision { max_batch_size, .. } = params else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        let AutoDeviceMapParams::Multimodal { max_batch_size, .. } = params else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: VoxtralConfig = serde_json::from_str(config)?;
@@ -7275,14 +7276,14 @@ impl MultimodalPromptPrefixer for Gemma4Prefixer {
     }
 }
 
-impl VisionModelLoader for Gemma4Loader {
+impl MultimodalModelLoader for Gemma4Loader {
     fn load(
         &self,
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: Gemma4Config = serde_json::from_str(config)?;
         Ok(Box::new(Gemma4Model::new(
             &cfg,
@@ -7386,14 +7387,14 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Gemma4Config = serde_json::from_str(config)?;
@@ -7412,14 +7413,14 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision {
+        let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
 
         let cfg: Gemma4Config = serde_json::from_str(config)?;

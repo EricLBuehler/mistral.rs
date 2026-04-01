@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 /// A type which can be used as a chat request.
 ///
-/// Implemented by [`TextMessages`], [`VisionMessages`], and [`RequestBuilder`].
+/// Implemented by [`TextMessages`], [`MultimodalMessages`], and [`RequestBuilder`].
 pub trait RequestLike {
     /// Borrow the current list of chat messages.
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>];
@@ -166,7 +166,7 @@ impl RequestLike for TextMessages {
     }
 }
 
-impl From<TextMessages> for VisionMessages {
+impl From<TextMessages> for MultimodalMessages {
     fn from(text: TextMessages) -> Self {
         Self {
             messages: text.messages,
@@ -196,7 +196,7 @@ struct PendingMediaPrefix {
 /// No constraints, logits processors, logprobs, tools, or adapters.
 ///
 /// Sampling is deterministic.
-pub struct VisionMessages {
+pub struct MultimodalMessages {
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,
     audios: Vec<AudioInput>,
@@ -204,14 +204,14 @@ pub struct VisionMessages {
     pending_prefixes: Vec<PendingMediaPrefix>,
 }
 
-impl Default for VisionMessages {
+impl Default for MultimodalMessages {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl VisionMessages {
-    /// Create an empty vision message list.
+impl MultimodalMessages {
+    /// Create an empty multimodal message list.
     pub fn new() -> Self {
         Self {
             images: Vec::new(),
@@ -339,7 +339,7 @@ impl VisionMessages {
     }
 }
 
-impl RequestLike for VisionMessages {
+impl RequestLike for MultimodalMessages {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>] {
         &self.messages
     }
@@ -356,7 +356,7 @@ impl RequestLike for VisionMessages {
         std::mem::swap(&mut other_images, &mut self.images);
         let mut other_audios = Vec::new();
         std::mem::swap(&mut other_audios, &mut self.audios);
-        RequestMessage::VisionChat {
+        RequestMessage::MultimodalChat {
             images: other_images,
             messages: other_messages,
             audios: other_audios,
@@ -444,8 +444,8 @@ impl From<TextMessages> for RequestBuilder {
     }
 }
 
-impl From<VisionMessages> for RequestBuilder {
-    fn from(value: VisionMessages) -> Self {
+impl From<MultimodalMessages> for RequestBuilder {
+    fn from(value: MultimodalMessages) -> Self {
         Self {
             messages: value.messages,
             images: value.images,
@@ -812,7 +812,7 @@ impl RequestLike for RequestBuilder {
             std::mem::swap(&mut other_images, &mut self.images);
             let mut other_audios = Vec::new();
             std::mem::swap(&mut other_audios, &mut self.audios);
-            RequestMessage::VisionChat {
+            RequestMessage::MultimodalChat {
                 images: other_images,
                 messages: other_messages,
                 audios: other_audios,
@@ -892,9 +892,9 @@ fn resolve_pending(
     pending: &mut Vec<PendingMediaPrefix>,
 ) {
     let prefixer = match category {
-        ModelCategory::Vision { prefixer } => prefixer,
+        ModelCategory::Multimodal { prefixer } => prefixer,
         _ => {
-            // Not a vision model, nothing to prefix.
+            // Not a multimodal model, nothing to prefix.
             pending.clear();
             return;
         }

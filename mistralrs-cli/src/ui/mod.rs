@@ -49,13 +49,13 @@ fn build_model_list(mistralrs: &Arc<MistralRs>) -> IndexMap<String, UiModelInfo>
             if let Ok(category) = mistralrs.get_model_category(Some(&model_id)) {
                 let kind = match category {
                     ModelCategory::Text => "text",
-                    ModelCategory::Vision { .. } => "vision",
+                    ModelCategory::Multimodal { .. } => "multimodal",
                     ModelCategory::Speech => "speech",
                     ModelCategory::Audio => "audio",
                     ModelCategory::Embedding => "embedding",
                     ModelCategory::Diffusion => "diffusion",
                 };
-                if matches!(kind, "text" | "vision" | "speech") {
+                if matches!(kind, "text" | "multimodal" | "speech") {
                     let generation_defaults = mistralrs
                         .config(Some(&model_id))
                         .ok()

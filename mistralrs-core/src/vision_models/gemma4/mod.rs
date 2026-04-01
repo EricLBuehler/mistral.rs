@@ -16,7 +16,7 @@ use crate::{
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -432,7 +432,7 @@ impl IsqModel for Gemma4Model {
     }
 }
 
-impl VisionModel for Gemma4Model {
+impl MultimodalModel for Gemma4Model {
     fn forward(
         &self,
         input_ids: &Tensor,

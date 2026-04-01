@@ -1,9 +1,9 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="HuggingFaceTB/SmolVLM-Instruct",
-        arch=VisionArchitecture.Idefics3,
+        arch=MultimodalArchitecture.Idefics3,
     ),
 )
 

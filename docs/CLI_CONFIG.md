@@ -97,7 +97,7 @@ Define one or more models. Each `[[models]]` entry creates a new model.
 
 | Option | Required | Description |
 |--------|----------|-------------|
-| `kind` | yes | Model type: `"auto"`, `"text"`, `"vision"`, `"diffusion"`, `"speech"`, `"embedding"` |
+| `kind` | yes | Model type: `"auto"`, `"text"`, `"multimodal"`, `"diffusion"`, `"speech"`, `"embedding"` |
 | `model_id` | yes | HuggingFace model ID or local path |
 | `tokenizer` | no | Path to local tokenizer.json |
 | `arch` | no | Model architecture (auto-detected if not specified) |
@@ -144,7 +144,7 @@ Define one or more models. Each `[[models]]` entry creates a new model.
 | `max_seq_len` | `4096` | Max sequence length for auto device mapping |
 | `max_batch_size` | `1` | Max batch size for auto device mapping |
 
-#### [models.vision] - Vision Options
+#### [models.multimodal] - Multimodal Options
 
 | Option | Description |
 |--------|-------------|
@@ -184,10 +184,10 @@ dtype = "auto"
 in_situ_quant = "q4k"
 
 [[models]]
-kind = "vision"
+kind = "multimodal"
 model_id = "Qwen/Qwen2-VL-2B-Instruct"
 
-[models.vision]
+[models.multimodal]
 max_num_images = 4
 
 [[models]]

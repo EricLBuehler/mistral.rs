@@ -17,7 +17,7 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, KvCache, MultimodalModel, NormalCache, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -757,7 +757,7 @@ impl IsqModel for VoxtralModel {
     }
 }
 
-impl VisionModel for VoxtralModel {
+impl MultimodalModel for VoxtralModel {
     fn forward(
         &self,
         input_ids: &Tensor,

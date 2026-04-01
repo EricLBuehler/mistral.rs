@@ -32,7 +32,7 @@ use crate::{
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -235,7 +235,7 @@ pub(crate) struct MLlamaSpecificArgs {
     pub image_hashes: Vec<u64>,
 }
 
-impl VisionModel for MLlamaModel {
+impl MultimodalModel for MLlamaModel {
     fn cache(&self) -> &EitherCache {
         &self.language_model.cache
     }

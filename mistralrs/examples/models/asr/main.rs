@@ -1,9 +1,9 @@
 use anyhow::Result;
-use mistralrs::{AudioInput, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{AudioInput, MultimodalMessages, MultimodalModelBuilder, TextMessageRole};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("mistralai/Voxtral-Mini-4B-Realtime-2602")
+    let model = MultimodalModelBuilder::new("mistralai/Voxtral-Mini-4B-Realtime-2602")
         .with_logging()
         .build()
         .await?;
@@ -11,7 +11,7 @@ async fn main() -> Result<()> {
     let audio_bytes = std::fs::read("sample_audio.wav")?;
     let audio = AudioInput::from_bytes(&audio_bytes)?;
 
-    let messages = VisionMessages::new().add_multimodal_message(
+    let messages = MultimodalMessages::new().add_multimodal_message(
         TextMessageRole::User,
         "Transcribe this audio.",
         vec![],

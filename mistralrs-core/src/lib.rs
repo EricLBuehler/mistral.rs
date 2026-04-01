@@ -113,11 +113,12 @@ pub use pipeline::{
     GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
     GGUFSpecificConfig, GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader,
     LlamaLoader, Loader, LocalModelPaths, LoraAdapterPaths, MistralLoader, MixtralLoader,
-    Modalities, ModelKind, ModelPaths, MultimodalPromptPrefixer, NormalLoader, NormalLoaderBuilder,
-    NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
-    SpeculativeConfig, SpeculativeLoader, SpeculativePipeline, SpeechLoader, SpeechPipeline,
-    Starcoder2Loader, SupportedModality, TokenSource, VisionLoader, VisionLoaderBuilder,
-    VisionLoaderType, VisionSpecificConfig, UQFF_MULTI_FILE_DELIMITER,
+    Modalities, ModelKind, ModelPaths, MultimodalLoader, MultimodalLoaderBuilder,
+    MultimodalLoaderType, MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
+    Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
+    SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality, TokenSource,
+    UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
     ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
@@ -225,7 +226,7 @@ pub struct MistralRsConfig {
 /// This captures the essential parameters needed to reconstruct a loader.
 #[derive(Clone)]
 pub struct ModelLoaderConfig {
-    /// The model selection configuration (Plain, GGUF, Vision, etc.)
+    /// The model selection configuration (Plain, GGUF, Multimodal, etc.)
     pub model_selected: ModelSelected,
     /// Source of the HF token
     pub token_source: TokenSource,
@@ -261,7 +262,7 @@ pub struct UnloadedModelState {
     pub engine_config: EngineConfig,
     /// MCP client configuration
     pub mcp_client_config: Option<McpClientConfig>,
-    /// Model category (Text, Vision, etc.)
+    /// Model category (Text, Multimodal, etc.)
     pub category: ModelCategory,
     /// Model metadata configuration
     pub mistralrs_config: MistralRsConfig,
@@ -763,7 +764,7 @@ impl MistralRs {
             && is_multi_threaded
             && matches!(
                 engine_instance.category,
-                ModelCategory::Text | ModelCategory::Vision { .. }
+                ModelCategory::Text | ModelCategory::Multimodal { .. }
             )
         {
             let clone_sender = engine_instance.sender.clone();

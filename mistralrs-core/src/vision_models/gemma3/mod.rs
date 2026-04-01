@@ -17,7 +17,7 @@ use crate::{
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
@@ -206,7 +206,7 @@ pub struct Gemma3SpecificArgs {
     pub image_hashes: Vec<u64>,
 }
 
-impl VisionModel for Gemma3Model {
+impl MultimodalModel for Gemma3Model {
     fn forward(
         &self,
         input_ids: &Tensor,

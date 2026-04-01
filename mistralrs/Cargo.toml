@@ -46,8 +46,8 @@ name = "streaming"
 path = "examples/getting_started/streaming/main.rs"
 
 [[example]]
-name = "vision"
-path = "examples/getting_started/vision/main.rs"
+name = "multimodal_basic"
+path = "examples/getting_started/multimodal/main.rs"
 
 [[example]]
 name = "gguf"
@@ -68,12 +68,12 @@ name = "text_models"
 path = "examples/models/text_models/main.rs"
 
 [[example]]
-name = "vision_models"
-path = "examples/models/vision_models/main.rs"
+name = "multimodal_models"
+path = "examples/models/multimodal_models/main.rs"
 
 [[example]]
-name = "vision_multiturn"
-path = "examples/models/vision_multiturn/main.rs"
+name = "multimodal_multiturn"
+path = "examples/models/multimodal_multiturn/main.rs"
 
 [[example]]
 name = "audio"
@@ -110,8 +110,8 @@ name = "uqff"
 path = "examples/quantization/uqff/main.rs"
 
 [[example]]
-name = "uqff_vision"
-path = "examples/quantization/uqff_vision/main.rs"
+name = "uqff_multimodal"
+path = "examples/quantization/uqff_multimodal/main.rs"
 
 [[example]]
 name = "topology"

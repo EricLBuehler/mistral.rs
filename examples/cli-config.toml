@@ -20,10 +20,10 @@ model_id = "meta-llama/Llama-3.2-3B-Instruct"
 in_situ_quant = "4"
 
 [[models]]
-kind = "vision"
+kind = "multimodal"
 model_id = "Qwen/Qwen2-VL-2B-Instruct"
 
-[models.vision]
+[models.multimodal]
 max_num_images = 4
 
 [[models]]

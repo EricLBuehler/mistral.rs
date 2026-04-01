@@ -18,7 +18,7 @@ use crate::{
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata, NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -337,7 +337,7 @@ pub(crate) struct MiniCpmOSpecificArgs {
     pub(crate) image_hashes: Vec<u64>,
 }
 
-impl VisionModel for MiniCpmOModel {
+impl MultimodalModel for MiniCpmOModel {
     fn cache(&self) -> &EitherCache {
         self.llm.cache()
     }

@@ -18,7 +18,7 @@ use crate::{
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata, NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -239,7 +239,7 @@ impl NormalModel for Llama4Model {
     }
 }
 
-impl VisionModel for Llama4Model {
+impl MultimodalModel for Llama4Model {
     fn forward(
         &self,
         input_ids: &Tensor,

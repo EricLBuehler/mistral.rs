@@ -41,7 +41,7 @@ async fn do_search(
     web_search_options: &WebSearchOptions,
 ) -> NormalRequest {
     let messages = match &mut second_request.messages {
-        RequestMessage::Chat { messages, .. } | RequestMessage::VisionChat { messages, .. } => {
+        RequestMessage::Chat { messages, .. } | RequestMessage::MultimodalChat { messages, .. } => {
             messages
         }
         _ => unreachable!(),
@@ -238,7 +238,7 @@ async fn do_extraction(
     web_search_options: &WebSearchOptions,
 ) -> NormalRequest {
     let messages = match &mut second_request.messages {
-        RequestMessage::Chat { messages, .. } | RequestMessage::VisionChat { messages, .. } => {
+        RequestMessage::Chat { messages, .. } | RequestMessage::MultimodalChat { messages, .. } => {
             messages
         }
         _ => unreachable!(),
@@ -342,7 +342,7 @@ async fn do_custom_tool(
     tool_calls: &ToolCallResponse,
 ) -> NormalRequest {
     let messages = match &mut second_request.messages {
-        RequestMessage::Chat { messages, .. } | RequestMessage::VisionChat { messages, .. } => {
+        RequestMessage::Chat { messages, .. } | RequestMessage::MultimodalChat { messages, .. } => {
             messages
         }
         _ => unreachable!(),

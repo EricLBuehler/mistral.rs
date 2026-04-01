@@ -253,9 +253,15 @@ pub struct Gemma4AudioConfig {
     pub conf_positional_bias_size: Option<usize>,
     #[serde(default = "conf_attention_chunk_size", alias = "attention_chunk_size")]
     pub conf_attention_chunk_size: usize,
-    #[serde(default = "conf_attention_context_left", alias = "attention_context_left")]
+    #[serde(
+        default = "conf_attention_context_left",
+        alias = "attention_context_left"
+    )]
     pub conf_attention_context_left: usize,
-    #[serde(default = "conf_attention_context_right", alias = "attention_context_right")]
+    #[serde(
+        default = "conf_attention_context_right",
+        alias = "attention_context_right"
+    )]
     pub conf_attention_context_right: usize,
     #[serde(
         default = "conf_attention_invalid_logits_value",
@@ -274,7 +280,10 @@ pub struct Gemma4AudioConfig {
     pub conf_reduction_factor: usize,
     #[serde(default = "conf_residual_weight", alias = "residual_weight")]
     pub conf_residual_weight: f64,
-    #[serde(default = "sscp_conv_channel_size", alias = "subsampling_conv_channels")]
+    #[serde(
+        default = "sscp_conv_channel_size",
+        alias = "subsampling_conv_channels"
+    )]
     pub sscp_conv_channel_size: Vec<usize>,
     #[serde(default = "sscp_conv_kernel_size")]
     pub sscp_conv_kernel_size: Vec<Vec<usize>>,

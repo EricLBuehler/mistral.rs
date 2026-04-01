@@ -11,13 +11,13 @@ use crate::model_builder_trait::{build_auto_pipeline, build_model_from_pipeline}
 use crate::Model;
 
 #[derive(Clone)]
-/// Configure a model with automatic detection of model type (text, vision, embedding, etc.).
+/// Configure a model with automatic detection of model type (text, multimodal, embedding, etc.).
 ///
 /// This builder works like the CLI `run` command: it reads the model's `config.json` at build time
-/// to determine whether it should be loaded as a text, vision, or embedding model.
+/// to determine whether it should be loaded as a text, multimodal, or embedding model.
 ///
 /// Use this when you don't know (or don't care) whether a model ID corresponds to a text or
-/// vision architecture. For example, `google/gemma-3-4b-it` is detected as vision,
+/// multimodal architecture. For example, `google/gemma-3-4b-it` is detected as multimodal,
 /// while `Qwen/Qwen3-4B` is detected as text, both work seamlessly.
 ///
 /// # Example
@@ -142,7 +142,7 @@ impl ModelBuilder {
     }
 
     /// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
-    /// Only applies to vision models that support this (e.g., Qwen2-VL, Idefics 2).
+    /// Only applies to multimodal models that support this (e.g., Qwen2-VL, Idefics 2).
     pub fn with_max_edge(mut self, max_edge: u32) -> Self {
         self.max_edge = Some(max_edge);
         self

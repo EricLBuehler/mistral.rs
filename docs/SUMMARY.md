@@ -22,7 +22,7 @@
 # Models
 
 - [Supported Models](SUPPORTED_MODELS.md)
-- [Vision Models](VISION_MODELS.md)
+- [Multimodal Models](MULTIMODAL_MODELS.md)
 - [Image Generation](IMAGEGEN_MODELS.md)
 - [Speech Models](SPEECH_MODELS.md)
 - [Embeddings](EMBEDDINGS.md)
@@ -42,7 +42,7 @@
 - [Qwen 3 Next](QWEN3NEXT.md)
 - [SmolLM3](SMOLLM3.md)
 
-## Vision Model Guides
+## Multimodal Model Guides
 
 - [Idefics 2](IDEFICS2.md)
 - [Idefics 3](IDEFICS3.md)

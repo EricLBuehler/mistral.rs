@@ -972,10 +972,7 @@ pub struct Gemma4AudioConformerBlock {
 impl Gemma4AudioConformerBlock {
     fn new(cfg: &Gemma4AudioConfig, vb: ShardedVarBuilder) -> Result<Self> {
         Ok(Self {
-            ffw_layer_start: Gemma4AudioConformerFeedForward::new(
-                cfg,
-                vb.pp("feed_forward1"),
-            )?,
+            ffw_layer_start: Gemma4AudioConformerFeedForward::new(cfg, vb.pp("feed_forward1"))?,
             attention: Gemma4AudioConformerAttention::new(
                 cfg,
                 vb.pp("self_attn"),
@@ -983,10 +980,7 @@ impl Gemma4AudioConformerBlock {
                 vb.pp("norm_post_attn"),
             )?,
             lconv1d: Gemma4AudioConformerLightConv1d::new(cfg, vb.pp("lconv1d"))?,
-            ffw_layer_end: Gemma4AudioConformerFeedForward::new(
-                cfg,
-                vb.pp("feed_forward2"),
-            )?,
+            ffw_layer_end: Gemma4AudioConformerFeedForward::new(cfg, vb.pp("feed_forward2"))?,
             norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("norm_out"))?,
             gradient_clipping: cfg.gradient_clipping,
         })

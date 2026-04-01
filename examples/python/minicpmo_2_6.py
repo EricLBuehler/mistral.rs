@@ -1,11 +1,11 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 MODEL_ID = "openbmb/MiniCPM-o-2_6"
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id=MODEL_ID,
-        arch=VisionArchitecture.MiniCpmO,
+        arch=MultimodalArchitecture.MiniCpmO,
     ),
 )
 

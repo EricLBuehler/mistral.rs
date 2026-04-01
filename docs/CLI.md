@@ -18,7 +18,7 @@ This is the comprehensive CLI reference for `mistralrs`. The CLI provides comman
 - [Model Types](#model-types)
   - [auto](#auto)
   - [text](#text)
-  - [vision](#vision)
+  - [multimodal](#multimodal)
   - [diffusion](#diffusion)
   - [speech](#speech)
   - [embedding](#embedding)
@@ -60,7 +60,7 @@ mistralrs run -m Qwen/Qwen3-4B
 # Run with thinking mode enabled
 mistralrs run -m Qwen/Qwen3-4B --enable-thinking
 
-# Run a vision model
+# Run a multimodal model
 mistralrs run -m google/gemma-3-4b-it
 ```
 
@@ -140,7 +140,7 @@ mistralrs quantize -m Qwen/Qwen3-4B --isq q4k,q8_0 -o qwen3-4b-uqff/
 # Equivalent: repeated --isq flags
 mistralrs quantize -m Qwen/Qwen3-4B --isq q4k --isq q8_0 -o qwen3-4b-uqff/
 
-# Quantize a vision model
+# Quantize a multimodal model
 mistralrs quantize -m google/gemma-3-4b-it --isq 4 -o gemma3-4b-uqff/
 
 # Quantize with imatrix for better quality
@@ -445,7 +445,7 @@ The `bench` command also accepts all model loading options (ISQ, device mapping,
 
 ### from-config - TOML Configuration
 
-Run the CLI from a TOML configuration file. This is the recommended way to run multiple models simultaneously, including models of different types (e.g., text + vision + embedding).
+Run the CLI from a TOML configuration file. This is the recommended way to run multiple models simultaneously, including models of different types (e.g., text + multimodal + embedding).
 
 See [CLI_CONFIG.md](CLI_CONFIG.md) for full TOML configuration format details.
 
@@ -473,7 +473,7 @@ kind = "auto"
 model_id = "Qwen/Qwen3-4B"
 
 [[models]]
-kind = "vision"
+kind = "multimodal"
 model_id = "google/gemma-3-4b-it"
 
 [[models]]
@@ -519,7 +519,7 @@ mistralrs run -m Qwen/Qwen3-4B
 mistralrs serve -m Qwen/Qwen3-4B
 ```
 
-The `auto` type supports text, vision, and other model types through automatic detection.
+The `auto` type supports text, multimodal, and other model types through automatic detection.
 
 ### text
 
@@ -530,16 +530,16 @@ mistralrs run text -m Qwen/Qwen3-4B
 mistralrs serve text -m Qwen/Qwen3-4B
 ```
 
-### vision
+### multimodal
 
-Vision-language models that can process images and text.
+Multimodal models that can process images, audio, and text.
 
 ```bash
-mistralrs run vision -m google/gemma-3-4b-it
-mistralrs serve vision -m google/gemma-3-4b-it
+mistralrs run multimodal -m google/gemma-3-4b-it
+mistralrs serve multimodal -m google/gemma-3-4b-it
 ```
 
-**Vision Options:**
+**Multimodal Options:**
 
 | Option | Description |
 |--------|-------------|
@@ -912,9 +912,9 @@ Ahoy there, matey! What brings ye to these waters?
 > \exit
 ```
 
-**Vision Model Interactive Mode:**
+**Multimodal Model Interactive Mode:**
 
-For vision models, you can include images in your prompts by specifying file paths or URLs:
+For multimodal models, you can include images in your prompts by specifying file paths or URLs:
 
 ```
 > Describe this image: /path/to/image.jpg
