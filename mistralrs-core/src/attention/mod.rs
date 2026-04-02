@@ -132,6 +132,9 @@ impl Sdpa {
             let v = v.transpose(1, 2)?;
 
             if q.device().is_cpu() {
+                let q = q.contiguous()?;
+                let k = k.contiguous()?;
+                let v = v.contiguous()?;
                 match q.dtype() {
                     DType::F32 => {
                         return cpu::run_flash_attn_cpu::<f32>(&q, &k, &v, mask, sdpa_params);

@@ -983,8 +983,10 @@ impl Model {
                             );
                         }
 
-                        let conv_state = pool.gather_conv_state(indices)?;
-                        let recurrent_state = pool.gather_recurrent_state(indices)?;
+                        let pool_device = pool.device().clone();
+                        let layer_device = x.device().clone();
+                        let conv_state = pool.gather_conv_state(indices)?.to_device(&layer_device)?;
+                        let recurrent_state = pool.gather_recurrent_state(indices)?.to_device(&layer_device)?;
 
                         let mut gdn_cache = GdnLayerCache {
                             conv_state,
@@ -994,8 +996,11 @@ impl Model {
 
                         x = layer.forward_linear(&x, &mut gdn_cache)?;
 
-                        pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
-                        pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
+                        // Move states back to pool device before scattering
+                        let conv_state_back = gdn_cache.conv_state.to_device(&pool_device)?;
+                        let recurrent_state_back = gdn_cache.recurrent_state.to_device(&pool_device)?;
+                        pool.scatter_conv_state(indices, &conv_state_back)?;
+                        pool.scatter_recurrent_state(indices, &recurrent_state_back)?;
 
                         let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
                         for &idx in &indices_vec {

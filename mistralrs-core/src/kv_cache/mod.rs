@@ -1453,6 +1453,58 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
             }
         }
         // Reset the hybrid cache (including recurrent state pools)
-        pipeline.cache().hybrid().reset();
+        let mut hybrid_cache = pipeline.cache().hybrid();
+        hybrid_cache.reset();
+
+        // After reset, all pool slots are freed, so clear and re-allocate
+        // recurrent_state_idx for each sequence, then build state_indices.
+        let recurrent_device = hybrid_cache.caches.iter().find_map(|c| {
+            if let HybridLayerCache::Recurrent(pool) = c {
+                Some(pool.device().clone())
+            } else {
+                None
+            }
+        });
+
+        for seq in seqs.iter_mut() {
+            seq.set_recurrent_state_idx(None);
+        }
+
+        let mut allocation_ok = true;
+        for seq in seqs.iter_mut() {
+            if let Some(slot_idx) = hybrid_cache.allocate_seq() {
+                seq.set_recurrent_state_idx(Some(slot_idx));
+            } else {
+                tracing::warn!(
+                    "Failed to allocate recurrent state slot for sequence {} during set_none_cache.",
+                    seq.id()
+                );
+                allocation_ok = false;
+                break;
+            }
+        }
+
+        if let Some(device) = recurrent_device {
+            if !allocation_ok {
+                hybrid_cache.set_state_indices(None);
+            } else {
+                let mut indices = Vec::with_capacity(seqs.len());
+                for seq in seqs.iter() {
+                    if let Some(idx) = seq.recurrent_state_idx() {
+                        #[allow(clippy::cast_possible_truncation)]
+                        indices.push(idx as u32);
+                    }
+                }
+                if indices.len() == seqs.len() {
+                    if let Ok(state_indices) = Tensor::from_vec(indices, (seqs.len(),), &device) {
+                        hybrid_cache.set_state_indices(Some(state_indices));
+                    } else {
+                        hybrid_cache.set_state_indices(None);
+                    }
+                } else {
+                    hybrid_cache.set_state_indices(None);
+                }
+            }
+        }
     }
 }

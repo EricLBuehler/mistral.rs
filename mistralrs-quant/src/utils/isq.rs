@@ -28,10 +28,24 @@ pub fn apply_immediate_isq(
             let guard = params.guard.clone();
             let (tx, rx) = pending_layer::pending_isq_channel();
             pool.spawn(move || {
-                let result =
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     layer
                         .clone()
-                        .apply_isq(Some(ty), device, &AtomicUsize::new(0), None, guard);
+                        .apply_isq(Some(ty), device, &AtomicUsize::new(0), None, guard)
+                }));
+                let result = match result {
+                    Ok(r) => r,
+                    Err(panic_info) => {
+                        let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                            s.clone()
+                        } else {
+                            "unknown panic in ISQ task".to_string()
+                        };
+                        Err(candle_core::Error::Msg(format!("ISQ task panicked: {msg}")))
+                    }
+                };
                 let _ = tx.send(result);
             });
             Ok(Arc::new(PendingIsqLayer::new(rx)))

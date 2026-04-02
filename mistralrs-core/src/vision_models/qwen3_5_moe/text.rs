@@ -855,10 +855,15 @@ impl Qwen3_5MoeTextModel {
             match &self.layer_types[i] {
                 LayerType::FullAttention => {
                     if let Some(HybridLayerCache::Attention(kv_cache)) = hybrid_cache.get_mut(i) {
+                        let layer_cos_sin = if cos_sin.0.device().location() != xs.device().location() {
+                            (cos_sin.0.to_device(xs.device())?, cos_sin.1.to_device(xs.device())?)
+                        } else {
+                            cos_sin.clone()
+                        };
                         xs = layer.forward_attention(
                             &xs,
                             attention_mask.as_ref().map(|m| m.get(xs.device())),
-                            &cos_sin,
+                            &layer_cos_sin,
                             kv_cache,
                             metadata
                                 .as_ref()
@@ -887,8 +892,10 @@ impl Qwen3_5MoeTextModel {
                             );
                         }
 
-                        let conv_state = pool.gather_conv_state(indices)?;
-                        let recurrent_state = pool.gather_recurrent_state(indices)?;
+                        let pool_device = pool.device().clone();
+                        let layer_device = xs.device().clone();
+                        let conv_state = pool.gather_conv_state(indices)?.to_device(&layer_device)?;
+                        let recurrent_state = pool.gather_recurrent_state(indices)?.to_device(&layer_device)?;
 
                         let mut gdn_cache = GdnLayerCache {
                             conv_state,
@@ -898,8 +905,11 @@ impl Qwen3_5MoeTextModel {
 
                         xs = layer.forward_linear(&xs, &mut gdn_cache)?;
 
-                        pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
-                        pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
+                        // Move states back to pool device before scattering
+                        let conv_state_back = gdn_cache.conv_state.to_device(&pool_device)?;
+                        let recurrent_state_back = gdn_cache.recurrent_state.to_device(&pool_device)?;
+                        pool.scatter_conv_state(indices, &conv_state_back)?;
+                        pool.scatter_recurrent_state(indices, &recurrent_state_back)?;
 
                         let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
                         for &idx in &indices_vec {

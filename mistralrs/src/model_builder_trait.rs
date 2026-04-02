@@ -324,6 +324,7 @@ pub async fn build_text_pipeline(
         hf_cache_path: builder.hf_cache_path.clone(),
         matformer_config_path: builder.matformer_config_path.clone(),
         matformer_slice_name: builder.matformer_slice_name.clone(),
+        #[cfg(feature = "kvcache-compression")]
         kv_compression: None,
     };
 
@@ -1020,6 +1021,7 @@ pub async fn build_auto_pipeline(
         hf_cache_path: builder.hf_cache_path.clone(),
         matformer_config_path: builder.matformer_config_path.clone(),
         matformer_slice_name: builder.matformer_slice_name.clone(),
+        #[cfg(feature = "kvcache-compression")]
         kv_compression: None,
     };
 

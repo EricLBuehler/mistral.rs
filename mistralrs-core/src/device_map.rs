@@ -325,9 +325,14 @@ impl DeviceMapper for LayerDeviceMapper {
         loading_isq: bool,
     ) -> ShardedVarBuilder {
         if loading_isq {
-            return varbuilder;
+            // When loading ISQ, set the VB device to the target device so that
+            // apply_immediate_isq places quantized weights on the correct
+            // device. linear_no_bias/linear will override to CPU for the actual
+            // weight loading, but base_vb captures this device for ISQ target.
+            varbuilder.set_device(self.mappings[layer].clone())
+        } else {
+            varbuilder.set_device(self.mappings[layer].clone())
         }
-        varbuilder.set_device(self.mappings[layer].clone())
     }
     fn device_for(&self, layer: usize, loading_isq: bool) -> Option<&Device> {
         if loading_isq {

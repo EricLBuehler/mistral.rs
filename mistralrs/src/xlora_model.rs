@@ -43,6 +43,7 @@ impl XLoraModelBuilder {
             hf_cache_path: self.text_model.hf_cache_path,
             matformer_config_path: None,
             matformer_slice_name: None,
+            #[cfg(feature = "kvcache-compression")]
             kv_compression: None,
         };
 
