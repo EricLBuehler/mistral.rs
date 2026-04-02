@@ -413,7 +413,8 @@ impl Engine {
                             &mut scheduled.completion,
                             self.pipeline,
                             'lp,
-                            self.prefix_cacher
+                            self.prefix_cacher,
+                            &self.scheduler
                         );
 
                         self.logger.add_tokens_processed(scheduled.completion.len());
@@ -474,7 +475,8 @@ impl Engine {
                             &mut scheduled.prompt,
                             self.pipeline,
                             'lp,
-                            self.prefix_cacher
+                            self.prefix_cacher,
+                            &self.scheduler
                         );
 
                         let total_processed_tokens: usize = scheduled
@@ -697,7 +699,8 @@ impl Engine {
                             &mut guards_mut,
                             self.pipeline,
                             'lp,
-                            self.prefix_cacher
+                            self.prefix_cacher,
+                            &self.scheduler
                         );
 
                         let total_processed_tokens: usize = guards_mut

@@ -86,7 +86,7 @@ macro_rules! handle_seq_error_stateaware_ok {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! handle_pipeline_forward_error {
-    ($stage: tt, $fallible:expr, $seq_slice:expr, $pipeline:expr, $label:tt, $prefix_cacher:expr) => {
+    ($stage: tt, $fallible:expr, $seq_slice:expr, $pipeline:expr, $label:tt, $prefix_cacher:expr, $scheduler:expr) => {
         match $fallible {
             Ok(v) => v,
             Err(e) => {
@@ -174,13 +174,12 @@ macro_rules! handle_pipeline_forward_error {
                             usage: group.get_usage(),
                         };
 
-                        seq.responder()
+                        let _ = seq.responder()
                             .send(Response::ModelError(
                                 e.to_string(),
                                 partial_completion_response
                             ))
-                            .await
-                            .unwrap();
+                            .await;
                     } else {
                         let partial_completion_response = CompletionResponse {
                             id: seq.id().to_string(),
@@ -192,13 +191,12 @@ macro_rules! handle_pipeline_forward_error {
                             usage: group.get_usage(),
                         };
 
-                        seq.responder()
+                        let _ = seq.responder()
                             .send(Response::CompletionModelError(
                                 e.to_string(),
                                 partial_completion_response
                             ))
-                            .await
-                            .unwrap();
+                            .await;
                     }
                 }
                 for seq in $seq_slice.iter_mut() {
@@ -212,6 +210,10 @@ macro_rules! handle_pipeline_forward_error {
                 // - We should reset the state then, including draft.
                 p.set_none_cache($seq_slice, true, true, false);
                 get_mut_arcmutex!($prefix_cacher).evict_all_caches().unwrap();
+                
+                // CRITICAL FIX: The loop continue bypasses the end-of-loop free_finished_sequence_groups.
+                // We must manually trigger eviction here to prevent scheduler deadlock.
+                get_mut_arcmutex!($scheduler).free_finished_sequence_groups();
 
                 continue $label;
             }
