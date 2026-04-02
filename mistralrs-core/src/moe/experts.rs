@@ -6,12 +6,10 @@
 //! - Handles backend selection (fused/fast/slow)
 //! - Manages tensor parallelism with all-reduce
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::Linear;
+use candle_core::{DType, Device, Result, Tensor, D};
 use mistralrs_quant::{
-    apply_immediate_isq, should_apply_immediate_isq, FusedExperts, MatMul, PackedExperts,
-    QuantMethod, QuantMethodConfig, QuantizedConfig, ShardedVarBuilder, SumAllReduce,
-    UnquantLinear,
+    FusedExperts, MatMul, PackedExperts, QuantMethod, QuantizedConfig, ShardedVarBuilder,
+    SumAllReduce,
 };
 use std::sync::Arc;
 
@@ -187,75 +185,6 @@ impl MoEExperts {
         })
     }
 
-    /// Create MoEExperts from a VarBuilder already at the experts level.
-    ///
-    /// Unlike `new` which does `vb.pp("experts")` internally, this takes the VB
-    /// already pointing at the experts-level path. Use this when the model's weight
-    /// structure doesn't have an "experts" sublevel (e.g., Gemma 4 uses `moe.*` directly).
-    ///
-    /// Supports two weight formats:
-    /// - Combined stacked: `gate_up_proj` [E, hidden, 2*inter]
-    /// - Per-expert: `{i}/gate_proj/weight` [inter, hidden]
-    pub fn new_direct(
-        cfg: &MoEExpertsConfig,
-        experts_vb: ShardedVarBuilder,
-        comm: &Arc<mistralrs_quant::Comm>,
-        loading_isq: bool,
-        quantization_config: &Option<QuantizedConfig>,
-        act: Activation,
-    ) -> Result<Self> {
-        let layer_device = experts_vb.device().clone();
-        let backend = MoEExpertsBackend::select(&layer_device, loading_isq, quantization_config);
-
-        let is_stacked_combined = experts_vb.contains_tensor("gate_up_proj");
-
-        let backend_impl = match backend {
-            MoEExpertsBackend::Fused => {
-                if is_stacked_combined {
-                    MoEExpertsBackendImpl::Fused(Self::load_fused_stacked(cfg, experts_vb, comm)?)
-                } else {
-                    MoEExpertsBackendImpl::Fused(Self::load_fused_standard(cfg, experts_vb, comm)?)
-                }
-            }
-            MoEExpertsBackend::Fast => {
-                if is_stacked_combined && quantization_config.is_none() {
-                    MoEExpertsBackendImpl::Fast(Self::load_fast_combined_stacked(cfg, experts_vb)?)
-                } else if is_stacked_combined {
-                    MoEExpertsBackendImpl::Slow(Self::load_slow_from_combined_stacked(
-                        cfg, experts_vb,
-                    )?)
-                } else {
-                    candle_core::bail!(
-                        "new_direct Fast backend requires combined stacked format \
-                         (gate_up_proj) or use new() with standard VB paths"
-                    )
-                }
-            }
-            MoEExpertsBackend::Slow => {
-                if is_stacked_combined {
-                    MoEExpertsBackendImpl::Slow(Self::load_slow_from_combined_stacked(
-                        cfg, experts_vb,
-                    )?)
-                } else {
-                    MoEExpertsBackendImpl::Slow(Self::load_slow(
-                        cfg,
-                        experts_vb,
-                        comm,
-                        quantization_config,
-                    )?)
-                }
-            }
-        };
-
-        Ok(Self {
-            backend: backend_impl,
-            act,
-            num_experts_per_tok: cfg.num_experts_per_tok,
-            all_reduce: SumAllReduce::new(comm),
-            world_size: comm.world_size(),
-        })
-    }
-
     /// Load fused weights in standard per-expert format
     fn load_fused_standard(
         cfg: &MoEExpertsConfig,
@@ -354,192 +283,6 @@ impl MoEExperts {
             down_w,
             w_size_n,
             stacked_format: true,
-        })
-    }
-
-    /// Load fast (gather-based) weights from a combined stacked `gate_up_proj`.
-    ///
-    /// Supports:
-    /// - `gate_up_proj`: [E, hidden, 2*inter] or [E, 2*inter, hidden]
-    /// - `down_proj`: [E, inter, hidden] or [E, hidden, inter]
-    fn load_fast_combined_stacked(
-        cfg: &MoEExpertsConfig,
-        experts_vb: ShardedVarBuilder,
-    ) -> Result<FastExpertsWeights> {
-        let num_experts = cfg.num_experts;
-
-        let isq_gate_up = should_apply_immediate_isq(&experts_vb.pp("gate_up_proj"));
-        let isq_down = should_apply_immediate_isq(&experts_vb.pp("down_proj"));
-
-        // When immediate ISQ is active, load directly on CPU to avoid creating
-        // large GPU buffers that will be immediately copied to CPU for quantization.
-        // On unified memory systems (Metal), this prevents doubling memory usage.
-        let load_vb = if (isq_gate_up || isq_down) && !experts_vb.device().is_cpu() {
-            experts_vb.clone().set_device(Device::Cpu)
-        } else {
-            experts_vb.clone()
-        };
-
-        let gate_up_proj = load_vb
-            .get(
-                (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
-                "gate_up_proj",
-            )
-            .or_else(|_| {
-                load_vb
-                    .get(
-                        (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
-                        "gate_up_proj",
-                    )
-                    .and_then(|t| t.transpose(1, 2)?.contiguous())
-            })?;
-        let down_proj_packed = load_vb
-            .get(
-                (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
-                "down_proj",
-            )
-            .or_else(|_| {
-                load_vb
-                    .get(
-                        (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
-                        "down_proj",
-                    )
-                    .and_then(|t| t.transpose(1, 2)?.contiguous())
-            })?;
-
-        let gate_proj = gate_up_proj
-            .narrow(2, 0, cfg.moe_intermediate_size)?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let up_proj = gate_up_proj
-            .narrow(2, cfg.moe_intermediate_size, cfg.moe_intermediate_size)?
-            .transpose(1, 2)?
-            .contiguous()?;
-        // Drop gate_up_proj early to free memory before creating more tensors
-        drop(gate_up_proj);
-        let down_proj = down_proj_packed.transpose(1, 2)?.contiguous()?;
-        drop(down_proj_packed);
-
-        let mut fused_gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-            QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
-        )?);
-        let mut fused_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-            QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
-        )?);
-        let mut fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-            QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
-        )?);
-
-        // Pass the original-device VB (not CPU) so apply_immediate_isq targets
-        // the correct device for the quantized weights.
-        let vb_gate_up = experts_vb.pp("gate_up_proj");
-        let vb_down = experts_vb.pp("down_proj");
-        fused_gate_proj = apply_immediate_isq(fused_gate_proj, vb_gate_up.clone())?;
-        fused_up_proj = apply_immediate_isq(fused_up_proj, vb_gate_up)?;
-        fused_down_proj = apply_immediate_isq(fused_down_proj, vb_down)?;
-
-        Ok(FastExpertsWeights {
-            fused_gate_proj,
-            fused_up_proj,
-            fused_down_proj,
-        })
-    }
-
-    /// Load slow (loop-based) weights from a combined stacked `gate_up_proj`.
-    ///
-    /// Supports both direct stacked conventions used by Gemma4 checkpoints:
-    /// - `gate_up_proj`: [E, hidden, 2*inter] or [E, 2*inter, hidden]
-    /// - `down_proj`: [E, inter, hidden] or [E, hidden, inter]
-    fn load_slow_from_combined_stacked(
-        cfg: &MoEExpertsConfig,
-        experts_vb: ShardedVarBuilder,
-    ) -> Result<SlowExpertsWeights> {
-        let num_experts = cfg.num_experts;
-
-        let isq_gate_up = should_apply_immediate_isq(&experts_vb.pp("gate_up_proj"));
-        let isq_down = should_apply_immediate_isq(&experts_vb.pp("down_proj"));
-
-        // When immediate ISQ is active, load directly on CPU to avoid creating
-        // large GPU buffers that will be immediately copied to CPU for quantization.
-        let load_vb = if (isq_gate_up || isq_down) && !experts_vb.device().is_cpu() {
-            experts_vb.clone().set_device(Device::Cpu)
-        } else {
-            experts_vb.clone()
-        };
-
-        let gate_up_proj = load_vb
-            .get(
-                (num_experts, cfg.hidden_size, cfg.moe_intermediate_size * 2),
-                "gate_up_proj",
-            )
-            .or_else(|_| {
-                load_vb
-                    .get(
-                        (num_experts, cfg.moe_intermediate_size * 2, cfg.hidden_size),
-                        "gate_up_proj",
-                    )
-                    .and_then(|t| t.transpose(1, 2)?.contiguous())
-            })?;
-        let down_proj_packed = load_vb
-            .get(
-                (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
-                "down_proj",
-            )
-            .or_else(|_| {
-                load_vb
-                    .get(
-                        (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
-                        "down_proj",
-                    )
-                    .and_then(|t| t.transpose(1, 2)?.contiguous())
-            })?;
-
-        // Pass the original-device VB (not CPU) so apply_immediate_isq targets
-        // the correct device for the quantized weights.
-        let vb_gate_up = experts_vb.pp("gate_up_proj");
-        let vb_down = experts_vb.pp("down_proj");
-
-        let mut gate_proj = Vec::with_capacity(num_experts);
-        let mut up_proj = Vec::with_capacity(num_experts);
-        let mut down_proj = Vec::with_capacity(num_experts);
-
-        for i in 0..num_experts {
-            let gate_up_expert = gate_up_proj.i(i)?;
-            let gate = gate_up_expert
-                .narrow(1, 0, cfg.moe_intermediate_size)?
-                .transpose(0, 1)?
-                .contiguous()?;
-            let up = gate_up_expert
-                .narrow(1, cfg.moe_intermediate_size, cfg.moe_intermediate_size)?
-                .transpose(0, 1)?
-                .contiguous()?;
-            let down = down_proj_packed.i(i)?.transpose(0, 1)?.contiguous()?;
-
-            let mut gate_layer: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(candle_nn::Linear::new(gate, None)),
-            )?);
-            let mut up_layer: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(candle_nn::Linear::new(up, None)),
-            )?);
-            let mut down_layer: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(candle_nn::Linear::new(down, None)),
-            )?);
-
-            gate_layer = apply_immediate_isq(gate_layer, vb_gate_up.clone())?;
-            up_layer = apply_immediate_isq(up_layer, vb_gate_up.clone())?;
-            down_layer = apply_immediate_isq(down_layer, vb_down.clone())?;
-
-            gate_proj.push(gate_layer);
-            up_proj.push(up_layer);
-            down_proj.push(down_layer);
-        }
-
-        Ok(SlowExpertsWeights {
-            experts: PackedExperts {
-                gate_proj,
-                up_proj,
-                down_proj,
-            },
         })
     }
 
@@ -760,23 +503,53 @@ impl MoEExperts {
                 .fused_down_proj
                 .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, topk_ids)?
         } else {
-            // Metal path: use broadcast gather shapes
-            let xs = xs.reshape((b_size, seq_len, 1, 1, hidden_dim))?;
+            // Metal path: use broadcast gather shapes.
+            let act_dtype = weights.fused_gate_proj.quantized_act_type();
+            let xs_5d = xs.reshape((b_size, seq_len, 1, 1, hidden_dim))?;
+            let xs_act = if let Some(dt) = act_dtype {
+                xs_5d.to_dtype(dt)?
+            } else {
+                xs_5d
+            };
             let indices = topk_ids.reshape((b_size, seq_len, self.num_experts_per_tok))?;
-            let gate = weights
-                .fused_gate_proj
-                .gather_forward_autocast(&xs, &indices)?;
-            let up = weights
-                .fused_up_proj
-                .gather_forward_autocast(&xs, &indices)?;
+
+            // Try fused gate+up+SiLU kernel (single dispatch instead of 3)
+            #[cfg(feature = "metal")]
+            let gated = {
+                let gate_qt = weights.fused_gate_proj.moe_qtensor();
+                let up_qt = weights.fused_up_proj.moe_qtensor();
+                if let (Some(gq), Some(uq)) = (gate_qt, up_qt) {
+                    // Fused path: silu(gate @ x) * (up @ x) in one Metal kernel
+                    tracing::debug!("fused_moe_swiglu_dispatch");
+                    Some(mistralrs_quant::metal_fused_gate_up_swiglu(gq, uq, &xs_act, &indices)?)
+                } else {
+                    tracing::debug!(gate_qt = gate_qt.is_some(), up_qt = up_qt.is_some(), "fused_moe_fallback");
+                    None
+                }
+            };
+            #[cfg(not(feature = "metal"))]
+            let gated: Option<Tensor> = None;
+
+            let gated = match gated {
+                Some(g) => g,
+                None => {
+                    // Fallback: separate gate + up + activation
+                    let gate = weights.fused_gate_proj.gather_forward(&xs_act, &indices)?;
+                    let up = weights.fused_up_proj.gather_forward(&xs_act, &indices)?;
+                    (up * gate.apply(&self.act)?)?
+                }
+            };
+
             let xs = weights
                 .fused_down_proj
-                .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, &indices)?;
+                .gather_forward(&gated, &indices)?;
             xs.squeeze(D::Minus2)?
                 .reshape((num_tokens, self.num_experts_per_tok, hidden_dim))?
         };
 
-        ys.to_dtype(DType::F32)?
+        // Weighted sum in F32 for precision, convert back once at the end
+        let ys_f32 = if ys.dtype() == DType::F32 { ys } else { ys.to_dtype(DType::F32)? };
+        ys_f32
             .broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
             .sum(D::Minus2)?
             .to_dtype(original_dtype)
@@ -806,10 +579,9 @@ impl MoEExperts {
             .enumerate()
         {
             for (&rw, &expert_idx) in rw.iter().zip(expert_idxs.iter()) {
-                let expert_idx = expert_idx as usize;
                 #[allow(clippy::cast_possible_truncation)]
-                top_x[expert_idx].push(row_idx as u32);
-                selected_experts[expert_idx].push(rw)
+                top_x[expert_idx as usize].push(row_idx as u32);
+                selected_experts[expert_idx as usize].push(rw)
             }
         }
 
@@ -859,8 +631,6 @@ impl MoEExperts {
     }
 
     /// Get mutable references to quantizable layers for ISQ
-    /// Returns mutable references to all ISQ-quantizable layers.
-    /// The count must match `num_isq_layers`.
     pub fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
         match &mut self.backend {
             MoEExpertsBackendImpl::Fused(_) => vec![],
@@ -886,16 +656,6 @@ impl MoEExperts {
                 }
                 layers
             }
-        }
-    }
-
-    /// Returns the number of ISQ-quantizable layers.
-    /// Must match the length of `get_isq_layers`.
-    pub fn num_isq_layers(&self) -> usize {
-        match &self.backend {
-            MoEExpertsBackendImpl::Fused(_) => 0,
-            MoEExpertsBackendImpl::Fast(_) => 3,
-            MoEExpertsBackendImpl::Slow(weights) => weights.experts.gate_proj.len() * 3,
         }
     }
 }

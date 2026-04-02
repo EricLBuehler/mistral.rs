@@ -25,6 +25,8 @@ pub mod f8q8;
 mod fp8;
 pub mod gemv;
 mod gguf;
+#[cfg(feature = "metal")]
+pub use gguf::metal_fused_gate_up_swiglu;
 mod gptq;
 mod hqq;
 mod imatrix;
@@ -1013,6 +1015,12 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
 
     /// If a quantized method, return the activation dtype.
     fn quantized_act_type(&self) -> Option<DType>;
+
+    /// Return the underlying QTensor for fused MoE kernels (gate+up+SiLU).
+    /// Only implemented for GgufMatMul with QTensor backing.
+    fn moe_qtensor(&self) -> Option<&std::sync::Arc<candle_core::quantized::QTensor>> {
+        None
+    }
 
     /// Weight dtype and device
     fn dtype_and_device(&self) -> (DType, Device);
