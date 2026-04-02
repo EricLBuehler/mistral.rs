@@ -57,6 +57,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Phi4MM`
 - `Qwen2_5VL`
 - `Gemma3`
+- `Gemma4`
 - `Mistral3`
 - `Llama4`
 - `Gemma3n`

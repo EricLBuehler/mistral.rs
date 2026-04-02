@@ -141,6 +141,11 @@ class MultimodalArchitecture(Enum):
     Llama4 = "llama4"
     Gemma3n = "Gemma3n"
     Qwen3VL = "Qwen3VL"
+    Qwen3VLMoE = "Qwen3VLMoE"
+    Qwen3_5 = "Qwen3_5"
+    Qwen3_5Moe = "Qwen3_5Moe"
+    Voxtral = "Voxtral"
+    Gemma4 = "Gemma4"
 
 @dataclass
 class DiffusionArchitecture(Enum):
