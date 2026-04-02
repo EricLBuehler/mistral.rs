@@ -121,7 +121,7 @@ fn sinks_attn_varlen(
         .k_meta(sdpa_params.sliding_window)
         .cumulative_seqlens[&device.location()];
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     if device.is_cuda() {
         return mistralrs_paged_attn::flash_attn_sinks_varlen(
             q,
