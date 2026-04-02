@@ -491,6 +491,8 @@ pub async fn build_vision_pipeline(
         matformer_config_path: builder.matformer_config_path.clone(),
         matformer_slice_name: builder.matformer_slice_name.clone(),
         organization: builder.organization,
+        #[cfg(feature = "kvcache-compression")]
+        kv_compression: None,
     };
 
     if builder.with_logging {
@@ -1036,6 +1038,8 @@ pub async fn build_auto_pipeline(
         matformer_config_path: builder.matformer_config_path.clone(),
         matformer_slice_name: builder.matformer_slice_name.clone(),
         organization: builder.organization,
+        #[cfg(feature = "kvcache-compression")]
+        kv_compression: None,
     };
 
     let embedding_config = EmbeddingSpecificConfig {

@@ -46,12 +46,15 @@ impl EitherCache {
         matches!(self, Self::Hybrid(_))
     }
 
-    /// If this is a `Normal` cache, replace all `Normal` KvCache layers with
-    /// TurboQuant `Compressed` layers.  No-op for `Full` and `Hybrid` caches.
+    /// Replace all `Normal` KvCache layers with TurboQuant `Compressed` layers.
+    /// Works for both `Normal` and `Hybrid` caches (attention layers only).
+    /// No-op for `Full` caches.
     #[cfg(feature = "kvcache-compression")]
     pub fn apply_compression(&self, config: super::KvCompressionConfig) {
-        if let Self::Normal(normal) = self {
-            normal.lock().apply_compression(config);
+        match self {
+            Self::Normal(normal) => normal.lock().apply_compression(config),
+            Self::Hybrid(hybrid) => hybrid.lock().apply_compression(config),
+            Self::Full(_) => {}
         }
     }
 }

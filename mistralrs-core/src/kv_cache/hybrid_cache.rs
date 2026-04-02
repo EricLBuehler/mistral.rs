@@ -465,6 +465,19 @@ impl HybridCache {
         }
     }
 
+    /// Convert all `Attention(Normal)` KV-cache layers to `Attention(Compressed)`
+    /// (TurboQuant) in-place. Recurrent layers are left unchanged.
+    #[cfg(feature = "kvcache-compression")]
+    pub fn apply_compression(&mut self, config: super::KvCompressionConfig) {
+        for (idx, cache) in self.caches.iter_mut().enumerate() {
+            if let HybridLayerCache::Attention(kv) = cache {
+                if matches!(kv, super::KvCache::Normal { .. }) {
+                    *kv = super::KvCache::new_compressed(2, config.clone(), idx);
+                }
+            }
+        }
+    }
+
     pub fn num_layers(&self) -> usize {
         self.caches.len()
     }

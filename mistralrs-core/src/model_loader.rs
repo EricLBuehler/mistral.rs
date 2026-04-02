@@ -340,6 +340,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     policy: CompressionPolicy::ThresholdTokens(kv_compression_threshold),
                 });
             }
+            #[cfg(feature = "kvcache-compression")]
+            let vision_kv_compression = normal_cfg.kv_compression.clone();
             let builder = AutoLoaderBuilder::new(
                 normal_cfg,
                 VisionSpecificConfig {
@@ -358,6 +360,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     matformer_config_path,
                     matformer_slice_name,
                     organization: organization.unwrap_or_default(),
+                    #[cfg(feature = "kvcache-compression")]
+                    kv_compression: vision_kv_compression,
                 },
                 EmbeddingSpecificConfig {
                     topology: Topology::from_option_path(topology)?,
@@ -419,6 +423,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 matformer_config_path,
                 matformer_slice_name,
                 organization: organization.unwrap_or_default(),
+                #[cfg(feature = "kvcache-compression")]
+                kv_compression: None,
             },
             args.chat_template,
             tokenizer_json,

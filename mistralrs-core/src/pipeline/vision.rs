@@ -133,6 +133,11 @@ pub struct VisionSpecificConfig {
     pub matformer_config_path: Option<PathBuf>,
     pub matformer_slice_name: Option<String>,
     pub organization: IsqOrganization,
+    /// Optional TurboQuant KV-cache compression config.
+    /// When set, all attention KV-cache layers (including those in hybrid caches)
+    /// are replaced with compressed variants after model loading.
+    #[cfg(feature = "kvcache-compression")]
+    pub kv_compression: Option<mistralrs_kvcache_compression::KvCompressionConfig>,
 }
 
 impl VisionLoaderBuilder {
@@ -858,6 +863,12 @@ impl Loader for VisionLoader {
         } else {
             (None, None)
         };
+
+        // Apply TurboQuant KV-cache compression if configured.
+        #[cfg(feature = "kvcache-compression")]
+        if let Some(ref kv_cfg) = self.config.kv_compression {
+            model.cache().apply_compression(kv_cfg.clone());
+        }
 
         let max_seq_len = model.max_seq_len();
         let llg_factory = build_llg_factory(tokenizer.clone())?;

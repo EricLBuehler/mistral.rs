@@ -998,6 +998,8 @@ fn loader_from_selected(
                 matformer_config_path: None,
                 matformer_slice_name: None,
                 organization: organization.unwrap_or_default(),
+                #[cfg(feature = "kvcache-compression")]
+                kv_compression: None,
             },
             args.chat_template,
             args.tokenizer_json,
