@@ -9,9 +9,9 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    apply_immediate_isq, should_apply_immediate_isq, FusedExperts, MatMul, PackedExperts,
-    QuantMethod, QuantMethodConfig, QuantizedConfig, ShardedVarBuilder, SumAllReduce,
-    UnquantLinear,
+    apply_immediate_isq, should_apply_immediate_isq, DummyLayer, FusedExperts, MatMul,
+    PackedExperts, QuantMethod, QuantMethodConfig, QuantizedConfig, ShardedVarBuilder,
+    SumAllReduce, UnquantLinear,
 };
 use std::sync::Arc;
 
@@ -225,10 +225,7 @@ impl MoEExperts {
                         cfg, experts_vb,
                     )?)
                 } else {
-                    candle_core::bail!(
-                        "new_direct Fast backend requires combined stacked format \
-                         (gate_up_proj) or use new() with standard VB paths"
-                    )
+                    MoEExpertsBackendImpl::Fast(Self::load_fast_direct_standard(cfg, experts_vb)?)
                 }
             }
             MoEExpertsBackend::Slow => {
@@ -437,6 +434,82 @@ impl MoEExperts {
         fused_gate_proj = apply_immediate_isq(fused_gate_proj, vb_gate_up.clone())?;
         fused_up_proj = apply_immediate_isq(fused_up_proj, vb_gate_up)?;
         fused_down_proj = apply_immediate_isq(fused_down_proj, vb_down)?;
+
+        Ok(FastExpertsWeights {
+            fused_gate_proj,
+            fused_up_proj,
+            fused_down_proj,
+        })
+    }
+
+    /// Load fast (gather-based) weights in per-expert format from a VB already
+    /// at the experts level (no `.pp("experts")` applied).
+    ///
+    /// Handles both real per-expert weights and UQFF dummy layers.
+    fn load_fast_direct_standard(
+        cfg: &MoEExpertsConfig,
+        experts_vb: ShardedVarBuilder,
+    ) -> Result<FastExpertsWeights> {
+        let num_experts = cfg.num_experts;
+
+        // UQFF loading: experts have no real tensors yet, create dummy layers
+        // that will be replaced during deserialization.
+        if !experts_vb.pp("0").contains_tensor("gate_proj.weight") {
+            let fused_gate_proj: Arc<dyn QuantMethod> =
+                Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?);
+            let fused_up_proj: Arc<dyn QuantMethod> =
+                Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?);
+            let fused_down_proj: Arc<dyn QuantMethod> =
+                Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?);
+            return Ok(FastExpertsWeights {
+                fused_gate_proj,
+                fused_up_proj,
+                fused_down_proj,
+            });
+        }
+
+        // Real per-expert weights: load, stack, and optionally ISQ
+        let load_experts_vb =
+            if mistralrs_quant::get_immediate_isq().is_some() && !experts_vb.device().is_cpu() {
+                experts_vb.clone().set_device(Device::Cpu)
+            } else {
+                experts_vb.clone()
+            };
+
+        let mut gate_proj_vec = Vec::with_capacity(num_experts);
+        let mut up_proj_vec = Vec::with_capacity(num_experts);
+        let mut down_proj_vec = Vec::with_capacity(num_experts);
+
+        for i in 0..num_experts {
+            let expert_vb = load_experts_vb.pp(i.to_string());
+            gate_proj_vec.push(expert_vb.get(
+                (cfg.moe_intermediate_size, cfg.hidden_size),
+                "gate_proj.weight",
+            )?);
+            up_proj_vec.push(expert_vb.get(
+                (cfg.moe_intermediate_size, cfg.hidden_size),
+                "up_proj.weight",
+            )?);
+            down_proj_vec.push(expert_vb.get(
+                (cfg.hidden_size, cfg.moe_intermediate_size),
+                "down_proj.weight",
+            )?);
+        }
+
+        let mut fused_gate_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(Linear::new(Tensor::stack(&gate_proj_vec, 0)?, None)),
+        )?);
+        let mut fused_up_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(Linear::new(Tensor::stack(&up_proj_vec, 0)?, None)),
+        )?);
+        let mut fused_down_proj: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(Linear::new(Tensor::stack(&down_proj_vec, 0)?, None)),
+        )?);
+
+        let expert0_vb = experts_vb.pp("0");
+        fused_gate_proj = apply_immediate_isq(fused_gate_proj, expert0_vb.pp("gate_proj"))?;
+        fused_up_proj = apply_immediate_isq(fused_up_proj, expert0_vb.pp("up_proj"))?;
+        fused_down_proj = apply_immediate_isq(fused_down_proj, expert0_vb.pp("down_proj"))?;
 
         Ok(FastExpertsWeights {
             fused_gate_proj,

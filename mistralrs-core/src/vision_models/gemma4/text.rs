@@ -721,10 +721,13 @@ impl DecoderLayer {
                 &cfg.quantization_config,
                 cfg.hidden_activation,
             )?;
-            // per_expert_scale may live under "moe" (old) or "router" (new)
+            // per_expert_scale may live under "moe", "experts", or "router"
+            // UQFF residuals always store it under "moe"
             let router_vb = mapper.set_device(layer_idx, vb.pp("router"), false);
+            let moe_explicit_vb = mapper.set_device(layer_idx, vb.pp("moe"), false);
             let scale = moe_vb
                 .get(num_experts, "per_expert_scale")
+                .or_else(|_| moe_explicit_vb.get(num_experts, "per_expert_scale"))
                 .or_else(|_| router_vb.get(num_experts, "per_expert_scale"))?;
             let rtr = Gemma4Router::new(
                 cfg.hidden_size,
