@@ -31,13 +31,13 @@ Fast, flexible LLM inference.
 
 ## Why mistral.rs?
 
-- **Any HuggingFace model, zero config**: Just `mistralrs run -m user/model`. Auto-detects architecture, quantization, chat template.
-- **True multimodality**: Vision, audio, speech generation, image generation, embeddings.
-- **Not another model registry**: Use HuggingFace models directly. No converting, no uploading to a separate service.
+- **Any HuggingFace model, zero config**: Just `mistralrs run -m user/model`.
+- **True multimodality**: Text, vision, video, and audio, speech generation, image generation, and embeddings in one engine.
 - **Full quantization control**: Choose the precise quantization you want to use, or make your own UQFF with `mistralrs quantize`.
 - **Built-in web UI**: `mistralrs serve --ui` gives you a web interface instantly.
 - **Hardware-aware**: `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
+- **Agentic features** — tool calling, web search, and MCP client built in
 
 ## Quick Start
 
