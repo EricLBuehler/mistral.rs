@@ -311,12 +311,11 @@ constexpr constant int kVecmatThreads = 256;
 constexpr constant int kVecmatWarps = kVecmatThreads / kWarpSize; // 8
 
 template <typename T>
-METAL_FUNC void
-mxfp4_vecmat_impl(const device T *x, const device uchar *w,
-                  const device uchar *scales, const device T *bias, device T *y,
-                  int M, int N, int K, int has_bias,
-                  threadgroup float *reduce_buf, // [kVecmatCols * kVecmatWarps]
-                  uint tid, ushort simd_gid, ushort lane_id, uint3 gid) {
+METAL_FUNC void mxfp4_vecmat_impl(
+    const device T *x, const device uchar *w, const device uchar *scales,
+    const device T *bias, device T *y, int M, int N, int K, int has_bias,
+    threadgroup float *reduce_buf, // [kVecmatCols * kVecmatWarps]
+    uint tid, ushort simd_gid, ushort lane_id, uint3 gid) {
 
   const int row = int(gid.y);
   const int col_base = int(gid.x) * kVecmatCols;
@@ -355,11 +354,10 @@ mxfp4_vecmat_impl(const device T *x, const device uchar *w,
         continue;
 
       // Load weight: uint4 = 16 bytes = 32 packed FP4 values
-      const device uint4 *w_ptr = reinterpret_cast<const device uint4 *>(
-          w + col * k_half + k_start / 2);
+      const device uint4 *w_ptr =
+          reinterpret_cast<const device uint4 *>(w + col * k_half + k_start / 2);
       const uint4 packed = *w_ptr;
-      const float w_scale =
-          e8m0_to_float(scales[col * scale_stride + blk]) * 0.5f;
+      const float w_scale = e8m0_to_float(scales[col * scale_stride + blk]) * 0.5f;
 
       // Dequant + dot product
       float dot = 0.0f;
@@ -403,9 +401,8 @@ mxfp4_vecmat_impl(const device T *x, const device uchar *w,
   if (simd_gid == 0) {
 #pragma unroll
     for (int c = 0; c < kVecmatCols; c++) {
-      float val = (lane_id < kVecmatWarps)
-                      ? reduce_buf[c * kVecmatWarps + lane_id]
-                      : 0.0f;
+      float val =
+          (lane_id < kVecmatWarps) ? reduce_buf[c * kVecmatWarps + lane_id] : 0.0f;
       val = simdgroup_reduce_sum(val);
       if (lane_id == 0) {
         const int col = col_base + c;
@@ -561,21 +558,20 @@ mxfp4_moe_gemm_reuse_bf16(const device bfloat16_t *x [[buffer(0)]],
                                  reduce_buf, tid, simd_gid, lane_id, gid);
 }
 
-[[kernel]] void mxfp4_vecmat_bf16(const device bfloat16_t *x [[buffer(0)]],
-                                  const device uchar *w [[buffer(1)]],
-                                  const device uchar *scales [[buffer(2)]],
-                                  const device bfloat16_t *bias [[buffer(3)]],
-                                  device bfloat16_t *y [[buffer(4)]],
-                                  const constant int &M [[buffer(5)]],
-                                  const constant int &N [[buffer(6)]],
-                                  const constant int &K [[buffer(7)]],
-                                  const constant int &has_bias [[buffer(8)]],
-                                  uint tid [[thread_index_in_threadgroup]],
-                                  ushort simd_gid
-                                  [[simdgroup_index_in_threadgroup]],
-                                  ushort lane_id [[thread_index_in_simdgroup]],
-                                  uint3 gid [[threadgroup_position_in_grid]]) {
+[[kernel]] void mxfp4_vecmat_bf16(
+    const device bfloat16_t *x [[buffer(0)]],
+    const device uchar *w [[buffer(1)]],
+    const device uchar *scales [[buffer(2)]],
+    const device bfloat16_t *bias [[buffer(3)]],
+    device bfloat16_t *y [[buffer(4)]], const constant int &M [[buffer(5)]],
+    const constant int &N [[buffer(6)]], const constant int &K [[buffer(7)]],
+    const constant int &has_bias [[buffer(8)]],
+    uint tid [[thread_index_in_threadgroup]],
+    ushort simd_gid [[simdgroup_index_in_threadgroup]],
+    ushort lane_id [[thread_index_in_simdgroup]],
+    uint3 gid [[threadgroup_position_in_grid]]) {
   threadgroup float reduce_buf[mxfp4::kVecmatCols * mxfp4::kVecmatWarps];
-  mxfp4::mxfp4_vecmat_impl<bfloat16_t>(x, w, scales, bias, y, M, N, K, has_bias,
-                                       reduce_buf, tid, simd_gid, lane_id, gid);
+  mxfp4::mxfp4_vecmat_impl<bfloat16_t>(x, w, scales, bias, y, M, N, K,
+                                        has_bias, reduce_buf, tid, simd_gid,
+                                        lane_id, gid);
 }

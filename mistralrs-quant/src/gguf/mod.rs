@@ -4,6 +4,10 @@ mod cpu;
 mod cuda;
 #[cfg(feature = "cuda")]
 mod ffi;
+#[cfg(feature = "metal")]
+mod metal;
+#[cfg(feature = "metal")]
+pub use metal::metal_fused_gate_up_swiglu;
 
 use std::{
     borrow::Cow,
@@ -24,10 +28,22 @@ use crate::{
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
 };
 
-#[derive(Debug)]
 pub struct GgufMatMul {
     pub(crate) w: QMatMul,
     pub(crate) b: Option<Tensor>,
+    /// Cached dequantized weights for Metal MoE dispatch.
+    /// Populated on first gather_forward call to avoid per-call dequantization.
+    #[cfg(feature = "metal")]
+    pub(crate) dequant_cache: std::sync::Mutex<Option<Tensor>>,
+}
+
+impl std::fmt::Debug for GgufMatMul {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GgufMatMul")
+            .field("w", &self.w)
+            .field("b", &self.b)
+            .finish()
+    }
 }
 
 impl QuantMethod for GgufMatMul {
@@ -39,6 +55,8 @@ impl QuantMethod for GgufMatMul {
             QuantMethodConfig::Gguf { q_weight, b } => Ok(Self {
                 w: QMatMul::from_arc(q_weight)?,
                 b,
+                #[cfg(feature = "metal")]
+                dequant_cache: std::sync::Mutex::new(None),
             }),
             QuantMethodConfig::GptqAwq { .. }
             | QuantMethodConfig::Unquantized(_)
@@ -79,8 +97,12 @@ impl QuantMethod for GgufMatMul {
         #[cfg(feature = "cuda")]
         let res = cuda::qmatmul_indexed_moe_forward(&self.w, x, indices)?;
 
-        // For CPU and Metal: use dequantize-then-matmul approach
-        #[cfg(not(feature = "cuda"))]
+        // Metal: GPU dispatch with cached dequantization
+        #[cfg(all(feature = "metal", not(feature = "cuda")))]
+        let res = metal::metal_indexed_moe_forward(&self.w, x, indices, &self.dequant_cache)?;
+
+        // CPU fallback
+        #[cfg(not(any(feature = "cuda", feature = "metal")))]
         let res = cpu::cpu_indexed_moe_forward(&self.w, x, indices)?;
 
         if let Some(ref b) = self.b {
@@ -94,31 +116,47 @@ impl QuantMethod for GgufMatMul {
         Some(DType::F32)
     }
 
+    fn moe_qtensor(&self) -> Option<&std::sync::Arc<candle_core::quantized::QTensor>> {
+        match &self.w {
+            QMatMul::QTensor(qt) => Some(qt),
+            _ => None,
+        }
+    }
+
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
         match self {
             Self {
                 w: QMatMul::Tensor(w),
-                b,
+                b, ..
             } => Ok(Arc::new(Self {
                 w: QMatMul::Tensor((w + delta)?),
                 b: b.clone(),
+                #[cfg(feature = "metal")]
+                dequant_cache: std::sync::Mutex::new(None),
             })),
             Self {
                 w: QMatMul::TensorF16(w),
-                b,
+                b, ..
             } => Ok(Arc::new(Self {
                 w: QMatMul::TensorF16((w + delta)?),
                 b: b.clone(),
+                #[cfg(feature = "metal")]
+                dequant_cache: std::sync::Mutex::new(None),
             })),
             Self {
                 w: QMatMul::QTensor(w),
-                b,
+                b, ..
             } => {
                 let (w, dtype) = (w.dequantize(&w.device())?, w.dtype());
                 let w = QMatMul::QTensor(std::sync::Arc::new(
                     candle_core::quantized::QTensor::quantize(&(w + delta)?, dtype)?,
                 ));
-                Ok(Arc::new(Self { w, b: b.clone() }))
+                Ok(Arc::new(Self {
+                    w,
+                    b: b.clone(),
+                    #[cfg(feature = "metal")]
+                    dequant_cache: std::sync::Mutex::new(None),
+                }))
             }
         }
     }
@@ -180,7 +218,12 @@ impl QuantMethod for GgufMatMul {
             } else {
                 None
             };
-            Ok(Arc::new(GgufMatMul { w, b }))
+            Ok(Arc::new(GgufMatMul {
+                w,
+                b,
+                #[cfg(feature = "metal")]
+                dequant_cache: std::sync::Mutex::new(None),
+            }))
         }
     }
 }
@@ -354,6 +397,8 @@ impl QuantizedSerde for GgufMatMul {
         Ok(Arc::new(Self {
             w: QMatMul::QTensor(w.into()),
             b,
+            #[cfg(feature = "metal")]
+            dequant_cache: std::sync::Mutex::new(None),
         }))
     }
     fn deserialize_ext_bias(
@@ -425,6 +470,8 @@ impl QuantizedSerde for GgufMatMul {
             Arc::new(Self {
                 w: QMatMul::QTensor(w.into()),
                 b: None,
+                #[cfg(feature = "metal")]
+                dequant_cache: std::sync::Mutex::new(None),
             }),
             b,
         ))
