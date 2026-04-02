@@ -2699,6 +2699,7 @@ impl TensorInfExtend for Tensor {
             DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 => {
                 candle_core::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors are not supported with .any")
             }
+            _ => candle_core::bail!("Unsupported DType variant for .any: {:?}", self.dtype()),
         }
     }
 }
@@ -2718,6 +2719,7 @@ pub fn clamp_for_f16(xs: &Tensor) -> Result<Tensor> {
         DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 => {
             candle_core::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors are not supported with .any")
         }
+        _ => candle_core::bail!("Unsupported DType variant for clamp_for_f16: {:?}", xs.dtype()),
     };
     if xs.is_inf()?.any()? {
         max -= 1000.;

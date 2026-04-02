@@ -9,8 +9,9 @@ use mistralrs_quant::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
+use parking_lot::Mutex;
 
 use super::gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode};
 use crate::{

@@ -50,13 +50,13 @@ impl Default for InMemoryResponseCache {
 
 impl ResponseCache for InMemoryResponseCache {
     fn store_response(&self, id: String, response: ResponseResource) -> Result<()> {
-        let mut responses = self.responses.write().unwrap();
+        let mut responses = self.responses.write();
         responses.insert(id, response);
         Ok(())
     }
 
     fn get_response(&self, id: &str) -> Result<Option<ResponseResource>> {
-        let responses = self.responses.read().unwrap();
+        let responses = self.responses.read();
         Ok(responses.get(id).cloned())
     }
 
@@ -67,8 +67,8 @@ impl ResponseCache for InMemoryResponseCache {
         //
         // We acquire all locks before any modifications to ensure atomicity.
         // The locks are released in reverse order when dropped at end of scope.
-        let mut responses = self.responses.write().unwrap();
-        let mut histories = self.conversation_histories.write().unwrap();
+        let mut responses = self.responses.write();
+        let mut histories = self.conversation_histories.write();
 
         let response_removed = responses.remove(id).is_some();
         let history_removed = histories.remove(id).is_some();

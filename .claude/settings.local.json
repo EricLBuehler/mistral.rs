@@ -161,7 +161,15 @@
       "Bash(grep -c \"^<task\" .planning/phases/03-store-error-state-refactor/03-*-PLAN.md)",
       "Read(//Users/gqadonis/Projects/sansaba/ssr-frontend/**)",
       "Bash(done)",
-      "Skill(gsd:plan-phase)"
+      "Skill(gsd:plan-phase)",
+      "Bash(cargo check:*)",
+      "Bash(cargo build:*)",
+      "Bash(./target/release/mistralrs --help)",
+      "Bash(./target/release/mistralrs serve:*)",
+      "Bash(./target/release/mistralrs run:*)",
+      "Bash(./target/release/mistralrs bench:*)",
+      "Bash(./target/release/mistralrs cache:*)",
+      "WebSearch"
     ]
   }
 }

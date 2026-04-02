@@ -123,6 +123,10 @@ impl PrefixCacheManagerV2 {
                 KvCache::Rotating { k, .. } => {
                     k.all_data().as_ref().expect("No KV cache data").device()
                 }
+                #[cfg(feature = "kvcache-compression")]
+                KvCache::Compressed { device, .. } => {
+                    device.as_ref().expect("No device in compressed KV cache")
+                }
             };
 
             if !matches!(cache_device, Device::Cpu) {
@@ -146,6 +150,10 @@ impl PrefixCacheManagerV2 {
                 }
                 KvCache::Rotating { k, .. } => {
                     k.all_data().as_ref().expect("No KV cache data").device()
+                }
+                #[cfg(feature = "kvcache-compression")]
+                KvCache::Compressed { device, .. } => {
+                    device.as_ref().expect("No device in compressed KV cache")
                 }
             };
 

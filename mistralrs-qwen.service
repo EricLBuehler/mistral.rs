@@ -1,0 +1,38 @@
+[Unit]
+Description=MistralRS LLM Server - Qwen3.5-9B with TurboQuant
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=gqadonis
+Group=gqadonis
+
+# Use the user's full environment so PATH, HOME, LD_LIBRARY_PATH, CUDA paths, etc. are all available
+Environment="HOME=/home/gqadonis"
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/gqadonis/.cargo/bin:/home/gqadonis/.local/bin"
+Environment="HF_HOME=/home/gqadonis/.cache/huggingface"
+Environment="XDG_CACHE_HOME=/home/gqadonis/.cache"
+
+WorkingDirectory=/home/gqadonis
+
+ExecStart=/usr/local/bin/mistralrs serve \
+    --model-id Qwen/Qwen3.5-9B \
+    --paged-attn off \
+    --ui \
+    --isq Q8_0 \
+    --kv-cache-bits 3 \
+    --kv-cache-threshold 4096
+
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mistralrs-qwen
+
+# Allow large memory maps (needed for model weights)
+LimitMEMLOCK=infinity
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

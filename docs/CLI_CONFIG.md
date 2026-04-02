@@ -152,6 +152,21 @@ Define one or more models. Each `[[models]]` entry creates a new model.
 | `max_num_images` | Maximum images per request |
 | `max_image_length` | Maximum image dimension for device mapping |
 
+#### [models.cache] - KV-Cache Compression
+
+TurboQuant KV-cache compression options. Requires the `kvcache-compression` Cargo feature.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `kv_compression_bits` | none (disabled) | Bits per coordinate: `2`, `3`, or `4`. Omit to disable compression. |
+| `kv_compression_threshold` | `128` | Tokens to accumulate before compression begins. Only active when `kv_compression_bits` is set. |
+
+```toml
+[models.cache]
+kv_compression_bits = 3        # 2, 3, or 4 — omit to disable
+kv_compression_threshold = 4096  # only compress after 4096 tokens
+```
+
 ## Full Examples
 
 ### Multi-Model Server with UI
@@ -243,8 +258,36 @@ device_layers = ["0:40", "1:40"]
 in_situ_quant = "q4k"
 ```
 
+### 8B Model with KV-Cache Compression (16 GB GPU)
+
+```toml
+command = "serve"
+
+[server]
+port = 1234
+
+[paged_attn]
+mode = "auto"
+memory_fraction = 0.85
+
+[[models]]
+kind = "auto"
+model_id = "meta-llama/Llama-3.1-8B-Instruct"
+dtype = "auto"
+
+[models.quantization]
+in_situ_quant = "q4k"
+
+[models.cache]
+kv_compression_bits = 3        # ~7× KV memory reduction, <0.1% quality impact
+kv_compression_threshold = 4096  # compress once context exceeds 4K tokens
+```
+
+This configuration lets a 16 GB GPU serve Llama-3.1-8B with context lengths of 100K+ tokens. Without `[models.cache]`, the same hardware is limited to ~32K tokens.
+
 ## Notes
 
 - `cpu` must be consistent across all models if specified
 - `default_model_id` (serve only) must match a `model_id` in `[[models]]`
 - `search_embedding_model` requires `enable_search = true`
+- `kv_compression_bits` requires the `kvcache-compression` Cargo feature; it is silently ignored otherwise

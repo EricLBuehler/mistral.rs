@@ -248,8 +248,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             hf_cache_path,
             matformer_config_path,
             matformer_slice_name,
-        } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
+            kv_compression_bits,
+            kv_compression_threshold,
+        } => {
+            let mut normal_cfg = NormalSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
                 write_uqff,
@@ -264,14 +266,30 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 hf_cache_path,
                 matformer_config_path,
                 matformer_slice_name,
-            },
-            args.chat_template,
-            tokenizer_json,
-            Some(model_id),
-            args.no_kv_cache,
-            args.jinja_explicit,
-        )
-        .build(arch)?,
+                ..Default::default()
+            };
+            #[cfg(feature = "kvcache-compression")]
+            if let Some(bits) = kv_compression_bits {
+                use crate::kv_cache::{CompressionBits, CompressionPolicy, KvCompressionConfig};
+                normal_cfg.kv_compression = Some(KvCompressionConfig {
+                    bits: match bits {
+                        2 => CompressionBits::Two,
+                        3 => CompressionBits::Three,
+                        _ => CompressionBits::Four,
+                    },
+                    policy: CompressionPolicy::ThresholdTokens(kv_compression_threshold),
+                });
+            }
+            NormalLoaderBuilder::new(
+                normal_cfg,
+                args.chat_template,
+                tokenizer_json,
+                Some(model_id),
+                args.no_kv_cache,
+                args.jinja_explicit,
+            )
+            .build(arch)?
+        }
         ModelSelected::Run {
             model_id,
             tokenizer_json,
@@ -290,24 +308,40 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             hf_cache_path,
             matformer_config_path,
             matformer_slice_name,
+            kv_compression_bits,
+            kv_compression_threshold,
         } => {
+            let mut normal_cfg = NormalSpecificConfig {
+                topology: Topology::from_option_path(topology.clone())?,
+                organization: organization.unwrap_or_default(),
+                write_uqff: write_uqff.clone(),
+                from_uqff: from_uqff.clone().map(|x| {
+                    x.split(UQFF_MULTI_FILE_DELIMITER)
+                        .map(PathBuf::from_str)
+                        .map(|x| x.unwrap())
+                        .collect::<Vec<_>>()
+                }),
+                imatrix: imatrix.clone(),
+                calibration_file: calibration_file.clone(),
+                hf_cache_path: hf_cache_path.clone(),
+                matformer_config_path: matformer_config_path.clone(),
+                matformer_slice_name: matformer_slice_name.clone(),
+                ..Default::default()
+            };
+            #[cfg(feature = "kvcache-compression")]
+            if let Some(bits) = kv_compression_bits {
+                use crate::kv_cache::{CompressionBits, CompressionPolicy, KvCompressionConfig};
+                normal_cfg.kv_compression = Some(KvCompressionConfig {
+                    bits: match bits {
+                        2 => CompressionBits::Two,
+                        3 => CompressionBits::Three,
+                        _ => CompressionBits::Four,
+                    },
+                    policy: CompressionPolicy::ThresholdTokens(kv_compression_threshold),
+                });
+            }
             let builder = AutoLoaderBuilder::new(
-                NormalSpecificConfig {
-                    topology: Topology::from_option_path(topology.clone())?,
-                    organization: organization.unwrap_or_default(),
-                    write_uqff: write_uqff.clone(),
-                    from_uqff: from_uqff.clone().map(|x| {
-                        x.split(UQFF_MULTI_FILE_DELIMITER)
-                            .map(PathBuf::from_str)
-                            .map(|x| x.unwrap())
-                            .collect::<Vec<_>>()
-                    }),
-                    imatrix: imatrix.clone(),
-                    calibration_file: calibration_file.clone(),
-                    hf_cache_path: hf_cache_path.clone(),
-                    matformer_config_path: matformer_config_path.clone(),
-                    matformer_slice_name: matformer_slice_name.clone(),
-                },
+                normal_cfg,
                 VisionSpecificConfig {
                     topology: Topology::from_option_path(topology.clone())?,
                     write_uqff: write_uqff.clone(),
@@ -438,6 +472,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 hf_cache_path,
                 matformer_config_path: None,
                 matformer_slice_name: None,
+                ..Default::default()
             },
             args.chat_template,
             tokenizer_json,
@@ -483,6 +518,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 hf_cache_path,
                 matformer_config_path: None,
                 matformer_slice_name: None,
+                ..Default::default()
             },
             args.chat_template,
             tokenizer_json,

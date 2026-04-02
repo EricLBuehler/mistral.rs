@@ -366,6 +366,8 @@ fn convert_to_model_selected(
                 hf_cache_path: device.hf_cache.clone(),
                 matformer_config_path: None,
                 matformer_slice_name: None,
+                kv_compression_bits: None,
+                kv_compression_threshold: 128,
             };
             Ok((model_selected, device.cpu, device.device_layers.clone()))
         }
@@ -399,6 +401,8 @@ fn convert_to_model_selected(
                 hf_cache_path: device.hf_cache.clone(),
                 matformer_config_path: None,
                 matformer_slice_name: None,
+                kv_compression_bits: None,
+                kv_compression_threshold: 128,
             };
             Ok((model_selected, device.cpu, device.device_layers.clone()))
         }

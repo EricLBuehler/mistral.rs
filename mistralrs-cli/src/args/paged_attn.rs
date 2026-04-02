@@ -11,6 +11,24 @@ use serde::Deserialize;
 pub struct CacheOptions {
     #[command(flatten)]
     pub paged_attn: PagedAttentionOptions,
+
+    /// Bits per coordinate for TurboQuant KV-cache compression (2, 3, or 4).
+    /// Requires the `kvcache-compression` feature. Disabled by default.
+    /// Can also be set via the MISTRALRS_KV_CACHE_BITS environment variable.
+    #[arg(long = "kv-cache-bits", value_parser = clap::value_parser!(u8).range(2..=4), env = "MISTRALRS_KV_CACHE_BITS")]
+    #[serde(default)]
+    pub kv_compression_bits: Option<u8>,
+
+    /// Minimum number of tokens to accumulate before compressing.
+    /// Only takes effect when `--kv-cache-bits` is set (default: 128).
+    /// Can also be set via the MISTRALRS_KV_CACHE_THRESHOLD environment variable.
+    #[arg(long = "kv-cache-threshold", default_value = "128", requires = "kv_compression_bits", env = "MISTRALRS_KV_CACHE_THRESHOLD")]
+    #[serde(default = "default_kv_cache_threshold")]
+    pub kv_compression_threshold: usize,
+}
+
+fn default_kv_cache_threshold() -> usize {
+    128
 }
 
 /// PagedAttention configuration

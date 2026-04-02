@@ -57,6 +57,7 @@ pub(crate) fn write_dtype(dtype: DType, buffer: &mut Vec<u8>) {
         DType::F6E3M2 => 11,
         DType::F4 => 12,
         DType::F8E8M0 => 13,
+        _ => panic!("Unsupported DType variant for UQFF write: {dtype:?}"),
     };
     buffer.extend(&dtype.to_le_bytes());
 }
@@ -117,6 +118,7 @@ pub(crate) fn serialize_tensor(buffer: &mut Vec<u8>, tensor: &Tensor) -> Result<
         DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 => {
             candle_core::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors cannot be serialized.")
         }
+        _ => candle_core::bail!("Unsupported DType variant for UQFF serialization: {:?}", tensor.dtype()),
     };
 
     // Check for potential overflow when converting usize to u32
@@ -189,6 +191,7 @@ pub(crate) fn deserialize_tensor<R: std::io::Read>(
         DType::F4 | DType::F6E3M2 | DType::F6E2M3 | DType::F8E8M0 => {
             candle_core::bail!("f4/f6e3m2/f6e2m3/f8e8m0 tensors cannot be deserialized.")
         }
+        _ => candle_core::bail!("Unsupported DType variant for UQFF deserialization: {dtype:?}"),
     }
 }
 

@@ -3,6 +3,9 @@ use parking_lot::{Mutex, MutexGuard};
 
 use candle_core::{Result, Tensor, D};
 
+#[cfg(feature = "kvcache-compression")]
+use mistralrs_kvcache_compression::{compress_all_tokens, compress_token_at_pos, CompressedLayerCache};
+
 use crate::{
     pipeline::{CacheManagerMixin, MetadataMixin},
     sequence::Sequence,
@@ -14,6 +17,9 @@ mod rotating_cache;
 mod single_cache;
 #[cfg(test)]
 mod tests;
+
+#[cfg(feature = "kvcache-compression")]
+pub use mistralrs_kvcache_compression::{CompressionBits, CompressionPolicy, KvCompressionConfig};
 
 pub use full_cache::{EitherCache, LayerCaches};
 pub use hybrid_cache::{
@@ -44,6 +50,21 @@ pub trait CacheManager<T: CacheManagerMixin + MetadataMixin + ?Sized> {
 pub enum KvCache {
     Normal { k: SingleCache, v: SingleCache },
     Rotating { k: RotatingCache, v: RotatingCache },
+    /// TurboQuant compressed KV cache (requires `kvcache-compression` feature).
+    /// Tokens beyond `config.threshold_tokens()` are stored in compressed form;
+    /// the most recent `threshold_tokens` are kept uncompressed in the tail.
+    #[cfg(feature = "kvcache-compression")]
+    Compressed {
+        history: Option<CompressedLayerCache>,
+        /// Uncompressed tail: [1, num_kv_heads, tail_len, head_dim]
+        tail_k: Option<Tensor>,
+        tail_v: Option<Tensor>,
+        total_seq_len: usize,
+        dim: usize,
+        config: KvCompressionConfig,
+        layer_idx: usize,
+        device: Option<candle_core::Device>,
+    },
 }
 
 impl KvCache {
@@ -59,10 +80,51 @@ impl KvCache {
         Self::Rotating { k, v }
     }
 
+    /// Create a new TurboQuant compressed cache for a single layer.
+    /// `layer_idx` is used to derive unique rotation seeds per layer.
+    /// The underlying `CompressedLayerCache` is initialised lazily on the
+    /// first `append()` call once the tensor shapes are known.
+    #[cfg(feature = "kvcache-compression")]
+    pub fn new_compressed(dim: usize, config: KvCompressionConfig, layer_idx: usize) -> Self {
+        Self::Compressed {
+            history: None,
+            tail_k: None,
+            tail_v: None,
+            total_seq_len: 0,
+            dim,
+            config,
+            layer_idx,
+            device: None,
+        }
+    }
+
     pub fn k(&self) -> Result<Option<Tensor>> {
         match self {
             Self::Normal { k, .. } => k.current_data(),
             Self::Rotating { k, .. } => k.current_data(),
+            #[cfg(feature = "kvcache-compression")]
+            Self::Compressed { history, tail_k, total_seq_len, dim, device, .. } => {
+                if *total_seq_len == 0 {
+                    return Ok(None);
+                }
+                let dev = match device.as_ref() {
+                    Some(d) => d,
+                    None => return Ok(None),
+                };
+                let hist_k = match history.as_ref() {
+                    Some(h) if h.n_compressed() > 0 => {
+                        let (kt, _) = h.decompress_to_tensors(dev)?;
+                        Some(kt)
+                    }
+                    _ => None,
+                };
+                match (hist_k, tail_k.as_ref()) {
+                    (None, None) => Ok(None),
+                    (Some(h), None) => Ok(Some(h)),
+                    (None, Some(t)) => Ok(Some(t.clone())),
+                    (Some(h), Some(t)) => Ok(Some(Tensor::cat(&[&h, t], *dim)?)),
+                }
+            }
         }
     }
 
@@ -70,12 +132,109 @@ impl KvCache {
         match self {
             Self::Normal { v, .. } => v.current_data(),
             Self::Rotating { v, .. } => v.current_data(),
+            #[cfg(feature = "kvcache-compression")]
+            Self::Compressed { history, tail_v, total_seq_len, dim, device, .. } => {
+                if *total_seq_len == 0 {
+                    return Ok(None);
+                }
+                let dev = match device.as_ref() {
+                    Some(d) => d,
+                    None => return Ok(None),
+                };
+                let hist_v = match history.as_ref() {
+                    Some(h) if h.n_compressed() > 0 => {
+                        let (_, vt) = h.decompress_to_tensors(dev)?;
+                        Some(vt)
+                    }
+                    _ => None,
+                };
+                match (hist_v, tail_v.as_ref()) {
+                    (None, None) => Ok(None),
+                    (Some(h), None) => Ok(Some(h)),
+                    (None, Some(t)) => Ok(Some(t.clone())),
+                    (Some(h), Some(t)) => Ok(Some(Tensor::cat(&[&h, t], *dim)?)),
+                }
+            }
         }
     }
 
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
         let k = k.contiguous()?;
         let v = v.contiguous()?;
+        #[cfg(feature = "kvcache-compression")]
+        if let Self::Compressed {
+            history, tail_k, tail_v, total_seq_len, dim, config, layer_idx, device,
+        } = self
+        {
+            *device = Some(k.device().clone());
+            let new_tokens = k.dim(*dim)?;
+            let threshold = config.threshold_tokens();
+
+            for tok_pos in 0..new_tokens {
+                let k_tok = k.narrow(*dim, tok_pos, 1)?;
+                let v_tok = v.narrow(*dim, tok_pos, 1)?;
+
+                // Append new token to tail
+                let new_tail_k = match tail_k.take() {
+                    None => k_tok.clone(),
+                    Some(t) => Tensor::cat(&[&t, &k_tok], *dim)?,
+                };
+                let new_tail_v = match tail_v.take() {
+                    None => v_tok.clone(),
+                    Some(t) => Tensor::cat(&[&t, &v_tok], *dim)?,
+                };
+                *total_seq_len += 1;
+
+                let tail_len = new_tail_k.dim(*dim)?;
+                if tail_len > threshold {
+                    // Lazy-init CompressedLayerCache once we know the tensor shape
+                    if history.is_none() {
+                        let num_kv_heads = new_tail_k.dim(1)?;
+                        let head_dim = new_tail_k.dim(3)?;
+                        *history = Some(
+                            CompressedLayerCache::new(num_kv_heads, head_dim, config.clone(), *layer_idx)
+                                .map_err(|e| candle_core::Error::Msg(format!("TurboQuant init: {e}")))?,
+                        );
+                    }
+                    // Compress oldest tail token into history
+                    compress_token_at_pos(history.as_mut().unwrap(), &new_tail_k, &new_tail_v, 0, *dim)?;
+                    *tail_k = Some(new_tail_k.narrow(*dim, 1, tail_len - 1)?.contiguous()?);
+                    *tail_v = Some(new_tail_v.narrow(*dim, 1, tail_len - 1)?.contiguous()?);
+                } else {
+                    *tail_k = Some(new_tail_k);
+                    *tail_v = Some(new_tail_v);
+                }
+            }
+
+            // Reconstruct full KV = history + tail
+            let dev = k.device();
+            let out_k = {
+                let hist = history.as_ref().filter(|h| h.n_compressed() > 0);
+                match (hist, tail_k.as_ref()) {
+                    (None, None) => candle_core::bail!("Compressed KV: empty after append"),
+                    (None, Some(t)) => t.clone(),
+                    (Some(h), None) => h.decompress_to_tensors(dev).map(|(kt, _)| kt)?,
+                    (Some(h), Some(t)) => {
+                        let (kh, _) = h.decompress_to_tensors(dev)?;
+                        Tensor::cat(&[&kh, t], *dim)?
+                    }
+                }
+            };
+            let out_v = {
+                let hist = history.as_ref().filter(|h| h.n_compressed() > 0);
+                match (hist, tail_v.as_ref()) {
+                    (None, None) => candle_core::bail!("Compressed KV: empty after append"),
+                    (None, Some(t)) => t.clone(),
+                    (Some(h), None) => h.decompress_to_tensors(dev).map(|(_, vt)| vt)?,
+                    (Some(h), Some(t)) => {
+                        let (_, vh) = h.decompress_to_tensors(dev)?;
+                        Tensor::cat(&[&vh, t], *dim)?
+                    }
+                }
+            };
+            return Ok((out_k, out_v));
+        }
+
         let (out_k, out_v) = match self {
             Self::Normal { k: kc, v: vc } => {
                 kc.append(&k)?;
@@ -87,6 +246,8 @@ impl KvCache {
                 let out_v = vc.append(&v)?;
                 (Some(out_k), Some(out_v))
             }
+            #[cfg(feature = "kvcache-compression")]
+            Self::Compressed { .. } => unreachable!("handled above"),
         };
         let k = match out_k {
             None => {
@@ -94,6 +255,8 @@ impl KvCache {
                 match self {
                     Self::Normal { k, .. } => shape[k.dim] = 0,
                     Self::Rotating { k, .. } => shape[k.dim] = 0,
+                    #[cfg(feature = "kvcache-compression")]
+                    Self::Compressed { dim, .. } => shape[*dim] = 0,
                 }
                 Tensor::zeros(shape, k.dtype(), k.device())?
             }
@@ -105,6 +268,8 @@ impl KvCache {
                 match self {
                     Self::Normal { v, .. } => shape[v.dim] = 0,
                     Self::Rotating { v, .. } => shape[v.dim] = 0,
+                    #[cfg(feature = "kvcache-compression")]
+                    Self::Compressed { dim, .. } => shape[*dim] = 0,
                 }
                 Tensor::zeros(shape, v.dtype(), v.device())?
             }
@@ -117,6 +282,8 @@ impl KvCache {
         match self {
             Self::Normal { k, .. } => k.current_seq_len(),
             Self::Rotating { k, .. } => k.current_seq_len(),
+            #[cfg(feature = "kvcache-compression")]
+            Self::Compressed { total_seq_len, .. } => *total_seq_len,
         }
     }
 
@@ -129,6 +296,15 @@ impl KvCache {
             Self::Rotating { k, v } => {
                 k.reset();
                 v.reset();
+            }
+            #[cfg(feature = "kvcache-compression")]
+            Self::Compressed { history, tail_k, tail_v, total_seq_len, .. } => {
+                if let Some(h) = history.as_mut() {
+                    h.reset();
+                }
+                *tail_k = None;
+                *tail_v = None;
+                *total_seq_len = 0;
             }
         }
     }
@@ -146,6 +322,34 @@ impl KvCache {
                 v.set_len(len)?;
                 Ok(())
             }
+            #[cfg(feature = "kvcache-compression")]
+            Self::Compressed { history, tail_k, tail_v, total_seq_len, dim, .. } => {
+                if len > *total_seq_len {
+                    candle_core::bail!(
+                        "compressed kv-cache: cannot extend len {} beyond current {}",
+                        len, total_seq_len
+                    );
+                }
+                let n_hist = history.as_ref().map(|h| h.n_compressed()).unwrap_or(0);
+                if len <= n_hist {
+                    // Truncate history, clear tail
+                    if let Some(h) = history.as_mut() { h.truncate(len); }
+                    *tail_k = None;
+                    *tail_v = None;
+                } else {
+                    // Truncate tail to the new length's tail portion
+                    let new_tail_len = len - n_hist;
+                    if let (Some(tk), Some(tv)) = (tail_k.as_ref(), tail_v.as_ref()) {
+                        let current_tail = tk.dim(*dim).unwrap_or(0);
+                        if new_tail_len < current_tail {
+                            *tail_k = Some(tk.narrow(*dim, 0, new_tail_len)?.contiguous()?);
+                            *tail_v = Some(tv.narrow(*dim, 0, new_tail_len)?.contiguous()?);
+                        }
+                    }
+                }
+                *total_seq_len = len;
+                Ok(())
+            }
         }
     }
 
@@ -161,11 +365,33 @@ impl KvCache {
                 v.try_set_len(len)?;
                 Ok(())
             }
+            #[cfg(feature = "kvcache-compression")]
+            Self::Compressed { total_seq_len, .. } => {
+                if len > *total_seq_len {
+                    candle_core::bail!(
+                        "compressed kv-cache: cannot extend len {} beyond current {}",
+                        len, total_seq_len
+                    );
+                }
+                Ok(())
+            }
         }
     }
 
     pub fn is_rotating(&self) -> bool {
         matches!(self, Self::Rotating { .. })
+    }
+
+    /// Returns `true` if this cache variant uses TurboQuant compression.
+    pub fn is_compressed(&self) -> bool {
+        #[cfg(feature = "kvcache-compression")]
+        {
+            matches!(self, Self::Compressed { .. })
+        }
+        #[cfg(not(feature = "kvcache-compression"))]
+        {
+            false
+        }
     }
 }
 
@@ -215,6 +441,33 @@ impl NormalCache {
                 );
                 len
             ]))),
+        }
+    }
+
+    /// Create a compressed-KV cache with `len` layers, using TurboQuant.
+    /// The `CompressedLayerCache` for each layer is lazily initialised on first
+    /// `append()` once tensor shapes are known.
+    #[cfg(feature = "kvcache-compression")]
+    pub fn new_with_compression(
+        len: usize,
+        config: KvCompressionConfig,
+    ) -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self(
+            (0..len)
+                .map(|idx| KvCache::new_compressed(2, config.clone(), idx))
+                .collect(),
+        )))
+    }
+
+    /// Convert all `Normal` KvCache layers to `Compressed` (TurboQuant) in-place.
+    /// Call this once after model loading if KV-cache compression is configured.
+    /// Already-Rotating layers are left unchanged.
+    #[cfg(feature = "kvcache-compression")]
+    pub fn apply_compression(&mut self, config: KvCompressionConfig) {
+        for (idx, kvc) in self.0.iter_mut().enumerate() {
+            if matches!(kvc, KvCache::Normal { .. }) {
+                *kvc = KvCache::new_compressed(2, config.clone(), idx);
+            }
         }
     }
 
@@ -269,6 +522,10 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     KvCache::Rotating { k, v } => {
                         (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
                     }
+                    #[cfg(feature = "kvcache-compression")]
+                    KvCache::Compressed { .. } => {
+                        (cache.k().unwrap().unwrap(), cache.v().unwrap().unwrap())
+                    }
                 }
             };
             // Build dims for batched cache
@@ -295,6 +552,10 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     }
                     KvCache::Rotating { k, v } => {
                         (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
+                    }
+                    #[cfg(feature = "kvcache-compression")]
+                    KvCache::Compressed { .. } => {
+                        (cache.k().unwrap().unwrap(), cache.v().unwrap().unwrap())
                     }
                 };
                 let offset = i * first_k.dims()[0];
@@ -337,6 +598,10 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 continue;
             };
             match cache_ref {
+                #[cfg(feature = "kvcache-compression")]
+                KvCache::Compressed { config, layer_idx: lidx, dim, .. } => {
+                    caches.push(KvCache::new_compressed(*dim, config.clone(), *lidx));
+                }
                 KvCache::Normal { k: old_k, .. } => {
                     let template_cache_dim = old_k.dim;
                     let template_cache_csl = old_k.current_seq_len;
@@ -406,6 +671,10 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 KvCache::Rotating { k, v } => {
                     (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
                 }
+                #[cfg(feature = "kvcache-compression")]
+                KvCache::Compressed { .. } => {
+                    (cache.k().unwrap().unwrap(), cache.v().unwrap().unwrap())
+                }
             };
 
             let k_caches = k_cache.chunk(seqs.len(), 0).unwrap();
@@ -424,6 +693,51 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 let v = v_caches.get(seq_i).unwrap().clone();
 
                 match cache {
+                    #[cfg(feature = "kvcache-compression")]
+                    KvCache::Compressed { config, layer_idx: lidx, dim, .. } => {
+                        // Rebuild Compressed from the full decompressed tensor written by the pipeline
+                        let config = config.clone();
+                        let lidx = *lidx;
+                        let dim = *dim;
+                        let threshold = config.threshold_tokens();
+                        let n_tokens = k.dim(dim).unwrap_or(0);
+                        let dev = k.device().clone();
+                        if n_tokens > threshold {
+                            let n_compress = n_tokens - threshold;
+                            let num_kv_heads = k.dim(1).unwrap_or(1);
+                            let head_dim = k.dim(3).unwrap_or(1);
+                            let mut new_hist = CompressedLayerCache::new(
+                                num_kv_heads, head_dim, config.clone(), lidx,
+                            ).expect("TurboQuant init in clone_out_cache");
+                            let k_hist = k.narrow(dim, 0, n_compress).unwrap();
+                            let v_hist = v.narrow(dim, 0, n_compress).unwrap();
+                            compress_all_tokens(&mut new_hist, &k_hist, &v_hist, dim)
+                                .expect("TurboQuant compress in clone_out_cache");
+                            let new_tail_k = k.narrow(dim, n_compress, threshold).unwrap().contiguous().unwrap();
+                            let new_tail_v = v.narrow(dim, n_compress, threshold).unwrap().contiguous().unwrap();
+                            *seq_cache = Some(KvCache::Compressed {
+                                history: Some(new_hist),
+                                tail_k: Some(new_tail_k),
+                                tail_v: Some(new_tail_v),
+                                total_seq_len: n_tokens,
+                                dim,
+                                config,
+                                layer_idx: lidx,
+                                device: Some(dev),
+                            });
+                        } else {
+                            *seq_cache = Some(KvCache::Compressed {
+                                history: None,
+                                tail_k: Some(k.contiguous().unwrap()),
+                                tail_v: Some(v.contiguous().unwrap()),
+                                total_seq_len: n_tokens,
+                                dim,
+                                config,
+                                layer_idx: lidx,
+                                device: Some(dev),
+                            });
+                        }
+                    }
                     KvCache::Normal {
                         k: cache_k,
                         v: cache_v,
@@ -537,6 +851,10 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
 
             // Use this for the various parameters. Assumes all seqs are from one model.
             match &old_caches[layer_idx] {
+                #[cfg(feature = "kvcache-compression")]
+                KvCache::Compressed { config, layer_idx: lidx, dim, .. } => {
+                    *layer = KvCache::new_compressed(*dim, config.clone(), *lidx);
+                }
                 KvCache::Normal { k, .. } => {
                     let template_cache_dim = k.dim;
                     let template_cache_msl = k.max_seq_len;

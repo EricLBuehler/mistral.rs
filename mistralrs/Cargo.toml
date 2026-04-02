@@ -261,3 +261,5 @@ mkl = ["mistralrs-core/mkl"]
 nccl = ["mistralrs-core/nccl"]
 # Use ring instead of aws-lc-rs for TLS
 ring = ["mistralrs-core/ring"]
+# TurboQuant KV-cache compression support
+kvcache-compression = ["mistralrs-core/kvcache-compression"]

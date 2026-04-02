@@ -449,6 +449,10 @@ pub fn gptq_linear(
     };
 
     let is_awq = *is_awq;
+    // Handle the case where the layer is actually unquantized (e.g. lm_head in AWQ models)
+    if vb.contains_tensor("weight") {
+        return crate::linear_b(in_dim, out_dim, false, &None, vb);
+    }
     // Handle the case where the layer is dummy (no tensors)
     if !vb.contains_tensor("qweight")
         || !vb.contains_tensor("qzeros")

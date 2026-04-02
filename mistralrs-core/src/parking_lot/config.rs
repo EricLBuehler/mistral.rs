@@ -106,7 +106,7 @@ impl ParkingLotSchedulerConfig {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("Failed to read config file: {}", e))?;
         
-        let config: Self = serde_yaml::from_str(&content)
+        let config: Self = serde_yml::from_str(&content)
             .map_err(|e| format!("Failed to parse YAML: {}", e))?;
         
         config.validate()?;
@@ -190,7 +190,7 @@ limits:
   max_queue_depth: 50
   timeout_secs: 60
 "#;
-        let config: ParkingLotSchedulerConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: ParkingLotSchedulerConfig = serde_yml::from_str(yaml).unwrap();
         assert_eq!(config.pool.worker_threads, Some(8));
         assert_eq!(config.pool.thread_stack_size, Some(2097152));
         assert_eq!(config.limits.max_units, Some(2048));

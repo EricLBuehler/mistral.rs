@@ -31,6 +31,7 @@ This is the comprehensive CLI reference for `mistralrs`. The CLI provides comman
   - [Chat Templates](#chat-templates)
   - [Web Search](#web-search)
   - [Thinking Mode](#thinking-mode)
+  - [KV-Cache Compression](#kv-cache-compression)
 - [Global Options](#global-options)
 - [Interactive Commands](#interactive-commands)
 
@@ -794,6 +795,65 @@ mistralrs run -m Qwen/Qwen3-4B --enable-thinking
 ```
 
 In interactive mode, thinking content is displayed in gray text before the final response.
+
+---
+
+### KV-Cache Compression
+
+TurboQuant KV-cache compression (Google Research, ICLR 2026) reduces KV-cache memory usage by 4–16× with minimal quality loss. It works on any model without retraining and is applied transparently before each forward pass.
+
+> **Requires the `kvcache-compression` Cargo feature.** Add `--features kvcache-compression` when building from source.
+
+#### CLI Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--kv-cache-bits <2\|3\|4>` | disabled | Bits per coordinate. `3` is recommended (≈7× compression, <0.1% quality loss). |
+| `--kv-cache-threshold <N>` | `128` | Tokens to accumulate before compression begins. Requires `--kv-cache-bits`. |
+
+Equivalent environment variables: `MISTRALRS_KV_CACHE_BITS`, `MISTRALRS_KV_CACHE_THRESHOLD`.
+
+#### Bits Decision Guide
+
+| VRAM headroom | `--kv-cache-bits` | `--kv-cache-threshold` | Notes |
+|---------------|-------------------|------------------------|-------|
+| > 30 % free | (omit flag) | — | Compression not needed |
+| 15–30 % free | `4` | `4096` | Conservative; high accuracy |
+| 5–15 % free | `3` | `4096` | **Recommended** |
+| < 5 % free | `3` | `128` | Compress early |
+| Critical < 2 % | `2` | `0` | Maximum compression; ~1% quality impact |
+
+#### Examples
+
+```bash
+# 3-bit compression, start compressing after 4096 tokens (recommended for 16GB GPU)
+mistralrs serve -m meta-llama/Llama-3.1-8B-Instruct \
+  --kv-cache-bits 3 \
+  --kv-cache-threshold 4096
+
+# 4-bit compression for tighter VRAM, via environment variables
+export MISTRALRS_KV_CACHE_BITS=4
+export MISTRALRS_KV_CACHE_THRESHOLD=4096
+mistralrs serve -m Qwen/Qwen3-8B
+
+# Maximum compression for very limited VRAM (2-bit, always compress)
+mistralrs serve -m meta-llama/Llama-3.1-8B-Instruct \
+  --kv-cache-bits 2 \
+  --kv-cache-threshold 0
+
+# Interactive mode with compression
+mistralrs run -m meta-llama/Llama-3.1-8B-Instruct --kv-cache-bits 3
+```
+
+#### Expected Context Gains (3-bit, ≈7× compression)
+
+| Model | GPU | Without compression | With 3-bit TurboQuant |
+|-------|-----|--------------------|-----------------------|
+| Llama-3.1-8B | RTX 4090 (24 GB) | ~32K tokens | ~200K tokens |
+| Llama-3.1-70B | A100 80 GB | ~16K tokens | ~100K tokens |
+| Qwen3-8B | M3 Max 64 GB | ~80K tokens | 128K+ |
+
+See [KV-Cache Compression Guide](prometheus-enhancements/KVCACHE-COMPRESSION.md) for memory math, platform notes, and TOML config examples.
 
 ---
 

@@ -607,15 +607,14 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 
 [[package]]
 name = "candle-core"
-version = "0.9.2"
-source = "git+https://github.com/huggingface/candle.git?rev=c3bb5bf#c3bb5bfb90c9cb5e003a803e3d8941067f32d880"
+version = "0.10.2"
 dependencies = [
  "accelerate-src",
  "byteorder",
  "candle-kernels",
  "candle-metal-kernels",
  "candle-ug",
- "cudarc 0.19.3",
+ "cudarc 0.19.4",
  "float8",
  "gemm 0.19.0",
  "half",
@@ -632,14 +631,14 @@ dependencies = [
  "rayon",
  "safetensors 0.7.0",
  "thiserror 2.0.18",
+ "tokenizers 0.22.2",
  "yoke 0.8.1",
  "zip 7.2.0",
 ]
 
 [[package]]
 name = "candle-flash-attn"
-version = "0.9.2"
-source = "git+https://github.com/huggingface/candle.git?rev=c3bb5bf#c3bb5bfb90c9cb5e003a803e3d8941067f32d880"
+version = "0.10.2"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -649,8 +648,7 @@ dependencies = [
 
 [[package]]
 name = "candle-flash-attn-v3"
-version = "0.9.2"
-source = "git+https://github.com/huggingface/candle.git?rev=c3bb5bf#c3bb5bfb90c9cb5e003a803e3d8941067f32d880"
+version = "0.10.2"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -662,16 +660,14 @@ dependencies = [
 
 [[package]]
 name = "candle-kernels"
-version = "0.9.2"
-source = "git+https://github.com/huggingface/candle.git?rev=c3bb5bf#c3bb5bfb90c9cb5e003a803e3d8941067f32d880"
+version = "0.10.2"
 dependencies = [
  "cudaforge",
 ]
 
 [[package]]
 name = "candle-metal-kernels"
-version = "0.9.2"
-source = "git+https://github.com/huggingface/candle.git?rev=c3bb5bf#c3bb5bfb90c9cb5e003a803e3d8941067f32d880"
+version = "0.10.2"
 dependencies = [
  "half",
  "objc2",
@@ -684,8 +680,7 @@ dependencies = [
 
 [[package]]
 name = "candle-nn"
-version = "0.9.2"
-source = "git+https://github.com/huggingface/candle.git?rev=c3bb5bf#c3bb5bfb90c9cb5e003a803e3d8941067f32d880"
+version = "0.10.2"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -703,8 +698,7 @@ dependencies = [
 
 [[package]]
 name = "candle-ug"
-version = "0.9.2"
-source = "git+https://github.com/huggingface/candle.git?rev=c3bb5bf#c3bb5bfb90c9cb5e003a803e3d8941067f32d880"
+version = "0.10.2"
 dependencies = [
  "ug",
  "ug-cuda",
@@ -1220,9 +1214,9 @@ dependencies = [
 
 [[package]]
 name = "cudarc"
-version = "0.19.3"
+version = "0.19.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6468cb7fa330840f3ebcd8df51edc0e7bf5c18df524792ce6004c6821851cdf3"
+checksum = "f071cd6a7b5d51607df76aa2d426aaabc7a74bc6bdb885b8afa63a880572ad9b"
 dependencies = [
  "float8",
  "half",
@@ -3156,6 +3150,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "libyml"
+version = "0.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3302702afa434ffa30847a83305f0a69d6abd74293b6554c18ec85c7ef30c980"
+dependencies = [
+ "anyhow",
+ "version_check",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3580,6 +3584,7 @@ dependencies = [
  "minijinja",
  "minijinja-contrib",
  "mistralrs-audio",
+ "mistralrs-kvcache-compression",
  "mistralrs-mcp",
  "mistralrs-paged-attn",
  "mistralrs-quant",
@@ -3613,12 +3618,13 @@ dependencies = [
  "serde-saphyr",
  "serde_json",
  "serde_plain",
+ "serde_yml",
  "statrs",
  "strum 0.27.2",
  "symphonia",
  "sysinfo",
  "thiserror 2.0.18",
- "tokenizers",
+ "tokenizers 0.21.4",
  "tokio",
  "tokio-rayon",
  "tokio-tungstenite",
@@ -3633,6 +3639,18 @@ dependencies = [
  "uuid 1.22.0",
  "variantly",
  "vob",
+]
+
+[[package]]
+name = "mistralrs-kvcache-compression"
+version = "0.7.1-alpha.1"
+dependencies = [
+ "candle-core",
+ "parking_lot",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
+ "turboquant",
 ]
 
 [[package]]
@@ -4237,6 +4255,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "onig"
+version = "6.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "336b9c63443aceef14bea841b899035ae3abe89b7c486aaf4c5bd8aafedac3f0"
+dependencies = [
+ "bitflags 2.11.0",
+ "libc",
+ "once_cell",
+ "onig_sys",
+]
+
+[[package]]
+name = "onig_sys"
+version = "69.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7f86c6eef3d6df15f23bcfb6af487cbd2fed4e5581d58d5bf1f5f8b7f6727dc"
+dependencies = [
+ "cc",
+ "pkg-config",
+]
+
+[[package]]
 name = "openai-harmony"
 version = "0.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4413,6 +4453,12 @@ name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
+
+[[package]]
+name = "pkg-config"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
 name = "plain"
@@ -5850,6 +5896,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_yml"
+version = "0.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59e2dd588bf1597a252c3b920e0143eb99b0f76e4e082f4c92ce34fbc9e71ddd"
+dependencies = [
+ "indexmap 2.13.0",
+ "itoa",
+ "libyml",
+ "memchr",
+ "ryu",
+ "serde",
+ "version_check",
+]
+
+[[package]]
 name = "servo_arc"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6590,6 +6651,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokenizers"
+version = "0.22.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b238e22d44a15349529690fb07bd645cf58149a1b1e44d6cb5bd1641ff1a6223"
+dependencies = [
+ "ahash",
+ "aho-corasick",
+ "compact_str",
+ "dary_heap",
+ "derive_builder",
+ "esaxx-rs",
+ "getrandom 0.3.4",
+ "itertools",
+ "log",
+ "macro_rules_attribute",
+ "monostate",
+ "onig",
+ "paste",
+ "rand 0.9.2",
+ "rayon",
+ "rayon-cond",
+ "regex",
+ "regex-syntax",
+ "serde",
+ "serde_json",
+ "spm_precompiled",
+ "thiserror 2.0.18",
+ "unicode-normalization-alignments",
+ "unicode-segmentation",
+ "unicode_categories",
+]
+
+[[package]]
 name = "tokio"
 version = "1.50.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6707,7 +6801,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
- "tokenizers",
+ "tokenizers 0.21.4",
  "toktrie",
 ]
 
@@ -6951,6 +7045,14 @@ dependencies = [
  "sha1",
  "thiserror 2.0.18",
  "utf-8",
+]
+
+[[package]]
+name = "turboquant"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

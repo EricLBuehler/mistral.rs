@@ -18,6 +18,7 @@ candle-core.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yml.workspace = true
 candle-flash-attn = { workspace = true, optional = true }
 dirs.workspace = true
 hf-hub.workspace = true
@@ -69,6 +70,7 @@ base64.workspace = true
 bytemuck_derive.workspace = true
 mistralrs-paged-attn = { workspace = true, optional = true }
 mistralrs-quant.workspace = true
+mistralrs-kvcache-compression = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["v4"] }
 utoipa = { workspace = true, optional = true }
 schemars.workspace = true
@@ -144,6 +146,7 @@ nccl = ["cuda", "mistralrs-quant/nccl"]
 utoipa = ["dep:utoipa"]
 ring = ["mistralrs-quant/ring"]
 parking-lot-scheduler = []
+kvcache-compression = ["dep:mistralrs-kvcache-compression"]
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }

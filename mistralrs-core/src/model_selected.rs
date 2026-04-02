@@ -23,6 +23,10 @@ fn default_max_batch_size() -> usize {
     AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE
 }
 
+fn default_kv_compression_threshold() -> usize {
+    128
+}
+
 fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
     x.parse()
 }
@@ -129,6 +133,16 @@ pub enum ModelSelected {
         /// Name of the Matryoshka Transformer slice to use
         #[arg(long)]
         matformer_slice_name: Option<String>,
+
+        /// Bits per coordinate for TurboQuant KV-cache compression (2, 3, or 4).
+        /// Requires the `kvcache-compression` feature. Disabled by default.
+        #[arg(long)]
+        kv_compression_bits: Option<u8>,
+
+        /// Minimum tokens to accumulate before compressing the KV cache.
+        /// Only takes effect when `--kv-compression-bits` is set (default: 128).
+        #[arg(long, default_value_t = 128)]
+        kv_compression_threshold: usize,
     },
 
     /// Select a plain model, without quantization or adapters
@@ -209,6 +223,18 @@ pub enum ModelSelected {
         #[arg(long)]
         #[serde(default)]
         matformer_slice_name: Option<String>,
+
+        /// Bits per coordinate for TurboQuant KV-cache compression (2, 3, or 4).
+        /// Requires the `kvcache-compression` feature. Disabled by default.
+        #[arg(long)]
+        #[serde(default)]
+        kv_compression_bits: Option<u8>,
+
+        /// Minimum tokens to accumulate before compressing the KV cache.
+        /// Only takes effect when `--kv-compression-bits` is set (default: 128).
+        #[arg(long, default_value_t = 128)]
+        #[serde(default = "default_kv_compression_threshold")]
+        kv_compression_threshold: usize,
     },
 
     /// Select an X-LoRA architecture

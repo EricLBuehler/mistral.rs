@@ -15,6 +15,35 @@ This document covers environment variables and server configuration for mistral.
 | `KEEP_ALIVE_INTERVAL` | SSE keep-alive interval in milliseconds (default: 10000) |
 | `HF_HUB_CACHE` | Override Hugging Face Hub cache directory |
 
+### KV-Cache Compression (TurboQuant)
+
+These variables enable TurboQuant KV-cache compression (requires the `kvcache-compression` Cargo feature). They are the environment-variable fallback for `--kv-cache-bits` and `--kv-cache-threshold`; explicit CLI flags always take precedence.
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `MISTRALRS_KV_CACHE_BITS` | `2` \| `3` \| `4` | unset (disabled) | Bits per coordinate for TurboQuant compression. Omit or unset to disable compression entirely. `3` is the recommended starting point (≈7× compression, <0.1% quality impact). |
+| `MISTRALRS_KV_CACHE_THRESHOLD` | integer ≥ 0 | `128` | Minimum number of tokens to accumulate before compression begins. Only active when `MISTRALRS_KV_CACHE_BITS` is set. Higher values preserve full-precision quality on short turns. |
+
+**Quick guidance:**
+
+| VRAM headroom | Recommended `BITS` | Recommended `THRESHOLD` |
+|---------------|--------------------|--------------------------|
+| > 30 % free | (disabled) | — |
+| 15–30 % free | `4` | `4096` |
+| 5–15 % free | `3` | `4096` |
+| < 5 % free | `3` | `128` (compress early) |
+| Critical (< 2 %) | `2` | `0` |
+
+**Example:**
+
+```bash
+export MISTRALRS_KV_CACHE_BITS=3
+export MISTRALRS_KV_CACHE_THRESHOLD=4096
+mistralrs serve -m meta-llama/Llama-3.1-8B-Instruct
+```
+
+See [KV-Cache Compression Guide](prometheus-enhancements/KVCACHE-COMPRESSION.md) for full details.
+
 ## Build-Time Environment Variables
 
 | Variable | Description |

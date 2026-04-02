@@ -324,6 +324,7 @@ pub async fn build_text_pipeline(
         hf_cache_path: builder.hf_cache_path.clone(),
         matformer_config_path: builder.matformer_config_path.clone(),
         matformer_slice_name: builder.matformer_slice_name.clone(),
+        kv_compression: None,
     };
 
     if builder.with_logging {
@@ -446,6 +447,8 @@ pub async fn build_text_pipeline(
             hf_cache_path: builder.hf_cache_path.clone(),
             matformer_config_path: builder.matformer_config_path.clone(),
             matformer_slice_name: builder.matformer_slice_name.clone(),
+            kv_compression_bits: None,
+            kv_compression_threshold: 128,
         },
         token_source: builder.token_source.clone(),
         hf_revision: builder.hf_revision.clone(),
@@ -1017,6 +1020,7 @@ pub async fn build_auto_pipeline(
         hf_cache_path: builder.hf_cache_path.clone(),
         matformer_config_path: builder.matformer_config_path.clone(),
         matformer_slice_name: builder.matformer_slice_name.clone(),
+        kv_compression: None,
     };
 
     let vision_config = VisionSpecificConfig {
@@ -1168,6 +1172,8 @@ pub async fn build_auto_pipeline(
             hf_cache_path: builder.hf_cache_path.clone(),
             matformer_config_path: builder.matformer_config_path.clone(),
             matformer_slice_name: builder.matformer_slice_name.clone(),
+            kv_compression_bits: None,
+            kv_compression_threshold: 128,
         },
         token_source: builder.token_source.clone(),
         hf_revision: builder.hf_revision.clone(),

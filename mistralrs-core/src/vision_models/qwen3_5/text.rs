@@ -2,8 +2,9 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
+use parking_lot::Mutex;
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::Embedding;

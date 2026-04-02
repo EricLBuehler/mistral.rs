@@ -12,8 +12,8 @@ use mistralrs_server_core::{
 };
 
 use crate::args::{
-    AdapterOptions, DeviceOptions, FormatOptions, GlobalOptions, ModelFormat, ModelSourceOptions,
-    ModelType, QuantizationOptions, RuntimeOptions, ServerOptions,
+    AdapterOptions, CacheOptions, DeviceOptions, FormatOptions, GlobalOptions, ModelFormat,
+    ModelSourceOptions, ModelType, QuantizationOptions, RuntimeOptions, ServerOptions,
 };
 use crate::ui::build_ui_router;
 
@@ -121,7 +121,7 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
             adapter,
             quantization,
             device,
-            cache: _,
+            cache,
             vision,
         } => {
             // If user explicitly specified a quantized format, handle it
@@ -147,12 +147,12 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
                         );
                     }
                     // Use the text model conversion which handles GGUF/GGML properly
-                    return convert_text_model(model, format, adapter, quantization, device);
+                    return convert_text_model(model, format, adapter, quantization, device, cache);
                 }
                 ModelFormat::Plain => {
                     // For plain format with adapters, also use text model conversion
                     if has_lora || has_xlora {
-                        return convert_text_model(model, format, adapter, quantization, device);
+                        return convert_text_model(model, format, adapter, quantization, device, cache);
                     }
                 }
             }
@@ -182,6 +182,8 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
                 hf_cache_path: device.hf_cache.clone(),
                 matformer_config_path: None,
                 matformer_slice_name: None,
+                kv_compression_bits: cache.kv_compression_bits,
+                kv_compression_threshold: cache.kv_compression_threshold,
             })
         }
 
@@ -191,8 +193,8 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
             adapter,
             quantization,
             device,
-            cache: _,
-        } => convert_text_model(model, format, adapter, quantization, device),
+            cache,
+        } => convert_text_model(model, format, adapter, quantization, device, cache),
 
         ModelType::Vision {
             model,
@@ -274,6 +276,7 @@ fn convert_text_model(
     adapter: &AdapterOptions,
     quantization: &QuantizationOptions,
     device: &DeviceOptions,
+    cache: &CacheOptions,
 ) -> Result<ModelSelected> {
     let format_type = format_opts.format.unwrap_or(ModelFormat::Plain);
     let has_lora = adapter.lora.is_some();
@@ -303,6 +306,8 @@ fn convert_text_model(
             hf_cache_path: device.hf_cache.clone(),
             matformer_config_path: None,
             matformer_slice_name: None,
+            kv_compression_bits: cache.kv_compression_bits,
+            kv_compression_threshold: cache.kv_compression_threshold,
         }),
 
         (ModelFormat::Plain, true, false) => Ok(ModelSelected::Lora {

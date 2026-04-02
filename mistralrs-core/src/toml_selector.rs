@@ -41,6 +41,10 @@ fn default_max_image_length() -> usize {
     AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH
 }
 
+fn default_kv_compression_threshold() -> usize {
+    128
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum TomlModelSelected {
@@ -86,6 +90,16 @@ pub enum TomlModelSelected {
 
         /// Cache path for Hugging Face models downloaded locally
         hf_cache_path: Option<PathBuf>,
+
+        /// Bits per coordinate for TurboQuant KV-cache compression (2, 3, or 4).
+        /// Requires the `kvcache-compression` feature. Omit to disable compression.
+        #[serde(default)]
+        kv_compression_bits: Option<u8>,
+
+        /// Minimum tokens to accumulate before compressing the KV cache.
+        /// Only takes effect when `kv_compression_bits` is set (default: 128).
+        #[serde(default = "default_kv_compression_threshold")]
+        kv_compression_threshold: usize,
     },
 
     /// Select an X-LoRA architecture
@@ -642,8 +656,10 @@ fn loader_from_selected(
             max_seq_len: _,
             max_batch_size: _,
             hf_cache_path,
-        } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
+            kv_compression_bits,
+            kv_compression_threshold,
+        } => {
+            let mut normal_cfg = NormalSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
                 write_uqff,
@@ -658,14 +674,30 @@ fn loader_from_selected(
                 hf_cache_path,
                 matformer_config_path: None,
                 matformer_slice_name: None,
-            },
-            args.chat_template,
-            args.tokenizer_json,
-            Some(model_id),
-            args.no_kv_cache,
-            args.jinja_explicit,
-        )
-        .build(arch)?,
+                ..Default::default()
+            };
+            #[cfg(feature = "kvcache-compression")]
+            if let Some(bits) = kv_compression_bits {
+                use crate::kv_cache::{CompressionBits, CompressionPolicy, KvCompressionConfig};
+                normal_cfg.kv_compression = Some(KvCompressionConfig {
+                    bits: match bits {
+                        2 => CompressionBits::Two,
+                        3 => CompressionBits::Three,
+                        _ => CompressionBits::Four,
+                    },
+                    policy: CompressionPolicy::ThresholdTokens(kv_compression_threshold),
+                });
+            }
+            NormalLoaderBuilder::new(
+                normal_cfg,
+                args.chat_template,
+                args.tokenizer_json,
+                Some(model_id),
+                args.no_kv_cache,
+                args.jinja_explicit,
+            )
+            .build(arch)?
+        }
         TomlModelSelected::XLora {
             model_id,
             xlora_model_id,
@@ -695,6 +727,7 @@ fn loader_from_selected(
                 hf_cache_path,
                 matformer_config_path: None,
                 matformer_slice_name: None,
+                ..Default::default()
             },
             args.chat_template,
             args.tokenizer_json,
@@ -739,6 +772,7 @@ fn loader_from_selected(
                 hf_cache_path,
                 matformer_config_path: None,
                 matformer_slice_name: None,
+                ..Default::default()
             },
             args.chat_template,
             args.tokenizer_json,

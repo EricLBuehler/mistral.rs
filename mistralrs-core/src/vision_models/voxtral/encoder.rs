@@ -1,7 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 use candle_core::{DType, Module, Result, Tensor};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
@@ -318,7 +319,7 @@ impl VoxtralEncoder {
 
         let seq_len = xs.dim(1)?;
 
-        let mut cache = self.cache.lock().expect("Encoder cache lock poisoned");
+        let mut cache = self.cache.lock();
 
         // Create causal mask with sliding window for the encoder
         let seqlen_offsets = vec![0usize; b_sz];
@@ -347,7 +348,7 @@ impl VoxtralEncoder {
     /// Reset the encoder KV cache (call between different audio inputs).
     pub fn reset_cache(&self) {
         let fresh = NormalCache::new_sliding(self.n_layers, 1_000_000, self.sliding_window);
-        let inner = fresh.lock().expect("New cache lock poisoned").clone();
-        *self.cache.lock().expect("Encoder cache lock poisoned") = inner;
+        let inner = fresh.lock().clone();
+        *self.cache.lock() = inner;
     }
 }

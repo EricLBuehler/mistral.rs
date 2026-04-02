@@ -42,7 +42,9 @@ pub struct ModelStatusRequest {
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct TuneModelRequest {
+    #[schema(value_type = Object)]
     model: ModelSelected,
+    #[schema(value_type = Object)]
     token_source: TokenSource,
     hf_revision: Option<String>,
     #[serde(default)]
@@ -204,7 +206,7 @@ pub async fn get_model_status(
     tag = "Mistral.rs",
     path = "/v1/models/tune",
     request_body = TuneModelRequest,
-    responses((status = 200, description = "Auto-tune a model configuration.", body = AutoTuneResult))
+    responses((status = 200, description = "Auto-tune a model configuration.", body = Object))
 )]
 pub async fn tune_model(
     Json(request): Json<TuneModelRequest>,

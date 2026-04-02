@@ -50,6 +50,7 @@ impl TextSpeculativeBuilder {
             hf_cache_path: builder.hf_cache_path,
             matformer_config_path: None,
             matformer_slice_name: None,
+            kv_compression: None,
         };
 
         if builder.with_logging {

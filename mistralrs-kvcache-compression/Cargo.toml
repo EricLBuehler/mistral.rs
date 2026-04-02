@@ -1,0 +1,21 @@
+[package]
+name = "mistralrs-kvcache-compression"
+readme = "../README.md"
+authors = ["mistral.rs contributors"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "TurboQuant KV-cache compression for mistral.rs (NormalCache and PagedAttention modes)"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
+
+[dependencies]
+turboquant.workspace = true
+candle-core.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true

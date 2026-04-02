@@ -35,6 +35,7 @@ impl LoraModelBuilder {
             hf_cache_path: self.text_model.hf_cache_path,
             matformer_config_path: None,
             matformer_slice_name: None,
+            kv_compression: None,
         };
 
         if self.text_model.with_logging {

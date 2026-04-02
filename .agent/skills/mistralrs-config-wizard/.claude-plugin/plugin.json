@@ -1,0 +1,106 @@
+{
+  "name": "mistralrs-config-wizard",
+  "version": "1.0.0",
+  "description": "Configuration assistant for mistral.rs — generates config.toml, .env, quickstart.sh, and Kubernetes manifests with hardware-matched TurboQuant KV-cache compression recommendations.",
+  "slash_commands": [
+    {
+      "name": "mistralrs-config",
+      "description": "Auto-detect intent and route to the right configuration mode",
+      "prompt_file": "prompts/meta-controller.md"
+    },
+    {
+      "name": "mistralrs-wizard",
+      "description": "Guided first-time setup: hardware → model → compression → generate config.toml + .env + quickstart.sh",
+      "prompt_file": "prompts/wizard.md"
+    },
+    {
+      "name": "mistralrs-advise",
+      "description": "Explain any mistral.rs configuration option, CLI flag, or environment variable",
+      "prompt_file": "prompts/advise.md"
+    },
+    {
+      "name": "mistralrs-validate",
+      "description": "Check an existing config.toml and/or .env for errors and conflicts",
+      "prompt_file": "prompts/validate.md"
+    },
+    {
+      "name": "mistralrs-model-select",
+      "description": "Hardware profile → model recommendation → TurboQuant KV-cache compression sizing",
+      "prompt_file": "prompts/model-select.md"
+    },
+    {
+      "name": "mistralrs-stack",
+      "description": "Full bundle generator: config.toml + .env + quickstart.sh (+ optional k8s manifests)",
+      "prompt_file": "prompts/generate.md"
+    },
+    {
+      "name": "mistralrs-k8s",
+      "description": "Generate Kubernetes Secret + ConfigMap + Deployment YAML or docker-compose.yml",
+      "prompt_file": "prompts/k8s-config.md"
+    },
+    {
+      "name": "mistralrs-migrate",
+      "description": "Convert existing mistralrs CLI shell scripts to structured config.toml + .env",
+      "prompt_file": "prompts/migrate.md"
+    }
+  ],
+  "resources": [
+    {
+      "id": "config-reference",
+      "path": "references/config-reference.md",
+      "description": "Complete TOML configuration field catalogue"
+    },
+    {
+      "id": "cli-args",
+      "path": "references/cli-args.md",
+      "description": "All CLI flags with TOML and env var equivalents"
+    },
+    {
+      "id": "env-vars",
+      "path": "references/env-vars.md",
+      "description": "All MISTRALRS_* environment variables"
+    },
+    {
+      "id": "turboquant-guide",
+      "path": "references/turboquant-guide.md",
+      "description": "TurboQuant KV-cache compression sizing guide"
+    },
+    {
+      "id": "deployment-patterns",
+      "path": "references/deployment-patterns.md",
+      "description": "Canonical deployment configurations"
+    },
+    {
+      "id": "model-catalog",
+      "path": "references/model-catalog.md",
+      "description": "Supported model architectures with hardware fit guidance"
+    }
+  ],
+  "templates": [
+    {
+      "id": "config-toml",
+      "path": "assets/templates/config.toml.template",
+      "description": "Annotated TOML config template"
+    },
+    {
+      "id": "env",
+      "path": "assets/templates/.env.template",
+      "description": "Environment variables template"
+    },
+    {
+      "id": "quickstart",
+      "path": "assets/templates/quickstart.sh.template",
+      "description": "Launch script template"
+    },
+    {
+      "id": "k8s-secret",
+      "path": "assets/templates/k8s-secret.yaml.template",
+      "description": "Kubernetes Secret template"
+    },
+    {
+      "id": "k8s-configmap",
+      "path": "assets/templates/k8s-configmap.yaml.template",
+      "description": "Kubernetes ConfigMap template"
+    }
+  ]
+}
