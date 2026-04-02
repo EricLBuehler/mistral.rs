@@ -172,7 +172,7 @@ impl QuantMethod for AfqLayer {
                     .squeeze(1)?;
                 result.reshape((b_size, seq_len, num_experts_per_tok, out_features))
             }
-            &[num_tokens, 1, hidden_dim] => {
+            &[num_tokens, _mid, hidden_dim] => {
                 let (_, num_experts_per_tok) = indices.dims2()?;
                 let flat_indices = indices.reshape((num_tokens * num_experts_per_tok,))?;
                 let selected_w = w.index_select(&flat_indices, 0)?;

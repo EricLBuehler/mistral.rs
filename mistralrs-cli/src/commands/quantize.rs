@@ -265,7 +265,7 @@ base_model_relation: quantized
 
 # `{base_model}`, UQFF quantization
 
-Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation: [UQFF docs](https://github.com/EricLBuehler/mistral.rs/blob/master/docs/UQFF.md).
+Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation: [UQFF docs](https://ericlbuehler.github.io/mistral.rs/UQFF.html).
 
 1) **Flexible** 🌀: Multiple quantization formats in *one* file format with *one* framework to run them all.
 2) **Reliable** 🔒: Compatibility ensured with *embedded* and *checked* semantic versioning information from day 1.
