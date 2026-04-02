@@ -1,8 +1,10 @@
-# Gemma 4 Model: [`google/gemma-4-E4B-it`](https://huggingface.co/google/gemma-4-E4B-it)
+# Gemma 4 Model Family: [`Collection`](https://huggingface.co/collections/google/gemma-4)
 
 Gemma 4 is a multimodal model that supports text, vision (image), video, and audio input with text output. It builds on the Gemma family with full multimodal capabilities across all four input modalities.
 
 We support the Gemma 4 Model in the Rust, Python, and HTTP APIs, including ISQ for increased performance.
+
+Pre-quantized UQFF models are available in the [mistralrs-community Gemma 4 collection](https://huggingface.co/collections/mistralrs-community/gemma-4).
 
 > **Video support**: Non-GIF video formats (mp4, avi, mov, etc.) require FFmpeg to be installed. See [VIDEO.md](VIDEO.md) for installation instructions and details.
 
@@ -13,7 +15,29 @@ The Python and HTTP APIs support sending inputs as:
 
 The Rust SDK takes images from the [image](https://docs.rs/image/latest/image/index.html) crate, audio from `AudioInput`, and video from `VideoInput`.
 
-## HTTP server
+## Running
+
+With an image:
+
+```
+mistralrs run -m mistralrs-community/gemma-4-E2B-it-UQFF --from-uqff 8 --image image.png -i "Describe this image in detail."
+```
+
+With a video:
+
+```
+mistralrs run -m mistralrs-community/gemma-4-E2B-it-UQFF --from-uqff 8 --video video.mp4 -i "Describe this video in detail."
+```
+
+With audio:
+
+```
+mistralrs run -m mistralrs-community/gemma-4-E2B-it-UQFF --from-uqff 8 --audio audio.mp3 -i "Transcribe this fully."
+```
+
+## Examples
+
+### HTTP server
 
 We support an OpenAI compatible HTTP API for multimodal models. The examples below demonstrate sending chat completion requests with different input types.
 
@@ -22,7 +46,7 @@ We support an OpenAI compatible HTTP API for multimodal models. The examples bel
 1) Start the server
 
 ```
-mistralrs serve multimodal -p 1234 -m google/gemma-4-E4B-it
+mistralrs serve -m google/gemma-4-E4B-it --isq 8
 ```
 
 2) Send a request
@@ -140,7 +164,7 @@ print(completion.choices[0].message.content)
 
 ---
 
-## Python
+### Python
 You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gemma4.py).
 
 ```py
@@ -185,14 +209,15 @@ print(res.usage)
 
 ---
 
-## Rust
+### Rust
 You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs).
 
-This is a minimal example of running the Gemma 4 model with a video input.
+This is a minimal example of running the Gemma 4 model with a video input. Video decoding uses the `parse_video_url` helper from `mistralrs-server-core`, which handles FFmpeg decoding and frame sampling automatically.
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VideoInput, MultimodalMessages, MultimodalModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+use mistralrs_server_core::video::parse_video_url;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -203,10 +228,7 @@ async fn main() -> Result<()> {
             .build()
             .await?;
 
-    // Load video frames (pre-decoded). In practice, use the server-core
-    // `parse_video_url` helper or decode frames with FFmpeg.
-    let frames: Vec<image::DynamicImage> = vec![/* decoded frames */];
-    let video = VideoInput::from_frames(frames, 24.0, None);
+    let video = parse_video_url("path/to/video.mp4", None).await?;
 
     let messages = MultimodalMessages::new().add_video_message(
         TextMessageRole::User,
@@ -224,22 +246,4 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-```
-
-## Interactive mode
-
-In interactive mode, simply include the path or URL to a video file in your prompt. The model will automatically detect video files by their extension.
-
-1) Start interactive mode
-
-```
-mistralrs run multimodal -m google/gemma-4-E4B-it
-```
-
-2) Enter prompts with video, image, or audio files
-
-```
-> Describe this video: path/to/video.mp4
-> What is in this image? path/to/image.jpg
-> Describe the image and the video: photo.png clip.mp4
 ```
