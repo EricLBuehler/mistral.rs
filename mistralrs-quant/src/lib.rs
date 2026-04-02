@@ -637,8 +637,19 @@ impl IsqBits {
         }
     }
 
-    /// Return all platform variants (non-Metal first, then Metal if different).
+    /// Return all platform variants, with the current platform's preferred variant first.
+    /// On Metal, AFQ variants come first; on other platforms, GGUF/Q variants come first.
     pub fn expand(self) -> Vec<IsqType> {
+        #[cfg(feature = "metal")]
+        match self {
+            Self::Two => vec![IsqType::AFQ2, IsqType::Q2K],
+            Self::Three => vec![IsqType::AFQ3, IsqType::Q3K],
+            Self::Four => vec![IsqType::AFQ4, IsqType::Q4K],
+            Self::Five => vec![IsqType::Q5K],
+            Self::Six => vec![IsqType::AFQ6, IsqType::Q6K],
+            Self::Eight => vec![IsqType::AFQ8, IsqType::Q8_0],
+        }
+        #[cfg(not(feature = "metal"))]
         match self {
             Self::Two => vec![IsqType::Q2K, IsqType::AFQ2],
             Self::Three => vec![IsqType::Q3K, IsqType::AFQ3],

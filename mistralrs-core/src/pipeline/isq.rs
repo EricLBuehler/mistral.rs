@@ -1300,12 +1300,18 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_uqff_shorthand_prefers_first_expand_variant() {
-        // expand() returns [Q8_0, AFQ8] — Q8_0 (non-Metal) comes first
+    fn test_resolve_uqff_shorthand_prefers_platform_variant() {
+        // expand() returns platform-preferred variant first:
+        // Metal: [AFQ8, Q8_0], non-Metal: [Q8_0, AFQ8]
         let files = vec!["q8_0-0.uqff".to_string(), "afq8-0.uqff".to_string()];
+        let expected = if cfg!(feature = "metal") {
+            "afq8-0.uqff"
+        } else {
+            "q8_0-0.uqff"
+        };
         assert_eq!(
             resolve_uqff_shorthand("8", &files),
-            Some("q8_0-0.uqff".to_string())
+            Some(expected.to_string())
         );
     }
 
