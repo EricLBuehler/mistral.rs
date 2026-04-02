@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     fmt::Debug,
     num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard},
+    sync::{atomic::AtomicUsize, Arc, Condvar, Mutex, MutexGuard},
 };
 
 use blockwise_fp8::blockwise_fp8_linear_b;
@@ -90,6 +90,56 @@ pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 use candle_nn::{Conv1d, Conv2d, Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
 
+/// Limits outstanding async ISQ jobs to prevent unbounded memory growth.
+///
+/// Without backpressure, MoE models (e.g. Gemma4 with 128 experts × 30 layers)
+/// queue BF16 tensor data in the rayon pool faster than the pool can quantize,
+/// causing OOM on memory-constrained systems like macOS Metal with unified memory.
+pub struct IsqBackpressure {
+    count: Mutex<usize>,
+    cvar: Condvar,
+    max: usize,
+}
+
+impl IsqBackpressure {
+    pub fn new(max: usize) -> Self {
+        Self {
+            count: Mutex::new(0),
+            cvar: Condvar::new(),
+            max,
+        }
+    }
+
+    /// Block until a slot is available, then increment the outstanding count.
+    pub fn acquire(&self) {
+        let mut count = self.count.lock().expect("ISQ backpressure lock poisoned");
+        while *count >= self.max {
+            count = self
+                .cvar
+                .wait(count)
+                .expect("ISQ backpressure lock poisoned");
+        }
+        *count += 1;
+    }
+
+    /// Decrement the outstanding count and wake a blocked loader thread.
+    pub fn release(&self) {
+        let mut count = self.count.lock().expect("ISQ backpressure lock poisoned");
+        *count = count.saturating_sub(1);
+        self.cvar.notify_one();
+    }
+}
+
+impl Debug for IsqBackpressure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let count = self.count.lock().map(|c| *c).unwrap_or(0);
+        f.debug_struct("IsqBackpressure")
+            .field("outstanding", &count)
+            .field("max", &self.max)
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ImmediateIsqParams {
     pub guard: QuantizeOntoGuard,
@@ -100,6 +150,8 @@ pub struct ImmediateIsqParams {
     /// When `Some`, `apply_immediate_isq` will spawn quantization tasks
     /// on this pool and return `PendingIsqLayer` wrappers.
     pub pool: Option<Arc<rayon::ThreadPool>>,
+    /// Backpressure to limit outstanding async ISQ jobs.
+    pub backpressure: Arc<IsqBackpressure>,
 }
 
 #[derive(Clone, Debug)]
@@ -130,12 +182,16 @@ pub fn set_immediate_isq_with_pool(
     overrides: Vec<ImmediateIsqOverride>,
     pool: rayon::ThreadPool,
 ) {
+    // Allow pool threads + 1 outstanding jobs: enough for pipeline overlap
+    // (load next tensor while pool quantizes current) without unbounded growth.
+    let max_outstanding = pool.current_num_threads() + 1;
     ENGINE_IMMEDIATE_ISQ.with(|cell| {
         *cell.borrow_mut() = Some(ImmediateIsqParams {
             guard: QuantizeOntoGuard::new(),
             ty: isq,
             predicates,
             overrides,
+            backpressure: Arc::new(IsqBackpressure::new(max_outstanding)),
             pool: Some(Arc::new(pool)),
         });
     });
@@ -581,8 +637,19 @@ impl IsqBits {
         }
     }
 
-    /// Return all platform variants (non-Metal first, then Metal if different).
+    /// Return all platform variants, with the current platform's preferred variant first.
+    /// On Metal, AFQ variants come first; on other platforms, GGUF/Q variants come first.
     pub fn expand(self) -> Vec<IsqType> {
+        #[cfg(feature = "metal")]
+        match self {
+            Self::Two => vec![IsqType::AFQ2, IsqType::Q2K],
+            Self::Three => vec![IsqType::AFQ3, IsqType::Q3K],
+            Self::Four => vec![IsqType::AFQ4, IsqType::Q4K],
+            Self::Five => vec![IsqType::Q5K],
+            Self::Six => vec![IsqType::AFQ6, IsqType::Q6K],
+            Self::Eight => vec![IsqType::AFQ8, IsqType::Q8_0],
+        }
+        #[cfg(not(feature = "metal"))]
         match self {
             Self::Two => vec![IsqType::Q2K, IsqType::AFQ2],
             Self::Three => vec![IsqType::Q3K, IsqType::AFQ3],

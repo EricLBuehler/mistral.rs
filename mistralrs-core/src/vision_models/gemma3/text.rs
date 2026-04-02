@@ -19,8 +19,8 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalCacheType, NormalLoadingMetadata,
-        VisionModel,
+        EitherCache, IsqModel, KvCache, MultimodalModel, NormalCache, NormalCacheType,
+        NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -545,7 +545,7 @@ impl TextModel {
                 num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
                 num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
                     .max(1),
-                sliding_window: None,
+                sliding_window: Some(cfg.sliding_window),
                 k_head_dim: cfg.head_dim,
                 v_head_dim: cfg.head_dim,
                 kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
@@ -579,6 +579,11 @@ impl TextModel {
         // See: https://github.com/vllm-project/vllm/blob/5819ca8944af4f7dcbac3c6b73179f760e05910d/vllm/config/model.py#L1116-L1125
         let has_bidirectional =
             has_images && self.image_token_index.is_some() && input_ids.dim(1)? > 1;
+
+        // Non-causal flash params used for the bidirectional-attention path so
+        // that the paged-attention gather path does NOT force causal=true (which
+        // would undo the bidirectional overrides in the materialized masks).
+        let bidir_flash = FlashParams::empty(false);
 
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
             // Build real masks (not flash-attn dummies) with bidirectional regions for image tokens
@@ -623,8 +628,7 @@ impl TextModel {
                     .unwrap_or(true)
             });
 
-            // None = bypass flash, use the mask directly
-            (attention_mask, sliding_attention_mask, None)
+            (attention_mask, sliding_attention_mask, Some(&bidir_flash))
         } else {
             // Standard path: use CausalMasker (returns dummy (1,1) when flash-attn on CUDA)
             let attention_mask = CausalMasker.make_causal_mask_matrix(
@@ -843,7 +847,7 @@ impl IsqModel for TextModel {
     }
 }
 
-impl VisionModel for TextModel {
+impl MultimodalModel for TextModel {
     fn forward(
         &self,
         _input_ids: &Tensor,

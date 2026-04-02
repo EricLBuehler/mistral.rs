@@ -35,7 +35,7 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, KvCache, MultimodalModel, NormalCache, NormalLoadingMetadata,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -1292,7 +1292,7 @@ pub(crate) struct Phi3VisionSpecificArgs {
     pub image_hashes: Vec<u64>,
 }
 
-impl VisionModel for Model {
+impl MultimodalModel for Model {
     fn forward(
         &self,
         input_ids: &Tensor,

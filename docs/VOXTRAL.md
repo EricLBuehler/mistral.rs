@@ -13,7 +13,7 @@ We support an OpenAI compatible HTTP API for audio models.
 1) Start the server
 
 ```
-mistralrs serve vision -m mistralai/Voxtral-Mini-4B-Realtime-2602
+mistralrs serve multimodal -m mistralai/Voxtral-Mini-4B-Realtime-2602
 ```
 
 2) Send a request
@@ -59,11 +59,11 @@ You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob
 
 ```rust
 use anyhow::Result;
-use mistralrs::{AudioInput, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{AudioInput, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("mistralai/Voxtral-Mini-4B-Realtime-2602")
+    let model = MultimodalModelBuilder::new("mistralai/Voxtral-Mini-4B-Realtime-2602")
         .with_logging()
         .build()
         .await?;
@@ -71,11 +71,12 @@ async fn main() -> Result<()> {
     let audio_bytes = std::fs::read("sample_audio.wav")?;
     let audio = AudioInput::from_bytes(&audio_bytes)?;
 
-    let messages = VisionMessages::new().add_multimodal_message(
+    let messages = MultimodalMessages::new().add_multimodal_message(
         TextMessageRole::User,
         "Transcribe this audio.",
         vec![],
         vec![audio],
+        vec![],
     );
 
     let response = model.send_chat_request(messages).await?;
@@ -93,12 +94,12 @@ async fn main() -> Result<()> {
 ## Python
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="mistralai/Voxtral-Mini-4B-Realtime-2602",
-        arch=VisionArchitecture.Voxtral,
+        arch=MultimodalArchitecture.Voxtral,
     ),
 )
 

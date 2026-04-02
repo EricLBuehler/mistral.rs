@@ -17,7 +17,7 @@ The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/
 ## HTTP server
 You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v.py).
 
-We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
+We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.
 
 > Note: The image_url may be either a path, URL, or a base64 encoded string.
 
@@ -44,7 +44,7 @@ The perspective from which this photo is taken offers an expansive view of the m
 1) Start the server
 
 ```
-mistralrs serve vision -p 1234 -m microsoft/Phi-3.5-vision-instruct
+mistralrs serve multimodal -p 1234 -m microsoft/Phi-3.5-vision-instruct
 ```
 
 2) Send a request
@@ -89,18 +89,18 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs).
 
 This is a minimal example of running the Phi 3 Vision model with a dummy image.
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model =
-        VisionModelBuilder::new("microsoft/Phi-3.5-vision-instruct")
+        MultimodalModelBuilder::new("microsoft/Phi-3.5-vision-instruct")
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
@@ -114,7 +114,7 @@ async fn main() -> Result<()> {
     };
     let image = image::load_from_memory(&bytes)?;
 
-    let messages = VisionMessages::new().add_phiv_image_message(
+    let messages = MultimodalMessages::new().add_phiv_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         image,
@@ -140,12 +140,12 @@ This example demonstrates loading and sending a chat completion request with an 
 > Note: the image_url may be either a path, URL, or a base64 encoded string.
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="microsoft/Phi-3.5-vision-instruct",
-        arch=VisionArchitecture.Phi3V,
+        arch=MultimodalArchitecture.Phi3V,
     ),
 )
 

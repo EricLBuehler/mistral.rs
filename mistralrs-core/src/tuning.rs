@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use crate::device_map::{DeviceLayerMapMetadata, DeviceMapMetadata};
 use crate::model_loader::{get_auto_device_map_params, get_model_dtype};
 use crate::pipeline::{
-    AutoDeviceMapParams, AutoEmbeddingLoader, AutoNormalLoader, AutoVisionLoader,
-    DeviceMappedModelLoader, EmbeddingLoaderType, NormalLoaderType, TokenSource, VisionLoaderType,
+    AutoDeviceMapParams, AutoEmbeddingLoader, AutoMultimodalLoader, AutoNormalLoader,
+    DeviceMappedModelLoader, EmbeddingLoaderType, MultimodalLoaderType, NormalLoaderType,
+    TokenSource,
 };
 use crate::utils::tokens::get_token;
 use crate::{paged_attn_supported, IsqType, ModelSelected, TryIntoDType, GLOBAL_HF_CACHE};
@@ -120,7 +121,7 @@ enum TuneBackend {
 #[derive(Clone, Copy, Debug)]
 enum TuneKind {
     Normal,
-    Vision,
+    Multimodal,
     Embedding,
 }
 
@@ -169,7 +170,7 @@ fn hf_cache_path_from_model(model: &ModelSelected) -> Option<PathBuf> {
         ModelSelected::Plain { hf_cache_path, .. }
         | ModelSelected::Lora { hf_cache_path, .. }
         | ModelSelected::XLora { hf_cache_path, .. }
-        | ModelSelected::VisionPlain { hf_cache_path, .. }
+        | ModelSelected::MultimodalPlain { hf_cache_path, .. }
         | ModelSelected::Embedding { hf_cache_path, .. }
         | ModelSelected::Run { hf_cache_path, .. } => hf_cache_path.clone(),
         _ => None,
@@ -187,7 +188,7 @@ fn model_id_from_selected(model: &ModelSelected) -> String {
             model_id: Some(model_id),
             ..
         }
-        | ModelSelected::VisionPlain { model_id, .. }
+        | ModelSelected::MultimodalPlain { model_id, .. }
         | ModelSelected::Embedding { model_id, .. }
         | ModelSelected::Run { model_id, .. } => model_id.clone(),
         ModelSelected::GGUF {
@@ -292,8 +293,8 @@ fn infer_kind(config: &str, sentence_transformers: bool) -> Result<TuneKind> {
         anyhow::bail!("Expected exactly one architecture in config");
     }
     let name = &cfg.architectures[0];
-    if VisionLoaderType::from_causal_lm_name(name).is_ok() {
-        return Ok(TuneKind::Vision);
+    if MultimodalLoaderType::from_causal_lm_name(name).is_ok() {
+        return Ok(TuneKind::Multimodal);
     }
     if EmbeddingLoaderType::from_causal_lm_name(name).is_ok() {
         return Ok(TuneKind::Embedding);
@@ -498,14 +499,14 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
     )?;
 
     let kind = match &req.model {
-        ModelSelected::VisionPlain { .. } => TuneKind::Vision,
+        ModelSelected::MultimodalPlain { .. } => TuneKind::Multimodal,
         ModelSelected::Embedding { .. } => TuneKind::Embedding,
         _ => infer_kind(&config, sentence_transformers)?,
     };
 
     let mut params = get_auto_device_map_params(&req.model)?;
-    if matches!(kind, TuneKind::Vision) {
-        params = params.maybe_promote_to_vision();
+    if matches!(kind, TuneKind::Multimodal) {
+        params = params.maybe_promote_to_multimodal();
     }
 
     let devices = select_devices(req.force_cpu)?;
@@ -518,11 +519,11 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
     };
 
     let loader_normal = AutoNormalLoader;
-    let loader_vision = AutoVisionLoader;
+    let loader_multimodal = AutoMultimodalLoader;
     let loader_embedding = AutoEmbeddingLoader;
     let loader: &dyn DeviceMappedModelLoader = match kind {
         TuneKind::Normal => &loader_normal,
-        TuneKind::Vision => &loader_vision,
+        TuneKind::Multimodal => &loader_multimodal,
         TuneKind::Embedding => &loader_embedding,
     };
 
@@ -541,8 +542,8 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
     if matches!(kind, TuneKind::Embedding) {
         notes.push("Detected embedding model configuration.".to_string());
     }
-    if matches!(kind, TuneKind::Vision) {
-        notes.push("Detected vision model configuration.".to_string());
+    if matches!(kind, TuneKind::Multimodal) {
+        notes.push("Detected multimodal model configuration.".to_string());
     }
 
     // Get total VRAM for calculations

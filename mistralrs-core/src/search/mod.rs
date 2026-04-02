@@ -190,11 +190,33 @@ pub fn get_search_tools(web_search_options: &WebSearchOptions) -> Result<Vec<Too
 
 pub fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<SearchResult>> {
     let client = reqwest::blocking::Client::new();
+    let user_agent = format!("mistralrs/{APP_VERSION} ({OS}; {ARCH}; {FAMILY})");
+
+    // If the model passed a URL instead of a search query, fetch it directly
+    // rather than searching DuckDuckGo (which returns 0 results for raw URLs).
+    let trimmed = params.query.trim().trim_matches('"');
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        let content = match client.get(trimmed).header("User-Agent", &user_agent).send() {
+            Ok(response) => {
+                let html = response.text()?;
+                config::with_decorator(PlainDecorator::new())
+                    .do_decorate()
+                    .string_from_read(html.as_bytes(), 80)
+                    .unwrap_or_default()
+            }
+            Err(e) => anyhow::bail!("Failed to fetch URL: {e}"),
+        };
+        return Ok(vec![SearchResult {
+            title: trimmed.to_string(),
+            description: String::new(),
+            url: trimmed.to_string(),
+            content,
+        }]);
+    }
 
     let encoded_query = urlencoding::encode(&params.query);
     let url = format!("https://html.duckduckgo.com/html/?q={encoded_query}");
 
-    let user_agent = format!("mistralrs/{APP_VERSION} ({OS}; {ARCH}; {FAMILY})");
     let response = client.get(&url).header("User-Agent", &user_agent).send()?;
 
     // Check the response status

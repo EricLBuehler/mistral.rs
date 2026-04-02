@@ -1,15 +1,16 @@
 use std::{
     cell::RefCell,
     fs::{self, File},
-    io::Read,
+    io::{Cursor, Read},
     sync::{Arc, Mutex},
 };
 
 use either::Either;
-use image::DynamicImage;
+use image::codecs::gif::GifDecoder;
+use image::{AnimationDecoder, DynamicImage};
 use mistralrs_core::{
-    AudioInput, ChatCompletionResponse, CompletionResponse, MistralRs, Request, Response,
-    ResponseErr,
+    sample_frame_indices, AudioInput, ChatCompletionResponse, CompletionResponse, MistralRs,
+    Request, Response, ResponseErr, VideoInput,
 };
 use pyo3::{exceptions::PyValueError, PyErr};
 use tokio::sync::mpsc::Receiver;
@@ -286,4 +287,283 @@ pub(crate) fn parse_audio_url(url_unparsed: &str) -> PyApiResult<AudioInput> {
     };
 
     AudioInput::from_bytes(&bytes).map_err(|e| PyApiErr::from(format!("{e}")))
+}
+
+/// Default number of frames to sample from a video.
+const DEFAULT_NUM_FRAMES: usize = 32;
+
+/// Default FPS assumed when metadata is unavailable.
+const DEFAULT_FPS: f64 = 24.0;
+
+/// Parses and loads a video from a URL, file path, or data URL.
+/// Mirrors `parse_image_url`/`parse_audio_url` but returns a [`VideoInput`].
+///
+/// GIF files are decoded with the `image` crate. All other formats require
+/// FFmpeg on `$PATH`.
+pub(crate) fn parse_video_url(url_unparsed: &str) -> PyApiResult<VideoInput> {
+    let url = if let Ok(url) = url::Url::parse(url_unparsed) {
+        url
+    } else if File::open(url_unparsed).is_ok() {
+        url::Url::from_file_path(std::path::absolute(url_unparsed)?)
+            .map_err(|_| format!("Could not parse file path: {url_unparsed}"))?
+    } else {
+        url::Url::parse(url_unparsed).map_err(|_| {
+            format!(
+                "Invalid source '{}': not a valid URL (http/https/data) and file not found. \
+                 Use a full URL, a data URL, or a file path that exists.",
+                url_unparsed
+            )
+        })?
+    };
+
+    let bytes = if url.scheme() == "http" || url.scheme() == "https" {
+        match reqwest::blocking::get(url.clone()) {
+            Ok(http_resp) => http_resp
+                .bytes()
+                .map_err(|e| PyApiErr::from(format!("{e}")))?
+                .to_vec(),
+            Err(e) => return Err(PyApiErr::from(format!("{e}"))),
+        }
+    } else if url.scheme() == "file" {
+        let path = url
+            .to_file_path()
+            .map_err(|_| format!("Could not parse file path: {url}"))?;
+
+        if let Ok(mut f) = File::open(&path) {
+            let metadata = fs::metadata(&path)?;
+            let mut buffer = vec![0; metadata.len() as usize];
+            f.read_exact(&mut buffer)?;
+            buffer
+        } else {
+            return Err(PyApiErr::from(format!(
+                "Could not open file at path: {url}"
+            )));
+        }
+    } else if url.scheme() == "data" {
+        let data_url = data_url::DataUrl::process(url.as_str()).map_err(|e| format!("{e}"))?;
+        data_url.decode_to_vec().map_err(|e| format!("{e}"))?.0
+    } else {
+        return Err(PyApiErr::from(format!(
+            "Unsupported URL scheme: {}",
+            url.scheme()
+        )));
+    };
+
+    let lower = url_unparsed.to_lowercase();
+    let is_gif = lower.ends_with(".gif")
+        || lower.contains("image/gif")
+        || (bytes.len() >= 6 && &bytes[..6] == b"GIF89a")
+        || (bytes.len() >= 6 && &bytes[..6] == b"GIF87a");
+
+    if is_gif {
+        decode_gif_frames(&bytes).map_err(|e| PyApiErr::from(format!("{e}")))
+    } else {
+        decode_video_ffmpeg(&bytes, url_unparsed).map_err(|e| PyApiErr::from(format!("{e}")))
+    }
+}
+
+fn decode_gif_frames(bytes: &[u8]) -> anyhow::Result<VideoInput> {
+    let decoder = GifDecoder::new(Cursor::new(bytes))
+        .map_err(|e| anyhow::anyhow!("Failed to decode GIF: {e}"))?;
+
+    let raw_frames: Vec<_> = decoder
+        .into_frames()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let total = raw_frames.len();
+    if total == 0 {
+        anyhow::bail!("GIF contains no frames");
+    }
+
+    let total_delay_ms: u32 = raw_frames
+        .iter()
+        .map(|f| {
+            let (num, den) = f.delay().numer_denom_ms();
+            if den == 0 {
+                100
+            } else {
+                num * 1000 / den
+            }
+        })
+        .sum();
+    let fps = if total_delay_ms > 0 {
+        (total as f64 * 1000.0) / total_delay_ms as f64
+    } else {
+        DEFAULT_FPS
+    };
+
+    let indices = sample_frame_indices(total, DEFAULT_NUM_FRAMES);
+    let frames: Vec<DynamicImage> = indices
+        .iter()
+        .map(|&i| DynamicImage::ImageRgba8(raw_frames[i].buffer().clone()))
+        .collect();
+
+    Ok(VideoInput {
+        frames,
+        fps,
+        total_num_frames: total,
+        sampled_indices: indices,
+    })
+}
+
+fn decode_video_ffmpeg(bytes: &[u8], source_hint: &str) -> anyhow::Result<VideoInput> {
+    let ffmpeg_ok = std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok();
+
+    if !ffmpeg_ok {
+        anyhow::bail!(
+            "Cannot decode video '{}': FFmpeg not found.\n\
+             FFmpeg is required for video input (non-GIF formats). Install it:\n\
+             - Linux:   apt install ffmpeg  /  dnf install ffmpeg\n\
+             - macOS:   brew install ffmpeg\n\
+             - Windows: https://ffmpeg.org/download.html",
+            source_hint,
+        );
+    }
+
+    let tmp_dir = std::env::temp_dir().join("mistralrs_video");
+    fs::create_dir_all(&tmp_dir)?;
+    let video_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let input_path = tmp_dir.join(format!("{video_id}.video"));
+    fs::write(&input_path, bytes)?;
+
+    let (fps, total_frames) = probe_video_blocking(&input_path).unwrap_or((DEFAULT_FPS, 0));
+
+    let effective_total = if total_frames > 0 {
+        total_frames
+    } else {
+        DEFAULT_NUM_FRAMES
+    };
+
+    let indices = sample_frame_indices(effective_total, DEFAULT_NUM_FRAMES);
+    let n = indices.len();
+
+    let out_dir = tmp_dir.join(format!("{video_id}_frames"));
+    fs::create_dir_all(&out_dir)?;
+
+    let select_expr = indices
+        .iter()
+        .map(|i| format!("eq(n\\,{i})"))
+        .collect::<Vec<_>>()
+        .join("+");
+
+    let status = std::process::Command::new("ffmpeg")
+        .args([
+            "-i",
+            input_path.to_str().unwrap(),
+            "-vf",
+            &format!("select='{select_expr}'"),
+            "-vsync",
+            "vfr",
+            "-frames:v",
+            &n.to_string(),
+            &format!("{}/frame_%04d.png", out_dir.display()),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+
+    if !status.success() {
+        let _ = fs::remove_file(&input_path);
+        let _ = fs::remove_dir_all(&out_dir);
+        anyhow::bail!(
+            "FFmpeg failed to extract frames from '{}' (exit code: {:?})",
+            source_hint,
+            status.code()
+        );
+    }
+
+    let mut frames = Vec::with_capacity(n);
+    for i in 1..=n {
+        let frame_path = out_dir.join(format!("frame_{i:04}.png"));
+        if frame_path.exists() {
+            let frame_bytes = fs::read(&frame_path)?;
+            let img = image::load_from_memory(&frame_bytes)
+                .map_err(|e| anyhow::anyhow!("Failed to load extracted frame {i}: {e}"))?;
+            frames.push(img);
+        }
+    }
+
+    let _ = fs::remove_file(&input_path);
+    let _ = fs::remove_dir_all(&out_dir);
+
+    if frames.is_empty() {
+        anyhow::bail!(
+            "FFmpeg extracted 0 frames from '{}'. The file may be corrupt or empty.",
+            source_hint
+        );
+    }
+
+    let actual_indices = if frames.len() < indices.len() {
+        sample_frame_indices(effective_total, frames.len())
+    } else {
+        indices
+    };
+
+    Ok(VideoInput {
+        frames,
+        fps,
+        total_num_frames: effective_total,
+        sampled_indices: actual_indices,
+    })
+}
+
+fn probe_video_blocking(path: &std::path::Path) -> anyhow::Result<(f64, usize)> {
+    let fps_output = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=r_frame_rate",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            path.to_str().unwrap(),
+        ])
+        .output()?;
+
+    let fps_str = String::from_utf8_lossy(&fps_output.stdout);
+    let fps = parse_fps_fraction(fps_str.trim()).unwrap_or(DEFAULT_FPS);
+
+    let count_output = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-count_frames",
+            "-show_entries",
+            "stream=nb_read_frames",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            path.to_str().unwrap(),
+        ])
+        .output()?;
+
+    let count_str = String::from_utf8_lossy(&count_output.stdout);
+    let total_frames: usize = count_str.trim().parse().unwrap_or(0);
+
+    Ok((fps, total_frames))
+}
+
+fn parse_fps_fraction(s: &str) -> Option<f64> {
+    if let Some((num, den)) = s.split_once('/') {
+        let n: f64 = num.parse().ok()?;
+        let d: f64 = den.parse().ok()?;
+        if d > 0.0 {
+            Some(n / d)
+        } else {
+            None
+        }
+    } else {
+        s.parse().ok()
+    }
 }

@@ -239,7 +239,7 @@ impl QuantMethod for F8Q8Linear {
     ) -> Result<Arc<dyn QuantMethod>> {
         match dtype {
             Some(IsqType::F8Q8) | None => {
-                // Already F8Q8 or no-op — just return self
+                // Already F8Q8 or no-op, just return self
                 Ok(self)
             }
             Some(other) => {

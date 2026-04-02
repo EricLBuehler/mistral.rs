@@ -17,7 +17,7 @@ use tokio::sync::mpsc::channel;
 #[derive(Parser)]
 struct Args {
     /// The model to run.
-    #[arg(short, long, default_value = "google/gemma-3-4b-it")]
+    #[arg(short, long, default_value = "google/gemma-4-E4B-it")]
     model_id: String,
 
     /// Filename to text to run the model on. This is recommended to be the Wikitext 2 dataset:

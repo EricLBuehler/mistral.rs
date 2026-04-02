@@ -25,6 +25,7 @@ use tokio::sync::mpsc::{channel, Receiver};
 use tracing::{error, info};
 
 use mistralrs_server_core::util;
+use mistralrs_server_core::video::parse_video_url;
 
 fn exit_handler() {
     std::process::exit(0);
@@ -44,6 +45,31 @@ fn history_file_path() -> PathBuf {
 
     // e.g. ~/.config/mistral.rs/history.txt
     config_dir.join("history.txt")
+}
+
+fn format_sampling_params(params: &SamplingParams) -> String {
+    fn fmt_opt<T: std::fmt::Display>(v: &Option<T>) -> String {
+        match v {
+            Some(v) => v.to_string(),
+            None => "off".to_string(),
+        }
+    }
+    let mut parts = vec![
+        format!("temp={}", fmt_opt(&params.temperature)),
+        format!("top_k={}", fmt_opt(&params.top_k)),
+        format!("top_p={}", fmt_opt(&params.top_p)),
+        format!("min_p={}", fmt_opt(&params.min_p)),
+    ];
+    if params.frequency_penalty.is_some() {
+        parts.push(format!("freq_pen={}", fmt_opt(&params.frequency_penalty)));
+    }
+    if params.presence_penalty.is_some() {
+        parts.push(format!("pres_pen={}", fmt_opt(&params.presence_penalty)));
+    }
+    if params.repetition_penalty.is_some() {
+        parts.push(format!("rep_pen={}", fmt_opt(&params.repetition_penalty)));
+    }
+    parts.join(", ")
 }
 
 fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>) -> String {
@@ -76,6 +102,281 @@ fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>) -> String {
 static CTRLC_HANDLER: LazyLock<Mutex<&'static (dyn Fn() + Sync)>> =
     LazyLock::new(|| Mutex::new(&exit_handler));
 
+pub struct OneshotInput {
+    pub text: String,
+    pub images: Vec<String>,
+    pub videos: Vec<String>,
+    pub audios: Vec<String>,
+}
+
+pub async fn oneshot_mode(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    enable_thinking: Option<bool>,
+    input: OneshotInput,
+) {
+    let has_media =
+        !input.images.is_empty() || !input.videos.is_empty() || !input.audios.is_empty();
+
+    if has_media {
+        oneshot_multimodal(mistralrs, do_search, enable_thinking, input).await;
+    } else {
+        oneshot_text(mistralrs, do_search, enable_thinking, input.text).await;
+    }
+}
+
+async fn oneshot_text(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    enable_thinking: Option<bool>,
+    text: String,
+) {
+    let sender = mistralrs.get_sender(None).unwrap();
+    let sampling_params = interactive_sample_parameters(&mistralrs);
+
+    let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
+    user_message.insert("role".to_string(), Either::Left("user".to_string()));
+    user_message.insert("content".to_string(), Either::Left(text));
+    let messages = vec![user_message];
+
+    let request_messages = RequestMessage::Chat {
+        messages,
+        enable_thinking,
+        reasoning_effort: None,
+    };
+
+    let (tx, mut rx) = channel(10_000);
+    let req = Request::Normal(Box::new(NormalRequest {
+        id: mistralrs.next_request_id(),
+        messages: request_messages,
+        sampling_params: sampling_params.clone(),
+        response: tx,
+        return_logprobs: false,
+        is_streaming: true,
+        constraint: Constraint::None,
+        suffix: None,
+        tool_choice: None,
+        tools: None,
+        logits_processors: None,
+        return_raw_logits: false,
+        web_search_options: do_search.then(WebSearchOptions::default),
+        model_id: None,
+        truncate_sequence: false,
+    }));
+    sender.send(req).await.unwrap();
+    let start_ttft = Instant::now();
+    match stream_assistant_response(&mut rx, start_ttft).await {
+        Ok((_, first_token_duration, last_usage)) => {
+            print_stats(
+                &mistralrs,
+                &sampling_params,
+                first_token_duration,
+                last_usage,
+            );
+        }
+        Err(e) => {
+            error!("{e}");
+        }
+    }
+    println!();
+}
+
+async fn oneshot_multimodal(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    enable_thinking: Option<bool>,
+    input: OneshotInput,
+) {
+    let config = mistralrs.config(None).unwrap();
+    let prefixer = match &config.category {
+        ModelCategory::Multimodal { prefixer } => prefixer,
+        _ => {
+            error!("--image/--video/--audio require a multimodal model, but the loaded model is not multimodal.");
+            return;
+        }
+    };
+
+    let sender = mistralrs.get_sender(None).unwrap();
+    let sampling_params = interactive_sample_parameters(&mistralrs);
+
+    let mut images = Vec::new();
+    let mut audios = Vec::new();
+    let mut videos = Vec::new();
+
+    // Load images
+    let mut image_indexes = Vec::new();
+    for url in &input.images {
+        match util::parse_image_url(url).await {
+            Ok(image) => {
+                info!("Loaded image: {url}");
+                image_indexes.push(images.len());
+                images.push(image);
+            }
+            Err(e) => {
+                error!("Failed to load image {url}: {e}");
+                return;
+            }
+        }
+    }
+
+    // Load audios
+    let mut audio_indexes = Vec::new();
+    for url in &input.audios {
+        match util::parse_audio_url(url).await {
+            Ok(audio) => {
+                info!("Loaded audio: {url}");
+                audio_indexes.push(audios.len());
+                audios.push(audio);
+            }
+            Err(e) => {
+                error!("Failed to load audio {url}: {e}");
+                return;
+            }
+        }
+    }
+
+    // Load videos
+    let mut video_indexes = Vec::new();
+    for url in &input.videos {
+        match parse_video_url(url, None).await {
+            Ok(video) => {
+                info!("Loaded video: {url}");
+                video_indexes.push(videos.len());
+                videos.push(video);
+            }
+            Err(e) => {
+                error!("Failed to load video {url}: {e}");
+                return;
+            }
+        }
+    }
+
+    // Build content parts
+    let mut content_vec: Vec<IndexMap<String, Value>> = Vec::new();
+    for _ in &input.images {
+        content_vec.push(IndexMap::from([(
+            "type".to_string(),
+            Value::String("image".to_string()),
+        )]));
+    }
+    for _ in &input.audios {
+        content_vec.push(IndexMap::from([(
+            "type".to_string(),
+            Value::String("audio".to_string()),
+        )]));
+    }
+    for _ in &input.videos {
+        content_vec.push(IndexMap::from([(
+            "type".to_string(),
+            Value::String("video".to_string()),
+        )]));
+    }
+
+    // Prefix the text with media context
+    let mut prefixed_text = input.text.clone();
+    if !image_indexes.is_empty() {
+        prefixed_text = prefixer.prefix_image(image_indexes, &prefixed_text);
+    }
+    if !audio_indexes.is_empty() {
+        prefixed_text = prefixer.prefix_audio(audio_indexes, &prefixed_text);
+    }
+    if !video_indexes.is_empty() {
+        prefixed_text = prefixer.prefix_video(video_indexes, &prefixed_text);
+    }
+    content_vec.push(IndexMap::from([
+        ("type".to_string(), Value::String("text".to_string())),
+        ("text".to_string(), Value::String(prefixed_text)),
+    ]));
+
+    let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
+    user_message.insert("role".to_string(), Either::Left("user".to_string()));
+    user_message.insert("content".to_string(), Either::Right(content_vec));
+    let messages = vec![user_message];
+
+    let request_messages = RequestMessage::MultimodalChat {
+        images,
+        audios,
+        videos,
+        messages,
+        enable_thinking,
+        reasoning_effort: None,
+    };
+
+    let (tx, mut rx) = channel(10_000);
+    let req = Request::Normal(Box::new(NormalRequest {
+        id: mistralrs.next_request_id(),
+        messages: request_messages,
+        sampling_params: sampling_params.clone(),
+        response: tx,
+        return_logprobs: false,
+        is_streaming: true,
+        constraint: Constraint::None,
+        suffix: None,
+        tool_choice: None,
+        tools: None,
+        logits_processors: None,
+        return_raw_logits: false,
+        web_search_options: do_search.then(WebSearchOptions::default),
+        model_id: None,
+        truncate_sequence: false,
+    }));
+    sender.send(req).await.unwrap();
+    let start_ttft = Instant::now();
+    match stream_assistant_response(&mut rx, start_ttft).await {
+        Ok((_, first_token_duration, last_usage)) => {
+            print_stats(
+                &mistralrs,
+                &sampling_params,
+                first_token_duration,
+                last_usage,
+            );
+        }
+        Err(e) => {
+            error!("{e}");
+        }
+    }
+    println!();
+}
+
+fn print_stats(
+    mistralrs: &Arc<MistralRs>,
+    sampling_params: &SamplingParams,
+    first_token_duration: Option<std::time::Duration>,
+    last_usage: Option<Usage>,
+) {
+    if let Some(last_usage) = last_usage {
+        println!();
+        println!();
+        println!("Stats:");
+        if let Some(ttft) = first_token_duration {
+            println!("Time to first token: {:.2?}s", ttft.as_secs_f32());
+        }
+        println!(
+            "Prompt: {} tokens, {:.2} T/s",
+            last_usage.prompt_tokens, last_usage.avg_prompt_tok_per_sec
+        );
+        println!(
+            "Decode: {} tokens, {:.2} T/s",
+            last_usage.completion_tokens, last_usage.avg_compl_tok_per_sec
+        );
+        if let Ok(logger) = mistralrs.get_logger(None) {
+            let (prefix_hits, prefix_total) = logger.prefix_cache_stats();
+            if prefix_total > 0 {
+                println!(
+                    "Prefix cache: {} hits / {} turns",
+                    prefix_hits, prefix_total
+                );
+            }
+            if let Some((hits, misses)) = logger.encoder_cache_stats() {
+                if hits + misses > 0 {
+                    println!("Encoder cache: {}/{} hits", hits, hits + misses);
+                }
+            }
+        }
+        println!("Sampling: {}", format_sampling_params(sampling_params));
+    }
+}
+
 pub async fn interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
@@ -85,8 +386,8 @@ pub async fn interactive_mode(
         Ok(ModelCategory::Text) => {
             text_interactive_mode(mistralrs, do_search, enable_thinking).await
         }
-        Ok(ModelCategory::Vision { .. }) => {
-            vision_interactive_mode(mistralrs, do_search, enable_thinking).await
+        Ok(ModelCategory::Multimodal { .. }) => {
+            multimodal_interactive_mode(mistralrs, do_search, enable_thinking).await
         }
         Ok(ModelCategory::Diffusion) => diffusion_interactive_mode(mistralrs, do_search).await,
         Ok(ModelCategory::Audio) => {
@@ -102,15 +403,15 @@ pub async fn interactive_mode(
 
 const COMMAND_COMMANDS: &str = r#"
 Commands:
-- `\help`: Display this message.
-- `\exit`: Quit interactive mode.
-- `\system <system message here>`:
+- `/help`: Display this message.
+- `/exit`: Quit interactive mode.
+- `/system <system message here>`:
     Add a system message to the chat without running the model.
-    Ex: `\system Always respond as a pirate.`
-- `\clear`: Clear the chat history.
-- `\temperature <float>`: Set sampling temperature (0.0 to 2.0).
-- `\topk <int>`: Set top-k sampling value (>0).
-- `\topp <float>`: Set top-p sampling value in (0.0 to 1.0).
+    Ex: `/system Always respond as a pirate.`
+- `/clear`: Clear the chat history.
+- `/temperature <float>`: Set sampling temperature (0.0 to 2.0).
+- `/topk <int>`: Set top-k sampling value (>0).
+- `/topp <float>`: Set top-p sampling value in (0.0 to 1.0).
 "#;
 
 const TEXT_INTERACTIVE_HELP: &str = r#"
@@ -118,43 +419,46 @@ Welcome to interactive mode! Because this model is a text model, you can enter p
 "#;
 
 const VISION_INTERACTIVE_HELP: &str = r#"
-Welcome to interactive mode! Because this model is a vision model, you can enter prompts and chat with the model.
+Welcome to interactive mode! Because this model is a multimodal model, you can enter prompts and chat with the model.
 
-To specify a message with one or more images or audios, simply include the image/audio URL or path:
+To specify a message with one or more images, audios, or videos, simply include the image/audio/video URL or path:
 
 - `Describe these images: path/to/image1.jpg path/to/image2.png`
 - `Describe the image and transcribe the audio: path/to/image1.jpg path/to/sound.mp3`
+- `Describe this video: path/to/video.mp4`
 "#;
 
 const DIFFUSION_INTERACTIVE_HELP: &str = r#"
 Welcome to interactive mode! Because this model is a diffusion model, you can enter prompts and the model will generate an image.
 
 Commands:
-- `\help`: Display this message.
-- `\exit`: Quit interactive mode.
+- `/help`: Display this message.
+- `/exit`: Quit interactive mode.
 "#;
 
 const SPEECH_INTERACTIVE_HELP: &str = r#"
 Welcome to interactive mode! Because this model is a speech generation model, you can enter prompts and the model will generate audio.
 
 Commands:
-- `\help`: Display this message.
-- `\exit`: Quit interactive mode.
+- `/help`: Display this message.
+- `/exit`: Quit interactive mode.
 "#;
 
-const HELP_CMD: &str = "\\help";
-const EXIT_CMD: &str = "\\exit";
-const SYSTEM_CMD: &str = "\\system";
-const CLEAR_CMD: &str = "\\clear";
-const TEMPERATURE_CMD: &str = "\\temperature";
-const TOPK_CMD: &str = "\\topk";
-const TOPP_CMD: &str = "\\topp";
+const HELP_CMD: &str = "/help";
+const EXIT_CMD: &str = "/exit";
+const SYSTEM_CMD: &str = "/system";
+const CLEAR_CMD: &str = "/clear";
+const TEMPERATURE_CMD: &str = "/temperature";
+const TOPK_CMD: &str = "/topk";
+const TOPP_CMD: &str = "/topp";
 
 /// Regex string used to extract image URLs from prompts.
 const IMAGE_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:png|jpe?g|bmp|gif|webp)(?:\?\S+?)?)"#;
 const AUDIO_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:wav|mp3|flac|ogg)(?:\?\S+?)?)"#;
+const VIDEO_REGEX: &str =
+    r#"((?:https?://|file://)?\S+?\.(?:mp4|avi|mov|mkv|webm|gif|m4v)(?:\?\S+?)?)"#;
 
-fn interactive_sample_parameters() -> SamplingParams {
+fn interactive_fallback_sample_parameters() -> SamplingParams {
     SamplingParams {
         temperature: Some(0.1),
         top_k: Some(32),
@@ -169,6 +473,24 @@ fn interactive_sample_parameters() -> SamplingParams {
         logits_bias: None,
         n_choices: 1,
         dry_params: Some(DrySamplingParams::default()),
+    }
+}
+
+fn interactive_sample_parameters(mistralrs: &Arc<MistralRs>) -> SamplingParams {
+    match mistralrs
+        .config(None)
+        .ok()
+        .and_then(|cfg| cfg.generation_defaults)
+    {
+        Some(defaults) => {
+            let mut params = SamplingParams {
+                dry_params: Some(DrySamplingParams::default()),
+                ..SamplingParams::neutral()
+            };
+            params.apply_model_defaults(&defaults);
+            params
+        }
+        None => interactive_fallback_sample_parameters(),
     }
 }
 
@@ -241,12 +563,13 @@ async fn text_interactive_mode(
     let sender = mistralrs.get_sender(None).unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
 
-    let mut sampling_params = interactive_sample_parameters();
+    let mut sampling_params = interactive_sample_parameters(&mistralrs);
 
     info!("Starting interactive loop with sampling params: {sampling_params:?}");
     println!(
-        "{}{TEXT_INTERACTIVE_HELP}{COMMAND_COMMANDS}{}",
+        "{}{TEXT_INTERACTIVE_HELP}{COMMAND_COMMANDS}\nSampling: {}\n{}",
         "=".repeat(20),
+        format_sampling_params(&sampling_params),
         "=".repeat(20)
     );
 
@@ -373,6 +696,7 @@ async fn text_interactive_mode(
                     );
                 }
             }
+            println!("Sampling: {}", format_sampling_params(&sampling_params));
         }
         let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
@@ -417,6 +741,7 @@ async fn stream_assistant_response(
 
     const GRAY: &str = "\x1b[90m";
     const RESET: &str = "\x1b[0m";
+    let mut was_reasoning = false;
 
     while let Some(resp) = rx.recv().await {
         match resp {
@@ -433,15 +758,23 @@ async fn stream_assistant_response(
                 if let Some(ref reasoning) = choice.delta.reasoning_content {
                     print!("{GRAY}{reasoning}{RESET}");
                     io::stdout().flush().unwrap();
+                    was_reasoning = true;
                 }
 
                 if let Some(ref content) = choice.delta.content {
+                    if was_reasoning {
+                        println!();
+                        was_reasoning = false;
+                    }
                     assistant_output.push_str(content);
                     print!("{content}");
                     io::stdout().flush().unwrap();
                 }
 
                 if let Some(ref finish_reason) = choice.finish_reason {
+                    if was_reasoning {
+                        println!();
+                    }
                     if matches!(finish_reason.as_str(), "length") {
                         print!("...");
                     }
@@ -467,7 +800,7 @@ async fn stream_assistant_response(
     Ok((assistant_output, first_token_duration, last_usage))
 }
 
-async fn vision_interactive_mode(
+async fn multimodal_interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
     enable_thinking: Option<bool>,
@@ -475,28 +808,31 @@ async fn vision_interactive_mode(
     // Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
     let image_regex = Regex::new(IMAGE_REGEX).unwrap();
     let audio_regex = Regex::new(AUDIO_REGEX).unwrap();
+    let video_regex = Regex::new(VIDEO_REGEX).unwrap();
 
     let sender = mistralrs.get_sender(None).unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
     let mut images = Vec::new();
     let mut audios = Vec::new();
+    let mut videos = Vec::new();
 
     let config = mistralrs.config(None).unwrap();
     let prefixer = match &config.category {
-        ModelCategory::Vision { prefixer } => prefixer,
+        ModelCategory::Multimodal { prefixer } => prefixer,
         _ => {
-            panic!("`add_image_message` expects a vision model.")
+            panic!("`add_image_message` expects a multimodal model.")
         }
     };
 
-    let mut sampling_params = interactive_sample_parameters();
+    let mut sampling_params = interactive_sample_parameters(&mistralrs);
     let mut prev_encoder_hits: usize = 0;
     let mut prev_encoder_misses: usize = 0;
 
     info!("Starting interactive loop with sampling params: {sampling_params:?}");
     println!(
-        "{}{VISION_INTERACTIVE_HELP}{COMMAND_COMMANDS}{}",
+        "{}{VISION_INTERACTIVE_HELP}{COMMAND_COMMANDS}\nSampling: {}\n{}",
         "=".repeat(20),
+        format_sampling_params(&sampling_params),
         "=".repeat(20)
     );
 
@@ -537,6 +873,7 @@ async fn vision_interactive_mode(
                 messages.clear();
                 images.clear();
                 audios.clear();
+                videos.clear();
                 info!("Cleared chat history.");
                 continue;
             }
@@ -558,9 +895,11 @@ async fn vision_interactive_mode(
             _ => {
                 let (urls_image, text_without_images) =
                     parse_files_and_message(prompt_trimmed, &image_regex);
-                let (urls_audio, text) =
+                let (urls_audio, text_without_audios) =
                     parse_files_and_message(&text_without_images, &audio_regex);
-                if !urls_image.is_empty() || !urls_audio.is_empty() {
+                let (urls_video, text) =
+                    parse_files_and_message(&text_without_audios, &video_regex);
+                if !urls_image.is_empty() || !urls_audio.is_empty() || !urls_video.is_empty() {
                     // Load images
                     let mut image_indexes = Vec::new();
                     for url in &urls_image {
@@ -576,8 +915,8 @@ async fn vision_interactive_mode(
                             }
                         }
                     }
-                    // Load audios (clear previous turn's audio — transcription is per-turn)
-                    audios.clear();
+                    // Load audios and retain earlier turns so multimodal history can be
+                    // replayed with stable audio indices and matching payloads.
                     let mut audio_indexes = Vec::new();
                     for url in &urls_audio {
                         match util::parse_audio_url(url).await {
@@ -588,6 +927,21 @@ async fn vision_interactive_mode(
                             }
                             Err(e) => {
                                 error!("Failed to read audio from URL/path {}: {}", url, e);
+                                continue 'outer;
+                            }
+                        }
+                    }
+                    // Load videos
+                    let mut video_indexes = Vec::new();
+                    for url in &urls_video {
+                        match parse_video_url(url, None).await {
+                            Ok(video) => {
+                                info!("Added video at `{url}`");
+                                video_indexes.push(videos.len());
+                                videos.push(video);
+                            }
+                            Err(e) => {
+                                error!("Failed to read video from URL/path {}: {}", url, e);
                                 continue 'outer;
                             }
                         }
@@ -606,6 +960,12 @@ async fn vision_interactive_mode(
                             Value::String("audio".to_string()),
                         )]));
                     }
+                    for _ in &urls_video {
+                        content_vec.push(IndexMap::from([(
+                            "type".to_string(),
+                            Value::String("video".to_string()),
+                        )]));
+                    }
                     // Prefix the text with any media context
                     let mut prefixed_text = text.clone();
                     if !image_indexes.is_empty() {
@@ -615,6 +975,10 @@ async fn vision_interactive_mode(
                     if !audio_indexes.is_empty() {
                         prefixed_text =
                             prefixer.prefix_audio(audio_indexes.clone(), &prefixed_text);
+                    }
+                    if !video_indexes.is_empty() {
+                        prefixed_text =
+                            prefixer.prefix_video(video_indexes.clone(), &prefixed_text);
                     }
                     // Add the final text part
                     content_vec.push(IndexMap::from([
@@ -642,9 +1006,10 @@ async fn vision_interactive_mode(
         // Set the handler to terminate all seqs, so allowing cancelling running
         *CTRLC_HANDLER.lock().unwrap() = &terminate_handler;
 
-        let request_messages = RequestMessage::VisionChat {
+        let request_messages = RequestMessage::MultimodalChat {
             images: images.clone(),
             audios: audios.clone(),
+            videos: videos.clone(),
             messages: messages.clone(),
             enable_thinking,
             reasoning_effort: None,
@@ -712,6 +1077,7 @@ async fn vision_interactive_mode(
                     prev_encoder_misses = misses;
                 }
             }
+            println!("Sampling: {}", format_sampling_params(&sampling_params));
         }
         let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();

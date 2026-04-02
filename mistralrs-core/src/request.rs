@@ -5,6 +5,8 @@ use mistralrs_quant::IsqType;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::VideoInput;
+
 use crate::{
     response::Response, sampler::SamplingParams, tools::ToolChoice, CustomLogitsProcessor,
     DiffusionGenerationParams, Tool,
@@ -77,11 +79,13 @@ pub enum RequestMessage {
         best_of: Option<usize>,
     },
     CompletionTokens(Vec<u32>),
-    VisionChat {
+    MultimodalChat {
         #[serde(skip)] // TODO
         images: Vec<image::DynamicImage>,
         #[serde(skip)] // TODO
         audios: Vec<AudioInput>,
+        #[serde(skip)]
+        videos: Vec<VideoInput>,
         messages: Vec<IndexMap<String, MessageContent>>,
         enable_thinking: Option<bool>,
         /// Reasoning effort level for Harmony-format models

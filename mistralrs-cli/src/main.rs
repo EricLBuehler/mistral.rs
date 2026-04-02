@@ -47,10 +47,17 @@ async fn main() -> Result<()> {
             model_type,
             default_model,
             runtime,
-            enable_thinking,
+            thinking,
+            input,
+            image,
+            video,
+            audio,
         } => {
             let model_type = resolve_model_type(model_type, default_model)?;
-            run_interactive(model_type, runtime, cli.global, enable_thinking).await?;
+            run_interactive(
+                model_type, runtime, cli.global, thinking, input, image, video, audio,
+            )
+            .await?;
         }
 
         Command::Completions { shell } => {

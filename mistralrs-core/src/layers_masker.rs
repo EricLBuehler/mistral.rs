@@ -2,7 +2,7 @@
 
 use std::ops::Add;
 
-use candle_core::{DType, Device, Result, Tensor, WithDType, D};
+use candle_core::{DType, Device, Result, Tensor, WithDType};
 
 use crate::pipeline::KvCache;
 
@@ -34,8 +34,7 @@ impl PastKvLenCache for NotACache {
 
 impl PastKvLenCache for Vec<KvCache> {
     fn get_past_kv_len(&self) -> Result<usize> {
-        let kv_cache_1 = &self[0];
-        Ok(kv_cache_1.current_seq_len())
+        Ok(self.iter().map(KvCache::current_seq_len).max().unwrap_or(0))
     }
 }
 
@@ -108,15 +107,17 @@ impl CausalMasker {
     fn make_swa_mask(
         &self,
         tgt_len: usize,
-        seqlen_offset: usize,
+        past_kv_len: usize,
         sliding_window: usize,
         device: &Device,
         dtype: DType,
     ) -> Result<Tensor> {
+        let total_kv_len = tgt_len + past_kv_len;
         let mask: Vec<_> = (0..tgt_len)
             .flat_map(|i| {
-                (0..tgt_len).map(move |j| {
-                    if i < j || j + sliding_window < i {
+                let q_pos = past_kv_len + i;
+                (0..total_kv_len).map(move |j| {
+                    if j > q_pos || j + sliding_window < q_pos {
                         f32::NEG_INFINITY
                     } else {
                         0.
@@ -124,14 +125,7 @@ impl CausalMasker {
                 })
             })
             .collect();
-        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), device)?;
-        let mask = if seqlen_offset > 0 {
-            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, device)?;
-            Tensor::cat(&[&mask0, &mask], D::Minus1)?
-        } else {
-            mask
-        };
-        mask.to_dtype(dtype)
+        Tensor::from_slice(&mask, (tgt_len, total_kv_len), device)?.to_dtype(dtype)
     }
 
     /// Expands a mask from (bs, seq_len) to (bs, 1, tgt_len, seq_len)
@@ -253,9 +247,7 @@ impl CausalMasker {
         let (_b_sz, tgt_len) = input_ids.dims2()?;
         let sliding_window = sliding_window.unwrap();
 
-        let past_kv_len = cache
-            .get_past_kv_len()?
-            .min(sliding_window.saturating_sub(tgt_len));
+        let past_kv_len = cache.get_past_kv_len()?;
         if tgt_len == 1 {
             return Ok(None);
         }
@@ -324,9 +316,7 @@ impl CausalMasker {
 
         // Compare the past KV len to the sliding window size. If the past kv len is 0 (no prefix cache), then this will be 0.
         // Otherwise, this will be the number required such that the mask fits the size of the k/v seqlen (usually sliding window)
-        let past_kv_len = cache
-            .get_past_kv_len()?
-            .min(sliding_window.saturating_sub(tgt_len));
+        let past_kv_len = cache.get_past_kv_len()?;
         if tgt_len == 1 {
             return Ok(None);
         }

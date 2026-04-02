@@ -26,7 +26,12 @@ irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1
    source $HOME/.cargo/env
    ```
 
-3. (Optional) Set up HuggingFace authentication:
+3. (Optional) Install [FFmpeg](https://ffmpeg.org/) for video input support:
+   - Linux: `sudo apt install ffmpeg` or `sudo dnf install ffmpeg`
+   - macOS: `brew install ffmpeg`
+   - See [Video Input](VIDEO.md) for details
+
+4. (Optional) Set up HuggingFace authentication:
    ```bash
    mistralrs login
    ```

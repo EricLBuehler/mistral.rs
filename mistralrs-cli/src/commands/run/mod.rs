@@ -3,6 +3,7 @@
 mod interactive;
 
 pub(crate) use interactive::interactive_mode;
+use interactive::OneshotInput;
 
 use anyhow::Result;
 use tracing::info;
@@ -16,12 +17,16 @@ use super::serve::{
 };
 use crate::args::{GlobalOptions, ModelType, RuntimeOptions};
 
-/// Run the model in interactive mode
+/// Run the model in interactive or one-shot mode
 pub async fn run_interactive(
     model_type: ModelType,
     runtime: RuntimeOptions,
     global: GlobalOptions,
-    enable_thinking: bool,
+    thinking: Option<bool>,
+    input: Option<String>,
+    images: Vec<String>,
+    videos: Vec<String>,
+    audios: Vec<String>,
 ) -> Result<()> {
     initialize_logging();
 
@@ -79,14 +84,24 @@ pub async fn run_interactive(
 
     let mistralrs = builder.build().await?;
 
-    info!("Model loaded, starting interactive mode...");
-
-    interactive::interactive_mode(
-        mistralrs.clone(),
-        runtime.enable_search,
-        if enable_thinking { Some(true) } else { None },
-    )
-    .await;
+    if let Some(text) = input {
+        info!("Model loaded, running one-shot mode...");
+        interactive::oneshot_mode(
+            mistralrs.clone(),
+            runtime.enable_search,
+            thinking,
+            OneshotInput {
+                text,
+                images,
+                videos,
+                audios,
+            },
+        )
+        .await;
+    } else {
+        info!("Model loaded, starting interactive mode...");
+        interactive::interactive_mode(mistralrs.clone(), runtime.enable_search, thinking).await;
+    }
 
     Ok(())
 }

@@ -34,7 +34,7 @@
 
 ### By Category
 - [Supported Models](SUPPORTED_MODELS.md) - Complete model list and compatibility
-- [Vision Models](VISION_MODELS.md) - Vision model overview
+- [Multimodal Models](MULTIMODAL_MODELS.md) - Multimodal model overview
 - [Image Generation](IMAGEGEN_MODELS.md) - Diffusion models
 - [Embeddings](EMBEDDINGS.md) - Embedding model overview
 
@@ -45,11 +45,11 @@
 
 **Text Models:**
 - [DeepSeek V2](DEEPSEEKV2.md) | [DeepSeek V3](DEEPSEEKV3.md)
-- [Gemma 2](GEMMA2.md) | [Gemma 3](GEMMA3.md) | [Gemma 3n](GEMMA3N.md)
+- [Gemma 2](GEMMA2.md) | [Gemma 3](GEMMA3.md) | [Gemma 3n](GEMMA3N.md) | [Gemma 4](GEMMA4.md)
 - [GLM4](GLM4.md) | [GLM-4.7-Flash](GLM4_MOE_LITE.md) | [GLM-4.7](GLM4_MOE.md)
 - [Qwen 3](QWEN3.md) | [Qwen 3 Next](QWEN3NEXT.md) | [SmolLM3](SMOLLM3.md) | [GPT-OSS](GPT_OSS.md)
 
-**Vision Models:**
+**Multimodal Models:**
 - [Idefics 2](IDEFICS2.md) | [Idefics 3](IDEFICS3.md)
 - [LLaVA](LLaVA.md) | [Llama 3.2 Vision](VLLAMA.md) | [Llama 4](LLAMA4.md)
 - [MiniCPM-O 2.6](MINICPMO_2_6.md) | [Mistral 3](MISTRAL3.md)

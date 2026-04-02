@@ -168,7 +168,7 @@ pub fn gather_kv_cache(
             slice_ptr(cu_s.as_cuda_slice::<u32>()?, cu_l.start_offset())
         };
 
-        // Scale pointers — hoist storage guards so they outlive the pointers
+        // Scale pointers, hoist storage guards so they outlive the pointers
         let _ks_storage = k_scale.map(|ks| ks.storage_and_layout());
         let (k_scale_ptr, _ks_guard) = if let Some((ref s, l)) = _ks_storage {
             let s = match &**s {

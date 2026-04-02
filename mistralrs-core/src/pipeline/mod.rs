@@ -11,6 +11,7 @@ mod isq;
 pub(crate) mod llg;
 mod loaders;
 mod macros;
+mod multimodal;
 mod normal;
 mod paths;
 mod processing;
@@ -18,7 +19,6 @@ mod response;
 mod sampling;
 mod speculative;
 mod speech;
-mod vision;
 
 pub use super::diffusion_models::DiffusionGenerationParams;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
@@ -41,20 +41,20 @@ pub use isq::{
 };
 use llguidance::toktrie::TokEnv;
 pub use loaders::{
-    AdapterKind, AutoDeviceMapParams, AutoEmbeddingLoader, AutoNormalLoader, AutoVisionLoader,
+    AdapterKind, AutoDeviceMapParams, AutoEmbeddingLoader, AutoMultimodalLoader, AutoNormalLoader,
     DeepSeekV2Loader, DeepSeekV3Loader, DeviceMappedModelLoader, DiffusionLoaderType,
     DiffusionModel, DiffusionModelLoader, EmbeddingGemmaLoader, EmbeddingLoaderType,
     EmbeddingModel, EmbeddingModelLoader, EmbeddingModelPaths, EmbeddingModule,
     EmbeddingModulePaths, EmbeddingModuleType, FluxLoader, GLM4Loader, GLM4MoeLiteLoader,
-    GLM4MoeLoader, Gemma2Loader, Gemma3Loader, Gemma3nLoader, GemmaLoader, GptOssLoader,
-    GraniteMoeHybridLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader,
-    LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader, Mistral3Loader, MistralLoader,
-    MixtralLoader, ModelKind, ModelPaths, NormalLoaderType, NormalLoadingMetadata, NormalModel,
-    NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader,
-    PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader,
-    Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3VLLoader,
-    Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, SmolLm3Loader, Starcoder2Loader,
-    TokenSource, VLlama4Loader, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
+    GLM4MoeLoader, Gemma2Loader, Gemma3Loader, Gemma3nLoader, Gemma4Loader, GemmaLoader,
+    GptOssLoader, GraniteMoeHybridLoader, Idefics2Loader, Idefics3Loader, LLaVALoader,
+    LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader, Mistral3Loader,
+    MistralLoader, MixtralLoader, ModelKind, ModelPaths, MultimodalLoaderType, MultimodalModel,
+    MultimodalModelLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
+    Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName,
+    QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3EmbeddingLoader,
+    Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader,
+    Qwen3_5MoeLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
     VoxtralLoader,
 };
 #[allow(clippy::too_many_arguments)]
@@ -84,6 +84,7 @@ pub(crate) fn get_device_layers_for_loader(
     )
 }
 use mistralrs_quant::IsqType;
+pub use multimodal::{MultimodalLoader, MultimodalLoaderBuilder, MultimodalSpecificConfig};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths};
 pub use paths::{AdapterPaths, LoraAdapterPaths};
@@ -99,7 +100,6 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
-pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
 
 use anyhow::Result;
 use candle_core::{DType, Device, IndexOp, Tensor, Var};
@@ -120,6 +120,7 @@ pub enum SupportedModality {
     Text,
     Audio,
     Vision,
+    Video,
     Embedding,
 }
 
@@ -129,6 +130,7 @@ impl Debug for SupportedModality {
             Self::Text => write!(f, "📝 Text"),
             Self::Audio => write!(f, "🔊 Audio"),
             Self::Vision => write!(f, "🖼️ Vision"),
+            Self::Video => write!(f, "🎬 Video"),
             Self::Embedding => write!(f, "🔢 Embedding"),
         }
     }
@@ -209,9 +211,6 @@ pub trait CacheManagerMixin {
         load_preallocated_cache: bool,
     );
     fn cache(&self) -> &EitherCache;
-    fn do_preallocated_cache(&self) -> bool {
-        matches!(self.cache(), EitherCache::Normal(_))
-    }
 }
 
 pub trait MetadataMixin {
@@ -221,6 +220,9 @@ pub trait MetadataMixin {
     fn name(&self) -> String;
     fn reset_non_granular_state(&self);
     fn get_metadata(&self) -> Arc<GeneralMetadata>;
+    fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
+        None
+    }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper>;
 }
 
@@ -279,11 +281,11 @@ pub trait AnyMoePipelineMixin {
 }
 
 /// Category of the model. This can also be used to extract model-category specific tools,
-/// such as the vision model prompt prefixer.
+/// such as the multimodal model prompt prefixer.
 #[derive(Clone)]
 pub enum ModelCategory {
     Text,
-    Vision {
+    Multimodal {
         prefixer: Arc<dyn MultimodalPromptPrefixer>,
     },
     Diffusion,
@@ -296,7 +298,9 @@ impl std::fmt::Debug for ModelCategory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ModelCategory::Text => write!(f, "ModelCategory::Text"),
-            ModelCategory::Vision { .. } => write!(f, "ModelCategory::Vision {{ prefixer: .. }}"),
+            ModelCategory::Multimodal { .. } => {
+                write!(f, "ModelCategory::Multimodal {{ prefixer: .. }}")
+            }
             ModelCategory::Diffusion => write!(f, "ModelCategory::Diffusion"),
             ModelCategory::Audio => write!(f, "ModelCategory::Audio"),
             ModelCategory::Speech => write!(f, "ModelCategory::Speech"),
@@ -309,14 +313,14 @@ impl PartialEq for ModelCategory {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Text, Self::Text) => true,
-            (Self::Vision { .. }, Self::Vision { .. }) => true,
+            (Self::Multimodal { .. }, Self::Multimodal { .. }) => true,
             (Self::Audio, Self::Audio) => true,
             (Self::Speech, Self::Speech) => true,
             (Self::Diffusion, Self::Diffusion) => true,
             (Self::Embedding, Self::Embedding) => true,
             (
                 Self::Text
-                | Self::Vision { .. }
+                | Self::Multimodal { .. }
                 | Self::Diffusion
                 | Self::Audio
                 | Self::Speech
@@ -335,6 +339,10 @@ pub trait MultimodalPromptPrefixer: Send + Sync {
     }
     /// Prefix for inclusion in messages (may do nothing if the chat template handles it).
     fn prefix_audio(&self, _audio_indexes: Vec<usize>, prompt: &str) -> String {
+        prompt.to_string()
+    }
+    /// Prefix for inclusion in messages (may do nothing if the chat template handles it).
+    fn prefix_video(&self, _video_indexes: Vec<usize>, prompt: &str) -> String {
         prompt.to_string()
     }
 }
@@ -460,6 +468,7 @@ pub trait Pipeline:
                         self.get_metadata().no_kv_cache,
                         None,
                         return_raw_logits,
+                        self.get_metadata().sliding_window,
                         self.get_input_processor_config(),
                         None,
                         self.device_mapper(),
@@ -711,6 +720,7 @@ pub trait Pipeline:
                         self.get_metadata().no_kv_cache,
                         None,
                         return_raw_logits,
+                        self.get_metadata().sliding_window,
                         self.get_input_processor_config(),
                         Some(metadata),
                         self.device_mapper(),

@@ -231,6 +231,36 @@ pub fn expand_uqff_shards(first_file: &str, available_files: &[String]) -> Vec<S
     }
 }
 
+/// Resolve a UQFF shorthand (numeric like `"8"` or ISQ name like `"q4k"`) to an
+/// actual UQFF filename from the available files list.
+///
+/// Returns `Some("q8_0-0.uqff")` if a matching file is found, `None` otherwise.
+/// For numeric shorthands, tries all platform variants via `IsqBits::expand()`.
+pub fn resolve_uqff_shorthand(input: &str, available_files: &[String]) -> Option<String> {
+    let lowered = input.to_lowercase();
+
+    // Try numeric shorthand first (2/3/4/5/6/8)
+    if let Ok(bits) = IsqBits::try_from(lowered.as_str()) {
+        for isq_type in bits.expand() {
+            let candidate = format!("{isq_type}-0.uqff");
+            if available_files.iter().any(|f| f == &candidate) {
+                return Some(candidate);
+            }
+        }
+        return None;
+    }
+
+    // Try explicit ISQ type name (e.g., "q4k", "afq8", "q8_0")
+    if let Ok(isq_type) = parse_isq_value(&lowered, None) {
+        let candidate = format!("{isq_type}-0.uqff");
+        if available_files.iter().any(|f| f == &candidate) {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
 #[derive(Clone, Debug, Copy, Default, Deserialize, serde::Serialize)]
 pub enum IsqOrganization {
     #[default]
@@ -1244,5 +1274,83 @@ pub(crate) trait IsqModelLoader {
     /// Only called on non-adapter models!
     fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes(config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_uqff_shorthand_numeric_q8() {
+        let files = vec!["q8_0-0.uqff".to_string(), "config.json".to_string()];
+        assert_eq!(
+            resolve_uqff_shorthand("8", &files),
+            Some("q8_0-0.uqff".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_uqff_shorthand_numeric_afq8() {
+        let files = vec!["afq8-0.uqff".to_string(), "config.json".to_string()];
+        assert_eq!(
+            resolve_uqff_shorthand("8", &files),
+            Some("afq8-0.uqff".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_uqff_shorthand_prefers_platform_variant() {
+        // expand() returns platform-preferred variant first:
+        // Metal: [AFQ8, Q8_0], non-Metal: [Q8_0, AFQ8]
+        let files = vec!["q8_0-0.uqff".to_string(), "afq8-0.uqff".to_string()];
+        let expected = if cfg!(feature = "metal") {
+            "afq8-0.uqff"
+        } else {
+            "q8_0-0.uqff"
+        };
+        assert_eq!(
+            resolve_uqff_shorthand("8", &files),
+            Some(expected.to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_uqff_shorthand_numeric_q4() {
+        let files = vec!["q4k-0.uqff".to_string()];
+        assert_eq!(
+            resolve_uqff_shorthand("4", &files),
+            Some("q4k-0.uqff".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_uqff_shorthand_numeric_q5() {
+        let files = vec!["q5k-0.uqff".to_string()];
+        assert_eq!(
+            resolve_uqff_shorthand("5", &files),
+            Some("q5k-0.uqff".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_uqff_shorthand_isq_name() {
+        let files = vec!["q4k-0.uqff".to_string(), "q8_0-0.uqff".to_string()];
+        assert_eq!(
+            resolve_uqff_shorthand("q4k", &files),
+            Some("q4k-0.uqff".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_uqff_shorthand_explicit_filename_returns_none() {
+        let files = vec!["q8_0-0.uqff".to_string()];
+        assert_eq!(resolve_uqff_shorthand("q8_0-0.uqff", &files), None);
+    }
+
+    #[test]
+    fn test_resolve_uqff_shorthand_no_match() {
+        let files = vec!["config.json".to_string()];
+        assert_eq!(resolve_uqff_shorthand("8", &files), None);
     }
 }

@@ -144,9 +144,11 @@ struct Args {
     #[arg(long = "search-embedding-model")]
     search_embedding_model: Option<SearchEmbeddingModel>,
 
-    /// Enable thinking for interactive mode and models that support it.
-    #[arg(long = "enable-thinking")]
-    enable_thinking: bool,
+    /// Control thinking mode for interactive mode and models that support it.
+    /// Use --thinking or --thinking true to force on, --thinking false to force off.
+    /// Omit to defer to the chat template default.
+    #[arg(long, num_args = 0..=1, default_missing_value = "true", value_parser = clap::value_parser!(bool))]
+    thinking: Option<bool>,
 
     /// Port to serve MCP protocol on
     #[arg(long)]
@@ -417,12 +419,7 @@ async fn main() -> Result<()> {
         get_search_embedding_model(args.enable_search, args.search_embedding_model);
 
     if args.interactive_mode {
-        interactive_mode(
-            mistralrs,
-            search_embedding_model.is_some(),
-            args.enable_thinking.then_some(true),
-        )
-        .await;
+        interactive_mode(mistralrs, search_embedding_model.is_some(), args.thinking).await;
         return Ok(());
     }
 

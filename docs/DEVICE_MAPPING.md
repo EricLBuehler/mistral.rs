@@ -8,15 +8,15 @@ by default in the CLI/server and Python SDK and does not make any changes when t
 > completely fit on the available GPUs, or you wish to use automatic device mapping, you can disable tensor parallelism by setting `MISTRALRS_NO_NCCL=1`.
 
 Automatic device mapping works by prioritizing loading models into GPU memory, and any remaining parts are loaded into CPU memory.
-Models architectures such as vision models which greatly benefit from GPU acceleration also automatically prioritize keeping those
+Models architectures such as multimodal models which greatly benefit from GPU acceleration also automatically prioritize keeping those
 components on the GPU.
 
 To control the mapping across devices, you can set the following maximum parameters which the model should expect in a prompt.
 
 - maximum sequence length (default: 4096)
 - maximum batch size (default: 1)
-- (vision models) maximum image length (length refers to the edge length) (default: 1024)
-- (vision models) maximum number of images (default: 1)
+- (multimodal models) maximum image length (length refers to the edge length) (default: 1024)
+- (multimodal models) maximum number of images (default: 1)
 
 These parameters do not translate to hard limits during runtime, they only control the mapping.
 
@@ -30,16 +30,16 @@ On integrated GPU systems (e.g. Apple Silicon, NVIDIA Grace Blackwell, Jetson) w
 ## Examples
 - Python
     - Text models [text_auto_device_map.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/text_auto_device_map.py)
-    - Vision models [vision_auto_device_map.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/vision_auto_device_map.py)
+    - Multimodal models [multimodal_auto_device_map.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/multimodal_auto_device_map.py)
 - Rust
     - Text models [text_auto_device_map/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs)
-    - Vision models [vision_auto_device_map/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs)
+    - Multimodal models [auto_device_map/main.rs](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs)
 - Server
     - Text models:
     ```bash
     mistralrs run --isq 4 -m meta-llama/Llama-3.3-70B-Instruct --max-seq-len 4096 --max-batch-size 2
     ```
-    - Vision models:
+    - Multimodal models:
     ```bash
     mistralrs run --isq 4 -m meta-llama/Llama-3.2-11B-Vision-Instruct --max-seq-len 4096 --max-batch-size 2 --max-num-images 2 --max-image-length 1024
     ```

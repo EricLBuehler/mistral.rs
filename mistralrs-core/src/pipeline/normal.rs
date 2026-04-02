@@ -80,6 +80,7 @@ pub struct NormalPipeline {
     // For full UQFF serialization
     template_filename: Option<PathBuf>,
     generation_config: Option<PathBuf>,
+    generation_defaults: Option<crate::ModelGenerationDefaults>,
     config: String,
     imatrix: Option<PathBuf>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -290,14 +291,14 @@ impl Loader for NormalLoader {
             silent,
             self.config.from_uqff.is_some()
         );
-        if let Some(from_uqff) = self.config.from_uqff.clone() {
-            *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
-        }
         *self
             .token_source
             .write()
             .expect("Failed to write to token source") = Some(token_source);
-        *self.revision.write().expect("Failed to write to revision") = revision;
+        *self.revision.write().expect("Failed to write to revision") = revision.clone();
+        if let Some(from_uqff) = self.config.from_uqff.clone() {
+            *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
+        }
         self.load_model_from_path(
             &paths?,
             dtype,
@@ -822,6 +823,7 @@ impl Loader for NormalLoader {
                     None,
                     Some(pipeline_mapper.as_ref()),
                     None,
+                    model.config().sliding_window,
                 )?;
 
                 model.forward(
@@ -935,13 +937,14 @@ impl Loader for NormalLoader {
             paged_attn_config
         };
 
+        let model_metadata = model.model_config();
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
                 paged_attn_config.block_size,
                 dtype,
                 paged_attn_config.cache_type,
-                model.config(),
+                model_metadata.as_ref(),
                 &device,
                 &pipeline_mapper
                     .get_unique_devices()
@@ -959,7 +962,7 @@ impl Loader for NormalLoader {
                 layer_devices.push(device);
             }
             let cache_engine = CacheEngine::new(
-                model.config(),
+                model_metadata.as_ref(),
                 &cache_config,
                 dtype,
                 model.device(),
@@ -978,10 +981,11 @@ impl Loader for NormalLoader {
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
             EitherCache::Hybrid(hybrid) => hybrid.lock().unwrap().num_layers(),
         };
-        let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
+        let generation_defaults = gen_conf
+            .as_ref()
+            .and_then(GenerationConfig::generation_defaults);
+        let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
         let sliding_window = model.config().sliding_window;
-        let model_metadata = Arc::new(model.config().clone());
-
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
             tokenizer: tokenizer.into(),
@@ -1018,6 +1022,7 @@ impl Loader for NormalLoader {
             organization: self.config.organization,
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
+            generation_defaults,
             config,
             imatrix: self.config.imatrix.clone(),
             mapper: pipeline_mapper,
@@ -1137,6 +1142,9 @@ impl MetadataMixin for NormalPipeline {
     }
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
+    }
+    fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
+        self.generation_defaults.clone()
     }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
         Some(&*self.mapper)

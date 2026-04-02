@@ -16,12 +16,12 @@ mistralrs run -m google/gemma-3n-E4B-it \
 ### Python
 
 ```python
-from mistralrs import Runner, Which, VisionArchitecture
+from mistralrs import Runner, Which, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="google/gemma-3n-E4B-it",
-        arch=VisionArchitecture.Gemma3n,
+        arch=MultimodalArchitecture.Gemma3n,
         matformer_config_path="matformer_configs/gemma3n.csv",
         matformer_slice_name="Config for E2.49B (block-level)",
     ),
@@ -31,10 +31,10 @@ runner = Runner(
 ### Rust
 
 ```rust
-use mistralrs::VisionModelBuilder;
+use mistralrs::MultimodalModelBuilder;
 use std::path::PathBuf;
 
-let model = VisionModelBuilder::new("google/gemma-3n-E4B-it")
+let model = MultimodalModelBuilder::new("google/gemma-3n-E4B-it")
     .with_matformer_config_path(PathBuf::from("matformer_configs/gemma3n.csv"))
     .with_matformer_slice_name("Config for E2.49B (block-level)".to_string())
     .build()
@@ -117,9 +117,9 @@ Combine Matformer with ISQ for maximum efficiency:
 
 ```python
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="google/gemma-3n-E4B-it",
-        arch=VisionArchitecture.Gemma3n,
+        arch=MultimodalArchitecture.Gemma3n,
         matformer_config_path="matformer_configs/gemma3n.csv",
         matformer_slice_name="Config for E2.49B (block-level)",
     ),
@@ -132,13 +132,13 @@ runner = Runner(
 Matformer works seamlessly with automatic device mapping:
 
 ```rust
-use mistralrs::{VisionModelBuilder, DeviceMapSetting, AutoDeviceMapParams};
+use mistralrs::{MultimodalModelBuilder, DeviceMapSetting, AutoDeviceMapParams};
 
-let model = VisionModelBuilder::new("google/gemma-3n-E4B-it")
+let model = MultimodalModelBuilder::new("google/gemma-3n-E4B-it")
     .with_matformer_config_path(PathBuf::from("matformer_configs/gemma3n.csv"))
     .with_matformer_slice_name("Config for E2.49B (block-level)".to_string())
     .with_device_mapping(DeviceMapSetting::Auto(
-        AutoDeviceMapParams::default_vision()
+        AutoDeviceMapParams::default_multimodal()
     ))
     .build()
     .await?;
@@ -174,9 +174,9 @@ Tiny,15,0.8,"[4096, 4096, ...]","[5,6,7,10,11,12,15,16,17,20,21,22,25,26,27,30,3
 ### Python Parameters
 
 ```python
-Which.VisionPlain(
+Which.MultimodalPlain(
     model_id: str,
-    arch: VisionArchitecture,
+    arch: MultimodalArchitecture,
     matformer_config_path: str = None,  # Path to CSV
     matformer_slice_name: str = None,   # Slice name
     # ... other parameters
@@ -186,7 +186,7 @@ Which.VisionPlain(
 ### Rust Methods
 
 ```rust
-// For VisionModelBuilder
+// For MultimodalModelBuilder
 .with_matformer_config_path(path: PathBuf)
 .with_matformer_slice_name(name: String)
 

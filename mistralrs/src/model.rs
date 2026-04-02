@@ -32,7 +32,7 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
 /// and as such may be created with one of:
 /// - [`ModelBuilder`] (auto-detecting)
 /// - [`TextModelBuilder`]
-/// - [`VisionModelBuilder`]
+/// - [`MultimodalModelBuilder`]
 /// - [`GgufModelBuilder`]
 /// - [`EmbeddingModelBuilder`]
 /// - [`DiffusionModelBuilder`]
@@ -46,7 +46,7 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
 ///
 /// [`ModelBuilder`]: crate::ModelBuilder
 /// [`TextModelBuilder`]: crate::TextModelBuilder
-/// [`VisionModelBuilder`]: crate::VisionModelBuilder
+/// [`MultimodalModelBuilder`]: crate::MultimodalModelBuilder
 /// [`GgufModelBuilder`]: crate::GgufModelBuilder
 /// [`EmbeddingModelBuilder`]: crate::EmbeddingModelBuilder
 /// [`DiffusionModelBuilder`]: crate::DiffusionModelBuilder

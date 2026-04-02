@@ -513,7 +513,7 @@ impl PastKvLenCache for HybridCache {
 
 impl HybridCache {
     /// Truncate all attention layer KV caches to the given sequence length.
-    /// Recurrent layers are unchanged — use snapshot/restore for recurrent rollback.
+    /// Recurrent layers are unchanged, use snapshot/restore for recurrent rollback.
     pub fn truncate_attention_to(&mut self, len: usize) -> Result<()> {
         for cache in &mut self.caches {
             if let HybridLayerCache::Attention(kv) = cache {

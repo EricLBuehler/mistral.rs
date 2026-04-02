@@ -58,6 +58,7 @@ pub struct GGMLPipeline {
     model_id: String,
     non_granular_state: Option<NonGranularState>,
     metadata: Arc<GeneralMetadata>,
+    generation_defaults: Option<crate::ModelGenerationDefaults>,
 }
 
 /// A loader for a GGML model.
@@ -367,7 +368,10 @@ impl Loader for GGMLLoader {
             Model::Llama(ref model) => model.cache.normal().0.len(),
             Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
         };
-        let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
+        let generation_defaults = gen_conf
+            .as_ref()
+            .and_then(GenerationConfig::generation_defaults);
+        let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
         Ok(Arc::new(Mutex::new(GGMLPipeline {
             model,
             tokenizer: tokenizer.into(),
@@ -399,6 +403,7 @@ impl Loader for GGMLLoader {
                     output: vec![SupportedModality::Text],
                 },
             }),
+            generation_defaults,
         })))
     }
 
@@ -514,6 +519,9 @@ impl MetadataMixin for GGMLPipeline {
     }
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
+    }
+    fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
+        self.generation_defaults.clone()
     }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
         None

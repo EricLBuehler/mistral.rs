@@ -21,6 +21,7 @@ use tokio::sync::mpsc::channel;
 use tracing::{error, info};
 
 use mistralrs_server_core::util;
+use mistralrs_server_core::video::parse_video_url;
 
 fn exit_handler() {
     std::process::exit(0);
@@ -82,8 +83,8 @@ pub async fn interactive_mode(
         Ok(ModelCategory::Text) => {
             text_interactive_mode(mistralrs, do_search, enable_thinking).await
         }
-        Ok(ModelCategory::Vision { .. }) => {
-            vision_interactive_mode(mistralrs, do_search, enable_thinking).await
+        Ok(ModelCategory::Multimodal { .. }) => {
+            multimodal_interactive_mode(mistralrs, do_search, enable_thinking).await
         }
         Ok(ModelCategory::Diffusion) => diffusion_interactive_mode(mistralrs, do_search).await,
         Ok(ModelCategory::Audio) => {
@@ -115,12 +116,13 @@ Welcome to interactive mode! Because this model is a text model, you can enter p
 "#;
 
 const VISION_INTERACTIVE_HELP: &str = r#"
-Welcome to interactive mode! Because this model is a vision model, you can enter prompts and chat with the model.
+Welcome to interactive mode! Because this model is a multimodal model, you can enter prompts and chat with the model.
 
-To specify a message with one or more images or audios, simply include the image/audio URL or path:
+To specify a message with one or more images, audios, or videos, simply include the image/audio/video URL or path:
 
 - `Describe these images: path/to/image1.jpg path/to/image2.png`
 - `Describe the image and transcribe the audio: path/to/image1.jpg path/to/sound.mp3`
+- `Describe this video: path/to/video.mp4`
 "#;
 
 const DIFFUSION_INTERACTIVE_HELP: &str = r#"
@@ -150,6 +152,8 @@ const TOPP_CMD: &str = "\\topp";
 /// Regex string used to extract image URLs from prompts.
 const IMAGE_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:png|jpe?g|bmp|gif|webp)(?:\?\S+?)?)"#;
 const AUDIO_REGEX: &str = r#"((?:https?://|file://)?\S+?\.(?:wav|mp3|flac|ogg)(?:\?\S+?)?)"#;
+const VIDEO_REGEX: &str =
+    r#"((?:https?://|file://)?\S+?\.(?:mp4|avi|mov|mkv|webm|gif|m4v)(?:\?\S+?)?)"#;
 
 fn interactive_sample_parameters() -> SamplingParams {
     SamplingParams {
@@ -452,7 +456,7 @@ fn parse_files_and_message(input: &str, regex: &Regex) -> (Vec<String>, String) 
     (urls, text)
 }
 
-async fn vision_interactive_mode(
+async fn multimodal_interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
     enable_thinking: Option<bool>,
@@ -460,17 +464,19 @@ async fn vision_interactive_mode(
     // Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
     let image_regex = Regex::new(IMAGE_REGEX).unwrap();
     let audio_regex = Regex::new(AUDIO_REGEX).unwrap();
+    let video_regex = Regex::new(VIDEO_REGEX).unwrap();
 
     let sender = mistralrs.get_sender(None).unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
     let mut images = Vec::new();
     let mut audios = Vec::new();
+    let mut videos = Vec::new();
 
     let config = mistralrs.config(None).unwrap();
     let prefixer = match &config.category {
-        ModelCategory::Vision { prefixer } => prefixer,
+        ModelCategory::Multimodal { prefixer } => prefixer,
         _ => {
-            panic!("`add_image_message` expects a vision model.")
+            panic!("`add_image_message` expects a multimodal model.")
         }
     };
 
@@ -519,6 +525,8 @@ async fn vision_interactive_mode(
             CLEAR_CMD => {
                 messages.clear();
                 images.clear();
+                audios.clear();
+                videos.clear();
                 info!("Cleared chat history.");
                 continue;
             }
@@ -540,9 +548,11 @@ async fn vision_interactive_mode(
             _ => {
                 let (urls_image, text_without_images) =
                     parse_files_and_message(prompt_trimmed, &image_regex);
-                let (urls_audio, text) =
+                let (urls_audio, text_without_audios) =
                     parse_files_and_message(&text_without_images, &audio_regex);
-                if !urls_image.is_empty() || !urls_audio.is_empty() {
+                let (urls_video, text) =
+                    parse_files_and_message(&text_without_audios, &video_regex);
+                if !urls_image.is_empty() || !urls_audio.is_empty() || !urls_video.is_empty() {
                     // Load images
                     let mut image_indexes = Vec::new();
                     for url in &urls_image {
@@ -573,6 +583,21 @@ async fn vision_interactive_mode(
                             }
                         }
                     }
+                    // Load videos
+                    let mut video_indexes = Vec::new();
+                    for url in &urls_video {
+                        match parse_video_url(url, None).await {
+                            Ok(video) => {
+                                info!("Added video at `{url}`");
+                                video_indexes.push(videos.len());
+                                videos.push(video);
+                            }
+                            Err(e) => {
+                                error!("Failed to read video from URL/path {}: {}", url, e);
+                                continue 'outer;
+                            }
+                        }
+                    }
                     // Build mixed content parts
                     let mut content_vec: Vec<IndexMap<String, Value>> = Vec::new();
                     for _ in &urls_image {
@@ -587,6 +612,12 @@ async fn vision_interactive_mode(
                             Value::String("audio".to_string()),
                         )]));
                     }
+                    for _ in &urls_video {
+                        content_vec.push(IndexMap::from([(
+                            "type".to_string(),
+                            Value::String("video".to_string()),
+                        )]));
+                    }
                     // Prefix the text with any media context
                     let mut prefixed_text = text.clone();
                     if !image_indexes.is_empty() {
@@ -596,6 +627,10 @@ async fn vision_interactive_mode(
                     if !audio_indexes.is_empty() {
                         prefixed_text =
                             prefixer.prefix_audio(audio_indexes.clone(), &prefixed_text);
+                    }
+                    if !video_indexes.is_empty() {
+                        prefixed_text =
+                            prefixer.prefix_video(video_indexes.clone(), &prefixed_text);
                     }
                     // Add the final text part
                     content_vec.push(IndexMap::from([
@@ -623,9 +658,10 @@ async fn vision_interactive_mode(
         // Set the handler to terminate all seqs, so allowing cancelling running
         *CTRLC_HANDLER.lock().unwrap() = &terminate_handler;
 
-        let request_messages = RequestMessage::VisionChat {
+        let request_messages = RequestMessage::MultimodalChat {
             images: images.clone(),
             audios: audios.clone(),
+            videos: videos.clone(),
             messages: messages.clone(),
             enable_thinking,
             reasoning_effort: None,

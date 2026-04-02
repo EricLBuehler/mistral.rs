@@ -26,7 +26,7 @@ The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/
 ## HTTP server
 You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/llama4.py).
 
-We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
+We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.
 
 > Note: The image_url may be either a path, URL, or a base64 encoded string.
 
@@ -63,7 +63,7 @@ The image exudes a sense of serenity and majesty, capturing the beauty of nature
 1) Start the server
 
 ```
-mistralrs serve vision -p 1234 --isq 4 -m meta-llama/Llama-4-Scout-17B-16E-Instruct
+mistralrs serve multimodal -p 1234 --isq 4 -m meta-llama/Llama-4-Scout-17B-16E-Instruct
 ```
 
 2) Send a request
@@ -113,17 +113,17 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs).
 
 This is a minimal example of running the Llama 4 model with a dummy image.
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new(
+    let model = MultimodalModelBuilder::new(
         "meta-llama/Llama-4-Scout-17B-16E-Instruct",
     )
     .with_isq(IsqType::Q4K)
@@ -139,7 +139,7 @@ async fn main() -> Result<()> {
     };
     let image = image::load_from_memory(&bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is this?",
         vec![image],
@@ -165,12 +165,12 @@ This example demonstrates loading and sending a chat completion request with an 
 > Note: the image_url may be either a path, URL, or a base64 encoded string.
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="meta-llama/Llama-4-Scout-17B-16E-Instruct",
-        arch=VisionArchitecture.Llama4,
+        arch=MultimodalArchitecture.Llama4,
     ),
     in_situ_quant="4",
 )

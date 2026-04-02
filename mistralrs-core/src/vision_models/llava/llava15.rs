@@ -16,8 +16,8 @@ use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::IsqModel;
+use crate::pipeline::MultimodalModel;
 use crate::pipeline::NormalLoadingMetadata;
-use crate::pipeline::VisionModel;
 use crate::utils::unvarbuilder::UnVarBuilder;
 use crate::vision_models::clip::{ClipConfig, ClipVisionTransformer};
 use crate::vision_models::llava::config::Config;
@@ -305,7 +305,7 @@ impl IsqModel for Model {
     }
 }
 
-impl VisionModel for Model {
+impl MultimodalModel for Model {
     fn forward(
         &self,
         input_ids: &Tensor,

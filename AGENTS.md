@@ -7,7 +7,7 @@ This file provides instructions for AI agents to understand the layout of the `m
 
 - `/mistralrs/`           : Main Rust crate (text & multimodal inference API)
 - `/mistralrs-core/`      : Core inference logic and tensor operations (text models)
-- `/mistralrs-vision/`    : Vision inference support (image-based inputs & vision-enabled models)
+- `/mistralrs-vision/`    : Image processing utilities (resizing, preprocessing for multimodal models)
 - `/mistralrs-quant/`     : Quantization support (ISQ, GGUF, GPTQ, AWQ, FP8, HQQ, etc.)
 - `/mistralrs-paged-attn/`: PagedAttention implementation
 - `/mistralrs-pyo3/`      : Python bindings (PyO3)
@@ -28,10 +28,10 @@ Mistral.rs supports multiple model types and advanced features via dedicated cra
   - Crate: `mistralrs-core` (low-level ops), `mistralrs` (API wrapper)
   - CLI: `mistralrs run -m <model>` or `mistralrs serve -m <model>` (auto-detects model type)
   - Docs: `docs/SAMPLING.md`, `docs/TOOL_CALLING.md`
-- **Vision Models**
+- **Multimodal Models**
   - Crate: `mistralrs-vision`
-  - CLI: `mistralrs run -m <model>` (auto-detects vision models)
-  - Docs: `docs/VISION_MODELS.md`, `docs/IMAGEGEN_MODELS.md`, `docs/IMATRIX.md`
+  - CLI: `mistralrs run -m <model>` (auto-detects multimodal models)
+  - Docs: `docs/MULTIMODAL_MODELS.md`, `docs/IMAGEGEN_MODELS.md`, `docs/IMATRIX.md`
 - **Diffusion Models**
   - CLI: `mistralrs run -m <model>` (auto-detects diffusion models)
   - Docs: `docs/FLUX.md`

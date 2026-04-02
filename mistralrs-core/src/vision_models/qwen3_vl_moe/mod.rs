@@ -19,7 +19,7 @@ use crate::{
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
     },
     vision_models::qwen3_vl::{vision::Qwen3VLVisionModel, Qwen3VLVisionSpecificArgs},
 };
@@ -453,7 +453,7 @@ impl Qwen3VLMoEModel {
     }
 }
 
-impl VisionModel for Qwen3VLMoEModel {
+impl MultimodalModel for Qwen3VLMoEModel {
     fn forward(
         &self,
         input_ids: &Tensor,

@@ -28,11 +28,12 @@ Complete reference for model support in mistral.rs.
 - Llama
 - Mistral
 
-### Vision Models
+### Multimodal Models
 
 - Qwen 3-VL
 - Qwen 3-VL MoE
 - Qwen 3.5
+- Gemma 4 (text, image, video, audio)
 - Gemma 3n
 - Llama 4
 - Gemma 3
@@ -115,6 +116,7 @@ Complete reference for model support in mistral.rs.
 |Dia 1.6b| | |✅|
 |Voxtral| | |✅|
 |Gemma 3n| | |✅|
+|Gemma 4| | |✅|
 |Qwen 3 VL| | |✅|
 |Qwen 3 MoE|✅| |✅|
 |Qwen 3-VL MoE| | |✅|
@@ -131,7 +133,7 @@ Complete reference for model support in mistral.rs.
 |Plain|✅|
 |GGUF|✅|
 |GGML| |
-|Vision Plain|✅|
+|Multimodal Plain|✅|
 
 ## X-LoRA and LoRA Support
 
@@ -166,6 +168,7 @@ Complete reference for model support in mistral.rs.
 |Qwen 3| | | |
 |SmolLM3|✅| | |
 |Gemma 3n| | | |
+|Gemma 4| | | |
 |Voxtral| | | |
 |Qwen 3 VL| | | |
 |Qwen 3-VL MoE| | | |
@@ -209,6 +212,7 @@ Complete reference for model support in mistral.rs.
 |Qwen 3| |
 |SmolLM3|✅|
 |Gemma 3n| |
+|Gemma 4| |
 |Voxtral| |
 |Qwen 3 VL| |
 |Qwen 3-VL MoE| |

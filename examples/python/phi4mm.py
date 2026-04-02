@@ -1,9 +1,9 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="microsoft/Phi-4-multimodal-instruct",
-        arch=VisionArchitecture.Phi4MM,
+        arch=MultimodalArchitecture.Phi4MM,
     ),
 )
 

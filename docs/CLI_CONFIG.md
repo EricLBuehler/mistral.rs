@@ -35,7 +35,7 @@ in_situ_quant = "q4k"
 | Option | Commands | Description |
 |--------|----------|-------------|
 | `command` | all | Required. Either `"serve"` or `"run"` |
-| `enable_thinking` | run | Enable thinking mode (default: false) |
+| `thinking` | run | Control thinking mode. Set to `true` to force on, `false` to force off. Omit to defer to chat template default. |
 | `default_model_id` | serve | Default model ID for API requests (must match a model_id in [[models]]) |
 
 ### [global] Section
@@ -97,7 +97,7 @@ Define one or more models. Each `[[models]]` entry creates a new model.
 
 | Option | Required | Description |
 |--------|----------|-------------|
-| `kind` | yes | Model type: `"auto"`, `"text"`, `"vision"`, `"diffusion"`, `"speech"`, `"embedding"` |
+| `kind` | yes | Model type: `"auto"`, `"text"`, `"multimodal"`, `"diffusion"`, `"speech"`, `"embedding"` |
 | `model_id` | yes | HuggingFace model ID or local path |
 | `tokenizer` | no | Path to local tokenizer.json |
 | `arch` | no | Model architecture (auto-detected if not specified) |
@@ -144,7 +144,7 @@ Define one or more models. Each `[[models]]` entry creates a new model.
 | `max_seq_len` | `4096` | Max sequence length for auto device mapping |
 | `max_batch_size` | `1` | Max batch size for auto device mapping |
 
-#### [models.vision] - Vision Options
+#### [models.multimodal] - Multimodal Options
 
 | Option | Description |
 |--------|-------------|
@@ -184,10 +184,10 @@ dtype = "auto"
 in_situ_quant = "q4k"
 
 [[models]]
-kind = "vision"
+kind = "multimodal"
 model_id = "Qwen/Qwen2-VL-2B-Instruct"
 
-[models.vision]
+[models.multimodal]
 max_num_images = 4
 
 [[models]]
@@ -199,7 +199,7 @@ model_id = "google/embeddinggemma-300m"
 
 ```toml
 command = "run"
-enable_thinking = true
+thinking = true
 
 [runtime]
 max_seqs = 16
@@ -208,6 +208,8 @@ max_seqs = 16
 kind = "auto"
 model_id = "Qwen/Qwen3-4B"
 ```
+
+Set `thinking = true` to force thinking on, `thinking = false` to force thinking off. If omitted, `mistralrs from-config` defers to the chat template default. Templates with an explicit thinking toggle use the repository fallback of `true` when no override is provided.
 
 ### GGUF Model
 

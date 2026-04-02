@@ -13,4 +13,5 @@ pub struct ProcessorConfig {
     pub(crate) spatial_merge_size: Option<usize>,
     pub(crate) pixel_shuffle_ratio: Option<f32>,
     pub(crate) audio_seq_length: Option<usize>,
+    pub(crate) video_max_soft_tokens: Option<usize>,
 }

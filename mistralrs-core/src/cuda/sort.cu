@@ -193,7 +193,9 @@ __global__ void topk_kernel(const T *__restrict__ input, // [nrows, ncols]
     int local_idx = -1;
 
     for (int i = tid; i < ncols; i += block_size) {
-      if (!s_used[i] && (float)s_data[i] > (float)local_max) {
+      float candidate = (float)s_data[i];
+      if (!s_used[i] && candidate == candidate &&
+          candidate > (float)local_max) {
         local_max = s_data[i];
         local_idx = i;
       }
@@ -225,6 +227,10 @@ __global__ void topk_kernel(const T *__restrict__ input, // [nrows, ncols]
       T final_max = warp_reduce_max_with_idx(val, idx, final_idx);
 
       if (tid == 0) {
+        if (final_idx < 0) {
+          final_idx = 0;
+          final_max = (T)0;
+        }
         row_values[ki] = final_max;
         row_indices[ki] = (uint32_t)final_idx;
         s_used[final_idx] = true;
@@ -350,7 +356,9 @@ __global__ void topk_softmax_kernel(
     int local_idx = -1;
 
     for (int i = tid; i < ncols; i += block_size) {
-      if (!s_used[i] && (float)s_data[i] > (float)local_max) {
+      float candidate = (float)s_data[i];
+      if (!s_used[i] && candidate == candidate &&
+          candidate > (float)local_max) {
         local_max = s_data[i];
         local_idx = i;
       }
@@ -380,6 +388,10 @@ __global__ void topk_softmax_kernel(
       T final_max = warp_reduce_max_with_idx(val, idx, final_idx);
 
       if (tid == 0) {
+        if (final_idx < 0) {
+          final_idx = 0;
+          final_max = (T)0;
+        }
         s_topk_vals[ki] = final_max;
         s_topk_idx[ki] = final_idx;
         s_used[final_idx] = true;

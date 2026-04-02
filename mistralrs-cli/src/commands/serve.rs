@@ -122,7 +122,7 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
             quantization,
             device,
             cache: _,
-            vision,
+            multimodal,
         } => {
             // If user explicitly specified a quantized format, handle it
             let format_type = format.format.unwrap_or(ModelFormat::Plain);
@@ -174,11 +174,11 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
                 from_uqff: quantization.from_uqff.clone(),
                 imatrix: quantization.imatrix.clone(),
                 calibration_file: quantization.calibration_file.clone(),
-                max_edge: vision.max_edge,
+                max_edge: multimodal.max_edge,
                 max_seq_len: device.max_seq_len,
                 max_batch_size: device.max_batch_size,
-                max_num_images: vision.max_num_images,
-                max_image_length: vision.max_image_length,
+                max_num_images: multimodal.max_num_images,
+                max_image_length: multimodal.max_image_length,
                 hf_cache_path: device.hf_cache.clone(),
                 matformer_config_path: None,
                 matformer_slice_name: None,
@@ -194,15 +194,15 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
             cache: _,
         } => convert_text_model(model, format, adapter, quantization, device),
 
-        ModelType::Vision {
+        ModelType::Multimodal {
             model,
             format: _,
             adapter: _,
             quantization,
             device,
             cache: _,
-            vision,
-        } => Ok(ModelSelected::VisionPlain {
+            multimodal,
+        } => Ok(ModelSelected::MultimodalPlain {
             model_id: model.model_id.clone(),
             tokenizer_json: model
                 .tokenizer
@@ -216,13 +216,13 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
                 .map(|p| p.to_string_lossy().to_string()),
             write_uqff: None,
             from_uqff: quantization.from_uqff.clone(),
-            max_edge: vision.max_edge,
+            max_edge: multimodal.max_edge,
             calibration_file: quantization.calibration_file.clone(),
             imatrix: quantization.imatrix.clone(),
             max_seq_len: device.max_seq_len,
             max_batch_size: device.max_batch_size,
-            max_num_images: vision.max_num_images.unwrap_or(1),
-            max_image_length: vision.max_image_length.unwrap_or(1024),
+            max_num_images: multimodal.max_num_images.unwrap_or(1),
+            max_image_length: multimodal.max_image_length.unwrap_or(1024),
             hf_cache_path: device.hf_cache.clone(),
             matformer_config_path: None,
             matformer_slice_name: None,
@@ -513,7 +513,7 @@ pub(crate) fn extract_paged_attn_settings(
     let cache = match model_type {
         ModelType::Auto { cache, .. } => cache,
         ModelType::Text { cache, .. } => cache,
-        ModelType::Vision { cache, .. } => cache,
+        ModelType::Multimodal { cache, .. } => cache,
         ModelType::Embedding { cache, .. } => cache,
         _ => return (None, None, None, None, None, PagedCacheType::Auto),
     };
@@ -525,7 +525,7 @@ pub(crate) fn extract_device_settings(model_type: &ModelType) -> (bool, Option<V
     let device = match model_type {
         ModelType::Auto { device, .. } => device,
         ModelType::Text { device, .. } => device,
-        ModelType::Vision { device, .. } => device,
+        ModelType::Multimodal { device, .. } => device,
         ModelType::Diffusion { device, .. } => device,
         ModelType::Speech { device, .. } => device,
         ModelType::Embedding { device, .. } => device,
@@ -538,7 +538,7 @@ pub(crate) fn extract_isq_setting(model_type: &ModelType) -> Option<String> {
     match model_type {
         ModelType::Auto { quantization, .. } => quantization.in_situ_quant.clone(),
         ModelType::Text { quantization, .. } => quantization.in_situ_quant.clone(),
-        ModelType::Vision { quantization, .. } => quantization.in_situ_quant.clone(),
+        ModelType::Multimodal { quantization, .. } => quantization.in_situ_quant.clone(),
         ModelType::Embedding { quantization, .. } => quantization.in_situ_quant.clone(),
         _ => None,
     }

@@ -135,15 +135,149 @@ typedef struct {
   half d;
 } block_q6_K;
 
+// Q4_0 block type
+#define QK4_0 32
+#define QR4_0 2
+#define QI4_0 (QK4_0 / (4 * QR4_0))
+typedef struct {
+  half d;
+  uint8_t qs[QK4_0 / 2];
+} block_q4_0;
+
+// Q4_1 block type
+#define QK4_1 32
+#define QR4_1 2
+#define QI4_1 (QK4_1 / (4 * QR4_1))
+typedef struct {
+  half2 dm;
+  uint8_t qs[QK4_1 / 2];
+} block_q4_1;
+
+// Q5_0 block type
+#define QK5_0 32
+#define QR5_0 2
+#define QI5_0 (QK5_0 / (4 * QR5_0))
+typedef struct {
+  half d;
+  uint8_t qh[4];
+  uint8_t qs[QK5_0 / 2];
+} block_q5_0;
+
+// Q5_1 block type
+#define QK5_1 32
+#define QR5_1 2
+#define QI5_1 (QK5_1 / (4 * QR5_1))
+typedef struct {
+  half2 dm;
+  uint8_t qh[4];
+  uint8_t qs[QK5_1 / 2];
+} block_q5_1;
+
 // VDR constants
+#define VDR_Q4_0_Q8_1_MMVQ 2
+#define VDR_Q4_1_Q8_1_MMVQ 2
+#define VDR_Q5_0_Q8_1_MMVQ 2
+#define VDR_Q5_1_Q8_1_MMVQ 2
 #define VDR_Q8_0_Q8_1_MMVQ 2
+#define VDR_Q8_1_Q8_1_MMVQ 2
 #define VDR_Q2_K_Q8_1_MMVQ 1
 #define VDR_Q3_K_Q8_1_MMVQ 1
 #define VDR_Q4_K_Q8_1_MMVQ 2
 #define VDR_Q5_K_Q8_1_MMVQ 2
 #define VDR_Q6_K_Q8_1_MMVQ 1
 
-// vec_dot implementations
+// vec_dot implementations for Q4_0, Q4_1, Q5_0, Q5_1
+
+template <int vdr>
+static __device__ __forceinline__ float
+vec_dot_q4_0_q8_1_impl(const int *v, const int *u, const float &d4,
+                       const half2 &ds8) {
+  int sumi = 0;
+#pragma unroll
+  for (int i = 0; i < vdr; ++i) {
+    const int vi0 = (v[i] >> 0) & 0x0F0F0F0F;
+    const int vi1 = (v[i] >> 4) & 0x0F0F0F0F;
+    sumi = ggml_cuda_dp4a(vi0, u[2 * i + 0], sumi);
+    sumi = ggml_cuda_dp4a(vi1, u[2 * i + 1], sumi);
+  }
+  const float2 ds8f = __half22float2(ds8);
+  return d4 * (sumi * ds8f.x - (8 * vdr / QI4_0) * ds8f.y);
+}
+
+template <int vdr>
+static __device__ __forceinline__ float
+vec_dot_q4_1_q8_1_impl(const int *v, const int *u, const half2 &dm4,
+                       const half2 &ds8) {
+  int sumi = 0;
+#pragma unroll
+  for (int i = 0; i < vdr; ++i) {
+    const int vi0 = (v[i] >> 0) & 0x0F0F0F0F;
+    const int vi1 = (v[i] >> 4) & 0x0F0F0F0F;
+    sumi = ggml_cuda_dp4a(vi0, u[2 * i + 0], sumi);
+    sumi = ggml_cuda_dp4a(vi1, u[2 * i + 1], sumi);
+  }
+  const float2 dm4f = __half22float2(dm4);
+  const float2 ds8f = __half22float2(ds8);
+  const float d4d8 = dm4f.x * ds8f.x;
+  const float m4s8 = dm4f.y * ds8f.y;
+  return sumi * d4d8 + m4s8 / (QI8_1 / (vdr * QR4_1));
+}
+
+template <int vdr>
+static __device__ __forceinline__ float
+vec_dot_q5_0_q8_1_impl(const int *vl, const int *vh, const int *u,
+                       const float &d5, const half2 &ds8) {
+  int sumi = 0;
+#pragma unroll
+  for (int i = 0; i < vdr; ++i) {
+    int vi0 = (vl[i] >> 0) & 0x0F0F0F0F;
+    vi0 |= (vh[i] << 4) & 0x00000010;
+    vi0 |= (vh[i] << 11) & 0x00001000;
+    vi0 |= (vh[i] << 18) & 0x00100000;
+    vi0 |= (vh[i] << 25) & 0x10000000;
+    sumi = ggml_cuda_dp4a(vi0, u[2 * i + 0], sumi);
+
+    int vi1 = (vl[i] >> 4) & 0x0F0F0F0F;
+    vi1 |= (vh[i] >> 12) & 0x00000010;
+    vi1 |= (vh[i] >> 5) & 0x00001000;
+    vi1 |= (vh[i] << 2) & 0x00100000;
+    vi1 |= (vh[i] << 9) & 0x10000000;
+    sumi = ggml_cuda_dp4a(vi1, u[2 * i + 1], sumi);
+  }
+  const float2 ds8f = __half22float2(ds8);
+  return d5 * (sumi * ds8f.x - (16 * vdr / QI5_0) * ds8f.y);
+}
+
+template <int vdr>
+static __device__ __forceinline__ float
+vec_dot_q5_1_q8_1_impl(const int *vl, const int *vh, const int *u,
+                       const half2 &dm5, const half2 &ds8) {
+  int sumi = 0;
+#pragma unroll
+  for (int i = 0; i < vdr; ++i) {
+    int vi0 = (vl[i] >> 0) & 0x0F0F0F0F;
+    vi0 |= (vh[i] << 4) & 0x00000010;
+    vi0 |= (vh[i] << 11) & 0x00001000;
+    vi0 |= (vh[i] << 18) & 0x00100000;
+    vi0 |= (vh[i] << 25) & 0x10000000;
+    sumi = ggml_cuda_dp4a(vi0, u[2 * i + 0], sumi);
+
+    int vi1 = (vl[i] >> 4) & 0x0F0F0F0F;
+    vi1 |= (vh[i] >> 12) & 0x00000010;
+    vi1 |= (vh[i] >> 5) & 0x00001000;
+    vi1 |= (vh[i] << 2) & 0x00100000;
+    vi1 |= (vh[i] << 9) & 0x10000000;
+    sumi = ggml_cuda_dp4a(vi1, u[2 * i + 1], sumi);
+  }
+  const float2 dm5f = __half22float2(dm5);
+  const float2 ds8f = __half22float2(ds8);
+  const float d5d8 = dm5f.x * ds8f.x;
+  const float m5s8 = dm5f.y * ds8f.y;
+  return sumi * d5d8 + m5s8 / (QI5_1 / vdr);
+}
+
+// vec_dot implementations for Q8_0 and K-quants
+
 template <int vdr>
 static __device__ __forceinline__ float
 vec_dot_q8_0_q8_1_impl(const int *v, const int *u, const half &d8_0,
@@ -279,6 +413,93 @@ vec_dot_q6_K_q8_1_impl_mmvq(const int &vl, const int &vh,
 typedef float (*vec_dot_q_cuda_t)(const void *__restrict__ vbq,
                                   const block_q8_1 *__restrict__ bq8_1,
                                   const int &iqs);
+
+static __device__ __forceinline__ float
+vec_dot_q4_0_q8_1(const void *__restrict__ vbq,
+                  const block_q8_1 *__restrict__ bq8_1, const int &iqs) {
+  const block_q4_0 *bq4_0 = (const block_q4_0 *)vbq;
+  int v[VDR_Q4_0_Q8_1_MMVQ];
+  int u[2 * VDR_Q4_0_Q8_1_MMVQ];
+#pragma unroll
+  for (int i = 0; i < VDR_Q4_0_Q8_1_MMVQ; ++i) {
+    v[i] = get_int_from_uint8(bq4_0->qs, iqs + i);
+    u[2 * i + 0] = get_int_from_int8_aligned(bq8_1->qs, iqs + i);
+    u[2 * i + 1] = get_int_from_int8_aligned(bq8_1->qs, iqs + i + QI4_0);
+  }
+  return vec_dot_q4_0_q8_1_impl<VDR_Q4_0_Q8_1_MMVQ>(v, u, bq4_0->d, bq8_1->ds);
+}
+
+static __device__ __forceinline__ float
+vec_dot_q4_1_q8_1(const void *__restrict__ vbq,
+                  const block_q8_1 *__restrict__ bq8_1, const int &iqs) {
+  const block_q4_1 *bq4_1 = (const block_q4_1 *)vbq;
+  int v[VDR_Q4_1_Q8_1_MMVQ];
+  int u[2 * VDR_Q4_1_Q8_1_MMVQ];
+#pragma unroll
+  for (int i = 0; i < VDR_Q4_1_Q8_1_MMVQ; ++i) {
+    v[i] = get_int_from_uint8_aligned(bq4_1->qs, iqs + i);
+    u[2 * i + 0] = get_int_from_int8_aligned(bq8_1->qs, iqs + i);
+    u[2 * i + 1] = get_int_from_int8_aligned(bq8_1->qs, iqs + i + QI4_1);
+  }
+  return vec_dot_q4_1_q8_1_impl<VDR_Q4_1_Q8_1_MMVQ>(v, u, bq4_1->dm, bq8_1->ds);
+}
+
+static __device__ __forceinline__ float
+vec_dot_q5_0_q8_1(const void *__restrict__ vbq,
+                  const block_q8_1 *__restrict__ bq8_1, const int &iqs) {
+  const block_q5_0 *bq5_0 = (const block_q5_0 *)vbq;
+  int vl[VDR_Q5_0_Q8_1_MMVQ];
+  int vh[VDR_Q5_0_Q8_1_MMVQ];
+  int u[2 * VDR_Q5_0_Q8_1_MMVQ];
+#pragma unroll
+  for (int i = 0; i < VDR_Q5_0_Q8_1_MMVQ; ++i) {
+    vl[i] = get_int_from_uint8(bq5_0->qs, iqs + i);
+    vh[i] = get_int_from_uint8(bq5_0->qh, 0) >> (4 * (iqs + i));
+    u[2 * i + 0] = get_int_from_int8_aligned(bq8_1->qs, iqs + i);
+    u[2 * i + 1] = get_int_from_int8_aligned(bq8_1->qs, iqs + i + QI5_0);
+  }
+  return vec_dot_q5_0_q8_1_impl<VDR_Q5_0_Q8_1_MMVQ>(vl, vh, u, bq5_0->d,
+                                                    bq8_1->ds);
+}
+
+static __device__ __forceinline__ float
+vec_dot_q5_1_q8_1(const void *__restrict__ vbq,
+                  const block_q8_1 *__restrict__ bq8_1, const int &iqs) {
+  const block_q5_1 *bq5_1 = (const block_q5_1 *)vbq;
+  int vl[VDR_Q5_1_Q8_1_MMVQ];
+  int vh[VDR_Q5_1_Q8_1_MMVQ];
+  int u[2 * VDR_Q5_1_Q8_1_MMVQ];
+#pragma unroll
+  for (int i = 0; i < VDR_Q5_1_Q8_1_MMVQ; ++i) {
+    vl[i] = get_int_from_uint8_aligned(bq5_1->qs, iqs + i);
+    vh[i] = get_int_from_uint8_aligned(bq5_1->qh, 0) >> (4 * (iqs + i));
+    u[2 * i + 0] = get_int_from_int8_aligned(bq8_1->qs, iqs + i);
+    u[2 * i + 1] = get_int_from_int8_aligned(bq8_1->qs, iqs + i + QI5_1);
+  }
+  return vec_dot_q5_1_q8_1_impl<VDR_Q5_1_Q8_1_MMVQ>(vl, vh, u, bq5_1->dm,
+                                                    bq8_1->ds);
+}
+
+static __device__ __forceinline__ float
+vec_dot_q8_1_q8_1(const void *__restrict__ vbq,
+                  const block_q8_1 *__restrict__ bq8_1_v, const int &iqs) {
+  const block_q8_1 *bq8_1_w = (const block_q8_1 *)vbq;
+  int v[VDR_Q8_1_Q8_1_MMVQ];
+  int u[VDR_Q8_1_Q8_1_MMVQ];
+#pragma unroll
+  for (int i = 0; i < VDR_Q8_1_Q8_1_MMVQ; ++i) {
+    v[i] = get_int_from_int8_aligned(bq8_1_w->qs, iqs + i);
+    u[i] = get_int_from_int8_aligned(bq8_1_v->qs, iqs + i);
+  }
+  const float2 dmw = __half22float2(bq8_1_w->ds);
+  const float2 dmv = __half22float2(bq8_1_v->ds);
+  int sumi = 0;
+#pragma unroll
+  for (int i = 0; i < VDR_Q8_1_Q8_1_MMVQ; ++i) {
+    sumi = ggml_cuda_dp4a(v[i], u[i], sumi);
+  }
+  return dmw.x * dmv.x * sumi + dmw.y * dmv.y;
+}
 
 static __device__ __forceinline__ float
 vec_dot_q8_0_q8_1(const void *__restrict__ vbq,
@@ -510,8 +731,9 @@ __device__ void indexed_moe_forward(const void *__restrict__ all_weights,
 
   const size_t weight_block_size = sizeof(block_q_t);
   const size_t input_block_size = sizeof(block_q8_1);
+  const size_t weight_blocks_per_row = ((size_t)k + qk - 1) / qk;
   const size_t weight_expert_stride_bytes =
-      (size_t)(n * k) / qk * weight_block_size;
+      (size_t)n * weight_blocks_per_row * weight_block_size;
   const size_t input_task_stride_bytes =
       (size_t)k_padded / QK8_1 * input_block_size;
   const size_t output_task_stride_elems = n;
@@ -533,7 +755,7 @@ __device__ void indexed_moe_forward(const void *__restrict__ all_weights,
     return;
   }
 
-  const int blocks_per_row_x = k / qk;
+  const int blocks_per_row_x = (k + qk - 1) / qk;
   const int blocks_per_col_y = k_padded / QK8_1;
   constexpr int blocks_per_iter = vdr * nwarps * WARP_SIZE / qi;
 
@@ -566,7 +788,63 @@ __device__ void indexed_moe_forward(const void *__restrict__ all_weights,
   }
 }
 
-// Kernel instantiations
+// Kernel instantiations - Q quants
+extern "C" __global__ void indexed_moe_forward_q4_0_q8_1(
+    const void *__restrict__ all_weights, const void *__restrict__ all_inputs,
+    const unsigned int *__restrict__ indices, float *__restrict__ all_outputs,
+    const int n, const int k, const int batch, const int topk,
+    const int k_padded, const int input_dim1) {
+  indexed_moe_forward<QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ,
+                      vec_dot_q4_0_q8_1>(all_weights, all_inputs, indices,
+                                         all_outputs, n, k, batch, topk,
+                                         k_padded, input_dim1);
+}
+
+extern "C" __global__ void indexed_moe_forward_q4_1_q8_1(
+    const void *__restrict__ all_weights, const void *__restrict__ all_inputs,
+    const unsigned int *__restrict__ indices, float *__restrict__ all_outputs,
+    const int n, const int k, const int batch, const int topk,
+    const int k_padded, const int input_dim1) {
+  indexed_moe_forward<QK4_1, QI4_1, block_q4_1, VDR_Q4_1_Q8_1_MMVQ,
+                      vec_dot_q4_1_q8_1>(all_weights, all_inputs, indices,
+                                         all_outputs, n, k, batch, topk,
+                                         k_padded, input_dim1);
+}
+
+extern "C" __global__ void indexed_moe_forward_q5_0_q8_1(
+    const void *__restrict__ all_weights, const void *__restrict__ all_inputs,
+    const unsigned int *__restrict__ indices, float *__restrict__ all_outputs,
+    const int n, const int k, const int batch, const int topk,
+    const int k_padded, const int input_dim1) {
+  indexed_moe_forward<QK5_0, QI5_0, block_q5_0, VDR_Q5_0_Q8_1_MMVQ,
+                      vec_dot_q5_0_q8_1>(all_weights, all_inputs, indices,
+                                         all_outputs, n, k, batch, topk,
+                                         k_padded, input_dim1);
+}
+
+extern "C" __global__ void indexed_moe_forward_q5_1_q8_1(
+    const void *__restrict__ all_weights, const void *__restrict__ all_inputs,
+    const unsigned int *__restrict__ indices, float *__restrict__ all_outputs,
+    const int n, const int k, const int batch, const int topk,
+    const int k_padded, const int input_dim1) {
+  indexed_moe_forward<QK5_1, QI5_1, block_q5_1, VDR_Q5_1_Q8_1_MMVQ,
+                      vec_dot_q5_1_q8_1>(all_weights, all_inputs, indices,
+                                         all_outputs, n, k, batch, topk,
+                                         k_padded, input_dim1);
+}
+
+extern "C" __global__ void indexed_moe_forward_q8_1_q8_1(
+    const void *__restrict__ all_weights, const void *__restrict__ all_inputs,
+    const unsigned int *__restrict__ indices, float *__restrict__ all_outputs,
+    const int n, const int k, const int batch, const int topk,
+    const int k_padded, const int input_dim1) {
+  indexed_moe_forward<QK8_1, QI8_1, block_q8_1, VDR_Q8_1_Q8_1_MMVQ,
+                      vec_dot_q8_1_q8_1>(all_weights, all_inputs, indices,
+                                         all_outputs, n, k, batch, topk,
+                                         k_padded, input_dim1);
+}
+
+// Kernel instantiations - K quants
 extern "C" __global__ void indexed_moe_forward_q2k_q8_1(
     const void *__restrict__ all_weights, const void *__restrict__ all_inputs,
     const unsigned int *__restrict__ indices, float *__restrict__ all_outputs,
@@ -712,6 +990,66 @@ extern "C" void launch_indexed_moe_forward_q8_0_q8_1(
   dim3 block(WARP_SIZE, 4, 1);
   cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
   indexed_moe_forward_q8_0_q8_1<<<grid, block, 0, cuda_stream>>>(
+      all_weights, all_inputs, indices, all_outputs, n, k, batch, topk,
+      k_padded, input_dim1);
+}
+
+extern "C" void launch_indexed_moe_forward_q4_0_q8_1(
+    const void *all_weights, const void *all_inputs,
+    const unsigned int *indices, float *all_outputs, int n, int k, int batch,
+    int topk, int k_padded, int input_dim1, void *stream) {
+  dim3 grid(n, batch, topk);
+  dim3 block(WARP_SIZE, 4, 1);
+  cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
+  indexed_moe_forward_q4_0_q8_1<<<grid, block, 0, cuda_stream>>>(
+      all_weights, all_inputs, indices, all_outputs, n, k, batch, topk,
+      k_padded, input_dim1);
+}
+
+extern "C" void launch_indexed_moe_forward_q4_1_q8_1(
+    const void *all_weights, const void *all_inputs,
+    const unsigned int *indices, float *all_outputs, int n, int k, int batch,
+    int topk, int k_padded, int input_dim1, void *stream) {
+  dim3 grid(n, batch, topk);
+  dim3 block(WARP_SIZE, 4, 1);
+  cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
+  indexed_moe_forward_q4_1_q8_1<<<grid, block, 0, cuda_stream>>>(
+      all_weights, all_inputs, indices, all_outputs, n, k, batch, topk,
+      k_padded, input_dim1);
+}
+
+extern "C" void launch_indexed_moe_forward_q5_0_q8_1(
+    const void *all_weights, const void *all_inputs,
+    const unsigned int *indices, float *all_outputs, int n, int k, int batch,
+    int topk, int k_padded, int input_dim1, void *stream) {
+  dim3 grid(n, batch, topk);
+  dim3 block(WARP_SIZE, 4, 1);
+  cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
+  indexed_moe_forward_q5_0_q8_1<<<grid, block, 0, cuda_stream>>>(
+      all_weights, all_inputs, indices, all_outputs, n, k, batch, topk,
+      k_padded, input_dim1);
+}
+
+extern "C" void launch_indexed_moe_forward_q5_1_q8_1(
+    const void *all_weights, const void *all_inputs,
+    const unsigned int *indices, float *all_outputs, int n, int k, int batch,
+    int topk, int k_padded, int input_dim1, void *stream) {
+  dim3 grid(n, batch, topk);
+  dim3 block(WARP_SIZE, 4, 1);
+  cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
+  indexed_moe_forward_q5_1_q8_1<<<grid, block, 0, cuda_stream>>>(
+      all_weights, all_inputs, indices, all_outputs, n, k, batch, topk,
+      k_padded, input_dim1);
+}
+
+extern "C" void launch_indexed_moe_forward_q8_1_q8_1(
+    const void *all_weights, const void *all_inputs,
+    const unsigned int *indices, float *all_outputs, int n, int k, int batch,
+    int topk, int k_padded, int input_dim1, void *stream) {
+  dim3 grid(n, batch, topk);
+  dim3 block(WARP_SIZE, 4, 1);
+  cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
+  indexed_moe_forward_q8_1_q8_1<<<grid, block, 0, cuda_stream>>>(
       all_weights, all_inputs, indices, all_outputs, n, k, batch, topk,
       k_padded, input_dim1);
 }

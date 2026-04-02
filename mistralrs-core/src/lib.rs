@@ -41,9 +41,11 @@ mod metal;
 mod model_loader;
 mod moe;
 mod ops;
+mod video_input;
 pub use model_loader::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
 };
+pub use video_input::{sample_frame_indices, VideoInput};
 mod embedding_models;
 mod kv_cache;
 mod search;
@@ -58,7 +60,6 @@ mod diagnostics;
 mod diffusion_models;
 pub mod distributed;
 mod gguf;
-pub mod harmony;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;
@@ -68,13 +69,13 @@ mod models;
 mod paged_attention;
 mod pipeline;
 mod prefix_cacher;
+pub mod reasoning_parsers;
 mod request;
 mod response;
 mod sampler;
 mod scheduler;
 mod sequence;
 mod speech_models;
-pub mod think_tags;
 mod toml_selector;
 mod tools;
 mod topology;
@@ -114,11 +115,12 @@ pub use pipeline::{
     GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
     GGUFSpecificConfig, GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader,
     LlamaLoader, Loader, LocalModelPaths, LoraAdapterPaths, MistralLoader, MixtralLoader,
-    Modalities, ModelKind, ModelPaths, MultimodalPromptPrefixer, NormalLoader, NormalLoaderBuilder,
-    NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
-    SpeculativeConfig, SpeculativeLoader, SpeculativePipeline, SpeechLoader, SpeechPipeline,
-    Starcoder2Loader, SupportedModality, TokenSource, VisionLoader, VisionLoaderBuilder,
-    VisionLoaderType, VisionSpecificConfig, UQFF_MULTI_FILE_DELIMITER,
+    Modalities, ModelKind, ModelPaths, MultimodalLoader, MultimodalLoaderBuilder,
+    MultimodalLoaderType, MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
+    Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
+    SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality, TokenSource,
+    UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
     ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
@@ -127,7 +129,8 @@ pub use request::{
 };
 pub use response::*;
 pub use sampler::{
-    CustomLogitsProcessor, DrySamplingParams, SamplingParams, StopTokens, TopLogprob,
+    CustomLogitsProcessor, DrySamplingParams, ModelGenerationDefaults, SamplingParams, StopTokens,
+    TopLogprob,
 };
 pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
@@ -218,13 +221,14 @@ pub struct MistralRsConfig {
     pub category: ModelCategory,
     pub modalities: Modalities,
     pub max_seq_len: Option<usize>,
+    pub generation_defaults: Option<ModelGenerationDefaults>,
 }
 
 /// Configuration for recreating a model loader when reloading an unloaded model.
 /// This captures the essential parameters needed to reconstruct a loader.
 #[derive(Clone)]
 pub struct ModelLoaderConfig {
-    /// The model selection configuration (Plain, GGUF, Vision, etc.)
+    /// The model selection configuration (Plain, GGUF, Multimodal, etc.)
     pub model_selected: ModelSelected,
     /// Source of the HF token
     pub token_source: TokenSource,
@@ -260,7 +264,7 @@ pub struct UnloadedModelState {
     pub engine_config: EngineConfig,
     /// MCP client configuration
     pub mcp_client_config: Option<McpClientConfig>,
-    /// Model category (Text, Vision, etc.)
+    /// Model category (Text, Multimodal, etc.)
     pub category: ModelCategory,
     /// Model metadata configuration
     pub mistralrs_config: MistralRsConfig,
@@ -541,6 +545,7 @@ impl MistralRs {
             ModelCategory::Diffusion | ModelCategory::Speech => None,
             _ => Some(metadata.max_seq_len),
         };
+        let generation_defaults = pipeline_guard.generation_defaults();
         let encoder_cache_counters = pipeline_guard.encoder_cache_counters();
         drop(pipeline_guard);
 
@@ -559,6 +564,7 @@ impl MistralRs {
             category: category.clone(),
             modalities,
             max_seq_len,
+            generation_defaults,
         };
 
         let tx_for_engine = tx.clone();
@@ -760,7 +766,7 @@ impl MistralRs {
             && is_multi_threaded
             && matches!(
                 engine_instance.category,
-                ModelCategory::Text | ModelCategory::Vision { .. }
+                ModelCategory::Text | ModelCategory::Multimodal { .. }
             )
         {
             let clone_sender = engine_instance.sender.clone();

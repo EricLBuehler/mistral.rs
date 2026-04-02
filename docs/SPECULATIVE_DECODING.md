@@ -24,7 +24,7 @@ The key parameter is `gamma` - the number of draft tokens to generate per specul
 ## Requirements
 
 - **Same tokenizer:** Both target and draft models must share the same tokenizer vocabulary
-- **Same model category:** Both must be the same type (e.g., both text models or both vision models)
+- **Same model category:** Both must be the same type (e.g., both text models or both multimodal models)
 - **KV cache enabled:** Both models must have KV caching enabled (default behavior)
 
 ## Compatibility

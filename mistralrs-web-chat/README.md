@@ -13,7 +13,7 @@
 >
 > The new built-in UI provides the same features and is accessible at `/ui` when running the server.
 
-A minimal, fast, and modern web chat interface for [mistral.rs](https://github.com/EricBuehler/mistral.rs), supporting text, vision, and speech models with drag-and-drop image and file upload, markdown rendering, and multi-model selection.
+A minimal, fast, and modern web chat interface for [mistral.rs](https://github.com/EricBuehler/mistral.rs), supporting text, multimodal, and speech models with drag-and-drop image and file upload, markdown rendering, and multi-model selection.
 
 <img src="../res/chat.gif" alt="Demonstration" />
 
@@ -25,7 +25,7 @@ A minimal, fast, and modern web chat interface for [mistral.rs](https://github.c
 - **Text-to-speech Model Support:** Generate speech from text prompts and download as WAV files.
 - **Speech Input Model Support:** Upload audio inputs for multimodal models.
 - **File Upload:** Upload and work with files.
-- **Drag & Drop Image Upload:** Instantly preview and send images to vision models.
+- **Drag & Drop Image Upload:** Instantly preview and send images to multimodal models.
 - **Markdown Output:** Responses are rendered in markdown, including code blocks.
 - **Copy Button:** One-click copying for all code snippets.
 - **Responsive UI:** Clean layout for desktop and mobile.
@@ -48,12 +48,12 @@ A minimal, fast, and modern web chat interface for [mistral.rs](https://github.c
 ```bash
 cargo run --release --features <specify feature(s) here> --bin mistralrs-web-chat -- \
   --text-model Qwen/Qwen3-4B \
-  --vision-model google/gemma-3-4b-it \
+  --multimodal-model google/gemma-4-E4B-it \
   --speech-model nari-labs/Dia-1.6B
 ```
 
-- At least one model is required (text, vision, or speech).
-- Multiple `--text-model`, `--vision-model`, or `--speech-model` can be specified.
+- At least one model is required (text, multimodal, or speech).
+- Multiple `--text-model`, `--multimodal-model`, or `--speech-model` can be specified.
 - `--port` is optional (defaults to 1234).
 
 ---
@@ -72,7 +72,7 @@ Options:
                                  Options: Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q8_1, Q2K, Q3K, Q4K, Q5K, Q6K, Q8K,
                                           HQQ1, HQQ2, HQQ3, HQQ4, HQQ8, AFQ2, AFQ4, AFQ6, AFQ8
   --text-model <MODEL>           Text-only models (HuggingFace ID or local path). Can be repeated.
-  --vision-model <MODEL>         Vision models (HuggingFace ID or local path). Can be repeated.
+  --multimodal-model <MODEL>         Multimodal models (HuggingFace ID or local path). Can be repeated.
   --speech-model <MODEL>         Speech/TTS models (HuggingFace ID or local path). Can be repeated.
   --enable-search                Enable web search tool (requires embedding model)
   --search-embedding-model <M>   Built-in search embedding model (e.g., embedding_gemma)
@@ -110,7 +110,7 @@ Multiple models with web search:
 ```bash
 cargo run --release --features cuda --bin mistralrs-web-chat -- \
   --text-model Qwen/Qwen3-4B \
-  --vision-model google/gemma-3-4b-it \
+  --multimodal-model google/gemma-4-E4B-it \
   --enable-search \
   --search-embedding-model embedding_gemma
 ```
@@ -130,7 +130,7 @@ cargo run --release --features cuda --bin mistralrs-web-chat -- \
 | POST | `/api/load_chat` | Load chat history |
 | POST | `/api/delete_chat` | Delete chat |
 | POST | `/api/rename_chat` | Rename chat |
-| POST | `/api/upload_image` | Upload image (vision models) |
+| POST | `/api/upload_image` | Upload image (multimodal models) |
 | POST | `/api/upload_text` | Upload text/code file |
 | POST | `/api/upload_audio` | Upload audio file |
 | POST | `/api/generate_speech` | Generate speech (TTS models) |

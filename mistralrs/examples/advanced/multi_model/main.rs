@@ -4,14 +4,15 @@
 
 use anyhow::{anyhow, Result};
 use mistralrs::{
-    IsqBits, MultiModelBuilder, TextMessageRole, TextMessages, TextModelBuilder, VisionModelBuilder,
+    IsqBits, MultiModelBuilder, MultimodalModelBuilder, TextMessageRole, TextMessages,
+    TextModelBuilder,
 };
 
 // Model IDs - these are the actual HuggingFace model paths
-const GEMMA_MODEL_ID: &str = "google/gemma-3-4b-it";
+const GEMMA_MODEL_ID: &str = "google/gemma-4-E4B-it";
 const QWEN_MODEL_ID: &str = "Qwen/Qwen3-4B";
 // Aliases - these are the short IDs used in API requests
-const GEMMA_ALIAS: &str = "gemma-vision";
+const GEMMA_ALIAS: &str = "gemma-multimodal";
 const QWEN_ALIAS: &str = "qwen-text";
 
 #[tokio::main]
@@ -21,7 +22,7 @@ async fn main() -> Result<()> {
     let model = MultiModelBuilder::new()
         .add_model_with_alias(
             GEMMA_ALIAS,
-            VisionModelBuilder::new(GEMMA_MODEL_ID)
+            MultimodalModelBuilder::new(GEMMA_MODEL_ID)
                 .with_auto_isq(IsqBits::Four)
                 .with_logging(),
         )
@@ -51,7 +52,7 @@ async fn main() -> Result<()> {
         println!("  {} -> {:?}", model_id, status);
     }
 
-    // Send a request to the default model (Gemma - vision model)
+    // Send a request to the default model (Gemma - multimodal model)
     println!("\n=== Request to Default Model ({}) ===", GEMMA_ALIAS);
     let messages =
         TextMessages::new().add_message(TextMessageRole::User, "What is 2 + 2? Answer briefly.");

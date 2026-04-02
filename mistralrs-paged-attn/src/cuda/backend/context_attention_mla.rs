@@ -118,7 +118,7 @@ fn gather_cached_mla(
 ///
 /// # Returns
 ///
-/// `[total_new_tokens, num_heads, kv_lora_rank]` — attention output in latent space
+/// `[total_new_tokens, num_heads, kv_lora_rank]`, attention output in latent space
 #[allow(clippy::too_many_arguments)]
 pub fn context_attention_fwd_mla(
     q_nope: &Tensor,
@@ -403,8 +403,8 @@ mod tests {
         // 2 new tokens, 3 cached tokens
         let mask = build_causal_mask(2, 5, 3, &Device::Cpu).unwrap();
         let data: Vec<f32> = mask.flatten_all().unwrap().to_vec1().unwrap();
-        // Row 0 (q=0): [0, 0, 0, 0, -inf] — attends to all 3 ctx + self
-        // Row 1 (q=1): [0, 0, 0, 0, 0] — attends to all
+        // Row 0 (q=0): [0, 0, 0, 0, -inf], attends to all 3 ctx + self
+        // Row 1 (q=1): [0, 0, 0, 0, 0], attends to all
         assert_eq!(data[0], 0.0);
         assert_eq!(data[1], 0.0);
         assert_eq!(data[2], 0.0);

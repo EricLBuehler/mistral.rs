@@ -134,6 +134,7 @@ impl InputsProcessor for Llama4ImageProcessor {
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
+        sliding_window: Option<usize>,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta>,
         mapper: Option<&dyn DeviceMapper>,
@@ -327,6 +328,7 @@ impl InputsProcessor for Llama4ImageProcessor {
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 mapper,
+                sliding_window,
             )
             .unwrap()
         } else {
@@ -342,6 +344,7 @@ impl InputsProcessor for Llama4ImageProcessor {
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 mapper,
+                sliding_window,
             )
             .unwrap()
         };

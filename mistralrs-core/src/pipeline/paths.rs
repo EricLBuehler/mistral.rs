@@ -458,7 +458,16 @@ pub(crate) fn get_chat_template(
                 if let Some(template_filename) = paths.get_template_filename() {
                     if template_filename.extension().map(|e| e.to_str()) == Some(Some("jinja")) {
                         info!("Using chat template from .jinja file.");
-                        let mut template = ChatTemplate::default();
+                        // Load special tokens (bos/eos/unk) from tokenizer_config.json
+                        // in the same directory, matching HF's behavior where
+                        // apply_chat_template passes self.special_tokens_map to the template.
+                        let mut template = template_filename
+                            .parent()
+                            .map(|dir| dir.join("tokenizer_config.json"))
+                            .filter(|p| p.exists())
+                            .and_then(|p| fs::read_to_string(p).ok())
+                            .and_then(|s| serde_json::from_str::<ChatTemplate>(&s).ok())
+                            .unwrap_or_default();
                         template.chat_template =
                             Some(ChatTemplateValue(Either::Left(content.clone())));
                         template

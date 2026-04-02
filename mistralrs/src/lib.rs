@@ -1,7 +1,7 @@
-//! # mistralrs — Blazing-Fast LLM Inference in Rust
+//! # mistralrs, Blazing-Fast LLM Inference in Rust
 //!
 //! The Rust SDK for [mistral.rs](https://github.com/EricLBuehler/mistral.rs), a high-performance
-//! LLM inference engine supporting text, vision, speech, image generation, and embedding models.
+//! LLM inference engine supporting text, multimodal, speech, image generation, and embedding models.
 //!
 //! ## Quick Start
 //!
@@ -27,7 +27,7 @@
 //! |---|---|---|
 //! | Any model (auto-detect) | [`ModelBuilder`] | `examples/getting_started/text_generation/` |
 //! | Text generation | [`TextModelBuilder`] | `examples/getting_started/text_generation/` |
-//! | Vision (image+text) | [`VisionModelBuilder`] | `examples/getting_started/vision/` |
+//! | Multimodal (image+text) | [`MultimodalModelBuilder`] | `examples/getting_started/multimodal/` |
 //! | GGUF quantized models | [`GgufModelBuilder`] | `examples/getting_started/gguf/` |
 //! | Image generation | [`DiffusionModelBuilder`] | `examples/models/diffusion/` |
 //! | Speech synthesis | [`SpeechModelBuilder`] | `examples/models/speech/` |
@@ -66,10 +66,10 @@
 //! | Type | Use When | Sampling |
 //! |---|---|---|
 //! | [`TextMessages`] | Simple text-only chat, no special settings needed | Deterministic |
-//! | [`VisionMessages`] | Your prompt includes images or audio | Deterministic |
+//! | [`MultimodalMessages`] | Your prompt includes images or audio | Deterministic |
 //! | [`RequestBuilder`] | You need tools, logprobs, custom sampling, constraints, adapters, or web search | Configurable |
 //!
-//! `TextMessages` and `VisionMessages` can be converted into a [`RequestBuilder`] via
+//! `TextMessages` and `MultimodalMessages` can be converted into a [`RequestBuilder`] via
 //! `Into<RequestBuilder>` if you start simple and later need more control.
 //!
 //! ## Streaming
@@ -184,13 +184,13 @@
 //! | `accelerate` | Apple Accelerate framework |
 //! | `mkl` | Intel MKL acceleration |
 //!
-//! The default feature set (no flags) builds with pure Rust — no C compiler or system
+//! The default feature set (no flags) builds with pure Rust, no C compiler or system
 //! libraries required.
 //!
 //! ## Architecture
 //!
 //! ```text
-//! ModelBuilder / TextModelBuilder / VisionModelBuilder / GgufModelBuilder / ...
+//! ModelBuilder / TextModelBuilder / MultimodalModelBuilder / GgufModelBuilder / ...
 //!     │
 //!     ▼
 //!   Model ──── send_chat_request() ──► Engine ──► Pipeline ──► Output
@@ -218,10 +218,10 @@ mod lora_model;
 mod messages;
 mod model;
 pub mod model_builder_trait;
+mod multimodal_model;
 mod speculative;
 mod speech_model;
 mod text_model;
-mod vision_model;
 mod xlora_model;
 
 pub(crate) use isq_setting::resolve_isq;
@@ -240,8 +240,8 @@ pub use gguf_lora_model::GgufLoraModelBuilder;
 pub use gguf_xlora_model::GgufXLoraModelBuilder;
 pub use lora_model::LoraModelBuilder;
 pub use messages::{
-    EmbeddingRequest, EmbeddingRequestBuilder, EmbeddingRequestInput, RequestBuilder, RequestLike,
-    TextMessageRole, TextMessages, VisionMessages,
+    EmbeddingRequest, EmbeddingRequestBuilder, EmbeddingRequestInput, MultimodalMessages,
+    RequestBuilder, RequestLike, TextMessageRole, TextMessages,
 };
 pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
@@ -249,10 +249,10 @@ pub use mistralrs_core::{
 pub use mistralrs_core::{SearchCallback, SearchResult, ToolCallback};
 pub use model::{best_device, Model};
 pub use model_builder_trait::{AnyModelBuilder, MultiModelBuilder};
+pub use multimodal_model::{MultimodalModelBuilder, UqffMultimodalModelBuilder};
 pub use speculative::TextSpeculativeBuilder;
 pub use speech_model::SpeechModelBuilder;
 pub use text_model::{PagedAttentionMetaBuilder, TextModelBuilder, UqffTextModelBuilder};
-pub use vision_model::{UqffVisionModelBuilder, VisionModelBuilder};
 pub use xlora_model::XLoraModelBuilder;
 
 pub use candle_core::{DType, Device, Result, Tensor};
@@ -274,7 +274,7 @@ pub use mistralrs_core::{
 pub use mistralrs_core::{Constraint, LlguidanceGrammar, MessageContent, NormalRequest, Request};
 
 // ========== Sampling ==========
-pub use mistralrs_core::{DrySamplingParams, SamplingParams, StopTokens};
+pub use mistralrs_core::{DrySamplingParams, ModelGenerationDefaults, SamplingParams, StopTokens};
 
 // ========== Tool Types ==========
 pub use mistralrs_core::{
@@ -283,12 +283,15 @@ pub use mistralrs_core::{
 
 // ========== Config Types ==========
 pub use mistralrs_core::{
-    DefaultSchedulerMethod, IsqType, MemoryGpuConfig, ModelDType, PagedAttentionConfig,
-    PagedCacheType, SchedulerConfig, WebSearchOptions,
+    DefaultSchedulerMethod, IsqType, MemoryGpuConfig, MistralRsConfig, ModelDType,
+    PagedAttentionConfig, PagedCacheType, SchedulerConfig, WebSearchOptions,
 };
 
 // ========== Audio Types ==========
 pub use mistralrs_core::AudioInput;
+
+// ========== Video Types ==========
+pub use mistralrs_core::VideoInput;
 
 // ========== Custom Logits ==========
 pub use mistralrs_core::CustomLogitsProcessor;
@@ -320,7 +323,7 @@ pub use mistralrs_core::{AutoDeviceMapParams, DeviceMapSetting};
 pub use mistralrs_core::{LayerTopology, Topology};
 
 // ========== Loader Types ==========
-pub use mistralrs_core::{NormalLoaderType, VisionLoaderType};
+pub use mistralrs_core::{MultimodalLoaderType, NormalLoaderType};
 
 // ========== Token Source ==========
 pub use mistralrs_core::TokenSource;

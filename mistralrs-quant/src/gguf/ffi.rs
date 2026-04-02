@@ -110,4 +110,79 @@ extern "C" {
         input_dim1: i32,
         stream: *mut c_void,
     );
+
+    /// Launch indexed MoE forward kernel for Q4_0 weights with Q8_1 input
+    pub fn launch_indexed_moe_forward_q4_0_q8_1(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        indices: *const u32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        batch: i32,
+        topk: i32,
+        k_padded: i32,
+        input_dim1: i32,
+        stream: *mut c_void,
+    );
+
+    /// Launch indexed MoE forward kernel for Q4_1 weights with Q8_1 input
+    pub fn launch_indexed_moe_forward_q4_1_q8_1(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        indices: *const u32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        batch: i32,
+        topk: i32,
+        k_padded: i32,
+        input_dim1: i32,
+        stream: *mut c_void,
+    );
+
+    /// Launch indexed MoE forward kernel for Q5_0 weights with Q8_1 input
+    pub fn launch_indexed_moe_forward_q5_0_q8_1(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        indices: *const u32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        batch: i32,
+        topk: i32,
+        k_padded: i32,
+        input_dim1: i32,
+        stream: *mut c_void,
+    );
+
+    /// Launch indexed MoE forward kernel for Q5_1 weights with Q8_1 input
+    pub fn launch_indexed_moe_forward_q5_1_q8_1(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        indices: *const u32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        batch: i32,
+        topk: i32,
+        k_padded: i32,
+        input_dim1: i32,
+        stream: *mut c_void,
+    );
+
+    /// Launch indexed MoE forward kernel for Q8_1 weights with Q8_1 input
+    pub fn launch_indexed_moe_forward_q8_1_q8_1(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        indices: *const u32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        batch: i32,
+        topk: i32,
+        k_padded: i32,
+        input_dim1: i32,
+        stream: *mut c_void,
+    );
 }

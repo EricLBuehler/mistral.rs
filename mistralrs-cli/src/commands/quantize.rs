@@ -17,7 +17,7 @@ fn get_isq_values(model_type: &QuantizeModelType) -> &[String] {
     match model_type {
         QuantizeModelType::Auto { quantization, .. } => &quantization.in_situ_quant,
         QuantizeModelType::Text { quantization, .. } => &quantization.in_situ_quant,
-        QuantizeModelType::Vision { quantization, .. } => &quantization.in_situ_quant,
+        QuantizeModelType::Multimodal { quantization, .. } => &quantization.in_situ_quant,
         QuantizeModelType::Embedding { quantization, .. } => &quantization.in_situ_quant,
     }
 }
@@ -27,7 +27,7 @@ fn get_output_path(model_type: &QuantizeModelType) -> &PathBuf {
     match model_type {
         QuantizeModelType::Auto { output, .. } => &output.output_path,
         QuantizeModelType::Text { output, .. } => &output.output_path,
-        QuantizeModelType::Vision { output, .. } => &output.output_path,
+        QuantizeModelType::Multimodal { output, .. } => &output.output_path,
         QuantizeModelType::Embedding { output, .. } => &output.output_path,
     }
 }
@@ -37,7 +37,7 @@ fn get_model_id(model_type: &QuantizeModelType) -> &str {
     match model_type {
         QuantizeModelType::Auto { model, .. } => &model.model_id,
         QuantizeModelType::Text { model, .. } => &model.model_id,
-        QuantizeModelType::Vision { model, .. } => &model.model_id,
+        QuantizeModelType::Multimodal { model, .. } => &model.model_id,
         QuantizeModelType::Embedding { model, .. } => &model.model_id,
     }
 }
@@ -47,7 +47,7 @@ fn get_no_readme(model_type: &QuantizeModelType) -> bool {
     match model_type {
         QuantizeModelType::Auto { output, .. } => output.no_readme,
         QuantizeModelType::Text { output, .. } => output.no_readme,
-        QuantizeModelType::Vision { output, .. } => output.no_readme,
+        QuantizeModelType::Multimodal { output, .. } => output.no_readme,
         QuantizeModelType::Embedding { output, .. } => output.no_readme,
     }
 }
@@ -57,7 +57,7 @@ fn get_readme_overrides(model_type: &QuantizeModelType) -> (Option<String>, Opti
     match model_type {
         QuantizeModelType::Auto { output, .. }
         | QuantizeModelType::Text { output, .. }
-        | QuantizeModelType::Vision { output, .. }
+        | QuantizeModelType::Multimodal { output, .. }
         | QuantizeModelType::Embedding { output, .. } => {
             (output.uqff_base_model.clone(), output.uqff_repo_id.clone())
         }
@@ -72,7 +72,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
     let base_output = get_output_path(&model_type).clone();
     let file_mode = base_output.extension().is_some_and(|ext| ext == "uqff");
     let model_id = get_model_id(&model_type).to_string();
-    let is_vision = matches!(&model_type, QuantizeModelType::Vision { .. });
+    let is_multimodal = matches!(&model_type, QuantizeModelType::Multimodal { .. });
     let no_readme = get_no_readme(&model_type);
     let (flag_base_model, flag_repo_id) = get_readme_overrides(&model_type);
 
@@ -131,6 +131,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
             .with_token_source(global.token_source.clone())
             .with_interactive_mode(defaults::INTERACTIVE_MODE)
             .with_prefix_cache_n(0)
+            .set_paged_attn(Some(false))
             .with_cpu(cpu)
             .with_num_device_layers_optional(device_layers)
             .with_in_situ_quant(isq.to_string())
@@ -154,7 +155,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
         let (base_model, repo_id) = if no_readme {
             (model_id.clone(), flag_repo_id)
         } else if flag_base_model.is_some() || flag_repo_id.is_some() {
-            // CLI flags provided — skip interactive prompts
+            // CLI flags provided, skip interactive prompts
             (
                 flag_base_model.unwrap_or_else(|| model_id.clone()),
                 flag_repo_id,
@@ -165,7 +166,7 @@ pub async fn run_quantize(model_type: QuantizeModelType, global: GlobalOptions) 
 
         if !no_readme {
             if let Err(e) =
-                generate_model_card(&base_output, &base_model, repo_id.as_deref(), is_vision)
+                generate_model_card(&base_output, &base_model, repo_id.as_deref(), is_multimodal)
             {
                 warn!("Failed to generate README.md: {}", e);
             }
@@ -211,7 +212,7 @@ fn generate_model_card(
     output_dir: &Path,
     base_model: &str,
     repo_id: Option<&str>,
-    is_vision: bool,
+    is_multimodal: bool,
 ) -> Result<()> {
     // Scan the output directory for .uqff files and group by prefix
     let mut groups: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
@@ -246,6 +247,13 @@ fn generate_model_card(
 
     let repo_display = repo_id.unwrap_or("<REPO_ID>");
 
+    let has_afq = groups.keys().any(|k| k.to_lowercase().starts_with("afq"));
+    let afq_note = if has_afq {
+        "**Note:** AFQ variants are optimized for Apple Silicon / Metal."
+    } else {
+        ""
+    };
+
     let mut output = format!(
         r#"---
 tags:
@@ -257,21 +265,41 @@ base_model_relation: quantized
 
 # `{base_model}`, UQFF quantization
 
-Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation: [UQFF docs](https://github.com/EricLBuehler/mistral.rs/blob/master/docs/UQFF.md).
+Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation: [UQFF docs](https://ericlbuehler.github.io/mistral.rs/UQFF.html).
 
 1) **Flexible** 🌀: Multiple quantization formats in *one* file format with *one* framework to run them all.
 2) **Reliable** 🔒: Compatibility ensured with *embedded* and *checked* semantic versioning information from day 1.
 3) **Easy** 🤗: Download UQFF models *easily* and *quickly* from Hugging Face, or use a local file.
 4) **Customizable** 🛠️: Make and publish your own UQFF files in minutes.
 
+## Install
+
+Install [mistral.rs](https://github.com/EricLBuehler/mistral.rs) ([full guide](https://ericlbuehler.github.io/mistral.rs/INSTALLATION.html)):
+
+**Linux/macOS:**
+```
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+```
+
+**Windows (PowerShell):**
+```
+irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
+```
+
 ## Examples
+
+{afq_note}
 
 |Quantization|Command|
 |--|--|
 "#
     );
 
-    let model_type_flag = if is_vision { " vision-plain" } else { "" };
+    let model_type_flag = if is_multimodal {
+        " multimodal-plain"
+    } else {
+        ""
+    };
 
     for (prefix, paths) in &groups {
         // Sort shards by numeric suffix
@@ -339,7 +367,7 @@ fn convert_to_model_selected(
             model,
             quantization,
             device,
-            vision,
+            multimodal,
             ..
         } => {
             let model_selected = ModelSelected::Run {
@@ -358,11 +386,11 @@ fn convert_to_model_selected(
                 from_uqff: None,
                 imatrix: quantization.imatrix.clone(),
                 calibration_file: quantization.calibration_file.clone(),
-                max_edge: vision.max_edge,
+                max_edge: multimodal.max_edge,
                 max_seq_len: device.max_seq_len,
                 max_batch_size: device.max_batch_size,
-                max_num_images: vision.max_num_images,
-                max_image_length: vision.max_image_length,
+                max_num_images: multimodal.max_num_images,
+                max_image_length: multimodal.max_image_length,
                 hf_cache_path: device.hf_cache.clone(),
                 matformer_config_path: None,
                 matformer_slice_name: None,
@@ -403,14 +431,14 @@ fn convert_to_model_selected(
             Ok((model_selected, device.cpu, device.device_layers.clone()))
         }
 
-        QuantizeModelType::Vision {
+        QuantizeModelType::Multimodal {
             model,
             quantization,
             device,
-            vision,
+            multimodal,
             ..
         } => {
-            let model_selected = ModelSelected::VisionPlain {
+            let model_selected = ModelSelected::MultimodalPlain {
                 model_id: model.model_id.clone(),
                 tokenizer_json: model
                     .tokenizer
@@ -424,13 +452,13 @@ fn convert_to_model_selected(
                     .map(|p| p.to_string_lossy().to_string()),
                 write_uqff: Some(output_path),
                 from_uqff: None,
-                max_edge: vision.max_edge,
+                max_edge: multimodal.max_edge,
                 calibration_file: quantization.calibration_file.clone(),
                 imatrix: quantization.imatrix.clone(),
                 max_seq_len: device.max_seq_len,
                 max_batch_size: device.max_batch_size,
-                max_num_images: vision.max_num_images.unwrap_or(1),
-                max_image_length: vision.max_image_length.unwrap_or(1024),
+                max_num_images: multimodal.max_num_images.unwrap_or(1),
+                max_image_length: multimodal.max_image_length.unwrap_or(1024),
                 hf_cache_path: device.hf_cache.clone(),
                 matformer_config_path: None,
                 matformer_slice_name: None,

@@ -1,7 +1,7 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Linear, Module};
 use mistralrs_quant::{Convolution, QuantMethod, ShardedVarBuilder};
-use std::{collections::HashMap, ops::Mul, sync::Arc};
+use std::{ops::Mul, sync::Arc};
 
 use crate::{
     attention::SdpaParams,
@@ -285,13 +285,7 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let flash_params = FlashParams {
-            max_q: 0,
-            max_k: 0,
-            cumulative_seqlens_q: HashMap::new(),
-            cumulative_seqlens_k: HashMap::new(),
-            causal: false,
-        };
+        let flash_params = FlashParams::empty(false);
 
         let attn_output = Sdpa.run_attention(
             &q,

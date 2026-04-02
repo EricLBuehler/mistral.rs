@@ -1,16 +1,16 @@
 use super::isq::ImatrixDataSource;
 use super::isq::UqffFullSer;
 use super::{
-    get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoVisionLoader,
+    get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoMultimodalLoader,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
-    ModelKind, ModelPaths, MultimodalPromptPrefixer, Phi4MMLoader, PreProcessingMixin, Processor,
-    Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, TokenSource,
-    VLlama4Loader, VLlamaLoader, VisionModel, VisionModelLoader,
+    ModelKind, ModelPaths, MultimodalModel, MultimodalModelLoader, MultimodalPromptPrefixer,
+    Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader,
+    Qwen3_5Loader, Qwen3_5MoeLoader, TokenSource, VLlama4Loader, VLlamaLoader,
 };
 use super::{
-    Gemma3nLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader,
-    Phi3VLoader, Qwen2_5VLLoader, VisionLoaderType, VoxtralLoader,
+    Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader,
+    Mistral3Loader, MultimodalLoaderType, Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
@@ -39,8 +39,8 @@ use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
-    api_dir_list, api_get_file, get_paths, get_uqff_paths, vision_normal_model_loader,
-    vision_normal_model_loader_sharded, AnyMoeExpertType, DeviceMapSetting, Ordering,
+    api_dir_list, api_get_file, get_paths, get_uqff_paths, multimodal_normal_model_loader,
+    multimodal_normal_model_loader_sharded, AnyMoeExpertType, DeviceMapSetting, Ordering,
     PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::Result;
@@ -65,8 +65,8 @@ use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-pub struct VisionPipeline {
-    model: Box<dyn VisionModel + Send + Sync>,
+pub struct MultimodalPipeline {
+    model: Box<dyn MultimodalModel + Send + Sync>,
     tokenizer: Arc<Tokenizer>,
     chat_template: Arc<ChatTemplate>,
     model_id: String,
@@ -82,17 +82,18 @@ pub struct VisionPipeline {
     // For full UQFF serialization
     template_filename: Option<PathBuf>,
     generation_config: Option<PathBuf>,
+    generation_defaults: Option<crate::ModelGenerationDefaults>,
     config: String,
     processor_filename: Option<PathBuf>,
     preprocessor_filename: Option<PathBuf>,
     imatrix: Option<PathBuf>,
 }
 
-/// A loader for a vision (non-quantized) model.
-pub struct VisionLoader {
-    inner: Box<dyn VisionModelLoader>,
+/// A loader for a multimodal (non-quantized) model.
+pub struct MultimodalLoader {
+    inner: Box<dyn MultimodalModelLoader>,
     model_id: String,
-    config: VisionSpecificConfig,
+    config: MultimodalSpecificConfig,
     kind: ModelKind,
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
@@ -107,10 +108,10 @@ pub struct VisionLoader {
 }
 
 #[derive(Default)]
-/// A builder for a loader for a vision (non-quantized) model.
-pub struct VisionLoaderBuilder {
+/// A builder for a loader for a multimodal (non-quantized) model.
+pub struct MultimodalLoaderBuilder {
     model_id: Option<String>,
-    config: VisionSpecificConfig,
+    config: MultimodalSpecificConfig,
     kind: ModelKind,
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
@@ -120,8 +121,8 @@ pub struct VisionLoaderBuilder {
 }
 
 #[derive(Clone, Default)]
-/// Config specific to loading a vision model.
-pub struct VisionSpecificConfig {
+/// Config specific to loading a multimodal model.
+pub struct MultimodalSpecificConfig {
     pub topology: Option<Topology>,
     pub write_uqff: Option<PathBuf>,
     pub from_uqff: Option<Vec<PathBuf>>,
@@ -134,9 +135,9 @@ pub struct VisionSpecificConfig {
     pub organization: IsqOrganization,
 }
 
-impl VisionLoaderBuilder {
+impl MultimodalLoaderBuilder {
     pub fn new(
-        config: VisionSpecificConfig,
+        config: MultimodalSpecificConfig,
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
         model_id: Option<String>,
@@ -167,30 +168,31 @@ impl VisionLoaderBuilder {
         self
     }
 
-    pub fn build(self, loader: Option<VisionLoaderType>) -> Box<dyn Loader> {
-        let loader: Box<dyn VisionModelLoader> = match loader {
-            Some(VisionLoaderType::Phi3V) => Box::new(Phi3VLoader),
-            Some(VisionLoaderType::Idefics2) => Box::new(Idefics2Loader),
-            Some(VisionLoaderType::LLaVANext) => Box::new(LLaVANextLoader),
-            Some(VisionLoaderType::LLaVA) => Box::new(LLaVALoader),
-            Some(VisionLoaderType::VLlama) => Box::new(VLlamaLoader),
-            Some(VisionLoaderType::Qwen2VL) => Box::new(Qwen2VLLoader),
-            Some(VisionLoaderType::Idefics3) => Box::new(Idefics3Loader),
-            Some(VisionLoaderType::MiniCpmO) => Box::new(MiniCpmOLoader),
-            Some(VisionLoaderType::Phi4MM) => Box::new(Phi4MMLoader),
-            Some(VisionLoaderType::Qwen2_5VL) => Box::new(Qwen2_5VLLoader),
-            Some(VisionLoaderType::Gemma3) => Box::new(Gemma3Loader),
-            Some(VisionLoaderType::Mistral3) => Box::new(Mistral3Loader),
-            Some(VisionLoaderType::Llama4) => Box::new(VLlama4Loader),
-            Some(VisionLoaderType::Gemma3n) => Box::new(Gemma3nLoader),
-            Some(VisionLoaderType::Qwen3VL) => Box::new(Qwen3VLLoader),
-            Some(VisionLoaderType::Qwen3VLMoE) => Box::new(Qwen3VLMoELoader),
-            Some(VisionLoaderType::Qwen3_5) => Box::new(Qwen3_5Loader),
-            Some(VisionLoaderType::Qwen3_5Moe) => Box::new(Qwen3_5MoeLoader),
-            Some(VisionLoaderType::Voxtral) => Box::new(VoxtralLoader),
-            None => Box::new(AutoVisionLoader),
+    pub fn build(self, loader: Option<MultimodalLoaderType>) -> Box<dyn Loader> {
+        let loader: Box<dyn MultimodalModelLoader> = match loader {
+            Some(MultimodalLoaderType::Phi3V) => Box::new(Phi3VLoader),
+            Some(MultimodalLoaderType::Idefics2) => Box::new(Idefics2Loader),
+            Some(MultimodalLoaderType::LLaVANext) => Box::new(LLaVANextLoader),
+            Some(MultimodalLoaderType::LLaVA) => Box::new(LLaVALoader),
+            Some(MultimodalLoaderType::VLlama) => Box::new(VLlamaLoader),
+            Some(MultimodalLoaderType::Qwen2VL) => Box::new(Qwen2VLLoader),
+            Some(MultimodalLoaderType::Idefics3) => Box::new(Idefics3Loader),
+            Some(MultimodalLoaderType::MiniCpmO) => Box::new(MiniCpmOLoader),
+            Some(MultimodalLoaderType::Phi4MM) => Box::new(Phi4MMLoader),
+            Some(MultimodalLoaderType::Qwen2_5VL) => Box::new(Qwen2_5VLLoader),
+            Some(MultimodalLoaderType::Gemma3) => Box::new(Gemma3Loader),
+            Some(MultimodalLoaderType::Mistral3) => Box::new(Mistral3Loader),
+            Some(MultimodalLoaderType::Llama4) => Box::new(VLlama4Loader),
+            Some(MultimodalLoaderType::Gemma3n) => Box::new(Gemma3nLoader),
+            Some(MultimodalLoaderType::Qwen3VL) => Box::new(Qwen3VLLoader),
+            Some(MultimodalLoaderType::Qwen3VLMoE) => Box::new(Qwen3VLMoELoader),
+            Some(MultimodalLoaderType::Qwen3_5) => Box::new(Qwen3_5Loader),
+            Some(MultimodalLoaderType::Qwen3_5Moe) => Box::new(Qwen3_5MoeLoader),
+            Some(MultimodalLoaderType::Voxtral) => Box::new(VoxtralLoader),
+            Some(MultimodalLoaderType::Gemma4) => Box::new(Gemma4Loader),
+            None => Box::new(AutoMultimodalLoader),
         };
-        Box::new(VisionLoader {
+        Box::new(MultimodalLoader {
             inner: loader,
             model_id: self.model_id.unwrap(),
             config: self.config,
@@ -209,7 +211,7 @@ impl VisionLoaderBuilder {
     }
 }
 
-impl Loader for VisionLoader {
+impl Loader for MultimodalLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_hf(
         &self,
@@ -240,14 +242,14 @@ impl Loader for VisionLoader {
             silent,
             self.config.from_uqff.is_some()
         );
-        if let Some(from_uqff) = self.config.from_uqff.clone() {
-            *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
-        }
         *self
             .token_source
             .write()
             .expect("Failed to write to token source") = Some(token_source);
-        *self.revision.write().expect("Failed to write to revision") = revision;
+        *self.revision.write().expect("Failed to write to revision") = revision.clone();
+        if let Some(from_uqff) = self.config.from_uqff.clone() {
+            *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
+        }
         self.load_model_from_path(
             &paths?,
             dtype,
@@ -332,8 +334,8 @@ impl Loader for VisionLoader {
                 nm_device: available_devices[0].clone(),
             };
         } else if let DeviceMapSetting::Auto(mut params) = mapper.clone() {
-            // We can promote to vision params if we get text params
-            params = params.maybe_promote_to_vision();
+            // We can promote to multimodal params if we get text params
+            params = params.maybe_promote_to_multimodal();
             max_kv_tokens = Some(params.max_seq_len() * params.max_batch_size());
 
             // Initial dtype
@@ -602,7 +604,7 @@ impl Loader for VisionLoader {
 
             // Special case for where things can be more optimially loaded.
             match self.kind {
-                ModelKind::Normal => vision_normal_model_loader_sharded!(
+                ModelKind::Normal => multimodal_normal_model_loader_sharded!(
                     sharded_vb,
                     config,
                     self.inner,
@@ -617,7 +619,7 @@ impl Loader for VisionLoader {
             }
         } else {
             match self.kind {
-                ModelKind::Normal => vision_normal_model_loader!(
+                ModelKind::Normal => multimodal_normal_model_loader!(
                     paths,
                     Some(dtype),
                     &load_device,
@@ -638,18 +640,34 @@ impl Loader for VisionLoader {
             }
         };
 
-        // Handle the Gemma 3 1b case here
+        let processor_config_json = paths
+            .get_processor_config()
+            .as_ref()
+            .map(|f| fs::read_to_string(f).unwrap());
+
+        // Handle models that only ship processor_config.json with nested
+        // image/audio preprocessor settings and no preprocessor_config.json.
         let preprocessor_config: PreProcessorConfig = match paths.get_preprocessor_config().as_ref()
         {
             Some(preprocessor_config) => {
                 serde_json::from_str(&fs::read_to_string(preprocessor_config).unwrap()).unwrap()
             }
-            None => PreProcessorConfig::default(),
+            None => processor_config_json.as_deref().map_or_else(
+                PreProcessorConfig::default,
+                |json| match PreProcessorConfig::from_processor_config_json(json) {
+                    Ok(config) => config,
+                    Err(err) => {
+                        warn!(
+                            "Failed to synthesize preprocessor config from processor_config.json: {err}"
+                        );
+                        PreProcessorConfig::default()
+                    }
+                },
+            ),
         };
-        let processor_config: Option<ProcessorConfig> = paths
-            .get_processor_config()
-            .as_ref()
-            .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
+        let processor_config: Option<ProcessorConfig> = processor_config_json
+            .as_deref()
+            .map(|json| serde_json::from_str(json).unwrap());
 
         let processor = self.inner.get_processor(
             &config,
@@ -743,6 +761,7 @@ impl Loader for VisionLoader {
                     None,
                     None,
                     None,
+                    model.config().sliding_window,
                 )?;
                 let _ = model.forward(
                     &inputs.input,
@@ -836,6 +855,7 @@ impl Loader for VisionLoader {
             )?;
         }
 
+        let model_metadata = model.model_config();
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             anyhow::ensure!(
                 !matches!(self.kind, ModelKind::Adapter { .. }),
@@ -846,15 +866,20 @@ impl Loader for VisionLoader {
                 paged_attn_config.block_size,
                 dtype,
                 paged_attn_config.cache_type,
-                model.config(),
+                model_metadata.as_ref(),
                 &device,
                 &layer_devices,
                 silent,
                 None,
                 max_kv_tokens,
             )?;
-            let cache_engine =
-                CacheEngine::new(model.config(), &cache_config, dtype, &device, layer_devices)?;
+            let cache_engine = CacheEngine::new(
+                model_metadata.as_ref(),
+                &cache_config,
+                dtype,
+                &device,
+                layer_devices,
+            )?;
             (Some(cache_config), Some(cache_engine))
         } else {
             (None, None)
@@ -867,10 +892,12 @@ impl Loader for VisionLoader {
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
             EitherCache::Hybrid(hybrid) => hybrid.lock().unwrap().num_layers(),
         };
-        let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
+        let generation_defaults = gen_conf
+            .as_ref()
+            .and_then(GenerationConfig::generation_defaults);
+        let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
         let sliding_window = model.config().sliding_window;
-        let model_metadata = Arc::new(model.config().clone());
-        Ok(Arc::new(Mutex::new(VisionPipeline {
+        Ok(Arc::new(Mutex::new(MultimodalPipeline {
             model,
             tokenizer: tokenizer.into(),
             chat_template: Arc::new(chat_template),
@@ -899,6 +926,7 @@ impl Loader for VisionLoader {
             organization: self.config.organization,
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
+            generation_defaults,
             config,
             processor_filename: paths.get_processor_config().clone(),
             preprocessor_filename: paths.get_preprocessor_config().clone(),
@@ -916,7 +944,7 @@ impl Loader for VisionLoader {
     }
 }
 
-impl PreProcessingMixin for VisionPipeline {
+impl PreProcessingMixin for MultimodalPipeline {
     fn get_chat_template(&self) -> Option<Arc<ChatTemplate>> {
         Some(self.chat_template.clone())
     }
@@ -928,7 +956,7 @@ impl PreProcessingMixin for VisionPipeline {
     }
 }
 
-impl IsqPipelineMixin for VisionPipeline {
+impl IsqPipelineMixin for MultimodalPipeline {
     fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
         self.model
@@ -957,7 +985,7 @@ impl IsqPipelineMixin for VisionPipeline {
     }
 }
 
-impl CacheManagerMixin for VisionPipeline {
+impl CacheManagerMixin for MultimodalPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) {
         match self.model.cache() {
             EitherCache::Full(_) => FullCacheManager.clone_in_cache(self, seqs, false),
@@ -1011,7 +1039,7 @@ impl CacheManagerMixin for VisionPipeline {
     }
 }
 
-impl MetadataMixin for VisionPipeline {
+impl MetadataMixin for MultimodalPipeline {
     fn device(&self) -> Device {
         self.model.device().clone()
     }
@@ -1027,13 +1055,16 @@ impl MetadataMixin for VisionPipeline {
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
         Some(self.tokenizer.clone())
     }
+    fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
+        self.generation_defaults.clone()
+    }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
         Some(&*self.mapper)
     }
 }
 
 #[async_trait::async_trait]
-impl Pipeline for VisionPipeline {
+impl Pipeline for MultimodalPipeline {
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
@@ -1089,7 +1120,7 @@ impl Pipeline for VisionPipeline {
         sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }
     fn category(&self) -> ModelCategory {
-        ModelCategory::Vision {
+        ModelCategory::Multimodal {
             prefixer: self.prefixer.clone(),
         }
     }
@@ -1104,7 +1135,7 @@ impl Pipeline for VisionPipeline {
     }
 }
 
-impl AnyMoePipelineMixin for VisionPipeline {
+impl AnyMoePipelineMixin for MultimodalPipeline {
     fn amoe_finish_training(&mut self, gate_model_id: Option<String>) -> candle_core::Result<()> {
         self.model.finish_training(gate_model_id)
     }

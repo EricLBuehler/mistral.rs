@@ -73,7 +73,7 @@ pub struct EmbeddingPipeline {
     processor: Arc<dyn Processor + Send + Sync>,
 }
 
-/// A loader for a vision (non-quantized) model.
+/// A loader for an embedding (non-quantized) model.
 pub struct EmbeddingLoader {
     inner: Box<dyn EmbeddingModelLoader>,
     model_id: String,
@@ -88,7 +88,7 @@ pub struct EmbeddingLoader {
 }
 
 #[derive(Default)]
-/// A builder for a loader for a vision (non-quantized) model.
+/// A builder for a loader for an embedding (non-quantized) model.
 pub struct EmbeddingLoaderBuilder {
     model_id: Option<String>,
     config: EmbeddingSpecificConfig,
@@ -99,7 +99,7 @@ pub struct EmbeddingLoaderBuilder {
 }
 
 #[derive(Clone, Default)]
-/// Config specific to loading a vision model.
+/// Config specific to loading an embedding model.
 pub struct EmbeddingSpecificConfig {
     pub topology: Option<Topology>,
     pub write_uqff: Option<PathBuf>,
@@ -188,14 +188,14 @@ impl Loader for EmbeddingLoader {
             silent,
             self.config.from_uqff.is_some()
         );
-        if let Some(from_uqff) = self.config.from_uqff.clone() {
-            *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
-        }
         *self
             .token_source
             .write()
             .expect("Failed to write to token source") = Some(token_source);
-        *self.revision.write().expect("Failed to write to revision") = revision;
+        *self.revision.write().expect("Failed to write to revision") = revision.clone();
+        if let Some(from_uqff) = self.config.from_uqff.clone() {
+            *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
+        }
         self.load_model_from_path(
             &paths?,
             dtype,

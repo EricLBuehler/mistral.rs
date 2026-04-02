@@ -2,7 +2,7 @@
 
 The Qwen 3 VL models are the successors to the Qwen 2.5 VL models, featuring a diverse lineup of increased performance, flexible sizes, and reasoning-capable models.
 
-Mistral.rs supports the Qwen 3 VL vision model family (including MoE variants), with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements. MoE variants also support [MoQE](ISQ.md) via the `--organization moqe` flag.
+Mistral.rs supports the Qwen 3 VL multimodal model family (including MoE variants), with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements. MoE variants also support [MoQE](ISQ.md) via the `--organization moqe` flag.
 
 UQFF quantizations are also available.
 
@@ -25,25 +25,25 @@ The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/
 
 ## Interactive mode
 
-Mistral.rs supports interactive mode for vision models! It is an easy way to interact with the model.
+Mistral.rs supports interactive mode for multimodal models! It is an easy way to interact with the model.
 
 Start up interactive mode with the Qwen3 VL model:
 
 ```
-mistralrs run vision -m Qwen/Qwen3-VL-4B-Instruct
+mistralrs run multimodal -m Qwen/Qwen3-VL-4B-Instruct
 ```
 
 ## HTTP server
 You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_vl.py).
 
-We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
+We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.
 
 > Note: The image_url may be either a path, URL, or a base64 encoded string.
 
 1) Start the server
 
 ```
-mistralrs serve vision -p 1234 -m Qwen/Qwen3-VL-4B-Instruct
+mistralrs serve multimodal -p 1234 -m Qwen/Qwen3-VL-4B-Instruct
 ```
 
 2) Send a request
@@ -88,15 +88,15 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs).
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs).
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("Qwen/Qwen3-VL-4B-Instruct")
+    let model = MultimodalModelBuilder::new("Qwen/Qwen3-VL-4B-Instruct")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()
@@ -110,7 +110,7 @@ async fn main() -> Result<()> {
     };
     let image = image::load_from_memory(&bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is this?",
         vec![image],
@@ -138,14 +138,14 @@ This example demonstrates loading and sending a chat completion request with an 
 > Note: the image_url may be either a path, URL, or a base64 encoded string.
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 MODEL_ID = "Qwen/Qwen3-VL-4B-Thinking"
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id=MODEL_ID,
-        arch=VisionArchitecture.Qwen3VL,
+        arch=MultimodalArchitecture.Qwen3VL,
     ),
 )
 

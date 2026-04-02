@@ -6,13 +6,13 @@ use std::io::Write;
 
 use anyhow::Result;
 use mistralrs::{
-    AudioInput, ChatCompletionChunkResponse, ChunkChoice, Delta, Response, TextMessageRole,
-    VisionMessages, VisionModelBuilder,
+    AudioInput, ChatCompletionChunkResponse, ChunkChoice, Delta, MultimodalMessages,
+    MultimodalModelBuilder, Response, TextMessageRole,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
+    let model = MultimodalModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
         .with_logging()
         .build()
         .await?;
@@ -33,11 +33,12 @@ async fn main() -> Result<()> {
             .to_vec();
     let image = image::load_from_memory(&image_bytes)?;
 
-    let messages = VisionMessages::new().add_multimodal_message(
+    let messages = MultimodalMessages::new().add_multimodal_message(
         TextMessageRole::User,
         "Describe in detail what is happening.",
         vec![image],
         vec![audio],
+        vec![],
     );
 
     let mut stream = model.stream_chat_request(messages).await?;

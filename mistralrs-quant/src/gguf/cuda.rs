@@ -113,13 +113,13 @@ fn indexed_moe_forward_fused_q8_1_input(
     let num_blocks_per_row = k_padded / q8_1_block_size;
     let dst_row_size_bytes = num_blocks_per_row * q8_1_type_size;
     let y_size_in_bytes = total_rows * dst_row_size_bytes;
-    let mut input_quant = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
+    let mut input_quant = dev.alloc_zeros::<u8>(y_size_in_bytes)?;
 
     quantize_q8_1(input, &mut input_quant, k, total_rows, dev)?;
 
-    // Output buffer
+    // Output buffer - zero-initialize to prevent NaN from uninitialized memory
     let outsize = batch * topk * n;
-    let out = unsafe { dev.alloc::<f32>(outsize)? };
+    let out = dev.alloc_zeros::<f32>(outsize)?;
 
     // Get stream pointer
     let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
@@ -139,6 +139,81 @@ fn indexed_moe_forward_fused_q8_1_input(
         let weights_ptr = weight_ptr as *const std::ffi::c_void;
 
         match w_dtype {
+            GgmlDType::Q4_0 => {
+                ffi::launch_indexed_moe_forward_q4_0_q8_1(
+                    weights_ptr,
+                    inputs_ptr as *const std::ffi::c_void,
+                    indices_ptr as *const u32,
+                    outputs_ptr as *mut f32,
+                    n_i32,
+                    k_i32,
+                    batch_i32,
+                    topk_i32,
+                    k_padded_i32,
+                    input_dim1_i32,
+                    stream,
+                );
+            }
+            GgmlDType::Q4_1 => {
+                ffi::launch_indexed_moe_forward_q4_1_q8_1(
+                    weights_ptr,
+                    inputs_ptr as *const std::ffi::c_void,
+                    indices_ptr as *const u32,
+                    outputs_ptr as *mut f32,
+                    n_i32,
+                    k_i32,
+                    batch_i32,
+                    topk_i32,
+                    k_padded_i32,
+                    input_dim1_i32,
+                    stream,
+                );
+            }
+            GgmlDType::Q5_0 => {
+                ffi::launch_indexed_moe_forward_q5_0_q8_1(
+                    weights_ptr,
+                    inputs_ptr as *const std::ffi::c_void,
+                    indices_ptr as *const u32,
+                    outputs_ptr as *mut f32,
+                    n_i32,
+                    k_i32,
+                    batch_i32,
+                    topk_i32,
+                    k_padded_i32,
+                    input_dim1_i32,
+                    stream,
+                );
+            }
+            GgmlDType::Q5_1 => {
+                ffi::launch_indexed_moe_forward_q5_1_q8_1(
+                    weights_ptr,
+                    inputs_ptr as *const std::ffi::c_void,
+                    indices_ptr as *const u32,
+                    outputs_ptr as *mut f32,
+                    n_i32,
+                    k_i32,
+                    batch_i32,
+                    topk_i32,
+                    k_padded_i32,
+                    input_dim1_i32,
+                    stream,
+                );
+            }
+            GgmlDType::Q8_1 => {
+                ffi::launch_indexed_moe_forward_q8_1_q8_1(
+                    weights_ptr,
+                    inputs_ptr as *const std::ffi::c_void,
+                    indices_ptr as *const u32,
+                    outputs_ptr as *mut f32,
+                    n_i32,
+                    k_i32,
+                    batch_i32,
+                    topk_i32,
+                    k_padded_i32,
+                    input_dim1_i32,
+                    stream,
+                );
+            }
             GgmlDType::Q2K => {
                 ffi::launch_indexed_moe_forward_q2k_q8_1(
                     weights_ptr,
@@ -264,7 +339,12 @@ pub fn qtensor_indexed_moe_forward(qtensor: &QTensor, x: &Tensor, ids: &Tensor) 
     // Check supported dtypes
     if !matches!(
         dtype,
-        GgmlDType::Q8_0
+        GgmlDType::Q4_0
+            | GgmlDType::Q4_1
+            | GgmlDType::Q5_0
+            | GgmlDType::Q5_1
+            | GgmlDType::Q8_0
+            | GgmlDType::Q8_1
             | GgmlDType::Q2K
             | GgmlDType::Q3K
             | GgmlDType::Q4K

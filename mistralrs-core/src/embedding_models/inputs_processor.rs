@@ -1,15 +1,15 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
+use std::{any::Any, fmt::Debug, sync::Arc};
 
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor, WithDType};
+use candle_core::{Device, Tensor, WithDType};
 use tokenizers::Tokenizer;
 
 use crate::{
     device_map::DeviceMapper,
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionMeta},
+        text_models_inputs_processor::{make_flash_params, FlashParams, PagedAttentionMeta},
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
     sequence::Sequence,
@@ -50,6 +50,7 @@ pub fn make_prompt_chunk<T: WithDType + Debug>(
     device: &Device,
     mapper: Option<&dyn DeviceMapper>,
     has_causal_attention: bool,
+    sliding_window: Option<usize>,
 ) -> Result<InputMetadata> {
     let max_len = toks
         .iter()
@@ -77,49 +78,22 @@ pub fn make_prompt_chunk<T: WithDType + Debug>(
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
 
-    let (max_q, max_k, seqlens_q_map, seqlens_k_map) = if flash_attn {
-        let max_q = *seqlens_q.iter().max().unwrap();
-        let max_k = *seqlens_k.iter().max().unwrap();
-        let seqlens_q = Tensor::new(seqlens_q, device)?
-            .to_dtype(DType::F32)?
-            .cumsum(0)?
-            .to_dtype(DType::U32)?;
-        let seqlens_k = Tensor::new(seqlens_k, device)?
-            .to_dtype(DType::F32)?
-            .cumsum(0)?
-            .to_dtype(DType::U32)?;
-
-        let mut seqlens_q_map = HashMap::new();
-        let mut seqlens_k_map = HashMap::new();
-
-        if let Some(mapper) = &mapper {
-            let devices = mapper.get_unique_devices();
-            for device in devices {
-                seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
-                seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
-            }
-        } else {
-            seqlens_q_map.insert(device.location(), seqlens_q.to_device(device)?);
-            seqlens_k_map.insert(device.location(), seqlens_k.to_device(device)?);
-        }
-
-        (max_q, max_k, seqlens_q_map, seqlens_k_map)
+    let flash_meta = if flash_attn {
+        make_flash_params(
+            device,
+            mapper,
+            &seqlens_q,
+            &seqlens_k,
+            sliding_window,
+            has_causal_attention,
+        )?
     } else {
-        (0, 0, HashMap::new(), HashMap::new())
+        FlashParams::empty(has_causal_attention)
     };
 
     let input = Tensor::cat(&seqs_tensors, 0).unwrap();
 
-    Ok(InputMetadata {
-        input,
-        flash_meta: FlashParams {
-            max_k,
-            max_q,
-            cumulative_seqlens_k: seqlens_k_map,
-            cumulative_seqlens_q: seqlens_q_map,
-            causal: has_causal_attention,
-        },
-    })
+    Ok(InputMetadata { input, flash_meta })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -129,13 +103,20 @@ pub(crate) fn get_prompt_input<T: WithDType + std::fmt::Debug>(
     device: &Device,
     mapper: Option<&dyn DeviceMapper>,
     has_causal_attention: bool,
+    sliding_window: Option<usize>,
 ) -> Result<InnerInputProcessorOutput> {
     let offset = input_seqs[0].token_offset();
-    make_prompt_chunk(offset, toks, device, mapper, has_causal_attention).map(|inputs| {
-        InnerInputProcessorOutput {
-            inputs,
-            seq_indices: (0..input_seqs.len()).collect(),
-        }
+    make_prompt_chunk(
+        offset,
+        toks,
+        device,
+        mapper,
+        has_causal_attention,
+        sliding_window,
+    )
+    .map(|inputs| InnerInputProcessorOutput {
+        inputs,
+        seq_indices: (0..input_seqs.len()).collect(),
     })
 }
 
@@ -160,6 +141,7 @@ impl InputsProcessor for EmbeddingInputsProcessor {
         _no_kv_cache: bool,
         _last_n_context_len: Option<(usize, usize)>,
         _return_raw_logits: bool,
+        _sliding_window: Option<usize>,
         _: Option<Arc<dyn Any>>,
         _paged_attn_metadata: Option<PagedAttentionMeta>,
         mapper: Option<&dyn DeviceMapper>,
@@ -175,6 +157,7 @@ impl InputsProcessor for EmbeddingInputsProcessor {
             device,
             mapper,
             self.has_causal_attention,
+            None,
         )?;
         let InnerInputProcessorOutput {
             inputs:

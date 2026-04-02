@@ -23,15 +23,21 @@ Fast, flexible LLM inference.
   </a>
 </p>
 
+## Latest
+
+- **Gemma 4**: Full multimodal: text, image, video, and audio input. [Guide](docs/GEMMA4.md) | [Video setup](docs/VIDEO.md)
+- **MXFP4 ISQ quantization**: MXFP4 with optimized decode kernels for faster, smaller models. [Quantization docs](docs/QUANTS.md)
+- **Qwen 3.5 model family**: Support for the Qwen 3.5 series including vision. [Guide](docs/QWEN3_5.md)
+
 ## Why mistral.rs?
 
-- **Any HuggingFace model, zero config**: Just `mistralrs run -m user/model`. Auto-detects architecture, quantization, chat template.
-- **True multimodality**: Vision, audio, speech generation, image generation, embeddings.
-- **Not another model registry**: Use HuggingFace models directly. No converting, no uploading to a separate service.
+- **Any Hugging Face model, zero config**: Just `mistralrs run -m user/model`.
+- **True multimodality**: Text, vision, video, and audio, speech generation, image generation, and embeddings in one engine.
 - **Full quantization control**: Choose the precise quantization you want to use, or make your own UQFF with `mistralrs quantize`.
 - **Built-in web UI**: `mistralrs serve --ui` gives you a web interface instantly.
 - **Hardware-aware**: `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
+- **Agentic features** — tool calling, web search, and MCP client built in
 
 ## Quick Start
 
@@ -55,8 +61,14 @@ irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1
 # Interactive chat
 mistralrs run -m Qwen/Qwen3-4B
 
+# One-shot prompt (no interactive session)
+mistralrs run -m Qwen/Qwen3-4B -i "What is the capital of France?"
+
+# One-shot with an image
+mistralrs run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
+
 # Or start a server with web UI
-mistralrs serve --ui -m google/gemma-3-4b-it
+mistralrs serve --ui -m google/gemma-4-E4B-it
 ```
 
 Then visit `http://localhost:1234/ui` for the web chat interface.
@@ -143,7 +155,7 @@ mistralrs doctor
 </details>
 
 <details>
-<summary><b>Vision Models</b></summary>
+<summary><b>Multimodal Models</b></summary>
 
 - Qwen 3.5
 - Qwen 3.5 MoE
@@ -221,11 +233,11 @@ cargo add mistralrs
 
 ```rust
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, TextMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, TextMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("google/gemma-3-4b-it")
+    let model = MultimodalModelBuilder::new("google/gemma-4-E4B-it")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()

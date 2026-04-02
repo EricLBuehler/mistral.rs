@@ -6,7 +6,7 @@ Mistral.rs supports distributed inference on CUDA with Tensor Parallelism via NC
 
 Tensor Parallelism (TP) is automatically used to accelerate distributed inference when more than one CUDA GPUs are detected. The tensor parallelism size is always automatically set to the total number of GPUs.
 
-TP splits the model into shards and benefits from fast single-node interconnects like NVLink. Both `normal` and `vision` models support tensor parallelism.
+TP splits the model into shards and benefits from fast single-node interconnects like NVLink. Both `normal` and `multimodal` models support tensor parallelism.
 
 **Important**: The world size (total number of GPUs) must be a power of 2 (e.g., 1, 2, 4, 8, 16, 32, etc.). This is a requirement for optimal performance and correct operation of the distributed algorithms.
 

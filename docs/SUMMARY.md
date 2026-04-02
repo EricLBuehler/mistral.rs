@@ -21,7 +21,7 @@
 # Models
 
 - [Supported Models](SUPPORTED_MODELS.md)
-- [Vision Models](VISION_MODELS.md)
+- [Multimodal Models](MULTIMODAL_MODELS.md)
 - [Image Generation](IMAGEGEN_MODELS.md)
 - [Speech Models](SPEECH_MODELS.md)
 - [Embeddings](EMBEDDINGS.md)
@@ -41,8 +41,9 @@
 - [Qwen 3 Next](QWEN3NEXT.md)
 - [SmolLM3](SMOLLM3.md)
 
-## Vision Model Guides
+## Multimodal Model Guides
 
+- [Gemma 4](GEMMA4.md)
 - [Idefics 2](IDEFICS2.md)
 - [Idefics 3](IDEFICS3.md)
 - [LLaVA](LLaVA.md)
@@ -56,6 +57,7 @@
 - [Qwen 2-VL](QWEN2VL.md)
 - [Qwen 3-VL](QWEN3VL.md)
 - [Qwen 3.5](QWEN3_5.md)
+- [Video Input](VIDEO.md)
 
 ## Other Model Guides
 

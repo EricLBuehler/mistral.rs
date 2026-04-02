@@ -12,8 +12,8 @@ use hyper::Uri;
 use include_dir::{include_dir, Dir};
 use indexmap::IndexMap;
 use mistralrs::{
-    best_device, parse_isq_value, IsqType, SearchEmbeddingModel, SpeechLoaderType,
-    SpeechModelBuilder, TextModelBuilder, VisionModelBuilder,
+    best_device, parse_isq_value, IsqType, MultimodalModelBuilder, SearchEmbeddingModel,
+    SpeechLoaderType, SpeechModelBuilder, TextModelBuilder,
 };
 use std::sync::Arc;
 use tokio::{fs, net::TcpListener};
@@ -55,8 +55,11 @@ async fn main() -> Result<()> {
     eprintln!("⚠️  mistralrs-web-chat is deprecated. Please use `mistralrs serve --ui` from mistralrs-cli instead.");
 
     let cli = Cli::parse();
-    if cli.text_models.is_empty() && cli.vision_models.is_empty() && cli.speech_models.is_empty() {
-        eprintln!("At least one --text-model, --vision-model, or --speech-model is required");
+    if cli.text_models.is_empty()
+        && cli.multimodal_models.is_empty()
+        && cli.speech_models.is_empty()
+    {
+        eprintln!("At least one --text-model, --multimodal-model, or --speech-model is required");
         std::process::exit(1);
     }
 
@@ -101,15 +104,15 @@ async fn main() -> Result<()> {
         models.insert(name, LoadedModel::Text(Arc::new(m)));
     }
 
-    // Then insert vision models (preserving order)
-    for path in cli.vision_models {
+    // Then insert multimodal models (preserving order)
+    for path in cli.multimodal_models {
         let name = std::path::Path::new(&path)
             .file_name()
             .and_then(|p| p.to_str())
-            .unwrap_or("vision-model")
+            .unwrap_or("multimodal-model")
             .to_string();
-        println!("🖼️  Loading vision model: {name}");
-        let mut builder = VisionModelBuilder::new(path)
+        println!("🖼️  Loading multimodal model: {name}");
+        let mut builder = MultimodalModelBuilder::new(path)
             .with_isq(isq.unwrap_or(default_isq))
             .with_logging()
             .with_throughput_logging();
@@ -117,7 +120,7 @@ async fn main() -> Result<()> {
             builder = builder.with_search(*search_embedding_model);
         }
         let m = builder.build().await?;
-        models.insert(name, LoadedModel::Vision(Arc::new(m)));
+        models.insert(name, LoadedModel::Multimodal(Arc::new(m)));
     }
 
     // Then insert speech models (text-to-speech)

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-mistral.rs is a blazing-fast LLM inference engine written in Rust. It supports text, vision, image generation, and speech models with Rust and Python SDKs, plus OpenAI HTTP and MCP APIs.
+mistral.rs is a blazing-fast LLM inference engine written in Rust. It supports text, multimodal, image generation, and speech models with Rust and Python SDKs, plus OpenAI HTTP and MCP APIs.
 
 ## Essential Commands
 
@@ -70,7 +70,7 @@ You should also look for a model.safetensors.index.json file for the model at ha
 - `mistralrs-server-core/` - HTTP server routing, OpenAI API implementation
 - `mistralrs-pyo3/` - Python SDK (PyO3 bindings)
 - `mistralrs/` - Rust SDK (high-level crate)
-- `mistralrs-vision/` - Vision model support
+- `mistralrs-vision/` - Image processing utilities
 - `mistralrs-quant/` - Quantization implementations (ISQ, GGUF, GPTQ, etc.)
 - `mistralrs-paged-attn/` - PagedAttention implementation
 - `mistralrs-audio/` - Audio processing
@@ -79,7 +79,7 @@ You should also look for a model.safetensors.index.json file for the model at ha
 
 ### Key Design Patterns
 
-1. **Pipeline Architecture**: All models implement the `Pipeline` trait in `mistralrs-core/src/pipeline/mod.rs`. Different model types (Plain, GGUF, GGML, Vision) have their own pipeline implementations.
+1. **Pipeline Architecture**: All models implement the `Pipeline` trait in `mistralrs-core/src/pipeline/mod.rs`. Different model types (Plain, GGUF, GGML, Multimodal) have their own pipeline implementations.
 
 2. **Model Loading**: Models are loaded through `Loader` traits that handle different formats and quantizations. See `mistralrs-core/src/loader.rs`.
 
