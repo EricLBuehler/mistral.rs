@@ -274,6 +274,30 @@ impl ClippableLinear {
         } else {
             uvb.add(&self.inner);
         }
+        if let Some(v) = self.input_min {
+            uvb.add_tensor(
+                "input_min",
+                Tensor::new(v as f32, &candle_core::Device::Cpu).unwrap(),
+            );
+        }
+        if let Some(v) = self.input_max {
+            uvb.add_tensor(
+                "input_max",
+                Tensor::new(v as f32, &candle_core::Device::Cpu).unwrap(),
+            );
+        }
+        if let Some(v) = self.output_min {
+            uvb.add_tensor(
+                "output_min",
+                Tensor::new(v as f32, &candle_core::Device::Cpu).unwrap(),
+            );
+        }
+        if let Some(v) = self.output_max {
+            uvb.add_tensor(
+                "output_max",
+                Tensor::new(v as f32, &candle_core::Device::Cpu).unwrap(),
+            );
+        }
         uvb.to_safetensors()
     }
 }
