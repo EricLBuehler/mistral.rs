@@ -63,7 +63,7 @@ fn sinks_attn_regular(
     sdpa_params: &SdpaParams,
     window_size: usize,
 ) -> Result<Tensor> {
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     if q.device().is_cuda() {
         return mistralrs_paged_attn::flash_attn_sinks(
             q,
