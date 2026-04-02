@@ -786,7 +786,10 @@ impl DecoderLayer {
             (None, None, None)
         };
 
-        let layer_scalar = vb.get((1,), "layer_scalar").ok();
+        let layer_scalar = mapper
+            .set_device(layer_idx, vb, false)
+            .get((1,), "layer_scalar")
+            .ok();
 
         Ok(Self {
             self_attn,
@@ -1202,7 +1205,7 @@ impl TextModel {
                 candle_nn::Linear::new(
                     mapper.cast_nm_device(
                         embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
+                        false, // Tied lm_head is excluded from ISQ, so always place on target device
                     )?,
                     None,
                 ),
