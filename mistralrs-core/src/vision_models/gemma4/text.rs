@@ -713,9 +713,14 @@ impl DecoderLayer {
                 hidden_size: cfg.hidden_size,
                 moe_intermediate_size: expert_inter,
             };
-            let moe = MoEExperts::new_direct(
+            let layer_device = mapper
+                .device_for(layer_idx, loading_isq)
+                .cloned()
+                .unwrap_or(candle_core::Device::Cpu);
+            let moe = MoEExperts::new(
                 &moe_cfg,
                 moe_vb.clone(),
+                layer_device,
                 comm,
                 loading_isq,
                 &cfg.quantization_config,

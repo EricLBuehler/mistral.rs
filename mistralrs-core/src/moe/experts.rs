@@ -628,6 +628,15 @@ impl MoEExperts {
         ys.reshape((b_size * seq_len, hidden_dim))
     }
 
+    /// Return the number of ISQ-quantizable layers (immutable count).
+    pub fn num_isq_layers(&self) -> usize {
+        match &self.backend {
+            MoEExpertsBackendImpl::Fused(_) => 0,
+            MoEExpertsBackendImpl::Fast(_) => 3,
+            MoEExpertsBackendImpl::Slow(weights) => weights.experts.gate_proj.len() * 3,
+        }
+    }
+
     /// Get mutable references to quantizable layers for ISQ
     pub fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
         match &mut self.backend {
