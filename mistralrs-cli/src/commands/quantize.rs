@@ -271,6 +271,20 @@ Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation
 3) **Easy** 🤗: Download UQFF models *easily* and *quickly* from Hugging Face, or use a local file.
 4) **Customizable** 🛠️: Make and publish your own UQFF files in minutes.
 
+## Install
+
+Install [mistral.rs](https://github.com/EricLBuehler/mistral.rs) ([full guide](https://ericlbuehler.github.io/mistral.rs/INSTALLATION.html)):
+
+**Linux/macOS:**
+```
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+```
+
+**Windows (PowerShell):**
+```
+irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
+```
+
 ## Examples
 
 {afq_note}
