@@ -5,8 +5,8 @@ use super::{
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
     ModelKind, ModelPaths, MultimodalPromptPrefixer, Phi4MMLoader, PreProcessingMixin, Processor,
-    Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, TokenSource, VLlama4Loader, VLlamaLoader,
-    VisionModel, VisionModelLoader,
+    Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, TokenSource,
+    VLlama4Loader, VLlamaLoader, VisionModel, VisionModelLoader,
 };
 use super::{
     Gemma3nLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader,
@@ -14,8 +14,8 @@ use super::{
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
-use crate::distributed::{self, WorkerTransferData};
-use crate::kv_cache::{FullCacheManager, NormalCacheManager};
+use crate::distributed::{self, use_ring, WorkerTransferData};
+use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{
     calculate_eos_tokens, BeginEndUnkPadTok, ChatTemplateValue, GenerationConfig,
@@ -185,6 +185,8 @@ impl VisionLoaderBuilder {
             Some(VisionLoaderType::Gemma3n) => Box::new(Gemma3nLoader),
             Some(VisionLoaderType::Qwen3VL) => Box::new(Qwen3VLLoader),
             Some(VisionLoaderType::Qwen3VLMoE) => Box::new(Qwen3VLMoELoader),
+            Some(VisionLoaderType::Qwen3_5) => Box::new(Qwen3_5Loader),
+            Some(VisionLoaderType::Qwen3_5Moe) => Box::new(Qwen3_5MoeLoader),
             Some(VisionLoaderType::Voxtral) => Box::new(VoxtralLoader),
             None => Box::new(AutoVisionLoader),
         };
@@ -285,7 +287,7 @@ impl Loader for VisionLoader {
             // Use new_cuda instead of new_cuda_with_stream for NCCL compatibility
             // NCCL manages its own streams, so explicit stream creation can cause conflicts
             vec![candle_core::Device::new_cuda(worker_rank + 1)?]
-        } else if use_nccl {
+        } else if use_nccl || use_ring() {
             vec![candle_core::Device::new_cuda(0)?]
         } else {
             device_map::get_all_similar_devices(device)?
@@ -296,7 +298,7 @@ impl Loader for VisionLoader {
                 unsafe { dev.disable_event_tracking() };
             }
         }
-        let device = if use_nccl {
+        let device = if use_nccl || use_ring() {
             available_devices[0].clone()
         } else {
             device.clone()
@@ -325,7 +327,7 @@ impl Loader for VisionLoader {
 
         // If auto, convert to Map if not using nccl
         let mut max_kv_tokens: Option<usize> = None;
-        if use_nccl {
+        if use_nccl || use_ring() {
             mapper = DeviceMapSetting::DummyNccl {
                 nm_device: available_devices[0].clone(),
             };
@@ -368,6 +370,7 @@ impl Loader for VisionLoader {
                                         .pack_factor(dtype)
                                 }
                                 QuantizedSerdeType::F8Q8 => IsqType::F8Q8.pack_factor(dtype),
+                                QuantizedSerdeType::Mxfp4 => IsqType::MXFP4.pack_factor(dtype),
                             };
                             total_pack_factors += pack_factor;
                         }
@@ -583,7 +586,7 @@ impl Loader for VisionLoader {
 
         let multi_progress = Arc::new(new_multi_progress());
 
-        let mut model = if use_nccl {
+        let mut model = if use_nccl || use_ring() {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,
@@ -956,17 +959,17 @@ impl IsqPipelineMixin for VisionPipeline {
 
 impl CacheManagerMixin for VisionPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) {
-        if matches!(self.model.cache(), EitherCache::Full(_)) {
-            FullCacheManager.clone_in_cache(self, seqs, false)
-        } else {
-            NormalCacheManager.clone_in_cache(self, seqs, false)
+        match self.model.cache() {
+            EitherCache::Full(_) => FullCacheManager.clone_in_cache(self, seqs, false),
+            EitherCache::Normal(_) => NormalCacheManager.clone_in_cache(self, seqs, false),
+            EitherCache::Hybrid(_) => HybridCacheManager.clone_in_cache(self, seqs, false),
         }
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence]) {
-        if matches!(self.model.cache(), EitherCache::Full(_)) {
-            FullCacheManager.clone_out_cache(self, seqs, false)
-        } else {
-            NormalCacheManager.clone_out_cache(self, seqs, false)
+        match self.model.cache() {
+            EitherCache::Full(_) => FullCacheManager.clone_out_cache(self, seqs, false),
+            EitherCache::Normal(_) => NormalCacheManager.clone_out_cache(self, seqs, false),
+            EitherCache::Hybrid(_) => HybridCacheManager.clone_out_cache(self, seqs, false),
         }
     }
     fn set_none_cache(
@@ -977,15 +980,22 @@ impl CacheManagerMixin for VisionPipeline {
 
         load_preallocated_cache: bool,
     ) {
-        if matches!(self.model.cache(), EitherCache::Full(_)) {
-            FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
-        } else {
-            NormalCacheManager.set_none_cache(
+        match self.model.cache() {
+            EitherCache::Full(_) => {
+                FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false)
+            }
+            EitherCache::Normal(_) => NormalCacheManager.set_none_cache(
                 self,
                 seqs,
                 modify_draft_cache,
                 load_preallocated_cache,
-            );
+            ),
+            EitherCache::Hybrid(_) => HybridCacheManager.set_none_cache(
+                self,
+                seqs,
+                modify_draft_cache,
+                load_preallocated_cache,
+            ),
         }
         // Always clear model-specific state (e.g. Voxtral audio_embeds_cache)
         // for new prompts. set_none_cache is "Only called for prompt seqs",

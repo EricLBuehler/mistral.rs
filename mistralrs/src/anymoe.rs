@@ -1,10 +1,13 @@
 use mistralrs_core::{
-    initialize_logging, AnyMoeConfig, AnyMoeLoader, AutoDeviceMapParams, DefaultSchedulerMethod,
-    DeviceMapSetting, IsqType, Loader, MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig,
-    SchedulerConfig,
+    AnyMoeConfig, AnyMoeLoader, Loader, NormalLoaderBuilder, NormalSpecificConfig,
 };
 
-use crate::{best_device, resolve_isq, Model, TextModelBuilder};
+use crate::{
+    model_builder_trait::{
+        build_model_from_pipeline, build_pipeline_from_text_loader, maybe_initialize_logging,
+    },
+    Model, TextModelBuilder,
+};
 
 /// Configure and build an AnyMoE (Mixture of Experts) model on top of a text model.
 pub struct AnyMoeModelBuilder {
@@ -45,6 +48,7 @@ impl AnyMoeModelBuilder {
 
     /// Load the AnyMoE model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
+        let base = self.base.clone();
         let config = NormalSpecificConfig {
             topology: self.base.topology,
             organization: self.base.organization,
@@ -57,9 +61,7 @@ impl AnyMoeModelBuilder {
             matformer_slice_name: None,
         };
 
-        if self.base.with_logging {
-            initialize_logging();
-        }
+        maybe_initialize_logging(self.base.with_logging);
 
         let loader = NormalLoaderBuilder::new(
             config,
@@ -81,69 +83,9 @@ impl AnyMoeModelBuilder {
             layers: self.layers,
         });
 
-        // Load, into a Pipeline
-        let device = best_device(self.base.force_cpu)?;
-        let isq_type: Option<IsqType> = self
-            .base
-            .isq
-            .as_ref()
-            .map(|s| resolve_isq(s, &device))
-            .transpose()?;
+        let (pipeline, scheduler_config, add_model_config) =
+            build_pipeline_from_text_loader(base, loader).await?;
 
-        let pipeline = loader.load_model_from_hf(
-            self.base.hf_revision,
-            self.base.token_source,
-            &self.base.dtype,
-            &device,
-            !self.base.with_logging,
-            self.base
-                .device_mapping
-                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
-            isq_type,
-            self.base.paged_attn_cfg,
-        )?;
-
-        let scheduler_method = match self.base.paged_attn_cfg {
-            Some(_) => {
-                let config = pipeline
-                    .lock()
-                    .await
-                    .get_metadata()
-                    .cache_config
-                    .as_ref()
-                    .unwrap()
-                    .clone();
-
-                SchedulerConfig::PagedAttentionMeta {
-                    max_num_seqs: self.base.max_num_seqs,
-                    config,
-                }
-            }
-            None => SchedulerConfig::DefaultScheduler {
-                method: DefaultSchedulerMethod::Fixed(self.base.max_num_seqs.try_into()?),
-            },
-        };
-
-        let mut runner = MistralRsBuilder::new(
-            pipeline,
-            scheduler_method,
-            self.base.throughput_logging,
-            self.base.search_embedding_model,
-        );
-        if let Some(cb) = self.base.search_callback.clone() {
-            runner = runner.with_search_callback(cb);
-        }
-        for (name, cb) in &self.base.tool_callbacks {
-            runner = runner.with_tool_callback(name.clone(), cb.clone());
-        }
-        runner = runner
-            .with_no_kv_cache(self.base.no_kv_cache)
-            .with_no_prefix_cache(self.base.prefix_cache_n.is_none());
-
-        if let Some(n) = self.base.prefix_cache_n {
-            runner = runner.with_prefix_cache_n(n)
-        }
-
-        Ok(Model::new(runner.build().await))
+        Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)
     }
 }

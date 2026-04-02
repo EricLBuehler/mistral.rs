@@ -10,17 +10,19 @@ use requests::{
 };
 use serde_json::Value;
 use std::{
-    cell::RefCell,
     path::PathBuf,
     str::FromStr,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, OnceLock},
 };
 use stream::ChatCompletionStreamer;
 use tokio::{
     runtime::Runtime,
     sync::mpsc::{channel, Receiver},
 };
-use util::{PyApiErr, PyApiResult};
+use util::{
+    next_request_id, parse_chat_response, parse_completion_response, parse_embedding_response,
+    send_request_and_wait, send_request_with_optional_stream, PyApiErr, PyApiResult,
+};
 
 use candle_core::{Device, Result};
 use mistralrs_core::{
@@ -108,8 +110,6 @@ pub struct SpeechGenerationResponse {
 struct Runner {
     runner: Arc<MistralRs>,
 }
-
-static NEXT_REQUEST_ID: Mutex<RefCell<usize>> = Mutex::new(RefCell::new(0));
 
 fn wrap_search_callback(cb: PyObject) -> Arc<SearchCallback> {
     Arc::new(move |params: &SearchFunctionParameters| {
@@ -963,7 +963,7 @@ impl Runner {
         request: Py<ChatCompletionRequest>,
         model_id: Option<String>,
     ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
-        let (tx, mut rx) = channel(10_000);
+        let (tx, rx) = channel(10_000);
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
             let stop_toks = request
@@ -1210,13 +1210,7 @@ impl Runner {
             };
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
-                id: {
-                    let l = NEXT_REQUEST_ID.lock().unwrap();
-                    let last = &mut *l.borrow_mut();
-                    let last_v = *last;
-                    *last += 1;
-                    last_v
-                },
+                id: next_request_id(),
                 messages,
                 sampling_params: SamplingParams {
                     temperature: request.temperature,
@@ -1254,41 +1248,20 @@ impl Runner {
             let runner = self.runner.clone();
             let send_recv_result = py
                 .allow_threads(move || -> std::result::Result<either::Either<Response, Receiver<Response>>, String> {
-                    MistralRs::maybe_log_request(runner.clone(), debug_repr);
-                    let sender = runner
-                        .get_sender(model_id.as_deref())
-                        .map_err(|e| e.to_string())?;
-                    sender
-                        .blocking_send(model_request)
-                        .map_err(|e| e.to_string())?;
-                    if is_streaming {
-                        Ok(either::Either::Right(rx))
-                    } else {
-                        let response = rx
-                            .blocking_recv()
-                            .ok_or_else(|| "Response channel closed unexpectedly".to_string())?;
-                        Ok(either::Either::Left(response))
-                    }
+                    send_request_with_optional_stream(
+                        runner,
+                        model_id,
+                        model_request,
+                        rx,
+                        debug_repr,
+                        is_streaming,
+                    )
                 })
                 .map_err(PyApiErr::from)?;
 
             match send_recv_result {
                 either::Either::Right(rx) => Ok(Either::Right(ChatCompletionStreamer::from_rx(rx))),
-                either::Either::Left(response) => match response {
-                    Response::ValidationError(e) | Response::InternalError(e) => {
-                        Err(PyApiErr::from(e.to_string()))
-                    }
-                    Response::Done(response) => Ok(Either::Left(response)),
-                    Response::ModelError(msg, _) => Err(PyApiErr::from(msg.to_string())),
-                    Response::Chunk(_) => unreachable!(),
-                    Response::CompletionDone(_) => unreachable!(),
-                    Response::CompletionModelError(_, _) => unreachable!(),
-                    Response::CompletionChunk(_) => unreachable!(),
-                    Response::ImageGeneration(_) => unreachable!(),
-                    Response::Speech { .. } => unreachable!(),
-                    Response::Raw { .. } => unreachable!(),
-                    Response::Embeddings { .. } => unreachable!(),
-                },
+                either::Either::Left(response) => parse_chat_response(response).map(Either::Left),
             }
         })
     }
@@ -1327,13 +1300,7 @@ impl Runner {
 
                 let mut enqueue = |message: RequestMessage| -> std::result::Result<(), String> {
                     let (tx, rx) = channel(1);
-                    let request_id = {
-                        let l = NEXT_REQUEST_ID.lock().unwrap();
-                        let last = &mut *l.borrow_mut();
-                        let last_v = *last;
-                        *last += 1;
-                        last_v
-                    };
+                    let request_id = next_request_id();
 
                     let model_request = _Request::Normal(Box::new(NormalRequest {
                         id: request_id,
@@ -1380,19 +1347,7 @@ impl Runner {
                         "Embedding response channel closed unexpectedly".to_string()
                     })?;
 
-                    match response {
-                        Response::Embeddings { embeddings, .. } => all_embeddings.push(embeddings),
-                        Response::ValidationError(e) | Response::InternalError(e) => {
-                            return Err(e.to_string())
-                        }
-                        Response::ModelError(msg, _) => return Err(msg.to_string()),
-                        _ => {
-                            return Err(
-                                "Received unexpected response type from embeddings request."
-                                    .to_string(),
-                            )
-                        }
-                    }
+                    all_embeddings.push(parse_embedding_response(response)?);
                 }
 
                 Ok(all_embeddings)
@@ -1408,7 +1363,7 @@ impl Runner {
         request: Py<CompletionRequest>,
         model_id: Option<String>,
     ) -> PyApiResult<CompletionResponse> {
-        let (tx, mut rx) = channel(10_000);
+        let (tx, rx) = channel(10_000);
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
             let stop_toks = request
@@ -1445,13 +1400,7 @@ impl Runner {
             };
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
-                id: {
-                    let l = NEXT_REQUEST_ID.lock().unwrap();
-                    let last = &mut *l.borrow_mut();
-                    let last_v = *last;
-                    *last += 1;
-                    last_v
-                },
+                id: next_request_id(),
                 messages: RequestMessage::Completion {
                     text: request.prompt.clone(),
                     echo_prompt: request.echo_prompt,
@@ -1492,33 +1441,11 @@ impl Runner {
             let runner = self.runner.clone();
             let response = py
                 .allow_threads(move || -> std::result::Result<Response, String> {
-                    MistralRs::maybe_log_request(runner.clone(), debug_repr);
-                    let sender = runner
-                        .get_sender(model_id.as_deref())
-                        .map_err(|e| e.to_string())?;
-                    sender
-                        .blocking_send(model_request)
-                        .map_err(|e| e.to_string())?;
-                    rx.blocking_recv()
-                        .ok_or_else(|| "Response channel closed unexpectedly".to_string())
+                    send_request_and_wait(runner, model_id, model_request, rx, debug_repr)
                 })
                 .map_err(PyApiErr::from)?;
 
-            match response {
-                Response::ValidationError(e) | Response::InternalError(e) => {
-                    Err(PyApiErr::from(e.to_string()))
-                }
-                Response::CompletionDone(response) => Ok(response),
-                Response::CompletionModelError(msg, _) => Err(PyApiErr::from(msg.to_string())),
-                Response::Chunk(_) => unreachable!(),
-                Response::Done(_) => unreachable!(),
-                Response::ModelError(_, _) => unreachable!(),
-                Response::CompletionChunk(_) => unreachable!(),
-                Response::ImageGeneration(_) => unreachable!(),
-                Response::Speech { .. } => unreachable!(),
-                Response::Raw { .. } => unreachable!(),
-                Response::Embeddings { .. } => unreachable!(),
-            }
+            parse_completion_response(response)
         })
     }
 
@@ -1770,7 +1697,7 @@ impl Runner {
         request: Py<ChatCompletionRequest>,
         model_id: String,
     ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
-        let (tx, mut rx) = channel(10_000);
+        let (tx, rx) = channel(10_000);
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
             let stop_toks = request
@@ -2017,13 +1944,7 @@ impl Runner {
             };
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
-                id: {
-                    let l = NEXT_REQUEST_ID.lock().unwrap();
-                    let last = &mut *l.borrow_mut();
-                    let last_v = *last;
-                    *last += 1;
-                    last_v
-                },
+                id: next_request_id(),
                 messages,
                 sampling_params: SamplingParams {
                     temperature: request.temperature,
@@ -2061,41 +1982,20 @@ impl Runner {
             let runner = self.runner.clone();
             let send_recv_result = py
                 .allow_threads(move || -> std::result::Result<either::Either<Response, Receiver<Response>>, String> {
-                    MistralRs::maybe_log_request(runner.clone(), debug_repr);
-                    let sender = runner
-                        .get_sender(Some(&model_id))
-                        .map_err(|e| e.to_string())?;
-                    sender
-                        .blocking_send(model_request)
-                        .map_err(|e| e.to_string())?;
-                    if is_streaming {
-                        Ok(either::Either::Right(rx))
-                    } else {
-                        let response = rx
-                            .blocking_recv()
-                            .ok_or_else(|| "Response channel closed unexpectedly".to_string())?;
-                        Ok(either::Either::Left(response))
-                    }
+                    send_request_with_optional_stream(
+                        runner,
+                        Some(model_id),
+                        model_request,
+                        rx,
+                        debug_repr,
+                        is_streaming,
+                    )
                 })
                 .map_err(PyApiErr::from)?;
 
             match send_recv_result {
                 either::Either::Right(rx) => Ok(Either::Right(ChatCompletionStreamer::from_rx(rx))),
-                either::Either::Left(response) => match response {
-                    Response::ValidationError(e) | Response::InternalError(e) => {
-                        Err(PyApiErr::from(e.to_string()))
-                    }
-                    Response::Done(response) => Ok(Either::Left(response)),
-                    Response::ModelError(msg, _) => Err(PyApiErr::from(msg.to_string())),
-                    Response::Chunk(_) => unreachable!(),
-                    Response::CompletionDone(_) => unreachable!(),
-                    Response::CompletionModelError(_, _) => unreachable!(),
-                    Response::CompletionChunk(_) => unreachable!(),
-                    Response::ImageGeneration(_) => unreachable!(),
-                    Response::Speech { .. } => unreachable!(),
-                    Response::Raw { .. } => unreachable!(),
-                    Response::Embeddings { .. } => unreachable!(),
-                },
+                either::Either::Left(response) => parse_chat_response(response).map(Either::Left),
             }
         })
     }
@@ -2106,7 +2006,7 @@ impl Runner {
         request: Py<CompletionRequest>,
         model_id: String,
     ) -> PyApiResult<CompletionResponse> {
-        let (tx, mut rx) = channel(10_000);
+        let (tx, rx) = channel(10_000);
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
             let stop_toks = request
@@ -2143,13 +2043,7 @@ impl Runner {
             };
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
-                id: {
-                    let l = NEXT_REQUEST_ID.lock().unwrap();
-                    let last = &mut *l.borrow_mut();
-                    let last_v = *last;
-                    *last += 1;
-                    last_v
-                },
+                id: next_request_id(),
                 messages: RequestMessage::Completion {
                     text: request.prompt.clone(),
                     echo_prompt: request.echo_prompt,
@@ -2190,33 +2084,11 @@ impl Runner {
             let runner = self.runner.clone();
             let response = py
                 .allow_threads(move || -> std::result::Result<Response, String> {
-                    MistralRs::maybe_log_request(runner.clone(), debug_repr);
-                    let sender = runner
-                        .get_sender(Some(&model_id))
-                        .map_err(|e| e.to_string())?;
-                    sender
-                        .blocking_send(model_request)
-                        .map_err(|e| e.to_string())?;
-                    rx.blocking_recv()
-                        .ok_or_else(|| "Response channel closed unexpectedly".to_string())
+                    send_request_and_wait(runner, Some(model_id), model_request, rx, debug_repr)
                 })
                 .map_err(PyApiErr::from)?;
 
-            match response {
-                Response::ValidationError(e) | Response::InternalError(e) => {
-                    Err(PyApiErr::from(e.to_string()))
-                }
-                Response::CompletionDone(response) => Ok(response),
-                Response::CompletionModelError(msg, _) => Err(PyApiErr::from(msg.to_string())),
-                Response::Chunk(_) => unreachable!(),
-                Response::Done(_) => unreachable!(),
-                Response::ModelError(_, _) => unreachable!(),
-                Response::CompletionChunk(_) => unreachable!(),
-                Response::ImageGeneration(_) => unreachable!(),
-                Response::Speech { .. } => unreachable!(),
-                Response::Raw { .. } => unreachable!(),
-                Response::Embeddings { .. } => unreachable!(),
-            }
+            parse_completion_response(response)
         })
     }
 

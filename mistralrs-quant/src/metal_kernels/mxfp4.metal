@@ -298,6 +298,124 @@ METAL_FUNC void mxfp4_moe_gemm_reuse_impl(
   }
 }
 
+// ============================================================================
+// Optimized MXFP4 Vector-Matrix Multiply (for M <= 4, decode case)
+//
+// All 256 threads collaborate on K-reduction for VECMAT_COLS output columns.
+// Each thread processes K-blocks strided by 256, then simdgroup + cross-
+// simdgroup reduction produces the final dot product.
+// ============================================================================
+
+constexpr constant int kVecmatCols = 4;
+constexpr constant int kVecmatThreads = 256;
+constexpr constant int kVecmatWarps = kVecmatThreads / kWarpSize; // 8
+
+template <typename T>
+METAL_FUNC void mxfp4_vecmat_impl(
+    const device T *x, const device uchar *w, const device uchar *scales,
+    const device T *bias, device T *y, int M, int N, int K, int has_bias,
+    threadgroup float *reduce_buf, // [kVecmatCols * kVecmatWarps]
+    uint tid, ushort simd_gid, ushort lane_id, uint3 gid) {
+
+  const int row = int(gid.y);
+  const int col_base = int(gid.x) * kVecmatCols;
+
+  if (row >= M)
+    return;
+
+  const int num_k_blocks = K / 32;
+  const int k_half = K / 2;
+  const int scale_stride = K / 32;
+
+  float acc[kVecmatCols];
+#pragma unroll
+  for (int c = 0; c < kVecmatCols; c++)
+    acc[c] = 0.0f;
+
+  // Each thread processes K-blocks strided by kVecmatThreads
+  for (int blk = int(tid); blk < num_k_blocks; blk += kVecmatThreads) {
+    const int k_start = blk * 32;
+
+    // Load 32 input values
+    const device T *in_ptr = x + row * K + k_start;
+    float in_vals[32];
+#pragma unroll
+    for (int i = 0; i < 32; i += 4) {
+      in_vals[i + 0] = float(in_ptr[i + 0]);
+      in_vals[i + 1] = float(in_ptr[i + 1]);
+      in_vals[i + 2] = float(in_ptr[i + 2]);
+      in_vals[i + 3] = float(in_ptr[i + 3]);
+    }
+
+#pragma unroll
+    for (int c = 0; c < kVecmatCols; c++) {
+      const int col = col_base + c;
+      if (col >= N)
+        continue;
+
+      // Load weight: uint4 = 16 bytes = 32 packed FP4 values
+      const device uint4 *w_ptr =
+          reinterpret_cast<const device uint4 *>(w + col * k_half + k_start / 2);
+      const uint4 packed = *w_ptr;
+      const float w_scale = e8m0_to_float(scales[col * scale_stride + blk]) * 0.5f;
+
+      // Dequant + dot product
+      float dot = 0.0f;
+      int in_idx = 0;
+#pragma unroll
+      for (int u = 0; u < 4; ++u) {
+        uint vv = packed[u];
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+          const uchar b = uchar(vv & 0xff);
+          vv >>= 8;
+
+          const float w0 = float(fp4_to_i8x2(b & 0x0f)) * w_scale;
+          const float w1 = float(fp4_to_i8x2((b >> 4) & 0x0f)) * w_scale;
+
+          dot = fma(in_vals[in_idx + 0], w0, dot);
+          dot = fma(in_vals[in_idx + 1], w1, dot);
+          in_idx += 2;
+        }
+      }
+      acc[c] += dot;
+    }
+  }
+
+  // Simdgroup reduction
+#pragma unroll
+  for (int c = 0; c < kVecmatCols; c++) {
+    acc[c] = simdgroup_reduce_sum(acc[c]);
+  }
+
+  // Cross-simdgroup reduction via threadgroup memory
+  if (lane_id == 0) {
+#pragma unroll
+    for (int c = 0; c < kVecmatCols; c++) {
+      reduce_buf[c * kVecmatWarps + simd_gid] = acc[c];
+    }
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  // Final reduction by first simdgroup
+  if (simd_gid == 0) {
+#pragma unroll
+    for (int c = 0; c < kVecmatCols; c++) {
+      float val =
+          (lane_id < kVecmatWarps) ? reduce_buf[c * kVecmatWarps + lane_id] : 0.0f;
+      val = simdgroup_reduce_sum(val);
+      if (lane_id == 0) {
+        const int col = col_base + c;
+        if (col < N) {
+          if (has_bias != 0)
+            val += float(bias[col]);
+          y[row * N + col] = T(val);
+        }
+      }
+    }
+  }
+}
+
 } // namespace mxfp4
 
 [[kernel]] void mxfp4_matmul_f16(
@@ -421,4 +539,39 @@ mxfp4_moe_gemm_reuse_bf16(const device bfloat16_t *x [[buffer(0)]],
   mxfp4::mxfp4_moe_gemm_reuse_impl<bfloat16_t, 8>(
       x, w, scales, biases, indices, y, num_tokens, topk, num_experts, N, K,
       has_bias, tid, simd_gid, x_tile, lane_id, gid);
+}
+
+// Vecmat kernels for decode (M <= 4)
+[[kernel]] void mxfp4_vecmat_f16(
+    const device half *x [[buffer(0)]], const device uchar *w [[buffer(1)]],
+    const device uchar *scales [[buffer(2)]],
+    const device half *bias [[buffer(3)]], device half *y [[buffer(4)]],
+    const constant int &M [[buffer(5)]], const constant int &N [[buffer(6)]],
+    const constant int &K [[buffer(7)]],
+    const constant int &has_bias [[buffer(8)]],
+    uint tid [[thread_index_in_threadgroup]],
+    ushort simd_gid [[simdgroup_index_in_threadgroup]],
+    ushort lane_id [[thread_index_in_simdgroup]],
+    uint3 gid [[threadgroup_position_in_grid]]) {
+  threadgroup float reduce_buf[mxfp4::kVecmatCols * mxfp4::kVecmatWarps];
+  mxfp4::mxfp4_vecmat_impl<half>(x, w, scales, bias, y, M, N, K, has_bias,
+                                 reduce_buf, tid, simd_gid, lane_id, gid);
+}
+
+[[kernel]] void mxfp4_vecmat_bf16(
+    const device bfloat16_t *x [[buffer(0)]],
+    const device uchar *w [[buffer(1)]],
+    const device uchar *scales [[buffer(2)]],
+    const device bfloat16_t *bias [[buffer(3)]],
+    device bfloat16_t *y [[buffer(4)]], const constant int &M [[buffer(5)]],
+    const constant int &N [[buffer(6)]], const constant int &K [[buffer(7)]],
+    const constant int &has_bias [[buffer(8)]],
+    uint tid [[thread_index_in_threadgroup]],
+    ushort simd_gid [[simdgroup_index_in_threadgroup]],
+    ushort lane_id [[thread_index_in_simdgroup]],
+    uint3 gid [[threadgroup_position_in_grid]]) {
+  threadgroup float reduce_buf[mxfp4::kVecmatCols * mxfp4::kVecmatWarps];
+  mxfp4::mxfp4_vecmat_impl<bfloat16_t>(x, w, scales, bias, y, M, N, K,
+                                        has_bias, reduce_buf, tid, simd_gid,
+                                        lane_id, gid);
 }

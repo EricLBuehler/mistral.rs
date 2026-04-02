@@ -56,8 +56,8 @@ use indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressSt
 use itertools::Itertools;
 use mistralrs_quant::{
     AfqLayer, CollectedImatrixData, ColumnParallelLayer, DistributedKind, F8Q8Linear, FP8Linear,
-    GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizeOntoGuard, QuantizedSerde,
-    QuantizedSerdeType, ReplicatedLayer, RowParallelLayer, UnquantLinear,
+    GgufMatMul, HqqLayer, IsqBits, IsqType, MXFP4Layer, QuantMethod, QuantizeOntoGuard,
+    QuantizedSerde, QuantizedSerdeType, ReplicatedLayer, RowParallelLayer, UnquantLinear,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use regex::Regex;
@@ -107,19 +107,22 @@ pub const UQFF_MULTI_FILE_DELIMITER: &str = ";";
 /// - `AFQ6`
 /// - `AFQ8`
 pub fn parse_isq_value(s: &str, device: Option<&Device>) -> Result<IsqType, String> {
-    let is_metal = device.map(|device| device.is_metal()).unwrap_or(false);
-    let tp = match s.to_lowercase().as_str() {
-        "2" if is_metal => IsqType::AFQ2,
-        "2" if !is_metal => IsqType::Q2K,
-        "3" if is_metal => IsqType::AFQ3,
-        "3" if !is_metal => IsqType::Q3K,
-        "4" if is_metal => IsqType::AFQ4,
-        "4" if !is_metal => IsqType::Q4K,
-        "5" => IsqType::Q5K,
-        "6" if is_metal => IsqType::AFQ6,
-        "6" if !is_metal => IsqType::Q6K,
-        "8" if is_metal => IsqType::AFQ8,
-        "8" if !is_metal => IsqType::Q8_0,
+    let lowered = s.to_lowercase();
+
+    // Numeric shorthands resolve via IsqBits
+    if let Ok(bits) = IsqBits::try_from(lowered.as_str()) {
+        let tp = match device {
+            Some(dev) => bits.resolve(dev),
+            None => bits.resolve(&Device::Cpu),
+        };
+        #[cfg(feature = "cuda")]
+        {
+            // All IsqBits resolutions are CUDA-safe, so no extra check needed.
+        }
+        return Ok(tp);
+    }
+
+    let tp = match lowered.as_str() {
         "q4_0" => IsqType::Q4_0,
         "q4_1" => IsqType::Q4_1,
         "q5_0" => IsqType::Q5_0,
@@ -141,10 +144,11 @@ pub fn parse_isq_value(s: &str, device: Option<&Device>) -> Result<IsqType, Stri
         "afq3" => IsqType::AFQ3,
         "afq2" => IsqType::AFQ2,
         "f8q8" => IsqType::F8Q8,
+        "mxfp4" => IsqType::MXFP4,
         // "hqq3" => IsqType::HQQ3,
         // "hqq2" => IsqType::HQQ2,
         // "hqq1" => IsqType::HQQ1,
-        _ => return Err(format!("ISQ type {s} unknown, choose one of `2`, `3`, `4`, `6`, `8`, `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`, `AFQ8`, `AFQ6`, `AFQ4`, `AFQ3`, `AFQ2`, `F8Q8`.")),
+        _ => return Err(format!("ISQ type {s} unknown, choose one of `2`, `3`, `4`, `5`, `6`, `8`, `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`, `AFQ8`, `AFQ6`, `AFQ4`, `AFQ3`, `AFQ2`, `F8Q8`, `MXFP4`.")),
     };
     #[cfg(feature = "cuda")]
     {
@@ -168,14 +172,26 @@ pub fn parse_isq_value(s: &str, device: Option<&Device>) -> Result<IsqType, Stri
                 | IsqType::AFQ4
                 | IsqType::AFQ6
                 | IsqType::AFQ8
-                | IsqType::F8Q8 // | IsqType::HQQ3
-                                // | IsqType::HQQ2
-                                // | IsqType::HQQ1
+                | IsqType::F8Q8
+                | IsqType::MXFP4 // | IsqType::HQQ3
+                                 // | IsqType::HQQ2
+                                 // | IsqType::HQQ1
         ) {
-            return Err("ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`, `FP8`, `AFQ8`, `AFQ6`, `AFQ4`, `AFQ3`, `AFQ2`, `F8Q8`".to_string());
+            return Err("ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`, `FP8`, `AFQ8`, `AFQ6`, `AFQ4`, `AFQ3`, `AFQ2`, `F8Q8`, `MXFP4`".to_string());
         }
     }
     Ok(tp)
+}
+
+/// Expand an ISQ specifier into concrete `IsqType` variants.
+/// Numeric shorthands (2-8) produce both the non-Metal and Metal variants;
+/// explicit method names resolve to a single variant.
+pub fn expand_isq_value(s: &str) -> anyhow::Result<Vec<IsqType>> {
+    if let Ok(bits) = IsqBits::try_from(s.to_lowercase().as_str()) {
+        return Ok(bits.expand());
+    }
+    let isq = parse_isq_value(s, None).map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(vec![isq])
 }
 
 /// Given a UQFF filename like `"q4k-0.uqff"`, returns `Some(("q4k", 0))`.
@@ -1080,6 +1096,12 @@ pub trait IsqModel {
                                         &comm,
                                         guard.clone(),
                                     )?,
+                                    QuantizedSerdeType::Mxfp4 => MXFP4Layer::deserialize(
+                                        Cow::from(artifact),
+                                        &devices[i],
+                                        &comm,
+                                        guard.clone(),
+                                    )?,
                                 }
                             }
                         };
@@ -1154,6 +1176,12 @@ pub trait IsqModel {
                                         guard.clone(),
                                     )?,
                                     QuantizedSerdeType::F8Q8 => F8Q8Linear::deserialize(
+                                        Cow::from(artifact),
+                                        &devices[i],
+                                        &comm,
+                                        guard.clone(),
+                                    )?,
+                                    QuantizedSerdeType::Mxfp4 => MXFP4Layer::deserialize(
                                         Cow::from(artifact),
                                         &devices[i],
                                         &comm,

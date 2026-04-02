@@ -342,6 +342,17 @@ impl QuantMethod for UnquantLinear {
                     dtype: DType::F8E4M3,
                 })?))
             }
+            Some(IsqType::MXFP4) => {
+                let _acquired_quantize_guard = guard.acquire(&device);
+                if imatrix_weight.is_some() {
+                    candle_core::bail!("MXFP4 does not support imatrix.");
+                }
+
+                n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let w = self.w.to_device(&device)?;
+                let b = self.b.as_ref().map(|b| b.to_device(&device)).transpose()?;
+                crate::MXFP4Layer::quantize(&w, b, &device)
+            }
             Some(IsqType::F8Q8) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {

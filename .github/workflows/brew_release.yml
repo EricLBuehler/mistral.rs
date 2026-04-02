@@ -1,0 +1,84 @@
+name: Homebrew Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag"
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install ffmpeg
+        run: brew install ffmpeg
+
+      - name: Build
+        run: cargo build --release --features metal -p mistralrs-cli
+
+      - name: Package
+        run: |
+          tar czf mistralrs-metal-aarch64-apple-darwin.tar.gz -C target/release mistralrs
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.tag }}"
+          gh release create "$TAG" --title "$TAG" --notes "Release $TAG" 2>/dev/null || true
+          gh release upload "$TAG" mistralrs-metal-aarch64-apple-darwin.tar.gz --clobber
+
+      - name: Update tap formula
+        env:
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.tag }}"
+          VERSION="${TAG#v}"
+          SHA=$(shasum -a 256 mistralrs-metal-aarch64-apple-darwin.tar.gz | awk '{print $1}')
+          URL="https://github.com/EricLBuehler/mistral.rs/releases/download/${TAG}/mistralrs-metal-aarch64-apple-darwin.tar.gz"
+
+          git clone "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/EricLBuehler/homebrew-mistralrs.git" tap
+
+          cat > tap/Formula/mistralrs.rb << FORMULA
+          class Mistralrs < Formula
+            desc "Fast, flexible LLM inference."
+            homepage "https://github.com/EricLBuehler/mistral.rs"
+            license "MIT"
+            version "${VERSION}"
+            url "${URL}"
+            sha256 "${SHA}"
+
+            depends_on "ffmpeg"
+            depends_on :macos
+            depends_on arch: :arm64
+
+            def install
+              bin.install "mistralrs"
+            end
+
+            test do
+              assert_match "mistralrs", shell_output("#{bin}/mistralrs --help")
+            end
+          end
+          FORMULA
+          # Strip leading whitespace from heredoc indentation
+          sed -i '' 's/^          //' tap/Formula/mistralrs.rb
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/mistralrs.rb
+          git commit -m "Update mistralrs to ${TAG}"
+          git push

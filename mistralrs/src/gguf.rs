@@ -7,6 +7,7 @@ use crate::model_builder_trait::{build_gguf_pipeline, build_model_from_pipeline}
 use crate::Model;
 use std::sync::Arc;
 
+#[derive(Clone)]
 /// Configure a text GGUF model with the various parameters for loading, running, and other inference behaviors.
 pub struct GgufModelBuilder {
     // Loading model

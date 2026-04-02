@@ -595,13 +595,13 @@ impl Engine {
                 }
             }
 
-            // Allocate Mamba state pool slot for hybrid models
+            // Allocate recurrent state pool slot for hybrid models
             {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
                 if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
                     let mut hybrid_cache = pipeline.cache().hybrid();
                     if let Some(slot_idx) = hybrid_cache.allocate_seq() {
-                        seq.set_mamba_state_idx(Some(slot_idx));
+                        seq.set_recurrent_state_idx(Some(slot_idx));
                     }
                 }
             }
@@ -636,12 +636,30 @@ impl Engine {
             seq = match prefill_cache.clone() {
                 Some(MatchingCache::Normal {
                     normal,
+                    recurrent_snapshots,
                     images_to_keep,
                     audios_to_keep,
                     toks,
                     offset,
                 }) => {
                     self.logger.add_prefix_cache_hit();
+
+                    // Restore recurrent state for hybrid models
+                    if let Some(snapshots) = recurrent_snapshots {
+                        if let Some(slot_idx) = seq.recurrent_state_idx() {
+                            let pipeline = get_mut_arcmutex!(self.pipeline);
+                            if pipeline.cache().is_hybrid() {
+                                let mut hybrid_cache = pipeline.cache().hybrid();
+                                if let Err(e) =
+                                    hybrid_cache.restore_recurrent_state(slot_idx, &snapshots)
+                                {
+                                    tracing::warn!(
+                                        "Failed to restore recurrent state from prefix cache: {e}"
+                                    );
+                                }
+                            }
+                        }
+                    }
 
                     seq.keep_num_images(images_to_keep);
                     seq.keep_num_audios(audios_to_keep);
