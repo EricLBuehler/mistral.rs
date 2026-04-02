@@ -31,7 +31,7 @@ Fast, flexible LLM inference.
 
 ## Why mistral.rs?
 
-- **Any HuggingFace model, zero config**: Just `mistralrs run -m user/model`.
+- **Any Hugging Face model, zero config**: Just `mistralrs run -m user/model`.
 - **True multimodality**: Text, vision, video, and audio, speech generation, image generation, and embeddings in one engine.
 - **Full quantization control**: Choose the precise quantization you want to use, or make your own UQFF with `mistralrs quantize`.
 - **Built-in web UI**: `mistralrs serve --ui` gives you a web interface instantly.
