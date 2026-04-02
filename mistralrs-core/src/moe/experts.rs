@@ -520,10 +520,8 @@ impl MoEExperts {
                 let up_qt = weights.fused_up_proj.moe_qtensor();
                 if let (Some(gq), Some(uq)) = (gate_qt, up_qt) {
                     // Fused path: silu(gate @ x) * (up @ x) in one Metal kernel
-                    tracing::debug!("fused_moe_swiglu_dispatch");
                     Some(mistralrs_quant::metal_fused_gate_up_swiglu(gq, uq, &xs_act, &indices)?)
                 } else {
-                    tracing::debug!(gate_qt = gate_qt.is_some(), up_qt = up_qt.is_some(), "fused_moe_fallback");
                     None
                 }
             };
