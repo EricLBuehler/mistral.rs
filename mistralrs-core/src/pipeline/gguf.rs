@@ -584,7 +584,7 @@ impl Loader for GGUFLoader {
             }
         }
 
-        let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
+        let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
         Ok(Arc::new(Mutex::new(GGUFPipeline {
             model,
             tokenizer: tokenizer.into(),

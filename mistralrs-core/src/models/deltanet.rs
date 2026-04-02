@@ -521,11 +521,12 @@ impl GatedDeltaNet {
         )?;
 
         let projection = if world_size > 1 {
-            let merged_qkv = mistralrs_quant::ColumnParallelLayer::new_merged_chunks(
+            let merged_qkv = mistralrs_quant::ColumnParallelLayer::new_merged(
                 cfg.hidden_size(),
                 qkv_out_global,
-                vec![key_dim_global, key_dim_global, value_dim_global],
+                3,
                 cfg.quantization_config(),
+                false,
                 comm,
                 vb_la.pp("in_proj_qkv"),
             )?;
