@@ -1,3 +1,6 @@
+#ifndef FLOAT8_METAL_H
+#define FLOAT8_METAL_H
+
 #include <metal_stdlib>
 using namespace metal;
 
@@ -147,3 +150,5 @@ inline uchar float_to_fp8_e4m3(float f) {
 inline uchar float_to_fp8_e5m2(float f) {
   return detail::fp32_to_fp8<5, 2, 15>(f);
 }
+
+#endif // FLOAT8_METAL_H
