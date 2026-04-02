@@ -449,6 +449,7 @@ impl Qwen2_5VLModel {
             )?);
         }
         let ropeidx_attn_mask = Tensor::stack(&ropeidx_attn_mask_bs, 0)?;
+
         let mut ropeidx_attn_mask_indices_bs = Vec::new();
         for len in seqlens.iter() {
             ropeidx_attn_mask_indices_bs.push(Tensor::from_vec(
@@ -459,11 +460,24 @@ impl Qwen2_5VLModel {
         }
         let ropeidx_attn_mask_indices = Tensor::stack(&ropeidx_attn_mask_indices_bs, 0)?;
 
-        let ropeidx_input_ids = if attention_mask.is_some() {
+        // For position calculation, we need a tensor with the actual sequence length from seqlens
+        // During completion, input_ids is just [1, 1] (the new token), but seqlens reflects
+        // the full sequence length including KV cache
+        let ropeidx_input_ids_tensor;
+        let ropeidx_input_ids = if seqlens.len() == 1 && seqlens[0] != input_ids.dim(1)? {
+            // Completion mode: create a dummy tensor with the right length for position calculation
+            ropeidx_input_ids_tensor = Tensor::zeros(
+                (input_ids.dim(0)?, seqlens[0]),
+                input_ids.dtype(),
+                input_ids.device(),
+            )?;
+            &ropeidx_input_ids_tensor
+        } else if attention_mask.is_some() {
             input_ids
         } else {
             input_ids_full
         };
+
         let (position_ids, mrope_position_deltas) = self.get_rope_index(
             ropeidx_input_ids,
             rope_img_grid_thw.as_ref(),
