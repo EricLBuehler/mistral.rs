@@ -183,11 +183,7 @@ impl Sdpa {
             mask.layout().broadcast_as(tgt_mask_shape.clone()).is_ok()
                 && sdpa_params.softcap.is_none_or(|x| x == 1.0)
         });
-        let valid_head_dims: &[usize] = if seq_len == 1 {
-            &[32, 64, 72, 80, 96, 128, 256, 512]
-        } else {
-            &[32, 64, 72, 80, 96, 128, 256, 512]
-        };
+        let valid_head_dims: &[usize] = &[32, 64, 72, 80, 96, 128, 256, 512];
         // Metal SDPA full kernel requires q_seq <= k_seq when a mask is present.
         let metal_supports_mask = mask.is_none() || seq_len <= k.dim(2)?;
         if [q, k, v].into_iter().all(|x| x.device().is_metal())

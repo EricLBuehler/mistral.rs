@@ -19,6 +19,7 @@ candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 candle-flash-attn = { workspace = true, optional = true }
+mlx-rs = { version = "0.25", optional = true }
 dirs.workspace = true
 hf-hub.workspace = true
 thiserror.workspace = true
@@ -133,6 +134,7 @@ metal = [
     "mistralrs-paged-attn/metal",
     "dep:objc2-metal"
 ]
+mlx = ["dep:mlx-rs"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
 flash-attn-v3 = ["cuda", "dep:candle-flash-attn-v3"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "mistralrs-quant/accelerate"]
