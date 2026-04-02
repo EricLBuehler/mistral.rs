@@ -631,8 +631,8 @@ __global__ void mxfp4_vecmat(const T *__restrict__ input,
                              const uint8_t *__restrict__ weight_scale,
                              const T *__restrict__ bias, T *__restrict__ output,
                              int M, int N, int K, bool has_bias) {
-  const int row = blockIdx.y;                            // input row (M dim)
-  const int col_base = blockIdx.x * VECMAT_COLS;         // first output col
+  const int row = blockIdx.y;                    // input row (M dim)
+  const int col_base = blockIdx.x * VECMAT_COLS; // first output col
   const int tid = threadIdx.x;
   const int warp_id = tid / WARP_SIZE;
   const int lane_id = tid % WARP_SIZE;
@@ -697,10 +697,9 @@ __global__ void mxfp4_vecmat(const T *__restrict__ input,
       // Load weight: uint4 = 16 bytes = 32 packed FP4 values
       uint4 w_vec = *reinterpret_cast<const uint4 *>(
           &weight[(size_t)col * k_half + k_start / 2]);
-      float scale =
-          e8m0_to_float(
-              __ldg(&weight_scale[(size_t)col * scale_stride + blk])) *
-          0.5f;
+      float scale = e8m0_to_float(__ldg(
+                        &weight_scale[(size_t)col * scale_stride + blk])) *
+                    0.5f;
 
       // Dequant + dot product
       float w_vals[32];

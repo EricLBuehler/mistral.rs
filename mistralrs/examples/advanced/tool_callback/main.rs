@@ -37,7 +37,7 @@ fn local_search(query: &str) -> Result<Vec<SearchResult>> {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Build the model and register the *tool callback*.
-    let model = ModelBuilder::new("google/gemma-3-4b-it")
+    let model = ModelBuilder::new("google/gemma-4-E4B-it")
         .with_auto_isq(IsqBits::Four)
         .with_logging()
         .with_tool_callback(

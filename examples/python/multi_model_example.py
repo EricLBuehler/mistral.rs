@@ -9,7 +9,7 @@ This example shows how to:
 5. Model loading/unloading operations
 
 Models used:
-- Multimodal: google/gemma-3-4b-it (MultimodalArchitecture.Gemma3)
+- Multimodal: google/gemma-4-E4B-it (MultimodalArchitecture.Gemma4)
 - Text: Qwen/Qwen3-4B (Architecture.Qwen3)
 """
 
@@ -26,11 +26,11 @@ from mistralrs import (
 def example_runner_with_model_id():
     """Demonstrate using Runner with model_id in requests."""
 
-    # Create a runner with Gemma 3 4B multimodal model
+    # Create a runner with Gemma 4 E4B multimodal model
     runner = Runner(
         which=Which.MultimodalPlain(
-            model_id="google/gemma-3-4b-it",
-            arch=MultimodalArchitecture.Gemma3,
+            model_id="google/gemma-4-E4B-it",
+            arch=MultimodalArchitecture.Gemma4,
         ),
         in_situ_quant="Q4K",
     )
@@ -96,8 +96,8 @@ def example_unload_reload():
 
     runner = Runner(
         which=Which.MultimodalPlain(
-            model_id="google/gemma-3-4b-it",
-            arch=MultimodalArchitecture.Gemma3,
+            model_id="google/gemma-4-E4B-it",
+            arch=MultimodalArchitecture.Gemma4,
         ),
         in_situ_quant="Q4K",
     )
@@ -162,14 +162,14 @@ def example_multi_model_setup():
     Example showing a real multi-model setup with multimodal and text models.
 
     This example loads:
-    - Multimodal model: google/gemma-3-4b-it
+    - Multimodal model: google/gemma-4-E4B-it
     - Text model: Qwen/Qwen3-4B
     """
     # Load a multimodal model first
     runner = Runner(
         which=Which.MultimodalPlain(
-            model_id="google/gemma-3-4b-it",
-            arch=MultimodalArchitecture.Gemma3,
+            model_id="google/gemma-4-E4B-it",
+            arch=MultimodalArchitecture.Gemma4,
         ),
         in_situ_quant="Q4K",
     )

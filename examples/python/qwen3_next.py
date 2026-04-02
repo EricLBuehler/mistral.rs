@@ -12,7 +12,10 @@ res = runner.send_chat_completion_request(
     ChatCompletionRequest(
         model="default",
         messages=[
-            {"role": "user", "content": "Write a Python function to compute fibonacci numbers."}
+            {
+                "role": "user",
+                "content": "Write a Python function to compute fibonacci numbers.",
+            }
         ],
         max_tokens=256,
         presence_penalty=1.0,

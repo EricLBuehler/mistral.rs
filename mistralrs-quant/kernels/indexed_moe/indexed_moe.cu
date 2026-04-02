@@ -426,8 +426,7 @@ vec_dot_q4_0_q8_1(const void *__restrict__ vbq,
     u[2 * i + 0] = get_int_from_int8_aligned(bq8_1->qs, iqs + i);
     u[2 * i + 1] = get_int_from_int8_aligned(bq8_1->qs, iqs + i + QI4_0);
   }
-  return vec_dot_q4_0_q8_1_impl<VDR_Q4_0_Q8_1_MMVQ>(v, u, bq4_0->d,
-                                                     bq8_1->ds);
+  return vec_dot_q4_0_q8_1_impl<VDR_Q4_0_Q8_1_MMVQ>(v, u, bq4_0->d, bq8_1->ds);
 }
 
 static __device__ __forceinline__ float
@@ -442,8 +441,7 @@ vec_dot_q4_1_q8_1(const void *__restrict__ vbq,
     u[2 * i + 0] = get_int_from_int8_aligned(bq8_1->qs, iqs + i);
     u[2 * i + 1] = get_int_from_int8_aligned(bq8_1->qs, iqs + i + QI4_1);
   }
-  return vec_dot_q4_1_q8_1_impl<VDR_Q4_1_Q8_1_MMVQ>(v, u, bq4_1->dm,
-                                                     bq8_1->ds);
+  return vec_dot_q4_1_q8_1_impl<VDR_Q4_1_Q8_1_MMVQ>(v, u, bq4_1->dm, bq8_1->ds);
 }
 
 static __device__ __forceinline__ float
@@ -461,7 +459,7 @@ vec_dot_q5_0_q8_1(const void *__restrict__ vbq,
     u[2 * i + 1] = get_int_from_int8_aligned(bq8_1->qs, iqs + i + QI5_0);
   }
   return vec_dot_q5_0_q8_1_impl<VDR_Q5_0_Q8_1_MMVQ>(vl, vh, u, bq5_0->d,
-                                                     bq8_1->ds);
+                                                    bq8_1->ds);
 }
 
 static __device__ __forceinline__ float
@@ -479,7 +477,7 @@ vec_dot_q5_1_q8_1(const void *__restrict__ vbq,
     u[2 * i + 1] = get_int_from_int8_aligned(bq8_1->qs, iqs + i + QI5_1);
   }
   return vec_dot_q5_1_q8_1_impl<VDR_Q5_1_Q8_1_MMVQ>(vl, vh, u, bq5_1->dm,
-                                                     bq8_1->ds);
+                                                    bq8_1->ds);
 }
 
 static __device__ __forceinline__ float

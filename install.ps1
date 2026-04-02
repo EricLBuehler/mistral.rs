@@ -288,7 +288,7 @@ function Main {
     Write-Host ""
     Write-Host "  mistralrs run -m Qwen/Qwen3-4B"
     Write-Host ""
-    Write-Host "  mistralrs serve --ui -m google/gemma-3-4b-it"
+    Write-Host "  mistralrs serve --ui -m google/gemma-4-E4B-it"
     Write-Host ""
     Write-Host "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
     Write-Host ""

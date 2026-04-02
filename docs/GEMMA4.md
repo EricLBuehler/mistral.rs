@@ -1,4 +1,4 @@
-# Gemma 4 Model: [`gg-hf-gg/gemma-4-e4b-it`](https://huggingface.co/gg-hf-gg/gemma-4-e4b-it)
+# Gemma 4 Model: [`google/gemma-4-E4B-it`](https://huggingface.co/google/gemma-4-E4B-it)
 
 Gemma 4 is a multimodal model that supports text, vision (image), video, and audio input with text output. It builds on the Gemma family with full multimodal capabilities across all four input modalities.
 
@@ -22,7 +22,7 @@ We support an OpenAI compatible HTTP API for multimodal models. The examples bel
 1) Start the server
 
 ```
-mistralrs serve multimodal -p 1234 -m gg-hf-gg/gemma-4-e4b-it
+mistralrs serve multimodal -p 1234 -m google/gemma-4-E4B-it
 ```
 
 2) Send a request
@@ -140,6 +140,51 @@ print(completion.choices[0].message.content)
 
 ---
 
+## Python
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gemma4.py).
+
+```py
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+
+runner = Runner(
+    which=Which.MultimodalPlain(
+        model_id="google/gemma-4-E4B-it",
+        arch=MultimodalArchitecture.Gemma4,
+    ),
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "What is this?",
+                    },
+                ],
+            }
+        ],
+        max_tokens=256,
+        presence_penalty=1.0,
+        top_p=0.1,
+        temperature=0.1,
+    )
+)
+print(res.choices[0].message.content)
+print(res.usage)
+```
+
+---
+
 ## Rust
 You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs).
 
@@ -152,7 +197,7 @@ use mistralrs::{IsqType, TextMessageRole, VideoInput, MultimodalMessages, Multim
 #[tokio::main]
 async fn main() -> Result<()> {
     let model =
-        MultimodalModelBuilder::new("gg-hf-gg/gemma-4-e4b-it")
+        MultimodalModelBuilder::new("google/gemma-4-E4B-it")
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
@@ -188,7 +233,7 @@ In interactive mode, simply include the path or URL to a video file in your prom
 1) Start interactive mode
 
 ```
-mistralrs run multimodal -m gg-hf-gg/gemma-4-e4b-it
+mistralrs run multimodal -m google/gemma-4-E4B-it
 ```
 
 2) Enter prompts with video, image, or audio files

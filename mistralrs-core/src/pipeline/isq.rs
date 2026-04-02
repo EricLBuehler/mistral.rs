@@ -1302,10 +1302,7 @@ mod tests {
     #[test]
     fn test_resolve_uqff_shorthand_prefers_first_expand_variant() {
         // expand() returns [Q8_0, AFQ8] — Q8_0 (non-Metal) comes first
-        let files = vec![
-            "q8_0-0.uqff".to_string(),
-            "afq8-0.uqff".to_string(),
-        ];
+        let files = vec!["q8_0-0.uqff".to_string(), "afq8-0.uqff".to_string()];
         assert_eq!(
             resolve_uqff_shorthand("8", &files),
             Some("q8_0-0.uqff".to_string())

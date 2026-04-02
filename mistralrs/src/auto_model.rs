@@ -17,7 +17,7 @@ use crate::Model;
 /// to determine whether it should be loaded as a text, multimodal, or embedding model.
 ///
 /// Use this when you don't know (or don't care) whether a model ID corresponds to a text or
-/// multimodal architecture. For example, `google/gemma-3-4b-it` is detected as multimodal,
+/// multimodal architecture. For example, `google/gemma-4-E4B-it` is detected as multimodal,
 /// while `Qwen/Qwen3-4B` is detected as text, both work seamlessly.
 ///
 /// # Example

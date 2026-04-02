@@ -1117,11 +1117,19 @@ impl AudioModel {
         // SSCP
         let uvb_sscp = uvb.pp("subsample_conv_projection");
         let uvb_l0 = uvb_sscp.pp("layer0");
-        uvb_l0.pp("conv").add(&self.subsample_conv_projection.conv_0.conv);
-        uvb_l0.pp("norm").add(&self.subsample_conv_projection.conv_0.norm);
+        uvb_l0
+            .pp("conv")
+            .add(&self.subsample_conv_projection.conv_0.conv);
+        uvb_l0
+            .pp("norm")
+            .add(&self.subsample_conv_projection.conv_0.norm);
         let uvb_l1 = uvb_sscp.pp("layer1");
-        uvb_l1.pp("conv").add(&self.subsample_conv_projection.conv_1.conv);
-        uvb_l1.pp("norm").add(&self.subsample_conv_projection.conv_1.norm);
+        uvb_l1
+            .pp("conv")
+            .add(&self.subsample_conv_projection.conv_1.conv);
+        uvb_l1
+            .pp("norm")
+            .add(&self.subsample_conv_projection.conv_1.norm);
         uvb_sscp
             .pp("input_proj_linear")
             .add(&self.subsample_conv_projection.input_proj_linear);
@@ -1142,10 +1150,7 @@ impl AudioModel {
             uvb_attn
                 .pp("v_proj")
                 .extend(block.attention.attn.v_proj.residual_tensors());
-            uvb_attn.add_tensor(
-                "per_dim_scale",
-                block.attention.attn._per_dim_scale.clone(),
-            );
+            uvb_attn.add_tensor("per_dim_scale", block.attention.attn._per_dim_scale.clone());
             uvb_attn
                 .pp("relative_k_proj")
                 .add(&block.attention.attn.relative_position_embedding.pos_proj);

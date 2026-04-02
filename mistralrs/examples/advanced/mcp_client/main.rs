@@ -121,7 +121,7 @@ async fn main() -> Result<()> {
 
     // Build the model with MCP client configuration
     // The MCP client will automatically connect to configured servers and discover available tools
-    let model = ModelBuilder::new("google/gemma-3-4b-it".to_string())
+    let model = ModelBuilder::new("google/gemma-4-E4B-it".to_string())
         .with_auto_isq(IsqBits::Eight) // Use 8-bit quantization for efficiency
         .with_logging()
         .with_paged_attn(

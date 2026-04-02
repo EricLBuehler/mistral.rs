@@ -48,7 +48,7 @@ A minimal, fast, and modern web chat interface for [mistral.rs](https://github.c
 ```bash
 cargo run --release --features <specify feature(s) here> --bin mistralrs-web-chat -- \
   --text-model Qwen/Qwen3-4B \
-  --multimodal-model google/gemma-3-4b-it \
+  --multimodal-model google/gemma-4-E4B-it \
   --speech-model nari-labs/Dia-1.6B
 ```
 
@@ -110,7 +110,7 @@ Multiple models with web search:
 ```bash
 cargo run --release --features cuda --bin mistralrs-web-chat -- \
   --text-model Qwen/Qwen3-4B \
-  --multimodal-model google/gemma-3-4b-it \
+  --multimodal-model google/gemma-4-E4B-it \
   --enable-search \
   --search-embedding-model embedding_gemma
 ```

@@ -345,28 +345,30 @@ macro_rules! get_uqff_paths {
         let input_count = input_files.len();
 
         // Resolve numeric/ISQ-name shorthands (e.g., "8" -> "q8_0-0.uqff")
-        let resolved_files: Vec<String> = input_files.iter().map(|file_str| {
-            if let Some(resolved) = $crate::pipeline::isq::resolve_uqff_shorthand(file_str, &available_files) {
-                tracing::info!(
-                    "Resolved UQFF shorthand `{}` to `{}`",
-                    file_str,
-                    resolved,
-                );
-                resolved
-            } else if file_str.parse::<u32>().is_ok() {
-                let available_uqff: Vec<_> = available_files.iter()
-                    .filter(|f| f.ends_with(".uqff"))
-                    .collect();
-                tracing::warn!(
-                    "No UQFF file found for shorthand `{}`. Available UQFF files: {:?}",
-                    file_str,
-                    available_uqff,
-                );
-                file_str.clone()
-            } else {
-                file_str.clone()
-            }
-        }).collect();
+        let resolved_files: Vec<String> = input_files
+            .iter()
+            .map(|file_str| {
+                if let Some(resolved) =
+                    $crate::pipeline::isq::resolve_uqff_shorthand(file_str, &available_files)
+                {
+                    tracing::info!("Resolved UQFF shorthand `{}` to `{}`", file_str, resolved,);
+                    resolved
+                } else if file_str.parse::<u32>().is_ok() {
+                    let available_uqff: Vec<_> = available_files
+                        .iter()
+                        .filter(|f| f.ends_with(".uqff"))
+                        .collect();
+                    tracing::warn!(
+                        "No UQFF file found for shorthand `{}`. Available UQFF files: {:?}",
+                        file_str,
+                        available_uqff,
+                    );
+                    file_str.clone()
+                } else {
+                    file_str.clone()
+                }
+            })
+            .collect();
 
         let mut expanded_files: Vec<String> = Vec::new();
         let mut seen = std::collections::HashSet::new();

@@ -65,10 +65,10 @@ mistralrs run -m Qwen/Qwen3-4B
 mistralrs run -m Qwen/Qwen3-4B -i "What is the capital of France?"
 
 # One-shot with an image
-mistralrs run -m google/gemma-3-4b-it --image photo.jpg -i "Describe this image"
+mistralrs run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
 
 # Or start a server with web UI
-mistralrs serve --ui -m google/gemma-3-4b-it
+mistralrs serve --ui -m google/gemma-4-E4B-it
 ```
 
 Then visit `http://localhost:1234/ui` for the web chat interface.
@@ -237,7 +237,7 @@ use mistralrs::{IsqType, TextMessageRole, TextMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = MultimodalModelBuilder::new("google/gemma-3-4b-it")
+    let model = MultimodalModelBuilder::new("google/gemma-4-E4B-it")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()

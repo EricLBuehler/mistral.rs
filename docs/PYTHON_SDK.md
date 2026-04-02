@@ -250,18 +250,18 @@ The `mistralrs` Python SDK supports running multiple models using the `Runner` c
 ```python
 import mistralrs
 
-# Create a Runner with a multimodal model (Gemma 3 4B)
+# Create a Runner with a multimodal model (Gemma 4 E4B)
 runner = mistralrs.Runner(
     which=mistralrs.Which.MultimodalPlain(
-        model_id="google/gemma-3-4b-it",
-        arch=mistralrs.MultimodalArchitecture.Gemma3,
+        model_id="google/gemma-4-E4B-it",
+        arch=mistralrs.MultimodalArchitecture.Gemma4,
     ),
     in_situ_quant="Q4K",
 )
 
 # List available models (model IDs are registered IDs, aliases if configured)
 models = runner.list_models()
-print(f"Available models: {models}")  # ["google/gemma-3-4b-it"]
+print(f"Available models: {models}")  # ["google/gemma-4-E4B-it"]
 
 # Send request to specific model using model_id parameter
 response = runner.send_chat_completion_request(
@@ -269,7 +269,7 @@ response = runner.send_chat_completion_request(
         messages=[{"role": "user", "content": "Hello!"}],
         max_tokens=100
     ),
-    model_id="google/gemma-3-4b-it"  # Target specific model
+    model_id="google/gemma-4-E4B-it"  # Target specific model
 )
 
 # Send request without model_id (uses default model)
@@ -293,7 +293,7 @@ default_model = runner.get_default_model_id()
 print(f"Default model: {default_model}")
 
 # Change default model (model must be loaded)
-runner.set_default_model_id("google/gemma-3-4b-it")
+runner.set_default_model_id("google/gemma-4-E4B-it")
 
 # List models with their status
 models_with_status = runner.list_models_with_status()
@@ -306,7 +306,7 @@ for model_id, status in models_with_status:
 You can unload models to free memory and reload them on demand:
 
 ```python
-model_id = "google/gemma-3-4b-it"
+model_id = "google/gemma-4-E4B-it"
 
 # Check if model is loaded
 is_loaded = runner.is_model_loaded(model_id)

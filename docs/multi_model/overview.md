@@ -176,7 +176,7 @@ mistralrs from-config --file <CONFIG>
   },
   "multimodal-model": {
     "MultimodalPlain": {
-      "model_id": "google/gemma-3-4b-it"
+      "model_id": "google/gemma-4-E4B-it"
     }
   }
 }
@@ -308,7 +308,7 @@ The `mistralrs` crate provides `MultiModelBuilder` for loading multiple models a
 
 ### Loading Multiple Models
 
-By default, model IDs are the pipeline names (usually the HuggingFace model path, e.g., `"google/gemma-3-4b-it"`). You can provide custom aliases with `add_model_with_alias` for shorter IDs.
+By default, model IDs are the pipeline names (usually the HuggingFace model path, e.g., `"google/gemma-4-E4B-it"`). You can provide custom aliases with `add_model_with_alias` for shorter IDs.
 
 ```rust
 use mistralrs::{IsqType, MultiModelBuilder, TextModelBuilder, MultimodalModelBuilder, TextMessages, TextMessageRole};
@@ -320,7 +320,7 @@ async fn main() -> anyhow::Result<()> {
     let model = MultiModelBuilder::new()
         .add_model_with_alias(
             "gemma-multimodal",
-            MultimodalModelBuilder::new("google/gemma-3-4b-it")  // Multimodal model
+            MultimodalModelBuilder::new("google/gemma-4-E4B-it")  // Multimodal model
                 .with_isq(IsqType::Q4K)
                 .with_logging(),
         )
@@ -397,11 +397,11 @@ The Python `Runner` class supports multi-model operations directly.
 ```python
 from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture, Architecture
 
-# Create a runner with a multimodal model (Gemma 3 4B)
+# Create a runner with a multimodal model (Gemma 4 E4B)
 runner = Runner(
     which=Which.MultimodalPlain(
-        model_id="google/gemma-3-4b-it",
-        arch=MultimodalArchitecture.Gemma3,
+        model_id="google/gemma-4-E4B-it",
+        arch=MultimodalArchitecture.Gemma4,
     ),
     in_situ_quant="Q4K",
 )
@@ -421,7 +421,7 @@ print(f"Available models: {models}")
 
 # Get/set default model
 default = runner.get_default_model_id()
-runner.set_default_model_id("google/gemma-3-4b-it")
+runner.set_default_model_id("google/gemma-4-E4B-it")
 
 # Send request with specific model_id
 request = ChatCompletionRequest(
@@ -440,13 +440,13 @@ status = runner.list_models_with_status()
 # Returns list of (model_id, status) tuples
 
 # Check if a model is loaded
-is_loaded = runner.is_model_loaded("google/gemma-3-4b-it")
+is_loaded = runner.is_model_loaded("google/gemma-4-E4B-it")
 
 # Unload a model to free memory
-runner.unload_model("google/gemma-3-4b-it")
+runner.unload_model("google/gemma-4-E4B-it")
 
 # Reload when needed
-runner.reload_model("google/gemma-3-4b-it")
+runner.reload_model("google/gemma-4-E4B-it")
 ```
 
 ### Request Methods with model_id
@@ -489,7 +489,7 @@ multi.send_chat_request_to_model(request, "model-id").await?;
 
 // New - model IDs are pipeline names by default (aliases optional)
 let model = MultiModelBuilder::new()
-    .add_model(MultimodalModelBuilder::new("google/gemma-3-4b-it"))
+    .add_model(MultimodalModelBuilder::new("google/gemma-4-E4B-it"))
     .add_model(TextModelBuilder::new("Qwen/Qwen3-4B"))
     .build()
     .await?;
@@ -506,6 +506,6 @@ multi_runner = MultiModelRunner(runner)
 multi_runner.send_chat_completion_request_to_model(request, "model-id")
 
 # New - model IDs are the registered IDs (aliases if configured)
-runner = Runner(which=Which.Plain(model_id="google/gemma-3-4b-it", ...))
-runner.send_chat_completion_request(request, model_id="google/gemma-3-4b-it")
+runner = Runner(which=Which.Plain(model_id="google/gemma-4-E4B-it", ...))
+runner.send_chat_completion_request(request, model_id="google/gemma-4-E4B-it")
 ```

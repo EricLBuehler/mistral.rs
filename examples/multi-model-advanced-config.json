@@ -27,10 +27,10 @@
     }
   },
   {
-    "model_id": "gemma3-4b-multimodal",
+    "model_id": "gemma4-E4B-multimodal",
     "model": {
       "MultimodalPlain": {
-        "model_id": "google/gemma-3-4b-it"
+        "model_id": "google/gemma-4-E4B-it"
       }
     }
   },

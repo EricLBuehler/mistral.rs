@@ -58,7 +58,7 @@ mistralrs run -m Qwen/Qwen3-4B
 mistralrs run -m Qwen/Qwen3-4B --thinking
 
 # Run a multimodal model
-mistralrs run -m google/gemma-3-4b-it
+mistralrs run -m google/gemma-4-E4B-it
 ```
 
 **One-shot mode examples:**
@@ -70,10 +70,10 @@ When `-i` is provided, the model processes a single request and exits. Combine w
 mistralrs run -m Qwen/Qwen3-4B -i "What is the capital of France?"
 
 # Describe an image
-mistralrs run -m google/gemma-3-4b-it --image photo.jpg -i "Describe this image"
+mistralrs run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
 
 # Multiple images
-mistralrs run -m google/gemma-3-4b-it --image img1.jpg --image img2.png -i "Compare these images"
+mistralrs run -m google/gemma-4-E4B-it --image img1.jpg --image img2.png -i "Compare these images"
 
 # Video input
 mistralrs run -m google/gemma-4-E4B-it --video clip.mp4 -i "What happens in this video?"
@@ -85,7 +85,7 @@ mistralrs run -m google/gemma-4-E4B-it --audio recording.wav -i "Transcribe this
 mistralrs run -m google/gemma-4-E4B-it --image photo.jpg --audio clip.mp3 -i "Describe the image and transcribe the audio"
 
 # URLs work too
-mistralrs run -m google/gemma-3-4b-it --image https://example.com/photo.jpg -i "What is in this image?"
+mistralrs run -m google/gemma-4-E4B-it --image https://example.com/photo.jpg -i "What is in this image?"
 ```
 
 **Options:**
@@ -169,7 +169,7 @@ mistralrs quantize -m Qwen/Qwen3-4B --isq q4k,q8_0 -o qwen3-4b-uqff/
 mistralrs quantize -m Qwen/Qwen3-4B --isq q4k --isq q8_0 -o qwen3-4b-uqff/
 
 # Quantize a multimodal model
-mistralrs quantize -m google/gemma-3-4b-it --isq 4 -o gemma3-4b-uqff/
+mistralrs quantize -m google/gemma-4-E4B-it --isq 4 -o gemma4-E4B-uqff/
 
 # Quantize with imatrix for better quality
 mistralrs quantize -m Qwen/Qwen3-4B --isq q4k --imatrix imatrix.dat -o qwen3-4b-uqff/qwen3-4b-q4k.uqff
@@ -384,7 +384,7 @@ HuggingFace Model Cache
 │ Model                    │ Size     │ Last Used   │
 ├──────────────────────────┼──────────┼─────────────┤
 │ Qwen/Qwen3-4B            │ 8.5 GB   │ today       │
-│ google/gemma-3-4b-it     │ 6.2 GB   │ 2 days ago  │
+│ google/gemma-4-E4B-it     │ 6.2 GB   │ 2 days ago  │
 │ meta-llama/Llama-3.2-3B  │ 5.8 GB   │ 1 week ago  │
 └──────────────────────────┴──────────┴─────────────┘
 
@@ -502,7 +502,7 @@ model_id = "Qwen/Qwen3-4B"
 
 [[models]]
 kind = "multimodal"
-model_id = "google/gemma-3-4b-it"
+model_id = "google/gemma-4-E4B-it"
 
 [[models]]
 kind = "embedding"
@@ -563,8 +563,8 @@ mistralrs serve text -m Qwen/Qwen3-4B
 Multimodal models that can process images, audio, and text.
 
 ```bash
-mistralrs run multimodal -m google/gemma-3-4b-it
-mistralrs serve multimodal -m google/gemma-3-4b-it
+mistralrs run multimodal -m google/gemma-4-E4B-it
+mistralrs serve multimodal -m google/gemma-4-E4B-it
 ```
 
 **Multimodal Options:**

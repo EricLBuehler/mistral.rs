@@ -6,10 +6,10 @@
     },
     "in_situ_quant": "8"
   },
-  "gemma3-4b-multimodal": {
-    "alias": "gemma3-4b-multimodal",
+  "gemma4-E4B-multimodal": {
+    "alias": "gemma4-E4B-multimodal",
     "MultimodalPlain": {
-      "model_id": "google/gemma-3-4b-it"
+      "model_id": "google/gemma-4-E4B-it"
     },
     "in_situ_quant": "4"
   },

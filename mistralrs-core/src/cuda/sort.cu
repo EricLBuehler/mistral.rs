@@ -194,7 +194,8 @@ __global__ void topk_kernel(const T *__restrict__ input, // [nrows, ncols]
 
     for (int i = tid; i < ncols; i += block_size) {
       float candidate = (float)s_data[i];
-      if (!s_used[i] && candidate == candidate && candidate > (float)local_max) {
+      if (!s_used[i] && candidate == candidate &&
+          candidate > (float)local_max) {
         local_max = s_data[i];
         local_idx = i;
       }
@@ -356,7 +357,8 @@ __global__ void topk_softmax_kernel(
 
     for (int i = tid; i < ncols; i += block_size) {
       float candidate = (float)s_data[i];
-      if (!s_used[i] && candidate == candidate && candidate > (float)local_max) {
+      if (!s_used[i] && candidate == candidate &&
+          candidate > (float)local_max) {
         local_max = s_data[i];
         local_idx = i;
       }

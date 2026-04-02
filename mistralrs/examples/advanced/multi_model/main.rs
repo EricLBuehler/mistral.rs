@@ -9,7 +9,7 @@ use mistralrs::{
 };
 
 // Model IDs - these are the actual HuggingFace model paths
-const GEMMA_MODEL_ID: &str = "google/gemma-3-4b-it";
+const GEMMA_MODEL_ID: &str = "google/gemma-4-E4B-it";
 const QWEN_MODEL_ID: &str = "Qwen/Qwen3-4B";
 // Aliases - these are the short IDs used in API requests
 const GEMMA_ALIAS: &str = "gemma-multimodal";

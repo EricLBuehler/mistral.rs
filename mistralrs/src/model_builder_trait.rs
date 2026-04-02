@@ -127,7 +127,7 @@ impl MultiModelBuilder {
         }
     }
 
-    /// Add a model. The model ID will be the pipeline name (e.g., "google/gemma-3-4b-it").
+    /// Add a model. The model ID will be the pipeline name (e.g., "google/gemma-4-E4B-it").
     pub fn add_model<B: Into<AnyModelBuilder>>(mut self, builder: B) -> Self {
         self.builders.push(MultiModelEntry {
             builder: builder.into(),

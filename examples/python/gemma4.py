@@ -2,7 +2,7 @@ from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitectu
 
 runner = Runner(
     which=Which.MultimodalPlain(
-        model_id="gg-hf-gg/gemma-4-e4b-it",
+        model_id="google/gemma-4-E4B-it",
         arch=MultimodalArchitecture.Gemma4,
     ),
 )
