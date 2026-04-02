@@ -973,33 +973,56 @@ impl Model {
                         }
 
                         let first_offset = pool.get_seqlen_offset(indices_vec[0] as usize);
-                        if indices_vec
+                        let offsets_uniform = indices_vec
                             .iter()
-                            .any(|&idx| pool.get_seqlen_offset(idx as usize) != first_offset)
-                        {
-                            candle_core::bail!(
-                                "Hybrid recurrent seqlen offsets diverged within a batch for layer {layer_idx}."
-                            );
-                        }
+                            .all(|&idx| pool.get_seqlen_offset(idx as usize) == first_offset);
 
-                        let conv_state = pool.gather_conv_state(indices)?;
-                        let recurrent_state = pool.gather_recurrent_state(indices)?;
+                        if offsets_uniform {
+                            let conv_state = pool.gather_conv_state(indices)?;
+                            let recurrent_state = pool.gather_recurrent_state(indices)?;
 
-                        let mut gdn_cache = GdnLayerCache {
-                            conv_state,
-                            recurrent_state,
-                            seqlen_offset: first_offset,
-                        };
+                            let mut gdn_cache = GdnLayerCache {
+                                conv_state,
+                                recurrent_state,
+                                seqlen_offset: first_offset,
+                            };
 
-                        x = layer.forward_linear(&x, &mut gdn_cache)?;
+                            x = layer.forward_linear(&x, &mut gdn_cache)?;
 
-                        pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
-                        pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
+                            pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
+                            pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
 
-                        let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
-                        for &idx in &indices_vec {
-                            let updated = pool.get_seqlen_offset(idx as usize) + delta;
-                            pool.set_seqlen_offset(idx as usize, updated);
+                            let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
+                            for &idx in &indices_vec {
+                                let updated = pool.get_seqlen_offset(idx as usize) + delta;
+                                pool.set_seqlen_offset(idx as usize, updated);
+                            }
+                        } else {
+                            let mut outputs = Vec::with_capacity(indices_vec.len());
+                            for (batch_idx, &seq_idx) in indices_vec.iter().enumerate() {
+                                let single_idx = Tensor::from_vec(vec![seq_idx], (1,), indices.device())?;
+                                let seq_offset = pool.get_seqlen_offset(seq_idx as usize);
+                                let conv_state = pool.gather_conv_state(&single_idx)?;
+                                let recurrent_state = pool.gather_recurrent_state(&single_idx)?;
+
+                                let mut gdn_cache = GdnLayerCache {
+                                    conv_state,
+                                    recurrent_state,
+                                    seqlen_offset: seq_offset,
+                                };
+
+                                let seq_x = x.narrow(0, batch_idx, 1)?;
+                                let seq_out = layer.forward_linear(&seq_x, &mut gdn_cache)?;
+                                outputs.push(seq_out);
+
+                                pool.scatter_conv_state(&single_idx, &gdn_cache.conv_state)?;
+                                pool.scatter_recurrent_state(&single_idx, &gdn_cache.recurrent_state)?;
+
+                                let delta = gdn_cache.seqlen_offset.saturating_sub(seq_offset);
+                                let updated = pool.get_seqlen_offset(seq_idx as usize) + delta;
+                                pool.set_seqlen_offset(seq_idx as usize, updated);
+                            }
+                            x = Tensor::cat(&outputs, 0)?;
                         }
                     } else {
                         candle_core::bail!(
