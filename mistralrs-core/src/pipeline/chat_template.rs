@@ -323,6 +323,45 @@ fn is_gemma4_tool_template(template: &str) -> bool {
     template.contains("<|tool_call>") && template.contains("<tool_call|>")
 }
 
+/// Parse tool_call `arguments` fields from JSON strings into objects.
+///
+/// The OpenAI API returns `tool_calls[i].function.arguments` as a JSON string,
+/// but the Gemma 4 chat template's `format_argument` macro only emits the
+/// correct `<|"|>` delimited format when `arguments` is a mapping (object).
+/// When it's a string, the raw JSON is rendered verbatim, producing a format
+/// mismatch that confuses the model in multi-turn tool-calling conversations.
+fn parse_gemma4_tool_call_arguments(messages: &mut [IndexMap<String, MessageContent>]) {
+    for message in messages.iter_mut() {
+        let is_assistant = message
+            .get("role")
+            .and_then(|v| match v {
+                Either::Left(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .is_some_and(|r| r == "assistant");
+        if !is_assistant {
+            continue;
+        }
+
+        let Some(Either::Right(tool_calls)) = message.get_mut("tool_calls") else {
+            continue;
+        };
+        for tc in tool_calls.iter_mut() {
+            // tool_calls[i].function.arguments
+            let Some(serde_json::Value::Object(func)) = tc.get_mut("function") else {
+                continue;
+            };
+            if let Some(serde_json::Value::String(json_str)) = func.get("arguments") {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+                    if parsed.is_object() {
+                        func.insert("arguments".to_string(), parsed);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Pre-process messages for Gemma 4 tool templates.
 ///
 /// The Gemma 4 chat template expects `tool_responses` as a field on the
@@ -479,9 +518,12 @@ pub fn apply_chat_template_to(
         }
     };
 
-    // Pre-process messages for Gemma 4 tool templates: merge role:"tool"
-    // messages into tool_responses on the preceding assistant message.
+    // Pre-process messages for Gemma 4 tool templates: parse JSON-string
+    // tool_call arguments into objects (so the template renders them in
+    // <|"|> format), and merge role:"tool" messages into tool_responses on
+    // the preceding assistant message.
     if is_gemma4_tool_template(&resolved_template) {
+        parse_gemma4_tool_call_arguments(&mut messages);
         preprocess_gemma4_tool_messages(&mut messages);
     }
 
@@ -730,6 +772,31 @@ mod tests {
         assert_eq!(tool_responses[0]["name"], "get_weather");
         // Content was valid JSON → parsed into a Value, not a string
         assert_eq!(tool_responses[0]["response"]["temp"], 72);
+    }
+
+    #[test]
+    fn gemma4_parse_tool_call_arguments_converts_json_string_to_object() {
+        let mut messages = vec![
+            user_text_message("call something"),
+            assistant_message_with_tool_calls(),
+        ];
+        // Before: arguments is a JSON string
+        if let Some(Either::Right(ref tcs)) = messages[1].get("tool_calls") {
+            let func = tcs[0].get("function").unwrap();
+            assert!(func.get("arguments").unwrap().is_string());
+        }
+
+        super::parse_gemma4_tool_call_arguments(&mut messages);
+
+        // After: arguments should be a parsed object
+        if let Some(Either::Right(ref tcs)) = messages[1].get("tool_calls") {
+            let func = tcs[0].get("function").unwrap();
+            let args = func.get("arguments").unwrap();
+            assert!(args.is_object(), "arguments should be parsed to object");
+            assert_eq!(args.get("city").unwrap(), "Boston");
+        } else {
+            panic!("expected tool_calls");
+        }
     }
 
     #[test]

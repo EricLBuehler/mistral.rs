@@ -444,6 +444,39 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
         }
     }
 
+    // Models need a system message alongside tool declarations to reliably
+    // trigger tool calls. Without one the model often answers from knowledge
+    // instead of generating <|tool_call>. Inject a minimal default when the
+    // user hasn't provided one.
+    {
+        let messages = match &mut probe.messages {
+            RequestMessage::Chat { messages, .. }
+            | RequestMessage::MultimodalChat { messages, .. } => messages,
+            _ => unreachable!(),
+        };
+        let has_system = messages
+            .first()
+            .and_then(|m| m.get("role"))
+            .and_then(|r| match r {
+                Either::Left(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .is_some_and(|r| r == "system" || r == "developer");
+        if !has_system {
+            let mut sys_msg: IndexMap<String, MessageContent> = IndexMap::new();
+            sys_msg.insert("role".to_string(), Either::Left("system".to_string()));
+            // NOTE: "You are a helpful assistant." also works and may improve
+            // tool-call reliability further, but an empty system message is
+            // enough to make the template emit a proper system turn with
+            // tool declarations.
+            sys_msg.insert(
+                "content".to_string(),
+                Either::Left(String::new()),
+            );
+            messages.insert(0, sys_msg);
+        }
+    }
+
     probe.tool_choice = Some(ToolChoice::Auto);
     // Prevent accidental infinite recursion on the probe itself.
     probe.web_search_options = None;
