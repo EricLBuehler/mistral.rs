@@ -18,9 +18,22 @@ use crate::{
 
 use super::Engine;
 
-/// Build a `tool_calls` structured field for an assistant message in the
-/// auto-tool-calling loop.  This enables Gemma 4 (and other templates that
-/// use `message.tool_calls`) to render the tool call correctly.
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+/// Get a mutable reference to the messages vec inside a request.
+fn get_messages_mut(
+    request: &mut NormalRequest,
+) -> &mut Vec<IndexMap<String, MessageContent>> {
+    match &mut request.messages {
+        RequestMessage::Chat { messages, .. }
+        | RequestMessage::MultimodalChat { messages, .. } => messages,
+        _ => unreachable!(),
+    }
+}
+
+/// Build a `tool_calls` structured field for an assistant message.
+/// Enables Gemma 4 (and other templates that use `message.tool_calls`)
+/// to render the tool call correctly.
 fn build_tool_calls_field(tc: &ToolCallResponse) -> MessageContent {
     let mut tc_map = IndexMap::new();
     tc_map.insert("id".to_string(), Value::String(tc.id.clone()));
@@ -34,33 +47,79 @@ fn build_tool_calls_field(tc: &ToolCallResponse) -> MessageContent {
     Either::Right(vec![tc_map])
 }
 
+/// Append an assistant message recording the tool call invocation.
+fn append_assistant_tool_call(
+    messages: &mut Vec<IndexMap<String, MessageContent>>,
+    tc: &ToolCallResponse,
+) {
+    let mut message: IndexMap<String, MessageContent> = IndexMap::new();
+    message.insert("role".to_string(), Either::Left("assistant".to_string()));
+    message.insert("content".to_string(), Either::Left(String::new()));
+    message.insert("tool_calls".to_string(), build_tool_calls_field(tc));
+    messages.push(message);
+}
+
+/// Append a tool response message with the execution result.
+fn append_tool_response(
+    messages: &mut Vec<IndexMap<String, MessageContent>>,
+    tool_name: &str,
+    content: String,
+) {
+    let mut message: IndexMap<String, MessageContent> = IndexMap::new();
+    message.insert("role".to_string(), Either::Left("tool".to_string()));
+    message.insert("name".to_string(), Either::Left(tool_name.to_string()));
+    message.insert("content".to_string(), Either::Left(content));
+    messages.push(message);
+}
+
+/// Ensure a system message exists at the start of the conversation.
+/// Models need a system message alongside tool declarations to reliably
+/// trigger tool calls.
+fn ensure_system_message(messages: &mut Vec<IndexMap<String, MessageContent>>) {
+    let has_system = messages
+        .first()
+        .and_then(|m| m.get("role"))
+        .and_then(|r| match r {
+            Either::Left(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .is_some_and(|r| r == "system" || r == "developer");
+    if !has_system {
+        let mut sys_msg: IndexMap<String, MessageContent> = IndexMap::new();
+        sys_msg.insert("role".to_string(), Either::Left("system".to_string()));
+        sys_msg.insert("content".to_string(), Either::Left(String::new()));
+        messages.insert(0, sys_msg);
+    }
+}
+
+/// Forward a non-chat-completion response to the user sender.
+/// Returns `true` if the response was forwarded (caller should return),
+/// `false` if it's a `Done` or `Chunk` that the caller should handle.
+async fn forward_passthrough(
+    resp: Response,
+    user_sender: &tokio::sync::mpsc::Sender<Response>,
+) -> Option<Response> {
+    match resp {
+        // These are the ones the tool loop actually handles:
+        Response::Done(_) | Response::Chunk(_) => Some(resp),
+        // Everything else gets forwarded directly:
+        other => {
+            let _ = user_sender.send(other).await;
+            None
+        }
+    }
+}
+
+// ── Tool executors ─────────────────────────────────────────────────────────
+
 async fn do_search(
     this: Arc<Engine>,
     mut second_request: NormalRequest,
     tool_calls: &ToolCallResponse,
     web_search_options: &WebSearchOptions,
 ) -> NormalRequest {
-    let messages = match &mut second_request.messages {
-        RequestMessage::Chat { messages, .. } | RequestMessage::MultimodalChat { messages, .. } => {
-            messages
-        }
-        _ => unreachable!(),
-    };
-
-    // Add assistant call message
-    {
-        let mut message: IndexMap<String, MessageContent> = IndexMap::new();
-        message.insert("role".to_string(), Either::Left("assistant".to_string()));
-        message.insert(
-            "content".to_string(),
-            Either::Left(format!(
-                "{{\"name\":\"{}\",\"arguments\":\"{}\"}}",
-                tool_calls.function.name, tool_calls.function.arguments
-            )),
-        );
-        message.insert("tool_calls".to_string(), build_tool_calls_field(tool_calls));
-        messages.push(message);
-    }
+    let messages = get_messages_mut(&mut second_request);
+    append_assistant_tool_call(messages, tool_calls);
     let tool_call_params: SearchFunctionParameters =
         serde_json::from_str(&tool_calls.function.arguments).unwrap();
     tracing::info!(
@@ -213,14 +272,7 @@ async fn do_search(
             used_results.len()
         );
 
-        let mut message: IndexMap<String, MessageContent> = IndexMap::new();
-        message.insert("role".to_string(), Either::Left("tool".to_string()));
-        message.insert(
-            "name".to_string(),
-            Either::Left(tool_calls.function.name.clone()),
-        );
-        message.insert("content".to_string(), Either::Left(tool_result));
-        messages.push(message);
+        append_tool_response(messages, &tool_calls.function.name, tool_result);
     }
 
     // Allow the assistant to invoke tools again on the next turn
@@ -237,27 +289,8 @@ async fn do_extraction(
     tool_calls: &ToolCallResponse,
     web_search_options: &WebSearchOptions,
 ) -> NormalRequest {
-    let messages = match &mut second_request.messages {
-        RequestMessage::Chat { messages, .. } | RequestMessage::MultimodalChat { messages, .. } => {
-            messages
-        }
-        _ => unreachable!(),
-    };
-
-    // Add assistant call message
-    {
-        let mut message: IndexMap<String, MessageContent> = IndexMap::new();
-        message.insert("role".to_string(), Either::Left("assistant".to_string()));
-        message.insert(
-            "content".to_string(),
-            Either::Left(format!(
-                "{{\"name\":\"{}\",\"arguments\":\"{}\"}}",
-                tool_calls.function.name, tool_calls.function.arguments
-            )),
-        );
-        message.insert("tool_calls".to_string(), build_tool_calls_field(tool_calls));
-        messages.push(message);
-    }
+    let messages = get_messages_mut(&mut second_request);
+    append_assistant_tool_call(messages, tool_calls);
     let tool_call_params: ExtractFunctionParameters =
         serde_json::from_str(&tool_calls.function.arguments).unwrap();
     tracing::info!(
@@ -315,17 +348,11 @@ async fn do_extraction(
             (end - start).as_secs_f32(),
         );
 
-        let mut message: IndexMap<String, MessageContent> = IndexMap::new();
-        message.insert("role".to_string(), Either::Left("tool".to_string()));
-        message.insert(
-            "name".to_string(),
-            Either::Left(tool_calls.function.name.clone()),
+        append_tool_response(
+            messages,
+            &tool_calls.function.name,
+            format!("{{\"output\": \"{tool_result}\"}}"),
         );
-        message.insert(
-            "content".to_string(),
-            Either::Left(format!("{{\"output\": \"{tool_result}\"}}")),
-        );
-        messages.push(message);
     }
 
     // Allow the assistant to invoke tools again on the next turn
@@ -341,26 +368,8 @@ async fn do_custom_tool(
     mut second_request: NormalRequest,
     tool_calls: &ToolCallResponse,
 ) -> NormalRequest {
-    let messages = match &mut second_request.messages {
-        RequestMessage::Chat { messages, .. } | RequestMessage::MultimodalChat { messages, .. } => {
-            messages
-        }
-        _ => unreachable!(),
-    };
-
-    {
-        let mut message: IndexMap<String, MessageContent> = IndexMap::new();
-        message.insert("role".to_string(), Either::Left("assistant".to_string()));
-        message.insert(
-            "content".to_string(),
-            Either::Left(format!(
-                "{{\"name\":\"{}\",\"arguments\":\"{}\"}}",
-                tool_calls.function.name, tool_calls.function.arguments
-            )),
-        );
-        message.insert("tool_calls".to_string(), build_tool_calls_field(tool_calls));
-        messages.push(message);
-    }
+    let messages = get_messages_mut(&mut second_request);
+    append_assistant_tool_call(messages, tool_calls);
 
     let result = if let Some(cb) = this.tool_callbacks.get(&tool_calls.function.name) {
         cb(&tool_calls.function).unwrap_or_else(|e| {
@@ -389,16 +398,7 @@ async fn do_custom_tool(
         format!("ERROR: no tool callback for {}", tool_calls.function.name)
     };
 
-    {
-        let mut message: IndexMap<String, MessageContent> = IndexMap::new();
-        message.insert("role".to_string(), Either::Left("tool".to_string()));
-        message.insert(
-            "name".to_string(),
-            Either::Left(tool_calls.function.name.clone()),
-        );
-        message.insert("content".to_string(), Either::Left(result));
-        messages.push(message);
-    }
+    append_tool_response(messages, &tool_calls.function.name, result);
 
     second_request.tool_choice = Some(ToolChoice::Auto);
     second_request
@@ -445,37 +445,7 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
     }
 
     // Models need a system message alongside tool declarations to reliably
-    // trigger tool calls. Without one the model often answers from knowledge
-    // instead of generating <|tool_call>. Inject a minimal default when the
-    // user hasn't provided one.
-    {
-        let messages = match &mut probe.messages {
-            RequestMessage::Chat { messages, .. }
-            | RequestMessage::MultimodalChat { messages, .. } => messages,
-            _ => unreachable!(),
-        };
-        let has_system = messages
-            .first()
-            .and_then(|m| m.get("role"))
-            .and_then(|r| match r {
-                Either::Left(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .is_some_and(|r| r == "system" || r == "developer");
-        if !has_system {
-            let mut sys_msg: IndexMap<String, MessageContent> = IndexMap::new();
-            sys_msg.insert("role".to_string(), Either::Left("system".to_string()));
-            // NOTE: "You are a helpful assistant." also works and may improve
-            // tool-call reliability further, but an empty system message is
-            // enough to make the template emit a proper system turn with
-            // tool declarations.
-            sys_msg.insert(
-                "content".to_string(),
-                Either::Left(String::new()),
-            );
-            messages.insert(0, sys_msg);
-        }
-    }
+    ensure_system_message(get_messages_mut(&mut probe));
 
     probe.tool_choice = Some(ToolChoice::Auto);
     // Prevent accidental infinite recursion on the probe itself.
@@ -508,83 +478,13 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
             // ----------------------- NON-STREAMING ------------------------
             if !is_streaming {
                 let resp = receiver.recv().await.unwrap();
-                // Handle the response, forwarding errors and non-Done responses to user
+                let Some(resp) = forward_passthrough(resp, &user_sender).await else {
+                    return;
+                };
                 let done = match resp {
                     Response::Done(done) => done,
-                    // Forward error responses to user and return
-                    Response::InternalError(e) => {
-                        let _ = user_sender.send(Response::InternalError(e)).await;
-                        return;
-                    }
-                    Response::ValidationError(e) => {
-                        let _ = user_sender.send(Response::ValidationError(e)).await;
-                        return;
-                    }
-                    Response::ModelError(msg, resp) => {
-                        let _ = user_sender.send(Response::ModelError(msg, resp)).await;
-                        return;
-                    }
-                    // Forward other response types to user and return
-                    Response::Chunk(res) => {
-                        let _ = user_sender.send(Response::Chunk(res)).await;
-                        return;
-                    }
-                    Response::CompletionChunk(res) => {
-                        let _ = user_sender.send(Response::CompletionChunk(res)).await;
-                        return;
-                    }
-                    Response::CompletionModelError(msg, resp) => {
-                        let _ = user_sender
-                            .send(Response::CompletionModelError(msg, resp))
-                            .await;
-                        return;
-                    }
-                    Response::CompletionDone(res) => {
-                        let _ = user_sender.send(Response::CompletionDone(res)).await;
-                        return;
-                    }
-                    Response::ImageGeneration(res) => {
-                        let _ = user_sender.send(Response::ImageGeneration(res)).await;
-                        return;
-                    }
-                    Response::Raw {
-                        logits_chunks,
-                        tokens,
-                    } => {
-                        let _ = user_sender
-                            .send(Response::Raw {
-                                logits_chunks,
-                                tokens,
-                            })
-                            .await;
-                        return;
-                    }
-                    Response::Embeddings {
-                        embeddings,
-                        prompt_tokens,
-                        total_tokens,
-                    } => {
-                        let _ = user_sender
-                            .send(Response::Embeddings {
-                                embeddings,
-                                prompt_tokens,
-                                total_tokens,
-                            })
-                            .await;
-                        return;
-                    }
-                    Response::Speech {
-                        pcm,
-                        rate,
-                        channels,
-                    } => {
-                        let _ = user_sender
-                            .send(Response::Speech {
-                                pcm,
-                                rate,
-                                channels,
-                            })
-                            .await;
+                    _ => {
+                        let _ = user_sender.send(resp).await;
                         return;
                     }
                 };
@@ -629,20 +529,18 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                 let mut last_choice = None;
 
                 while let Some(resp) = receiver.recv().await {
+                    let Some(resp) = forward_passthrough(resp, &user_sender).await else {
+                        return;
+                    };
                     match resp {
                         Response::Chunk(chunk) => {
-                            // Forward every content‑bearing chunk immediately, but
-                            // *suppress* the ones that initiate a tool call. This ensures
-                            // the user sees the assistant's streamed text from the very
-                            // first probe turn while still hiding the internal
-                            // search/extract trigger.
+                            // Forward content-bearing chunks, suppress tool-call chunks.
                             let first_choice = &chunk.choices[0];
                             if first_choice.delta.tool_calls.is_none() {
                                 let _ = user_sender.send(Response::Chunk(chunk.clone())).await;
                             }
                             last_choice = Some(first_choice.clone());
 
-                            // Stop once the model marks completion.
                             if last_choice
                                 .as_ref()
                                 .and_then(|c| c.finish_reason.as_ref())
@@ -651,80 +549,9 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                                 break;
                             }
                         }
-                        // Forward error responses to user and return
-                        Response::InternalError(e) => {
-                            let _ = user_sender.send(Response::InternalError(e)).await;
-                            return;
-                        }
-                        Response::ValidationError(e) => {
-                            let _ = user_sender.send(Response::ValidationError(e)).await;
-                            return;
-                        }
-                        Response::ModelError(msg, resp) => {
-                            let _ = user_sender.send(Response::ModelError(msg, resp)).await;
-                            return;
-                        }
-                        // Forward other response types to user and return
-                        Response::CompletionChunk(res) => {
-                            let _ = user_sender.send(Response::CompletionChunk(res)).await;
-                            return;
-                        }
-                        Response::CompletionModelError(msg, resp) => {
-                            let _ = user_sender
-                                .send(Response::CompletionModelError(msg, resp))
-                                .await;
-                            return;
-                        }
-                        Response::Done(res) => {
-                            let _ = user_sender.send(Response::Done(res)).await;
-                            return;
-                        }
-                        Response::CompletionDone(res) => {
-                            let _ = user_sender.send(Response::CompletionDone(res)).await;
-                            return;
-                        }
-                        Response::ImageGeneration(res) => {
-                            let _ = user_sender.send(Response::ImageGeneration(res)).await;
-                            return;
-                        }
-                        Response::Raw {
-                            logits_chunks,
-                            tokens,
-                        } => {
-                            let _ = user_sender
-                                .send(Response::Raw {
-                                    logits_chunks,
-                                    tokens,
-                                })
-                                .await;
-                            return;
-                        }
-                        Response::Embeddings {
-                            embeddings,
-                            prompt_tokens,
-                            total_tokens,
-                        } => {
-                            let _ = user_sender
-                                .send(Response::Embeddings {
-                                    embeddings,
-                                    prompt_tokens,
-                                    total_tokens,
-                                })
-                                .await;
-                            return;
-                        }
-                        Response::Speech {
-                            pcm,
-                            rate,
-                            channels,
-                        } => {
-                            let _ = user_sender
-                                .send(Response::Speech {
-                                    pcm,
-                                    rate,
-                                    channels,
-                                })
-                                .await;
+                        other => {
+                            // Done or unexpected in streaming — forward and stop.
+                            let _ = user_sender.send(other).await;
                             return;
                         }
                     }
