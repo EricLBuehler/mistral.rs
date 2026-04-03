@@ -49,6 +49,7 @@ fn main() -> Result<(), String> {
     println!("cargo::rustc-check-cfg=cfg(has_vector_fp8_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_wmma_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(allow_legacy_bf16)");
 
     #[cfg(feature = "cuda")]
     {
@@ -56,6 +57,7 @@ fn main() -> Result<(), String> {
         const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
         println!("cargo:rerun-if-changed=build.rs");
+        println!("cargo:rerun-if-env-changed=ALLOW_LEGACY");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
         let mut builder = cudaforge::KernelBuilder::new()
@@ -73,6 +75,17 @@ fn main() -> Result<(), String> {
             .arg("--verbose")
             .arg("--compiler-options")
             .arg("-fPIC");
+
+        let allow_legacy = std::env::var("ALLOW_LEGACY").unwrap_or_default();
+        let allow_legacy_bf16 = allow_legacy == "all"
+            || allow_legacy
+                .split(',')
+                .map(str::trim)
+                .any(|value| value == "bf16");
+        if allow_legacy_bf16 {
+            builder = builder.arg("-DALLOW_LEGACY_BF16");
+            println!("cargo:rustc-cfg=allow_legacy_bf16");
+        }
 
         let compute_cap = builder.get_compute_cap().unwrap_or(80);
         // ======== Handle optional kernel compilation via rustc-cfg flags

@@ -91,17 +91,26 @@ __device__ __forceinline__ float dequant_value<float>(uint32_t q, float scale,
 template <>
 __device__ __forceinline__ __half dequant_value<__half>(uint32_t q, __half scale,
                                                          __half bias) {
+#if __CUDA_ARCH__ >= 700
   return __hfma(__uint2half_rn(q), scale, bias);
+#else
+  return __float2half_rn(fmaf(static_cast<float>(q), __half2float(scale),
+                              __half2float(bias)));
+#endif
 }
 
-#if __CUDA_ARCH__ >= 800
 template <>
 __device__ __forceinline__ __nv_bfloat16
 dequant_value<__nv_bfloat16>(uint32_t q, __nv_bfloat16 scale,
                               __nv_bfloat16 bias) {
+#if __CUDA_ARCH__ >= 800
   return __hfma(__uint2bfloat16_rn(q), scale, bias);
-}
+#else
+  return __float2bfloat16_rn(
+      fmaf(static_cast<float>(q), __bfloat162float(scale),
+           __bfloat162float(bias)));
 #endif
+}
 
 // ============================================================================
 // Quantization helpers (round((w - bias) / scale))
