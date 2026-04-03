@@ -77,6 +77,7 @@ fn main() {
     set_git_revision();
 
     println!("cargo::rustc-check-cfg=cfg(has_flashinfer_gdn_sm90_kernel)");
+    println!("cargo::rustc-check-cfg=cfg(has_moe_wmma)");
     println!("cargo::rustc-check-cfg=cfg(has_gdn_fp8_producer)");
 
     #[cfg(feature = "cudnn")]
@@ -123,6 +124,15 @@ fn main() {
             .arg(&header_hash_arg);
 
         let compute_cap = builder.get_compute_cap().unwrap_or(80);
+
+        if compute_cap >= 70 {
+            println!("cargo:rustc-cfg=has_moe_wmma");
+        } else {
+            // Generic BF16 GEMM uses unsupported native BF16 half2 on Pascal.
+            // Pascal goes through moe_gemm_hfma2.cu instead. The GEMV kernel
+            // remains available for small decode batches.
+            builder = builder.exclude(&["moe_gemm_wmma.cu", "moe_gemm.cu"]);
+        }
 
         let allow_legacy = std::env::var("ALLOW_LEGACY").unwrap_or_default();
         let allow_legacy_bf16 = allow_legacy == "all"
