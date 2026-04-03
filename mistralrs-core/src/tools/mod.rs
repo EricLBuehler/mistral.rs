@@ -33,6 +33,7 @@ fn process_model_specific_message(message: &str) -> Result<String> {
 
 pub struct ToolCallingMatcher {
     tool_choice: ToolChoice,
+    known_tool_names: Option<std::collections::HashSet<String>>,
 }
 
 // Same as CalledFunction, but has different cases for variations on the names
@@ -99,8 +100,19 @@ fn fix_broken_json(raw: &str) -> anyhow::Result<String> {
 }
 
 impl ToolCallingMatcher {
-    pub fn new(tool_choice: ToolChoice) -> anyhow::Result<Self> {
-        Ok(Self { tool_choice })
+    pub fn new(
+        tool_choice: ToolChoice,
+        tools: Option<&[crate::Tool]>,
+    ) -> anyhow::Result<Self> {
+        let known_tool_names = tools.map(|t| {
+            t.iter()
+                .map(|tool| tool.function.name.clone())
+                .collect::<std::collections::HashSet<_>>()
+        });
+        Ok(Self {
+            tool_choice,
+            known_tool_names,
+        })
     }
 
     // Checks if the `message_prefix` could be a tool call. If false, either
@@ -148,9 +160,11 @@ impl ToolCallingMatcher {
         let message = process_model_specific_message(message)?;
         let message = fix_broken_json(&message).unwrap();
 
-        if let Ok(deser) = serde_json::from_str::<CalledFunctionParameters>(&message) {
+        let mut calls = if let Ok(deser) =
+            serde_json::from_str::<CalledFunctionParameters>(&message)
+        {
             let id = format!("call-{}", Uuid::new_v4());
-            Ok(vec![ToolCallResponse {
+            vec![ToolCallResponse {
                 index: 0,
                 id,
                 tp: ToolCallType::Function,
@@ -158,9 +172,9 @@ impl ToolCallingMatcher {
                     name: deser.name,
                     arguments: serde_json::to_string(&deser.parameters)?,
                 },
-            }])
+            }]
         } else if let Ok(deser) = serde_json::from_str::<Vec<CalledFunctionParameters>>(&message) {
-            Ok(deser
+            deser
                 .into_iter()
                 .enumerate()
                 .map(|(idx, deser)| {
@@ -175,13 +189,36 @@ impl ToolCallingMatcher {
                         },
                     })
                 })
-                .collect::<anyhow::Result<Vec<_>>>()?)
+                .collect::<anyhow::Result<Vec<_>>>()?
         } else {
             if matches!(self.tool_choice, ToolChoice::Tool(_)) {
                 anyhow::bail!("Tool choice was required but no tools were called.")
             }
-            Ok(Vec::new())
+            return Ok(Vec::new());
+        };
+
+        // Filter out hallucinated tool names.
+        if let Some(ref known) = self.known_tool_names {
+            let before = calls.len();
+            calls.retain(|tc| {
+                let valid = known.contains(&tc.function.name);
+                if !valid {
+                    tracing::warn!(
+                        "Dropping hallucinated tool call `{}` (not in defined tools: {:?})",
+                        tc.function.name,
+                        known
+                    );
+                }
+                valid
+            });
+            if calls.is_empty() && before > 0 && matches!(self.tool_choice, ToolChoice::Tool(_)) {
+                anyhow::bail!(
+                    "Tool choice was required but model called unknown tools."
+                );
+            }
         }
+
+        Ok(calls)
     }
 }
 

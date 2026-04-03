@@ -141,7 +141,10 @@ impl Engine {
         };
         let has_tools = request.tools.as_ref().is_some_and(|t| !t.is_empty());
         let matcher = Arc::new(handle_seq_error!(
-            ToolCallingMatcher::new(request.tool_choice.unwrap_or(ToolChoice::Auto),),
+            ToolCallingMatcher::new(
+                request.tool_choice.unwrap_or(ToolChoice::Auto),
+                request.tools.as_deref(),
+            ),
             request.response
         ));
 

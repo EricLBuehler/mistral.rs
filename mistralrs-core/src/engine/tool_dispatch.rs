@@ -233,13 +233,26 @@ pub(super) fn execute_custom_tool(engine: &Engine, tc: &ToolCallResponse) -> Too
     let name = &tc.function.name;
 
     let content = if let Some(cb_with_tool) = engine.tool_callbacks.get(name) {
-        (cb_with_tool.callback)(&tc.function).unwrap_or_else(|e| {
-            tracing::error!("Error when calling tool `{name}`: {e}");
-            format!("ERROR: {e}")
-        })
+        match (cb_with_tool.callback)(&tc.function) {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!("Tool `{name}` execution failed: {e}");
+                serde_json::json!({
+                    "error": format!("{e}"),
+                    "tool": name,
+                    "status": "failed"
+                })
+                .to_string()
+            }
+        }
     } else {
-        tracing::error!("Attempted to call tool `{name}`, but it doesn't exist.");
-        format!("ERROR: no tool callback for {name}")
+        tracing::error!("Tool `{name}` not found in registered callbacks.");
+        serde_json::json!({
+            "error": format!("Tool `{name}` is not registered."),
+            "tool": name,
+            "status": "not_found"
+        })
+        .to_string()
     };
 
     ToolResult { content }
