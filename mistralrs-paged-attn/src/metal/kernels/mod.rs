@@ -31,6 +31,11 @@ const KERNELS: &[u8] = include_bytes!(concat!(
     env!("OUT_DIR"),
     "/mistralrs_paged_attention_tvos.metallib"
 ));
+#[cfg(target_os = "visionos")]
+const KERNELS: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/mistralrs_paged_attention_visionos.metallib"
+));
 
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
@@ -267,11 +272,17 @@ impl Kernels {
             }
         }
 
-        // Compile the preprocessed source with Metal 3.1 for native bfloat16 support.
-        // This must match the -std=metal3.1 flag used in build.rs for precompiled metallibs.
+        // Compile the preprocessed source with the correct Metal language version per platform.
+        // This must match the -std=metal* flags used in build.rs for precompiled metallibs:
+        //   - macOS / iOS / tvOS → Metal 3.1 (native bfloat16 via __HAVE_BFLOAT__)
+        //   - visionOS           → Metal 4.0 (minimum supported version on visionOS)
+        // See: https://support.apple.com/en-us/102894
         let compile_options = {
             let opts = MTLCompileOptions::new();
+            #[cfg(not(target_os = "visionos"))]
             opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
+            #[cfg(target_os = "visionos")]
+            opts.setLanguageVersion(MTLLanguageVersion::Version4_0);
             opts.setMathMode(MTLMathMode::Fast);
             opts
         };
