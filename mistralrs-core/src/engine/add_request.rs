@@ -33,8 +33,7 @@ impl Engine {
                     &request.messages,
                     RequestMessage::Chat { .. } | RequestMessage::MultimodalChat { .. }
                 );
-                let has_tooling =
-                    !self.tool_callbacks.is_empty() || !self.tool_callbacks_with_tools.is_empty();
+                let has_tooling = !self.tool_callbacks.is_empty();
                 let has_search = request.web_search_options.is_some();
 
                 if is_chat && (has_search || has_tooling) {

@@ -232,12 +232,7 @@ pub(super) async fn execute_extraction(
 pub(super) fn execute_custom_tool(engine: &Engine, tc: &ToolCallResponse) -> ToolResult {
     let name = &tc.function.name;
 
-    let content = if let Some(cb) = engine.tool_callbacks.get(name) {
-        cb(&tc.function).unwrap_or_else(|e| {
-            tracing::error!("Error when calling tool `{name}`: {e}");
-            format!("ERROR: {e}")
-        })
-    } else if let Some(cb_with_tool) = engine.tool_callbacks_with_tools.get(name) {
+    let content = if let Some(cb_with_tool) = engine.tool_callbacks.get(name) {
         (cb_with_tool.callback)(&tc.function).unwrap_or_else(|e| {
             tracing::error!("Error when calling tool `{name}`: {e}");
             format!("ERROR: {e}")

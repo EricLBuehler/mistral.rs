@@ -188,13 +188,13 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
             .extend(search::get_search_tools(opts).unwrap());
     }
 
-    // Add Tool definitions from tool callbacks with tools if they're not already present
-    if !this.tool_callbacks_with_tools.is_empty() {
+    // Add Tool definitions from registered tool callbacks
+    if !this.tool_callbacks.is_empty() {
         let tools = probe.tools.get_or_insert_with(Vec::new);
         let existing_tool_names: Vec<String> =
             tools.iter().map(|t| t.function.name.clone()).collect();
 
-        for (name, callback_with_tool) in &this.tool_callbacks_with_tools {
+        for (name, callback_with_tool) in &this.tool_callbacks {
             if !existing_tool_names.contains(name) {
                 tools.push(callback_with_tool.tool.clone());
             }

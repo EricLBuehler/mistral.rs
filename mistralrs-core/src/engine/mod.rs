@@ -160,8 +160,7 @@ pub struct Engine {
     pipeline: Arc<Mutex<dyn Pipeline>>,
     search_pipeline: Arc<Mutex<Option<SearchPipeline>>>,
     search_callback: Option<Arc<search::SearchCallback>>,
-    tool_callbacks: tools::ToolCallbacks,
-    tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+    tool_callbacks: tools::ToolCallbacksWithTools,
     scheduler: Arc<Mutex<dyn Scheduler>>,
     id: Arc<Mutex<usize>>,
     no_kv_cache: bool,
@@ -196,8 +195,7 @@ impl Engine {
         throughput_logging_enabled: bool,
         search_embedding_model: Option<SearchEmbeddingModel>,
         search_callback: Option<Arc<search::SearchCallback>>,
-        tool_callbacks: tools::ToolCallbacks,
-        tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+        tool_callbacks: tools::ToolCallbacksWithTools,
         logger: Arc<IntervalLogger>,
     ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
@@ -230,7 +228,6 @@ impl Engine {
             search_pipeline: Arc::new(Mutex::new(search_pipeline)),
             search_callback,
             tool_callbacks,
-            tool_callbacks_with_tools,
             scheduler: scheduler.clone(),
             id: Arc::new(Mutex::new(0)),
             no_kv_cache,

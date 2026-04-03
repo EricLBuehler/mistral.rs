@@ -22,8 +22,7 @@ pub struct GgufModelBuilder {
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) search_embedding_model: Option<SearchEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
-    pub(crate) tool_callbacks: HashMap<String, Arc<ToolCallback>>,
-    pub(crate) tool_callbacks_with_tools: HashMap<String, ToolCallbackWithTool>,
+    pub(crate) tool_callbacks: HashMap<String, ToolCallbackWithTool>,
     pub(crate) device: Option<Device>,
 
     // Model running
@@ -70,7 +69,6 @@ impl GgufModelBuilder {
             search_embedding_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
-            tool_callbacks_with_tools: HashMap::new(),
             device: None,
         }
     }
@@ -93,7 +91,21 @@ impl GgufModelBuilder {
         name: impl Into<String>,
         callback: Arc<ToolCallback>,
     ) -> Self {
-        self.tool_callbacks.insert(name.into(), callback);
+        let name = name.into();
+        self.tool_callbacks.insert(
+            name.clone(),
+            ToolCallbackWithTool {
+                callback,
+                tool: Tool {
+                    tp: ToolType::Function,
+                    function: Function {
+                        description: None,
+                        name,
+                        parameters: None,
+                    },
+                },
+            },
+        );
         self
     }
 
@@ -106,7 +118,7 @@ impl GgufModelBuilder {
         tool: Tool,
     ) -> Self {
         let name = name.into();
-        self.tool_callbacks_with_tools
+        self.tool_callbacks
             .insert(name, ToolCallbackWithTool { callback, tool });
         self
     }

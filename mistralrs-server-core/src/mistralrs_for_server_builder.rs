@@ -930,7 +930,6 @@ impl MistralRsForServerBuilder {
                 search_embedding_model,
                 search_callback: self.search_callback.clone(),
                 tool_callbacks: HashMap::new(),
-                tool_callbacks_with_tools: HashMap::new(),
             };
 
             let mut add_model_config = mistralrs_core::AddModelConfig::new(engine_config);

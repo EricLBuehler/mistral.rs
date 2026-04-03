@@ -188,12 +188,7 @@ impl MultiModelBuilder {
             runner_builder = runner_builder.with_search_callback(cb);
         }
 
-        for (name, cb) in &add_model_config.engine_config.tool_callbacks {
-            runner_builder = runner_builder.with_tool_callback(name.clone(), cb.clone());
-        }
-
-        for (name, callback_with_tool) in &add_model_config.engine_config.tool_callbacks_with_tools
-        {
+        for (name, callback_with_tool) in &add_model_config.engine_config.tool_callbacks {
             runner_builder = runner_builder.with_tool_callback_and_tool(
                 name.clone(),
                 callback_with_tool.callback.clone(),
@@ -321,8 +316,7 @@ pub(crate) fn build_engine_config(
     throughput_logging_enabled: bool,
     search_embedding_model: Option<SearchEmbeddingModel>,
     search_callback: Option<Arc<SearchCallback>>,
-    tool_callbacks: &HashMap<String, Arc<ToolCallback>>,
-    tool_callbacks_with_tools: &HashMap<String, ToolCallbackWithTool>,
+    tool_callbacks: &HashMap<String, ToolCallbackWithTool>,
     no_kv_cache: bool,
     prefix_cache_n: Option<usize>,
 ) -> EngineConfig {
@@ -331,7 +325,6 @@ pub(crate) fn build_engine_config(
         search_embedding_model,
         search_callback,
         tool_callbacks: tool_callbacks.clone(),
-        tool_callbacks_with_tools: tool_callbacks_with_tools.clone(),
         no_kv_cache,
         no_prefix_cache: prefix_cache_n.is_none(),
         prefix_cache_n: prefix_cache_n.unwrap_or(16),
@@ -360,7 +353,6 @@ pub(crate) async fn build_pipeline_from_text_loader(
         builder.search_embedding_model,
         builder.search_callback.clone(),
         &builder.tool_callbacks,
-        &builder.tool_callbacks_with_tools,
         builder.no_kv_cache,
         builder.prefix_cache_n,
     );
@@ -411,7 +403,6 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         builder.search_embedding_model,
         builder.search_callback.clone(),
         &builder.tool_callbacks,
-        &builder.tool_callbacks_with_tools,
         builder.no_kv_cache,
         builder.prefix_cache_n,
     );
@@ -464,11 +455,7 @@ pub async fn build_model_from_pipeline(
         runner_builder = runner_builder.with_search_callback(cb);
     }
 
-    for (name, cb) in &add_model_config.engine_config.tool_callbacks {
-        runner_builder = runner_builder.with_tool_callback(name.clone(), cb.clone());
-    }
-
-    for (name, callback_with_tool) in &add_model_config.engine_config.tool_callbacks_with_tools {
+    for (name, callback_with_tool) in &add_model_config.engine_config.tool_callbacks {
         runner_builder = runner_builder.with_tool_callback_and_tool(
             name.clone(),
             callback_with_tool.callback.clone(),
@@ -552,7 +539,6 @@ pub async fn build_text_pipeline(
         builder.search_embedding_model,
         builder.search_callback.clone(),
         &builder.tool_callbacks,
-        &builder.tool_callbacks_with_tools,
         builder.no_kv_cache,
         builder.prefix_cache_n,
     );
@@ -667,7 +653,6 @@ pub async fn build_multimodal_pipeline(
         builder.search_embedding_model,
         builder.search_callback.clone(),
         &builder.tool_callbacks,
-        &builder.tool_callbacks_with_tools,
         false,
         builder.prefix_cache_n,
     );
@@ -776,7 +761,6 @@ pub async fn build_gguf_pipeline(
         builder.search_embedding_model,
         builder.search_callback.clone(),
         &builder.tool_callbacks,
-        &builder.tool_callbacks_with_tools,
         builder.no_kv_cache,
         builder.prefix_cache_n,
     );
@@ -1112,7 +1096,6 @@ pub async fn build_auto_pipeline(
         builder.search_embedding_model,
         builder.search_callback.clone(),
         &builder.tool_callbacks,
-        &builder.tool_callbacks_with_tools,
         builder.no_kv_cache,
         builder.prefix_cache_n,
     );
