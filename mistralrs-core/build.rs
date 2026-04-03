@@ -90,6 +90,7 @@ fn main() {
             println!("cargo:rustc-cfg=has_gdn_fp8_producer");
         }
         println!("cargo:rerun-if-changed=build.rs");
+        println!("cargo:rerun-if-env-changed=ALLOW_LEGACY");
         println!("cargo:rerun-if-changed=src/cuda");
         println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
         println!("cargo:rerun-if-env-changed=NVCC");
@@ -123,10 +124,21 @@ fn main() {
 
         let compute_cap = builder.get_compute_cap().unwrap_or(80);
 
+        let allow_legacy = std::env::var("ALLOW_LEGACY").unwrap_or_default();
+        let allow_legacy_bf16 = allow_legacy == "all"
+            || allow_legacy
+                .split(',')
+                .map(str::trim)
+                .any(|value| value == "bf16");
+
+
         // Check if CUDA_COMPUTE_CAP < 80 and disable bf16 kernels if so.
         // bf16 WMMA operations and certain bf16 intrinsics are only available on sm_80+.
-        if compute_cap < 80 {
+        if compute_cap < 80 && !allow_legacy_bf16 {
             builder = builder.arg("-DNO_BF16_KERNEL");
+        }
+        if allow_legacy_bf16 {
+            builder = builder.arg("-DALLOW_LEGACY_BF16");
         }
 
         // https://github.com/EricLBuehler/mistral.rs/issues/286
