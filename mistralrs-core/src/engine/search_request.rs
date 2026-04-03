@@ -1,19 +1,13 @@
-use std::{borrow::Cow, sync::Arc, time::Instant};
+use std::sync::Arc;
 
-use bm25::{Embedder, EmbedderBuilder, Language, ScoredDocument, Scorer};
 use either::Either;
 use indexmap::IndexMap;
-use tokenizers::InputSequence;
-use tracing::{level_filters::LevelFilter, Dispatch};
 
 use serde_json::Value;
 
 use crate::{
-    get_mut_arcmutex,
-    request::SearchContextSize,
-    search::{self, ExtractFunctionParameters, SearchFunctionParameters, SearchResult},
-    MessageContent, NormalRequest, RequestMessage, Response, ToolCallResponse, ToolChoice,
-    WebSearchOptions,
+    get_mut_arcmutex, search, MessageContent, NormalRequest, RequestMessage, Response,
+    ToolCallResponse, ToolChoice, WebSearchOptions,
 };
 
 use super::Engine;
@@ -111,297 +105,60 @@ async fn forward_passthrough(
 }
 
 // ── Tool executors ─────────────────────────────────────────────────────────
+//
+// Each executor: append assistant tool-call message, run the tool via
+// `tool_dispatch`, append tool response, and configure the request for the
+// next turn.
+
+use super::tool_dispatch;
 
 async fn do_search(
-    this: Arc<Engine>,
-    mut second_request: NormalRequest,
-    tool_calls: &ToolCallResponse,
-    web_search_options: &WebSearchOptions,
+    engine: Arc<Engine>,
+    mut request: NormalRequest,
+    tc: &ToolCallResponse,
+    opts: &WebSearchOptions,
 ) -> NormalRequest {
-    let messages = get_messages_mut(&mut second_request);
-    append_assistant_tool_call(messages, tool_calls);
-    let tool_call_params: SearchFunctionParameters =
-        serde_json::from_str(&tool_calls.function.arguments).unwrap();
-    tracing::info!(
-        "Called search tool with query `{}`.",
-        tool_call_params.query
-    );
+    let messages = get_messages_mut(&mut request);
+    append_assistant_tool_call(messages, tc);
 
-    let start = Instant::now();
-    // Add tool response
-    {
-        let tokenizer = get_mut_arcmutex!(this.pipeline)
-            .tokenizer()
-            .expect("A tokenizer is expected for non-diffusion models.");
+    let result = tool_dispatch::execute_search(&engine, tc, opts).await;
+    append_tool_response(messages, &tc.function.name, result.content);
 
-        // Allow `info` and below; suppress `warn`
-        let subscriber = tracing_subscriber::fmt::Subscriber::builder()
-            .with_max_level(LevelFilter::INFO)
-            .finish();
-        let dispatch = Dispatch::new(subscriber);
-
-        // Manage context size by # of tokens. Apply default here.
-        let max_results_budget_toks =
-            match web_search_options.search_context_size.unwrap_or_default() {
-                SearchContextSize::High => 16384_usize,
-                SearchContextSize::Medium => 8192_usize,
-                SearchContextSize::Low => 4096_usize,
-            };
-        let (results, result_token_lens): (Vec<SearchResult>, Vec<usize>) =
-            tokio::task::block_in_place(|| {
-                tracing::dispatcher::with_default(&dispatch, || {
-                    let base_results = if let Some(cb) = &this.search_callback {
-                        cb(&tool_call_params).unwrap()
-                    } else {
-                        search::run_search_tool(&tool_call_params).unwrap()
-                    };
-                    base_results
-                        .into_iter()
-                        .map(|mut result| {
-                            result = result
-                                .cap_content_len(&tokenizer, max_results_budget_toks)
-                                .unwrap();
-                            let len = {
-                                let inp = InputSequence::Raw(Cow::from(&result.content));
-                                tokenizer
-                                    .encode_fast(inp, false)
-                                    .map(|x| x.len())
-                                    .unwrap_or(usize::MAX)
-                            };
-                            (result, len)
-                        })
-                        .unzip()
-                })
-            });
-
-        let mut combined: Vec<(SearchResult, usize)> = results
-            .into_iter()
-            .zip(result_token_lens.into_iter())
-            .collect();
-        combined.sort_by_key(|(_, len)| *len);
-        let (results, result_token_lens): (Vec<SearchResult>, Vec<usize>) =
-            combined.into_iter().unzip();
-
-        let mut used_results = Vec::new();
-        let mut used_len = 0;
-
-        if let Some(search_pipeline) = &mut *get_mut_arcmutex!(this.search_pipeline) {
-            let ranked_chunks = search::rag::rank_document_chunks(
-                &tool_call_params.query,
-                &results,
-                search_pipeline,
-            )
-            .unwrap();
-
-            if ranked_chunks.is_empty() {
-                for (result, len) in results.iter().zip(result_token_lens.iter()) {
-                    if used_len + len > max_results_budget_toks {
-                        break;
-                    }
-                    used_len += len;
-                    used_results.push(result.clone());
-                }
-            } else {
-                for chunk in ranked_chunks {
-                    if chunk.token_len == 0 {
-                        continue;
-                    }
-                    if used_len + chunk.token_len > max_results_budget_toks {
-                        break;
-                    }
-                    used_len += chunk.token_len;
-                    let mut chunk_result = results[chunk.result_index].clone();
-                    chunk_result.content = chunk.content;
-                    used_results.push(chunk_result);
-                }
-            }
-        } else {
-            tracing::warn!(
-                "No embedding model loaded; falling back to BM25 ranking for web search results."
-            );
-
-            let docs: Vec<String> = results.iter().map(|res| res.content.clone()).collect();
-            let doc_refs: Vec<&str> = docs.iter().map(|s| s.as_str()).collect();
-
-            let embedder: Embedder =
-                EmbedderBuilder::with_fit_to_corpus(Language::English, &doc_refs).build();
-
-            let mut scorer = Scorer::<usize>::new();
-            for (i, doc_text) in docs.iter().enumerate() {
-                let doc_embedding = embedder.embed(doc_text);
-                scorer.upsert(&i, doc_embedding);
-            }
-
-            let query_embedding = embedder.embed(&tool_call_params.query);
-
-            let mut scored_docs: Vec<ScoredDocument<usize>> = docs
-                .iter()
-                .enumerate()
-                .filter_map(|(i, _)| {
-                    scorer
-                        .score(&i, &query_embedding)
-                        .map(|score| ScoredDocument { id: i, score })
-                })
-                .collect();
-
-            scored_docs.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-
-            for doc in scored_docs {
-                let idx = doc.id;
-                let len = result_token_lens[idx];
-                if used_len + len > max_results_budget_toks {
-                    break;
-                }
-                used_len += len;
-                used_results.push(results[idx].clone());
-            }
-        }
-
-        let tool_result = serde_json::to_string(&serde_json::json!({
-            "output": used_results
-        }))
-        .unwrap();
-        let end = Instant::now();
-        tracing::info!(
-            "Web search executed in {:.2}s, using {used_len} tokens of {} search results.",
-            (end - start).as_secs_f32(),
-            used_results.len()
-        );
-
-        append_tool_response(messages, &tool_calls.function.name, tool_result);
-    }
-
-    // Allow the assistant to invoke tools again on the next turn
-    second_request.tool_choice = Some(ToolChoice::Auto);
-    // Recursion is enabled here!
-    second_request.web_search_options = Some(web_search_options.clone());
-
-    second_request
+    request.tool_choice = Some(ToolChoice::Auto);
+    request.web_search_options = Some(opts.clone());
+    request
 }
 
 async fn do_extraction(
-    this: Arc<Engine>,
-    mut second_request: NormalRequest,
-    tool_calls: &ToolCallResponse,
-    web_search_options: &WebSearchOptions,
+    engine: Arc<Engine>,
+    mut request: NormalRequest,
+    tc: &ToolCallResponse,
+    opts: &WebSearchOptions,
 ) -> NormalRequest {
-    let messages = get_messages_mut(&mut second_request);
-    append_assistant_tool_call(messages, tool_calls);
-    let tool_call_params: ExtractFunctionParameters =
-        serde_json::from_str(&tool_calls.function.arguments).unwrap();
-    tracing::info!(
-        "Called extrcation tool with query `{}`.",
-        tool_call_params.url
-    );
+    let messages = get_messages_mut(&mut request);
+    append_assistant_tool_call(messages, tc);
 
-    let start = Instant::now();
-    // Add tool response
-    {
-        let tokenizer = get_mut_arcmutex!(this.pipeline)
-            .tokenizer()
-            .expect("A tokenizer is expected for non-diffusion models.");
+    let result = tool_dispatch::execute_extraction(&engine, tc, opts).await;
+    append_tool_response(messages, &tc.function.name, result.content);
 
-        // Allow `info` and below; suppress `warn`
-        let subscriber = tracing_subscriber::fmt::Subscriber::builder()
-            .with_max_level(LevelFilter::INFO)
-            .finish();
-        let dispatch = Dispatch::new(subscriber);
-
-        // Manage context size by # of tokens. Apply default here.
-        let max_results_budget_toks =
-            match web_search_options.search_context_size.unwrap_or_default() {
-                SearchContextSize::High => 16384_usize,
-                SearchContextSize::Medium => 8192_usize,
-                SearchContextSize::Low => 4096_usize,
-            };
-
-        let res = {
-            let extract_result = tokio::task::block_in_place(|| {
-                tracing::dispatcher::with_default(&dispatch, || {
-                    search::run_extract_tool(&tool_call_params).unwrap()
-                })
-            });
-            extract_result
-                .cap_content_len(&tokenizer, max_results_budget_toks)
-                .unwrap()
-        };
-
-        let tool_result = serde_json::to_string(&res)
-            .unwrap()
-            .replace("\\n", "\n")
-            .replace("\\\"", "\"")
-            .replace("\\\\", "\\");
-        let end = Instant::now();
-        let used_len = {
-            let inp = InputSequence::Raw(Cow::from(&tool_result));
-            tokenizer
-                .encode_fast(inp, false)
-                .map(|x| x.len())
-                .unwrap_or(usize::MAX)
-        };
-        tracing::info!(
-            "Extraction executed in {:.2}s, using {used_len} tokens.",
-            (end - start).as_secs_f32(),
-        );
-
-        append_tool_response(
-            messages,
-            &tool_calls.function.name,
-            format!("{{\"output\": \"{tool_result}\"}}"),
-        );
-    }
-
-    // Allow the assistant to invoke tools again on the next turn
-    second_request.tool_choice = Some(ToolChoice::Auto);
-    // Recursion is enabled here!
-    second_request.web_search_options = Some(web_search_options.clone());
-
-    second_request
+    request.tool_choice = Some(ToolChoice::Auto);
+    request.web_search_options = Some(opts.clone());
+    request
 }
 
 async fn do_custom_tool(
-    this: Arc<Engine>,
-    mut second_request: NormalRequest,
-    tool_calls: &ToolCallResponse,
+    engine: Arc<Engine>,
+    mut request: NormalRequest,
+    tc: &ToolCallResponse,
 ) -> NormalRequest {
-    let messages = get_messages_mut(&mut second_request);
-    append_assistant_tool_call(messages, tool_calls);
+    let messages = get_messages_mut(&mut request);
+    append_assistant_tool_call(messages, tc);
 
-    let result = if let Some(cb) = this.tool_callbacks.get(&tool_calls.function.name) {
-        cb(&tool_calls.function).unwrap_or_else(|e| {
-            tracing::error!(
-                "Error when calling tool `{}`: {e}",
-                tool_calls.function.name
-            );
-            format!("ERROR: {e}")
-        })
-    } else if let Some(callback_with_tool) = this
-        .tool_callbacks_with_tools
-        .get(&tool_calls.function.name)
-    {
-        (callback_with_tool.callback)(&tool_calls.function).unwrap_or_else(|e| {
-            tracing::error!(
-                "Error when calling tool `{}`: {e}",
-                tool_calls.function.name
-            );
-            format!("ERROR: {e}")
-        })
-    } else {
-        tracing::error!(
-            "Attempted to call tool `{}`, but it doesn't exist.",
-            tool_calls.function.name
-        );
-        format!("ERROR: no tool callback for {}", tool_calls.function.name)
-    };
+    let result = tool_dispatch::execute_custom_tool(&engine, tc);
+    append_tool_response(messages, &tc.function.name, result.content);
 
-    append_tool_response(messages, &tool_calls.function.name, result);
-
-    second_request.tool_choice = Some(ToolChoice::Auto);
-    second_request
+    request.tool_choice = Some(ToolChoice::Auto);
+    request
 }
 
 /// Drive one or more web-search / extraction rounds without recursion.
