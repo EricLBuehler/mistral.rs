@@ -1036,9 +1036,12 @@ pub trait IsqModel {
             })
             .collect::<HashMap<_, _>>();
 
-        if artifact_isqs.len() != total_tensors {
+        // The serialized artifact count may be less than total_tensors
+        // because serialization filters by isq_serde_supported(). Only
+        // check that we don't have MORE artifacts than layers.
+        if artifact_isqs.len() > total_tensors {
             candle_core::bail!(
-                "Number of artifacts ({}) does not match the number of ISQ layers ({total_tensors})",
+                "Number of artifacts ({}) exceeds the number of ISQ layers ({total_tensors})",
                 artifact_isqs.len(),
             );
         }
