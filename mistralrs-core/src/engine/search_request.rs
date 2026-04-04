@@ -125,7 +125,6 @@ async fn do_search(
     append_tool_response(messages, &tc.function.name, result.content);
 
     request.tool_choice = Some(ToolChoice::Auto);
-    request.web_search_options = Some(opts.clone());
     request
 }
 
@@ -142,7 +141,6 @@ async fn do_extraction(
     append_tool_response(messages, &tc.function.name, result.content);
 
     request.tool_choice = Some(ToolChoice::Auto);
-    request.web_search_options = Some(opts.clone());
     request
 }
 
@@ -226,7 +224,9 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
             current.response = sender;
 
             // Kick the request into the engine via the channel.
-            // This avoids lock contention with the main engine loop.
+            // Clear web_search_options so the engine doesn't re-enter the
+            // search flow — this loop already manages tool orchestration.
+            current.web_search_options = None;
             let _ = this_clone
                 .tx
                 .send(crate::request::Request::Normal(Box::new(current)))
