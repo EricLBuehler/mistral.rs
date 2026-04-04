@@ -121,16 +121,13 @@ impl ToolCallingMatcher {
     // If the start of a message could be a tool call, then it looks like an incomplete JSON of a given structure, e.g. `{"name": "foo", "param`.
     //
     // Returns a tuple of `(could_be_tool, is_complete_tool)`.
-    pub fn prefix_could_be_tool(
-        &self,
-        _pipeline: &dyn Pipeline,
-        message_prefix: &str,
-    ) -> Result<(bool, bool)> {
+    pub fn prefix_could_be_tool(&self, message_prefix: &str) -> Result<(bool, bool)> {
         if matches!(self.tool_choice, ToolChoice::None) {
             return Ok((false, false));
         }
         let message_prefix = process_model_specific_message(message_prefix)?;
-        let message_prefix = fix_broken_json(&message_prefix).unwrap();
+        let message_prefix =
+            fix_broken_json(&message_prefix).map_err(candle_core::Error::msg)?;
 
         // Check if the prefix could be a JSON serialization of any of the following types.
         Ok([
@@ -149,16 +146,12 @@ impl ToolCallingMatcher {
         .unwrap_or((contains_tool_call_prefix(&message_prefix), false)))
     }
 
-    pub fn get_call(
-        &self,
-        _pipeline: &dyn Pipeline,
-        message: &str,
-    ) -> anyhow::Result<Vec<ToolCallResponse>> {
+    pub fn get_call(&self, message: &str) -> anyhow::Result<Vec<ToolCallResponse>> {
         if matches!(self.tool_choice, ToolChoice::None) {
             return Ok(Vec::new());
         }
         let message = process_model_specific_message(message)?;
-        let message = fix_broken_json(&message).unwrap();
+        let message = fix_broken_json(&message)?;
 
         let mut calls = if let Ok(deser) =
             serde_json::from_str::<CalledFunctionParameters>(&message)
@@ -242,7 +235,6 @@ where
 
 /// Takes raw UTf8 text and parses any possible tool calls from it.
 pub fn parse_text_tools<'a>(
-    pipeline: &dyn Pipeline,
     raw_text: &'a str,
     matcher: Option<Arc<ToolCallingMatcher>>,
 ) -> anyhow::Result<(Option<&'a str>, Vec<ToolCallResponse>)> {
@@ -251,7 +243,7 @@ pub fn parse_text_tools<'a>(
 
     if let Some(ref matcher) = matcher {
         let calls = matcher
-            .get_call(pipeline, raw_text)
+            .get_call(raw_text)
             .map_err(candle_core::Error::msg)?;
         if !calls.is_empty() {
             text_new = None;

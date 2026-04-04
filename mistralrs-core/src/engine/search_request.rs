@@ -248,7 +248,15 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
 
                 // Did the assistant ask to run a tool?
                 let tc_opt = match &done.choices[0].message.tool_calls {
-                    Some(calls) if calls.len() == 1 => Some(&calls[0]),
+                    Some(calls) if !calls.is_empty() => {
+                        if calls.len() > 1 {
+                            tracing::warn!(
+                                "Model returned {} tool calls; executing only the first.",
+                                calls.len()
+                            );
+                        }
+                        Some(&calls[0])
+                    }
                     _ => None,
                 };
 
@@ -317,7 +325,15 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                 let Some(choice) = last_choice else { break };
 
                 let tc_opt = match &choice.delta.tool_calls {
-                    Some(calls) if calls.len() == 1 => Some(&calls[0]),
+                    Some(calls) if !calls.is_empty() => {
+                        if calls.len() > 1 {
+                            tracing::warn!(
+                                "Model returned {} tool calls; executing only the first.",
+                                calls.len()
+                            );
+                        }
+                        Some(&calls[0])
+                    }
                     _ => None,
                 };
 

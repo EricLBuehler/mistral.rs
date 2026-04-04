@@ -52,11 +52,11 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     if let Some(ref t) = seq.tools {
         if let Ok(Some(ref d)) = seq.peek_delta() {
             let (_tool_use_still_possible, tool_use_is_done) =
-                t.prefix_could_be_tool(this, d.as_str())?;
+                t.prefix_could_be_tool(d.as_str())?;
 
             if tool_use_is_done
                 && matches!(
-                    parse_text_tools(this, d, seq.tools.clone()),
+                    parse_text_tools(d, seq.tools.clone()),
                     Ok((None, _tools))
                 )
             {
@@ -73,18 +73,15 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         if let Some(ref t) = seq.tools {
             if let Ok(Some(ref d)) = seq.peek_delta() {
                 (tool_use_still_possible, tool_use_is_done) =
-                    t.prefix_could_be_tool(this, d.as_str())?;
+                    t.prefix_could_be_tool(d.as_str())?;
             }
         };
 
-        // let send = seq.get_toks().len() % 2 == 0 || is_done.is_some();
-        let send = true;
         // Send chunks when:
         // 1. Tool call is not possible (!tool_use_still_possible) - normal streaming
         // 2. Tool call is complete (tool_use_is_done) - send the tool call
         // 3. Sequence is done (is_done.is_some()) - send buffered output as text since it wasn't a valid tool call
         if !tool_use_still_possible || tool_use_is_done || is_done.is_some() {
-            if send {
                 if is_done.is_some() && seq.reasoning_mode().is_some() {
                     seq.finalize_reasoning();
                 }
@@ -98,7 +95,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             )
                         } else {
                             let (text_new, _) =
-                                parse_text_tools(this, delta.as_str(), seq.tools.clone())
+                                parse_text_tools(delta.as_str(), seq.tools.clone())
                                     .map_err(candle_core::Error::msg)?;
                             (text_new.map(ToString::to_string), None)
                         };
@@ -131,7 +128,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         } else {
                             // Not in Harmony mode - parse text for tool calls
                             let (_, tool_calls) =
-                                parse_text_tools(this, delta.as_str(), seq.tools.clone())
+                                parse_text_tools(delta.as_str(), seq.tools.clone())
                                     .map_err(candle_core::Error::msg)?;
                             if !tool_calls.is_empty() {
                                 is_done = Some(StopReason::ToolCalls);
@@ -179,7 +176,6 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         );
                     }
                 }
-            }
 
             // Send usage on final chunk.
             let usage_opt = if is_done.is_some() {
@@ -309,7 +305,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             })
                             .collect()
                     } else if let Some(ref content) = final_content {
-                        let (_, tc) = parse_text_tools(this, content.as_str(), seq.tools.clone())
+                        let (_, tc) = parse_text_tools(content.as_str(), seq.tools.clone())
                             .map_err(candle_core::Error::msg)?;
                         tc
                     } else {
@@ -319,7 +315,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     (final_content, tool_calls, reasoning)
                 } else {
                     let (text_new, tool_calls) =
-                        parse_text_tools(this, text.as_str(), seq.tools.clone())
+                        parse_text_tools(text.as_str(), seq.tools.clone())
                             .map_err(candle_core::Error::msg)?;
                     (text_new.map(ToString::to_string), tool_calls, None)
                 };

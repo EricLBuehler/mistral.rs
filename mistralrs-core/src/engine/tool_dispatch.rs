@@ -51,8 +51,16 @@ pub(super) async fn execute_search(
     tc: &ToolCallResponse,
     opts: &WebSearchOptions,
 ) -> ToolResult {
-    let params: SearchFunctionParameters =
-        serde_json::from_str(&tc.function.arguments).unwrap();
+    let params: SearchFunctionParameters = match serde_json::from_str(&tc.function.arguments) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("Failed to parse search tool arguments: {e}");
+            return ToolResult {
+                content: serde_json::json!({"error": format!("Invalid search arguments: {e}")})
+                    .to_string(),
+            };
+        }
+    };
     tracing::info!("Called search tool with query `{}`.", params.query);
 
     let start = Instant::now();
@@ -66,10 +74,16 @@ pub(super) async fn execute_search(
     let (results, result_token_lens): (Vec<SearchResult>, Vec<usize>) =
         tokio::task::block_in_place(|| {
             tracing::dispatcher::with_default(&dispatch, || {
-                let base = if let Some(cb) = &engine.search_callback {
-                    cb(&params).unwrap()
+                let base = match if let Some(cb) = &engine.search_callback {
+                    cb(&params)
                 } else {
-                    search::run_search_tool(&params).unwrap()
+                    search::run_search_tool(&params)
+                } {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::error!("Search tool execution failed: {e}");
+                        return (Vec::new(), Vec::new());
+                    }
                 };
                 base.into_iter()
                     .map(|mut r| {
@@ -185,8 +199,16 @@ pub(super) async fn execute_extraction(
     tc: &ToolCallResponse,
     opts: &WebSearchOptions,
 ) -> ToolResult {
-    let params: ExtractFunctionParameters =
-        serde_json::from_str(&tc.function.arguments).unwrap();
+    let params: ExtractFunctionParameters = match serde_json::from_str(&tc.function.arguments) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("Failed to parse extraction tool arguments: {e}");
+            return ToolResult {
+                content: serde_json::json!({"error": format!("Invalid extraction arguments: {e}")})
+                    .to_string(),
+            };
+        }
+    };
     tracing::info!("Called extraction tool with url `{}`.", params.url);
 
     let start = Instant::now();
@@ -198,11 +220,29 @@ pub(super) async fn execute_extraction(
 
     let res = {
         let raw = tokio::task::block_in_place(|| {
-            tracing::dispatcher::with_default(&dispatch, || {
-                search::run_extract_tool(&params).unwrap()
+            tracing::dispatcher::with_default(&dispatch, || match search::run_extract_tool(&params)
+            {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    tracing::error!("Extraction tool failed: {e}");
+                    None
+                }
             })
         });
-        raw.cap_content_len(&tokenizer, max_toks).unwrap()
+        let Some(raw) = raw else {
+            return ToolResult {
+                content: serde_json::json!({"error": "Content extraction failed"}).to_string(),
+            };
+        };
+        match raw.cap_content_len(&tokenizer, max_toks) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("Failed to cap extraction content: {e}");
+                return ToolResult {
+                    content: serde_json::json!({"error": format!("Extraction processing failed: {e}")}).to_string(),
+                };
+            }
+        }
     };
 
     let content = serde_json::to_string(&res)
