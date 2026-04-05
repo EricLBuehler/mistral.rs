@@ -23,6 +23,7 @@ We support the following models' tool calling in OpenAI-compatible and parse nat
 - Hermes 3
 - DeepSeek V2/V3/R1
 - Qwen 3
+- GPT-OSS
 
 All models that support tool calling will respond according to the OpenAI tool calling API.
 
