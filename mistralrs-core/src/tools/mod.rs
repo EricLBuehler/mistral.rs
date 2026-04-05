@@ -1,3 +1,4 @@
+pub(crate) mod grammar;
 pub(crate) mod parsers;
 mod request;
 mod response;
@@ -33,6 +34,7 @@ fn process_model_specific_message(message: &str) -> Result<String> {
 pub struct ToolCallingMatcher {
     tool_choice: ToolChoice,
     known_tool_names: Option<std::collections::HashSet<String>>,
+    tools: Option<Arc<Vec<crate::Tool>>>,
 }
 
 // Same as CalledFunction, but has different cases for variations on the names
@@ -105,10 +107,24 @@ impl ToolCallingMatcher {
                 .map(|tool| tool.function.name.clone())
                 .collect::<std::collections::HashSet<_>>()
         });
+        let tools_arc = tools.map(|t| Arc::new(t.to_vec()));
         Ok(Self {
             tool_choice,
             known_tool_names,
+            tools: tools_arc,
         })
+    }
+
+    /// Build a tool call grammar if a known format prefix is detected in
+    /// `text` and tools are available.  Returns `None` when tool choice is
+    /// `None`, no format matches, or the format is not yet ready (e.g.
+    /// DeepSeek before the JSON fence).
+    pub fn build_tool_call_grammar(&self, text: &str) -> Option<llguidance::api::TopLevelGrammar> {
+        if matches!(self.tool_choice, ToolChoice::None) {
+            return None;
+        }
+        let tools = self.tools.as_ref()?;
+        parsers::build_tool_call_grammar(text, tools)
     }
 
     // Checks if the `message_prefix` could be a tool call. If false, either

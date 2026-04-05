@@ -552,6 +552,10 @@ pub struct Sequence {
 
     // Tool calls
     pub tools: Option<Arc<ToolCallingMatcher>>,
+    /// True when `recognizer` was set by mid-stream tool grammar activation
+    /// (as opposed to a user-specified grammar). Used to safely deactivate
+    /// the grammar when the tool call body is complete.
+    tool_grammar_active: bool,
 
     // Unified reasoning parser (think tags, channel tags, or Harmony)
     reasoning_parser: Option<Box<dyn ReasoningParser>>,
@@ -652,6 +656,7 @@ impl Sequence {
                 image_gen_save_file,
             ),
             tools,
+            tool_grammar_active: false,
             sequence_stepping_type,
             return_raw_logits,
             token_offset: 0,
@@ -1328,6 +1333,16 @@ impl Sequence {
             .as_mut()
             .map(|p| p.finalize_tool_calls())
             .unwrap_or_default()
+    }
+
+    /// Whether the current recognizer was activated mid-stream for tool call
+    /// grammar constraining (as opposed to a user-specified grammar).
+    pub fn is_tool_grammar_active(&self) -> bool {
+        self.tool_grammar_active
+    }
+
+    pub fn set_tool_grammar_active(&mut self, active: bool) {
+        self.tool_grammar_active = active;
     }
 }
 
