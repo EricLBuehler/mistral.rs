@@ -5,6 +5,7 @@
 
 mod deepseek;
 mod gemma4;
+pub(crate) mod harmony;
 mod llama;
 mod mistral_nemo;
 mod qwen;

@@ -67,24 +67,39 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     // When a tool call prefix is detected and no grammar is already active,
     // build a format-specific grammar and activate it so subsequent tokens
     // are constrained to valid tool call syntax.
+    // For Harmony mode, tool calls are signaled by token-level markers (not
+    // text prefixes), so we also check HarmonyContext for new tool calls.
     if matches!(seq.recognizer, SequenceRecognizer::None) {
-        if let Some(ref t) = seq.tools {
-            if let Ok(Some(ref text)) = seq.peek_delta() {
-                if let Some(grm) = t.build_tool_call_grammar(text.as_str()) {
-                    if let Some(ref factory) = metadata.llg_factory {
-                        match crate::pipeline::llg::constraint_from_llg_grammar(factory, grm) {
-                            Ok(matcher) => {
-                                tracing::debug!("Activated tool call grammar");
-                                seq.recognizer = SequenceRecognizer::Llguidance(Box::new(matcher));
-                                seq.set_tool_grammar_active(true);
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to build tool call grammar: {e}. \
-                                     Continuing without constraint."
-                                );
-                            }
-                        }
+        // Try text-based detection first, then Harmony token-based detection.
+        let grm = if let Some(ref t) = seq.tools {
+            seq.peek_delta()
+                .ok()
+                .flatten()
+                .and_then(|text| t.build_tool_call_grammar(text.as_str()))
+        } else {
+            None
+        };
+        let grm = grm.or_else(|| {
+            if seq.needs_harmony_tool_grammar() {
+                seq.tools.as_ref()?.build_harmony_tool_grammar()
+            } else {
+                None
+            }
+        });
+
+        if let Some(grm) = grm {
+            if let Some(ref factory) = metadata.llg_factory {
+                match crate::pipeline::llg::constraint_from_llg_grammar(factory, grm) {
+                    Ok(matcher) => {
+                        tracing::debug!("Activated tool call grammar");
+                        seq.recognizer = SequenceRecognizer::Llguidance(Box::new(matcher));
+                        seq.set_tool_grammar_active(true);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to build tool call grammar: {e}. \
+                             Continuing without constraint."
+                        );
                     }
                 }
             }

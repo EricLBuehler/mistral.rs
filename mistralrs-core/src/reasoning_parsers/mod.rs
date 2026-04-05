@@ -39,6 +39,12 @@ pub trait ReasoningParser: Send + Sync {
     fn finalize_tool_calls(&mut self) -> Vec<harmony::HarmonyToolCall> {
         vec![]
     }
+    /// Check if a tool call grammar should be activated mid-stream.
+    /// Returns true once when a new tool call is detected, then auto-clears.
+    /// Only meaningful for Harmony mode; defaults to false.
+    fn take_needs_tool_grammar_activation(&mut self) -> bool {
+        false
+    }
 }
 
 /// The active reasoning format for a sequence.

@@ -1335,6 +1335,18 @@ impl Sequence {
             .unwrap_or_default()
     }
 
+    /// Check if the Harmony reasoning parser has detected a new tool call
+    /// that needs grammar activation. Returns true once per tool call,
+    /// then auto-clears.
+    pub fn needs_harmony_tool_grammar(&mut self) -> bool {
+        if !self.is_harmony_mode() {
+            return false;
+        }
+        self.reasoning_parser
+            .as_mut()
+            .is_some_and(|p| p.take_needs_tool_grammar_activation())
+    }
+
     /// Whether the current recognizer was activated mid-stream for tool call
     /// grammar constraining (as opposed to a user-specified grammar).
     pub fn is_tool_grammar_active(&self) -> bool {
