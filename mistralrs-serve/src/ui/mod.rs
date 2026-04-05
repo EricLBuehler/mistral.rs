@@ -9,11 +9,11 @@ use axum::routing::{get, get_service, post};
 use axum::Router;
 use include_dir::{include_dir, Dir};
 use indexmap::IndexMap;
-use tracing::info;
 use mistralrs::{Model, SearchEmbeddingModel};
 use mistralrs_core::{MistralRs, ModelCategory};
 use tokio::fs;
 use tower_http::services::ServeDir;
+use tracing::info;
 
 use crate::ui::handlers::{api::*, websocket::ws_handler};
 use crate::ui::types::{AppState, GenerationParams, UiModelInfo};
@@ -69,36 +69,52 @@ async fn static_handler(
 
 fn build_model_list(mistralrs: &Arc<MistralRs>) -> IndexMap<String, UiModelInfo> {
     let mut models = IndexMap::new();
-    if let Ok(list) = mistralrs.list_models() {
-        for model_id in list {
-            if let Ok(category) = mistralrs.get_model_category(Some(&model_id)) {
-                let kind = match category {
+
+    let all_models = mistralrs.list_models_with_status().unwrap_or_default();
+
+    for (model_id, status) in &all_models {
+        let status_str = status.to_string();
+
+        let (kind, generation_defaults) = if status_str == "loaded" {
+            let kind = mistralrs
+                .get_model_category(Some(model_id))
+                .ok()
+                .map(|cat| match cat {
                     ModelCategory::Text => "text",
                     ModelCategory::Multimodal { .. } => "multimodal",
                     ModelCategory::Speech => "speech",
                     ModelCategory::Audio => "audio",
                     ModelCategory::Embedding => "embedding",
                     ModelCategory::Diffusion => "diffusion",
-                };
-                if matches!(kind, "text" | "multimodal" | "speech") {
-                    let generation_defaults = mistralrs
-                        .config(Some(&model_id))
-                        .ok()
-                        .and_then(|cfg| cfg.generation_defaults);
-                    models.insert(
-                        model_id.clone(),
-                        UiModelInfo {
-                            name: model_id,
-                            kind: kind.to_string(),
-                            generation_defaults: GenerationParams::from_model_defaults(
-                                generation_defaults.as_ref(),
-                            ),
-                        },
-                    );
-                }
-            }
+                })
+                .unwrap_or("text");
+
+            let defaults = mistralrs
+                .config(Some(model_id))
+                .ok()
+                .and_then(|cfg| cfg.generation_defaults);
+
+            (
+                kind.to_string(),
+                GenerationParams::from_model_defaults(defaults.as_ref()),
+            )
+        } else {
+            ("text".to_string(), GenerationParams::default())
+        };
+
+        if matches!(kind.as_str(), "text" | "multimodal" | "speech") {
+            models.insert(
+                model_id.clone(),
+                UiModelInfo {
+                    name: model_id.clone(),
+                    kind,
+                    status: Some(status_str),
+                    generation_defaults,
+                },
+            );
         }
     }
+
     models
 }
 
@@ -152,7 +168,7 @@ pub async fn build_ui_router(
 
     let app_state = Arc::new(AppState {
         model: model_wrapper,
-        models,
+        models: tokio::sync::RwLock::new(models),
         current: tokio::sync::RwLock::new(default_model),
         chats_dir: chats_dir.to_string_lossy().to_string(),
         speech_dir: speech_dir.to_string_lossy().to_string(),
@@ -179,6 +195,7 @@ pub async fn build_ui_router(
         .route("/api/settings", get(get_settings))
         .route("/api/generate_speech", post(generate_speech))
         .route("/api/stop", post(stop_generation))
+        .route("/api/refresh_models", get(refresh_models))
         .nest_service("/speech", get_service(ServeDir::new(speech_dir.clone())))
         .nest_service("/uploads", get_service(ServeDir::new(uploads_dir.clone())))
         .route("/", get(static_handler))

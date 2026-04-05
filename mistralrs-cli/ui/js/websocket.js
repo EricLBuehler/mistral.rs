@@ -141,6 +141,13 @@ function handleWebSocketMessage(ev) {
   if (ev.data === '[DONE]') {
     generationStopped = false;
     hideStopBtn();
+    hideLoadingIndicator();
+    return;
+  }
+
+  // Handle model loading indicator
+  if (ev.data === '[LOADING]') {
+    showLoadingIndicator();
     return;
   }
 
@@ -148,6 +155,7 @@ function handleWebSocketMessage(ev) {
   if (ev.data.startsWith('Error:') || ev.data.startsWith('No model selected') || ev.data.startsWith('Selected model not found')) {
     hideSpinner();
     hideStopBtn();
+    hideLoadingIndicator();
     showError(ev.data);
     return;
   }
@@ -407,4 +415,26 @@ function initMessageSending() {
       sendMessage();
     }
   });
+}
+
+/**
+ * Show model loading indicator
+ */
+function showLoadingIndicator() {
+  hideLoadingIndicator();
+  const log = document.getElementById('log');
+  const loadingDiv = document.createElement('div');
+  loadingDiv.className = 'loading-indicator';
+  loadingDiv.id = 'modelLoading';
+  loadingDiv.innerHTML = '<span class="loading-spinner"></span> Loading model...';
+  log.appendChild(loadingDiv);
+  log.scrollTop = log.scrollHeight;
+}
+
+/**
+ * Hide model loading indicator
+ */
+function hideLoadingIndicator() {
+  const el = document.getElementById('modelLoading');
+  if (el) el.remove();
 }

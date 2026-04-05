@@ -8,6 +8,8 @@ use mistralrs::{ModelGenerationDefaults, SearchEmbeddingModel};
 pub struct UiModelInfo {
     pub name: String,
     pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
     pub generation_defaults: GenerationParams,
 }
 
@@ -100,7 +102,7 @@ impl GenerationParams {
 
 pub struct AppState {
     pub model: mistralrs::Model,
-    pub models: IndexMap<String, UiModelInfo>,
+    pub models: RwLock<IndexMap<String, UiModelInfo>>,
     pub current: RwLock<Option<String>>,
     pub chats_dir: String,
     /// Directory for storing generated speech wav files

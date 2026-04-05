@@ -265,7 +265,6 @@ pub async fn get_model_status(
                 CoreModelStatus::Loaded => ModelStatus::Loaded,
                 CoreModelStatus::Unloaded => ModelStatus::Unloaded,
                 CoreModelStatus::Reloading => ModelStatus::Reloading,
-                CoreModelStatus::Pending => ModelStatus::Pending,
             };
             Json(ModelStatusResponse {
                 model_id,
