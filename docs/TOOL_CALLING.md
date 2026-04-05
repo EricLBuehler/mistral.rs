@@ -31,7 +31,7 @@ All models that support tool calling will respond according to the OpenAI tool c
 When tools are provided in a request, mistral.rs automatically enforces constrained decoding on tool call output. When the model begins generating a tool call, a grammar is activated mid-stream that constrains subsequent tokens to valid tool call syntax. This prevents malformed JSON, hallucinated tool names, and missing closing delimiters.
 
 **How it works:**
-1. The model generates normally until a tool call prefix is detected (e.g., `<tool_call>`, `<|python_tag|>`, `[TOOL_CALLS]`).
+1. The model generates normally until a tool call prefix is detected.
 2. A format-specific grammar activates and constrains all subsequent tokens to valid tool call structure.
 3. When the tool call body (and closing delimiter, if applicable) is complete, the grammar deactivates.
 4. For multi-tool-call turns, the grammar re-activates when the next prefix is detected.
