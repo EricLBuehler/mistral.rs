@@ -155,6 +155,7 @@ pub fn get_search_tools(web_search_options: &WebSearchOptions) -> Result<Vec<Too
                 description: Some(format!("{description}{location_details}")),
                 name: SEARCH_TOOL_NAME.to_string(),
                 parameters: Some(parameters),
+                strict: None,
             },
         }
     };
@@ -181,6 +182,7 @@ pub fn get_search_tools(web_search_options: &WebSearchOptions) -> Result<Vec<Too
                 description: Some(description.to_string()),
                 name: EXTRACT_TOOL_NAME.to_string(),
                 parameters: Some(parameters),
+                strict: None,
             },
         }
     };

@@ -479,6 +479,7 @@ impl McpClient {
                     name: tool_name.clone(),
                     description: tool.description.clone(),
                     parameters: Self::convert_mcp_schema_to_parameters(&tool.input_schema),
+                    strict: None,
                 };
 
                 let tool_def = Tool {
@@ -627,6 +628,7 @@ impl McpClient {
                 name: tool_name.clone(),
                 description: tool.description.clone(),
                 parameters: Self::convert_mcp_schema_to_parameters(&tool.input_schema),
+                strict: None,
             };
 
             let tool_def = Tool {

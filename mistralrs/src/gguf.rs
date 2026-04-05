@@ -102,6 +102,7 @@ impl GgufModelBuilder {
                         description: None,
                         name,
                         parameters: None,
+                        strict: None,
                     },
                 },
             },

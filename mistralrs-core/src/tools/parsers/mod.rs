@@ -57,7 +57,11 @@ pub trait ToolFormatParser: Send + Sync {
     /// tool call in this format.  The grammar covers the **post-prefix**
     /// content (the prefix itself is already generated when grammar
     /// activation occurs).
-    fn tool_call_grammar(&self, tools: &[Tool]) -> TopLevelGrammar;
+    ///
+    /// `text` is the full generated text up to the point of grammar
+    /// activation — parsers like DeepSeek can use it to extract the tool
+    /// name from the prefix.
+    fn tool_call_grammar(&self, tools: &[Tool], text: &str) -> TopLevelGrammar;
 }
 
 /// Static registry of all supported tool-call format parsers, tried in order.
@@ -92,7 +96,7 @@ pub fn build_tool_call_grammar(text: &str, tools: &[Tool]) -> Option<TopLevelGra
             if parser.format() == ToolCallFormat::DeepSeek && !text.contains("```json\n") {
                 return None;
             }
-            return Some(parser.tool_call_grammar(tools));
+            return Some(parser.tool_call_grammar(tools, text));
         }
     }
     None

@@ -26,7 +26,13 @@ impl ToolFormatParser for Gemma4Parser {
     /// Pure Lark grammar for Gemma 4's non-JSON tool call format.
     /// Special tokens (`<|"|>`, `<tool_call|>`) use bare angle-bracket
     /// syntax so llguidance matches them via the trie.
-    fn tool_call_grammar(&self, tools: &[Tool]) -> TopLevelGrammar {
+    fn tool_call_grammar(&self, tools: &[Tool], _text: &str) -> TopLevelGrammar {
+        if tools.iter().any(|t| t.function.strict == Some(true)) {
+            tracing::warn!(
+                "strict: true on tool definitions is not supported for Gemma 4 format \
+                 (non-JSON tool calls). Arguments will not be schema-constrained."
+            );
+        }
         let tool_alts = crate::tools::grammar::lark_tool_name_alternatives(tools);
         // Use r##"..."## because the grammar contains `<|"|>` which has
         // a `"#` sequence that would close an r#"..."# literal.

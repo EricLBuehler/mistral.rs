@@ -128,13 +128,21 @@ impl ToolCallingMatcher {
     }
 
     /// Build a pure JSON object grammar for Harmony tool call arguments.
+    /// When `tool_name` identifies a tool with `strict: true`, its
+    /// parameters schema is used for constrained decoding.
     /// Returns `None` when tool choice is `None` or no tools are defined.
-    pub fn build_harmony_tool_grammar(&self) -> Option<llguidance::api::TopLevelGrammar> {
+    pub fn build_harmony_tool_grammar(
+        &self,
+        tool_name: Option<&str>,
+    ) -> Option<llguidance::api::TopLevelGrammar> {
         if matches!(self.tool_choice, ToolChoice::None) {
             return None;
         }
-        self.tools.as_ref()?;
-        Some(parsers::harmony::tool_call_grammar())
+        let tools = self.tools.as_ref()?;
+        Some(parsers::harmony::tool_call_grammar_for_tool(
+            tool_name,
+            Some(tools),
+        ))
     }
 
     // Checks if the `message_prefix` could be a tool call. If false, either

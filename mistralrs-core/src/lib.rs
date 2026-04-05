@@ -486,6 +486,7 @@ impl MistralRsBuilder {
                         description: None,
                         name,
                         parameters: None,
+                        strict: None,
                     },
                 },
             },

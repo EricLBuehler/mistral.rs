@@ -438,6 +438,12 @@ impl super::ReasoningParser for HarmonyContext {
     fn take_needs_tool_grammar_activation(&mut self) -> bool {
         Self::take_needs_grammar_activation(self)
     }
+
+    fn current_tool_recipient(&self) -> Option<String> {
+        self.current_tool_call
+            .as_ref()
+            .map(|(recipient, _)| recipient.clone())
+    }
 }
 
 /// Global harmony encoding (lazy loaded)

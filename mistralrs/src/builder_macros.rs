@@ -33,6 +33,7 @@ macro_rules! common_builder_methods {
                             description: None,
                             name,
                             parameters: None,
+                            strict: None,
                         },
                     },
                 },
