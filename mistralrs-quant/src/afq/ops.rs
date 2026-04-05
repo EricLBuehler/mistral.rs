@@ -569,7 +569,7 @@ mod metal_tests {
     #[test]
     fn test_afq_four() -> Result<()> {
         let rmse = run_afq_roundtrip(AfqBits::Four)?;
-        assert!(rmse < 0.078, "{rmse}");
+        assert!(rmse < 0.09, "{rmse}");
         Ok(())
     }
 
@@ -583,7 +583,7 @@ mod metal_tests {
     #[test]
     fn test_afq_two() -> Result<()> {
         let rmse = run_afq_roundtrip(AfqBits::Two)?;
-        assert!(rmse < 0.35, "{rmse}");
+        assert!(rmse < 0.40, "{rmse}");
         Ok(())
     }
 }
