@@ -100,10 +100,7 @@ fn fix_broken_json(raw: &str) -> anyhow::Result<String> {
 }
 
 impl ToolCallingMatcher {
-    pub fn new(
-        tool_choice: ToolChoice,
-        tools: Option<&[crate::Tool]>,
-    ) -> anyhow::Result<Self> {
+    pub fn new(tool_choice: ToolChoice, tools: Option<&[crate::Tool]>) -> anyhow::Result<Self> {
         let known_tool_names = tools.map(|t| {
             t.iter()
                 .map(|tool| tool.function.name.clone())
@@ -126,8 +123,7 @@ impl ToolCallingMatcher {
             return Ok((false, false));
         }
         let message_prefix = process_model_specific_message(message_prefix)?;
-        let message_prefix =
-            fix_broken_json(&message_prefix).map_err(candle_core::Error::msg)?;
+        let message_prefix = fix_broken_json(&message_prefix).map_err(candle_core::Error::msg)?;
 
         // Check if the prefix could be a JSON serialization of any of the following types.
         Ok([
@@ -205,9 +201,7 @@ impl ToolCallingMatcher {
                 valid
             });
             if calls.is_empty() && before > 0 && matches!(self.tool_choice, ToolChoice::Tool(_)) {
-                anyhow::bail!(
-                    "Tool choice was required but model called unknown tools."
-                );
+                anyhow::bail!("Tool choice was required but model called unknown tools.");
             }
         }
 
@@ -252,4 +246,3 @@ pub fn parse_text_tools<'a>(
     };
     Ok((text_new, tool_calls))
 }
-

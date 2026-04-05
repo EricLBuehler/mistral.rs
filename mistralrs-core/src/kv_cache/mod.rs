@@ -1,3 +1,4 @@
+use crate::attention::AttentionMask;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use candle_core::{Result, Tensor, D};
@@ -704,13 +705,17 @@ impl Cache {
         cache: &mut Option<(Tensor, Tensor)>,
         k: Tensor,
         v: Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         sliding_window: Option<usize>,
     ) -> Result<(Tensor, Tensor, Option<Tensor>)> {
+        let mask_tensor = match attention_mask {
+            AttentionMask::Custom(t) => Some(t.clone()),
+            _ => None,
+        };
         let (k, v, attention_mask) = match cache.clone() {
-            None => (k, v, attention_mask.cloned()),
+            None => (k, v, mask_tensor),
             Some((mut prev_k, mut prev_v)) => {
-                let mut mask = attention_mask.cloned();
+                let mut mask = mask_tensor;
                 if let Some(sliding_window) = sliding_window {
                     let kv_seq_len = prev_k.dim(2)?;
                     if kv_seq_len > sliding_window {

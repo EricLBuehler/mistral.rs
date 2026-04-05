@@ -8,7 +8,7 @@ use indicatif::MultiProgress;
 use mistralrs_quant::{ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder};
 
 use crate::{
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     layers::{layer_norm, linear_no_bias, Activation, Sdpa},
     ops::RepeatInterleaveOp,
     pipeline::{text_models_inputs_processor::FlashParams, IsqModel},
@@ -160,7 +160,7 @@ impl Llama4VisionAttention {
         })
     }
 
-    fn forward(&self, hidden_state: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&self, hidden_state: &Tensor, attention_mask: &AttentionMask) -> Result<Tensor> {
         let mut hidden_state = hidden_state.clone();
         let original_dtype = hidden_state.dtype();
         if let Some(t) = self.q_proj.quantized_act_type() {
@@ -312,7 +312,7 @@ impl Llama4VisionEncoderLayer {
         })
     }
 
-    fn forward(&self, hidden_state: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&self, hidden_state: &Tensor, attention_mask: &AttentionMask) -> Result<Tensor> {
         // Self attn
         let residual = hidden_state;
         let mut hidden_state = self.input_layernorm.forward(hidden_state)?;
@@ -358,7 +358,7 @@ impl Llama4VisionEncoder {
     fn forward_with_states(
         &self,
         hidden_state: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
     ) -> Result<Tensor> {
         let mut hidden_state = hidden_state.clone();
         for layer in self.layers.iter() {
@@ -668,7 +668,9 @@ impl Llama4VisionModel {
         // Apply encoder
         hidden_state =
             hidden_state.reshape((bs_times_num_tiles * num_concurrent_media, (), hidden_dim))?;
-        hidden_state = self.model.forward_with_states(&hidden_state, None)?;
+        hidden_state = self
+            .model
+            .forward_with_states(&hidden_state, &AttentionMask::None)?;
 
         hidden_state = self.layernorm_post.forward(&hidden_state)?;
 

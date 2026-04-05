@@ -1,3 +1,4 @@
+use crate::attention::AttentionMask;
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
@@ -99,11 +100,13 @@ impl AudioEmbedding {
     fn get_audio_features(
         &self,
         input_embeds: &Tensor,
-        audio_attention_mask: Option<&Tensor>,
+        audio_attention_mask: &AttentionMask,
         input_mode: &InputMode,
     ) -> Result<Tensor> {
         // Get audio features from encoder
-        let (audio_features, _masks) = self.encoder.forward(input_embeds, audio_attention_mask)?;
+        let (audio_features, _masks) = self
+            .encoder
+            .forward(input_embeds, audio_attention_mask.as_option_tensor())?;
 
         // Apply projection based on mode
         let projection_layers = self.proj.get(input_mode).ok_or_else(|| {
@@ -123,7 +126,7 @@ impl AudioEmbedding {
         input_ids: &Tensor,
         input_embeds: &Tensor,
         audio_embed_sizes: Vec<usize>,
-        audio_attention_mask: Option<&Tensor>,
+        audio_attention_mask: &AttentionMask,
         input_mode: &InputMode,
     ) -> Result<Tensor> {
         // Reshape input_ids to 2D

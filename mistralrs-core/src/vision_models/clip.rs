@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::attention::AttentionMask;
 use std::sync::Arc;
 
 // Sourced from https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/clip/vision_model.rs
@@ -157,7 +158,7 @@ impl ClipAttention {
             .contiguous()
     }
 
-    fn forward(&self, xs: &Tensor, causal_attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, causal_attention_mask: &AttentionMask) -> Result<Tensor> {
         let (bsz, seq_len, hidden_size) = xs.dims3()?;
 
         let query_states = (self.q_proj.forward(xs)? * self.scale)?;
@@ -175,14 +176,15 @@ impl ClipAttention {
 
         let src_len = key_states.dim(1)?;
 
-        let attn_weights = if let Some(causal_attention_mask) = causal_attention_mask {
-            attn_weights
-                .reshape((bsz, self.num_attention_heads, seq_len, src_len))?
-                .broadcast_add(causal_attention_mask)?
-                .reshape((bsz * self.num_attention_heads, seq_len, src_len))?
-        } else {
-            attn_weights
-        };
+        let attn_weights =
+            if let AttentionMask::Custom(causal_attention_mask) = causal_attention_mask {
+                attn_weights
+                    .reshape((bsz, self.num_attention_heads, seq_len, src_len))?
+                    .broadcast_add(causal_attention_mask)?
+                    .reshape((bsz * self.num_attention_heads, seq_len, src_len))?
+            } else {
+                attn_weights
+            };
 
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
 
@@ -245,7 +247,7 @@ impl ClipEncoderLayer {
         })
     }
 
-    fn forward(&self, xs: &Tensor, causal_attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, causal_attention_mask: &AttentionMask) -> Result<Tensor> {
         let residual = xs;
         let xs = self.layer_norm1.forward(xs)?;
         let xs = self.self_attn.forward(&xs, causal_attention_mask)?;
@@ -277,7 +279,7 @@ impl ClipEncoder {
     pub fn forward_get_hidden_states(
         &self,
         xs: &Tensor,
-        causal_attention_mask: Option<&Tensor>,
+        causal_attention_mask: &AttentionMask,
     ) -> Result<Vec<Tensor>> {
         let mut xs = xs.clone();
         let mut hidden_states = Vec::new();
@@ -320,7 +322,7 @@ impl ClipVisionTransformer {
             .apply(&self.pre_layer_norm)?;
         let mut result = self
             .encoder
-            .forward_get_hidden_states(&hidden_states, None)?;
+            .forward_get_hidden_states(&hidden_states, &AttentionMask::None)?;
         let encoder_outputs = result.last().unwrap();
         let pooled_output = encoder_outputs.i((.., 0, ..))?;
         result.push(self.final_layer_norm.forward(&pooled_output)?.clone());

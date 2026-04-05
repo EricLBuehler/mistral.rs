@@ -9,6 +9,7 @@ pub use inputs_processor::MiniCpmOProcessor;
 use mistralrs_quant::{CollectedImatrixData, QuantMethod, ShardedVarBuilder};
 use resampler::Resampler;
 
+use crate::attention::AttentionMask;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
@@ -158,7 +159,7 @@ impl MiniCpmOModel {
 
                         let vpm_out = self.vpm.forward(
                             &single_pv,
-                            Some(&patch_attn_mask),
+                            &AttentionMask::Custom(patch_attn_mask.clone()),
                             Some(&tgt_size_tensor),
                         )?;
                         let feats = self.resampler.forward(&vpm_out, &tgt_size_vec)?;
@@ -232,15 +233,18 @@ impl MiniCpmOModel {
                         let end_idx = i + vision_batch_size;
                         let tmp_hs = self.vpm.forward(
                             &all_pixel_values.i(start_idx..end_idx)?,
-                            Some(&patch_attn_mask.i(start_idx..end_idx)?),
+                            &AttentionMask::Custom(patch_attn_mask.i(start_idx..end_idx)?),
                             Some(&tgt_sizes.i(start_idx..end_idx)?),
                         )?;
                         hs.push(tmp_hs);
                     }
                     Tensor::cat(&hs, 0)?
                 } else {
-                    self.vpm
-                        .forward(&all_pixel_values, Some(&patch_attn_mask), Some(&tgt_sizes))?
+                    self.vpm.forward(
+                        &all_pixel_values,
+                        &AttentionMask::Custom(patch_attn_mask.clone()),
+                        Some(&tgt_sizes),
+                    )?
                 };
                 vision_embedding = self.resampler.forward(&vision_embedding, &tgt_sizes_vec)?;
                 vision_embedding

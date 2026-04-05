@@ -4,6 +4,45 @@ use crate::{attention::backends::cpu, pipeline::text_models_inputs_processor::Fl
 
 use candle_core::{DType, Device, Result, Tensor};
 
+/// Attention mask passed to [`Sdpa::run_attention`].
+///
+/// Encodes both the mask data and the *intent* — whether the attention layer
+/// should use flash attention (causal handled by the kernel), eager attention
+/// with an explicit mask tensor, or no masking at all.
+#[derive(Clone, Debug)]
+pub enum AttentionMask {
+    /// No masking. Used for single-token decode or truly unmasked attention.
+    None,
+    /// Flash attention with `is_causal = true`. No mask tensor is needed;
+    /// the flash kernel applies causal masking internally. Also signals
+    /// "this is a prefill" to the paged attention layer.
+    CausalFlash,
+    /// An explicit mask tensor (causal, sliding window, bidirectional, …).
+    /// Dispatches to the eager (non-flash) attention path.
+    Custom(Tensor),
+}
+
+impl AttentionMask {
+    /// Extract the inner tensor as `Option<&Tensor>`.
+    ///
+    /// Returns `Some(&tensor)` for [`Custom`](Self::Custom), `None` otherwise.
+    /// Useful for interfacing with paged-attention and MLA helpers that still
+    /// accept `Option<&Tensor>`.
+    pub fn as_option_tensor(&self) -> Option<&Tensor> {
+        match self {
+            Self::Custom(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// Returns `true` when the mask carries an explicit tensor
+    /// ([`Custom`](Self::Custom) variant), mirroring the old
+    /// `Option<Tensor>::is_some()` semantics.
+    pub fn is_custom(&self) -> bool {
+        matches!(self, Self::Custom(_))
+    }
+}
+
 mod backends;
 
 #[allow(unused)]
@@ -99,40 +138,38 @@ impl Sdpa {
     /// - k: (b_sz, n_kv_heads, q_len, head_dim)
     /// - v: (b_sz, n_kv_heads, q_len, head_dim)
     ///
-    /// The attention implementation is dispatched as follows:
-    /// 1) If using flash attn (CUDA), use a flash attention V2/V3 kernel
-    /// 2) If decoding and using a Metal device, use a fused kkernel
-    /// 2) Otherwise, use the "naive" SDPA implementation (with optimized mask+softmax+scale application)
+    /// Dispatch attention based on the [`AttentionMask`] variant:
+    ///
+    /// - [`AttentionMask::CausalFlash`] → flash attention with `is_causal = true`
+    /// - [`AttentionMask::None`] → flash if available (decode), else eager without mask
+    /// - [`AttentionMask::Custom`] → eager attention with the explicit mask tensor
     #[allow(unused_variables, clippy::too_many_arguments)]
     pub fn run_attention(
         &self,
         q: &Tensor,
         k: &Tensor,
         v: &Tensor,
-        mask: Option<&Tensor>,
+        mask: &AttentionMask,
         flash_params: Option<&FlashParams>,
         sdpa_params: &SdpaParams,
     ) -> Result<Tensor> {
         // If sinks are present, dispatch to the sinks backend
         if let Some(sinks) = &sdpa_params.sinks {
-            return sinks_attn(q, k, v, sinks, mask, flash_params, sdpa_params);
+            let mask_tensor = match mask {
+                AttentionMask::Custom(t) => Some(t),
+                _ => None,
+            };
+            return sinks_attn(q, k, v, sinks, mask_tensor, flash_params, sdpa_params);
         }
 
-        let (b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()?;
-        let (_, _, _, k_head_dim) = k.dims4()?;
-        let (_, _, _, v_head_dim) = v.dims4()?;
+        // Custom mask → eager attention (flash can't use arbitrary mask tensors)
+        if let AttentionMask::Custom(mask_tensor) = mask {
+            return self.run_attention_noflash(q, k, v, Some(mask_tensor), sdpa_params);
+        }
 
+        // CausalFlash or None → try flash attention, fall back to eager
         let can_use_flash = q.device().is_cpu()
-            || q.device().is_cuda()
-                && crate::using_flash_attn()
-                && q.dtype() != DType::F32
-                // Flash attention v2 for head_dim > 256 requires kBlockN >= 64
-                // in the kernel tiling, which needs >= 128 KB shared memory.
-                // GPUs with less (e.g. GB10 at 99 KB) cannot run it correctly.
-                // Fall back to eager attention which has no smem constraint.
-                && head_dim <= 256
-                && k_head_dim <= 256
-                && v_head_dim <= 256;
+            || q.device().is_cuda() && crate::using_flash_attn() && q.dtype() != DType::F32;
 
         if can_use_flash {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
@@ -143,17 +180,17 @@ impl Sdpa {
             if q.device().is_cpu() {
                 match q.dtype() {
                     DType::F32 => {
-                        return cpu::run_flash_attn_cpu::<f32>(&q, &k, &v, mask, sdpa_params);
+                        return cpu::run_flash_attn_cpu::<f32>(&q, &k, &v, None, sdpa_params);
                     }
                     DType::F16 => {
-                        return cpu::run_flash_attn_cpu::<half::f16>(&q, &k, &v, mask, sdpa_params)
+                        return cpu::run_flash_attn_cpu::<half::f16>(&q, &k, &v, None, sdpa_params)
                     }
                     DType::BF16 => {
                         return cpu::run_flash_attn_cpu::<half::bf16>(
                             &q,
                             &k,
                             &v,
-                            mask,
+                            None,
                             sdpa_params,
                         );
                     }
@@ -166,7 +203,7 @@ impl Sdpa {
             }
         }
 
-        self.run_attention_noflash(q, k, v, mask, sdpa_params)
+        self.run_attention_noflash(q, k, v, None, sdpa_params)
     }
 
     /// Same as `run_attention`, but no flash attention

@@ -7,7 +7,7 @@ use mistralrs_quant::{ColumnParallelLayer, QuantMethod, RowParallelLayer, Sharde
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     device_map::DeviceMapper,
     layers::{
         embedding, Gemma3RotaryEmbedding, GemmaRmsNorm, MatMul, Mlp, RotaryEmbedding,
@@ -250,7 +250,7 @@ impl Attention {
             &q,
             &k,
             &v,
-            Some(mask),
+            &AttentionMask::Custom(mask.clone()),
             Some(flash_params),
             &self.sdpa_params,
         )?;

@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::layers_masker::CausalMaskConfig;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -9,7 +10,7 @@ use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{embedding, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
@@ -112,7 +113,7 @@ impl DecoderAttention {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         flash_params: &FlashParams,
@@ -167,7 +168,7 @@ impl DecoderAttention {
         if let Some(t) = self.wq.quantized_act_type() {
             attn_output = attn_output.to_dtype(t)?;
         }
-        attn_output = if attention_mask.is_some() {
+        attn_output = if !matches!(attention_mask, AttentionMask::None) {
             attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
@@ -324,7 +325,7 @@ impl DecoderLayer {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         t_cond: Option<&Tensor>,
@@ -616,12 +617,14 @@ impl VoxtralModel {
 
         // EitherCache::normal() returns MutexGuard via interior mutability
         let mut cache = self.cache.normal();
-        let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+        let attention_mask = CausalMasker.make_causal_mask(
             &dummy_toks,
             &cache.0 as &dyn PastKvLenCache,
-            self.sliding_window,
             input_embeds.dtype(),
-            self.num_heads,
+            &CausalMaskConfig {
+                sliding_window: self.sliding_window,
+                ..Default::default()
+            },
         )?;
 
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
@@ -634,7 +637,7 @@ impl VoxtralModel {
                 .transpose()?;
             xs = layer.forward(
                 &xs,
-                attention_mask.as_ref().map(|m| m.get(xs.device())),
+                &attention_mask.get(xs.device()),
                 seqlen_offsets,
                 &mut cache.0[i],
                 t_cond_mapped.as_ref(),

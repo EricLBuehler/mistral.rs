@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::layers_masker::CausalMaskConfig;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -7,7 +8,7 @@ use candle_core::{DType, Module, Result, Tensor};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     layers::{CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     pipeline::{KvCache, NormalCache},
@@ -72,7 +73,7 @@ impl EncoderAttention {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
@@ -113,7 +114,7 @@ impl EncoderAttention {
             &self.sdpa_params,
         )?;
 
-        let attn_output = if attention_mask.is_some() {
+        let attn_output = if !matches!(attention_mask, AttentionMask::None) {
             attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
@@ -180,7 +181,7 @@ impl EncoderLayer {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
@@ -323,22 +324,19 @@ impl VoxtralEncoder {
         // Create causal mask with sliding window for the encoder
         let seqlen_offsets = vec![0usize; b_sz];
         let dummy_toks = Tensor::zeros((b_sz, seq_len), DType::U32, xs.device())?;
-        let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+        let attention_mask = CausalMasker.make_causal_mask(
             &dummy_toks,
             &cache.0 as &dyn PastKvLenCache,
-            self.sliding_window,
             xs.dtype(),
-            self.num_heads,
+            &CausalMaskConfig {
+                sliding_window: self.sliding_window,
+                ..Default::default()
+            },
         )?;
 
         let mut hidden = xs;
         for (i, layer) in self.layers.iter().enumerate() {
-            hidden = layer.forward(
-                &hidden,
-                attention_mask.as_ref(),
-                &seqlen_offsets,
-                &mut cache.0[i],
-            )?;
+            hidden = layer.forward(&hidden, &attention_mask, &seqlen_offsets, &mut cache.0[i])?;
         }
 
         self.norm.forward(&hidden)

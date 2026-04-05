@@ -1485,10 +1485,7 @@ impl MistralRs {
                 throughput_logging_enabled: engine_instance.reboot_state.throughput_logging_enabled,
                 search_embedding_model: engine_instance.reboot_state.search_embedding_model,
                 search_callback: engine_instance.reboot_state.search_callback.clone(),
-                tool_callbacks: engine_instance
-                    .reboot_state
-                    .tool_callbacks
-                    .clone(),
+                tool_callbacks: engine_instance.reboot_state.tool_callbacks.clone(),
             },
             mcp_client_config: engine_instance.reboot_state.mcp_client_config.clone(),
             category: engine_instance.category.clone(),
@@ -1624,10 +1621,7 @@ impl MistralRs {
             throughput_logging_enabled: unloaded_state.engine_config.throughput_logging_enabled,
             search_embedding_model: unloaded_state.engine_config.search_embedding_model,
             search_callback: unloaded_state.engine_config.search_callback.clone(),
-            tool_callbacks: unloaded_state
-                .engine_config
-                .tool_callbacks
-                .clone(),
+            tool_callbacks: unloaded_state.engine_config.tool_callbacks.clone(),
             mcp_client_config: unloaded_state.mcp_client_config.clone(),
             loader_config: Some(unloaded_state.loader_config.clone()),
         };

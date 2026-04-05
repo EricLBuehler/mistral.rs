@@ -220,12 +220,13 @@ pub(super) async fn execute_extraction(
 
     let res = {
         let raw = tokio::task::block_in_place(|| {
-            tracing::dispatcher::with_default(&dispatch, || match search::run_extract_tool(&params)
-            {
-                Ok(r) => Some(r),
-                Err(e) => {
-                    tracing::error!("Extraction tool failed: {e}");
-                    None
+            tracing::dispatcher::with_default(&dispatch, || {
+                match search::run_extract_tool(&params) {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        tracing::error!("Extraction tool failed: {e}");
+                        None
+                    }
                 }
             })
         });
@@ -239,7 +240,9 @@ pub(super) async fn execute_extraction(
             Err(e) => {
                 tracing::error!("Failed to cap extraction content: {e}");
                 return ToolResult {
-                    content: serde_json::json!({"error": format!("Extraction processing failed: {e}")}).to_string(),
+                    content:
+                        serde_json::json!({"error": format!("Extraction processing failed: {e}")})
+                            .to_string(),
                 };
             }
         }

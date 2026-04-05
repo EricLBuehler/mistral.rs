@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::layers_masker::CausalMaskConfig;
 use candle_core::{Device, Module, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
@@ -11,7 +12,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
         self, embedding, CausalMasker, GptOssRotaryEmbedding, MatMul, RmsNorm, RotaryEmbedding,
@@ -247,7 +248,7 @@ impl Attention {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -304,7 +305,7 @@ impl Attention {
                 )?,
                 None => {
                     let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                    assert!(attention_mask.is_some());
+                    assert!(!matches!(attention_mask, AttentionMask::None));
                     paged_attn.forward(
                         &q,
                         &k,
@@ -335,7 +336,7 @@ impl Attention {
         if let Some(t) = self.q_proj.quantized_act_type() {
             attn_output = attn_output.to_dtype(t)?;
         }
-        attn_output = if attention_mask.is_some() {
+        attn_output = if !matches!(attention_mask, AttentionMask::None) {
             attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
@@ -522,7 +523,7 @@ impl DecoderLayer {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -744,29 +745,47 @@ impl Model {
 
         let sliding_window = self.cfg.sliding_window;
 
-        // Use the `_as_attn_bias` variants which always construct real masks.
-        // The standard `make_causal_mask_matrix` returns a dummy (1,1) tensor when
-        // flash-attn is enabled on CUDA, but the CPU sinks fallback needs a real mask.
+        // Always construct real masks (force_custom: true) because the CPU
+        // sinks fallback needs a real mask, not the flash-attn dummy.
         let mask_cache: &dyn PastKvLenCache = metadata
             .as_ref()
             .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
             .unwrap_or(cache as &dyn PastKvLenCache);
-        let causal_mask =
-            CausalMasker.make_causal_mask_as_attn_bias(input_ids, mask_cache, xs.dtype())?;
-
-        let sliding_mask = CausalMasker.make_sliding_window_causal_mask_as_attn_bias(
+        let causal_mask = CausalMasker.make_causal_mask(
             input_ids,
             mask_cache,
-            sliding_window,
             xs.dtype(),
+            &CausalMaskConfig {
+                force_custom: true,
+                ..Default::default()
+            },
+        )?;
+
+        let sliding_mask = CausalMasker.make_causal_mask(
+            input_ids,
+            mask_cache,
+            xs.dtype(),
+            &CausalMaskConfig {
+                sliding_window: sliding_window,
+                force_custom: true,
+                ..Default::default()
+            },
         )?;
 
         let should_use_mask = metadata
             .as_ref()
             .map(|(_, meta)| meta.is_first_prompt_chunk)
             .unwrap_or(true);
-        let causal_mask = if should_use_mask { causal_mask } else { None };
-        let sliding_mask = if should_use_mask { sliding_mask } else { None };
+        let causal_mask = if should_use_mask {
+            causal_mask
+        } else {
+            AttentionMask::None
+        };
+        let sliding_mask = if should_use_mask {
+            sliding_mask
+        } else {
+            AttentionMask::None
+        };
         let causal_mask = DeviceMappedMask::new(causal_mask, &*self.mapper)?;
         let sliding_mask = DeviceMappedMask::new(sliding_mask, &*self.mapper)?;
 
@@ -774,14 +793,19 @@ impl Model {
             xs = self.mapper.map(xs, i)?;
 
             let layer_mask = if layer.self_attn.is_sliding {
-                sliding_mask.as_ref().or(causal_mask.as_ref())
+                let sm = sliding_mask.get(xs.device());
+                if matches!(sm, AttentionMask::None) {
+                    causal_mask.get(xs.device())
+                } else {
+                    sm
+                }
             } else {
-                causal_mask.as_ref()
+                causal_mask.get(xs.device())
             };
 
             xs = layer.forward(
                 &xs,
-                layer_mask.map(|m| m.get(xs.device())),
+                &layer_mask,
                 seqlen_offsets,
                 &mut cache[i],
                 metadata.as_ref().map(|(kv, m)| (kv[i].clone(), *m)),

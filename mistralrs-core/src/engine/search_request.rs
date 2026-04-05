@@ -15,12 +15,11 @@ use super::Engine;
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /// Get a mutable reference to the messages vec inside a request.
-fn get_messages_mut(
-    request: &mut NormalRequest,
-) -> &mut Vec<IndexMap<String, MessageContent>> {
+fn get_messages_mut(request: &mut NormalRequest) -> &mut Vec<IndexMap<String, MessageContent>> {
     match &mut request.messages {
-        RequestMessage::Chat { messages, .. }
-        | RequestMessage::MultimodalChat { messages, .. } => messages,
+        RequestMessage::Chat { messages, .. } | RequestMessage::MultimodalChat { messages, .. } => {
+            messages
+        }
         _ => unreachable!(),
     }
 }

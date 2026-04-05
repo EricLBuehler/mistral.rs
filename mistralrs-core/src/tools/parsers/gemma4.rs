@@ -265,7 +265,8 @@ mod tests {
 
     #[test]
     fn strips_tool_response_eos() {
-        let msg = "<|tool_call>call:search{query:<|\"|\x3eweather<|\"|\x3e}<tool_call|><|tool_response>";
+        let msg =
+            "<|tool_call>call:search{query:<|\"|\x3eweather<|\"|\x3e}<tool_call|><|tool_response>";
         let parsed: Vec<CalledFunctionParameters> = serde_json::from_str(&parse(msg)).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].parameters["query"], "weather");
