@@ -3,9 +3,11 @@
 //! Format: `<|tool_call>call:NAME{key:<|"|>value<|"|>,key2:42}<tool_call|>`
 
 use candle_core::Result;
+use llguidance::api::{GrammarWithLexer, TopLevelGrammar};
 use serde_json::Value;
 
 use super::ToolFormatParser;
+use crate::Tool;
 
 /// Gemma 4 string delimiter token.
 const GEMMA4_STR_DELIM: &str = "<|\"|>";
@@ -15,6 +17,35 @@ pub struct Gemma4Parser;
 impl ToolFormatParser for Gemma4Parser {
     fn could_be_tool_call(&self, text: &str) -> bool {
         text.contains("<|tool_call>")
+    }
+
+    fn format(&self) -> super::ToolCallFormat {
+        super::ToolCallFormat::Gemma4
+    }
+
+    /// Pure Lark grammar for Gemma 4's non-JSON tool call format.
+    ///
+    /// Covers: `call:NAME{key:<|"|>value<|"|>,key2:42}<tool_call|>`
+    fn tool_call_grammar(&self, tools: &[Tool]) -> TopLevelGrammar {
+        let tool_alts = crate::tools::grammar::lark_tool_name_alternatives(tools);
+        let lark = format!(
+            r#"start: "call:" TOOL_NAME "{{" args "}}" "<tool_call|>"
+TOOL_NAME: {tool_alts}
+args: pair ("," pair)* |
+pair: KEY ":" value
+KEY: /[a-zA-Z_][a-zA-Z0-9_]*/
+value: gemma_string | number | "true" | "false" | "null" | array | object
+gemma_string: "<|\"" "|>" /[^<]*/ "<|\"" "|>"
+number: /-?(0|[1-9][0-9]*)(\.[0-9]+)?/
+array: "[" (value ("," value)*)? "]"
+object: "{{" (pair ("," pair)*)? "}}"
+"#
+        );
+        let top = GrammarWithLexer::from_lark(lark);
+        TopLevelGrammar {
+            grammars: vec![top],
+            max_tokens: None,
+        }
     }
 
     fn parse(&self, message: &str) -> Result<Option<String>> {

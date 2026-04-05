@@ -10,6 +10,25 @@ mod mistral_nemo;
 mod qwen;
 
 use candle_core::Result;
+use llguidance::api::TopLevelGrammar;
+
+use crate::Tool;
+
+/// Identifies the detected tool call format so that the correct grammar
+/// can be constructed for mid-stream constrained decoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCallFormat {
+    /// `<tool_call>{"name":"...","arguments":{...}}</tool_call>`
+    Qwen,
+    /// `<|python_tag|>{"name":"...","parameters":{...}}`
+    Llama,
+    /// `[TOOL_CALLS][{"name":"...","arguments":{...}}]`
+    MistralNemo,
+    /// Multi-line with ` ```json` fence and `<｜tool▁call▁end｜>` delimiter
+    DeepSeek,
+    /// `<|tool_call>call:NAME{key:<|"|>value<|"|>}<tool_call|>` (non-JSON)
+    Gemma4,
+}
 
 /// A parser that can detect and extract tool calls from model output.
 pub trait ToolFormatParser: Send + Sync {
@@ -29,6 +48,15 @@ pub trait ToolFormatParser: Send + Sync {
     ///
     /// The caller will fall through to the next parser on `Ok(None)`.
     fn parse(&self, message: &str) -> Result<Option<String>>;
+
+    /// The tool call format this parser handles.
+    fn format(&self) -> ToolCallFormat;
+
+    /// Build an llguidance grammar that constrains model output to a valid
+    /// tool call in this format.  The grammar covers the **post-prefix**
+    /// content (the prefix itself is already generated when grammar
+    /// activation occurs).
+    fn tool_call_grammar(&self, tools: &[Tool]) -> TopLevelGrammar;
 }
 
 /// Static registry of all supported tool-call format parsers, tried in order.
@@ -50,6 +78,23 @@ static PARSERS: std::sync::LazyLock<Vec<Box<dyn ToolFormatParser>>> =
 /// format.
 pub fn contains_tool_call_prefix(text: &str) -> bool {
     PARSERS.iter().any(|p| p.could_be_tool_call(text))
+}
+
+/// Build a tool call grammar for the first matching format detected in
+/// `text`.  Returns `None` if no format matches or if the format is not
+/// yet ready for grammar activation (e.g. DeepSeek before the JSON fence).
+pub fn build_tool_call_grammar(text: &str, tools: &[Tool]) -> Option<TopLevelGrammar> {
+    for parser in PARSERS.iter() {
+        if parser.could_be_tool_call(text) {
+            // DeepSeek: wait until the JSON fence is present so we don't
+            // activate grammar before the function name is complete.
+            if parser.format() == ToolCallFormat::DeepSeek && !text.contains("```json\n") {
+                return None;
+            }
+            return Some(parser.tool_call_grammar(tools));
+        }
+    }
+    None
 }
 
 /// Try each parser in order to extract tool calls from `message`.

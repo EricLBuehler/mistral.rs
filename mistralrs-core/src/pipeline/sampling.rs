@@ -63,6 +63,34 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         }
     };
 
+    // Mid-stream grammar activation for tool calls.
+    // When a tool call prefix is detected and no grammar is already active,
+    // build a format-specific grammar and activate it so subsequent tokens
+    // are constrained to valid tool call syntax.
+    if matches!(seq.recognizer, SequenceRecognizer::None) {
+        if let Some(ref t) = seq.tools {
+            if let Ok(Some(ref text)) = seq.peek_delta() {
+                if let Some(grm) = t.build_tool_call_grammar(text.as_str()) {
+                    if let Some(ref factory) = metadata.llg_factory {
+                        match crate::pipeline::llg::constraint_from_llg_grammar(factory, grm) {
+                            Ok(matcher) => {
+                                tracing::debug!("Activated tool call grammar");
+                                seq.recognizer = SequenceRecognizer::Llguidance(Box::new(matcher));
+                                seq.set_tool_grammar_active(true);
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to build tool call grammar: {e}. \
+                                     Continuing without constraint."
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Handle streaming requests
     if seq.get_mut_group().is_streaming {
         let mut tool_use_still_possible = false;
@@ -548,6 +576,18 @@ pub async fn sample_sequence(
             }
         }
         SequenceRecognizer::None => {}
+    }
+
+    // Deactivate mid-stream tool grammar when the grammar has completed
+    // (e.g. JSON body finished).  This allows the model to continue
+    // generating unconstrained text (closing delimiters, or another tool
+    // call prefix that will re-activate the grammar).
+    if let SequenceRecognizer::Llguidance(ref llg) = seq.recognizer {
+        if llg.is_stopped() && seq.is_tool_grammar_active() {
+            seq.recognizer = SequenceRecognizer::None;
+            seq.set_tool_grammar_active(false);
+            tracing::debug!("Deactivated tool call grammar (body complete)");
+        }
     }
 
     Ok(second_logprobs_response)
