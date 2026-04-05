@@ -1500,11 +1500,13 @@ impl TextModel {
 
             (attention_mask, sliding_attention_mask, Some(&bidir_flash))
         } else {
-            let attention_mask = CausalMasker.make_causal_mask_matrix(
+            // Full-attention layers (head_dim=512) use eager attention because
+            // flash-attn v2 produces incorrect results for head_dim > 256.
+            // Eager attention needs a real causal mask (not the 1x1 flash dummy).
+            let attention_mask = CausalMasker.make_causal_mask_as_attn_bias(
                 input_ids,
                 mask_cache,
                 xs.dtype(),
-                self.cfg.num_attn_heads,
             )?;
             let attention_mask = attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
             let attention_mask = attention_mask.filter(|_| {

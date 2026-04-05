@@ -123,7 +123,16 @@ impl Sdpa {
         let (_, _, _, v_head_dim) = v.dims4()?;
 
         let can_use_flash = q.device().is_cpu()
-            || q.device().is_cuda() && crate::using_flash_attn() && q.dtype() != DType::F32;
+            || q.device().is_cuda()
+                && crate::using_flash_attn()
+                && q.dtype() != DType::F32
+                // Flash attention v2 for head_dim > 256 requires kBlockN >= 64
+                // in the kernel tiling, which needs >= 128 KB shared memory.
+                // GPUs with less (e.g. GB10 at 99 KB) cannot run it correctly.
+                // Fall back to eager attention which has no smem constraint.
+                && head_dim <= 256
+                && k_head_dim <= 256
+                && v_head_dim <= 256;
 
         if can_use_flash {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
