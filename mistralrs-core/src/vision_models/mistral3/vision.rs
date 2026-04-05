@@ -3,6 +3,7 @@ use std::sync::Arc;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use mistralrs_quant::{linear_b, Convolution, QuantMethod, ShardedVarBuilder};
 
+use crate::attention::AttentionMask;
 use crate::{
     layers::{self, GetFloatInfo, RmsNorm},
     pipeline::NormalLoadingMetadata,
@@ -119,7 +120,7 @@ impl Attention {
         xs: &Tensor,
         emb: &RotaryEmbedding,
         subsampled_positions: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
     ) -> Result<Tensor> {
         let (b, patches, _) = xs.dims3()?;
         let query_states = self.q_proj.forward_autocast(xs)?;
@@ -136,8 +137,8 @@ impl Attention {
         let attn_weights = (query_states.matmul(&key_states.t()?)? * self.scale)?;
 
         let attn_weights = match attention_mask {
-            None => attn_weights,
-            Some(mask) => attn_weights.broadcast_add(mask)?,
+            AttentionMask::None | AttentionMask::CausalFlash => attn_weights,
+            AttentionMask::Custom(mask) => attn_weights.broadcast_add(mask)?,
         };
 
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
@@ -224,7 +225,7 @@ impl AttentionLayer {
         xs: &Tensor,
         emb: &RotaryEmbedding,
         subsampled_positions: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.attention.forward(
@@ -265,7 +266,7 @@ impl Transformer {
         xs: &Tensor,
         emb: &RotaryEmbedding,
         subsampled_positions: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
     ) -> Result<Tensor> {
         let mut xs = xs.clone();
         for layer in self.layers.iter() {
@@ -482,7 +483,7 @@ impl Mistral3VisionModel {
             &patch_embeds,
             &self.patch_positional_embedding,
             subsampled_positions.as_ref(),
-            Some(&attention_mask),
+            &AttentionMask::Custom(attention_mask.clone()),
         )
     }
 

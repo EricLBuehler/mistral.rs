@@ -130,8 +130,8 @@ impl Gemma4Model {
 
         let language_model = TextModel::new(
             &cfg.text_config,
-            Some(cfg.image_token_id as usize),
-            Some(cfg.video_token_id as usize),
+            Some(cfg.image_token_id),
+            Some(cfg.video_token_id),
             vb.pp("language_model"),
             is_gptx,
             normal_loading_metadata,
@@ -374,7 +374,7 @@ impl Gemma4Model {
         }
 
         // ── Video embedding (same vision tower as images) ──────────────
-        if let Some(ref vid_pixel_values) = video_pixel_values {
+        if let Some(vid_pixel_values) = video_pixel_values {
             let video_mask = input_ids
                 .to_dtype(DType::F32)?
                 .eq(self.cfg.video_token_id as f64)?;

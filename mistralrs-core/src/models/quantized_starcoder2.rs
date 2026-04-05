@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::attention::SdpaParams;
+use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
-use crate::layers::{CausalMasker, MatMul, QLinear, RotaryEmbedding, Sdpa};
+use crate::layers::{CausalMaskConfig, CausalMasker, MatMul, QLinear, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -65,7 +65,7 @@ impl LayerWeights {
     fn forward_attn(
         &self,
         x: &Tensor,
-        mask: Option<&Tensor>,
+        mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -124,7 +124,7 @@ impl LayerWeights {
             }
         };
 
-        let y = if mask.is_some() {
+        let y = if mask.is_custom() {
             y.transpose(1, 2)?.reshape(&[b_sz, q_len, hidden_size])?
         } else {
             y.reshape(&[b_sz, q_len, hidden_size])?
@@ -361,21 +361,24 @@ impl ModelWeights {
         let (_b_sz, seq_len) = input_ids.dims2()?;
         let mut xs = self.tok_embeddings.forward(input_ids)?;
         let cache = &mut self.cache.normal().0;
-        let mask = CausalMasker.make_causal_mask_matrix(
+        let mask = CausalMasker.make_causal_mask(
             input_ids,
             metadata
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
             self.dtype,
-            self.layers[0].n_head,
+            &CausalMaskConfig::default(),
         )?;
-        let mask = mask.filter(|_| {
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-        });
+        let mask = if metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(true)
+        {
+            mask
+        } else {
+            AttentionMask::None
+        };
         let mask = DeviceMappedMask::new(mask, &**self.mapper.as_ref().unwrap())?;
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
@@ -385,7 +388,7 @@ impl ModelWeights {
             let ys = xs.apply(&layer.attn_norm)?;
             let ys = layer.forward_attn(
                 &ys,
-                mask.as_ref().map(|m| m.get(xs.device())),
+                &mask.get(xs.device()),
                 seqlen_offsets,
                 &mut cache[i],
                 metadata

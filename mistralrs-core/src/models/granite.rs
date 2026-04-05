@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::layers_masker::CausalMaskConfig;
 use candle_core::{Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
@@ -14,7 +15,7 @@ use std::{
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
@@ -1277,7 +1278,7 @@ impl CausalSelfAttention {
     fn forward(
         &self,
         x: &Tensor,
-        attention_mask: &Option<Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -1330,7 +1331,7 @@ impl CausalSelfAttention {
                     &q,
                     &k,
                     &v,
-                    attention_mask.clone().as_ref(),
+                    attention_mask,
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
@@ -1339,12 +1340,12 @@ impl CausalSelfAttention {
                 )?,
                 None => {
                     let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                    assert!(attention_mask.is_some());
+                    assert!(!matches!(attention_mask, AttentionMask::None));
                     paged_attn.forward(
                         &q,
                         &k,
                         &v,
-                        attention_mask.clone().as_ref(),
+                        attention_mask,
                         None,
                         None,
                         &input_metadata,
@@ -1360,7 +1361,7 @@ impl CausalSelfAttention {
                     &q,
                     &k,
                     &v,
-                    attention_mask.clone().as_ref(),
+                    attention_mask,
                     Some(flash_params),
                     &self.sdpa_params,
                 )?
@@ -1370,7 +1371,7 @@ impl CausalSelfAttention {
         if let Some(t) = self.q_proj.quantized_act_type() {
             y = y.to_dtype(t)?;
         }
-        y = if attention_mask.is_some() {
+        y = if !matches!(attention_mask, AttentionMask::None) {
             y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
         } else {
             y.reshape((b_sz, seq_len, ()))?
@@ -1469,7 +1470,7 @@ impl Block {
     fn forward(
         &self,
         x: &Tensor,
-        attention_mask: &Option<Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -1938,22 +1939,25 @@ impl GraniteMoeHybrid {
 
         // Build attention mask - use seqlen offsets for paged chunks, otherwise
         // derive past length from the pipeline hybrid cache (attention layers).
-        let mask = CausalMasker.make_causal_mask_matrix(
+        let mask = CausalMasker.make_causal_mask(
             input_ids,
             metadata
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(&*pipeline_cache as &dyn PastKvLenCache),
             x.dtype(),
-            self.num_attention_heads,
+            &CausalMaskConfig::default(),
         )?;
         // PagedAttention prompt chunking
-        let mask = mask.filter(|_| {
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-        });
+        let mask = if metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(true)
+        {
+            mask
+        } else {
+            AttentionMask::None
+        };
         let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
@@ -1964,10 +1968,10 @@ impl GraniteMoeHybrid {
                     if let Some(HybridLayerCache::Attention(kv_cache)) =
                         pipeline_cache.get_mut(layer_idx)
                     {
-                        let mask_for_layer = mask.as_ref().map(|m| m.get(x.device()).clone());
+                        let mask_for_layer = &mask.get(x.device());
                         x = block.forward(
                             &x,
-                            &mask_for_layer,
+                            mask_for_layer,
                             seqlen_offsets,
                             kv_cache,
                             metadata.as_ref().map(|(kv_cache, metadata)| {
@@ -1979,10 +1983,10 @@ impl GraniteMoeHybrid {
                         &mut internal_cache.caches[layer_idx]
                     {
                         // Safety fallback: keep legacy path if layer-cache wiring is inconsistent.
-                        let mask_for_layer = mask.as_ref().map(|m| m.get(x.device()).clone());
+                        let mask_for_layer = &mask.get(x.device());
                         x = block.forward(
                             &x,
-                            &mask_for_layer,
+                            mask_for_layer,
                             seqlen_offsets,
                             kv_cache,
                             metadata.as_ref().map(|(kv_cache, metadata)| {

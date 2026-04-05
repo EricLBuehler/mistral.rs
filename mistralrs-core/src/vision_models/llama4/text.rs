@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
@@ -10,7 +11,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{embedding, Activation, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
@@ -147,7 +148,7 @@ impl CausalSelfAttention {
         &self,
         x: &Tensor,
         position_ids: &Tensor,
-        attention_mask: &Option<Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -196,7 +197,7 @@ impl CausalSelfAttention {
                     &q,
                     &k,
                     &v,
-                    attention_mask.clone().as_ref(),
+                    attention_mask,
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
@@ -208,12 +209,12 @@ impl CausalSelfAttention {
                     // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
                     let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
                     // Sanity check.
-                    assert!(attention_mask.is_some());
+                    assert!(!matches!(attention_mask, AttentionMask::None));
                     paged_attn.forward(
                         &q,
                         &k,
                         &v,
-                        attention_mask.clone().as_ref(),
+                        attention_mask,
                         None,
                         None,
                         &input_metadata,
@@ -229,14 +230,14 @@ impl CausalSelfAttention {
                     &q.contiguous()?,
                     &k.contiguous()?,
                     &v.contiguous()?,
-                    attention_mask.clone().as_ref(),
+                    attention_mask,
                     Some(flash_params),
                     &self.sdpa_params,
                 )?
             }
         };
 
-        y = if attention_mask.is_some() {
+        y = if !matches!(attention_mask, AttentionMask::None) {
             y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
         } else {
             y.reshape((b_sz, seq_len, ()))?
@@ -479,7 +480,7 @@ impl Block {
         &self,
         x: &Tensor,
         position_ids: &Tensor,
-        attention_mask: &Option<Tensor>,
+        attention_mask: &AttentionMask,
         chunked_mask: &Option<Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
@@ -489,14 +490,17 @@ impl Block {
         let residual = x;
         let x = self.rms_1.forward(x)?;
         let mask = if self.use_chunked_attention {
-            chunked_mask
+            match chunked_mask {
+                Some(t) => AttentionMask::Custom(t.clone()),
+                None => AttentionMask::None,
+            }
         } else {
-            attention_mask
+            attention_mask.clone()
         };
         let x = (self.attn.forward(
             &x,
             position_ids,
-            mask,
+            &mask,
             seqlen_offsets,
             kv_cache,
             metadata,
@@ -684,11 +688,11 @@ impl TextModel {
             input_ids.device(),
         )?;
 
-        let mask = CausalMasker.make_causal_mask_matrix(
+        let mask = CausalMasker.make_causal_mask(
             input_ids,
             cache_for_mask,
             x.dtype(),
-            self.blocks[0].attn.num_attention_heads,
+            &CausalMaskConfig::default(),
         )?;
         let chunked_mask = CausalMasker.make_chunked_mask_matrix(
             input_ids,
@@ -698,25 +702,33 @@ impl TextModel {
             self.blocks[0].attn.num_attention_heads,
         )?;
         // PagedAttention prompt chunking
-        let mask = mask.filter(|_| {
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-        });
+        let mask = if metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(true)
+        {
+            mask
+        } else {
+            AttentionMask::None
+        };
         // PagedAttention prompt chunking
-        let chunked_mask = chunked_mask.filter(|_| {
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-        });
+        let chunked_mask = if metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(true)
+        {
+            chunked_mask
+        } else {
+            None
+        };
         let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
-        let chunked_mask = DeviceMappedMask::new(chunked_mask, &*self.mapper)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
-            let mask_for_layer = mask.as_ref().map(|m| m.get(x.device()).clone());
-            let chunked_mask_for_layer = chunked_mask.as_ref().map(|m| m.get(x.device()).clone());
+            let mask_for_layer = mask.get(x.device());
+            let chunked_mask_for_layer = chunked_mask
+                .as_ref()
+                .map(|m| m.to_device(x.device()))
+                .transpose()?;
             x = block.forward(
                 &x,
                 &position_ids.to_device(x.device())?,

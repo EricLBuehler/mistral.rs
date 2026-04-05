@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::layers_masker::CausalMaskConfig;
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
@@ -11,7 +12,7 @@ use mistralrs_quant::{
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
         embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, RotaryEmbedding,
@@ -104,9 +105,7 @@ impl ProportionalRotaryEmbedding {
             inv_freq_vec.push(1f32 / base.powf((2 * i) as f32 / head_dim as f32));
         }
         // Pad with zeros for non-rotated dimensions
-        for _ in rope_angles..half_dim {
-            inv_freq_vec.push(0f32);
-        }
+        inv_freq_vec.extend(std::iter::repeat_n(0f32, half_dim - rope_angles));
 
         let inv_freq = Tensor::from_vec(inv_freq_vec, (1, half_dim), device)?;
         let t = Tensor::arange(0u32, max_position_embeddings as u32, device)?
@@ -397,8 +396,8 @@ impl Attention {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
-        sliding_attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
+        sliding_attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_caches: &mut [KvCache],
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -509,7 +508,7 @@ impl Attention {
                     }
                     None => {
                         let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                        assert!(paged_mask.is_some());
+                        assert!(!matches!(paged_mask, AttentionMask::None));
                         paged_attn.forward(
                             &q,
                             &k,
@@ -572,16 +571,20 @@ impl Attention {
                         Ok(None)
                     }
                 };
-                let mask = adjust_mask(mask)?;
+                let mask = match adjust_mask(mask.as_option_tensor())? {
+                    Some(t) => AttentionMask::Custom(t),
+                    None => AttentionMask::None,
+                };
 
-                Sdpa.run_attention(&q, &k, &v, mask.as_ref(), flash_params, &self.sdpa_params)?
+                Sdpa.run_attention(&q, &k, &v, &mask, flash_params, &self.sdpa_params)?
             }
         };
 
         if let Some(t) = self.q_proj.quantized_act_type() {
             attn_output = attn_output.to_dtype(t)?;
         }
-        let has_mask = attention_mask.is_some() || sliding_attention_mask.is_some();
+        let has_mask = !matches!(attention_mask, AttentionMask::None)
+            || !matches!(sliding_attention_mask, AttentionMask::None);
         attn_output = if has_mask {
             attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
@@ -821,8 +824,8 @@ impl DecoderLayer {
         &self,
         xs: &Tensor,
         per_layer_input: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
-        sliding_attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
+        sliding_attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_caches: &mut [KvCache],
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -1474,60 +1477,91 @@ impl TextModel {
         let bidir_flash = FlashParams::empty(false);
 
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional {
-            let attention_mask =
-                CausalMasker.make_causal_mask_as_attn_bias(input_ids, mask_cache, xs.dtype())?;
-            let attention_mask = attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
+            let attention_mask = CausalMasker.make_causal_mask(
+                input_ids,
+                mask_cache,
+                xs.dtype(),
+                &CausalMaskConfig {
+                    force_custom: true,
+                    ..Default::default()
+                },
+            )?;
+            let attention_mask = match attention_mask {
+                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
+                other => other,
+            };
 
-            let sliding_attention_mask = CausalMasker
-                .make_sliding_window_causal_mask_as_attn_bias(
-                    input_ids,
-                    mask_cache,
-                    Some(self.sliding_window),
-                    xs.dtype(),
-                )?;
-            let sliding_attention_mask = sliding_attention_mask
-                .map(|m| {
+            let sliding_attention_mask = CausalMasker.make_causal_mask(
+                input_ids,
+                mask_cache,
+                xs.dtype(),
+                &CausalMaskConfig {
+                    sliding_window: Some(self.sliding_window),
+                    force_custom: true,
+                },
+            )?;
+            let sliding_attention_mask = match sliding_attention_mask {
+                AttentionMask::Custom(m) => AttentionMask::Custom(
                     Self::apply_image_bidirectional_mask(
                         &m,
                         input_ids,
                         self.image_token_id.expect("missing image token id"),
                         self.video_token_id,
-                    )
-                })
-                .transpose()?;
-            let sliding_attention_mask =
-                sliding_attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
+                    )?
+                    .to_device(&Device::Cpu)?,
+                ),
+                other => other,
+            };
 
             (attention_mask, sliding_attention_mask, Some(&bidir_flash))
         } else {
-            let attention_mask = CausalMasker.make_causal_mask_matrix(
+            // Full-attention layers (head_dim=512) use eager attention because
+            // flash-attn v2 produces incorrect results for head_dim > 256.
+            // Eager attention needs a real causal mask (not the 1x1 flash dummy).
+            let attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
                 mask_cache,
                 xs.dtype(),
-                self.cfg.num_attn_heads,
+                &CausalMaskConfig {
+                    force_custom: true,
+                    ..Default::default()
+                },
             )?;
-            let attention_mask = attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
-            let attention_mask = attention_mask.filter(|_| {
-                metadata
-                    .as_ref()
-                    .map(|(_, meta)| meta.is_first_prompt_chunk)
-                    .unwrap_or(true)
-            });
-            let sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+            let attention_mask = match attention_mask {
+                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
+                other => other,
+            };
+            let is_first = metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true);
+            let attention_mask = if is_first {
+                attention_mask
+            } else {
+                AttentionMask::None
+            };
+            let sliding_attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
                 mask_cache,
-                Some(self.sliding_window),
                 xs.dtype(),
-                self.cfg.num_attn_heads,
+                &CausalMaskConfig {
+                    sliding_window: Some(self.sliding_window),
+                    ..Default::default()
+                },
             )?;
-            let sliding_attention_mask =
-                sliding_attention_mask.map(|m| m.to_device(&Device::Cpu).unwrap());
-            let sliding_attention_mask = sliding_attention_mask.filter(|_| {
-                metadata
-                    .as_ref()
-                    .map(|(_, meta)| meta.is_first_prompt_chunk)
-                    .unwrap_or(true)
-            });
+            let sliding_attention_mask = match sliding_attention_mask {
+                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
+                other => other,
+            };
+            let sliding_attention_mask = if metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true)
+            {
+                sliding_attention_mask
+            } else {
+                AttentionMask::None
+            };
 
             (attention_mask, sliding_attention_mask, Some(flash_params))
         };
@@ -1552,8 +1586,8 @@ impl TextModel {
             xs = layer.forward(
                 &xs,
                 per_layer_input.as_ref(),
-                attention_mask.as_ref().map(|m| m.get(xs.device())),
-                sliding_attention_mask.as_ref().map(|m| m.get(xs.device())),
+                &attention_mask.get(xs.device()),
+                &sliding_attention_mask.get(xs.device()),
                 seqlen_offsets,
                 cache,
                 metadata.as_ref().map(|(kv_cache, metadata)| {

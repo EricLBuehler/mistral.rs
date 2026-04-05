@@ -6,7 +6,7 @@ use mistralrs_quant::{Convolution, QuantMethod, ShardedVarBuilder};
 use std::{ops::Mul, sync::Arc};
 
 use crate::{
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     layers::{conv2d, embedding, layer_norm, Activation, CausalMasker, Sdpa},
     pipeline::text_models_inputs_processor::FlashParams,
     serde_default_fn,
@@ -266,7 +266,7 @@ impl Attention {
         })
     }
 
-    fn forward(&self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, attention_mask: &AttentionMask) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
         let mut q = self.q_proj.forward(xs)?;
@@ -398,7 +398,7 @@ impl EncoderLayer {
         })
     }
 
-    fn forward(&self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, attention_mask: &AttentionMask) -> Result<Tensor> {
         let residual = xs.clone();
 
         let hidden_states = self.layer_norm_1.forward(xs)?;
@@ -429,7 +429,7 @@ impl Encoder {
     fn forward_get_hidden_states(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         hidden_states_index: isize,
     ) -> Result<Tensor> {
         let mut hidden_states = xs.clone();
@@ -470,7 +470,7 @@ impl SiglipVisionTransformer {
     pub fn forward(
         &self,
         pixel_values: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         tgt_sizes: Option<&Tensor>,
     ) -> Result<Tensor> {
         self.forward_get_hidden_states(pixel_values, attention_mask, tgt_sizes, -1)
@@ -479,12 +479,12 @@ impl SiglipVisionTransformer {
     pub fn forward_get_hidden_states(
         &self,
         pixel_values: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         tgt_sizes: Option<&Tensor>,
         hidden_states_index: isize,
     ) -> Result<Tensor> {
         let bs = pixel_values.dim(0)?;
-        let patch_attention_mask = if let Some(attn_mask) = attention_mask {
+        let patch_attention_mask = if let AttentionMask::Custom(attn_mask) = attention_mask {
             attn_mask.clone()
         } else {
             let patch_size = self.config.patch_size;
@@ -503,7 +503,7 @@ impl SiglipVisionTransformer {
             self.embeddings
                 .forward(pixel_values, &patch_attention_mask, tgt_sizes)?;
 
-        let attention_mask = if attention_mask.is_none() {
+        let attention_mask = if matches!(attention_mask, AttentionMask::None) {
             None
         } else {
             let mask = patch_attention_mask
@@ -513,7 +513,10 @@ impl SiglipVisionTransformer {
         };
         let hidden_states = self.encoder.forward_get_hidden_states(
             &hidden_states,
-            attention_mask.as_ref(),
+            &match attention_mask.as_ref() {
+                Some(t) => AttentionMask::Custom(t.clone()),
+                None => AttentionMask::None,
+            },
             hidden_states_index + 1,
         )?;
         hidden_states.apply(&self.post_layernorm)
