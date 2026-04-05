@@ -26,6 +26,18 @@ We support the following models' tool calling in OpenAI-compatible and parse nat
 
 All models that support tool calling will respond according to the OpenAI tool calling API.
 
+## Tool call grammar enforcement
+
+When tools are provided in a request, mistral.rs automatically enforces constrained decoding on tool call output. When the model begins generating a tool call, a grammar is activated mid-stream that constrains subsequent tokens to valid tool call syntax. This prevents malformed JSON, hallucinated tool names, and missing closing delimiters.
+
+**How it works:**
+1. The model generates normally until a tool call prefix is detected (e.g., `<tool_call>`, `<|python_tag|>`, `[TOOL_CALLS]`).
+2. A format-specific grammar activates and constrains all subsequent tokens to valid tool call structure.
+3. When the tool call body (and closing delimiter, if applicable) is complete, the grammar deactivates.
+4. For multi-tool-call turns, the grammar re-activates when the next prefix is detected.
+
+This feature is automatic, and no configuration is needed. It uses the same [llguidance](https://github.com/guidance-ai/llguidance) infrastructure as user-specified grammar constraints. If a user-specified grammar is already active on the request, tool call grammar activation is skipped.
+
 ## OpenAI compatible HTTP example
 Please see [our example here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/tool_calling.py).
 
