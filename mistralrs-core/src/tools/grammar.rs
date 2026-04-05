@@ -181,6 +181,16 @@ mod tests {
     }
 
     #[test]
+    fn gemma4_strict_grammar_still_pure_lark() {
+        let grm = parsers::build_tool_call_grammar("<|tool_call>", &strict_tools())
+            .expect("should match");
+        // Strict mode still uses pure Lark (no JSON schema subgrammar)
+        // because Gemma 4's format is not JSON.
+        assert_eq!(grm.grammars.len(), 1);
+        assert!(grm.grammars[0].json_schema.is_none());
+    }
+
+    #[test]
     fn tool_names_in_schema() {
         let grm =
             parsers::build_tool_call_grammar("<tool_call>", &sample_tools()).expect("should match");

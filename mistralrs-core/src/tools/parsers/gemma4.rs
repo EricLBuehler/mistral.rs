@@ -23,21 +23,26 @@ impl ToolFormatParser for Gemma4Parser {
         super::ToolCallFormat::Gemma4
     }
 
-    /// Pure Lark grammar for Gemma 4's non-JSON tool call format.
-    /// Special tokens (`<|"|>`, `<tool_call|>`) use bare angle-bracket
-    /// syntax so llguidance matches them via the trie.
+    /// Lark grammar for Gemma 4's non-JSON tool call format.
+    ///
+    /// When any tool has `strict: true`, generates a branching grammar with
+    /// per-tool schema-constrained argument rules.  Otherwise falls back to
+    /// the generic grammar that accepts any key-value pairs.
     fn tool_call_grammar(&self, tools: &[Tool], _text: &str) -> TopLevelGrammar {
-        if tools.iter().any(|t| t.function.strict == Some(true)) {
-            tracing::warn!(
-                "strict: true on tool definitions is not supported for Gemma 4 format \
-                 (non-JSON tool calls). Arguments will not be schema-constrained."
-            );
-        }
-        let tool_alts = crate::tools::grammar::lark_tool_name_alternatives(tools);
-        // Use r##"..."## because the grammar contains `<|"|>` which has
-        // a `"#` sequence that would close an r#"..."# literal.
-        let lark = format!(
-            r##"start: "call:" TOOL_NAME "{{" args "}}" <tool_call|>
+        let any_strict = tools.iter().any(|t| t.function.strict == Some(true));
+
+        let lark = if any_strict {
+            let mut builder = GemmaLarkBuilder::new();
+            let branches: Vec<String> =
+                tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
+            builder.emit_shared_rules();
+            builder.build(&branches)
+        } else {
+            let tool_alts = crate::tools::grammar::lark_tool_name_alternatives(tools);
+            // r##"..."## because the grammar contains `<|"|>` which has
+            // a `"#` sequence that would close an r#"..."# literal.
+            format!(
+                r##"start: "call:" TOOL_NAME "{{" args "}}" <tool_call|>
 TOOL_NAME: {tool_alts}
 args: pair ("," pair)* |
 pair: KEY ":" value
@@ -48,7 +53,9 @@ number: /-?(0|[1-9][0-9]*)(\.[0-9]+)?/
 array: "[" (value ("," value)*)? "]"
 object: "{{" (pair ("," pair)*)? "}}"
 "##
-        );
+            )
+        };
+
         let top = GrammarWithLexer::from_lark(lark);
         TopLevelGrammar {
             grammars: vec![top],
@@ -62,6 +69,216 @@ object: "{{" (pair ("," pair)*)? "}}"
         }
         parse_gemma4_tool_calls(message)
     }
+}
+
+// ── Strict-mode grammar builder ────────────────────────────────────────
+
+/// Builds a branching Lark grammar for Gemma 4 strict mode, where each
+/// tool gets its own branch with schema-constrained argument rules.
+///
+/// Key names and value types are enforced per-property.  Duplicate keys
+/// and required-field presence are NOT enforced in the grammar (the parsing
+/// layer handles those).
+struct GemmaLarkBuilder {
+    rules: Vec<String>,
+    counter: usize,
+}
+
+impl GemmaLarkBuilder {
+    fn new() -> Self {
+        Self {
+            rules: Vec::new(),
+            counter: 0,
+        }
+    }
+
+    fn next_id(&mut self) -> usize {
+        let id = self.counter;
+        self.counter += 1;
+        id
+    }
+
+    /// Emit one tool branch.  Returns the branch rule name.
+    fn emit_tool_branch(&mut self, tool: &Tool) -> String {
+        let id = self.next_id();
+        let branch = format!("b{id}");
+        let schema = tool.function.strict_parameters_schema();
+        let args = match &schema {
+            Some(s)
+                if s.get("properties")
+                    .and_then(|v| v.as_object())
+                    .map_or(false, |p| !p.is_empty()) =>
+            {
+                self.emit_constrained_args(s)
+            }
+            _ => "generic_args".to_string(),
+        };
+        let name_esc = lark_escape_str(&tool.function.name);
+        self.rules.push(format!(
+            r##"{branch}: "call:" "{name_esc}" "{{" {args} "}}" <tool_call|>"##
+        ));
+        branch
+    }
+
+    /// Emit per-property pair rules for a schema with `properties`.
+    /// Returns the args rule name.
+    fn emit_constrained_args(&mut self, schema: &Value) -> String {
+        let props = schema["properties"].as_object().unwrap();
+        let mut pair_names = Vec::new();
+
+        for (key, prop_schema) in props {
+            let pid = self.next_id();
+            let pair_name = format!("p{pid}");
+            let val_ref = self.schema_to_value_rule(prop_schema);
+            let key_esc = lark_escape_str(key);
+            self.rules
+                .push(format!(r#"{pair_name}: "{key_esc}" ":" {val_ref}"#));
+            pair_names.push(pair_name);
+        }
+
+        let aid = self.next_id();
+        let args_name = format!("a{aid}");
+        let alts = pair_names.join(" | ");
+        self.rules
+            .push(format!(r#"{args_name}: ({alts}) ("," ({alts}))* |"#));
+        args_name
+    }
+
+    /// Map a JSON Schema to a Lark value rule reference.
+    fn schema_to_value_rule(&mut self, schema: &Value) -> String {
+        // anyOf / oneOf
+        if let Some(variants) = schema
+            .get("anyOf")
+            .or_else(|| schema.get("oneOf"))
+            .and_then(|v| v.as_array())
+        {
+            return self.emit_union_rule(variants);
+        }
+        // enum
+        if let Some(vals) = schema.get("enum").and_then(|v| v.as_array()) {
+            return self.emit_enum_rule(vals);
+        }
+        // const
+        if let Some(val) = schema.get("const") {
+            return self.emit_const_rule(val);
+        }
+        // type-based dispatch
+        match schema.get("type").and_then(|v| v.as_str()) {
+            Some("string") => "gemma_string".to_string(),
+            Some("number") => "number".to_string(),
+            Some("integer") => "integer".to_string(),
+            Some("boolean") => "boolean_val".to_string(),
+            Some("null") => r#""null""#.to_string(),
+            Some("object") => self.emit_object_value(schema),
+            Some("array") => self.emit_array_value(schema),
+            _ => "any_value".to_string(),
+        }
+    }
+
+    fn emit_union_rule(&mut self, variants: &[Value]) -> String {
+        let id = self.next_id();
+        let name = format!("u{id}");
+        let alts: Vec<String> = variants.iter().map(|v| self.schema_to_value_rule(v)).collect();
+        self.rules.push(format!("{name}: {}", alts.join(" | ")));
+        name
+    }
+
+    fn emit_enum_rule(&mut self, values: &[Value]) -> String {
+        let id = self.next_id();
+        let name = format!("e{id}");
+        let alts: Vec<String> = values
+            .iter()
+            .map(|v| match v {
+                Value::String(s) => {
+                    format!(r##"<|"|> "{}" <|"|>"##, lark_escape_str(s))
+                }
+                Value::Number(n) => format!(r#""{n}""#),
+                Value::Bool(b) => format!(r#""{b}""#),
+                Value::Null => r#""null""#.to_string(),
+                _ => "any_value".to_string(),
+            })
+            .collect();
+        self.rules.push(format!("{name}: {}", alts.join(" | ")));
+        name
+    }
+
+    fn emit_const_rule(&mut self, val: &Value) -> String {
+        match val {
+            Value::String(s) => {
+                let id = self.next_id();
+                let name = format!("c{id}");
+                self.rules.push(format!(
+                    r##"{name}: <|"|> "{}" <|"|>"##,
+                    lark_escape_str(s)
+                ));
+                name
+            }
+            Value::Number(n) => format!(r#""{n}""#),
+            Value::Bool(b) => format!(r#""{b}""#),
+            Value::Null => r#""null""#.to_string(),
+            _ => "any_value".to_string(),
+        }
+    }
+
+    fn emit_object_value(&mut self, schema: &Value) -> String {
+        let has_props = schema
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .map_or(false, |p| !p.is_empty());
+        if has_props {
+            let inner = self.emit_constrained_args(schema);
+            let id = self.next_id();
+            let name = format!("o{id}");
+            self.rules
+                .push(format!(r#"{name}: "{{" {inner} "}}""#));
+            name
+        } else {
+            "generic_object".to_string()
+        }
+    }
+
+    fn emit_array_value(&mut self, schema: &Value) -> String {
+        let id = self.next_id();
+        let name = format!("r{id}");
+        let item_ref = match schema.get("items") {
+            Some(item_schema) => self.schema_to_value_rule(item_schema),
+            None => "any_value".to_string(),
+        };
+        self.rules.push(format!(
+            r#"{name}: "[" ({item_ref} ("," {item_ref})*)? "]""#
+        ));
+        name
+    }
+
+    /// Append shared terminal and generic rules used by all branches.
+    fn emit_shared_rules(&mut self) {
+        self.rules.extend([
+            r##"gemma_string: <|"|> /[^<]*/ <|"|>"##.to_string(),
+            r#"number: /-?(0|[1-9][0-9]*)(\.[0-9]+)?/"#.to_string(),
+            r#"integer: /-?(0|[1-9][0-9]*)/"#.to_string(),
+            r#"boolean_val: "true" | "false""#.to_string(),
+            r#"generic_args: generic_pair ("," generic_pair)* |"#.to_string(),
+            r#"generic_pair: GKEY ":" any_value"#.to_string(),
+            r#"GKEY: /[a-zA-Z_][a-zA-Z0-9_]*/"#.to_string(),
+            r##"any_value: gemma_string | number | boolean_val | "null" | generic_array | generic_object"##
+                .to_string(),
+            r#"generic_array: "[" (any_value ("," any_value)*)? "]""#.to_string(),
+            r###"generic_object: "{" (generic_pair ("," generic_pair)*)? "}""###.to_string(),
+        ]);
+    }
+
+    /// Consume the builder and produce the final Lark grammar string.
+    fn build(self, branches: &[String]) -> String {
+        let start = format!("start: {}", branches.join(" | "));
+        let mut lines = vec![start];
+        lines.extend(self.rules);
+        lines.join("\n")
+    }
+}
+
+/// Escape a string for use inside a Lark double-quoted string literal.
+fn lark_escape_str(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 // ── Parsing ────────────────────────────────────────────────────────────────
@@ -504,5 +721,187 @@ mod tests {
     fn prefix_detection() {
         assert!(Gemma4Parser.could_be_tool_call("<|tool_call>call:test{}<tool_call|>"));
         assert!(!Gemma4Parser.could_be_tool_call("some random text"));
+    }
+
+    // ── Strict mode grammar tests ──────────────────────────────────────
+
+    use mistralrs_mcp::{Function, ToolType};
+
+    fn strict_weather_tool() -> crate::Tool {
+        crate::Tool {
+            tp: ToolType::Function,
+            function: Function {
+                name: "get_weather".to_string(),
+                description: Some("Get weather".to_string()),
+                parameters: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "city": { "type": "string" },
+                            "temp": { "type": "number" }
+                        },
+                        "required": ["city"]
+                    }))
+                    .unwrap(),
+                ),
+                strict: Some(true),
+            },
+        }
+    }
+
+    fn non_strict_search_tool() -> crate::Tool {
+        crate::Tool {
+            tp: ToolType::Function,
+            function: Function {
+                name: "search".to_string(),
+                description: Some("Search".to_string()),
+                parameters: None,
+                strict: None,
+            },
+        }
+    }
+
+    #[test]
+    fn strict_grammar_basic() {
+        let tools = vec![strict_weather_tool()];
+        let mut builder = GemmaLarkBuilder::new();
+        let branches: Vec<String> =
+            tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
+        builder.emit_shared_rules();
+        let lark = builder.build(&branches);
+
+        assert!(lark.starts_with("start: b0"));
+        assert!(lark.contains(r#""get_weather""#));
+        assert!(lark.contains(r#""city""#));
+        assert!(lark.contains(r#""temp""#));
+        assert!(lark.contains("gemma_string"));
+        assert!(lark.contains("number"));
+    }
+
+    #[test]
+    fn strict_grammar_mixed_tools() {
+        let tools = vec![strict_weather_tool(), non_strict_search_tool()];
+        let mut builder = GemmaLarkBuilder::new();
+        let branches: Vec<String> =
+            tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
+        builder.emit_shared_rules();
+        let lark = builder.build(&branches);
+
+        // Two branches in start rule (IDs are globally incremented)
+        assert!(lark.starts_with("start: b0 | b"));
+        assert!(lark.contains(r#""get_weather""#));
+        assert!(lark.contains(r#""city""#));
+        assert!(lark.contains(r#""search""#));
+        assert!(lark.contains("generic_args"));
+    }
+
+    #[test]
+    fn strict_grammar_enum() {
+        let tools = vec![crate::Tool {
+            tp: ToolType::Function,
+            function: Function {
+                name: "set_unit".to_string(),
+                description: None,
+                parameters: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"]
+                            }
+                        }
+                    }))
+                    .unwrap(),
+                ),
+                strict: Some(true),
+            },
+        }];
+        let mut builder = GemmaLarkBuilder::new();
+        let branches: Vec<String> =
+            tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
+        builder.emit_shared_rules();
+        let lark = builder.build(&branches);
+
+        assert!(lark.contains(r#""celsius""#));
+        assert!(lark.contains(r#""fahrenheit""#));
+    }
+
+    #[test]
+    fn strict_grammar_nested_object() {
+        let tools = vec![crate::Tool {
+            tp: ToolType::Function,
+            function: Function {
+                name: "configure".to_string(),
+                description: None,
+                parameters: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "config": {
+                                "type": "object",
+                                "properties": {
+                                    "url": { "type": "string" },
+                                    "retries": { "type": "integer" }
+                                }
+                            }
+                        }
+                    }))
+                    .unwrap(),
+                ),
+                strict: Some(true),
+            },
+        }];
+        let mut builder = GemmaLarkBuilder::new();
+        let branches: Vec<String> =
+            tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
+        builder.emit_shared_rules();
+        let lark = builder.build(&branches);
+
+        assert!(lark.contains(r#""config""#));
+        assert!(lark.contains(r#""url""#));
+        assert!(lark.contains(r#""retries""#));
+        assert!(lark.contains("integer"));
+    }
+
+    #[test]
+    fn strict_grammar_array() {
+        let tools = vec![crate::Tool {
+            tp: ToolType::Function,
+            function: Function {
+                name: "batch".to_string(),
+                description: None,
+                parameters: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "ids": {
+                                "type": "array",
+                                "items": { "type": "integer" }
+                            }
+                        }
+                    }))
+                    .unwrap(),
+                ),
+                strict: Some(true),
+            },
+        }];
+        let mut builder = GemmaLarkBuilder::new();
+        let branches: Vec<String> =
+            tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
+        builder.emit_shared_rules();
+        let lark = builder.build(&branches);
+
+        assert!(lark.contains(r#""ids""#));
+        assert!(lark.contains("integer"));
+        assert!(lark.contains(r#""[""#));
+    }
+
+    #[test]
+    fn strict_grammar_no_strict_unchanged() {
+        let tools = vec![non_strict_search_tool()];
+        let grm = Gemma4Parser.tool_call_grammar(&tools, "");
+        assert_eq!(grm.grammars.len(), 1);
+        assert!(grm.grammars[0].json_schema.is_none());
     }
 }
