@@ -127,6 +127,16 @@ impl ToolCallingMatcher {
         parsers::build_tool_call_grammar(text, tools)
     }
 
+    /// Build a pure JSON object grammar for Harmony tool call arguments.
+    /// Returns `None` when tool choice is `None` or no tools are defined.
+    pub fn build_harmony_tool_grammar(&self) -> Option<llguidance::api::TopLevelGrammar> {
+        if matches!(self.tool_choice, ToolChoice::None) {
+            return None;
+        }
+        self.tools.as_ref()?;
+        Some(parsers::harmony::tool_call_grammar())
+    }
+
     // Checks if the `message_prefix` could be a tool call. If false, either
     // [`ToolChoice::None`] was selected, or the prefix could not match.
     //

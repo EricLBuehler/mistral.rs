@@ -2,7 +2,7 @@
 //! constrained decoding.
 //!
 //! Format-specific grammars are defined in each parser file
-//! (`parsers/{qwen,llama,mistral_nemo,deepseek,gemma4}.rs`).  This
+//! (`parsers/{qwen,llama,mistral_nemo,deepseek,gemma4,harmony}.rs`).  This
 //! module provides common building blocks used by those parsers.
 
 use llguidance::api::GrammarWithLexer;
@@ -167,5 +167,13 @@ mod tests {
     fn no_match_returns_none() {
         let grm = parsers::build_tool_call_grammar("Hello world", &sample_tools());
         assert!(grm.is_none());
+    }
+
+    #[test]
+    fn harmony_args_grammar_is_single_json_object() {
+        let grm = parsers::harmony::tool_call_grammar();
+        assert_eq!(grm.grammars.len(), 1);
+        let schema = grm.grammars[0].json_schema.as_ref().unwrap();
+        assert_eq!(schema["type"], "object");
     }
 }
