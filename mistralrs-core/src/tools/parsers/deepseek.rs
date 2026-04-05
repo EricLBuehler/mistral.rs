@@ -31,9 +31,11 @@ impl ToolFormatParser for DeepSeekParser {
     }
 
     /// Grammar activates after the ` ```json\n` fence.  Covers the JSON
-    /// arguments object + closing fence + end delimiter.
+    /// arguments object, closing ` ``` ` fence, and `<｜tool▁call▁end｜>`
+    /// end delimiter (matched as a special token via bare angle-bracket
+    /// syntax).
     fn tool_call_grammar(&self, _tools: &[Tool]) -> TopLevelGrammar {
-        let lark = r#"start: @json_body "\n```\n<｜tool▁call▁end｜>""#.to_string();
+        let lark = r#"start: @json_body "\n```\n" <｜tool▁call▁end｜>"#.to_string();
         let top = GrammarWithLexer::from_lark(lark);
         let json_body = GrammarWithLexer {
             name: Some("json_body".to_string()),

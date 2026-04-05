@@ -24,22 +24,24 @@ impl ToolFormatParser for Gemma4Parser {
     }
 
     /// Pure Lark grammar for Gemma 4's non-JSON tool call format.
-    ///
-    /// Covers: `call:NAME{key:<|"|>value<|"|>,key2:42}<tool_call|>`
+    /// Special tokens (`<|"|>`, `<tool_call|>`) use bare angle-bracket
+    /// syntax so llguidance matches them via the trie.
     fn tool_call_grammar(&self, tools: &[Tool]) -> TopLevelGrammar {
         let tool_alts = crate::tools::grammar::lark_tool_name_alternatives(tools);
+        // Use r##"..."## because the grammar contains `<|"|>` which has
+        // a `"#` sequence that would close an r#"..."# literal.
         let lark = format!(
-            r#"start: "call:" TOOL_NAME "{{" args "}}" "<tool_call|>"
+            r##"start: "call:" TOOL_NAME "{{" args "}}" <tool_call|>
 TOOL_NAME: {tool_alts}
 args: pair ("," pair)* |
 pair: KEY ":" value
 KEY: /[a-zA-Z_][a-zA-Z0-9_]*/
 value: gemma_string | number | "true" | "false" | "null" | array | object
-gemma_string: "<|\"" "|>" /[^<]*/ "<|\"" "|>"
+gemma_string: <|"|> /[^<]*/ <|"|>
 number: /-?(0|[1-9][0-9]*)(\.[0-9]+)?/
 array: "[" (value ("," value)*)? "]"
 object: "{{" (pair ("," pair)*)? "}}"
-"#
+"##
         );
         let top = GrammarWithLexer::from_lark(lark);
         TopLevelGrammar {

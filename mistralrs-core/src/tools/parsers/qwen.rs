@@ -23,8 +23,10 @@ impl ToolFormatParser for QwenParser {
     }
 
     fn tool_call_grammar(&self, tools: &[Tool]) -> TopLevelGrammar {
+        // `</tool_call>` is matched as a special token via bare
+        // angle-bracket syntax (not a string literal).
         crate::tools::grammar::build_json_format_grammar(
-            r#"start: @json_body "</tool_call>""#.to_string(),
+            r#"start: @json_body </tool_call>"#.to_string(),
             tools,
             "arguments",
             false,

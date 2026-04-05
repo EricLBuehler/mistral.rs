@@ -1,7 +1,9 @@
-//! Shared helpers for building tool call grammars.
+//! Shared helpers for building tool call grammars used in mid-stream
+//! constrained decoding.
 //!
 //! Format-specific grammars are defined in each parser file
-//! (`parsers/{qwen,llama,mistral_nemo,deepseek,gemma4}.rs`).
+//! (`parsers/{qwen,llama,mistral_nemo,deepseek,gemma4}.rs`).  This
+//! module provides common building blocks used by those parsers.
 
 use llguidance::api::GrammarWithLexer;
 use llguidance::api::TopLevelGrammar;

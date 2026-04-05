@@ -579,9 +579,9 @@ pub async fn sample_sequence(
     }
 
     // Deactivate mid-stream tool grammar when the grammar has completed
-    // (e.g. JSON body finished).  This allows the model to continue
-    // generating unconstrained text (closing delimiters, or another tool
-    // call prefix that will re-activate the grammar).
+    // (i.e. the full tool call body and closing delimiter have been
+    // generated).  This allows re-activation for subsequent tool calls
+    // in multi-tool-call turns.
     if let SequenceRecognizer::Llguidance(ref llg) = seq.recognizer {
         if llg.is_stopped() && seq.is_tool_grammar_active() {
             seq.recognizer = SequenceRecognizer::None;
