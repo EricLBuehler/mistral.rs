@@ -615,7 +615,6 @@ impl TextModel {
                 &CausalMaskConfig {
                     sliding_window: Some(self.sliding_window),
                     force_custom: true,
-                    ..Default::default()
                 },
             )?;
 

@@ -18,6 +18,7 @@ use super::serve::{
 use crate::args::{GlobalOptions, ModelType, RuntimeOptions};
 
 /// Run the model in interactive or one-shot mode
+#[allow(clippy::too_many_arguments)]
 pub async fn run_interactive(
     model_type: ModelType,
     runtime: RuntimeOptions,

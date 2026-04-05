@@ -3,7 +3,7 @@
 use candle_core::Device;
 use mistralrs_core::{
     AddModelConfig, DefaultSchedulerMethod, EngineConfig, IsqType, Pipeline, SchedulerConfig,
-    SearchCallback, SearchEmbeddingModel, ToolCallback, ToolCallbackWithTool,
+    SearchCallback, SearchEmbeddingModel, ToolCallbackWithTool,
 };
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;

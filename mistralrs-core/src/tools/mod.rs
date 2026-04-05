@@ -12,7 +12,6 @@ use std::fmt;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::Pipeline;
 use mistralrs_mcp::CalledFunction;
 
 pub use mistralrs_mcp::{ToolCallback, ToolCallbackWithTool};
@@ -228,10 +227,10 @@ where
 }
 
 /// Takes raw UTf8 text and parses any possible tool calls from it.
-pub fn parse_text_tools<'a>(
-    raw_text: &'a str,
+pub fn parse_text_tools(
+    raw_text: &str,
     matcher: Option<Arc<ToolCallingMatcher>>,
-) -> anyhow::Result<(Option<&'a str>, Vec<ToolCallResponse>)> {
+) -> anyhow::Result<(Option<&str>, Vec<ToolCallResponse>)> {
     let mut tool_calls = Vec::new();
     let mut text_new = Some(raw_text);
 

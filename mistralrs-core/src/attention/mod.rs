@@ -6,7 +6,7 @@ use candle_core::{DType, Device, Result, Tensor};
 
 /// Attention mask passed to [`Sdpa::run_attention`].
 ///
-/// Encodes both the mask data and the *intent* — whether the attention layer
+/// Encodes both the mask data and the *intent*, whether the attention layer
 /// should use flash attention (causal handled by the kernel), eager attention
 /// with an explicit mask tensor, or no masking at all.
 #[derive(Clone, Debug)]
@@ -17,7 +17,7 @@ pub enum AttentionMask {
     /// the flash kernel applies causal masking internally. Also signals
     /// "this is a prefill" to the paged attention layer.
     CausalFlash,
-    /// An explicit mask tensor (causal, sliding window, bidirectional, …).
+    /// An explicit mask tensor (causal, sliding window, bidirectional, etc).
     /// Dispatches to the eager (non-flash) attention path.
     Custom(Tensor),
 }
@@ -140,9 +140,9 @@ impl Sdpa {
     ///
     /// Dispatch attention based on the [`AttentionMask`] variant:
     ///
-    /// - [`AttentionMask::CausalFlash`] → flash attention with `is_causal = true`
-    /// - [`AttentionMask::None`] → flash if available (decode), else eager without mask
-    /// - [`AttentionMask::Custom`] → eager attention with the explicit mask tensor
+    /// - [`AttentionMask::CausalFlash`]: flash attention with `is_causal = true`
+    /// - [`AttentionMask::None`]: flash if available (decode), else eager without mask
+    /// - [`AttentionMask::Custom`]: eager attention with the explicit mask tensor
     #[allow(unused_variables, clippy::too_many_arguments)]
     pub fn run_attention(
         &self,
@@ -162,12 +162,12 @@ impl Sdpa {
             return sinks_attn(q, k, v, sinks, mask_tensor, flash_params, sdpa_params);
         }
 
-        // Custom mask → eager attention (flash can't use arbitrary mask tensors)
+        // Custom mask, eager attention (flash can't use arbitrary mask tensors)
         if let AttentionMask::Custom(mask_tensor) = mask {
             return self.run_attention_noflash(q, k, v, Some(mask_tensor), sdpa_params);
         }
 
-        // CausalFlash or None → try flash attention, fall back to eager
+        // CausalFlash or None: try flash attention, fall back to eager
         let can_use_flash = q.device().is_cpu()
             || q.device().is_cuda() && crate::using_flash_attn() && q.dtype() != DType::F32;
 
@@ -229,11 +229,7 @@ impl Sdpa {
             mask.layout().broadcast_as(tgt_mask_shape.clone()).is_ok()
                 && sdpa_params.softcap.is_none_or(|x| x == 1.0)
         });
-        let valid_head_dims: &[usize] = if seq_len == 1 {
-            &[32, 64, 72, 80, 96, 128, 256, 512]
-        } else {
-            &[32, 64, 72, 80, 96, 128, 256, 512]
-        };
+        let valid_head_dims: &[usize] = &[32, 64, 72, 80, 96, 128, 256, 512];
         // Metal SDPA full kernel requires q_seq <= k_seq when a mask is present.
         let metal_supports_mask = mask.is_none() || seq_len <= k.dim(2)?;
         if [q, k, v].into_iter().all(|x| x.device().is_metal())
@@ -327,7 +323,18 @@ impl Sdpa {
                     if let Some(softcap) = sdpa_params.softcap {
                         attention_scores = (attention_scores.tanh()? * softcap as f64)?;
                     }
+                    // Compute softmax in F32 for precision. BF16's 7 mantissa
+                    // bits cause exp() to lose information on long sequences.
+                    // Flash attention already computes softmax in F32; this
+                    // matches that behaviour for the eager path.
+                    let scores_dtype = attention_scores.dtype();
+                    if scores_dtype == DType::BF16 || scores_dtype == DType::F16 {
+                        attention_scores = attention_scores.to_dtype(DType::F32)?;
+                    }
                     attention_scores = candle_nn::ops::softmax_last_dim(&attention_scores)?;
+                    if attention_scores.dtype() != scores_dtype {
+                        attention_scores = attention_scores.to_dtype(scores_dtype)?;
+                    }
 
                     let context_layer = cublaslt.batch_matmul(
                         &v_flat.t()?.contiguous()?,

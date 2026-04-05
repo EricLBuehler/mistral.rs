@@ -738,7 +738,7 @@ impl VisionTower {
         }
 
         // Pool: output_length = num_patches / k² (computed from actual patches)
-        let k = self.pooler.pooling_k() as usize;
+        let k = self.pooler.pooling_k();
         let output_length = num_patches / (k * k);
         let (pooled, pool_mask) =
             self.pooler
@@ -777,7 +777,7 @@ impl VisionTower {
                 .to_dtype(hidden_states.dtype())?;
             hidden_states = (hidden_states.broadcast_sub(&std_bias)?).broadcast_mul(&std_scale)?;
         }
-        Ok(hidden_states.unsqueeze(0)?)
+        hidden_states.unsqueeze(0)
     }
 
     pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {

@@ -766,9 +766,8 @@ impl Model {
             mask_cache,
             xs.dtype(),
             &CausalMaskConfig {
-                sliding_window: sliding_window,
+                sliding_window,
                 force_custom: true,
-                ..Default::default()
             },
         )?;
 

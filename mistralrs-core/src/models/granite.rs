@@ -1971,7 +1971,7 @@ impl GraniteMoeHybrid {
                         let mask_for_layer = &mask.get(x.device());
                         x = block.forward(
                             &x,
-                            &mask_for_layer,
+                            mask_for_layer,
                             seqlen_offsets,
                             kv_cache,
                             metadata.as_ref().map(|(kv_cache, metadata)| {
@@ -1986,7 +1986,7 @@ impl GraniteMoeHybrid {
                         let mask_for_layer = &mask.get(x.device());
                         x = block.forward(
                             &x,
-                            &mask_for_layer,
+                            mask_for_layer,
                             seqlen_offsets,
                             kv_cache,
                             metadata.as_ref().map(|(kv_cache, metadata)| {

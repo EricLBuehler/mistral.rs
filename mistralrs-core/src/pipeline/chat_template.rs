@@ -439,9 +439,9 @@ fn preprocess_gemma4_tool_messages(messages: &mut Vec<IndexMap<String, MessageCo
         // When the assistant message has structured tool_calls, clear the raw
         // JSON content so the template only renders the <|tool_call> tags (not
         // both the tags AND the raw JSON string, which confuses the model).
-        if messages[asst_idx].contains_key("tool_calls") {
-            messages[asst_idx].insert("content".to_string(), Either::Left(String::new()));
-        } else if !messages[asst_idx].contains_key("content") {
+        if messages[asst_idx].contains_key("tool_calls")
+            || !messages[asst_idx].contains_key("content")
+        {
             messages[asst_idx].insert("content".to_string(), Either::Left(String::new()));
         }
     }
@@ -673,7 +673,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(DEFAULT_ENABLE_THINKING);
+        const { assert!(DEFAULT_ENABLE_THINKING) };
         assert_eq!(rendered, "<|think|><bos>hello");
         assert_eq!(rendered, enabled);
     }

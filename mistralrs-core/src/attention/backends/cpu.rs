@@ -724,7 +724,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attention::{AttentionMask, SdpaParams};
+    use crate::attention::SdpaParams;
     use candle_core::{Device, Tensor, D};
     use candle_nn::ops::softmax;
 

@@ -10,6 +10,7 @@ use crate::pipeline::KvCache;
 pub struct CausalMasker;
 
 /// Configuration for [`CausalMasker::make_causal_mask`].
+#[derive(Default)]
 pub struct CausalMaskConfig {
     /// Sliding window size. `None` = full causal attention.
     pub sliding_window: Option<usize>,
@@ -17,15 +18,6 @@ pub struct CausalMaskConfig {
     /// Set to `true` when you need the real mask tensor (e.g. bidirectional
     /// vision overrides, head_dim > 256 eager fallback).
     pub force_custom: bool,
-}
-
-impl Default for CausalMaskConfig {
-    fn default() -> Self {
-        Self {
-            sliding_window: None,
-            force_custom: false,
-        }
-    }
 }
 
 // https://github.com/mokeyish/candle-ext/blob/main/src/masked_fill.rs
@@ -310,7 +302,7 @@ impl BidirectionalMasker {
     pub fn make_mask(&self, input_ids: &Tensor, dtype: DType) -> Result<Tensor> {
         let (_b_sz, tgt_len) = input_ids.dims2()?;
 
-        // Do not make any -inf — bidirectional (all-zeros) mask
+        // Do not make any -inf, bidirectional (all-zeros) mask
         let mask = Tensor::zeros((tgt_len, tgt_len), dtype, input_ids.device())?;
 
         Ok(mask)

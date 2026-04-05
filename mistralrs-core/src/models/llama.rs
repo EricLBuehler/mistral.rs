@@ -531,7 +531,7 @@ impl Llama {
             let mask_for_layer = &mask.get(x.device());
             x = block.forward(
                 &x,
-                &mask_for_layer,
+                mask_for_layer,
                 seqlen_offsets,
                 &mut cache[block_idx],
                 metadata

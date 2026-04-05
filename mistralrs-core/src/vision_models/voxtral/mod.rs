@@ -370,6 +370,7 @@ pub struct VoxtralModel {
     cfg: ModelConfigMetadata,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: Option<usize>,
+    #[allow(dead_code)]
     num_heads: usize,
     model_dim: usize,
     ada_rms_norm_t_cond: bool,

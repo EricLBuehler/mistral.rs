@@ -341,6 +341,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn negative_number() {
         let msg = "<|tool_call>call:offset{x:-5,y:3.14}<tool_call|>";
         let parsed: Vec<CalledFunctionParameters> = serde_json::from_str(&parse(msg)).unwrap();

@@ -955,7 +955,7 @@ impl Model {
                         let mask_for_layer = &mask.get(x.device());
                         x = layer.forward_attention(
                             &x,
-                            &mask_for_layer,
+                            mask_for_layer,
                             seqlen_offsets,
                             kv_cache,
                             metadata.as_ref().map(|(kv_cache, metadata)| {

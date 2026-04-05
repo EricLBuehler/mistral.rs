@@ -105,9 +105,7 @@ impl ProportionalRotaryEmbedding {
             inv_freq_vec.push(1f32 / base.powf((2 * i) as f32 / head_dim as f32));
         }
         // Pad with zeros for non-rotated dimensions
-        for _ in rope_angles..half_dim {
-            inv_freq_vec.push(0f32);
-        }
+        inv_freq_vec.extend(std::iter::repeat_n(0f32, half_dim - rope_angles));
 
         let inv_freq = Tensor::from_vec(inv_freq_vec, (1, half_dim), device)?;
         let t = Tensor::arange(0u32, max_position_embeddings as u32, device)?
@@ -1500,7 +1498,6 @@ impl TextModel {
                 &CausalMaskConfig {
                     sliding_window: Some(self.sliding_window),
                     force_custom: true,
-                    ..Default::default()
                 },
             )?;
             let sliding_attention_mask = match sliding_attention_mask {

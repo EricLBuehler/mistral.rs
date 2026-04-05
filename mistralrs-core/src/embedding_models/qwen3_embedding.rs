@@ -312,6 +312,7 @@ pub struct Model {
     sliding_window: Option<usize>,
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    #[allow(dead_code)]
     cfg: ModelConfigMetadata,
 }
 
