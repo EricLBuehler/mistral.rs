@@ -39,6 +39,45 @@ When tools are provided in a request, mistral.rs automatically enforces constrai
 
 This feature is automatic, and no configuration is needed. It uses the same [llguidance](https://github.com/guidance-ai/llguidance) infrastructure as user-specified grammar constraints. If a user-specified grammar is already active on the request, tool call grammar activation is skipped.
 
+## Strict mode
+
+By default, the tool call grammar enforces valid syntax (correct delimiters, valid tool names, well-formed key-value pairs) but allows any argument keys and value types. **Strict mode** goes further: it enforces the tool's `parameters` JSON schema on the generated arguments.
+
+Set `"strict": true` on the function definition to enable it:
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "get_weather",
+    "description": "Get the weather for a city.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "city": { "type": "string" },
+        "units": { "type": "string", "enum": ["celsius", "fahrenheit"] }
+      },
+      "required": ["city"]
+    },
+    "strict": true
+  }
+}
+```
+
+**What strict mode enforces:**
+- Only declared property names are accepted as argument keys
+- Value types match the schema (string, number, integer, boolean, null)
+- Enum values are constrained to the declared set
+- Nested objects and typed arrays follow their sub-schemas
+- Required fields must appear; optional fields may be omitted
+
+**Notes:**
+- Strict and non-strict tools can be mixed in the same request. Each tool is enforced independently.
+- The built-in web search tools (`search_the_web`, `website_content_extractor`) use strict mode automatically.
+- For Gemma 4, arguments are emitted in alphabetical key order (matching the model's native `dictsort` convention), which allows required-field enforcement without combinatorial grammar blowup.
+
+In the Rust SDK, set `strict: Some(true)` on the `Function` struct. In the Python SDK, include `"strict": true` in the tool JSON string passed to `tool_schemas`.
+
 ## OpenAI compatible HTTP example
 Please see [our example here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/tool_calling.py).
 
