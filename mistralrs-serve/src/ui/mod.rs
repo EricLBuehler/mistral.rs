@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -8,6 +9,7 @@ use axum::routing::{get, get_service, post};
 use axum::Router;
 use include_dir::{include_dir, Dir};
 use indexmap::IndexMap;
+use tracing::info;
 use mistralrs::{Model, SearchEmbeddingModel};
 use mistralrs_core::{MistralRs, ModelCategory};
 use tokio::fs;
@@ -24,9 +26,32 @@ mod utils;
 
 static STATIC_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/static");
 
-async fn static_handler(uri: axum::http::Uri) -> Response<Body> {
+#[derive(Clone)]
+struct UiState {
+    override_dir: Option<Arc<PathBuf>>,
+}
+
+async fn static_handler(
+    axum::extract::State(state): axum::extract::State<UiState>,
+    uri: axum::http::Uri,
+) -> Response<Body> {
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
+
+    // Try disk override first
+    if let Some(ref dir) = state.override_dir {
+        let file_path = dir.join(path);
+        if let Ok(contents) = tokio::fs::read(&file_path).await {
+            let mime = mime_guess::from_path(path).first_or_octet_stream();
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(axum::http::header::CONTENT_TYPE, mime.as_ref())
+                .body(Body::from(contents))
+                .unwrap();
+        }
+    }
+
+    // Fall back to embedded files
     if let Some(file) = STATIC_DIR.get_file(path) {
         let mime = mime_guess::from_path(path).first_or_octet_stream();
         Response::builder()
@@ -84,6 +109,16 @@ pub async fn build_ui_router(
 ) -> Result<Router> {
     let models = build_model_list(&mistralrs);
     let model_wrapper = Model::new(mistralrs.clone());
+
+    // Detect UI override directory next to the executable
+    let ui_override_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.join("ui")))
+        .filter(|dir| dir.is_dir());
+    if let Some(ref dir) = ui_override_dir {
+        info!("UI override directory detected: {}", dir.display());
+    }
+    let ui_override_dir = ui_override_dir.map(Arc::new);
 
     let base_cache = get_cache_dir();
     let chats_dir = base_cache.join("chats");
@@ -143,10 +178,14 @@ pub async fn build_ui_router(
         .route("/api/append_message", post(append_message))
         .route("/api/settings", get(get_settings))
         .route("/api/generate_speech", post(generate_speech))
+        .route("/api/stop", post(stop_generation))
         .nest_service("/speech", get_service(ServeDir::new(speech_dir.clone())))
         .nest_service("/uploads", get_service(ServeDir::new(uploads_dir.clone())))
         .route("/", get(static_handler))
         .route("/{*path}", get(static_handler))
+        .with_state(UiState {
+            override_dir: ui_override_dir,
+        })
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(axum::extract::Extension(app_state));
 

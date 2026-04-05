@@ -15,6 +15,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use mistralrs::speech_utils;
+use mistralrs_core::TERMINATE_ALL_NEXT_STEP;
 
 use crate::ui::chat::append_chat_message;
 use crate::ui::types::{
@@ -321,14 +322,25 @@ pub async fn list_chats(Extension(app): Extension<Arc<AppState>>) -> impl IntoRe
 
     if let Ok(mut entries) = fs::read_dir(dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
-            if let Ok(bytes) = fs::read(entry.path()).await {
-                if let Ok(chat) = serde_json::from_slice::<ChatFile>(&bytes) {
-                    chats.push(chat);
+            if let Some(name) = entry.file_name().to_str() {
+                if name.ends_with(".json") {
+                    let id = name.trim_end_matches(".json");
+                    if let Ok(bytes) = fs::read(entry.path()).await {
+                        if let Ok(chat) = serde_json::from_slice::<ChatFile>(&bytes) {
+                            chats.push(json!({
+                                "id": id,
+                                "title": chat.title.unwrap_or_default(),
+                                "model": chat.model,
+                                "kind": chat.kind,
+                                "created_at": chat.created_at,
+                            }));
+                        }
+                    }
                 }
             }
         }
     }
-    chats.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    chats.sort_by(|a, b| b["created_at"].as_str().unwrap_or("").cmp(a["created_at"].as_str().unwrap_or("")));
     Json(json!({ "chats": chats }))
 }
 
@@ -389,7 +401,15 @@ pub async fn load_chat(
         if let Ok(chat) = serde_json::from_slice::<ChatFile>(&bytes) {
             let mut cur = app.current_chat.write().await;
             *cur = Some(req.id.clone());
-            return Json(chat).into_response();
+            return Json(json!({
+                "id": req.id,
+                "title": chat.title.unwrap_or_default(),
+                "model": chat.model,
+                "kind": chat.kind,
+                "created_at": chat.created_at,
+                "messages": chat.messages,
+            }))
+            .into_response();
         }
     }
     (StatusCode::NOT_FOUND, "Chat not found").into_response()
@@ -519,4 +539,9 @@ pub async fn generate_speech(
 
     let url = format!("speech/{filename}");
     (StatusCode::OK, Json(json!({ "url": url }))).into_response()
+}
+
+pub async fn stop_generation() -> impl IntoResponse {
+    TERMINATE_ALL_NEXT_STEP.store(true, std::sync::atomic::Ordering::SeqCst);
+    StatusCode::OK
 }

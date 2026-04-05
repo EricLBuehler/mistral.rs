@@ -1,0 +1,352 @@
+// Settings management functionality
+
+// Default settings shown in the UI when the server/model does not specify a value.
+const displayFallbacks = {
+  temperature: 0.7,
+  top_p: 0.9,
+  top_k: 40,
+  max_tokens: 2048,
+  repetition_penalty: 1.1,
+  system_prompt: null
+};
+
+// Model defaults returned by the server for the currently selected model.
+let serverDefaults = {
+  temperature: null,
+  top_p: null,
+  top_k: null,
+  max_tokens: null,
+  repetition_penalty: null,
+  system_prompt: null
+};
+
+// Current user settings (localStorage overrides)
+let userSettings = {
+  temperature: null,
+  top_p: null,
+  top_k: null,
+  max_tokens: null,
+  repetition_penalty: null,
+  system_prompt: null
+};
+
+// Whether search is enabled on the server
+let searchEnabledOnServer = false;
+
+/**
+ * Load settings from server and localStorage
+ */
+async function loadSettings() {
+  try {
+    const res = await fetch(apiUrl('api/settings'));
+    if (res.ok) {
+      const data = await res.json();
+      serverDefaults = data.defaults;
+      searchEnabledOnServer = data.search_enabled;
+
+      // Hide web search controls if not enabled on server
+      const webSearchCard = document.getElementById('webSearchCard');
+      if (webSearchCard) {
+        webSearchCard.style.display = searchEnabledOnServer ? 'block' : 'none';
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load settings:', e);
+  }
+
+  // Load user overrides from localStorage
+  const stored = localStorage.getItem('mistralrs_settings');
+  if (stored) {
+    try {
+      const parsed = JSON.parse(stored);
+      userSettings = { ...userSettings, ...parsed };
+    } catch (e) {
+      console.error('Failed to parse stored settings:', e);
+    }
+  }
+
+  // Update UI with current values
+  updateSettingsUI();
+}
+
+/**
+ * Save user settings to localStorage
+ */
+function saveSettings() {
+  localStorage.setItem('mistralrs_settings', JSON.stringify(userSettings));
+}
+
+/**
+ * Get the effective transmitted value for a setting.
+ */
+function getEffectiveSetting(key) {
+  if (userSettings[key] !== null && userSettings[key] !== undefined) {
+    return userSettings[key];
+  }
+  return serverDefaults[key];
+}
+
+/**
+ * Get the value shown in the settings UI.
+ */
+function getDisplaySetting(key) {
+  const effective = getEffectiveSetting(key);
+  if (effective !== null && effective !== undefined) {
+    return effective;
+  }
+  return displayFallbacks[key];
+}
+
+/**
+ * Update a setting value
+ */
+function setSetting(key, value) {
+  userSettings[key] = value;
+  saveSettings();
+
+  // If system prompt changed, notify the WebSocket
+  if (key === 'system_prompt' && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ set_system_prompt: value }));
+  }
+}
+
+/**
+ * Reset a setting to server default
+ */
+function resetSetting(key) {
+  userSettings[key] = null;
+  saveSettings();
+  updateSettingsUI();
+}
+
+/**
+ * Reset all settings to defaults
+ */
+function resetAllSettings() {
+  userSettings = {
+    temperature: null,
+    top_p: null,
+    top_k: null,
+    max_tokens: null,
+    repetition_penalty: null,
+    system_prompt: null
+  };
+  saveSettings();
+  updateSettingsUI();
+
+  // Notify WebSocket of system prompt reset
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ set_system_prompt: serverDefaults.system_prompt }));
+  }
+}
+
+/**
+ * Update the settings UI to reflect current values
+ */
+function updateSettingsUI() {
+  // Temperature
+  const tempInput = document.getElementById('settingTemperature');
+  const tempValue = document.getElementById('temperatureValue');
+  if (tempInput && tempValue) {
+    const value = getDisplaySetting('temperature');
+    tempInput.value = value;
+    tempValue.textContent = value.toFixed(2);
+  }
+
+  // Top P
+  const topPInput = document.getElementById('settingTopP');
+  const topPValue = document.getElementById('topPValue');
+  if (topPInput && topPValue) {
+    const value = getDisplaySetting('top_p');
+    topPInput.value = value;
+    topPValue.textContent = value.toFixed(2);
+  }
+
+  // Top K
+  const topKInput = document.getElementById('settingTopK');
+  if (topKInput) {
+    topKInput.value = getDisplaySetting('top_k');
+  }
+
+  // Max Tokens
+  const maxTokensInput = document.getElementById('settingMaxTokens');
+  if (maxTokensInput) {
+    maxTokensInput.value = getDisplaySetting('max_tokens');
+  }
+
+  // Repetition Penalty
+  const repPenInput = document.getElementById('settingRepetitionPenalty');
+  const repPenValue = document.getElementById('repetitionPenaltyValue');
+  if (repPenInput && repPenValue) {
+    const value = getDisplaySetting('repetition_penalty');
+    repPenInput.value = value;
+    repPenValue.textContent = value.toFixed(2);
+  }
+
+  // System Prompt
+  const sysPromptInput = document.getElementById('settingSystemPrompt');
+  if (sysPromptInput) {
+    sysPromptInput.value = getDisplaySetting('system_prompt') || '';
+  }
+}
+
+/**
+ * Get generation params object for sending with messages
+ */
+function getGenerationParams() {
+  const params = {};
+  const temperature = getEffectiveSetting('temperature');
+  const topP = getEffectiveSetting('top_p');
+  const topK = getEffectiveSetting('top_k');
+  const maxTokens = getEffectiveSetting('max_tokens');
+  const repetitionPenalty = getEffectiveSetting('repetition_penalty');
+
+  if (temperature !== null && temperature !== undefined) params.temperature = temperature;
+  if (topP !== null && topP !== undefined) params.top_p = topP;
+  if (topK !== null && topK !== undefined) params.top_k = topK;
+  if (maxTokens !== null && maxTokens !== undefined) params.max_tokens = maxTokens;
+  if (repetitionPenalty !== null && repetitionPenalty !== undefined) {
+    params.repetition_penalty = repetitionPenalty;
+  }
+
+  return params;
+}
+
+/**
+ * Initialize settings panel event handlers
+ */
+function initSettingsHandlers() {
+  // Settings toggle button
+  const settingsBtn = document.getElementById('settingsBtn');
+  const settingsPanel = document.getElementById('settingsPanel');
+
+  if (settingsBtn && settingsPanel) {
+    settingsBtn.addEventListener('click', () => {
+      settingsPanel.classList.toggle('hidden');
+      settingsBtn.classList.toggle('active');
+    });
+  }
+
+  // Temperature slider
+  const tempInput = document.getElementById('settingTemperature');
+  const tempValue = document.getElementById('temperatureValue');
+  if (tempInput && tempValue) {
+    tempInput.addEventListener('input', () => {
+      const val = parseFloat(tempInput.value);
+      tempValue.textContent = val.toFixed(2);
+      setSetting('temperature', val);
+    });
+  }
+
+  // Top P slider
+  const topPInput = document.getElementById('settingTopP');
+  const topPValue = document.getElementById('topPValue');
+  if (topPInput && topPValue) {
+    topPInput.addEventListener('input', () => {
+      const val = parseFloat(topPInput.value);
+      topPValue.textContent = val.toFixed(2);
+      setSetting('top_p', val);
+    });
+  }
+
+  // Top K input
+  const topKInput = document.getElementById('settingTopK');
+  if (topKInput) {
+    topKInput.addEventListener('change', () => {
+      const val = parseInt(topKInput.value, 10);
+      if (!isNaN(val) && val > 0) {
+        setSetting('top_k', val);
+      }
+    });
+  }
+
+  // Max Tokens input
+  const maxTokensInput = document.getElementById('settingMaxTokens');
+  if (maxTokensInput) {
+    maxTokensInput.addEventListener('change', () => {
+      const val = parseInt(maxTokensInput.value, 10);
+      if (!isNaN(val) && val > 0) {
+        setSetting('max_tokens', val);
+      }
+    });
+  }
+
+  // Repetition Penalty slider
+  const repPenInput = document.getElementById('settingRepetitionPenalty');
+  const repPenValue = document.getElementById('repetitionPenaltyValue');
+  if (repPenInput && repPenValue) {
+    repPenInput.addEventListener('input', () => {
+      const val = parseFloat(repPenInput.value);
+      repPenValue.textContent = val.toFixed(2);
+      setSetting('repetition_penalty', val);
+    });
+  }
+
+  // System Prompt textarea
+  const sysPromptInput = document.getElementById('settingSystemPrompt');
+  if (sysPromptInput) {
+    let debounceTimer;
+    sysPromptInput.addEventListener('input', () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        const val = sysPromptInput.value.trim() || null;
+        setSetting('system_prompt', val);
+      }, 500);
+    });
+  }
+
+  // Reset button
+  const resetBtn = document.getElementById('resetSettingsBtn');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      if (confirm('Reset all settings to defaults?')) {
+        resetAllSettings();
+      }
+    });
+  }
+}
+
+/**
+ * Initialize settings module
+ */
+async function initSettings() {
+  await loadSettings();
+  initSettingsHandlers();
+}
+
+// ===== Theme Toggle =====
+
+/**
+ * Initialize theme from localStorage or system preference
+ */
+function initTheme() {
+  const stored = localStorage.getItem('mistralrs_theme');
+  if (stored === 'dark') {
+    document.documentElement.classList.add('dark');
+  } else if (stored === 'light') {
+    document.documentElement.classList.remove('dark');
+  } else {
+    // No stored preference — follow system
+    if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      document.documentElement.classList.add('dark');
+    }
+  }
+}
+
+/**
+ * Toggle between light and dark mode
+ */
+function toggleTheme() {
+  const isDark = document.documentElement.classList.toggle('dark');
+  localStorage.setItem('mistralrs_theme', isDark ? 'dark' : 'light');
+}
+
+/**
+ * Initialize theme toggle button
+ */
+function initThemeToggle() {
+  const btn = document.getElementById('themeToggle');
+  if (btn) {
+    btn.addEventListener('click', toggleTheme);
+  }
+}

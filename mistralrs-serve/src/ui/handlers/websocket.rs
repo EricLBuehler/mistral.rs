@@ -120,6 +120,8 @@ where
                     }
                 }
             }
+            // Signal end of generation to the client
+            let _ = socket.send(Message::Text("[DONE]".into())).await;
             Ok(assistant_reply)
         }
         Err(e) => {
