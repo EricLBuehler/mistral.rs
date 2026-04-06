@@ -260,3 +260,11 @@ cargo run --release --features <features> --example <name>
 ```
 
 Browse all examples: [`mistralrs/examples/`](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples)
+
+## See Also
+
+- [Getting Started](GETTING_STARTED.md) — Quick tutorial
+- [Agentic Features Guide](AGENTS.md) — Agent builder, tool callbacks, web search
+- [Tool Calling](TOOL_CALLING.md) — Tool calling reference
+- [Performance Guide](PERFORMANCE.md) — Optimization options
+- [API Docs (docs.rs)](https://docs.rs/mistralrs) — Full API reference

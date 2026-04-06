@@ -188,3 +188,9 @@ async fn main() -> Result<()> {
     Ok(())
 }
 ```
+
+## See Also
+
+- [Agentic Features Guide](AGENTS.md) — Complete agentic capabilities overview
+- [Tool Calling](TOOL_CALLING.md) — How tool calling works under the hood
+- [MCP Client](MCP/client.md) — Connect to external tool servers

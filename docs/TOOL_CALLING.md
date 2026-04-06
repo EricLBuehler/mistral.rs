@@ -220,3 +220,9 @@ Web search uses DuckDuckGo by default. Override it with a custom search function
 - [Agentic tools (callbacks + max_tool_rounds)](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/agentic_tools.py)
 - [Custom tool callback](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_tool_call.py)
 - [Custom search callback](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_search.py)
+
+## See Also
+
+- [Agentic Features Guide](AGENTS.md) — Server-side tool execution, web search, MCP, and tool dispatch
+- [Web Search](WEB_SEARCH.md) — Built-in web search integration
+- [MCP Client](MCP/client.md) — Connect to external tool servers

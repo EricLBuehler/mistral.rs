@@ -245,3 +245,10 @@ After this, you can use Git to track, commit, and push files.
 You can find a list of models in the [Hugging Face model collection](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 
 Have you created a UQFF model on Hugging Face? If so, please [create an issue](https://github.com/EricLBuehler/mistral.rs/issues/new).
+
+## See Also
+
+- [Performance Guide](PERFORMANCE.md) — Choosing between ISQ, GGUF, and UQFF
+- [Quantization Overview](QUANTS.md) — All quantization methods
+- [ISQ](ISQ.md) — Quantize at load time instead
+- [Topology](TOPOLOGY.md) — Per-layer device mapping with UQFF

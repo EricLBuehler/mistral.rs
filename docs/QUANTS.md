@@ -86,3 +86,9 @@ python3 scripts/convert_to_gptq.py --src path/to/model --dst output/model/path -
 ```
 mistralrs run -m mlx-community/Llama-3.8-1B-8bit
 ```
+## See Also
+
+- [Performance Guide](PERFORMANCE.md) — Choosing the right quantization for your hardware
+- [ISQ (In-Situ Quantization)](ISQ.md) — Quantize any model at load time
+- [UQFF Format](UQFF.md) — Pre-quantized model format
+- [Topology](TOPOLOGY.md) — Per-layer quantization control

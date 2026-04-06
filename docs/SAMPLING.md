@@ -128,3 +128,8 @@ response = runner.send_chat_completion_request(
 ```
 
 Please suggest more sampling techniques by [raising an issue](https://github.com/EricLBuehler/mistral.rs/issues)!
+
+## See Also
+
+- [HTTP Server](HTTP.md) — All sampling parameters in the HTTP API
+- [CLI Reference](CLI.md) — Interactive mode sampling commands

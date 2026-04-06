@@ -249,3 +249,9 @@ runner = Runner(
 
 # ... rest of the code remains the same
 ```
+## See Also
+
+- [Performance Guide](PERFORMANCE.md) — How PagedAttention fits into the optimization stack
+- [FlashAttention](FLASH_ATTENTION.md) — Accelerates prefill when used with PagedAttention
+- [MLA](MLA.md) — KV cache compression for DeepSeek/GLM models
+- [Device Mapping](DEVICE_MAPPING.md) — Multi-GPU and CPU offloading
