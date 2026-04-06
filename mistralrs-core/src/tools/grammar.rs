@@ -253,8 +253,8 @@ mod tests {
 
     #[test]
     fn non_strict_tools_use_enum_schema() {
-        let grm = parsers::build_tool_call_grammar("<tool_call>", &sample_tools())
-            .expect("should match");
+        let grm =
+            parsers::build_tool_call_grammar("<tool_call>", &sample_tools()).expect("should match");
         let schema = grm.grammars[1].json_schema.as_ref().unwrap();
         // No anyOf — should use the original enum-based schema.
         assert!(schema.get("anyOf").is_none());
@@ -263,8 +263,8 @@ mod tests {
 
     #[test]
     fn strict_tool_produces_any_of_schema() {
-        let grm = parsers::build_tool_call_grammar("<tool_call>", &strict_tools())
-            .expect("should match");
+        let grm =
+            parsers::build_tool_call_grammar("<tool_call>", &strict_tools()).expect("should match");
         let schema = grm.grammars[1].json_schema.as_ref().unwrap();
         let variants = schema["anyOf"].as_array().expect("should have anyOf");
         assert_eq!(variants.len(), 2);
@@ -273,9 +273,7 @@ mod tests {
         let v0 = &variants[0];
         assert_eq!(v0["properties"]["name"]["const"], "get_weather");
         assert!(v0["properties"]["arguments"]["properties"]["place"].is_object());
-        assert_eq!(
-            v0["properties"]["arguments"]["required"][0], "place"
-        );
+        assert_eq!(v0["properties"]["arguments"]["required"][0], "place");
 
         // Second variant (search) should be generic object.
         let v1 = &variants[1];
@@ -296,8 +294,7 @@ mod tests {
     #[test]
     fn deepseek_strict_uses_per_tool_schema() {
         let text = "<｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n```json\n";
-        let grm = parsers::build_tool_call_grammar(text, &strict_tools())
-            .expect("should match");
+        let grm = parsers::build_tool_call_grammar(text, &strict_tools()).expect("should match");
         let schema = grm.grammars[1].json_schema.as_ref().unwrap();
         // DeepSeek knows the tool name — should use get_weather's strict schema directly.
         assert!(schema["properties"]["place"].is_object());
@@ -306,8 +303,7 @@ mod tests {
     #[test]
     fn deepseek_non_strict_uses_generic_schema() {
         let text = "<｜tool▁call▁begin｜>function<｜tool▁sep｜>search\n```json\n";
-        let grm = parsers::build_tool_call_grammar(text, &strict_tools())
-            .expect("should match");
+        let grm = parsers::build_tool_call_grammar(text, &strict_tools()).expect("should match");
         let schema = grm.grammars[1].json_schema.as_ref().unwrap();
         // search is not strict — should use generic object.
         assert_eq!(schema["type"], "object");
@@ -328,10 +324,8 @@ mod tests {
     #[test]
     fn harmony_non_strict_tool_uses_generic() {
         let tools = strict_tools();
-        let grm = parsers::harmony::tool_call_grammar_for_tool(
-            Some("functions.search"),
-            Some(&tools),
-        );
+        let grm =
+            parsers::harmony::tool_call_grammar_for_tool(Some("functions.search"), Some(&tools));
         let schema = grm.grammars[0].json_schema.as_ref().unwrap();
         assert_eq!(schema["type"], "object");
         assert!(schema.get("properties").is_none());
@@ -348,8 +342,7 @@ mod tests {
                 strict: Some(true),
             },
         }];
-        let grm = parsers::build_tool_call_grammar("<tool_call>", &tools)
-            .expect("should match");
+        let grm = parsers::build_tool_call_grammar("<tool_call>", &tools).expect("should match");
         let schema = grm.grammars[1].json_schema.as_ref().unwrap();
         // Should have anyOf with one variant falling back to generic object.
         let variants = schema["anyOf"].as_array().expect("should have anyOf");

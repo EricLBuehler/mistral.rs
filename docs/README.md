@@ -12,6 +12,7 @@
 | Fix an error | [Troubleshooting](TROUBLESHOOTING.md) |
 | Configure environment | [Configuration](CONFIGURATION.md) |
 | Check model support | [Supported Models](SUPPORTED_MODELS.md) |
+| Build agents | [Agentic Features Guide](AGENTS.md) |
 
 ## Getting Started
 
@@ -91,6 +92,7 @@
 
 ## Features
 
+- [Agentic Features Guide](AGENTS.md) - Web search, tool callbacks, agents, MCP, tool dispatch
 - [Tool Calling](TOOL_CALLING.md) - Function calling support
 - [Web Search](WEB_SEARCH.md) - Integrated web search
 - [Chat Templates](CHAT_TOK.md) - Template customization

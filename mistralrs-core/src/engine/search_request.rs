@@ -158,6 +158,17 @@ async fn do_custom_tool(
     request
 }
 
+fn do_http_tool(mut request: NormalRequest, tc: &ToolCallResponse, url: &str) -> NormalRequest {
+    let messages = get_messages_mut(&mut request);
+    append_assistant_tool_call(messages, tc);
+
+    let result = tool_dispatch::execute_http_tool(tc, url);
+    append_tool_response(messages, &tc.function.name, result.content);
+
+    request.tool_choice = Some(ToolChoice::Auto);
+    request
+}
+
 /// Drive one or more web-search / extraction rounds without recursion.
 ///
 /// Strategy:
@@ -169,6 +180,7 @@ async fn do_custom_tool(
 ///    probe that discovers whether a tool call is needed.
 pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
     let web_search_options = request.web_search_options.clone();
+    let dispatch_url = request.tool_dispatch_url.clone();
 
     // The sender that ultimately delivers data back to the caller.
     let user_sender = request.response.clone();
@@ -215,6 +227,8 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
         // `current` is what we actually dispatch each loop.
         // The very first time that is the hidden probe.
         let mut current = probe;
+        let max_rounds = current.max_tool_rounds.unwrap_or(16);
+        let mut round = 0;
 
         loop {
             // Each dispatch gets its own one-shot channel so we can peek at
@@ -223,9 +237,11 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
             current.response = sender;
 
             // Kick the request into the engine via the channel.
-            // Clear web_search_options so the engine doesn't re-enter the
+            // Clear fields that would cause the engine to re-enter the
             // search flow — this loop already manages tool orchestration.
             current.web_search_options = None;
+            current.max_tool_rounds = None;
+            current.tool_dispatch_url = None;
             let _ = this_clone
                 .tx
                 .send(crate::request::Request::Normal(Box::new(current)))
@@ -259,8 +275,8 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                     _ => None,
                 };
 
-                // No tool call? We are finished.
-                if tc_opt.is_none() {
+                // No tool call, or max rounds reached? We are finished.
+                if tc_opt.is_none() || round >= max_rounds {
                     user_sender
                         .send(Response::Done(done.clone()))
                         .await
@@ -270,6 +286,9 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
 
                 // Tool requested -> build the next turn.
                 let tc = tc_opt.unwrap();
+
+                // Resolve how to execute this tool: built-in search,
+                // registered callback, dispatch URL, or bail.
                 let next_visible = if search::search_tool_called(&tc.function.name) {
                     let web_search_options = web_search_options.as_ref().unwrap();
                     if tc.function.name == search::SEARCH_TOOL_NAME {
@@ -277,9 +296,19 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                     } else {
                         do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
                     }
-                } else {
+                } else if this_clone.tool_callbacks.contains_key(&tc.function.name) {
                     do_custom_tool(this_clone.clone(), visible_req, tc).await
+                } else if let Some(ref url) = dispatch_url {
+                    do_http_tool(visible_req, tc, url)
+                } else {
+                    // No way to execute — return to client.
+                    user_sender
+                        .send(Response::Done(done.clone()))
+                        .await
+                        .unwrap();
+                    return;
                 };
+                round += 1;
 
                 // The fresh request becomes both the user-visible context and
                 // the next `current` we will dispatch.
@@ -298,11 +327,10 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                     };
                     match resp {
                         Response::Chunk(chunk) => {
-                            // Forward content-bearing chunks, suppress tool-call chunks.
+                            // Forward all chunks including tool calls so
+                            // streaming clients see the full agentic flow.
                             let first_choice = &chunk.choices[0];
-                            if first_choice.delta.tool_calls.is_none() {
-                                let _ = user_sender.send(Response::Chunk(chunk.clone())).await;
-                            }
+                            let _ = user_sender.send(Response::Chunk(chunk.clone())).await;
                             last_choice = Some(first_choice.clone());
 
                             if last_choice
@@ -336,11 +364,13 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                     _ => None,
                 };
 
-                if tc_opt.is_none() {
-                    break; // No more tool calls -> done.
+                // No tool call or max rounds reached -> done.
+                if tc_opt.is_none() || round >= max_rounds {
+                    break;
                 }
 
                 let tc = tc_opt.unwrap();
+
                 let next_visible = if search::search_tool_called(&tc.function.name) {
                     let web_search_options = web_search_options.as_ref().unwrap();
                     if tc.function.name == search::SEARCH_TOOL_NAME {
@@ -348,9 +378,14 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                     } else {
                         do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
                     }
-                } else {
+                } else if this_clone.tool_callbacks.contains_key(&tc.function.name) {
                     do_custom_tool(this_clone.clone(), visible_req, tc).await
+                } else if let Some(ref url) = dispatch_url {
+                    do_http_tool(visible_req, tc, url)
+                } else {
+                    break; // No way to execute — client handles it.
                 };
+                round += 1;
 
                 visible_req = next_visible.clone();
                 visible_req.response = user_sender.clone();

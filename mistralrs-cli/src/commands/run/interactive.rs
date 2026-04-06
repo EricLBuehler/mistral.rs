@@ -160,6 +160,8 @@ async fn oneshot_text(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: do_search.then(WebSearchOptions::default),
+        max_tool_rounds: None,
+        tool_dispatch_url: None,
         model_id: None,
         truncate_sequence: false,
     }));
@@ -317,6 +319,8 @@ async fn oneshot_multimodal(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: do_search.then(WebSearchOptions::default),
+        max_tool_rounds: None,
+        tool_dispatch_url: None,
         model_id: None,
         truncate_sequence: false,
     }));
@@ -658,6 +662,8 @@ async fn text_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            max_tool_rounds: None,
+            tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
         }));
@@ -1030,6 +1036,8 @@ async fn multimodal_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            max_tool_rounds: None,
+            tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
         }));
@@ -1163,6 +1171,8 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            max_tool_rounds: None,
+            tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
         }));
@@ -1252,6 +1262,8 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            max_tool_rounds: None,
+            tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
         }));

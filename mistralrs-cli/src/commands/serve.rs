@@ -88,6 +88,8 @@ pub async fn run_server(
     // Build and run the server
     let mut app = MistralRsServerRouterBuilder::new()
         .with_mistralrs(mistralrs)
+        .with_max_tool_rounds_optional(server.max_tool_rounds)
+        .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
         .build()
         .await?;
 
