@@ -74,6 +74,7 @@ Set `"strict": true` on the function definition to enable it:
 **Notes:**
 - Strict and non-strict tools can be mixed in the same request. Each tool is enforced independently.
 - The built-in web search tools (`search_the_web`, `website_content_extractor`) use strict mode automatically.
+- Tools discovered from MCP servers are automatically promoted to strict mode when they provide an input schema.
 - For Gemma 4, arguments are emitted in alphabetical key order (matching the model's native `dictsort` convention), which allows required-field enforcement without combinatorial grammar blowup.
 
 In the Rust SDK, set `strict: Some(true)` on the `Function` struct. In the Python SDK, include `"strict": true` in the tool JSON string passed to `tool_schemas`.
