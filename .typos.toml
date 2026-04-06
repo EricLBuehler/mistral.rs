@@ -63,3 +63,4 @@ extend-ignore-re = [
 "DepthWiseSeperableConv1d" = "DepthWiseSeperableConv1d"
 "layrnorm" = "layrnorm"
 "pre_layrnorm" = "pre_layrnorm"
+"numer_denom_ms" = "numer_denom_ms"

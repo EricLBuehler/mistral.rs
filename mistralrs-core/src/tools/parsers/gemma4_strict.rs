@@ -39,7 +39,7 @@ impl GemmaLarkBuilder {
             Some(s)
                 if s.get("properties")
                     .and_then(|v| v.as_object())
-                    .map_or(false, |p| !p.is_empty()) =>
+                    .is_some_and(|p| !p.is_empty()) =>
             {
                 self.emit_constrained_args(s)
             }
@@ -112,7 +112,7 @@ impl GemmaLarkBuilder {
                     // Need a comma before this element.
                     if is_req {
                         // Required — comma always present.
-                        seq.push(format!(r#"",""#));
+                        seq.push(r#"",""#.to_string());
                         seq.push(name.to_string());
                     } else {
                         // Optional — wrap `"," pair` together so the
@@ -215,7 +215,7 @@ impl GemmaLarkBuilder {
         let has_props = schema
             .get("properties")
             .and_then(|v| v.as_object())
-            .map_or(false, |p| !p.is_empty());
+            .is_some_and(|p| !p.is_empty());
         if has_props {
             let inner = self.emit_constrained_args(schema);
             let id = self.next_id();
@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn strict_grammar_basic() {
-        let tools = vec![strict_weather_tool()];
+        let tools = [strict_weather_tool()];
         let mut builder = GemmaLarkBuilder::new();
         let branches: Vec<String> = tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
         builder.emit_shared_rules();
@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn strict_grammar_mixed_tools() {
-        let tools = vec![strict_weather_tool(), non_strict_search_tool()];
+        let tools = [strict_weather_tool(), non_strict_search_tool()];
         let mut builder = GemmaLarkBuilder::new();
         let branches: Vec<String> = tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
         builder.emit_shared_rules();
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn strict_grammar_enum() {
-        let tools = vec![crate::Tool {
+        let tools = [crate::Tool {
             tp: ToolType::Function,
             function: Function {
                 name: "set_unit".to_string(),
@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn strict_grammar_numeric_enum() {
-        let tools = vec![crate::Tool {
+        let tools = [crate::Tool {
             tp: ToolType::Function,
             function: Function {
                 name: "set_level".to_string(),
@@ -385,7 +385,7 @@ mod tests {
                         "type": "object",
                         "properties": {
                             "level": {
-                                "enum": [1, 2, 3.14]
+                                "enum": [1, 2, 3.25]
                             }
                         }
                     }))
@@ -401,12 +401,12 @@ mod tests {
 
         assert!(lark.contains(r#""1""#));
         assert!(lark.contains(r#""2""#));
-        assert!(lark.contains(r#""3.14""#));
+        assert!(lark.contains(r#""3.25""#));
     }
 
     #[test]
     fn strict_grammar_nested_object() {
-        let tools = vec![crate::Tool {
+        let tools = [crate::Tool {
             tp: ToolType::Function,
             function: Function {
                 name: "configure".to_string(),
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn strict_grammar_array() {
-        let tools = vec![crate::Tool {
+        let tools = [crate::Tool {
             tp: ToolType::Function,
             function: Function {
                 name: "batch".to_string(),
@@ -477,7 +477,7 @@ mod tests {
         // "city" is required, "temp" is optional.
         // Alphabetical order: city < temp.
         // Grammar should be: city (required) then ","temp (optional via ?).
-        let tools = vec![strict_weather_tool()];
+        let tools = [strict_weather_tool()];
         let mut builder = GemmaLarkBuilder::new();
         let branches: Vec<String> = tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
         builder.emit_shared_rules();
@@ -502,7 +502,7 @@ mod tests {
     fn strict_grammar_all_required_fixed_order() {
         // Both fields required — grammar should emit them in fixed
         // alphabetical order with no ? and no bag pattern.
-        let tools = vec![crate::Tool {
+        let tools = [crate::Tool {
             tp: ToolType::Function,
             function: Function {
                 name: "send".to_string(),
