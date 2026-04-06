@@ -8,12 +8,28 @@
 use llguidance::api::{GrammarWithLexer, TopLevelGrammar};
 use serde_json::json;
 
-/// Build a grammar that constrains generation to a valid JSON object.
-/// The tool name is already known from the Harmony recipient field, so
-/// only the arguments body needs constraining.
-pub fn tool_call_grammar() -> TopLevelGrammar {
+use crate::Tool;
+
+/// Build a grammar for Harmony tool call arguments, optionally using a
+/// strict tool's parameters schema when `tool_name` matches a tool with
+/// `strict: true`.
+pub fn tool_call_grammar_for_tool(
+    tool_name: Option<&str>,
+    tools: Option<&[Tool]>,
+) -> TopLevelGrammar {
+    let args_schema = tool_name
+        .and_then(|name| {
+            let tools = tools?;
+            // Harmony recipients use "functions.tool_name" format;
+            // strip the prefix when matching against tool definitions.
+            let bare_name = name.strip_prefix("functions.").unwrap_or(name);
+            tools.iter().find(|t| t.function.name == bare_name)
+        })
+        .and_then(|t| t.function.strict_parameters_schema())
+        .unwrap_or_else(|| json!({"type": "object"}));
+
     let json_body = GrammarWithLexer {
-        json_schema: Some(json!({"type": "object"})),
+        json_schema: Some(args_schema),
         ..Default::default()
     };
     TopLevelGrammar {

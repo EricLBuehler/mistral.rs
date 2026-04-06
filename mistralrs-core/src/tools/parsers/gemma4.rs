@@ -6,6 +6,7 @@ use candle_core::Result;
 use llguidance::api::{GrammarWithLexer, TopLevelGrammar};
 use serde_json::Value;
 
+use super::gemma4_strict::GemmaLarkBuilder;
 use super::ToolFormatParser;
 use crate::Tool;
 
@@ -23,15 +24,26 @@ impl ToolFormatParser for Gemma4Parser {
         super::ToolCallFormat::Gemma4
     }
 
-    /// Pure Lark grammar for Gemma 4's non-JSON tool call format.
-    /// Special tokens (`<|"|>`, `<tool_call|>`) use bare angle-bracket
-    /// syntax so llguidance matches them via the trie.
-    fn tool_call_grammar(&self, tools: &[Tool]) -> TopLevelGrammar {
-        let tool_alts = crate::tools::grammar::lark_tool_name_alternatives(tools);
-        // Use r##"..."## because the grammar contains `<|"|>` which has
-        // a `"#` sequence that would close an r#"..."# literal.
-        let lark = format!(
-            r##"start: "call:" TOOL_NAME "{{" args "}}" <tool_call|>
+    /// Lark grammar for Gemma 4's non-JSON tool call format.
+    ///
+    /// When any tool has `strict: true`, generates a branching grammar with
+    /// per-tool schema-constrained argument rules.  Otherwise falls back to
+    /// the generic grammar that accepts any key-value pairs.
+    fn tool_call_grammar(&self, tools: &[Tool], _text: &str) -> TopLevelGrammar {
+        let any_strict = tools.iter().any(|t| t.function.strict == Some(true));
+
+        let lark = if any_strict {
+            let mut builder = GemmaLarkBuilder::new();
+            let branches: Vec<String> =
+                tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
+            builder.emit_shared_rules();
+            builder.build(&branches)
+        } else {
+            let tool_alts = crate::tools::grammar::lark_tool_name_alternatives(tools);
+            // r##"..."## because the grammar contains `<|"|>` which has
+            // a `"#` sequence that would close an r#"..."# literal.
+            format!(
+                r##"start: "call:" TOOL_NAME "{{" args "}}" <tool_call|>
 TOOL_NAME: {tool_alts}
 args: pair ("," pair)* |
 pair: KEY ":" value
@@ -42,7 +54,9 @@ number: /-?(0|[1-9][0-9]*)(\.[0-9]+)?/
 array: "[" (value ("," value)*)? "]"
 object: "{{" (pair ("," pair)*)? "}}"
 "##
-        );
+            )
+        };
+
         let top = GrammarWithLexer::from_lark(lark);
         TopLevelGrammar {
             grammars: vec![top],
@@ -498,5 +512,25 @@ mod tests {
     fn prefix_detection() {
         assert!(Gemma4Parser.could_be_tool_call("<|tool_call>call:test{}<tool_call|>"));
         assert!(!Gemma4Parser.could_be_tool_call("some random text"));
+    }
+
+    #[test]
+    fn strict_grammar_no_strict_unchanged() {
+        // When no tools are strict, the grammar uses the non-branching
+        // TOOL_NAME path.  This test guards the structural invariant
+        // (single Lark grammar, no json_schema).
+        use mistralrs_mcp::{Function, ToolType};
+        let tools = vec![crate::Tool {
+            tp: ToolType::Function,
+            function: Function {
+                name: "search".to_string(),
+                description: None,
+                parameters: None,
+                strict: None,
+            },
+        }];
+        let grm = Gemma4Parser.tool_call_grammar(&tools, "");
+        assert_eq!(grm.grammars.len(), 1);
+        assert!(grm.grammars[0].json_schema.is_none());
     }
 }

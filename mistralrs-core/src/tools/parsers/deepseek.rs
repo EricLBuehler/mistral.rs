@@ -34,12 +34,17 @@ impl ToolFormatParser for DeepSeekParser {
     /// arguments object, closing ` ``` ` fence, and `<｜tool▁call▁end｜>`
     /// end delimiter (matched as a special token via bare angle-bracket
     /// syntax).
-    fn tool_call_grammar(&self, _tools: &[Tool]) -> TopLevelGrammar {
+    fn tool_call_grammar(&self, tools: &[Tool], text: &str) -> TopLevelGrammar {
+        let args_schema = extract_deepseek_tool_name(text)
+            .and_then(|name| tools.iter().find(|t| t.function.name == name))
+            .and_then(|t| t.function.strict_parameters_schema())
+            .unwrap_or_else(|| json!({"type": "object"}));
+
         let lark = r#"start: @json_body "\n```\n" <｜tool▁call▁end｜>"#.to_string();
         let top = GrammarWithLexer::from_lark(lark);
         let json_body = GrammarWithLexer {
             name: Some("json_body".to_string()),
-            json_schema: Some(json!({"type": "object"})),
+            json_schema: Some(args_schema),
             ..Default::default()
         };
         TopLevelGrammar {
@@ -90,4 +95,14 @@ impl ToolFormatParser for DeepSeekParser {
             serde_json::to_string(&calls).map_err(candle_core::Error::msg)?,
         ))
     }
+}
+
+/// Extract the tool name from a DeepSeek prefix.
+/// Pattern: `<｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME\n```json\n`
+fn extract_deepseek_tool_name(text: &str) -> Option<&str> {
+    let sep = "<｜tool▁sep｜>";
+    let sep_pos = text.rfind(sep)?;
+    let after_sep = &text[sep_pos + sep.len()..];
+    let name_end = after_sep.find('\n')?;
+    Some(after_sep[..name_end].trim())
 }

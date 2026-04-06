@@ -81,7 +81,10 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         };
         let grm = grm.or_else(|| {
             if seq.needs_harmony_tool_grammar() {
-                seq.tools.as_ref()?.build_harmony_tool_grammar()
+                let recipient = seq.harmony_current_tool_recipient();
+                seq.tools
+                    .as_ref()?
+                    .build_harmony_tool_grammar(recipient.as_deref())
             } else {
                 None
             }

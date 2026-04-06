@@ -18,7 +18,7 @@ impl ToolFormatParser for LlamaParser {
         super::ToolCallFormat::Llama
     }
 
-    fn tool_call_grammar(&self, tools: &[Tool]) -> TopLevelGrammar {
+    fn tool_call_grammar(&self, tools: &[Tool], _text: &str) -> TopLevelGrammar {
         crate::tools::grammar::build_json_format_grammar(
             r#"start: @json_body"#.to_string(),
             tools,

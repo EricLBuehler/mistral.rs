@@ -1347,6 +1347,15 @@ impl Sequence {
             .is_some_and(|p| p.take_needs_tool_grammar_activation())
     }
 
+    /// Return the recipient of the current in-progress Harmony tool call
+    /// (e.g. `"functions.get_weather"`).  Returns `None` when not in
+    /// Harmony mode or no tool call is active.
+    pub fn harmony_current_tool_recipient(&self) -> Option<String> {
+        self.reasoning_parser
+            .as_ref()
+            .and_then(|p| p.current_tool_recipient())
+    }
+
     /// Whether the current recognizer was activated mid-stream for tool call
     /// grammar constraining (as opposed to a user-specified grammar).
     pub fn is_tool_grammar_active(&self) -> bool {

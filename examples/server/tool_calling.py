@@ -32,7 +32,7 @@ tools = [
             "name": "run_python",
             "description": "Run some Python code",
             "parameters": {
-                "type": "string",
+                "type": "object",
                 "properties": {
                     "code": {
                         "type": "string",
@@ -41,6 +41,7 @@ tools = [
                 },
                 "required": ["code"],
             },
+            "strict": True,
         },
     }
 ]

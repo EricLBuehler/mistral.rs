@@ -474,11 +474,21 @@ impl McpClient {
                     .map_err(|_| anyhow::anyhow!("Tool call thread panicked"))?
                 });
 
-                // Convert MCP tool schema to Tool definition
+                // Convert MCP tool schema to Tool definition.
+                // Auto-enable strict mode when a schema is available —
+                // MCP tools always provide an inputSchema so constrained
+                // decoding can enforce it.
+                let parameters =
+                    Self::convert_mcp_schema_to_parameters(&tool.input_schema);
                 let function_def = Function {
                     name: tool_name.clone(),
                     description: tool.description.clone(),
-                    parameters: Self::convert_mcp_schema_to_parameters(&tool.input_schema),
+                    strict: if parameters.is_some() {
+                        Some(true)
+                    } else {
+                        None
+                    },
+                    parameters,
                 };
 
                 let tool_def = Tool {
@@ -622,11 +632,19 @@ impl McpClient {
                 .map_err(|_| anyhow::anyhow!("Tool call thread panicked"))?
             });
 
-            // Convert MCP tool schema to Tool definition
+            // Convert MCP tool schema to Tool definition.
+            // Auto-enable strict mode when a schema is available.
+            let parameters =
+                Self::convert_mcp_schema_to_parameters(&tool.input_schema);
             let function_def = Function {
                 name: tool_name.clone(),
                 description: tool.description.clone(),
-                parameters: Self::convert_mcp_schema_to_parameters(&tool.input_schema),
+                strict: if parameters.is_some() {
+                    Some(true)
+                } else {
+                    None
+                },
+                parameters,
             };
 
             let tool_def = Tool {
