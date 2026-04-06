@@ -37,7 +37,7 @@ Fast, flexible LLM inference.
 - **Built-in web UI**: `mistralrs serve --ui` gives you a web interface instantly.
 - **Hardware-aware**: `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
-- **Agentic features** — server-side tool loop, web search, MCP client, and HTTP tool dispatch
+- **[Agentic features](docs/AGENTS.md)** — server-side tool loop, web search, MCP client, and HTTP tool dispatch
 
 ## Quick Start
 
