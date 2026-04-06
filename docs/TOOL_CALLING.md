@@ -148,7 +148,7 @@ The tool dispatch URL lets the server POST unhandled tool calls to your HTTP end
 
 ```bash
 # CLI: applies to all requests
-mistralrs serve -p 1234 --tool-dispatch-url https://my-service.com/tools --max-tool-rounds 5 -m Qwen/Qwen3-4B
+mistralrs serve -p 1234 --tool-dispatch-url https://my-service.com/tools --max-tool-rounds 5 -m google/gemma-4-E4B-it
 ```
 
 ```rust

@@ -105,7 +105,7 @@ The simplest agentic feature: flip one flag and the model can search the web. mi
 
 **CLI:**
 ```bash
-mistralrs run --enable-search --isq 4 -m Qwen/Qwen3-4B
+mistralrs run --enable-search --isq 4 -m google/gemma-4-E4B-it
 ```
 
 **HTTP API:**
@@ -129,7 +129,7 @@ print(response.choices[0].message.content)
 from mistralrs import Runner, Which, Architecture, ChatCompletionRequest, WebSearchOptions
 
 runner = Runner(
-    which=Which.Plain(model_id="Qwen/Qwen3-4B", arch=Architecture.Qwen3),
+    which=Which.Plain(model_id="google/gemma-4-E4B-it"),
     enable_search=True,
 )
 
@@ -151,7 +151,7 @@ use mistralrs::{
     TextMessageRole, TextMessages, WebSearchOptions,
 };
 
-let model = ModelBuilder::new("Qwen/Qwen3-4B")
+let model = ModelBuilder::new("google/gemma-4-E4B-it")
     .with_auto_isq(IsqBits::Four)
     .with_search(SearchEmbeddingModel::default())
     .build()
@@ -176,7 +176,7 @@ def my_search(query: str) -> list[dict[str, str]]:
     return [{"title": "Result", "description": "...", "url": "https://...", "content": "..."}]
 
 runner = Runner(
-    which=Which.Plain(model_id="Qwen/Qwen3-4B", arch=Architecture.Qwen3),
+    which=Which.Plain(model_id="google/gemma-4-E4B-it"),
     enable_search=True,
     search_callback=my_search,
 )
@@ -184,7 +184,7 @@ runner = Runner(
 
 **Rust SDK:**
 ```rust
-let model = ModelBuilder::new("Qwen/Qwen3-4B")
+let model = ModelBuilder::new("google/gemma-4-E4B-it")
     .with_auto_isq(IsqBits::Four)
     .with_search_callback(Arc::new(|params: &mistralrs::SearchFunctionParameters| {
         // Return Vec<SearchResult> with title, description, url, content
@@ -774,7 +774,7 @@ You can enable multiple agentic features on the same model. The [dispatch order]
 
 **Rust SDK:**
 ```rust
-let model = ModelBuilder::new("Qwen/Qwen3-4B")
+let model = ModelBuilder::new("google/gemma-4-E4B-it")
     .with_auto_isq(IsqBits::Four)
     .with_search(SearchEmbeddingModel::default())      // Built-in web search
     .with_tool_callback("local_db", Arc::new(db_cb))   // Custom callback
@@ -790,7 +790,7 @@ mistralrs serve -p 1234 \
     --mcp-config mcp-config.json \
     --tool-dispatch-url http://localhost:8787/tools \
     --max-tool-rounds 10 \
-    -m Qwen/Qwen3-4B
+    -m google/gemma-4-E4B-it
 ```
 
 ---
