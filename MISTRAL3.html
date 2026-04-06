@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,57 +182,32 @@
                     <main>
                         <h1 id="mistral-small-31-model-mistralaimistral-small-31-24b-instruct-2503"><a class="header" href="#mistral-small-31-model-mistralaimistral-small-31-24b-instruct-2503">Mistral Small 3.1 Model: <a href="https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503"><code>mistralai/Mistral-Small-3.1-24B-Instruct-2503</code></a></a></h1>
 <p>The Mistral Small 3.1 model is a strong multimodal (text+vision) model with 128k context length, function calling, and strong visual understanding.</p>
-<p>We support the Mistral 3 Model in the Rust, Python, and HTTP APIs, including ISQ for increased performance.</p>
-<p>The Python and HTTP APIs support sending images as:</p>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre><code class="language-bash">mistralrs run -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 --isq 4 --image photo.jpg -i "Describe this image"
+</code></pre>
+<h2 id="input-formats"><a class="header" href="#input-formats">Input Formats</a></h2>
+<p>The Python and HTTP APIs support sending inputs as:</p>
 <ul>
-<li>URL</li>
-<li>Path to a local image</li>
-<li><a href="https://en.wikipedia.org/wiki/Base64">Base64</a> encoded string</li>
+<li><strong>Images</strong>: URL, path to a local file, or base64 encoded string (via <code>image_url</code>)</li>
 </ul>
-<p>The Rust SDK takes an image from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
+<p>The Rust SDK takes images from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
 <h2 id="tool-calling-with-mistral-small-31"><a class="header" href="#tool-calling-with-mistral-small-31">Tool calling with Mistral Small 3.1</a></h2>
 <p>The Mistral Small 3.1 model itself does not come with the correct JINJA chat template to enable tool calling. We provide a chat template for
 tool calling with Mistral Small 3.1, and you can use it by specifying the <code>jinja_explicit</code> parameter in the various APIs. For example:</p>
 <pre><code class="language-bash">mistralrs serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
 </code></pre>
-<h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/mistral3.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<hr>
-<p><strong>Image:</strong></p>
-<img src="https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg">
-<h6><a href="https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg">Credit</a></h6>
-
-<p><strong>Prompt:</strong></p>
-<pre><code>What is this?
-</code></pre>
-<p><strong>Output:</strong></p>
-<pre><code>The image shows a close-up of a vibrant flower with pink petals and a central cluster of yellowish-brown stamens. This flower appears to be from the genus *Gazania*, commonly known as treasure flowers or gazanias. These flowers are known for their daisy-like appearance and bright colors.
-
-Gazania flowers typically have ray florets (the petal-like structures) that can change color based on light conditions—often appearing more vibrant in direct sunlight. They are popular in gardens for their hardiness and ability to thrive in sunny locations with well-drained soil.
-
-If there's anything specific about this flower or its care that interests you further, feel free to ask!
-</code></pre>
-<hr>
+<h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve multimodal -p 1234 -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
+<pre><code class="language-bash">mistralrs serve -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 --isq 4 -p 1234
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
 </ol>
 <pre><code class="language-py">from openai import OpenAI
-import httpx
-import textwrap
-import json
-
 
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
-
 
 completion = client.chat.completions.create(
     model="default",
@@ -243,7 +218,7 @@ completion = client.chat.completions.create(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": "https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg"
+                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
                     },
                 },
                 {
@@ -254,22 +229,57 @@ completion = client.chat.completions.create(
         },
     ],
     max_tokens=256,
-    frequency_penalty=1.0,
-    top_p=0.1,
-    temperature=0,
 )
-resp = completion.choices[0].message.content
-print(resp)
-
+print(completion.choices[0].message.content)
 </code></pre>
 <ul>
 <li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">image via base64 here</a>.</li>
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
-<hr>
-<h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
+<h2 id="python-sdk"><a class="header" href="#python-sdk">Python SDK</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/mistral3.py">here</a>.</p>
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+
+runner = Runner(
+    which=Which.MultimodalPlain(
+        model_id="mistralai/Mistral-Small-3.1-24B-Instruct-2503",
+        arch=MultimodalArchitecture.Mistral3,
+    ),
+    in_situ_quant="4"
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "What is this?",
+                    },
+                ],
+            }
+        ],
+        max_tokens=256,
+    )
+)
+print(res.choices[0].message.content)
+print(res.usage)
+</code></pre>
+<ul>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
+</ul>
+<h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
-<p>This is a minimal example of running the Mistral 3 model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
@@ -306,56 +316,6 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
-<h2 id="python"><a class="header" href="#python">Python</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/mistral3.py">here</a>.</p>
-<p>This example demonstrates loading and sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
-
-runner = Runner(
-    which=Which.MultimodalPlain(
-        model_id="mistralai/Mistral-Small-3.1-24B-Instruct-2503",
-        arch=MultimodalArchitecture.Mistral3,
-    ),
-    in_situ_quant="4"
-)
-
-res = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="default",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": "What is this?",
-                    },
-                ],
-            }
-        ],
-        max_tokens=256,
-        presence_penalty=1.0,
-        top_p=0.1,
-        temperature=0.1,
-    )
-)
-print(res.choices[0].message.content)
-print(res.usage)
-
-</code></pre>
-<ul>
-<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
-<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
-</ul>
 
                     </main>
 

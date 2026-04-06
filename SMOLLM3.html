@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,8 +181,8 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="smollm3-huggingfacetbsmollm3-3b"><a class="header" href="#smollm3-huggingfacetbsmollm3-3b">SmolLM3: <a href="https://huggingface.co/HuggingFaceTB/SmolLM3-3B"><code>HuggingFaceTB/SmolLM3-3B</code></a></a></h1>
-<p>SmolLM3 is a 3B parameter long-context hybrid reasoning language model. It supports 6 languages, advanced reasoning and long context. SmolLM3 is a fully open model that offers strong performance at the 3B–4B scale.</p>
-<p><strong>Default, easiest:</strong></p>
+<p>SmolLM3 is a 3B parameter long-context hybrid reasoning language model. It supports 6 languages, advanced reasoning and long context. SmolLM3 is a fully open model that offers strong performance at the 3B-4B scale.</p>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
 <pre><code class="language-bash">mistralrs run --isq 8 -m HuggingFaceTB/SmolLM3-3B
 </code></pre>
 <p><strong>UQFF prequantized:</strong></p>
@@ -200,29 +200,18 @@
 <p>You can find a more detailed example demonstrating enabling/disabling thinking <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/smollm3.py">here</a>.</p>
 <pre><code class="language-bash">mistralrs serve --isq 8 -p 1234 -m HuggingFaceTB/SmolLM3-3B
 </code></pre>
-<pre><code class="language-py">import openai
+<pre><code class="language-py">from openai import OpenAI
 
-messages = []
-prompt = input("Enter system prompt &gt;&gt;&gt; ")
-if len(prompt) &gt; 0:
-    messages.append({"role": "system", "content": prompt})
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
-
-while True:
-    prompt = input("&gt;&gt;&gt; ")
-    messages.append({"role": "user", "content": prompt})
-    completion = client.chat.completions.create(
-        model="default",
-        messages=messages,
-        max_tokens=256,
-        frequency_penalty=1.0,
-        top_p=0.1,
-        temperature=0,
-        # enable_thinking=False,
-    )
-    resp = completion.choices[0].message.content
-    print(resp)
-    messages.append({"role": "assistant", "content": resp})
+completion = client.chat.completions.create(
+    model="default",
+    messages=[
+        {"role": "user", "content": "Tell me a story about the Rust type system."}
+    ],
+    max_tokens=256,
+)
+print(completion.choices[0].message.content)
 </code></pre>
 <h2 id="python-sdk"><a class="header" href="#python-sdk">Python SDK</a></h2>
 <p>You can find a more detailed example demonstrating enabling/disabling thinking <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/smollm3.py">here</a>.</p>
@@ -269,22 +258,10 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     let messages = TextMessages::new()
         // .enable_thinking(false)
-        .add_message(
-            TextMessageRole::System,
-            "You are an AI agent with a specialty in programming.",
-        )
-        .add_message(
-            TextMessageRole::User,
-            "Hello! How are you? Please write generic binary search function in Rust.",
-        );
+        .add_message(TextMessageRole::User, "Hello!");
 
     let response = model.send_chat_request(messages).await?;
-
     println!("{}", response.choices[0].message.content.as_ref().unwrap());
-    dbg!(
-        response.usage.avg_prompt_tok_per_sec,
-        response.usage.avg_compl_tok_per_sec
-    );
 
     Ok(())
 }</code></pre>

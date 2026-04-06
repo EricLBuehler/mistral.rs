@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,32 +180,26 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="gemma-2-model"><a class="header" href="#gemma-2-model">Gemma 2 Model</a></h1>
-<p><strong><a href="https://huggingface.co/collections/google/gemma-2-release-667d6600fd5220e7b967f315">See the Gemma 2 model Collection</a></strong></p>
-<p>The Gemma 2 models are a family of text-to-text decoder-only LLMs. As such, the methods to use them are the same as with all other text-to-text LLMs supported by mistral.rs.</p>
+                        <h1 id="gemma-2-collection"><a class="header" href="#gemma-2-collection">Gemma 2: <a href="https://huggingface.co/collections/google/gemma-2-release-667d6600fd5220e7b967f315"><code>collection</code></a></a></h1>
+<p>The Gemma 2 models are a family of text-to-text decoder-only LLMs.</p>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre><code class="language-bash">mistralrs run --isq 4 -m google/gemma-2-9b-it
+</code></pre>
 <h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
-<pre><code class="language-py">import openai
+<pre><code class="language-bash">mistralrs serve --isq 4 -p 1234 -m google/gemma-2-9b-it
+</code></pre>
+<pre><code class="language-py">from openai import OpenAI
 
-messages = []
-prompt = input("Enter system prompt &gt;&gt;&gt; ")
-if len(prompt) &gt; 0:
-    messages.append({"role": "system", "content": prompt})
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
-
-while True:
-    prompt = input("&gt;&gt;&gt; ")
-    messages.append({"role": "user", "content": prompt})
-    completion = client.chat.completions.create(
-        model="default",
-        messages=messages,
-        max_tokens=256,
-        frequency_penalty=1.0,
-        top_p=0.1,
-        temperature=0,
-    )
-    resp = completion.choices[0].message.content
-    print(resp)
-    messages.append({"role": "assistant", "content": resp})
+completion = client.chat.completions.create(
+    model="default",
+    messages=[
+        {"role": "user", "content": "Tell me a story about the Rust type system."}
+    ],
+    max_tokens=256,
+)
+print(completion.choices[0].message.content)
 </code></pre>
 <h2 id="python-sdk"><a class="header" href="#python-sdk">Python SDK</a></h2>
 <pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
@@ -232,6 +226,29 @@ res = runner.send_chat_completion_request(
 print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
+<h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
+<pre class="playground"><code class="language-rust">use anyhow::Result;
+use mistralrs::{
+    IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
+};
+
+#[tokio::main]
+async fn main() -&gt; Result&lt;()&gt; {
+    let model = TextModelBuilder::new("google/gemma-2-9b-it")
+        .with_isq(IsqType::Q4K)
+        .with_logging()
+        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+        .build()
+        .await?;
+
+    let messages = TextMessages::new()
+        .add_message(TextMessageRole::User, "Hello!");
+
+    let response = model.send_chat_request(messages).await?;
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+
+    Ok(())
+}</code></pre>
 
                     </main>
 

@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -187,80 +187,20 @@
 <p class="blockquote-tag-title"><svg viewbox="0 0 16 16" width="18" height="18"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"></path></svg>Note</p>
 <p>Only the vision portion of this model has been implemented. No audio features are supported yet.</p>
 </blockquote>
-<p>The Python and HTTP APIs support sending images as:</p>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre><code class="language-bash">mistralrs run -m openbmb/MiniCPM-o-2_6 --isq 4 --image photo.jpg -i "Describe this image"
+</code></pre>
+<h2 id="input-formats"><a class="header" href="#input-formats">Input Formats</a></h2>
+<p>The Python and HTTP APIs support sending inputs as:</p>
 <ul>
-<li>URL</li>
-<li>Path to a local image</li>
-<li><a href="https://en.wikipedia.org/wiki/Base64">Base64</a> encoded string</li>
+<li><strong>Images</strong>: URL, path to a local file, or base64 encoded string (via <code>image_url</code>)</li>
 </ul>
-<p>The Rust SDK takes an image from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
-<h2 id="toc"><a class="header" href="#toc">ToC</a></h2>
-<ul>
-<li><a href="#minicpm-o-26-model-openbmbminicpm-o-2_6">MiniCPM-O 2.6 Model: <code>openbmb/MiniCPM-o-2_6</code></a>
-<ul>
-<li><a href="#toc">ToC</a></li>
-<li><a href="#interactive-mode">Interactive mode</a></li>
-<li><a href="#http-server">HTTP server</a></li>
-<li><a href="#rust">Rust</a></li>
-<li><a href="#python">Python</a></li>
-</ul>
-</li>
-</ul>
-<h2 id="interactive-mode"><a class="header" href="#interactive-mode">Interactive mode</a></h2>
-<p>Mistral.rs supports interactive mode for multimodal models! It is an easy way to interact with the model.</p>
-<ol>
-<li>Start up interactive mode with the MiniCPM-O 2.6 Model model</li>
-</ol>
-<pre><code>mistralrs run multimodal --isq 4 -m openbmb/MiniCPM-o-2_6
-</code></pre>
-<ol start="2">
-<li>Say hello!</li>
-</ol>
-<pre><code>&gt; Hello!
-How can I assist you today?
-</code></pre>
-<ol start="3">
-<li>Pass the model an image and ask a question.</li>
-</ol>
-<pre><code>&gt; Hello!
-How can I assist you today?
-&gt; \image https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Rosa_Precious_platinum.jpg/220px-Rosa_Precious_platinum.jpg What is this image?
-The image shows a close-up view of a rose flower with dew drops on its petals. The rose is in full bloom, with its petals unfolding and displaying vibrant pink coloration. The dew drops on the petals create a delicate, glistening effect, adding to the overall visual appeal of the flower. The background is blurred, focusing attention on the intricate details of the rose.
-</code></pre>
-<h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/minicpmo_2_6.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<hr>
-<p><strong>Image:</strong>
-<img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width="1000" height="666"></p>
-<h6><a href="https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
-
-<p><strong>Prompt:</strong></p>
-<pre><code>What is shown in this image? Write a detailed response analyzing the scene.
-</code></pre>
-<p><strong>Output:</strong></p>
-<pre><code>The image shows Mount Washington, the highest peak in the Northeastern United States, located in the White Mountains of New Hampshire. The scene captures the mountain's rugged terrain and varied landscape features. 
-
-In the foreground, there are dense forests of coniferous trees, primarily spruce and fir, which are typical of the region's boreal forest ecosystem. The trees are densely packed, indicating a high level of vegetation cover and biodiversity.
-
-Moving upwards, the image reveals rocky outcroppings and boulders scattered across the slope, indicating the mountain's geological history of glacial activity. The presence of these rocks suggests that the area was once covered by ice sheets during the last ice age, which carved out the landscape and left behind a mix of boulders and talus slopes.
-
-In the mid-ground, the image shows a series of ridges and valleys, which are characteristic of the mountain's glacially sculpted terrain. These features were formed by the movement of ice sheets that carved out U-shaped valleys and left behind a series of rounded hills and ridges.
-
-At the summit, there is a prominent observation tower or weather station, which is likely used for scientific research and weather monitoring. The structure is situated at an elevation of approximately 6,288 feet (1,917 meters) above sea level, making it one of the highest points in the region.
-
-The image also captures the atmospheric conditions on Mount Washington, with clouds and mist visible in the background. The mountain's unique location in a region where cold Arctic air meets warm moist air from the Gulf Stream creates a unique microclimate known as the "Home Rule," where extreme weather conditions can occur.
-
-Overall, the image showcases the diverse geological and ecological features of Mount Washington, highlighting its role as a significant natural landmark in the Northeastern United States.
-</code></pre>
-<hr>
+<p>The Rust SDK takes images from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
+<h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve multimodal -p 1234 --isq 4 -m openbmb/MiniCPM-o-2_6
+<pre><code class="language-bash">mistralrs serve -m openbmb/MiniCPM-o-2_6 --isq 4 -p 1234
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -283,26 +223,63 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "What is shown in this image? Write a detailed response analyzing the scene.",
+                    "text": "What is this?",
                 },
             ],
         },
     ],
     max_tokens=256,
-    frequency_penalty=1.0,
-    top_p=0.1,
-    temperature=0,
 )
-resp = completion.choices[0].message.content
-print(resp)
-
+print(completion.choices[0].message.content)
 </code></pre>
 <ul>
 <li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">image via base64 here</a>.</li>
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
-<hr>
-<h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
+<h2 id="python-sdk"><a class="header" href="#python-sdk">Python SDK</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/minicpmo_2_6.py">here</a>.</p>
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+
+MODEL_ID = "openbmb/MiniCPM-o-2_6"
+
+runner = Runner(
+    which=Which.MultimodalPlain(
+        model_id=MODEL_ID,
+        arch=MultimodalArchitecture.MiniCpmO,
+    ),
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "What is this?",
+                    },
+                ],
+            }
+        ],
+        max_tokens=256,
+    )
+)
+print(res.choices[0].message.content)
+print(res.usage)
+</code></pre>
+<ul>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
+</ul>
+<h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
@@ -342,57 +319,6 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
-<hr>
-<h2 id="python"><a class="header" href="#python">Python</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/minicpmo_2_6.py">here</a>.</p>
-<p>This example demonstrates loading and sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
-
-MODEL_ID = "openbmb/MiniCPM-o-2_6"
-
-runner = Runner(
-    which=Which.MultimodalPlain(
-        model_id=MODEL_ID,
-        arch=MultimodalArchitecture.MiniCpmO,
-    ),
-)
-
-res = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="default",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": "What is shown in this image? Write a detailed response analyzing the scene.",
-                    },
-                ],
-            }
-        ],
-        max_tokens=256,
-        presence_penalty=1.0,
-        top_p=0.1,
-        temperature=0.1,
-    )
-)
-print(res.choices[0].message.content)
-print(res.usage)
-</code></pre>
-<ul>
-<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
-<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
-</ul>
 
                     </main>
 

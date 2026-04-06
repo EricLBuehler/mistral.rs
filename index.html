@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,138 +181,65 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <p><img src="banner.png" alt="mistral.rs"></p>
-<h2 id="quick-links"><a class="header" href="#quick-links">Quick Links</a></h2>
+<p><strong>Fast, flexible LLM inference.</strong> Run 40+ model families (text, vision, video, audio, speech, image generation, and embeddings) with automatic hardware optimization, OpenAI-compatible APIs, and built-in agentic features.</p>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre><code class="language-bash"># Install (Linux/macOS, auto-detects CUDA, Metal, MKL)
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+
+# Install (Windows PowerShell)
+irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
+
+# Run a model interactively
+mistralrs run --isq 4 -m Qwen/Qwen3-4B
+
+# Or serve it as an OpenAI-compatible API with a web UI
+mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
+</code></pre>
+<blockquote>
+<p><strong>New to mistral.rs?</strong> Follow the <a href="GETTING_STARTED.html">Getting Started tutorial</a> for a guided walkthrough.</p>
+</blockquote>
+<h2 id="choose-your-path"><a class="header" href="#choose-your-path">Choose Your Path</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>I want to…</th><th>Go to…</th></tr>
+<tr><th>I want to…</th><th>Start here</th></tr>
 </thead>
 <tbody>
-<tr><td>Install mistral.rs</td><td><a href="INSTALLATION.html">Installation Guide</a></td></tr>
-<tr><td>Understand cargo features</td><td><a href="CARGO_FEATURES.html">Cargo Features</a></td></tr>
-<tr><td>Run a model</td><td><a href="CLI.html">CLI Reference</a></td></tr>
-<tr><td>Use the HTTP API</td><td><a href="HTTP.html">HTTP Server</a></td></tr>
-<tr><td>Create &amp; publish UQFF models</td><td><a href="UQFF.html#creating-a-uqff-model">UQFF Guide</a></td></tr>
-<tr><td>Fix an error</td><td><a href="TROUBLESHOOTING.html">Troubleshooting</a></td></tr>
-<tr><td>Configure environment</td><td><a href="CONFIGURATION.html">Configuration</a></td></tr>
-<tr><td>Check model support</td><td><a href="SUPPORTED_MODELS.html">Supported Models</a></td></tr>
-<tr><td>Build agents</td><td><a href="AGENTS.html">Agentic Features Guide</a></td></tr>
+<tr><td>Follow a step-by-step tutorial</td><td><a href="GETTING_STARTED.html">Getting Started</a></td></tr>
+<tr><td>Run a model from the command line</td><td><a href="CLI.html">CLI Reference</a></td></tr>
+<tr><td>Serve models over HTTP</td><td><a href="HTTP.html">HTTP Server</a></td></tr>
+<tr><td>Build a Python application</td><td><a href="PYTHON_SDK.html">Python SDK</a></td></tr>
+<tr><td>Build a Rust application</td><td><a href="RUST_SDK.html">Rust SDK</a></td></tr>
+<tr><td>Optimize performance and memory</td><td><a href="PERFORMANCE.html">Performance Guide</a></td></tr>
+<tr><td>Choose a quantization method</td><td><a href="QUANTS.html">Quantization Overview</a></td></tr>
+<tr><td>Use agentic features (tools, search, MCP)</td><td><a href="AGENTS.html">Agentic Features Guide</a></td></tr>
+<tr><td>Find a specific model</td><td><a href="SUPPORTED_MODELS.html">Supported Models</a></td></tr>
+<tr><td>Troubleshoot an issue</td><td><a href="TROUBLESHOOTING.html">Troubleshooting</a></td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="getting-started"><a class="header" href="#getting-started">Getting Started</a></h2>
+<h2 id="highlights"><a class="header" href="#highlights">Highlights</a></h2>
 <ul>
-<li><a href="INSTALLATION.html">Installation Guide</a> - Install mistral.rs on your system</li>
-<li><a href="CARGO_FEATURES.html">Cargo Features</a> - Complete cargo features reference</li>
-<li><a href="CLI.html">CLI Reference</a> - Complete CLI command reference</li>
-<li><a href="CLI_CONFIG.html">CLI TOML Configuration</a> - Configure via TOML files</li>
-<li><a href="UQFF.html#creating-a-uqff-model">Create &amp; Publish UQFF Models</a> - Quantize models and upload to Hugging Face</li>
-<li><a href="TROUBLESHOOTING.html">Troubleshooting</a> - Common issues and solutions</li>
+<li><strong>Zero config</strong>: <code>mistralrs run -m &lt;model&gt;</code> auto-detects architecture, chat template, and hardware</li>
+<li><strong>Quantization control</strong>: ISQ, GGUF, GPTQ, AWQ, HQQ, AFQ, FP8, MXFP4, or just <code>--isq 4</code></li>
+<li><strong>Auto-tuning</strong>: <code>mistralrs tune</code> benchmarks your hardware and recommends optimal settings</li>
+<li><strong>Agentic</strong>: Server-side tool calling loop, web search, MCP client, HTTP tool dispatch</li>
+<li><strong>Multi-GPU</strong>: Automatic tensor parallelism via NCCL, or cross-machine via Ring backend</li>
+<li><strong>Web UI</strong>: <code>--ui</code> flag for instant browser-based chat</li>
 </ul>
-<h2 id="sdks--apis"><a class="header" href="#sdks--apis">SDKs &amp; APIs</a></h2>
+<h2 id="community"><a class="header" href="#community">Community</a></h2>
 <ul>
-<li><a href="PYTHON_SDK.html">Python SDK</a> - Python package documentation</li>
-<li><a href="PYTHON_INSTALLATION.html">Python Installation</a> - Python SDK installation guide</li>
-<li><a href="https://docs.rs/mistralrs/">Rust SDK</a> - Rust crate documentation</li>
-<li><a href="HTTP.html">HTTP Server</a> - OpenAI-compatible HTTP API</li>
-<li><a href="OPENRESPONSES.html">OpenResponses API</a> - Stateful conversation API</li>
+<li><a href="https://discord.gg/SZrecqK8qw">Discord</a></li>
+<li><a href="https://github.com/EricLBuehler/mistral.rs/issues">GitHub Issues</a></li>
+<li><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/README.md#contributing">Contributing</a></li>
 </ul>
-<h2 id="models"><a class="header" href="#models">Models</a></h2>
-<h3 id="by-category"><a class="header" href="#by-category">By Category</a></h3>
-<ul>
-<li><a href="SUPPORTED_MODELS.html">Supported Models</a> - Complete model list and compatibility</li>
-<li><a href="MULTIMODAL_MODELS.html">Multimodal Models</a> - Multimodal model overview</li>
-<li><a href="IMAGEGEN_MODELS.html">Image Generation</a> - Diffusion models</li>
-<li><a href="EMBEDDINGS.html">Embeddings</a> - Embedding model overview</li>
-</ul>
-<h3 id="model-specific-guides"><a class="header" href="#model-specific-guides">Model-Specific Guides</a></h3>
-<details>
-<summary>Click to expand model guides</summary>
-<p><strong>Text Models:</strong></p>
-<ul>
-<li><a href="DEEPSEEKV2.html">DeepSeek V2</a> | <a href="DEEPSEEKV3.html">DeepSeek V3</a></li>
-<li><a href="GEMMA2.html">Gemma 2</a> | <a href="GEMMA3.html">Gemma 3</a> | <a href="GEMMA3N.html">Gemma 3n</a> | <a href="GEMMA4.html">Gemma 4</a></li>
-<li><a href="GLM4.html">GLM4</a> | <a href="GLM4_MOE_LITE.html">GLM-4.7-Flash</a> | <a href="GLM4_MOE.html">GLM-4.7</a></li>
-<li><a href="QWEN3.html">Qwen 3</a> | <a href="QWEN3NEXT.html">Qwen 3 Next</a> | <a href="SMOLLM3.html">SmolLM3</a> | <a href="GPT_OSS.html">GPT-OSS</a></li>
-</ul>
-<p><strong>Multimodal Models:</strong></p>
-<ul>
-<li><a href="IDEFICS2.html">Idefics 2</a> | <a href="IDEFICS3.html">Idefics 3</a></li>
-<li><a href="LLaVA.html">LLaVA</a> | <a href="VLLAMA.html">Llama 3.2 Vision</a> | <a href="LLAMA4.html">Llama 4</a></li>
-<li><a href="MINICPMO_2_6.html">MiniCPM-O 2.6</a> | <a href="MISTRAL3.html">Mistral 3</a></li>
-<li><a href="PHI3.5MOE.html">Phi 3.5 MoE</a> | <a href="PHI3V.html">Phi 3.5 Vision</a> | <a href="PHI4MM.html">Phi 4 Multimodal</a></li>
-<li><a href="QWEN2VL.html">Qwen 2-VL</a> | <a href="QWEN3VL.html">Qwen 3 VL</a> | <a href="QWEN3_5.html">Qwen 3.5</a></li>
-</ul>
-<p><strong>Other Models:</strong></p>
-<ul>
-<li><a href="FLUX.html">FLUX (Diffusion)</a> | <a href="DIA.html">Dia (Speech)</a></li>
-<li><a href="EMBEDDINGGEMMA.html">EmbeddingGemma</a> | <a href="QWEN3_EMBEDDING.html">Qwen3 Embedding</a></li>
-</ul>
-</details>
-<h2 id="quantization--optimization"><a class="header" href="#quantization--optimization">Quantization &amp; Optimization</a></h2>
-<ul>
-<li><a href="QUANTS.html">Quantization Overview</a> - All supported quantization methods</li>
-<li><a href="ISQ.html">ISQ (In-Situ Quantization)</a> - Quantize models at load time</li>
-<li><a href="UQFF.html">UQFF Format</a> - Pre-quantized model format | <a href="UQFF/LAYOUT.html">Layout</a></li>
-<li><a href="TOPOLOGY.html">Topology</a> - Per-layer quantization and device mapping</li>
-<li><a href="IMATRIX.html">Importance Matrix</a> - Improve ISQ accuracy</li>
-</ul>
-<h2 id="adapters--model-customization"><a class="header" href="#adapters--model-customization">Adapters &amp; Model Customization</a></h2>
-<ul>
-<li><a href="ADAPTER_MODELS.html">Adapter Models</a> - LoRA and X-LoRA support</li>
-<li><a href="LORA_XLORA.html">LoRA/X-LoRA Examples</a></li>
-<li><a href="NON_GRANULAR.html">Non-Granular Scalings</a> - X-LoRA optimization</li>
-<li><a href="ANYMOE.html">AnyMoE</a> - Create MoE models from dense models</li>
-<li><a href="MATFORMER.html">MatFormer</a> - Dynamic model sizing</li>
-</ul>
-<h2 id="performance--hardware"><a class="header" href="#performance--hardware">Performance &amp; Hardware</a></h2>
-<ul>
-<li><a href="DEVICE_MAPPING.html">Device Mapping</a> - Multi-GPU and CPU offloading</li>
-<li><a href="PAGED_ATTENTION.html">PagedAttention</a> - Efficient KV cache management</li>
-<li><a href="SPECULATIVE_DECODING.html">Speculative Decoding</a> - Accelerate generation with draft models</li>
-<li><a href="FLASH_ATTENTION.html">Flash Attention</a> - Accelerated attention</li>
-<li><a href="MLA.html">MLA</a> - Multi-head Latent Attention</li>
-<li><a href="DISTRIBUTED/DISTRIBUTED.html">Distributed Inference</a>
-<ul>
-<li><a href="DISTRIBUTED/NCCL.html">NCCL Backend</a></li>
-<li><a href="DISTRIBUTED/RING.html">Ring Backend</a></li>
-</ul>
-</li>
-</ul>
-<h2 id="features"><a class="header" href="#features">Features</a></h2>
-<ul>
-<li><a href="AGENTS.html">Agentic Features Guide</a> - Web search, tool callbacks, agents, MCP, tool dispatch</li>
-<li><a href="TOOL_CALLING.html">Tool Calling</a> - Function calling support</li>
-<li><a href="WEB_SEARCH.html">Web Search</a> - Integrated web search</li>
-<li><a href="CHAT_TOK.html">Chat Templates</a> - Template customization</li>
-<li><a href="SAMPLING.html">Sampling Options</a> - Generation parameters</li>
-<li><a href="TOML_SELECTOR.html">TOML Selector</a> - Model selection syntax</li>
-<li><a href="multi_model/overview.html">Multi-Model Support</a> - Load multiple models</li>
-</ul>
-<h2 id="mcp-model-context-protocol"><a class="header" href="#mcp-model-context-protocol">MCP (Model Context Protocol)</a></h2>
-<ul>
-<li><a href="MCP/client.html">MCP Client</a> - Connect to external tools</li>
-<li><a href="MCP/server.html">MCP Server</a> - Serve models over MCP</li>
-<li><a href="MCP/configuration.html">MCP Configuration</a></li>
-<li><a href="MCP/transports.html">MCP Transports</a></li>
-<li><a href="MCP/advanced.html">MCP Advanced Usage</a></li>
-</ul>
-<h2 id="reference"><a class="header" href="#reference">Reference</a></h2>
-<ul>
-<li><a href="CONFIGURATION.html">Configuration</a> - Environment variables and server defaults</li>
-<li><a href="ENGINE.html">Engine Internals</a> - Engine behaviors and recovery</li>
-<li><a href="SUPPORTED_MODELS.html">Supported Models</a> - Complete compatibility tables</li>
-</ul>
-<hr>
-<h2 id="contributing"><a class="header" href="#contributing">Contributing</a></h2>
-<p>See the main <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/README.md#contributing">README</a> for contribution guidelines.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
 
-                            <a rel="next prefetch" href="INSTALLATION.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="GETTING_STARTED.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -323,7 +250,7 @@
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
 
-                    <a rel="next prefetch" href="INSTALLATION.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="GETTING_STARTED.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,40 +182,63 @@
                     <main>
                         <h1 id="gemma-4-model-family-collection"><a class="header" href="#gemma-4-model-family-collection">Gemma 4 Model Family: <a href="https://huggingface.co/collections/google/gemma-4"><code>Collection</code></a></a></h1>
 <p>Gemma 4 is a multimodal model that supports text, vision (image), video, and audio input with text output. It builds on the Gemma family with full multimodal capabilities across all four input modalities.</p>
-<p>We support the Gemma 4 Model in the Rust, Python, and HTTP APIs, including ISQ for increased performance.</p>
 <p>Pre-quantized UQFF models are available in the <a href="https://huggingface.co/collections/mistralrs-community/gemma-4">mistralrs-community Gemma 4 collection</a>.</p>
 <blockquote>
 <p><strong>Video support</strong>: Non-GIF video formats (mp4, avi, mov, etc.) require FFmpeg to be installed. See <a href="VIDEO.html">VIDEO.md</a> for installation instructions and details.</p>
 </blockquote>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre><code class="language-bash">mistralrs run -m google/gemma-4-E4B-it --isq 8 --image photo.jpg -i "Describe this image"
+</code></pre>
+<p>With a video:</p>
+<pre><code class="language-bash">mistralrs run -m google/gemma-4-E4B-it --isq 8 --video video.mp4 -i "Describe this video in detail."
+</code></pre>
+<p>With audio:</p>
+<pre><code class="language-bash">mistralrs run -m google/gemma-4-E4B-it --isq 8 --audio audio.mp3 -i "Transcribe this fully."
+</code></pre>
+<h2 id="input-formats"><a class="header" href="#input-formats">Input Formats</a></h2>
 <p>The Python and HTTP APIs support sending inputs as:</p>
 <ul>
-<li><strong>Images</strong>: URL, path to a local file, or <a href="https://en.wikipedia.org/wiki/Base64">Base64</a> encoded string (via <code>image_url</code>)</li>
+<li><strong>Images</strong>: URL, path to a local file, or base64 encoded string (via <code>image_url</code>)</li>
 <li><strong>Videos</strong>: URL or path to a local file (via <code>video_url</code>)</li>
 <li><strong>Audio</strong>: URL or path to a local file (via <code>audio_url</code>)</li>
 </ul>
 <p>The Rust SDK takes images from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate, audio from <code>AudioInput</code>, and video from <code>VideoInput</code>.</p>
-<h2 id="running"><a class="header" href="#running">Running</a></h2>
-<p>With an image:</p>
-<pre><code>mistralrs run -m mistralrs-community/gemma-4-E2B-it-UQFF --from-uqff 8 --image image.png -i "Describe this image in detail."
-</code></pre>
-<p>With a video:</p>
-<pre><code>mistralrs run -m mistralrs-community/gemma-4-E2B-it-UQFF --from-uqff 8 --video video.mp4 -i "Describe this video in detail."
-</code></pre>
-<p>With audio:</p>
-<pre><code>mistralrs run -m mistralrs-community/gemma-4-E2B-it-UQFF --from-uqff 8 --audio audio.mp3 -i "Transcribe this fully."
-</code></pre>
-<h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
-<h3 id="http-server"><a class="header" href="#http-server">HTTP server</a></h3>
-<p>We support an OpenAI compatible HTTP API for multimodal models. The examples below demonstrate sending chat completion requests with different input types.</p>
-<hr>
+<h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve -m google/gemma-4-E4B-it --isq 8
+<pre><code class="language-bash">mistralrs serve -m google/gemma-4-E4B-it --isq 8 -p 1234
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
 </ol>
+<pre><code class="language-py">from openai import OpenAI
+
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
+
+completion = client.chat.completions.create(
+    model="default",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "What is this?",
+                },
+            ],
+        },
+    ],
+    max_tokens=256,
+)
+print(completion.choices[0].message.content)
+</code></pre>
 <p><strong>Video example:</strong></p>
 <pre><code class="language-py">from openai import OpenAI
 
@@ -241,37 +264,6 @@ completion = client.chat.completions.create(
         }
     ],
     max_tokens=256,
-)
-print(completion.choices[0].message.content)
-</code></pre>
-<p><strong>Image example:</strong></p>
-<pre><code class="language-py">from openai import OpenAI
-
-client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
-
-completion = client.chat.completions.create(
-    model="default",
-    messages=[
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
-                    },
-                },
-                {
-                    "type": "text",
-                    "text": "What is this?",
-                },
-            ],
-        },
-    ],
-    max_tokens=256,
-    frequency_penalty=1.0,
-    top_p=0.1,
-    temperature=0,
 )
 print(completion.choices[0].message.content)
 </code></pre>
@@ -319,8 +311,7 @@ print(completion.choices[0].message.content)
 <li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">image via base64 here</a>.</li>
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
-<hr>
-<h3 id="python"><a class="header" href="#python">Python</a></h3>
+<h2 id="python-sdk"><a class="header" href="#python-sdk">Python SDK</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gemma4.py">here</a>.</p>
 <pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
@@ -352,16 +343,12 @@ res = runner.send_chat_completion_request(
             }
         ],
         max_tokens=256,
-        presence_penalty=1.0,
-        top_p=0.1,
-        temperature=0.1,
     )
 )
 print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
-<hr>
-<h3 id="rust"><a class="header" href="#rust">Rust</a></h3>
+<h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Gemma 4 model with a video input. Video decoding uses the <code>parse_video_url</code> helper from <code>mistralrs-server-core</code>, which handles FFmpeg decoding and frame sampling automatically.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;

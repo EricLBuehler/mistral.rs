@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,11 +180,13 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="flux1-model-black-forest-labsflux1-schnell"><a class="header" href="#flux1-model-black-forest-labsflux1-schnell">FLUX.1 Model: <a href="https://huggingface.co/black-forest-labs/FLUX.1-schnell"><code>black-forest-labs/FLUX.1-schnell</code></a></a></h1>
+                        <h1 id="flux1-black-forest-labsflux1-schnell"><a class="header" href="#flux1-black-forest-labsflux1-schnell">FLUX.1: <a href="https://huggingface.co/black-forest-labs/FLUX.1-schnell"><code>black-forest-labs/FLUX.1-schnell</code></a></a></h1>
 <p>The FLUX model is a 12 billion parameter rectified flow transformer capable of generating images from text descriptions.</p>
 <p>We support both the <code>-schnell</code> and <code>-dev</code> versions of the model.</p>
-<img src="https://github.com/user-attachments/assets/82bf5009-e3e9-402b-acf9-c48a52c7721b" width="400" height="267">
-<h2 id="memory-usage"><a class="header" href="#memory-usage">Memory usage</a></h2>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre><code class="language-bash">mistralrs run diffusion -m black-forest-labs/FLUX.1-schnell -a flux
+</code></pre>
+<h2 id="memory-usage"><a class="header" href="#memory-usage">Memory Usage</a></h2>
 <p>The FLUX model itself is 12 billion parameters (~24GB), and the T5 XXL encoder model it uses requires ~9GB. We support loading the models fully onto the GPU, which allows much faster inference. If you do not have enough memory, try the offloaded (<code>-offloaded</code> or <code>-Offloaded</code>) model types. These will load the model on the CPU but perform computations on the GPU.</p>
 <div class="table-wrapper">
 <table>
@@ -197,11 +199,11 @@
 </tbody>
 </table>
 </div>
-<h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
-<p>The OpenAI HTTP server provides a compatible way to easily use this implementation. As per the specification, output images can be returned as local paths to images or be encoded to base64.</p>
+<h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
+<p>Start the server:</p>
 <pre><code>mistralrs serve diffusion -p 1234 -m black-forest-labs/FLUX.1-schnell -a flux
 </code></pre>
-<p>After this, you can send requests via the HTTP server:</p>
+<p>Send a request:</p>
 <pre><code class="language-py">from openai import OpenAI
 
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
@@ -213,7 +215,7 @@ result = client.images.generate(
 )
 print(result.data[0].url)
 </code></pre>
-<h2 id="rust-example"><a class="header" href="#rust-example">Rust example</a></h2>
+<h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
 <pre class="playground"><code class="language-rust">use std::time::Instant;
 use anyhow::Result;
 use mistralrs::{DiffusionGenerationParams, DiffusionLoaderType, DiffusionModelBuilder, ImageGenerationResponseFormat};
@@ -247,9 +249,8 @@ async fn main() -&gt; Result&lt;()&gt; {
     );
 
     Ok(())
-}
-</code></pre>
-<h2 id="python-example"><a class="header" href="#python-example">Python example</a></h2>
+}</code></pre>
+<h2 id="python-sdk"><a class="header" href="#python-sdk">Python SDK</a></h2>
 <pre><code class="language-py">from mistralrs import (
     Runner,
     Which,

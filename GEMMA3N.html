@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,28 +182,24 @@
                     <main>
                         <h1 id="gemma-3n-model-googlegemma-3n-e4b-it"><a class="header" href="#gemma-3n-model-googlegemma-3n-e4b-it">Gemma 3n Model: <a href="https://huggingface.co/google/gemma-3n-E4B-it"><code>google/gemma-3n-E4B-it</code></a></a></h1>
 <p>Gemma 3n models are designed for efficient execution on low-resource devices. They are capable of multimodal input, handling text, image, video, and audio input, and generating text outputs. These models support over 140 spoken languages.</p>
-<p>The Gemma 3n Model has support in the Rust, Python, and HTTP APIs. Additionally, the Gemma 3n Model supports ISQ for increased performance.</p>
-<ul>
-<li>
-<p><strong>Full multimodal support</strong>: mistral.rs supports text, audio, and vision inputs to Gemma 3n!</p>
-</li>
-<li>
-<p><strong>🪆 mistral.rs supports dynamically resizing the Gemma 3n model with that MatFormer architecture!</strong></p>
-<p>Gemma 3n implements the MatFormer architecture, which allows one model to be resized dynamically and tune performance on resource-constrained systems.</p>
-<p>Mistral.rs supports this feature!</p>
-<p>You can access it using the <code>matformer_config_path</code> (<a href="https://github.com/EricLBuehler/mistral.rs/blob/master/matformer_configs/gemma3n.csv">example config</a>) and <code>matformer_slice_name</code> arguments throughout the APIs.</p>
-</li>
-<li>
-<p><strong>Prequantized UQFF models:</strong></p>
+<p>Prequantized UQFF models:</p>
 <ul>
 <li><a href="https://huggingface.co/EricB/gemma-3n-E4B-it-UQFF">Gemma 3n E4B</a></li>
 <li><a href="https://huggingface.co/EricB/gemma-3n-E2B-it-UQFF">Gemma 3n E2B</a></li>
 </ul>
-</li>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre><code class="language-bash">mistralrs run -m google/gemma-3n-E4B-it --isq 4 --image photo.jpg -i "Describe this image"
+</code></pre>
+<h2 id="input-formats"><a class="header" href="#input-formats">Input Formats</a></h2>
+<p>The Python and HTTP APIs support sending inputs as:</p>
+<ul>
+<li><strong>Images</strong>: URL, path to a local file, or base64 encoded string (via <code>image_url</code>)</li>
+<li><strong>Audio</strong>: URL or path to a local file (via <code>audio_url</code>)</li>
 </ul>
-<h2 id="using-matformer-with-gemma-3n"><a class="header" href="#using-matformer-with-gemma-3n">Using MatFormer with Gemma 3n</a></h2>
-<p>MatFormer allows you to dynamically adjust the model size based on your resource constraints. The Gemma 3n model comes with several pre-configured slices that offer different performance/resource trade-offs.</p>
-<p>You can read more about MatFormer in mistral.rs <a href="MATFORMER.html">here</a>.</p>
+<p>The Rust SDK takes images from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate and audio from <code>AudioInput</code>.</p>
+<h2 id="matformer-dynamic-model-resizing"><a class="header" href="#matformer-dynamic-model-resizing">MatFormer dynamic model resizing</a></h2>
+<p>Gemma 3n implements the MatFormer architecture, which allows one model to be resized dynamically and tune performance on resource-constrained systems.</p>
+<p>You can access it using the <code>matformer_config_path</code> (<a href="https://github.com/EricLBuehler/mistral.rs/blob/master/matformer_configs/gemma3n.csv">example config</a>) and <code>matformer_slice_name</code> arguments throughout the APIs. You can read more about MatFormer in mistral.rs <a href="MATFORMER.html">here</a>.</p>
 <h3 id="available-slices"><a class="header" href="#available-slices">Available Slices</a></h3>
 <p>The default configuration file (<a href="https://github.com/EricLBuehler/mistral.rs/blob/master/matformer_configs/gemma3n.csv"><code>matformer_configs/gemma3n.csv</code></a>) includes:</p>
 <ul>
@@ -211,16 +207,121 @@
 <li><strong>Config for official E2B Model</strong> (1.91B params, 30 layers) - Balanced performance/efficiency</li>
 <li>Various intermediate configurations from E1.96B to E3.79B with different layer and FFN configurations</li>
 </ul>
+<h3 id="choosing-the-right-slice"><a class="header" href="#choosing-the-right-slice">Choosing the Right Slice</a></h3>
+<ul>
+<li><strong>Resource-constrained environments</strong>: Use “Config for official E2B Model” (1.91B params)</li>
+<li><strong>Balanced performance</strong>: Try E2.49B to E2.98B configurations (block-level configs offer better balance)</li>
+<li><strong>Maximum quality</strong>: Use “Main model” (3.98B params) or omit MatFormer configuration entirely</li>
+</ul>
 <h3 id="command-line-example"><a class="header" href="#command-line-example">Command Line Example</a></h3>
-<pre><code class="language-bash"># Run with the E2.49B slice for balanced performance/efficiency
-mistralrs run multimodal -m google/gemma-3n-E4B-it \
+<pre><code class="language-bash">mistralrs run -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 </code></pre>
-<h3 id="python-sdk-example"><a class="header" href="#python-sdk-example">Python SDK Example</a></h3>
+<h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
+<ol>
+<li>Start the server</li>
+</ol>
+<pre><code class="language-bash">mistralrs serve -m google/gemma-3n-E4B-it --isq 4 -p 1234
+</code></pre>
+<p>Or with MatFormer:</p>
+<pre><code class="language-bash">mistralrs serve -m google/gemma-3n-E4B-it --isq 4 -p 1234 \
+  --matformer-config-path matformer_configs/gemma3n.csv \
+  --matformer-slice-name "Config for E2.49B (block-level)"
+</code></pre>
+<ol start="2">
+<li>Send a request</li>
+</ol>
+<pre><code class="language-py">from openai import OpenAI
+
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
+
+completion = client.chat.completions.create(
+    model="default",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "What is this?",
+                },
+            ],
+        },
+    ],
+    max_tokens=256,
+)
+print(completion.choices[0].message.content)
+</code></pre>
+<p><strong>Audio + image example:</strong></p>
+<pre><code class="language-json">{
+  "role": "user",
+  "content": [
+    {
+      "type": "audio_url",
+      "audio_url": { "url": "https://upload.wikimedia.org/wikipedia/commons/4/42/Bird_singing.ogg" }
+    },
+    {
+      "type": "image_url",
+      "image_url": { "url": "https://www.allaboutbirds.org/guide/assets/og/528129121-1200px.jpg" }
+    },
+    {
+      "type": "text",
+      "text": "Describe what is happening in this clip in as much detail as possible."
+    }
+  ]
+}
+</code></pre>
+<ul>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
+</ul>
+<h2 id="python-sdk"><a class="header" href="#python-sdk">Python SDK</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gemma3n.py">here</a>.</p>
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+
+runner = Runner(
+    which=Which.MultimodalPlain(
+        model_id="google/gemma-3n-E4B-it",
+        arch=MultimodalArchitecture.Gemma3n,
+    ),
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "What is this?",
+                    },
+                ],
+            }
+        ],
+        max_tokens=256,
+    )
+)
+print(res.choices[0].message.content)
+print(res.usage)
+</code></pre>
+<p><strong>With MatFormer:</strong></p>
 <pre><code class="language-python">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
-# Use the E2.49B slice for balanced performance/efficiency
 runner = Runner(
     which=Which.MultimodalPlain(
         model_id="google/gemma-3n-E4B-it",
@@ -230,11 +331,9 @@ runner = Runner(
     ),
 )
 
-# The model will use 35 layers with mixed FFN dimensions (4096 for early layers, 8192 for middle)
-# This results in ~37% parameter reduction while maintaining better performance than E2B
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="ignore",
+        model="default",
         messages=[
             {
                 "role": "user",
@@ -252,139 +351,18 @@ res = runner.send_chat_completion_request(
                 ],
             }
         ],
-        max_tokens=100,
+        max_tokens=256,
     )
 )
 print(res.choices[0].message.content)
-</code></pre>
-<h3 id="rust-sdk-example"><a class="header" href="#rust-sdk-example">Rust SDK Example</a></h3>
-<pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
-use std::path::PathBuf;
-
-#[tokio::main]
-async fn main() -&gt; Result&lt;()&gt; {
-    // Build model with MatFormer E2.49B configuration
-    let model = MultimodalModelBuilder::new("google/gemma-3n-E4B-it")
-        .with_isq(IsqType::Q4K)
-        .with_matformer_config_path(PathBuf::from("matformer_configs/gemma3n.csv"))
-        .with_matformer_slice_name("Config for E2.49B (block-level)".to_string())
-        .with_logging()
-        .build()
-        .await?;
-
-    let bytes = match reqwest::blocking::get(
-        "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg",
-    ) {
-        Ok(http_resp) =&gt; http_resp.bytes()?.to_vec(),
-        Err(e) =&gt; anyhow::bail!(e),
-    };
-    let image = image::load_from_memory(&amp;bytes)?;
-
-    let messages = MultimodalMessages::new().add_image_message(
-        TextMessageRole::User,
-        "Describe this image briefly.",
-        vec![image],
-    );
-
-    let response = model.send_chat_request(messages).await?;
-
-    println!("{}", response.choices[0].message.content.as_ref().unwrap());
-    println!("Using E2.49B slice: 35 layers, 2.49B effective params");
-    
-    Ok(())
-}</code></pre>
-<h3 id="choosing-the-right-slice"><a class="header" href="#choosing-the-right-slice">Choosing the Right Slice</a></h3>
-<ul>
-<li><strong>Resource-constrained environments</strong>: Use “Config for official E2B Model” (1.91B params)</li>
-<li><strong>Balanced performance</strong>: Try E2.49B to E2.98B configurations (block-level configs offer better balance)</li>
-<li><strong>Maximum quality</strong>: Use “Main model” (3.98B params) or omit MatFormer configuration entirely</li>
-</ul>
-<p>The slice selection allows you to:</p>
-<ul>
-<li>Reduce memory usage proportionally to the parameter count</li>
-<li>Speed up inference roughly linearly with the number of layers</li>
-<li>Maintain acceptable quality for many use cases with smaller slices</li>
-</ul>
-<h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/gemma3n.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<hr>
-<p><strong>Image:</strong>
-<img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width="1000" height="666"></p>
-<h6><a href="https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
-
-<p><strong>Prompt:</strong></p>
-<pre><code>Please describe this image in detail.
-</code></pre>
-<p><strong>Output:</strong></p>
-<pre><code>The image captures a breathtaking, wide-angle view of a majestic mountain covered in a blanket of snow. The mountain dominates the frame, its peak reaching towards a partly cloudy sky. The snow cover is uneven, with patches of exposed dark rock and textured snow formations creating a visually interesting surface. 
-
-A winding, snow-covered path or road snakes its way up the mountainside, appearing as a bright white line against the darker slopes. This path draws the eye upwards towards the summit, where a few structures, possibly communication towers or observation points, are visible. 
-
-The lower slopes of the mountain are covered in a dense forest of evergreen trees, their dark green hues contrasting beautifully with the white snow. The forest extends down into a valley, hinting at a wider landscape beyond the frame. 
-
-The sky above is a mix of pale blue and soft grey clouds, with some darker, more dramatic cloud formations near the top of the mountain. The lighting suggests it might be early morning or late afternoon, casting subtle shadows across the mountain's surface and highlighting its contours. 
-
-The overall impression is one of grandeur, tranquility, and the raw beauty of a winter landscape. The scale of the mountain is impressive, and the winding path invites a sense of exploration and adventure.
-</code></pre>
-<hr>
-<ol>
-<li>Start the server</li>
-</ol>
-<pre><code>mistralrs serve multimodal -p 1234 -m google/gemma-3n-E4B-it
-
-# Or with MatFormer for balanced performance:
-mistralrs serve multimodal -p 1234 -m google/gemma-3n-E4B-it \
-  --matformer-config-path matformer_configs/gemma3n.csv \
-  --matformer-slice-name "Config for E2.49B (block-level)"
-</code></pre>
-<ol start="2">
-<li>Send a request</li>
-</ol>
-<pre><code class="language-py">from openai import OpenAI
-
-client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
-
-completion = client.chat.completions.create(
-    model="ignore",
-    messages=[
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
-                    },
-                },
-                {
-                    "type": "text",
-                    "text": "Please describe this image in detail.",
-                },
-            ],
-        },
-    ],
-    max_tokens=256,
-    frequency_penalty=1.0,
-    top_p=0.1,
-    temperature=0,
-)
-resp = completion.choices[0].message.content
-print(resp)
-
+print(res.usage)
 </code></pre>
 <ul>
-<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">image via base64 here</a>.</li>
-<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
-<hr>
-<h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
+<h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
-<p>This is a minimal example of running the Gemma 3n model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
@@ -421,78 +399,17 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
-<h2 id="python"><a class="header" href="#python">Python</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gemma3n.py">here</a>.</p>
-<p>This example demonstrates loading and sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
-
-runner = Runner(
-    which=Which.MultimodalPlain(
-        model_id="google/gemma-3n-E4B-it",
-        arch=MultimodalArchitecture.Gemma3n,
-    ),
-)
-
-res = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="ignore",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": "Please describe this image in detail.",
-                    },
-                ],
-            }
-        ],
-        max_tokens=256,
-        presence_penalty=1.0,
-        top_p=0.1,
-        temperature=0.1,
-    )
-)
-print(res.choices[0].message.content)
-print(res.usage)
-</code></pre>
-<h3 id="openai-http-api"><a class="header" href="#openai-http-api">OpenAI HTTP API</a></h3>
-<p>Audio is delivered with the <code>audio_url</code> content-type that mirrors OpenAIʼs official specification:</p>
-<pre><code class="language-json">{
-  "role": "user",
-  "content": [
-    {
-      "type": "audio_url",
-      "audio_url": { "url": "https://upload.wikimedia.org/wikipedia/commons/4/42/Bird_singing.ogg" }
-    },
-    {
-      "type": "image_url",
-      "image_url": { "url": "https://www.allaboutbirds.org/guide/assets/og/528129121-1200px.jpg" }
-    },
-    {
-      "type": "text",
-      "text": "Describe what is happening in this clip in as much detail as possible."
-    }
-  ]
-}
-</code></pre>
-<h3 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h3>
+<p><strong>With MatFormer and audio:</strong></p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{AudioInput, IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
     let model = MultimodalModelBuilder::new("google/gemma-3n-E4B-it")
         .with_isq(IsqType::Q4K)
+        .with_matformer_config_path(PathBuf::from("matformer_configs/gemma3n.csv"))
+        .with_matformer_slice_name("Config for E2.49B (block-level)".to_string())
         .with_logging()
         .build()
         .await?;
@@ -525,11 +442,6 @@ async fn main() -&gt; Result&lt;()&gt; {
     println!("{}", response.choices[0].message.content.as_ref().unwrap());
     Ok(())
 }</code></pre>
-<p>With this, you now have a single-call pipeline that fuses <em>sound</em>, <em>vision</em>, and <em>text</em> – all running locally through <code>mistral.rs</code>! 🔥</p>
-<ul>
-<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
-<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
-</ul>
 
                     </main>
 

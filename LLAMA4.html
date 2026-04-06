@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,8 +181,6 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="llama-4-series-meta-llamallama-4-scout-17b-16e-instruct"><a class="header" href="#llama-4-series-meta-llamallama-4-scout-17b-16e-instruct">Llama 4 Series: <a href="https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct"><code>meta-llama/Llama-4-Scout-17B-16E-Instruct</code></a></a></h1>
-<p><strong>🚧 We are preparing a collection of UQFF quantized models! 🚧</strong></p>
-<hr>
 <p>The Llama 4 collection of models are natively multimodal AI models that enable text and multimodal experiences.</p>
 <p><strong>Architecture:</strong></p>
 <ul>
@@ -194,60 +192,28 @@
 <ul>
 <li>Tool calling + <a href="WEB_SEARCH.html">Automatic web search</a></li>
 <li>ISQ</li>
-<li>Rust, Python and HTTP APIs</li>
 </ul>
-<p>The Python and HTTP APIs support sending images as:</p>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre><code class="language-bash">mistralrs run -m meta-llama/Llama-4-Scout-17B-16E-Instruct --isq 4 --image photo.jpg -i "Describe this image"
+</code></pre>
+<h2 id="input-formats"><a class="header" href="#input-formats">Input Formats</a></h2>
+<p>The Python and HTTP APIs support sending inputs as:</p>
 <ul>
-<li>URL</li>
-<li>Path to a local image</li>
-<li><a href="https://en.wikipedia.org/wiki/Base64">Base64</a> encoded string</li>
+<li><strong>Images</strong>: URL, path to a local file, or base64 encoded string (via <code>image_url</code>)</li>
 </ul>
-<p>The Rust SDK takes an image from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
-<h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/llama4.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<hr>
-<p><strong>Image:</strong></p>
-<img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg">
-<h6><a href="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg">Credit</a></h6>
-
-<p><strong>Prompt:</strong></p>
-<pre><code>Please describe this image in detail.
-</code></pre>
-<p><strong>Output:</strong></p>
-<pre><code>The image presents a breathtaking mountain landscape, with a snow-capped peak dominating the scene. The mountain's rugged terrain is characterized by numerous ridges and valleys, while its summit is adorned with several structures that appear to be communication towers or antennas.
-
-**Key Features:**
-
-* **Mountain:** The mountain is the central focus of the image, showcasing a mix of snow-covered and bare areas.
-* **Sky:** The sky above the mountain features a dramatic display of clouds, with dark grey clouds at the top gradually giving way to lighter blue skies towards the bottom.
-* **Valley:** In the foreground, a valley stretches out, covered in trees that are mostly bare, suggesting a winter setting.
-* **Lighting:** The lighting in the image is striking, with the sun casting a warm glow on the mountain's snow-covered slopes while leaving the surrounding areas in shadow.
-
-**Overall Impression:**
-
-The image exudes a sense of serenity and majesty, capturing the beauty of nature in a dramatic and awe-inspiring way. The contrast between the snow-covered mountain and the bare trees in the valley creates a visually appealing scene that invites the viewer to appreciate the natural world.
-</code></pre>
-<hr>
+<p>The Rust SDK takes images from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
+<h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve multimodal -p 1234 --isq 4 -m meta-llama/Llama-4-Scout-17B-16E-Instruct
+<pre><code class="language-bash">mistralrs serve -m meta-llama/Llama-4-Scout-17B-16E-Instruct --isq 4 -p 1234
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
 </ol>
 <pre><code class="language-py">from openai import OpenAI
-import httpx
-import textwrap
-import json
-
 
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
-
 
 completion = client.chat.completions.create(
     model="default",
@@ -263,28 +229,63 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "Please describe this image in detail.",
+                    "text": "What is this?",
                 },
             ],
         },
     ],
     max_tokens=256,
-    frequency_penalty=1.0,
-    top_p=0.1,
-    temperature=0,
 )
-resp = completion.choices[0].message.content
-print(resp)
-
+print(completion.choices[0].message.content)
 </code></pre>
 <ul>
 <li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">image via base64 here</a>.</li>
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
-<hr>
-<h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
+<h2 id="python-sdk"><a class="header" href="#python-sdk">Python SDK</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/llama4.py">here</a>.</p>
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+
+runner = Runner(
+    which=Which.MultimodalPlain(
+        model_id="meta-llama/Llama-4-Scout-17B-16E-Instruct",
+        arch=MultimodalArchitecture.Llama4,
+    ),
+    in_situ_quant="4",
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "What is this?",
+                    },
+                ],
+            }
+        ],
+        max_tokens=256,
+    )
+)
+print(res.choices[0].message.content)
+print(res.usage)
+</code></pre>
+<ul>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
+</ul>
+<h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
-<p>This is a minimal example of running the Llama 4 model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
@@ -322,55 +323,6 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
-<h2 id="python"><a class="header" href="#python">Python</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/llama4.py">here</a>.</p>
-<p>This example demonstrates loading and sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
-
-runner = Runner(
-    which=Which.MultimodalPlain(
-        model_id="meta-llama/Llama-4-Scout-17B-16E-Instruct",
-        arch=MultimodalArchitecture.Llama4,
-    ),
-    in_situ_quant="4",
-)
-
-res = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="default",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": "What is this?",
-                    },
-                ],
-            }
-        ],
-        max_tokens=256,
-        presence_penalty=1.0,
-        top_p=0.1,
-        temperature=0.1,
-    )
-)
-print(res.choices[0].message.content)
-print(res.usage)
-</code></pre>
-<ul>
-<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
-<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
-</ul>
 
                     </main>
 

@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,43 +182,31 @@
                     <main>
                         <h1 id="phi-4-multimodal-model-microsoftphi-4-multimodal-instruct"><a class="header" href="#phi-4-multimodal-model-microsoftphi-4-multimodal-instruct">Phi 4 Multimodal Model: <a href="https://huggingface.co/microsoft/Phi-4-multimodal-instruct"><code>microsoft/Phi-4-multimodal-instruct</code></a></a></h1>
 <p>The Phi 4 Multimodal Model has support in the Rust, Python, and HTTP APIs. The Phi 4 Multimodal Model supports ISQ for increased performance.</p>
-<p>The Python and HTTP APIs support sending images as:</p>
-<ul>
-<li>URL</li>
-<li>Path to a local image</li>
-<li><a href="https://en.wikipedia.org/wiki/Base64">Base64</a> encoded string</li>
-</ul>
-<p>The Rust SDK takes an image from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
 <blockquote>
 <p>Note: The Phi 4 Multimodal model works best with one image although it is supported to send multiple images.</p>
 </blockquote>
 <blockquote>
-<p>Note: when sending multiple images, they will be resized to the minimum dimension by which all will fit without cropping.
-Aspect ratio is not preserved in that case.</p>
+<p>Note: When sending multiple images, they will be resized to the minimum dimension by which all will fit without cropping. Aspect ratio is not preserved in that case.</p>
 </blockquote>
-<p><a href="#audio-input"><strong>Phi 4 multimodal supports audio inputs!</strong></a>.</p>
-<h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<hr>
-<p><strong>Image:</strong>
-<img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width="1000" height="666"></p>
-<h6><a href="https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
-
-<p><strong>Prompt:</strong></p>
-<pre><code>What is shown in this image? Write a detailed response analyzing the scene.
+<p>Phi 4 Multimodal also supports <a href="#audio-input">audio inputs</a>.</p>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre><code class="language-bash">mistralrs run -m microsoft/Phi-4-multimodal-instruct --isq 4 --image photo.jpg -i "Describe this image"
 </code></pre>
-<p><strong>Output:</strong></p>
-<pre><code>A mountain with snow on it.
-</code></pre>
-<hr>
+<h2 id="input-formats"><a class="header" href="#input-formats">Input Formats</a></h2>
+<p>The Python and HTTP APIs support sending inputs as:</p>
+<ul>
+<li><strong>Images</strong>: URL, path to a local file, or base64 encoded string (via <code>image_url</code>)</li>
+<li><strong>Audio</strong>: URL or path to a local file (via <code>audio_url</code>)</li>
+</ul>
+<p>The Rust SDK takes images from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate and audio from <code>AudioInput</code>.</p>
+<h2 id="audio-input"><a class="header" href="#audio-input">Audio input</a></h2>
+<p>Alongside vision, Phi 4 Multimodal can accept audio as an additional modality. This unlocks fully-local pipelines such as text + speech + vision -&gt; text where the model can reason jointly over what it hears and what it sees.</p>
+<p>mistral.rs automatically decodes the supplied audio (WAV/MP3/FLAC/OGG – anything <a href="https://github.com/pdeljanov/Symphonia">Symphonia</a> can handle) into 16-bit PCM.</p>
+<h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve multimodal -p 1234 -m microsoft/Phi-4-multimodal-instruct
+<pre><code class="language-bash">mistralrs serve -m microsoft/Phi-4-multimodal-instruct --isq 4 -p 1234
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -241,28 +229,81 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "What is shown in this image? Write a detailed response analyzing the scene.",
+                    "text": "What is this?",
                 },
             ],
         },
     ],
     max_tokens=256,
-    frequency_penalty=1.0,
-    top_p=0.1,
-    temperature=0,
 )
-resp = completion.choices[0].message.content
-print(resp)
-
+print(completion.choices[0].message.content)
+</code></pre>
+<p><strong>Audio + image example:</strong></p>
+<pre><code class="language-json">{
+  "role": "user",
+  "content": [
+    {
+      "type": "audio_url",
+      "audio_url": { "url": "https://upload.wikimedia.org/wikipedia/commons/4/42/Bird_singing.ogg" }
+    },
+    {
+      "type": "image_url",
+      "image_url": { "url": "https://www.allaboutbirds.org/guide/assets/og/528129121-1200px.jpg" }
+    },
+    {
+      "type": "text",
+      "text": "Describe what is happening in this clip in as much detail as possible."
+    }
+  ]
+}
 </code></pre>
 <ul>
 <li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">image via base64 here</a>.</li>
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
-<hr>
-<h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
+<h2 id="python-sdk"><a class="header" href="#python-sdk">Python SDK</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py">here</a>.</p>
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+
+runner = Runner(
+    which=Which.MultimodalPlain(
+        model_id="microsoft/Phi-4-multimodal-instruct",
+        arch=MultimodalArchitecture.Phi4MM,
+    ),
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "What is this?",
+                    },
+                ],
+            }
+        ],
+        max_tokens=256,
+    )
+)
+print(res.choices[0].message.content)
+print(res.usage)
+</code></pre>
+<ul>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
+</ul>
+<h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
-<p>This is a minimal example of running the Phi 4 Multimodal model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
@@ -299,74 +340,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
-<h2 id="python"><a class="header" href="#python">Python</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py">here</a>.</p>
-<p>This example demonstrates loading and sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
-
-runner = Runner(
-    which=Which.MultimodalPlain(
-        model_id="microsoft/Phi-4-multimodal-instruct",
-        arch=MultimodalArchitecture.Phi4MM,
-    ),
-)
-
-res = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="default",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/e/e7/Everest_North_Face_toward_Base_Camp_Tibet_Luca_Galuzzi_2006.jpg"
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": "What is shown in this image? Write a detailed response analyzing the scene.",
-                    },
-                ],
-            }
-        ],
-        max_tokens=256,
-        presence_penalty=1.0,
-        top_p=0.1,
-        temperature=0.1,
-    )
-)
-print(res.choices[0].message.content)
-print(res.usage)
-</code></pre>
-<h2 id="audio-input"><a class="header" href="#audio-input">Audio input</a></h2>
-<p>Alongside vision, Phi 4 Multimodal in <code>mistral.rs</code> can accept <strong>audio</strong> as an additional modality.  This unlocks fully-local pipelines such as <strong>text + speech + vision -&gt; text</strong> where the model can reason jointly over what it <em>hears</em> and what it <em>sees</em>.</p>
-<p><code>mistral.rs</code> automatically decodes the supplied audio (WAV/MP3/FLAC/OGG/… – anything <a href="https://github.com/pdeljanov/Symphonia">Symphonia</a> can handle) into 16-bit PCM.</p>
-<h3 id="openai-http-api"><a class="header" href="#openai-http-api">OpenAI HTTP API</a></h3>
-<p>Audio is delivered with the <code>audio_url</code> content-type that mirrors OpenAIʼs official specification:</p>
-<pre><code class="language-json">{
-  "role": "user",
-  "content": [
-    {
-      "type": "audio_url",
-      "audio_url": { "url": "https://upload.wikimedia.org/wikipedia/commons/4/42/Bird_singing.ogg" }
-    },
-    {
-      "type": "image_url",
-      "image_url": { "url": "https://www.allaboutbirds.org/guide/assets/og/528129121-1200px.jpg" }
-    },
-    {
-      "type": "text",
-      "text": "Describe what is happening in this clip in as much detail as possible."
-    }
-  ]
-}
-</code></pre>
-<h3 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h3>
+<p><strong>With audio:</strong></p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{AudioInput, IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
@@ -406,11 +380,6 @@ async fn main() -&gt; Result&lt;()&gt; {
     println!("{}", response.choices[0].message.content.as_ref().unwrap());
     Ok(())
 }</code></pre>
-<p>With this, you now have a single-call pipeline that fuses <em>sound</em>, <em>vision</em>, and <em>text</em> – all running locally through <code>mistral.rs</code>! 🔥</p>
-<ul>
-<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
-<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
-</ul>
 
                     </main>
 

@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,22 +180,20 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="voxtral-model-mistralaivoxtral-mini-4b-realtime-2602"><a class="header" href="#voxtral-model-mistralaivoxtral-mini-4b-realtime-2602">Voxtral Model: <a href="https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602"><code>mistralai/Voxtral-Mini-4B-Realtime-2602</code></a></a></h1>
+                        <h1 id="voxtral-mini-4b-mistralaivoxtral-mini-4b-realtime-2602"><a class="header" href="#voxtral-mini-4b-mistralaivoxtral-mini-4b-realtime-2602">Voxtral Mini 4B: <a href="https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602"><code>mistralai/Voxtral-Mini-4B-Realtime-2602</code></a></a></h1>
 <p>Voxtral Mini is a 4.4B parameter real-time automatic speech recognition (ASR) model created by Mistral AI. It features a causal Whisper-based audio encoder, a temporal adapter, and a Mistral decoder. The model accepts audio input and produces text output (speech-to-text).</p>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre><code class="language-bash">mistralrs run multimodal -m mistralai/Voxtral-Mini-4B-Realtime-2602
+</code></pre>
 <p>The Voxtral Model has support in the Rust, Python, and HTTP APIs. Additionally, the Voxtral Model supports ISQ for increased performance.</p>
 <blockquote>
 <p>Note: Voxtral uses Mistral’s native format (<code>params.json</code>, <code>consolidated.safetensors</code>, <code>tekken.json</code>), which mistral.rs handles automatically.</p>
 </blockquote>
-<h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
-<p>We support an OpenAI compatible HTTP API for audio models.</p>
-<ol>
-<li>Start the server</li>
-</ol>
-<pre><code>mistralrs serve multimodal -m mistralai/Voxtral-Mini-4B-Realtime-2602
+<h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
+<p>Start the server:</p>
+<pre><code>mistralrs serve multimodal -m mistralai/Voxtral-Mini-4B-Realtime-2602 -p 1234
 </code></pre>
-<ol start="2">
-<li>Send a request</li>
-</ol>
+<p>Send a request:</p>
 <pre><code class="language-py">import base64
 from openai import OpenAI
 
@@ -230,7 +228,7 @@ completion = client.chat.completions.create(
 resp = completion.choices[0].message.content
 print(resp)
 </code></pre>
-<h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
+<h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/asr/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{AudioInput, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
@@ -263,7 +261,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
-<h2 id="python"><a class="header" href="#python">Python</a></h2>
+<h2 id="python-sdk"><a class="header" href="#python-sdk">Python SDK</a></h2>
 <pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(

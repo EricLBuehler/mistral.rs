@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,8 +180,11 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="dia-16b-model-nari-labsdia-16b"><a class="header" href="#dia-16b-model-nari-labsdia-16b">Dia 1.6b Model: <a href="https://huggingface.co/nari-labs/Dia-1.6B"><code>nari-labs/Dia-1.6B</code></a></a></h1>
+                        <h1 id="dia-16b-nari-labsdia-16b"><a class="header" href="#dia-16b-nari-labsdia-16b">Dia 1.6B: <a href="https://huggingface.co/nari-labs/Dia-1.6B"><code>nari-labs/Dia-1.6B</code></a></a></h1>
 <p>Dia is a 1.6B parameter text to speech model created by Nari Labs. You can condition the output on audio, enabling emotion and tone control. The model can also produce nonverbal communications like laughter, coughing, clearing throat, etc.</p>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre><code class="language-bash">mistralrs run speech -m nari-labs/Dia-1.6B -a dia
+</code></pre>
 <ul>
 <li>Generate dialogue via the [S1] and [S2] tags</li>
 <li>Generate non-verbal like (laughs), (coughs), etc.</li>
@@ -190,14 +193,14 @@
 <blockquote>
 <p>Note: voice cloning support is coming!</p>
 </blockquote>
-<h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
-<p>The OpenAI HTTP server provides a drop-in compatible way to easily use Dia locally!</p>
 <blockquote>
 <p>Note: we only support <code>pcm</code> and <code>wav</code> outputs.</p>
 </blockquote>
-<pre><code>mistralrs run speech -m nari-labs/Dia-1.6B -a dia
+<h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
+<p>Start the server:</p>
+<pre><code>mistralrs serve speech -m nari-labs/Dia-1.6B -a dia -p 1234
 </code></pre>
-<p>After this, you can send requests via the HTTP server:</p>
+<p>Send a request:</p>
 <pre><code class="language-py">from pathlib import Path
 from openai import OpenAI
 
@@ -214,7 +217,7 @@ output_path = Path("output.wav")
 output_path.write_bytes(response.read())
 print(f"WAV audio written to {output_path.resolve()}")
 </code></pre>
-<h2 id="rust-example"><a class="header" href="#rust-example">Rust example</a></h2>
+<h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
 <pre class="playground"><code class="language-rust">use std::time::Instant;
 
 use anyhow::Result;
@@ -246,7 +249,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
-<h2 id="python-example"><a class="header" href="#python-example">Python example</a></h2>
+<h2 id="python-sdk"><a class="header" href="#python-sdk">Python SDK</a></h2>
 <pre><code class="language-py">from mistralrs import (
     Runner,
     Which,

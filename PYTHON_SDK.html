@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -183,76 +183,279 @@
                         <h1 id="mistralrs-python-sdk"><a class="header" href="#mistralrs-python-sdk">mistralrs Python SDK</a></h1>
 <p>Documentation for the <code>mistralrs</code> Python package.</p>
 <blockquote>
-<p><strong>Installation:</strong> See <a href="PYTHON_INSTALLATION.html">PYTHON_INSTALLATION.md</a> for installation instructions.</p>
+<p><strong>Installation:</strong> See <a href="PYTHON_INSTALLATION.html">Python Installation</a> for installation instructions.</p>
 </blockquote>
 <p><strong>Table of contents</strong></p>
 <ul>
-<li>Full API reference: <a href="https://ericlbuehler.github.io/mistral.rs/pyo3/mistralrs.html">here</a></li>
-<li>Model configuration (<code>Which</code> enum): <a href="#which">here</a></li>
-<li>Multi-model support: <a href="#multi-model-support">here</a></li>
-<li>MCP Client Configuration: <a href="#mcp-client">here</a></li>
-<li>Example: <a href="#example">here</a></li>
-<li>Embeddings example: <a href="#embeddings-example">here</a></li>
+<li><a href="#quick-start">Quick Start</a></li>
+<li><a href="#model-configuration">Model Configuration</a></li>
+<li><a href="#streaming">Streaming</a></li>
+<li><a href="#structured-output">Structured Output</a></li>
+<li><a href="#tool-calling">Tool Calling</a></li>
+<li><a href="#multimodal-input">Multimodal Input</a></li>
+<li><a href="#embeddings">Embeddings</a></li>
+<li><a href="#multi-model-support">Multi-Model Support</a></li>
+<li><a href="#mcp-client">MCP Client</a></li>
+<li><a href="#configuration-reference">Configuration Reference</a></li>
 </ul>
-<h2 id="which"><a class="header" href="#which"><code>Which</code></a></h2>
-<p>Each <code>*_model_id</code> may be a HF hub repo or a local path. For quantized GGUF models, a list is accepted if multiple files must be specified.</p>
+<p>Full API reference: <a href="https://ericlbuehler.github.io/mistral.rs/pyo3/mistralrs.html">here</a></p>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre><code class="language-python">from mistralrs import Runner, Which, ChatCompletionRequest
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    in_situ_quant="4",
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "Hello!"}],
+        max_tokens=256,
+    )
+)
+print(res.choices[0].message.content)
+</code></pre>
+<h2 id="model-configuration"><a class="header" href="#model-configuration">Model Configuration</a></h2>
+<p>Models are configured through the <code>Which</code> enum. The most common variants:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variant</th><th>Use case</th><th>Key parameters</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Which.Plain</code></td><td>HuggingFace models</td><td><code>model_id</code>, <code>arch</code> (optional)</td></tr>
+<tr><td><code>Which.GGUF</code></td><td>GGUF quantized models</td><td><code>quantized_model_id</code>, <code>quantized_filename</code>, <code>tok_model_id</code></td></tr>
+<tr><td><code>Which.MultimodalPlain</code></td><td>Vision/audio models</td><td><code>model_id</code>, <code>arch</code></td></tr>
+<tr><td><code>Which.Embedding</code></td><td>Embedding models</td><td><code>model_id</code>, <code>arch</code></td></tr>
+<tr><td><code>Which.DiffusionPlain</code></td><td>Image generation</td><td><code>model_id</code>, <code>arch</code></td></tr>
+<tr><td><code>Which.Speech</code></td><td>Speech synthesis</td><td><code>model_id</code>, <code>arch</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Architecture is auto-detected for most models. Specify <code>arch</code> only if auto-detection fails.</p>
+<p><strong>Common Runner options:</strong></p>
+<pre><code class="language-python">runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    in_situ_quant="4",          # ISQ level: "2"-"8", "q4k", "q8_0", etc.
+    # pa_gpu_mem=4096,          # PagedAttention GPU memory in MB
+    # pa_blk_size=32,           # PagedAttention block size
+    # enable_search=True,       # Enable web search
+    # mcp_client_config=...,    # MCP client configuration
+)
+</code></pre>
+<p><strong>Loading GGUF models:</strong></p>
+<pre><code class="language-python">runner = Runner(
+    which=Which.GGUF(
+        tok_model_id="Qwen/Qwen3-0.6B",
+        quantized_model_id="unsloth/Qwen3-0.6B-GGUF",
+        quantized_filename="Qwen3-0.6B-Q4_K_M.gguf",
+    )
+)
+</code></pre>
+<p><strong>Loading UQFF models:</strong></p>
+<pre><code class="language-python">runner = Runner(
+    which=Which.Plain(
+        model_id="EricB/Phi-3.5-mini-instruct-UQFF",
+        from_uqff="phi3.5-mini-instruct-q4k-0.uqff",
+    )
+)
+</code></pre>
+<h2 id="streaming"><a class="header" href="#streaming">Streaming</a></h2>
+<p>Set <code>stream=True</code> on the request and iterate over chunks:</p>
+<pre><code class="language-python">from mistralrs import Runner, Which, ChatCompletionRequest
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    in_situ_quant="4",
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "Tell me a story."}],
+        max_tokens=256,
+        stream=True,
+    )
+)
+for chunk in res:
+    print(chunk.choices[0].delta.content, end="", flush=True)
+</code></pre>
+<h2 id="structured-output"><a class="header" href="#structured-output">Structured Output</a></h2>
+<p>Constrain the model to produce valid JSON matching a schema. Works with Pydantic models or raw JSON schemas:</p>
+<pre><code class="language-python">import json
+from pydantic import BaseModel, Field
+from mistralrs import Runner, Which, ChatCompletionRequest
+
+class City(BaseModel):
+    name: str = Field(..., description="City name")
+    country: str = Field(..., description="Country")
+    population: int = Field(..., description="Population")
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    in_situ_quant="4",
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "Give me info about Paris."}],
+        max_tokens=256,
+        grammar_type="json_schema",
+        grammar=json.dumps(City.model_json_schema()),
+    )
+)
+city = City.model_validate_json(res.choices[0].message.content)
+print(f"{city.name}, {city.country}: pop. {city.population}")
+</code></pre>
+<p>You can also use <code>grammar_type="regex"</code> or <code>grammar_type="lark"</code> for other constrained generation patterns.</p>
+<h2 id="tool-calling"><a class="header" href="#tool-calling">Tool Calling</a></h2>
+<p>Define tools as JSON schemas and let the model call them:</p>
+<pre><code class="language-python">import json
+from mistralrs import Runner, ToolChoice, Which, ChatCompletionRequest
+
+tools = [
+    json.dumps({
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the current weather for a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string", "description": "City name"},
+                },
+                "required": ["city"],
+            },
+            "strict": True,
+        },
+    })
+]
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    in_situ_quant="4",
+)
+
+# Model generates a tool call
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
+        max_tokens=256,
+        tool_schemas=tools,
+        tool_choice=ToolChoice.Auto,
+    )
+)
+
+tool_called = res.choices[0].message.tool_calls[0].function
+print(f"Tool: {tool_called.name}, Args: {tool_called.arguments}")
+</code></pre>
+<p>For server-side tool execution (agentic loop), use <code>tool_callbacks</code> or <code>max_tool_rounds</code>. See the <a href="AGENTS.html">Agentic Features Guide</a>.</p>
+<h2 id="multimodal-input"><a class="header" href="#multimodal-input">Multimodal Input</a></h2>
+<p>Send images, video, or audio using the OpenAI content format:</p>
+<pre><code class="language-python">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+
+runner = Runner(
+    which=Which.MultimodalPlain(
+        model_id="google/gemma-4-E4B-it",
+        arch=MultimodalArchitecture.Gemma4,
+    ),
+    in_situ_quant="4",
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/photo.jpg"},
+                    },
+                    {"type": "text", "text": "What is this?"},
+                ],
+            }
+        ],
+        max_tokens=256,
+    )
+)
+print(res.choices[0].message.content)
+</code></pre>
+<p>Image URLs can be web URLs, local file paths, or base64-encoded data URIs. Video uses <code>video_url</code> and audio uses <code>audio_url</code>.</p>
+<h2 id="embeddings"><a class="header" href="#embeddings">Embeddings</a></h2>
+<pre><code class="language-python">from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
+
+runner = Runner(
+    which=Which.Embedding(
+        model_id="google/embeddinggemma-300m",
+        arch=EmbeddingArchitecture.EmbeddingGemma,
+    )
+)
+
+embeddings = runner.send_embedding_request(
+    EmbeddingRequest(
+        input=["superconductors", "graphene conductivity"],
+        truncate_sequence=True,
+    )
+)
+print(len(embeddings), len(embeddings[0]))
+</code></pre>
+<h2 id="multi-model-support"><a class="header" href="#multi-model-support">Multi-Model Support</a></h2>
+<p>Load and manage multiple models with a single <code>Runner</code>. All request methods accept an optional <code>model_id</code> parameter:</p>
+<pre><code class="language-python"># List available models
+models = runner.list_models()
+
+# Send request to a specific model
+response = runner.send_chat_completion_request(request, model_id="model-id")
+
+# Model management
+runner.unload_model("model-id")     # Free memory
+runner.reload_model("model-id")     # Reload on demand
+# Or just send a request. Unloaded models auto-reload.
+</code></pre>
+<p>For server-based multi-model deployment, see <a href="multi_model/overview.html">Multi-Model Support</a>.</p>
+<h2 id="mcp-client"><a class="header" href="#mcp-client">MCP Client</a></h2>
+<p>Connect to external tool servers via the Model Context Protocol:</p>
+<pre><code class="language-python">import mistralrs
+
+mcp_config = mistralrs.McpClientConfigPy(
+    servers=[
+        mistralrs.McpServerConfigPy(
+            name="Filesystem Tools",
+            source=mistralrs.McpServerSourcePy.Process(
+                command="npx",
+                args=["@modelcontextprotocol/server-filesystem", "."],
+            ),
+        )
+    ],
+    auto_register_tools=True,
+)
+
+runner = mistralrs.Runner(
+    which=mistralrs.Which.Plain(model_id="Qwen/Qwen3-4B"),
+    mcp_client_config=mcp_config,
+)
+</code></pre>
+<p>MCP tools are automatically discovered and available to the model. Supports Process, HTTP, and WebSocket transports. See <a href="MCP/client.html">MCP Client</a> for details.</p>
+<h2 id="configuration-reference"><a class="header" href="#configuration-reference">Configuration Reference</a></h2>
+<details>
+<summary>Which enum: full type definitions</summary>
 <h3 id="architecture-for-plain-models"><a class="header" href="#architecture-for-plain-models">Architecture for plain models</a></h3>
 <p>If you do not specify the architecture, an attempt will be made to use the model’s config. If this fails, please raise an issue.</p>
 <ul>
-<li><code>Mistral</code></li>
-<li><code>Gemma</code></li>
-<li><code>Mixtral</code></li>
-<li><code>Llama</code></li>
-<li><code>Phi2</code></li>
-<li><code>Phi3</code></li>
-<li><code>Qwen2</code></li>
-<li><code>Gemma2</code></li>
-<li><code>GLM4</code></li>
-<li><code>GLM4MoeLite</code></li>
-<li><code>GLM4Moe</code></li>
-<li><code>Starcoder2</code></li>
-<li><code>Phi3_5MoE</code></li>
-<li><code>DeepseekV2</code></li>
-<li><code>DeepseekV3</code></li>
-<li><code>Qwen3</code></li>
-<li><code>Qwen3Moe</code></li>
-<li><code>SmolLm3</code></li>
-<li><code>GraniteMoeHybrid</code></li>
-<li><code>GptOss</code></li>
-<li><code>Qwen3Next</code></li>
-</ul>
-<h3 id="isq-organization"><a class="header" href="#isq-organization">ISQ Organization</a></h3>
-<ul>
-<li><code>Default</code></li>
-<li><code>MoQE</code>: if applicable, only quantize MoE experts. https://arxiv.org/abs/2310.02410</li>
+<li><code>Mistral</code>, <code>Gemma</code>, <code>Mixtral</code>, <code>Llama</code>, <code>Phi2</code>, <code>Phi3</code>, <code>Qwen2</code>, <code>Gemma2</code>, <code>GLM4</code>, <code>GLM4MoeLite</code>, <code>GLM4Moe</code>, <code>Starcoder2</code>, <code>Phi3_5MoE</code>, <code>DeepseekV2</code>, <code>DeepseekV3</code>, <code>Qwen3</code>, <code>Qwen3Moe</code>, <code>SmolLm3</code>, <code>GraniteMoeHybrid</code>, <code>GptOss</code>, <code>Qwen3Next</code></li>
 </ul>
 <h3 id="architecture-for-multimodal-models"><a class="header" href="#architecture-for-multimodal-models">Architecture for multimodal models</a></h3>
 <ul>
-<li><code>Phi3V</code></li>
-<li><code>Idefics2</code></li>
-<li><code>LLaVaNext</code></li>
-<li><code>LLaVa</code></li>
-<li><code>VLlama</code></li>
-<li><code>Qwen2VL</code></li>
-<li><code>Idefics3</code></li>
-<li><code>MiniCpmO</code></li>
-<li><code>Phi4MM</code></li>
-<li><code>Qwen2_5VL</code></li>
-<li><code>Gemma3</code></li>
-<li><code>Gemma4</code></li>
-<li><code>Mistral3</code></li>
-<li><code>Llama4</code></li>
-<li><code>Gemma3n</code></li>
-<li><code>Qwen3VL</code></li>
-<li><code>Qwen3VLMoE</code></li>
-<li><code>Qwen3_5</code></li>
-<li><code>Qwen3_5Moe</code></li>
-<li><code>Voxtral</code></li>
+<li><code>Phi3V</code>, <code>Idefics2</code>, <code>LLaVaNext</code>, <code>LLaVa</code>, <code>VLlama</code>, <code>Qwen2VL</code>, <code>Idefics3</code>, <code>MiniCpmO</code>, <code>Phi4MM</code>, <code>Qwen2_5VL</code>, <code>Gemma3</code>, <code>Gemma4</code>, <code>Mistral3</code>, <code>Llama4</code>, <code>Gemma3n</code>, <code>Qwen3VL</code>, <code>Qwen3VLMoE</code>, <code>Qwen3_5</code>, <code>Qwen3_5Moe</code>, <code>Voxtral</code></li>
 </ul>
 <h3 id="architecture-for-diffusion-models"><a class="header" href="#architecture-for-diffusion-models">Architecture for diffusion models</a></h3>
 <ul>
-<li><code>Flux</code></li>
-<li><code>FluxOffloaded</code></li>
+<li><code>Flux</code>, <code>FluxOffloaded</code></li>
 </ul>
 <h3 id="architecture-for-speech-models"><a class="header" href="#architecture-for-speech-models">Architecture for speech models</a></h3>
 <ul>
@@ -260,22 +463,15 @@
 </ul>
 <h3 id="architecture-for-embedding-models"><a class="header" href="#architecture-for-embedding-models">Architecture for embedding models</a></h3>
 <ul>
-<li><code>EmbeddingGemma</code></li>
-<li><code>Qwen3Embedding</code></li>
+<li><code>EmbeddingGemma</code>, <code>Qwen3Embedding</code></li>
 </ul>
-<h3 id="isq-organization-1"><a class="header" href="#isq-organization-1">ISQ Organization</a></h3>
+<h3 id="isq-organization"><a class="header" href="#isq-organization">ISQ Organization</a></h3>
 <ul>
 <li><code>Default</code></li>
-<li><code>MoQE</code>: if applicable, only quantize MoE experts. https://arxiv.org/abs/2310.02410</li>
+<li><code>MoQE</code>: if applicable, only quantize MoE experts. <a href="https://arxiv.org/abs/2310.02410">arxiv.org/abs/2310.02410</a></li>
 </ul>
-<blockquote>
-<p>Note: <code>from_uqff</code> specifies a UQFF path to load from. If provided, this takes precedence over applying ISQ. For sharded models, you only need to specify the first shard (e.g., <code>q4k-0.uqff</code>) – the remaining shards are auto-discovered. For multiple different quantizations, use a semicolon delimiter (;).</p>
-</blockquote>
-<blockquote>
-<p>Note: <code>enable_thinking</code> enables thinking for models that support the configuration.
-Note: <code>truncate_sequence=True</code> trims prompts that would otherwise exceed the model’s maximum context length. Leave it <code>False</code> to receive a validation error instead.</p>
-</blockquote>
-<pre><code class="language-py">class Which(Enum):
+<h3 id="which-variants"><a class="header" href="#which-variants">Which variants</a></h3>
+<pre><code class="language-python">class Which(Enum):
     @dataclass
     class Plain:
         model_id: str
@@ -286,37 +482,9 @@ Note: <code>truncate_sequence=True</code> trims prompts that would otherwise exc
         from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
         calibration_file: str | None = None
         imatrix: str | None = None
-        hf_cache_path: str | None = None
-
-    @dataclass
-    class XLora:
-        xlora_model_id: str
-        order: str
-        arch: Architecture | None = None
-        model_id: str | None = None
-        tokenizer_json: str | None = None
-        tgt_non_granular_index: int | None = None
-        topology: str | None = None
-        from_uqff: str | list[str] | None = None
-        write_uqff: str | None = None
-        dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
-        hf_cache_path: str | None = None
-
-    @dataclass
-    class Lora:
-        adapter_model_id: str
-        arch: Architecture | None = None
-        model_id: str | None = None
-        tokenizer_json: str | None = None
-        topology: str | None = None
-        from_uqff: str | list[str] | None = None
-        write_uqff: str | None = None
-        dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
         hf_cache_path: str | None = None
 
     @dataclass
@@ -326,78 +494,7 @@ Note: <code>truncate_sequence=True</code> trims prompts that would otherwise exc
         tok_model_id: str | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
-
-    @dataclass
-    class XLoraGGUF:
-        quantized_model_id: str
-        quantized_filename: str | list[str]
-        xlora_model_id: str
-        order: str
-        tok_model_id: str | None = None
-        tgt_non_granular_index: int | None = None
-        topology: str | None = None
-        dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
-
-    @dataclass
-    class LoraGGUF:
-        quantized_model_id: str
-        quantized_filename: str | list[str]
-        adapters_model_id: str
-        order: str
-        tok_model_id: str | None = None
-        topology: str | None = None
-        dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
-
-    @dataclass
-    class GGML:
-        quantized_model_id: str
-        quantized_filename: str
-        tok_model_id: str | None = None
-        tokenizer_json: str | None = None
-        gqa: int | None = None
-        topology: str | None = None
-        dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
-
-    @dataclass
-    class XLoraGGML:
-        quantized_model_id: str
-        quantized_filename: str
-        xlora_model_id: str
-        order: str
-        tok_model_id: str | None = None
-        tgt_non_granular_index: int | None = None
-        tokenizer_json: str | None = None
-        gqa: int | None = None
-        topology: str | None = None
-        dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
-
-    @dataclass
-    class LoraGGML:
-        quantized_model_id: str
-        quantized_filename: str
-        adapters_model_id: str
-        order: str
-        tok_model_id: str | None = None
-        tokenizer_json: str | None = None
-        topology: str | None = None
-        dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
-
-    @dataclass
-    class Embedding:
-        model_id: str
-        arch: EmbeddingArchitecture | None = None
-        tokenizer_json: str | None = None
-        topology: str | None = None
-        from_uqff: str | list[str] | None = None
-        write_uqff: str | None = None
-        dtype: ModelDType = ModelDType.Auto
-        hf_cache_path: str | None = None
+        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class MultimodalPlain:
@@ -409,9 +506,20 @@ Note: <code>truncate_sequence=True</code> trims prompts that would otherwise exc
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         max_edge: int | None = None
-        auto_map_params: MultimodalAutoMapParams | None = (None,)
+        auto_map_params: MultimodalAutoMapParams | None = None
         calibration_file: str | None = None
         imatrix: str | None = None
+        hf_cache_path: str | None = None
+
+    @dataclass
+    class Embedding:
+        model_id: str
+        arch: EmbeddingArchitecture | None = None
+        tokenizer_json: str | None = None
+        topology: str | None = None
+        from_uqff: str | list[str] | None = None
+        write_uqff: str | None = None
+        dtype: ModelDType = ModelDType.Auto
         hf_cache_path: str | None = None
 
     @dataclass
@@ -427,268 +535,43 @@ Note: <code>truncate_sequence=True</code> trims prompts that would otherwise exc
         dac_model_id: str | None = None
         dtype: ModelDType = ModelDType.Auto
 </code></pre>
-<h2 id="multi-model-support"><a class="header" href="#multi-model-support">Multi-model Support</a></h2>
-<p>The <code>mistralrs</code> Python SDK supports running multiple models using the <code>Runner</code> class with the <code>model_id</code> parameter. All request methods accept an optional <code>model_id</code> to target a specific model. When <code>model_id</code> is <code>None</code> or omitted, the default model is used. If aliases are configured (for example via the server config or Rust <code>MultiModelBuilder</code>), <code>list_models()</code> will return those aliases and you can pass them in requests; canonical pipeline names remain accepted.</p>
-<h3 id="basic-usage-with-model_id"><a class="header" href="#basic-usage-with-model_id">Basic Usage with model_id</a></h3>
-<pre><code class="language-python">import mistralrs
-
-# Create a Runner with a multimodal model (Gemma 4 E4B)
-runner = mistralrs.Runner(
-    which=mistralrs.Which.MultimodalPlain(
-        model_id="google/gemma-4-E4B-it",
-        arch=mistralrs.MultimodalArchitecture.Gemma4,
-    ),
-    in_situ_quant="Q4K",
-)
-
-# List available models (model IDs are registered IDs, aliases if configured)
-models = runner.list_models()
-print(f"Available models: {models}")  # ["google/gemma-4-E4B-it"]
-
-# Send request to specific model using model_id parameter
-response = runner.send_chat_completion_request(
-    mistralrs.ChatCompletionRequest(
-        messages=[{"role": "user", "content": "Hello!"}],
-        max_tokens=100
-    ),
-    model_id="google/gemma-4-E4B-it"  # Target specific model
-)
-
-# Send request without model_id (uses default model)
-response = runner.send_chat_completion_request(
-    mistralrs.ChatCompletionRequest(
-        messages=[{"role": "user", "content": "Hello!"}],
-        max_tokens=100
-    )
-)
-</code></pre>
-<h3 id="multi-model-management"><a class="header" href="#multi-model-management">Multi-model Management</a></h3>
-<pre><code class="language-python"># List available models
-models = runner.list_models()
-print(f"Available models: {models}")
-
-# Get/set default model
-default_model = runner.get_default_model_id()
-print(f"Default model: {default_model}")
-
-# Change default model (model must be loaded)
-runner.set_default_model_id("google/gemma-4-E4B-it")
-
-# List models with their status
-models_with_status = runner.list_models_with_status()
-for model_id, status in models_with_status:
-    print(f"{model_id}: {status}")  # status is "loaded", "unloaded", or "reloading"
-</code></pre>
-<h3 id="model-unloading-and-reloading"><a class="header" href="#model-unloading-and-reloading">Model Unloading and Reloading</a></h3>
-<p>You can unload models to free memory and reload them on demand:</p>
-<pre><code class="language-python">model_id = "google/gemma-4-E4B-it"
-
-# Check if model is loaded
-is_loaded = runner.is_model_loaded(model_id)
-print(f"Model loaded: {is_loaded}")
-
-# List models with their status
-models_with_status = runner.list_models_with_status()
-for mid, status in models_with_status:
-    print(f"{mid}: {status}")
-
-# Unload a model to free memory (preserves configuration for reload)
-runner.unload_model(model_id)
-
-# Check status after unload
-is_loaded = runner.is_model_loaded(model_id)
-print(f"Model loaded after unload: {is_loaded}")  # False
-
-# Manually reload a model
-runner.reload_model(model_id)
-
-# Auto-reload: sending a request to an unloaded model will reload it automatically
-response = runner.send_chat_completion_request(
-    mistralrs.ChatCompletionRequest(
-        messages=[{"role": "user", "content": "Hello!"}]
-    ),
-    model_id=model_id  # Will auto-reload if unloaded
-)
-</code></pre>
-<h3 id="request-methods-with-model_id"><a class="header" href="#request-methods-with-model_id">Request Methods with model_id</a></h3>
-<p>All request methods accept an optional <code>model_id</code> parameter:</p>
-<pre><code class="language-python"># Chat completion
-response = runner.send_chat_completion_request(request, model_id="model-id")
-
-# Completion
-response = runner.send_completion_request(request, model_id="model-id")
-
-# Embeddings
-embeddings = runner.send_embedding_request(request, model_id="model-id")
-
-# Image generation
-image = runner.generate_image(prompt, response_format, model_id="model-id")
-
-# Audio generation
-audio = runner.generate_audio(prompt, model_id="model-id")
-
-# Tokenization
-tokens = runner.tokenize_text(text, add_special_tokens=True, model_id="model-id")
-text = runner.detokenize_text(tokens, skip_special_tokens=True, model_id="model-id")
-</code></pre>
-<p>When <code>model_id</code> is <code>None</code> or omitted, the default model is used.</p>
-<h3 id="server-configuration"><a class="header" href="#server-configuration">Server Configuration</a></h3>
-<p>For server-based multi-model deployment, see the <a href="multi_model/overview.html">multi-model documentation</a>.</p>
-<h2 id="mcp-client"><a class="header" href="#mcp-client">MCP Client</a></h2>
-<p>The <code>mistralrs</code> Python SDK now supports Model Context Protocol (MCP) clients, enabling AI assistants to connect to and interact with external tools and resources through standardized server interfaces.</p>
-<h3 id="mcp-server-configuration"><a class="header" href="#mcp-server-configuration">MCP Server Configuration</a></h3>
-<p>Configure MCP servers using <code>McpServerConfigPy</code>:</p>
-<pre><code class="language-python"># HTTP-based MCP server with Bearer token authentication
-http_server = mistralrs.McpServerConfigPy(
-    id="web_search",
-    name="Web Search MCP",
-    source=mistralrs.McpServerSourcePy.Http(
-        url="https://api.example.com/mcp",
-        timeout_secs=30,
-        headers={"X-API-Version": "v1"}  # Optional additional headers
-    ),
-    enabled=True,
-    tool_prefix="web",  # Prefixes tool names to avoid conflicts
-    resources=None,
-    bearer_token="your-api-token"  # Automatically added as Authorization header
-)
-
-# Process-based MCP server for local tools
-process_server = mistralrs.McpServerConfigPy(
-    id="filesystem",
-    name="Filesystem MCP",
-    source=mistralrs.McpServerSourcePy.Process(
-        command="mcp-server-filesystem",
-        args=["--root", "/tmp"],
-        work_dir=None,
-        env={"MCP_LOG_LEVEL": "debug"}  # Optional environment variables
-    ),
-    enabled=True,
-    tool_prefix="fs",
-    resources=["file://**"],  # Resource patterns this client is interested in
-    bearer_token=None  # Process servers typically don't need authentication
-)
-
-# WebSocket-based MCP server for real-time communication
-websocket_server = mistralrs.McpServerConfigPy(
-    id="realtime_data",
-    name="Real-time Data MCP",
-    source=mistralrs.McpServerSourcePy.WebSocket(
-        url="wss://realtime.example.com/mcp",
-        timeout_secs=60,
-        headers=None
-    ),
-    enabled=True,
-    tool_prefix="rt",
-    resources=None,
-    bearer_token="websocket-token"  # WebSocket Bearer token support
-)
-</code></pre>
-<h3 id="mcp-client-configuration"><a class="header" href="#mcp-client-configuration">MCP Client Configuration</a></h3>
-<p>Configure the MCP client using <code>McpClientConfigPy</code>:</p>
-<pre><code class="language-python">mcp_config = mistralrs.McpClientConfigPy(
-    servers=[http_server, process_server, websocket_server],
-    auto_register_tools=True,  # Automatically discover and register tools
-    tool_timeout_secs=30,      # Timeout for individual tool calls
-    max_concurrent_calls=5     # Maximum concurrent tool calls across all servers
-)
-</code></pre>
-<h3 id="integration-with-runner"><a class="header" href="#integration-with-runner">Integration with Runner</a></h3>
-<p>Pass the MCP client configuration to the <code>Runner</code>:</p>
-<pre><code class="language-python">runner = mistralrs.Runner(
-    which=mistralrs.Which.GGUF(
-        tok_model_id="mistralai/Mistral-7B-Instruct-v0.1",
-        quantized_model_id="TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
-        quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",
-    ),
-    mcp_client_config=mcp_config  # MCP tools automatically registered
-)
-</code></pre>
-<p>When <code>auto_register_tools=True</code>, the MCP client will:</p>
-<ol>
-<li>Connect to all enabled MCP servers</li>
-<li>Discover available tools from each server</li>
-<li>Register them for automatic tool calling with appropriate prefixes</li>
-<li>Make them available during model conversations</li>
-</ol>
-<h3 id="mcp-transport-types"><a class="header" href="#mcp-transport-types">MCP Transport Types</a></h3>
-<ul>
-<li>
-<p><strong>HTTP Transport</strong>: Best for public APIs, RESTful services, servers behind load balancers. Supports SSE (Server-Sent Events) and standard HTTP semantics.</p>
-</li>
-<li>
-<p><strong>Process Transport</strong>: Best for local tools, development servers, sandboxed environments. Provides process isolation with no network overhead.</p>
-</li>
-<li>
-<p><strong>WebSocket Transport</strong>: Best for interactive applications, real-time data, low-latency requirements. Supports persistent connections and server-initiated notifications.</p>
-</li>
-</ul>
-<h3 id="authentication"><a class="header" href="#authentication">Authentication</a></h3>
-<ul>
-<li><strong>Bearer Tokens</strong>: Automatically added as <code>Authorization: Bearer &lt;token&gt;</code> header for HTTP and WebSocket connections</li>
-<li><strong>Custom Headers</strong>: Additional headers can be specified for API keys, versioning, etc.</li>
-<li><strong>Process Servers</strong>: Typically don’t require authentication as they run locally</li>
-</ul>
-<h2 id="example"><a class="header" href="#example">Example</a></h2>
-<pre><code class="language-python">from mistralrs import Runner, Which, ChatCompletionRequest
-
-runner = Runner(
-    which=Which.GGUF(
-        tok_model_id="mistralai/Mistral-7B-Instruct-v0.1",
-        quantized_model_id="TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
-        quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",
-    )
-)
-
-res = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="default",
-        messages=[{"role":"user", "content":"Tell me a story about the Rust type system."}],
-        max_tokens=256,
-        presence_penalty=1.0,
-        top_p=0.1,
-        temperature=0.1,
-    )
-)
-print(res.choices[0].message.content)
-print(res.usage)
-</code></pre>
-<h2 id="embeddings-example"><a class="header" href="#embeddings-example">Embeddings example</a></h2>
-<pre><code class="language-python">from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
-
-runner = Runner(
-    which=Which.Embedding(
-        model_id="google/embeddinggemma-300m",
-        arch=EmbeddingArchitecture.EmbeddingGemma,
-    )
-)
-
-embeddings = runner.send_embedding_request(
-    EmbeddingRequest(
-        input=[
-            "task: query | text: superconductors",
-            "task: query | text: graphene",
-        ],
-        truncate_sequence=True,
-    )
-)
-
-print(len(embeddings), len(embeddings[0]))
-
-# Swap the model_id and arch below to load Qwen/Qwen3-Embedding-0.6B instead:
-# Runner(
-#     which=Which.Embedding(
-#         model_id="Qwen/Qwen3-Embedding-0.6B",
-#         arch=EmbeddingArchitecture.Qwen3Embedding,
-#     )
-# )
-</code></pre>
+<blockquote>
+<p>Note: <code>from_uqff</code> specifies a UQFF path to load from. For sharded models, you only need to specify the first shard (e.g., <code>q4k-0.uqff</code>). The remaining shards are auto-discovered.</p>
+</blockquote>
+<blockquote>
+<p>Note: <code>enable_thinking</code> enables thinking for models that support it.</p>
+</blockquote>
+<blockquote>
+<p>Note: <code>truncate_sequence=True</code> trims prompts that exceed the model’s maximum context length.</p>
+</blockquote>
+<p>Adapter variants (<code>XLora</code>, <code>Lora</code>, <code>XLoraGGUF</code>, <code>LoraGGUF</code>, <code>GGML</code>, <code>XLoraGGML</code>, <code>LoraGGML</code>) are also available. See the <a href="https://ericlbuehler.github.io/mistral.rs/pyo3/mistralrs.html">full API reference</a> for details.</p>
+</details>
+<h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Category</th><th>Examples</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Getting Started</strong></td><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/plain.py">plain.py</a>, <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/streaming.py">streaming.py</a>, <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gguf.py">gguf.py</a></td></tr>
+<tr><td><strong>Structured Output</strong></td><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/pydantic_schema.py">pydantic_schema.py</a>, <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/json_schema.py">json_schema.py</a>, <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/regex.py">regex.py</a>, <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/lark.py">lark.py</a></td></tr>
+<tr><td><strong>Tool Calling</strong></td><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/tool_call.py">tool_call.py</a>, <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_tool_call.py">custom_tool_call.py</a>, <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/agentic_tools.py">agentic_tools.py</a></td></tr>
+<tr><td><strong>Search</strong></td><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/web_search.py">web_search.py</a>, <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_search.py">custom_search.py</a></td></tr>
+<tr><td><strong>MCP</strong></td><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/mcp_client.py">mcp_client.py</a></td></tr>
+<tr><td><strong>Quantization</strong></td><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/isq.py">isq.py</a>, <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/imatrix.py">imatrix.py</a>, <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/topology.py">topology.py</a></td></tr>
+<tr><td><strong>Adapters</strong></td><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/lora_zephyr.py">lora_zephyr.py</a>, <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/xlora_zephyr.py">xlora_zephyr.py</a>, <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/anymoe.py">anymoe.py</a></td></tr>
+<tr><td><strong>Advanced</strong></td><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/paged_attention.py">paged_attention.py</a>, <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/speculative.py">speculative.py</a>, <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/multi_model_example.py">multi_model_example.py</a></td></tr>
+<tr><td><strong>Cookbook</strong></td><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/cookbook.ipynb">cookbook.ipynb</a>, <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/tool_calling.ipynb">tool_calling.ipynb</a></td></tr>
+</tbody>
+</table>
+</div>
+<p>Browse all examples: <a href="https://github.com/EricLBuehler/mistral.rs/tree/master/examples/python">examples/python/</a></p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="RUST_SDK.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="OPENRESPONSES.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -702,7 +585,7 @@ print(len(embeddings), len(embeddings[0]))
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="RUST_SDK.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="OPENRESPONSES.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

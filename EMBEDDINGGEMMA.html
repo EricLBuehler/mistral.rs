@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,12 +180,14 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="embeddinggemma"><a class="header" href="#embeddinggemma">EmbeddingGemma</a></h1>
-<p>EmbeddingGemma was the first embedding model supported by mistral.rs. This guide walks through serving the
-model via the OpenAI-compatible HTTP server, running it from Python, and embedding text directly in Rust.</p>
+                        <h1 id="embeddinggemma-googleembeddinggemma-300m"><a class="header" href="#embeddinggemma-googleembeddinggemma-300m">EmbeddingGemma: <a href="https://huggingface.co/google/embeddinggemma-300m"><code>google/embeddinggemma-300m</code></a></a></h1>
+<p>EmbeddingGemma was the first embedding model supported by mistral.rs. It generates optimized embeddings for various use cases such as document retrieval, question answering, and fact verification.</p>
 <p>For a catalog of available embedding models and general usage tips, see <a href="EMBEDDINGS.html">EMBEDDINGS.md</a>.</p>
-<h2 id="prompt-instructions"><a class="header" href="#prompt-instructions">Prompt instructions</a></h2>
-<p>EmbeddingGemma can generate optimized embeddings for various use cases-such as document retrieval, question answering, and fact verification-or for specific input types, either, a query or a document-using prompts that are prepended to the input strings.</p>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre><code class="language-bash">mistralrs serve embedding -m google/embeddinggemma-300m -p 1234
+</code></pre>
+<h2 id="prompt-instructions"><a class="header" href="#prompt-instructions">Prompt Instructions</a></h2>
+<p>EmbeddingGemma can generate optimized embeddings for various use cases or for specific input types (query or document) using prompts that are prepended to the input strings.</p>
 <ul>
 <li>Query prompts follow the form <code>task: {task description} | query: </code> where the task description varies by the use case, with the default task description being search result.</li>
 <li>Document-style prompts follow the form <code>title: {title | "none"} | text: </code> where the title is either none (the default) or the actual title of the document. Note that providing a title, if available, will improve model performance for document prompts but may require manual formatting.</li>
@@ -207,11 +209,11 @@ model via the OpenAI-compatible HTTP server, running it from Python, and embeddi
 </tbody>
 </table>
 </div>
-<h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
-<p>Launch the server in embedding mode to expose an OpenAI-compatible <code>/v1/embeddings</code> endpoint:</p>
-<pre><code class="language-bash">mistralrs serve -p 1234 -m google/embeddinggemma-300m
+<h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
+<p>Start the server:</p>
+<pre><code class="language-bash">mistralrs serve embedding -m google/embeddinggemma-300m -p 1234
 </code></pre>
-<p>Once running, call the endpoint with an OpenAI client or raw <code>curl</code>:</p>
+<p>Send a request:</p>
 <pre><code class="language-bash">curl http://localhost:1234/v1/embeddings \
   -H "Authorization: Bearer EMPTY" \
   -H "Content-Type: application/json" \

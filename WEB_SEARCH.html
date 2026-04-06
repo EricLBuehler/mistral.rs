@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,12 +182,12 @@
                     <main>
                         <h1 id="web-search-tool-in-mistralrs"><a class="header" href="#web-search-tool-in-mistralrs">Web search tool in mistral.rs</a></h1>
 <p>mistral.rs is compatible with OpenAI’s <code>web_search_options</code> parameter! Once enabled, this allows web searching for models.</p>
-<p>This works with all models that support <a href="TOOL_CALLING.html">tool calling</a>. However, your mileage may vary depending on the specific model. The following models work during testing and are recommended for usage:</p>
+<p>This works with all models that support <a href="TOOL_CALLING.html">tool calling</a>. The following models have been tested:</p>
 <ul>
 <li>Hermes 3 3b/8b</li>
 <li>Mistral 3 24b</li>
 <li>Llama 4 Scout/Maverick</li>
-<li>Qwen 3 (⭐ Recommended!)</li>
+<li>Qwen 3</li>
 </ul>
 <p>Web search is supported both in streaming and completion responses! This makes it easy to integrate and test out in interactive mode!</p>
 <p>Besides tool calling and parsing of web content, we also use an embedding model to select the most relevant search results.</p>
@@ -346,6 +346,12 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
+<h2 id="see-also"><a class="header" href="#see-also">See Also</a></h2>
+<ul>
+<li><a href="AGENTS.html">Agentic Features Guide</a>: Complete agentic capabilities overview</li>
+<li><a href="TOOL_CALLING.html">Tool Calling</a>: How tool calling works under the hood</li>
+<li><a href="MCP/client.html">MCP Client</a>: Connect to external tool servers</li>
+</ul>
 
                     </main>
 

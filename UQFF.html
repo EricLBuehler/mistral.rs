@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -220,8 +220,8 @@ The uniquely powerful quantized file format.
 <h2 id="motivation"><a class="header" href="#motivation">Motivation</a></h2>
 <p>UQFF builds on our ISQ feature by allowing serialization and deserialization for models.</p>
 <p>While ISQ is a powerful feature enabling easy quantization of models, the key limitation has been the time required for requantization. While the process is relatively fast with parallelization and other techniques, multiple runs can make the experience slow.</p>
-<p><strong>Comparting UQFF to GGUF:</strong></p>
-<p>In contrast to GGUF, which only supports the GGUF quantizations, UQFF is designed with flexibiliuty in mind. At its code, it extends the power and flexibility of ISQ. The ability to support multiple quantization types (more to come!) in one simple, easy-to-use file is a critical feature.</p>
+<p><strong>Comparing UQFF to GGUF:</strong></p>
+<p>In contrast to GGUF, which only supports the GGUF quantizations, UQFF is designed with flexibility in mind. At its core, it extends the power and flexibility of ISQ. The ability to support multiple quantization types (more to come!) in one simple, easy-to-use file is a critical feature.</p>
 <p>Additionally, users will no longer need to wait for GGUF support to begin using post-training quantized models. As we add new models and quantization schemes to mistral.rs, the feature set of UQFF will grow.</p>
 <h2 id="support"><a class="header" href="#support">Support</a></h2>
 <p>The following quantization formats are supported in UQFF. One can, of course, be combined arbitrarily during UQFF generation or ISQ using a <a href="TOPOLOGY.html">model topology</a>. When loading a UQFF model, only the per-layer device mapping feature of the topology applies.</p>
@@ -408,6 +408,13 @@ mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k --isq q8_0 -o ph
 <h2 id="list-of-models"><a class="header" href="#list-of-models">List of models</a></h2>
 <p>You can find a list of models in the <a href="https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c">Hugging Face model collection</a>.</p>
 <p>Have you created a UQFF model on Hugging Face? If so, please <a href="https://github.com/EricLBuehler/mistral.rs/issues/new">create an issue</a>.</p>
+<h2 id="see-also"><a class="header" href="#see-also">See Also</a></h2>
+<ul>
+<li><a href="PERFORMANCE.html">Performance Guide</a>: Choosing between ISQ, GGUF, and UQFF</li>
+<li><a href="QUANTS.html">Quantization Overview</a>: All quantization methods</li>
+<li><a href="ISQ.html">ISQ</a>: Quantize at load time instead</li>
+<li><a href="TOPOLOGY.html">Topology</a>: Per-layer device mapping with UQFF</li>
+</ul>
 
                     </main>
 

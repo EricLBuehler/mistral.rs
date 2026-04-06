@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,7 +181,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="tool-calling"><a class="header" href="#tool-calling">Tool calling</a></h1>
-<p>Mistral.rs supports OpenAI-compatible tool calling across all APIs (HTTP, Python SDK, Rust SDK). The model decides which tools to call and generates structured arguments; you decide how the tools get executed — either client-side or automatically on the server.</p>
+<p>Mistral.rs supports OpenAI-compatible tool calling across all APIs (HTTP, Python SDK, Rust SDK). The model decides which tools to call and generates structured arguments; you decide how the tools get executed: either client-side or automatically on the server.</p>
 <h2 id="supported-models"><a class="header" href="#supported-models">Supported models</a></h2>
 <p>All supported models respond according to the <a href="https://cookbook.openai.com/examples/how_to_call_functions_with_chat_models">OpenAI tool calling API</a>:</p>
 <ul>
@@ -205,11 +205,11 @@
 <h3 id="basic-client-side-execution"><a class="header" href="#basic-client-side-execution">Basic (client-side execution)</a></h3>
 <p>The model generates a tool call, the server returns it to the client, and your code executes the tool and sends the result back in a follow-up request. This is the standard OpenAI flow.</p>
 <h3 id="agentic-server-side-execution"><a class="header" href="#agentic-server-side-execution">Agentic (server-side execution)</a></h3>
-<p>The server executes tools automatically and feeds results back to the model in a loop — no client round-trips needed. The model calls a tool, the server runs it, appends the result, and lets the model continue until it produces a final text answer or hits the round limit.</p>
+<p>The server executes tools automatically and feeds results back to the model in a loop without any client round-trips. The model calls a tool, the server runs it, appends the result, and lets the model continue until it produces a final text answer or hits the round limit.</p>
 <p>To use the agentic loop, you need two things:</p>
 <ol>
-<li><strong>A way to execute tools</strong> — register callbacks (Python/Rust SDK), connect MCP servers, enable web search, or set a tool dispatch URL</li>
-<li><strong><code>max_tool_rounds</code></strong> — tells the server how many loop iterations to allow</li>
+<li><strong>A way to execute tools</strong>: register callbacks (Python/Rust SDK), connect MCP servers, enable web search, or set a tool dispatch URL</li>
+<li><strong><code>max_tool_rounds</code></strong>: tells the server how many loop iterations to allow</li>
 </ol>
 <h2 id="grammar-enforcement"><a class="header" href="#grammar-enforcement">Grammar enforcement</a></h2>
 <p>When tools are provided in a request, mistral.rs automatically constrains the model’s output to valid tool call syntax using <a href="https://github.com/guidance-ai/llguidance">llguidance</a>. This prevents malformed JSON, hallucinated tool names, and missing delimiters.</p>
@@ -219,7 +219,7 @@
 <li>When the tool call is complete, the grammar deactivates.</li>
 <li>For multi-tool turns, the grammar re-activates for each subsequent tool call.</li>
 </ol>
-<p>This is automatic — no configuration needed. If a user-specified grammar is already active on the request, tool call grammar is skipped.</p>
+<p>This is automatic and requires no configuration. If a user-specified grammar is already active on the request, tool call grammar is skipped.</p>
 <h3 id="strict-mode"><a class="header" href="#strict-mode">Strict mode</a></h3>
 <p>By default, grammar enforcement ensures valid syntax but allows any argument keys and types. <strong>Strict mode</strong> additionally enforces the tool’s JSON schema on the arguments.</p>
 <p>Set <code>"strict": true</code> on the function definition:</p>
@@ -293,17 +293,17 @@ response = runner.send_chat_completion_request(request)
 <h3 id="how-tools-get-executed"><a class="header" href="#how-tools-get-executed">How tools get executed</a></h3>
 <p>When the model calls a tool during the agentic loop, the server tries these dispatch methods in order:</p>
 <ol>
-<li><strong>Built-in search tools</strong> (<code>search_the_web</code>, <code>website_content_extractor</code>) — if web search is enabled</li>
-<li><strong>Registered callbacks</strong> — tool callbacks from the Python/Rust SDK or MCP servers</li>
-<li><strong>Tool dispatch URL</strong> — POSTs the tool call to your HTTP endpoint</li>
-<li><strong>No handler found</strong> — the loop stops and the un-executed tool call is returned to the client</li>
+<li><strong>Built-in search tools</strong> (<code>search_the_web</code>, <code>website_content_extractor</code>): if web search is enabled</li>
+<li><strong>Registered callbacks</strong>: tool callbacks from the Python/Rust SDK or MCP servers</li>
+<li><strong>Tool dispatch URL</strong>: POSTs the tool call to your HTTP endpoint</li>
+<li><strong>No handler found</strong>: the loop stops and the un-executed tool call is returned to the client</li>
 </ol>
 <p>Streaming is supported: tool call chunks are forwarded to the client so you can see which tools are being called mid-loop.</p>
 <h3 id="tool-dispatch-url"><a class="header" href="#tool-dispatch-url">Tool dispatch URL</a></h3>
 <p>The tool dispatch URL lets the server POST unhandled tool calls to your HTTP endpoint. This is how HTTP API users get server-side tool execution without registering callbacks.</p>
 <p><strong>Security:</strong> To prevent SSRF, <code>tool_dispatch_url</code> cannot be set per-request via the HTTP API. Configure it server-side or in trusted SDK code:</p>
 <pre><code class="language-bash"># CLI: applies to all requests
-mistralrs serve -p 1234 --tool-dispatch-url https://my-service.com/tools --max-tool-rounds 5 -m Qwen/Qwen3-4B
+mistralrs serve -p 1234 --tool-dispatch-url https://my-service.com/tools --max-tool-rounds 5 -m google/gemma-4-E4B-it
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -325,7 +325,7 @@ ChatCompletionRequest(
 <p>Your endpoint returns:</p>
 <pre><code class="language-json">{"content": "Sunny, 22°C"}
 </code></pre>
-<p>The response can also be a bare string. One URL handles all tools — dispatch by <code>name</code>.</p>
+<p>The response can also be a bare string. One URL handles all tools, dispatched by <code>name</code>.</p>
 <h3 id="tool-callbacks"><a class="header" href="#tool-callbacks">Tool callbacks</a></h3>
 <p>Register custom functions to handle tool calls directly in your code. The callback receives the tool name and arguments, and returns the result as a string.</p>
 <p><strong>Python SDK:</strong></p>
@@ -364,12 +364,18 @@ runner = Runner(
 <li><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_tool_call.py">Custom tool callback</a></li>
 <li><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_search.py">Custom search callback</a></li>
 </ul>
+<h2 id="see-also"><a class="header" href="#see-also">See Also</a></h2>
+<ul>
+<li><a href="AGENTS.html">Agentic Features Guide</a>: Server-side tool execution, web search, MCP, and tool dispatch</li>
+<li><a href="WEB_SEARCH.html">Web Search</a>: Built-in web search integration</li>
+<li><a href="MCP/client.html">MCP Client</a>: Connect to external tool servers</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="DISTRIBUTED/RING.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="AGENTS.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -383,7 +389,7 @@ runner = Runner(
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="DISTRIBUTED/RING.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="AGENTS.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

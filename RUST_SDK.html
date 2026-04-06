@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -207,8 +207,8 @@
 mistralrs = "0.7"
 </code></pre>
 <p>For GPU acceleration, enable the appropriate feature:</p>
-<pre><code class="language-toml">mistralrs = { version = "0.7", features = ["metal"] }     # macOS
-mistralrs = { version = "0.7", features = ["cuda"] }       # NVIDIA
+<pre><code class="language-toml">mistralrs = { version = "0.8", features = ["metal"] }     # macOS
+mistralrs = { version = "0.8", features = ["cuda"] }       # NVIDIA
 </code></pre>
 <h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
 <pre class="playground"><code class="language-rust">use mistralrs::{IsqBits, ModelBuilder, TextMessages, TextMessageRole};
@@ -407,7 +407,7 @@ fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
 </tbody>
 </table>
 </div>
-<p>The default feature set (no flags) builds with pure Rust — no C compiler or system libraries required.</p>
+<p>The default feature set (no flags) builds with pure Rust. No C compiler or system libraries required.</p>
 <h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
 <p>The crate includes 48 runnable examples organized by topic:</p>
 <div class="table-wrapper">
@@ -428,16 +428,24 @@ fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
 <pre><code class="language-bash">cargo run --release --features &lt;features&gt; --example &lt;name&gt;
 </code></pre>
 <p>Browse all examples: <a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples"><code>mistralrs/examples/</code></a></p>
+<h2 id="see-also"><a class="header" href="#see-also">See Also</a></h2>
+<ul>
+<li><a href="GETTING_STARTED.html">Getting Started</a>: Quick tutorial</li>
+<li><a href="AGENTS.html">Agentic Features Guide</a>: Agent builder, tool callbacks, web search</li>
+<li><a href="TOOL_CALLING.html">Tool Calling</a>: Tool calling reference</li>
+<li><a href="PERFORMANCE.html">Performance Guide</a>: Optimization options</li>
+<li><a href="https://docs.rs/mistralrs">API Docs (docs.rs)</a>: Full API reference</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="TROUBLESHOOTING.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="PYTHON_INSTALLATION.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="PYTHON_SDK.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="SUPPORTED_MODELS.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -447,11 +455,11 @@ fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="TROUBLESHOOTING.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="PYTHON_INSTALLATION.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="PYTHON_SDK.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="SUPPORTED_MODELS.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

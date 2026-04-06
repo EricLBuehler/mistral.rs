@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,44 +182,26 @@
                     <main>
                         <h1 id="phi-3-vision-model-microsoftphi-35-vision-instruct"><a class="header" href="#phi-3-vision-model-microsoftphi-35-vision-instruct">Phi 3 Vision Model: <a href="https://huggingface.co/microsoft/Phi-3-vision-128k-instruct"><code>microsoft/Phi-3.5-vision-instruct</code></a></a></h1>
 <p>The Phi 3 Vision Model has support in the Rust, Python, and HTTP APIs. The Phi 3 Vision Model supports ISQ for increased performance.</p>
-<p>The Python and HTTP APIs support sending images as:</p>
-<ul>
-<li>URL</li>
-<li>Path to a local image</li>
-<li><a href="https://en.wikipedia.org/wiki/Base64">Base64</a> encoded string</li>
-</ul>
-<p>The Rust SDK takes an image from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
 <blockquote>
 <p>Note: The Phi 3 Vision model works best with one image although it is supported to send multiple images.</p>
 </blockquote>
 <blockquote>
-<p>Note: when sending multiple images, they will be resized to the minimum dimension by which all will fit without cropping.
-Aspect ratio is not preserved in that case.</p>
+<p>Note: When sending multiple images, they will be resized to the minimum dimension by which all will fit without cropping. Aspect ratio is not preserved in that case.</p>
 </blockquote>
-<h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<hr>
-<p><strong>Image:</strong>
-<img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width="1000" height="666"></p>
-<h6><a href="https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
-
-<p><strong>Prompt:</strong></p>
-<pre><code>What is shown in this image? Write a detailed response analyzing the scene.
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre><code class="language-bash">mistralrs run -m microsoft/Phi-3.5-vision-instruct --isq 4 --image photo.jpg -i "Describe this image"
 </code></pre>
-<p><strong>Output:</strong></p>
-<pre><code>The image captures a breathtaking view of a mountain peak, bathed in the soft glow of sunlight. The peak, dusted with a layer of snow, stands tall against the backdrop of a clear blue sky. A trail, etched into the mountain's side by countless hikers before it, winds its way up to the summit. The trail's white color contrasts sharply with the surrounding landscape, drawing attention to its path and inviting exploration.
-
-The perspective from which this photo is taken offers an expansive view of the mountain and its surroundings. It seems as if one could look down from this vantage point and see miles upon miles of untouched wilderness stretching out into the distance. The colors in the image are predominantly blue and white, reflecting both sky and snow-covered mountains respectively. However, there are also hints of green from trees dotting lower parts of mountainsides or valleys below them - adding another layer to this picturesque scene. This serene landscape evokes feelings of tranquility and adventure at once - an invitation to explore nature's grandeur while respecting its majesty at all times!
-</code></pre>
-<hr>
+<h2 id="input-formats"><a class="header" href="#input-formats">Input Formats</a></h2>
+<p>The Python and HTTP APIs support sending inputs as:</p>
+<ul>
+<li><strong>Images</strong>: URL, path to a local file, or base64 encoded string (via <code>image_url</code>)</li>
+</ul>
+<p>The Rust SDK takes images from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
+<h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve multimodal -p 1234 -m microsoft/Phi-3.5-vision-instruct
+<pre><code class="language-bash">mistralrs serve -m microsoft/Phi-3.5-vision-instruct --isq 4 -p 1234
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -242,28 +224,62 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "What is shown in this image? Write a detailed response analyzing the scene.",
+                    "text": "What is this?",
                 },
             ],
         },
     ],
     max_tokens=256,
-    frequency_penalty=1.0,
-    top_p=0.1,
-    temperature=0,
 )
-resp = completion.choices[0].message.content
-print(resp)
-
+print(completion.choices[0].message.content)
 </code></pre>
 <ul>
 <li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">image via base64 here</a>.</li>
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
-<hr>
-<h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
+<h2 id="python-sdk"><a class="header" href="#python-sdk">Python SDK</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py">here</a>.</p>
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+
+runner = Runner(
+    which=Which.MultimodalPlain(
+        model_id="microsoft/Phi-3.5-vision-instruct",
+        arch=MultimodalArchitecture.Phi3V,
+    ),
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "What is this?",
+                    },
+                ],
+            }
+        ],
+        max_tokens=256,
+    )
+)
+print(res.choices[0].message.content)
+print(res.usage)
+</code></pre>
+<ul>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
+</ul>
+<h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
-<p>This is a minimal example of running the Phi 3 Vision model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
@@ -300,54 +316,6 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
-<h2 id="python"><a class="header" href="#python">Python</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py">here</a>.</p>
-<p>This example demonstrates loading and sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
-
-runner = Runner(
-    which=Which.MultimodalPlain(
-        model_id="microsoft/Phi-3.5-vision-instruct",
-        arch=MultimodalArchitecture.Phi3V,
-    ),
-)
-
-res = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="default",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/e/e7/ Everest_North_Face_toward_Base_Camp_Tibet_Luca_Galuzzi_2006.jpg"
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": "What is shown in this image? Write a detailed response analyzing the scene.",
-                    },
-                ],
-            }
-        ],
-        max_tokens=256,
-        presence_penalty=1.0,
-        top_p=0.1,
-        temperature=0.1,
-    )
-)
-print(res.choices[0].message.content)
-print(res.usage)
-</code></pre>
-<ul>
-<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
-<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
-</ul>
 
                     </main>
 

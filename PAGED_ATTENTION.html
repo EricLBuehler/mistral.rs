@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -186,7 +186,7 @@
 <li>CUDA (Unix-like platforms such as WSL, Linux)</li>
 <li>Metal</li>
 </ul>
-<p>Our PagedAttention implementation has 2 inputs: GPU KV cache memory size, and block size. This enables you to have fine-tuned control over the available context length, by configuring the available memory for KV cache. When using a CUDA device, PagedAttention is actiated by default but can be disabled with <code>no_paged_attn</code> for Python or <code>no-paged-attn</code> for the CLI tools.</p>
+<p>Our PagedAttention implementation has 2 inputs: GPU KV cache memory size, and block size. This enables you to have fine-tuned control over the available context length, by configuring the available memory for KV cache. When using a CUDA device, PagedAttention is activated by default but can be disabled with <code>no_paged_attn</code> for Python or <code>no-paged-attn</code> for the CLI tools.</p>
 <h2 id="kv-cache-quantization"><a class="header" href="#kv-cache-quantization">KV Cache Quantization</a></h2>
 <p>PagedAttention now supports KV cache quantization to reduce memory usage and potentially improve performance. The KV cache can be quantized to FP8 (F8E4M3 format) instead of using the model’s native dtype, significantly reducing memory requirements while maintaining model quality.</p>
 <p><strong>Available cache types:</strong></p>
@@ -295,7 +295,7 @@
 </blockquote>
 <h2 id="metal-memory-behavior"><a class="header" href="#metal-memory-behavior">Metal Memory Behavior</a></h2>
 <p>On Metal (macOS Apple Silicon), the GPU and CPU share the same physical RAM (unified memory). Unlike CUDA GPUs with dedicated VRAM where unused memory would otherwise be wasted, allocating large KV caches on Metal wires physical RAM away from the OS and CPU, which can cause system-wide memory pressure and thrashing.</p>
-<p>To avoid this, mistral.rs automatically caps the PagedAttention KV cache on Metal to <code>max_seq_len * max_batch_size</code> tokens — just enough for the configured context length. On CUDA, the full available memory is used for maximum request concurrency (following the vLLM approach).</p>
+<p>To avoid this, mistral.rs automatically caps the PagedAttention KV cache on Metal to <code>max_seq_len * max_batch_size</code> tokens, which is just enough for the configured context length. On CUDA, the full available memory is used for maximum request concurrency (following the vLLM approach).</p>
 <p>You can override this behavior on any platform with <code>--pa-memory-mb</code> to set an explicit KV cache budget in megabytes.</p>
 <h2 id="flashattention-v2v3--pagedattention-in-mistralrs"><a class="header" href="#flashattention-v2v3--pagedattention-in-mistralrs">FlashAttention V2/V3 + PagedAttention in mistral.rs</a></h2>
 <p>If mistral.rs is compiled with <a href="FLASH_ATTENTION.html">FlashAttention</a> and PagedAttention is enabled, then FlashAttention will be used in tandem to accelerate
@@ -418,16 +418,23 @@ runner = Runner(
 
 # ... rest of the code remains the same
 </code></pre>
+<h2 id="see-also"><a class="header" href="#see-also">See Also</a></h2>
+<ul>
+<li><a href="PERFORMANCE.html">Performance Guide</a>: How PagedAttention fits into the optimization stack</li>
+<li><a href="FLASH_ATTENTION.html">FlashAttention</a>: Accelerates prefill when used with PagedAttention</li>
+<li><a href="MLA.html">MLA</a>: KV cache compression for DeepSeek/GLM models</li>
+<li><a href="DEVICE_MAPPING.html">Device Mapping</a>: Multi-GPU and CPU offloading</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="DEVICE_MAPPING.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="IMATRIX.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="SPECULATIVE_DECODING.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="FLASH_ATTENTION.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -437,11 +444,11 @@ runner = Runner(
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="DEVICE_MAPPING.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="IMATRIX.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="SPECULATIVE_DECODING.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="FLASH_ATTENTION.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

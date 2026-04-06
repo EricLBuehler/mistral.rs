@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-0499d85f.js";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5ca6495.js"></script>
+        <script src="toc-2ba2a48a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,46 +180,32 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="llava-and-llavanext-model-llava-hf-model-family"><a class="header" href="#llava-and-llavanext-model-llava-hf-model-family">LLaVA and LLaVANext Model: <code>llava-hf model family</code></a></h1>
-<p>The <a href="https://arxiv.org/abs/2310.03744">LLaVA</a> and <a href="https://llava-vl.github.io/blog/2024-01-30-llava-next/">LLaVANext</a> are great multimodal models that can handle both text and vision inputs.</p>
-<p>This implementation supports both LLaVA and LLaVANext(which adds multi resolution image processing) and two types of LLM base model: llama and mistral. Currently it is tested on:</p>
+                        <h1 id="llava-and-llavanext-model-llava-hf-model-family"><a class="header" href="#llava-and-llavanext-model-llava-hf-model-family">LLaVA and LLaVANext Model: <a href="https://huggingface.co/llava-hf"><code>llava-hf model family</code></a></a></h1>
+<p>The <a href="https://arxiv.org/abs/2310.03744">LLaVA</a> and <a href="https://llava-vl.github.io/blog/2024-01-30-llava-next/">LLaVANext</a> are multimodal models that can handle both text and vision inputs.</p>
+<p>This implementation supports both LLaVA and LLaVANext (which adds multi resolution image processing) and two types of LLM base model: llama and mistral. Currently it is tested on:</p>
 <ul>
 <li>llava-hf/llava-v1.6-mistral-7b-hf</li>
 <li>llava-hf/llava-v1.6-vicuna-7b-hf</li>
 <li>llava-hf/llava-1.5-7b-hf</li>
 </ul>
-<p>The LLaVA and LLaVANext Model has support in the Rust, Python, and HTTP APIs. The LLaVA and LLaVANext Model also supports ISQ for increased performance.</p>
-<p>The Python and HTTP APIs support sending images as:</p>
+<p>ISQ is supported for increased performance.</p>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre><code class="language-bash">mistralrs run -m llava-hf/llava-v1.6-mistral-7b-hf --isq 4 --image photo.jpg -i "Describe this image"
+</code></pre>
+<p>For vicuna backend, specify the chat template:</p>
+<pre><code class="language-bash">mistralrs run -m llava-hf/llava-v1.6-vicuna-7b-hf --isq 4 -c ./chat_templates/vicuna.json --image photo.jpg -i "Describe this image"
+</code></pre>
+<h2 id="input-formats"><a class="header" href="#input-formats">Input Formats</a></h2>
+<p>The Python and HTTP APIs support sending inputs as:</p>
 <ul>
-<li>URL</li>
-<li>Path to a local image</li>
-<li><a href="https://en.wikipedia.org/wiki/Base64">Base64</a> encoded string</li>
+<li><strong>Images</strong>: URL, path to a local file, or base64 encoded string (via <code>image_url</code>)</li>
 </ul>
-<p>The Rust SDK takes an image from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
-<h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/llava_next.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<hr>
-<p><strong>Image:</strong>
-<img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width="1000" height="666"></p>
-<h6><a href="https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
-
-<p><strong>Prompt:</strong></p>
-<pre><code>What is shown in this image?
-</code></pre>
-<p><strong>Output:</strong></p>
-<pre><code>Text: The image shows a steep, snow-covered hillside with a pine tree on the right side, close to the top. The landscape appears to be a mountainous area with winter conditions. There are no visible humans or permanent structures in the immediate vicinity that suggest this is a summer or recreational location. It's likely a cold, snowy day or season, and the slopes might be part of a mountainous region.
-</code></pre>
-<hr>
+<p>The Rust SDK takes images from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
+<h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve multimodal -p 1234 --isq 4 -m llava-hf/llava-v1.6-mistral-7b-hf
-# or for vicuna backend, specify the chat template:
-mistralrs serve multimodal -p 1234 --isq 4 -c ./chat_templates/vicuna.json -m llava-hf/llava-v1.6-vicuna-7b-hf
+<pre><code class="language-bash">mistralrs serve -m llava-hf/llava-v1.6-mistral-7b-hf --isq 4 -p 1234
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -242,27 +228,62 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "What is shown in this image?",
+                    "text": "What is this?",
                 },
             ],
         },
     ],
     max_tokens=256,
-    frequency_penalty=1.0,
-    top_p=0.1,
-    temperature=0,
 )
-resp = completion.choices[0].message.content
-print(resp)
+print(completion.choices[0].message.content)
 </code></pre>
 <ul>
 <li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">image via base64 here</a>.</li>
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
-<hr>
-<h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
+<h2 id="python-sdk"><a class="header" href="#python-sdk">Python SDK</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/llava_next.py">here</a>.</p>
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+
+runner = Runner(
+    which=Which.MultimodalPlain(
+        model_id="llava-hf/llava-v1.6-mistral-7b-hf",
+        arch=MultimodalArchitecture.LLaVANext,
+    ),
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "What is this?",
+                    },
+                ],
+            },
+        ],
+        max_tokens=256,
+    )
+)
+print(res.choices[0].message.content)
+print(res.usage)
+</code></pre>
+<ul>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
+</ul>
+<h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
-<p>This is a minimal example of running the LLaVA and LLaVANext model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
@@ -300,54 +321,6 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
-<h2 id="python"><a class="header" href="#python">Python</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/llava_next.py">here</a>.</p>
-<p>This example demonstrates loading and sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
-
-runner = Runner(
-    which=Which.MultimodalPlain(
-        model_id="llava-hf/llava-v1.6-mistral-7b-hf",
-        arch=MultimodalArchitecture.LLaVANext,
-    ),
-)
-
-res = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="default",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": "What is shown in this image?",
-                    },
-                ],
-            },
-        ],
-        max_tokens=256,
-        presence_penalty=1.0,
-        top_p=0.1,
-        temperature=0.1,
-    )
-)
-print(res.choices[0].message.content)
-print(res.usage)
-</code></pre>
-<ul>
-<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
-<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
-</ul>
 
                     </main>
 

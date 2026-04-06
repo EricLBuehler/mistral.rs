@@ -1,0 +1,682 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Examples - mistral.rs Documentation</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Fast, flexible LLM inference.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "ayu";
+            window.path_to_searchindex_js = "searchindex-5b149b9f.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-2ba2a48a.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">mistral.rs Documentation</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/EricLBuehler/mistral.rs" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/EricLBuehler/mistral.rs/edit/master/docs/./EXAMPLES.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="examples"><a class="header" href="#examples">Examples</a></h1>
+<p>A comprehensive index of all examples in the repository, organized by SDK and category.</p>
+<h2 id="python-sdk"><a class="header" href="#python-sdk">Python SDK</a></h2>
+<p>Examples using the <code>mistralrs</code> Python package directly.</p>
+<h3 id="getting-started"><a class="header" href="#getting-started">Getting Started</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/plain.py">plain.py</a></td><td>Basic text generation with a plain (unquantized) model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/streaming.py">streaming.py</a></td><td>Streaming chat completions token-by-token with a GGUF model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gguf.py">gguf.py</a></td><td>Load and run a GGUF-quantized model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/embedding_gemma.py">embedding_gemma.py</a></td><td>Generate text embeddings with EmbeddingGemma</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_embedding.py">qwen3_embedding.py</a></td><td>Generate text embeddings with Qwen3-Embedding</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/token_source.py">token_source.py</a></td><td>Configure a custom HF token source (literal, env, path, cache)</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="models"><a class="header" href="#models">Models</a></h3>
+<h4 id="text-models"><a class="header" href="#text-models">Text Models</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/deepseekr1.py">deepseekr1.py</a></td><td>Run DeepSeek-R1 reasoning model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/deepseekv2.py">deepseekv2.py</a></td><td>Run DeepSeek-V2-Lite</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3.py">qwen3.py</a></td><td>Run Qwen3 with thinking mode toggling via <code>/think</code> and <code>/no_think</code></td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_5.py">qwen3_5.py</a></td><td>Run Qwen3.5 dense or MoE variant with vision input</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_next.py">qwen3_next.py</a></td><td>Run Qwen3-Coder-Next</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/smollm3.py">smollm3.py</a></td><td>Run SmolLM3 text model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/granite.py">granite.py</a></td><td>Run IBM Granite 4.0 MoE Hybrid model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gpt_oss.py">gpt_oss.py</a></td><td>Run GPT-OSS MoE model with MXFP4 quantized experts</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/glm4_moe_lite.py">glm4_moe_lite.py</a></td><td>Run GLM-4.7-Flash MoE model</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="vision-models"><a class="header" href="#vision-models">Vision Models</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gemma3.py">gemma3.py</a></td><td>Run Gemma 3 multimodal model with image input</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gemma3n.py">gemma3n.py</a></td><td>Run Gemma 3n multimodal model with image input</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gemma4.py">gemma4.py</a></td><td>Run Gemma 4 multimodal model with image input</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen2vl.py">qwen2vl.py</a></td><td>Run Qwen2-VL vision-language model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_vl.py">qwen3_vl.py</a></td><td>Run Qwen3-VL vision-language model with thinking</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/llama4.py">llama4.py</a></td><td>Run Llama 4 Scout multimodal model with ISQ</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/llama_vision.py">llama_vision.py</a></td><td>Run Llama 3.2 Vision model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/mistral3.py">mistral3.py</a></td><td>Run Mistral Small 3.1 vision model with ISQ</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py">phi3v.py</a></td><td>Run Phi-3.5 Vision with a remote image URL</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">phi3v_base64.py</a></td><td>Run Phi-3.5 Vision with a base64-encoded image</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">phi3v_local_img.py</a></td><td>Run Phi-3.5 Vision with a local image file path</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi4mm.py">phi4mm.py</a></td><td>Run Phi-4 Multimodal with image input</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi4mm_audio.py">phi4mm_audio.py</a></td><td>Run Phi-4 Multimodal with combined audio and image input</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/idefics2.py">idefics2.py</a></td><td>Run Idefics 2 vision model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/idefics3.py">idefics3.py</a></td><td>Run Idefics 3 vision model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/llava_next.py">llava_next.py</a></td><td>Run LLaVA-NeXT vision model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/smolvlm.py">smolvlm.py</a></td><td>Run SmolVLM vision model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/minicpmo_2_6.py">minicpmo_2_6.py</a></td><td>Run MiniCPM-o 2.6 multimodal model</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="image-generation-and-speech"><a class="header" href="#image-generation-and-speech">Image Generation and Speech</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/flux.py">flux.py</a></td><td>Generate images with Flux diffusion model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/dia.py">dia.py</a></td><td>Text-to-speech synthesis with Dia and WAV output</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="tools-and-agents"><a class="header" href="#tools-and-agents">Tools and Agents</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/tool_call.py">tool_call.py</a></td><td>Client-side tool calling with manual tool execution loop</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/agentic_tools.py">agentic_tools.py</a></td><td>Agentic tool callbacks with automatic multi-round execution</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_tool_call.py">custom_tool_call.py</a></td><td>Custom tool callback for local filesystem search</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/web_search.py">web_search.py</a></td><td>Web-search-augmented generation with WebSearchOptions</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_search.py">custom_search.py</a></td><td>Custom search callback replacing the default web search</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/mcp_client.py">mcp_client.py</a></td><td>MCP client connecting to an external tool server</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="constrained-generation"><a class="header" href="#constrained-generation">Constrained Generation</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/json_schema.py">json_schema.py</a></td><td>JSON schema-constrained generation</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/pydantic_schema.py">pydantic_schema.py</a></td><td>Constrained generation from a Pydantic model schema</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/regex.py">regex.py</a></td><td>Regex-constrained generation</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/lark.py">lark.py</a></td><td>Lark grammar-constrained generation (JSON via grammar)</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/lark_llg.py">lark_llg.py</a></td><td>Lark grammar with inline <code>%json</code> schema directive</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/llguidance.py">llguidance.py</a></td><td>llguidance grammar with named JSON schema references</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="quantization"><a class="header" href="#quantization">Quantization</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/isq.py">isq.py</a></td><td>In-situ quantization (ISQ) at load time</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/imatrix.py">imatrix.py</a></td><td>ISQ with importance-matrix calibration data</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/topology.py">topology.py</a></td><td>Per-layer quantization control via a topology YAML file</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/mixture_of_quant_experts.py">mixture_of_quant_experts.py</a></td><td>MoQE: quantize only MoE expert layers differently</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="adapters-lora--x-lora"><a class="header" href="#adapters-lora--x-lora">Adapters (LoRA / X-LoRA)</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/lora_zephyr.py">lora_zephyr.py</a></td><td>Load a LoRA adapter on a GGUF model and select adapters per request</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/lora_activation.py">lora_activation.py</a></td><td>Programmatically activate/deactivate LoRA adapters</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/xlora_zephyr.py">xlora_zephyr.py</a></td><td>Run X-LoRA with GGUF on Zephyr</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/xlora_gemma.py">xlora_gemma.py</a></td><td>Run X-LoRA on Gemma</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="anymoe"><a class="header" href="#anymoe">AnyMoE</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/anymoe.py">anymoe.py</a></td><td>Train AnyMoE gating layer from fine-tuned expert models</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/anymoe_inference.py">anymoe_inference.py</a></td><td>Run AnyMoE inference with a pretrained gating model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/anymoe_lora.py">anymoe_lora.py</a></td><td>AnyMoE with LoRA adapters as experts</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="advanced"><a class="header" href="#advanced">Advanced</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/paged_attention.py">paged_attention.py</a></td><td>Enable PagedAttention for efficient KV-cache memory</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/speculative.py">speculative.py</a></td><td>Speculative decoding with a smaller GGUF draft model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/speculative_xlora.py">speculative_xlora.py</a></td><td>Speculative decoding combined with X-LoRA</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/text_auto_device_map.py">text_auto_device_map.py</a></td><td>Automatic multi-GPU device mapping for text models</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/multimodal_auto_device_map.py">multimodal_auto_device_map.py</a></td><td>Automatic multi-GPU device mapping for multimodal models</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/multi_model_example.py">multi_model_example.py</a></td><td>Load, manage, and dispatch requests across multiple models</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/test_multi_model.py">test_multi_model.py</a></td><td>Multi-model management test harness</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="http-server"><a class="header" href="#http-server">HTTP Server</a></h2>
+<p>Examples using the OpenAI-compatible HTTP API (start the server with <code>mistralrs serve</code>).</p>
+<h3 id="getting-started-1"><a class="header" href="#getting-started-1">Getting Started</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/chat.py">chat.py</a></td><td>Interactive multi-turn chat with the OpenAI client</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/completion.py">completion.py</a></td><td>Text completion (non-chat) endpoint</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/streaming.py">streaming.py</a></td><td>Streaming chat completions token-by-token</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/streaming_completion.py">streaming_completion.py</a></td><td>Streaming text completion endpoint</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/embedding.py">embedding.py</a></td><td>Generate text embeddings via the embeddings endpoint</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="models-1"><a class="header" href="#models-1">Models</a></h3>
+<h4 id="vision-models-1"><a class="header" href="#vision-models-1">Vision Models</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/gemma3.py">gemma3.py</a></td><td>Gemma 3 multimodal chat with image input</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/gemma3n.py">gemma3n.py</a></td><td>Gemma 3n multimodal chat with image input</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/gemma4.py">gemma4.py</a></td><td>Gemma 4 multimodal chat with image input</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/gemma4_video.py">gemma4_video.py</a></td><td>Gemma 4 with video input</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen2vl.py">qwen2vl.py</a></td><td>Qwen2-VL vision-language chat</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_vl.py">qwen3_vl.py</a></td><td>Qwen3-VL vision-language chat</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/llama4.py">llama4.py</a></td><td>Llama 4 Scout multimodal chat</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/llama_vision.py">llama_vision.py</a></td><td>Llama 3.2 Vision chat</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/mistral3.py">mistral3.py</a></td><td>Mistral Small 3.1 vision chat</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v.py">phi3v.py</a></td><td>Phi-3.5 Vision with remote image URL</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">phi3v_base64.py</a></td><td>Phi-3.5 Vision with base64-encoded image</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">phi3v_local_img.py</a></td><td>Phi-3.5 Vision with local image file</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi4mm.py">phi4mm.py</a></td><td>Phi-4 Multimodal with image input</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi4mm_audio.py">phi4mm_audio.py</a></td><td>Phi-4 Multimodal with audio and image input</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/idefics2.py">idefics2.py</a></td><td>Idefics 2 vision chat</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/idefics3.py">idefics3.py</a></td><td>Idefics 3 vision chat</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/llava.py">llava.py</a></td><td>LLaVA 1.5 vision chat</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/llava_next.py">llava_next.py</a></td><td>LLaVA-NeXT vision chat</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/minicpmo_2_6.py">minicpmo_2_6.py</a></td><td>MiniCPM-o 2.6 multimodal chat</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/smollm3.py">smollm3.py</a></td><td>SmolLM3 chat</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="text-models-1"><a class="header" href="#text-models-1">Text Models</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3.py">qwen3.py</a></td><td>Qwen3 chat</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_5.py">qwen3_5.py</a></td><td>Qwen3.5 chat</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_next.py">qwen3_next.py</a></td><td>Qwen3-Coder-Next chat</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/gpt_oss.py">gpt_oss.py</a></td><td>GPT-OSS MoE chat</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="image-generation-and-speech-1"><a class="header" href="#image-generation-and-speech-1">Image Generation and Speech</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/flux.py">flux.py</a></td><td>Generate images via the images endpoint</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/dia.py">dia.py</a></td><td>Text-to-speech via the audio speech endpoint</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="openai-responses-api"><a class="header" href="#openai-responses-api">OpenAI Responses API</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/responses.py">responses.py</a></td><td>Multi-turn conversation using the Responses API with reasoning</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/responses_vision.py">responses_vision.py</a></td><td>Responses API with vision (image) input</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/responses_audio.py">responses_audio.py</a></td><td>Responses API with audio input and transcription</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="tools-and-agents-1"><a class="header" href="#tools-and-agents-1">Tools and Agents</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/tool_calling.py">tool_calling.py</a></td><td>Client-side tool calling with the OpenAI client</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/streaming_tool_calling.py">streaming_tool_calling.py</a></td><td>Streaming tool calls with multi-round execution loop</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/tool_dispatch.py">tool_dispatch.py</a></td><td>Server-side tool dispatch via an external HTTP endpoint</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/agentic_tool_rounds.py">agentic_tool_rounds.py</a></td><td>Server-side agentic loop with max_tool_rounds</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/web_search.py">web_search.py</a></td><td>Web-search-augmented generation via web_search_options</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/mcp_chat.py">mcp_chat.py</a></td><td>Chat with MCP tool server integration</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="constrained-generation-1"><a class="header" href="#constrained-generation-1">Constrained Generation</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/json_schema.py">json_schema.py</a></td><td>JSON schema-constrained output via response_format</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/openai_response_format.py">openai_response_format.py</a></td><td>Structured output with Pydantic via <code>beta.chat.completions.parse</code></td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/regex.py">regex.py</a></td><td>Regex-constrained generation and token healing</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/lark.py">lark.py</a></td><td>Lark grammar-constrained generation (C code grammar)</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/llguidance.py">llguidance.py</a></td><td>llguidance grammar with named JSON schema references</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="advanced-1"><a class="header" href="#advanced-1">Advanced</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/adapter_chat.py">adapter_chat.py</a></td><td>Chat with per-request LoRA adapter selection</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/multi_model_chat.py">multi_model_chat.py</a></td><td>Multi-model server: list models, route requests, compare outputs</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/stream_completion_bench.py">stream_completion_bench.py</a></td><td>Benchmark streaming vs non-streaming latency</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h2>
+<p>Examples using the <code>mistralrs</code> Rust crate (in <code>mistralrs/examples/</code>).</p>
+<h3 id="getting-started-2"><a class="header" href="#getting-started-2">Getting Started</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/getting_started/text_generation">text_generation</a></td><td>Basic text generation with ISQ quantization and chat</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/getting_started/streaming">streaming</a></td><td>Streaming text generation with token-by-token output</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/getting_started/gguf">gguf</a></td><td>Load and run a GGUF-quantized model from Hugging Face</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/getting_started/gguf_locally">gguf_locally</a></td><td>Load and run a GGUF model from a local file path</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/getting_started/multimodal">multimodal</a></td><td>Simple multimodal “hello world” with image input</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/getting_started/embedding">embedding</a></td><td>Generate text embeddings using an embedding model</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="models-2"><a class="header" href="#models-2">Models</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/models/text_models">text_models</a></td><td>Unified text model example with all supported model IDs</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/models/multimodal_models">multimodal_models</a></td><td>Unified multimodal model example with all supported model IDs</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/models/multimodal">multimodal</a></td><td>Multimodal streaming with combined image and audio inputs</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/models/multimodal_multiturn">multimodal_multiturn</a></td><td>Multi-turn conversation with a multimodal model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/models/audio">audio</a></td><td>Audio input processing with a multimodal model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/models/asr">asr</a></td><td>Automatic speech recognition (ASR) with Voxtral</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/models/speech">speech</a></td><td>Text-to-speech synthesis using a speech model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/models/diffusion">diffusion</a></td><td>Image generation using a diffusion model</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="quantization-1"><a class="header" href="#quantization-1">Quantization</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/quantization/isq">isq</a></td><td>In-situ quantization with explicit and automatic type selection</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/quantization/imatrix">imatrix</a></td><td>ISQ with importance-matrix calibration data</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/quantization/topology">topology</a></td><td>Per-layer quantization control using a Topology</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/quantization/uqff">uqff</a></td><td>Load a pre-quantized UQFF text model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/quantization/uqff_multimodal">uqff_multimodal</a></td><td>Load a pre-quantized UQFF multimodal model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/quantization/mixture_of_quant_experts">mixture_of_quant_experts</a></td><td>MoQE: quantize only MoE expert layers at a different precision</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="tools-and-agents-2"><a class="header" href="#tools-and-agents-2">Tools and Agents</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/agent">agent</a></td><td>Agentic loop with <code>#[tool]</code> macro and <code>AgentBuilder</code> (non-streaming)</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/agent_streaming">agent_streaming</a></td><td>Agentic loop with streaming output and real-time events</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/tools">tools</a></td><td>Tool calling (function calling) with manual tool definitions</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/tool_callback">tool_callback</a></td><td>Tool callbacks for automatic server-side tool execution</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/web_search">web_search</a></td><td>Web-search-augmented generation</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/search_callback">search_callback</a></td><td>Custom search callback to override default web search</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/mcp_client">mcp_client</a></td><td>MCP client connecting to an external tool server</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="constrained-generation-2"><a class="header" href="#constrained-generation-2">Constrained Generation</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/json_schema">json_schema</a></td><td>JSON schema-constrained generation for typed output</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/grammar">grammar</a></td><td>Constrained generation using a GBNF grammar</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/llguidance">llguidance</a></td><td>Constrained generation using an llguidance grammar</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="adapters-and-anymoe"><a class="header" href="#adapters-and-anymoe">Adapters and AnyMoE</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/lora">lora</a></td><td>Load and run a model with a LoRA adapter</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/xlora">xlora</a></td><td>X-LoRA adapter mixing</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/anymoe">anymoe</a></td><td>AnyMoE: create a MoE model from fine-tuned adapters</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/anymoe_lora">anymoe_lora</a></td><td>AnyMoE with LoRA adapters for expert specialization</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="advanced-2"><a class="header" href="#advanced-2">Advanced</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/paged_attn">paged_attn</a></td><td>Enable PagedAttention for efficient KV-cache memory management</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/speculative">speculative</a></td><td>Speculative decoding with a smaller draft model</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/auto_device_map">auto_device_map</a></td><td>Automatic device mapping across multiple GPUs</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/multi_model">multi_model</a></td><td>Load and dispatch requests across multiple models</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/batching">batching</a></td><td>Concurrent request batching with parallel requests</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/embeddings">embeddings</a></td><td>Compute and compare embeddings with cosine similarity</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/batching_embeddings">batching_embeddings</a></td><td>Batch multiple embedding requests for parallel encoding</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/logits_processor">logits_processor</a></td><td>Custom logits processor to modify token probabilities</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/perplexity">perplexity</a></td><td>Compute perplexity of a text file</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/error_handling">error_handling</a></td><td>Error handling patterns with error variant matching</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/advanced/file_logging">file_logging</a></td><td>Log model output to a file using the tracing framework</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="cookbook"><a class="header" href="#cookbook">Cookbook</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Example</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/cookbook/agent">agent</a></td><td>Code review agent using <code>#[tool]</code> macro and <code>AgentBuilder</code></td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/cookbook/multiturn">multiturn</a></td><td>Interactive multi-turn chatbot with streaming output</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/cookbook/rag">rag</a></td><td>Simple RAG with embedding retrieval and text generation</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples/cookbook/structured">structured</a></td><td>Structured data extraction with <code>generate_structured&lt;T&gt;()</code></td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="jupyter-notebooks"><a class="header" href="#jupyter-notebooks">Jupyter Notebooks</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Notebook</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/cookbook.ipynb">cookbook.ipynb</a></td><td>Python API cookbook: loading GGUF, Plain, and X-LoRA models</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/tool_calling.ipynb">tool_calling.ipynb</a></td><td>Interactive tool calling walkthrough with Python SDK</td></tr>
+<tr><td><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3_duckduckgo_mistral.rs.ipynb">phi3_duckduckgo_mistral.rs.ipynb</a></td><td>Phi-3 tool calling with DuckDuckGo search via LangChain</td></tr>
+</tbody>
+</table>
+</div>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="FAQ.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="FAQ.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>
