@@ -59,7 +59,7 @@
 - [Qwen 2-VL](QWEN2VL.md) | [Qwen 3 VL](QWEN3VL.md) | [Qwen 3.5](QWEN3_5.md)
 
 **Other Models:**
-- [FLUX (Diffusion)](FLUX.md) | [Dia (Speech)](DIA.md)
+- [FLUX (Diffusion)](FLUX.md) | [Voxtral (Speech-to-Text)](VOXTRAL.md) | [Dia (Speech)](DIA.md)
 - [EmbeddingGemma](EMBEDDINGGEMMA.md) | [Qwen3 Embedding](QWEN3_EMBEDDING.md)
 
 </details>

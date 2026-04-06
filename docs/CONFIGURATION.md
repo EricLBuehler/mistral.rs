@@ -32,7 +32,7 @@ When running the HTTP server with `mistralrs serve`, these defaults apply:
 |---------|---------------|
 | Server IP | `0.0.0.0` (all interfaces) |
 | Max request body | 50 MB |
-| Max running sequences | 16 |
+| Max running sequences | 32 |
 | Prefix cache count | 16 |
 | SSE keep-alive | 10 seconds |
 | PagedAttention (CUDA) | Enabled |
