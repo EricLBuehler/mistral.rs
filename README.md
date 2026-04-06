@@ -25,9 +25,9 @@ Fast, flexible LLM inference.
 
 ## Latest
 
-- **Gemma 4**: Full multimodal: text, image, video, and audio input. [Guide](docs/GEMMA4.md) | [Video setup](docs/VIDEO.md)
-- **MXFP4 ISQ quantization**: MXFP4 with optimized decode kernels for faster, smaller models. [Quantization docs](docs/QUANTS.md)
-- **Qwen 3.5 model family**: Support for the Qwen 3.5 series including vision. [Guide](docs/QWEN3_5.md)
+- **Gemma 4**: Full multimodal: text, image, video, and audio input. [Guide](https://ericlbuehler.github.io/mistral.rs/GEMMA4.html) | [Video setup](https://ericlbuehler.github.io/mistral.rs/VIDEO.html)
+- **MXFP4 ISQ quantization**: MXFP4 with optimized decode kernels for faster, smaller models. [Quantization docs](https://ericlbuehler.github.io/mistral.rs/QUANTS.html)
+- **Qwen 3.5 model family**: Support for the Qwen 3.5 series including vision. [Guide](https://ericlbuehler.github.io/mistral.rs/QWEN3_5.html)
 
 ## Why mistral.rs?
 
@@ -37,7 +37,7 @@ Fast, flexible LLM inference.
 - **Built-in web UI**: `mistralrs serve --ui` gives you a web interface instantly.
 - **Hardware-aware**: `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
-- **[Agentic features](docs/AGENTS.md)** — server-side tool loop, web search, MCP client, and HTTP tool dispatch
+- **[Agentic features](https://ericlbuehler.github.io/mistral.rs/AGENTS.html)** — server-side tool loop, web search, MCP client, and HTTP tool dispatch
 
 ## Quick Start
 
@@ -53,7 +53,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBueh
 irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
 ```
 
-[Manual installation & other platforms](docs/INSTALLATION.md)
+[Manual installation & other platforms](https://ericlbuehler.github.io/mistral.rs/INSTALLATION.html)
 
 ### Run Your First Model
 
@@ -80,7 +80,7 @@ The CLI is designed to be **zero-config**: just point it at a model and go.
 - **Auto-detection**: Automatically detects model architecture, quantization format, and chat template
 - **All-in-one**: Single binary for chat, server, benchmarks, and web UI (`run`, `serve`, `bench`)
 - **Hardware tuning**: Run `mistralrs tune` to automatically benchmark and configure optimal settings for your hardware
-- **Format-agnostic**: Works with Hugging Face models, GGUF files, and [UQFF quantizations](docs/UQFF.md) seamlessly
+- **Format-agnostic**: Works with Hugging Face models, GGUF files, and [UQFF quantizations](https://ericlbuehler.github.io/mistral.rs/UQFF.html) seamlessly
 
 ```bash
 # Auto-tune for your hardware and emit a config file
@@ -93,7 +93,7 @@ mistralrs from-config -f config.toml
 mistralrs doctor
 ```
 
-[Full CLI documentation](docs/CLI.md)
+[Full CLI documentation](https://ericlbuehler.github.io/mistral.rs/CLI.html)
 
 <details open>
   <summary><b>Web Chat Demo</b></summary>
@@ -105,29 +105,29 @@ mistralrs doctor
 
 **Performance**
 - Continuous batching support by default on all devices.
-- CUDA with [FlashAttention](docs/FLASH_ATTENTION.md) V2/V3, Metal, [multi-GPU tensor parallelism](docs/DISTRIBUTED/DISTRIBUTED.md)
-- [PagedAttention](docs/PAGED_ATTENTION.md) for high throughput continuous batching on CUDA or Apple Silicon, prefix caching (including multimodal)
+- CUDA with [FlashAttention](https://ericlbuehler.github.io/mistral.rs/FLASH_ATTENTION.html) V2/V3, Metal, [multi-GPU tensor parallelism](https://ericlbuehler.github.io/mistral.rs/DISTRIBUTED/DISTRIBUTED.html)
+- [PagedAttention](https://ericlbuehler.github.io/mistral.rs/PAGED_ATTENTION.html) for high throughput continuous batching on CUDA or Apple Silicon, prefix caching (including multimodal)
 
-**Quantization** ([full docs](docs/QUANTS.md))
-- [In-situ quantization (ISQ)](docs/ISQ.md) of any Hugging Face model
+**Quantization** ([full docs](https://ericlbuehler.github.io/mistral.rs/QUANTS.html))
+- [In-situ quantization (ISQ)](https://ericlbuehler.github.io/mistral.rs/ISQ.html) of any Hugging Face model
 - GGUF (2-8 bit), GPTQ, AWQ, HQQ, FP8, BNB support
-- ⭐ [Per-layer topology](docs/TOPOLOGY.md): Fine-tune quantization per layer for optimal quality/speed
+- ⭐ [Per-layer topology](https://ericlbuehler.github.io/mistral.rs/TOPOLOGY.html): Fine-tune quantization per layer for optimal quality/speed
 - ⭐ Auto-select fastest quant method for your hardware
 
 **Flexibility**
-- [LoRA & X-LoRA](docs/ADAPTER_MODELS.md) with weight merging
-- [AnyMoE](docs/ANYMOE.md): Create mixture-of-experts on any base model
-- [Multiple models](docs/multi_model/README.md): Load/unload at runtime
+- [LoRA & X-LoRA](https://ericlbuehler.github.io/mistral.rs/ADAPTER_MODELS.html) with weight merging
+- [AnyMoE](https://ericlbuehler.github.io/mistral.rs/ANYMOE.html): Create mixture-of-experts on any base model
+- [Multiple models](https://ericlbuehler.github.io/mistral.rs/multi_model/overview.html): Load/unload at runtime
 
 **Agentic Features**
-- Integrated [tool calling](docs/TOOL_CALLING.md) with grammar enforcement and strict schema mode
-- ⭐ Server-side [agentic loop](docs/TOOL_CALLING.md#agentic-loop): auto-execute tools and feed results back
-- ⭐ [Tool dispatch URL](docs/TOOL_CALLING.md#tool-dispatch-url): POST tool calls to your own endpoint
-- ⭐ [Web search integration](docs/WEB_SEARCH.md) with embedding-based ranking
-- ⭐ [MCP client](docs/MCP/client.md): Connect to external tools via Process, HTTP, or WebSocket
-- Python/Rust [tool callbacks](docs/TOOL_CALLING.md#tool-callbacks) for custom execution
+- Integrated [tool calling](https://ericlbuehler.github.io/mistral.rs/TOOL_CALLING.html) with grammar enforcement and strict schema mode
+- ⭐ Server-side [agentic loop](https://ericlbuehler.github.io/mistral.rs/TOOL_CALLING.html#agentic-loop): auto-execute tools and feed results back
+- ⭐ [Tool dispatch URL](https://ericlbuehler.github.io/mistral.rs/TOOL_CALLING.html#tool-dispatch-url): POST tool calls to your own endpoint
+- ⭐ [Web search integration](https://ericlbuehler.github.io/mistral.rs/WEB_SEARCH.html) with embedding-based ranking
+- ⭐ [MCP client](https://ericlbuehler.github.io/mistral.rs/MCP/client.html): Connect to external tools via Process, HTTP, or WebSocket
+- Python/Rust [tool callbacks](https://ericlbuehler.github.io/mistral.rs/TOOL_CALLING.html#tool-callbacks) for custom execution
 
-[Full feature documentation](docs/README.md)
+[Full feature documentation](https://ericlbuehler.github.io/mistral.rs/)
 
 ## Supported Models
 
@@ -200,7 +200,7 @@ mistralrs doctor
 - Qwen 3 Embedding
 </details>
 
-[Request a new model](https://github.com/EricLBuehler/mistral.rs/issues/156) | [Full compatibility tables](docs/SUPPORTED_MODELS.md)
+[Request a new model](https://github.com/EricLBuehler/mistral.rs/issues/156) | [Full compatibility tables](https://ericlbuehler.github.io/mistral.rs/SUPPORTED_MODELS.html)
 
 ## Python SDK
 
@@ -280,13 +280,13 @@ docker run --gpus all -p 1234:1234 ghcr.io/ericlbuehler/mistral.rs:latest \
 For complete documentation, see the **[Documentation](https://ericlbuehler.github.io/mistral.rs/)**.
 
 **Quick Links:**
-- [CLI Reference](docs/CLI.md) - All commands and options
-- [HTTP API](docs/HTTP.md) - OpenAI-compatible endpoints
-- [Quantization](docs/QUANTS.md) - ISQ, GGUF, GPTQ, and more
-- [Device Mapping](docs/DEVICE_MAPPING.md) - Multi-GPU and CPU offloading
-- [MCP Integration](docs/MCP/README.md) - MCP integration documentation
-- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
-- [Configuration](docs/CONFIGURATION.md) - Environment variables for configuration
+- [CLI Reference](https://ericlbuehler.github.io/mistral.rs/CLI.html) - All commands and options
+- [HTTP API](https://ericlbuehler.github.io/mistral.rs/HTTP.html) - OpenAI-compatible endpoints
+- [Quantization](https://ericlbuehler.github.io/mistral.rs/QUANTS.html) - ISQ, GGUF, GPTQ, and more
+- [Device Mapping](https://ericlbuehler.github.io/mistral.rs/DEVICE_MAPPING.html) - Multi-GPU and CPU offloading
+- [MCP Integration](https://ericlbuehler.github.io/mistral.rs/MCP/client.html) - MCP integration documentation
+- [Troubleshooting](https://ericlbuehler.github.io/mistral.rs/TROUBLESHOOTING.html) - Common issues and solutions
+- [Configuration](https://ericlbuehler.github.io/mistral.rs/CONFIGURATION.html) - Environment variables for configuration
 
 ## Contributing
 

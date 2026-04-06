@@ -7,6 +7,8 @@ GPT-OSS is a Mixture of Experts (MoE) language model with specialized attention 
 - YARN RoPE scaling for extended context
 - Hybrid cache supporting both full and sliding window attention
 
+## Quick Start
+
 ```bash
 mistralrs run -m openai/gpt-oss-20b
 ```
@@ -23,29 +25,18 @@ mistralrs serve -p 1234 -m openai/gpt-oss-20b
 ```
 
 ```py
-import openai
+from openai import OpenAI
 
-client = openai.OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
-messages = []
-prompt = input("Enter system prompt >>> ")
-if len(prompt) > 0:
-    messages.append({"role": "system", "content": prompt})
-
-while True:
-    prompt = input(">>> ")
-    messages.append({"role": "user", "content": prompt})
-    completion = client.chat.completions.create(
-        model="default",
-        messages=messages,
-        max_tokens=256,
-        frequency_penalty=1.0,
-        top_p=0.1,
-        temperature=0,
-    )
-    resp = completion.choices[0].message.content
-    print(resp)
-    messages.append({"role": "assistant", "content": resp})
+completion = client.chat.completions.create(
+    model="default",
+    messages=[
+        {"role": "user", "content": "Tell me a story about the Rust type system."}
+    ],
+    max_tokens=256,
+)
+print(completion.choices[0].message.content)
 ```
 
 ## Python SDK
@@ -92,22 +83,10 @@ async fn main() -> Result<()> {
         .await?;
 
     let messages = TextMessages::new()
-        .add_message(
-            TextMessageRole::System,
-            "You are an AI agent with a specialty in programming.",
-        )
-        .add_message(
-            TextMessageRole::User,
-            "Hello! How are you? Please write generic binary search function in Rust.",
-        );
+        .add_message(TextMessageRole::User, "Hello!");
 
     let response = model.send_chat_request(messages).await?;
-
     println!("{}", response.choices[0].message.content.as_ref().unwrap());
-    dbg!(
-        response.usage.avg_prompt_tok_per_sec,
-        response.usage.avg_compl_tok_per_sec
-    );
 
     Ok(())
 }

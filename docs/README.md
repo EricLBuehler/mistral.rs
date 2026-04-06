@@ -1,121 +1,51 @@
 ![mistral.rs](banner.png)
 
-## Quick Links
+**Fast, flexible LLM inference.** Run 40+ model families (text, vision, video, audio, speech, image generation, and embeddings) with automatic hardware optimization, OpenAI-compatible APIs, and built-in agentic features.
 
-| I want to... | Go to... |
-|--------------|----------|
-| Install mistral.rs | [Installation Guide](INSTALLATION.md) |
-| Understand cargo features | [Cargo Features](CARGO_FEATURES.md) |
-| Run a model | [CLI Reference](CLI.md) |
-| Use the HTTP API | [HTTP Server](HTTP.md) |
-| Create & publish UQFF models | [UQFF Guide](UQFF.md#creating-a-uqff-model) |
-| Fix an error | [Troubleshooting](TROUBLESHOOTING.md) |
-| Configure environment | [Configuration](CONFIGURATION.md) |
-| Check model support | [Supported Models](SUPPORTED_MODELS.md) |
-| Build agents | [Agentic Features Guide](AGENTS.md) |
+## Quick Start
 
-## Getting Started
+```bash
+# Install (Linux/macOS, auto-detects CUDA, Metal, MKL)
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
 
-- [Installation Guide](INSTALLATION.md) - Install mistral.rs on your system
-- [Cargo Features](CARGO_FEATURES.md) - Complete cargo features reference
-- [CLI Reference](CLI.md) - Complete CLI command reference
-- [CLI TOML Configuration](CLI_CONFIG.md) - Configure via TOML files
-- [Create & Publish UQFF Models](UQFF.md#creating-a-uqff-model) - Quantize models and upload to Hugging Face
-- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and solutions
+# Install (Windows PowerShell)
+irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
 
-## SDKs & APIs
+# Run a model interactively
+mistralrs run --isq 4 -m Qwen/Qwen3-4B
 
-- [Python SDK](PYTHON_SDK.md) - Python package documentation
-- [Python Installation](PYTHON_INSTALLATION.md) - Python SDK installation guide
-- [Rust SDK](https://docs.rs/mistralrs/) - Rust crate documentation
-- [HTTP Server](HTTP.md) - OpenAI-compatible HTTP API
-- [OpenResponses API](OPENRESPONSES.md) - Stateful conversation API
+# Or serve it as an OpenAI-compatible API with a web UI
+mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
+```
 
-## Models
+> **New to mistral.rs?** Follow the [Getting Started tutorial](GETTING_STARTED.md) for a guided walkthrough.
 
-### By Category
-- [Supported Models](SUPPORTED_MODELS.md) - Complete model list and compatibility
-- [Multimodal Models](MULTIMODAL_MODELS.md) - Multimodal model overview
-- [Image Generation](IMAGEGEN_MODELS.md) - Diffusion models
-- [Embeddings](EMBEDDINGS.md) - Embedding model overview
+## Choose Your Path
 
-### Model-Specific Guides
+| I want to... | Start here |
+|---|---|
+| Follow a step-by-step tutorial | [Getting Started](GETTING_STARTED.md) |
+| Run a model from the command line | [CLI Reference](CLI.md) |
+| Serve models over HTTP | [HTTP Server](HTTP.md) |
+| Build a Python application | [Python SDK](PYTHON_SDK.md) |
+| Build a Rust application | [Rust SDK](RUST_SDK.md) |
+| Optimize performance and memory | [Performance Guide](PERFORMANCE.md) |
+| Choose a quantization method | [Quantization Overview](QUANTS.md) |
+| Use agentic features (tools, search, MCP) | [Agentic Features Guide](AGENTS.md) |
+| Find a specific model | [Supported Models](SUPPORTED_MODELS.md) |
+| Troubleshoot an issue | [Troubleshooting](TROUBLESHOOTING.md) |
 
-<details>
-<summary>Click to expand model guides</summary>
+## Highlights
 
-**Text Models:**
-- [DeepSeek V2](DEEPSEEKV2.md) | [DeepSeek V3](DEEPSEEKV3.md)
-- [Gemma 2](GEMMA2.md) | [Gemma 3](GEMMA3.md) | [Gemma 3n](GEMMA3N.md) | [Gemma 4](GEMMA4.md)
-- [GLM4](GLM4.md) | [GLM-4.7-Flash](GLM4_MOE_LITE.md) | [GLM-4.7](GLM4_MOE.md)
-- [Qwen 3](QWEN3.md) | [Qwen 3 Next](QWEN3NEXT.md) | [SmolLM3](SMOLLM3.md) | [GPT-OSS](GPT_OSS.md)
+- **Zero config**: `mistralrs run -m <model>` auto-detects architecture, chat template, and hardware
+- **Quantization control**: ISQ, GGUF, GPTQ, AWQ, HQQ, AFQ, FP8, MXFP4, or just `--isq 4`
+- **Auto-tuning**: `mistralrs tune` benchmarks your hardware and recommends optimal settings
+- **Agentic**: Server-side tool calling loop, web search, MCP client, HTTP tool dispatch
+- **Multi-GPU**: Automatic tensor parallelism via NCCL, or cross-machine via Ring backend
+- **Web UI**: `--ui` flag for instant browser-based chat
 
-**Multimodal Models:**
-- [Idefics 2](IDEFICS2.md) | [Idefics 3](IDEFICS3.md)
-- [LLaVA](LLaVA.md) | [Llama 3.2 Vision](VLLAMA.md) | [Llama 4](LLAMA4.md)
-- [MiniCPM-O 2.6](MINICPMO_2_6.md) | [Mistral 3](MISTRAL3.md)
-- [Phi 3.5 MoE](PHI3.5MOE.md) | [Phi 3.5 Vision](PHI3V.md) | [Phi 4 Multimodal](PHI4MM.md)
-- [Qwen 2-VL](QWEN2VL.md) | [Qwen 3 VL](QWEN3VL.md) | [Qwen 3.5](QWEN3_5.md)
+## Community
 
-**Other Models:**
-- [FLUX (Diffusion)](FLUX.md) | [Dia (Speech)](DIA.md)
-- [EmbeddingGemma](EMBEDDINGGEMMA.md) | [Qwen3 Embedding](QWEN3_EMBEDDING.md)
-
-</details>
-
-## Quantization & Optimization
-
-- [Quantization Overview](QUANTS.md) - All supported quantization methods
-- [ISQ (In-Situ Quantization)](ISQ.md) - Quantize models at load time
-- [UQFF Format](UQFF.md) - Pre-quantized model format | [Layout](UQFF/LAYOUT.md)
-- [Topology](TOPOLOGY.md) - Per-layer quantization and device mapping
-- [Importance Matrix](IMATRIX.md) - Improve ISQ accuracy
-
-## Adapters & Model Customization
-
-- [Adapter Models](ADAPTER_MODELS.md) - LoRA and X-LoRA support
-- [LoRA/X-LoRA Examples](LORA_XLORA.md)
-- [Non-Granular Scalings](NON_GRANULAR.md) - X-LoRA optimization
-- [AnyMoE](ANYMOE.md) - Create MoE models from dense models
-- [MatFormer](MATFORMER.md) - Dynamic model sizing
-
-## Performance & Hardware
-
-- [Device Mapping](DEVICE_MAPPING.md) - Multi-GPU and CPU offloading
-- [PagedAttention](PAGED_ATTENTION.md) - Efficient KV cache management
-- [Speculative Decoding](SPECULATIVE_DECODING.md) - Accelerate generation with draft models
-- [Flash Attention](FLASH_ATTENTION.md) - Accelerated attention
-- [MLA](MLA.md) - Multi-head Latent Attention
-- [Distributed Inference](DISTRIBUTED/DISTRIBUTED.md)
-  - [NCCL Backend](DISTRIBUTED/NCCL.md)
-  - [Ring Backend](DISTRIBUTED/RING.md)
-
-## Features
-
-- [Agentic Features Guide](AGENTS.md) - Web search, tool callbacks, agents, MCP, tool dispatch
-- [Tool Calling](TOOL_CALLING.md) - Function calling support
-- [Web Search](WEB_SEARCH.md) - Integrated web search
-- [Chat Templates](CHAT_TOK.md) - Template customization
-- [Sampling Options](SAMPLING.md) - Generation parameters
-- [TOML Selector](TOML_SELECTOR.md) - Model selection syntax
-- [Multi-Model Support](multi_model/overview.md) - Load multiple models
-
-## MCP (Model Context Protocol)
-
-- [MCP Client](MCP/client.md) - Connect to external tools
-- [MCP Server](MCP/server.md) - Serve models over MCP
-- [MCP Configuration](MCP/configuration.md)
-- [MCP Transports](MCP/transports.md)
-- [MCP Advanced Usage](MCP/advanced.md)
-
-## Reference
-
-- [Configuration](CONFIGURATION.md) - Environment variables and server defaults
-- [Engine Internals](ENGINE.md) - Engine behaviors and recovery
-- [Supported Models](SUPPORTED_MODELS.md) - Complete compatibility tables
-
----
-
-## Contributing
-
-See the main [README](https://github.com/EricLBuehler/mistral.rs/blob/master/README.md#contributing) for contribution guidelines.
+- [Discord](https://discord.gg/SZrecqK8qw)
+- [GitHub Issues](https://github.com/EricLBuehler/mistral.rs/issues)
+- [Contributing](https://github.com/EricLBuehler/mistral.rs/blob/master/README.md#contributing)

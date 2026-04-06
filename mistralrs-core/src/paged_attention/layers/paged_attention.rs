@@ -34,6 +34,7 @@ fn cumulative_seqlens_from_lengths(lengths: &[usize], device: &Device) -> Result
     let mut cumulative = Vec::with_capacity(lengths.len() + 1);
     cumulative.push(0u32);
     for &len in lengths {
+        #[allow(clippy::cast_possible_truncation)]
         cumulative.push(cumulative.last().copied().unwrap_or(0) + len as u32);
     }
     Tensor::new(&cumulative[..], &Device::Cpu)?.to_device(device)

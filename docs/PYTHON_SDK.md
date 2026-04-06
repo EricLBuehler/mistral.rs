@@ -2,92 +2,340 @@
 
 Documentation for the `mistralrs` Python package.
 
-> **Installation:** See [PYTHON_INSTALLATION.md](PYTHON_INSTALLATION.md) for installation instructions.
+> **Installation:** See [Python Installation](PYTHON_INSTALLATION.md) for installation instructions.
 
 **Table of contents**
-- Full API reference: [here](https://ericlbuehler.github.io/mistral.rs/pyo3/mistralrs.html)
-- Model configuration (`Which` enum): [here](#which)
-- Multi-model support: [here](#multi-model-support)
-- MCP Client Configuration: [here](#mcp-client)
-- Example: [here](#example)
-- Embeddings example: [here](#embeddings-example)
+- [Quick Start](#quick-start)
+- [Model Configuration](#model-configuration)
+- [Streaming](#streaming)
+- [Structured Output](#structured-output)
+- [Tool Calling](#tool-calling)
+- [Multimodal Input](#multimodal-input)
+- [Embeddings](#embeddings)
+- [Multi-Model Support](#multi-model-support)
+- [MCP Client](#mcp-client)
+- [Configuration Reference](#configuration-reference)
 
-## `Which`
+Full API reference: [here](https://ericlbuehler.github.io/mistral.rs/pyo3/mistralrs.html)
 
-Each `*_model_id` may be a HF hub repo or a local path. For quantized GGUF models, a list is accepted if multiple files must be specified.
+## Quick Start
+
+```python
+from mistralrs import Runner, Which, ChatCompletionRequest
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    in_situ_quant="4",
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "Hello!"}],
+        max_tokens=256,
+    )
+)
+print(res.choices[0].message.content)
+```
+
+## Model Configuration
+
+Models are configured through the `Which` enum. The most common variants:
+
+| Variant | Use case | Key parameters |
+|---|---|---|
+| `Which.Plain` | HuggingFace models | `model_id`, `arch` (optional) |
+| `Which.GGUF` | GGUF quantized models | `quantized_model_id`, `quantized_filename`, `tok_model_id` |
+| `Which.MultimodalPlain` | Vision/audio models | `model_id`, `arch` |
+| `Which.Embedding` | Embedding models | `model_id`, `arch` |
+| `Which.DiffusionPlain` | Image generation | `model_id`, `arch` |
+| `Which.Speech` | Speech synthesis | `model_id`, `arch` |
+
+Architecture is auto-detected for most models. Specify `arch` only if auto-detection fails.
+
+**Common Runner options:**
+
+```python
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    in_situ_quant="4",          # ISQ level: "2"-"8", "q4k", "q8_0", etc.
+    # pa_gpu_mem=4096,          # PagedAttention GPU memory in MB
+    # pa_blk_size=32,           # PagedAttention block size
+    # enable_search=True,       # Enable web search
+    # mcp_client_config=...,    # MCP client configuration
+)
+```
+
+**Loading GGUF models:**
+
+```python
+runner = Runner(
+    which=Which.GGUF(
+        tok_model_id="Qwen/Qwen3-0.6B",
+        quantized_model_id="unsloth/Qwen3-0.6B-GGUF",
+        quantized_filename="Qwen3-0.6B-Q4_K_M.gguf",
+    )
+)
+```
+
+**Loading UQFF models:**
+
+```python
+runner = Runner(
+    which=Which.Plain(
+        model_id="EricB/Phi-3.5-mini-instruct-UQFF",
+        from_uqff="phi3.5-mini-instruct-q4k-0.uqff",
+    )
+)
+```
+
+## Streaming
+
+Set `stream=True` on the request and iterate over chunks:
+
+```python
+from mistralrs import Runner, Which, ChatCompletionRequest
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    in_situ_quant="4",
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "Tell me a story."}],
+        max_tokens=256,
+        stream=True,
+    )
+)
+for chunk in res:
+    print(chunk.choices[0].delta.content, end="", flush=True)
+```
+
+## Structured Output
+
+Constrain the model to produce valid JSON matching a schema. Works with Pydantic models or raw JSON schemas:
+
+```python
+import json
+from pydantic import BaseModel, Field
+from mistralrs import Runner, Which, ChatCompletionRequest
+
+class City(BaseModel):
+    name: str = Field(..., description="City name")
+    country: str = Field(..., description="Country")
+    population: int = Field(..., description="Population")
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    in_situ_quant="4",
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "Give me info about Paris."}],
+        max_tokens=256,
+        grammar_type="json_schema",
+        grammar=json.dumps(City.model_json_schema()),
+    )
+)
+city = City.model_validate_json(res.choices[0].message.content)
+print(f"{city.name}, {city.country}: pop. {city.population}")
+```
+
+You can also use `grammar_type="regex"` or `grammar_type="lark"` for other constrained generation patterns.
+
+## Tool Calling
+
+Define tools as JSON schemas and let the model call them:
+
+```python
+import json
+from mistralrs import Runner, ToolChoice, Which, ChatCompletionRequest
+
+tools = [
+    json.dumps({
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the current weather for a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string", "description": "City name"},
+                },
+                "required": ["city"],
+            },
+            "strict": True,
+        },
+    })
+]
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    in_situ_quant="4",
+)
+
+# Model generates a tool call
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
+        max_tokens=256,
+        tool_schemas=tools,
+        tool_choice=ToolChoice.Auto,
+    )
+)
+
+tool_called = res.choices[0].message.tool_calls[0].function
+print(f"Tool: {tool_called.name}, Args: {tool_called.arguments}")
+```
+
+For server-side tool execution (agentic loop), use `tool_callbacks` or `max_tool_rounds`. See the [Agentic Features Guide](AGENTS.md).
+
+## Multimodal Input
+
+Send images, video, or audio using the OpenAI content format:
+
+```python
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+
+runner = Runner(
+    which=Which.MultimodalPlain(
+        model_id="google/gemma-4-E4B-it",
+        arch=MultimodalArchitecture.Gemma4,
+    ),
+    in_situ_quant="4",
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/photo.jpg"},
+                    },
+                    {"type": "text", "text": "What is this?"},
+                ],
+            }
+        ],
+        max_tokens=256,
+    )
+)
+print(res.choices[0].message.content)
+```
+
+Image URLs can be web URLs, local file paths, or base64-encoded data URIs. Video uses `video_url` and audio uses `audio_url`.
+
+## Embeddings
+
+```python
+from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
+
+runner = Runner(
+    which=Which.Embedding(
+        model_id="google/embeddinggemma-300m",
+        arch=EmbeddingArchitecture.EmbeddingGemma,
+    )
+)
+
+embeddings = runner.send_embedding_request(
+    EmbeddingRequest(
+        input=["superconductors", "graphene conductivity"],
+        truncate_sequence=True,
+    )
+)
+print(len(embeddings), len(embeddings[0]))
+```
+
+## Multi-Model Support
+
+Load and manage multiple models with a single `Runner`. All request methods accept an optional `model_id` parameter:
+
+```python
+# List available models
+models = runner.list_models()
+
+# Send request to a specific model
+response = runner.send_chat_completion_request(request, model_id="model-id")
+
+# Model management
+runner.unload_model("model-id")     # Free memory
+runner.reload_model("model-id")     # Reload on demand
+# Or just send a request. Unloaded models auto-reload.
+```
+
+For server-based multi-model deployment, see [Multi-Model Support](multi_model/overview.md).
+
+## MCP Client
+
+Connect to external tool servers via the Model Context Protocol:
+
+```python
+import mistralrs
+
+mcp_config = mistralrs.McpClientConfigPy(
+    servers=[
+        mistralrs.McpServerConfigPy(
+            name="Filesystem Tools",
+            source=mistralrs.McpServerSourcePy.Process(
+                command="npx",
+                args=["@modelcontextprotocol/server-filesystem", "."],
+            ),
+        )
+    ],
+    auto_register_tools=True,
+)
+
+runner = mistralrs.Runner(
+    which=mistralrs.Which.Plain(model_id="Qwen/Qwen3-4B"),
+    mcp_client_config=mcp_config,
+)
+```
+
+MCP tools are automatically discovered and available to the model. Supports Process, HTTP, and WebSocket transports. See [MCP Client](MCP/client.md) for details.
+
+## Configuration Reference
+
+<details>
+<summary>Which enum: full type definitions</summary>
 
 ### Architecture for plain models
+
 If you do not specify the architecture, an attempt will be made to use the model's config. If this fails, please raise an issue.
 
-- `Mistral`
-- `Gemma`
-- `Mixtral`
-- `Llama`
-- `Phi2`
-- `Phi3`
-- `Qwen2`
-- `Gemma2`
-- `GLM4`
-- `GLM4MoeLite`
-- `GLM4Moe`
-- `Starcoder2`
-- `Phi3_5MoE`
-- `DeepseekV2`
-- `DeepseekV3`
-- `Qwen3`
-- `Qwen3Moe`
-- `SmolLm3`
-- `GraniteMoeHybrid`
-- `GptOss`
-- `Qwen3Next`
-
-### ISQ Organization
-- `Default`
-- `MoQE`: if applicable, only quantize MoE experts. https://arxiv.org/abs/2310.02410
+- `Mistral`, `Gemma`, `Mixtral`, `Llama`, `Phi2`, `Phi3`, `Qwen2`, `Gemma2`, `GLM4`, `GLM4MoeLite`, `GLM4Moe`, `Starcoder2`, `Phi3_5MoE`, `DeepseekV2`, `DeepseekV3`, `Qwen3`, `Qwen3Moe`, `SmolLm3`, `GraniteMoeHybrid`, `GptOss`, `Qwen3Next`
 
 ### Architecture for multimodal models
-- `Phi3V`
-- `Idefics2`
-- `LLaVaNext`
-- `LLaVa`
-- `VLlama`
-- `Qwen2VL`
-- `Idefics3`
-- `MiniCpmO`
-- `Phi4MM`
-- `Qwen2_5VL`
-- `Gemma3`
-- `Gemma4`
-- `Mistral3`
-- `Llama4`
-- `Gemma3n`
-- `Qwen3VL`
-- `Qwen3VLMoE`
-- `Qwen3_5`
-- `Qwen3_5Moe`
-- `Voxtral`
+
+- `Phi3V`, `Idefics2`, `LLaVaNext`, `LLaVa`, `VLlama`, `Qwen2VL`, `Idefics3`, `MiniCpmO`, `Phi4MM`, `Qwen2_5VL`, `Gemma3`, `Gemma4`, `Mistral3`, `Llama4`, `Gemma3n`, `Qwen3VL`, `Qwen3VLMoE`, `Qwen3_5`, `Qwen3_5Moe`, `Voxtral`
 
 ### Architecture for diffusion models
-- `Flux`
-- `FluxOffloaded`
+
+- `Flux`, `FluxOffloaded`
 
 ### Architecture for speech models
+
 - `Dia`
 
 ### Architecture for embedding models
-- `EmbeddingGemma`
-- `Qwen3Embedding`
+
+- `EmbeddingGemma`, `Qwen3Embedding`
 
 ### ISQ Organization
+
 - `Default`
-- `MoQE`: if applicable, only quantize MoE experts. https://arxiv.org/abs/2310.02410
+- `MoQE`: if applicable, only quantize MoE experts. [arxiv.org/abs/2310.02410](https://arxiv.org/abs/2310.02410)
 
-> Note: `from_uqff` specifies a UQFF path to load from. If provided, this takes precedence over applying ISQ. For sharded models, you only need to specify the first shard (e.g., `q4k-0.uqff`) -- the remaining shards are auto-discovered. For multiple different quantizations, use a semicolon delimiter (;).
+### Which variants
 
-> Note: `enable_thinking` enables thinking for models that support the configuration.
-> Note: `truncate_sequence=True` trims prompts that would otherwise exceed the model's maximum context length. Leave it `False` to receive a validation error instead.
-
-```py
+```python
 class Which(Enum):
     @dataclass
     class Plain:
@@ -99,37 +347,9 @@ class Which(Enum):
         from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
+        auto_map_params: TextAutoMapParams | None = None
         calibration_file: str | None = None
         imatrix: str | None = None
-        hf_cache_path: str | None = None
-
-    @dataclass
-    class XLora:
-        xlora_model_id: str
-        order: str
-        arch: Architecture | None = None
-        model_id: str | None = None
-        tokenizer_json: str | None = None
-        tgt_non_granular_index: int | None = None
-        topology: str | None = None
-        from_uqff: str | list[str] | None = None
-        write_uqff: str | None = None
-        dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
-        hf_cache_path: str | None = None
-
-    @dataclass
-    class Lora:
-        adapter_model_id: str
-        arch: Architecture | None = None
-        model_id: str | None = None
-        tokenizer_json: str | None = None
-        topology: str | None = None
-        from_uqff: str | list[str] | None = None
-        write_uqff: str | None = None
-        dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
         hf_cache_path: str | None = None
 
     @dataclass
@@ -139,78 +359,7 @@ class Which(Enum):
         tok_model_id: str | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
-
-    @dataclass
-    class XLoraGGUF:
-        quantized_model_id: str
-        quantized_filename: str | list[str]
-        xlora_model_id: str
-        order: str
-        tok_model_id: str | None = None
-        tgt_non_granular_index: int | None = None
-        topology: str | None = None
-        dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
-
-    @dataclass
-    class LoraGGUF:
-        quantized_model_id: str
-        quantized_filename: str | list[str]
-        adapters_model_id: str
-        order: str
-        tok_model_id: str | None = None
-        topology: str | None = None
-        dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
-
-    @dataclass
-    class GGML:
-        quantized_model_id: str
-        quantized_filename: str
-        tok_model_id: str | None = None
-        tokenizer_json: str | None = None
-        gqa: int | None = None
-        topology: str | None = None
-        dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
-
-    @dataclass
-    class XLoraGGML:
-        quantized_model_id: str
-        quantized_filename: str
-        xlora_model_id: str
-        order: str
-        tok_model_id: str | None = None
-        tgt_non_granular_index: int | None = None
-        tokenizer_json: str | None = None
-        gqa: int | None = None
-        topology: str | None = None
-        dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
-
-    @dataclass
-    class LoraGGML:
-        quantized_model_id: str
-        quantized_filename: str
-        adapters_model_id: str
-        order: str
-        tok_model_id: str | None = None
-        tokenizer_json: str | None = None
-        topology: str | None = None
-        dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = (None,)
-
-    @dataclass
-    class Embedding:
-        model_id: str
-        arch: EmbeddingArchitecture | None = None
-        tokenizer_json: str | None = None
-        topology: str | None = None
-        from_uqff: str | list[str] | None = None
-        write_uqff: str | None = None
-        dtype: ModelDType = ModelDType.Auto
-        hf_cache_path: str | None = None
+        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class MultimodalPlain:
@@ -222,9 +371,20 @@ class Which(Enum):
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         max_edge: int | None = None
-        auto_map_params: MultimodalAutoMapParams | None = (None,)
+        auto_map_params: MultimodalAutoMapParams | None = None
         calibration_file: str | None = None
         imatrix: str | None = None
+        hf_cache_path: str | None = None
+
+    @dataclass
+    class Embedding:
+        model_id: str
+        arch: EmbeddingArchitecture | None = None
+        tokenizer_json: str | None = None
+        topology: str | None = None
+        from_uqff: str | list[str] | None = None
+        write_uqff: str | None = None
+        dtype: ModelDType = ModelDType.Auto
         hf_cache_path: str | None = None
 
     @dataclass
@@ -241,290 +401,28 @@ class Which(Enum):
         dtype: ModelDType = ModelDType.Auto
 ```
 
-## Multi-model Support
+> Note: `from_uqff` specifies a UQFF path to load from. For sharded models, you only need to specify the first shard (e.g., `q4k-0.uqff`). The remaining shards are auto-discovered.
 
-The `mistralrs` Python SDK supports running multiple models using the `Runner` class with the `model_id` parameter. All request methods accept an optional `model_id` to target a specific model. When `model_id` is `None` or omitted, the default model is used. If aliases are configured (for example via the server config or Rust `MultiModelBuilder`), `list_models()` will return those aliases and you can pass them in requests; canonical pipeline names remain accepted.
+> Note: `enable_thinking` enables thinking for models that support it.
 
-### Basic Usage with model_id
+> Note: `truncate_sequence=True` trims prompts that exceed the model's maximum context length.
 
-```python
-import mistralrs
+Adapter variants (`XLora`, `Lora`, `XLoraGGUF`, `LoraGGUF`, `GGML`, `XLoraGGML`, `LoraGGML`) are also available. See the [full API reference](https://ericlbuehler.github.io/mistral.rs/pyo3/mistralrs.html) for details.
 
-# Create a Runner with a multimodal model (Gemma 4 E4B)
-runner = mistralrs.Runner(
-    which=mistralrs.Which.MultimodalPlain(
-        model_id="google/gemma-4-E4B-it",
-        arch=mistralrs.MultimodalArchitecture.Gemma4,
-    ),
-    in_situ_quant="Q4K",
-)
+</details>
 
-# List available models (model IDs are registered IDs, aliases if configured)
-models = runner.list_models()
-print(f"Available models: {models}")  # ["google/gemma-4-E4B-it"]
+## Examples
 
-# Send request to specific model using model_id parameter
-response = runner.send_chat_completion_request(
-    mistralrs.ChatCompletionRequest(
-        messages=[{"role": "user", "content": "Hello!"}],
-        max_tokens=100
-    ),
-    model_id="google/gemma-4-E4B-it"  # Target specific model
-)
+| Category | Examples |
+|---|---|
+| **Getting Started** | [plain.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/plain.py), [streaming.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/streaming.py), [gguf.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gguf.py) |
+| **Structured Output** | [pydantic_schema.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/pydantic_schema.py), [json_schema.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/json_schema.py), [regex.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/regex.py), [lark.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/lark.py) |
+| **Tool Calling** | [tool_call.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/tool_call.py), [custom_tool_call.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_tool_call.py), [agentic_tools.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/agentic_tools.py) |
+| **Search** | [web_search.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/web_search.py), [custom_search.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_search.py) |
+| **MCP** | [mcp_client.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/mcp_client.py) |
+| **Quantization** | [isq.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/isq.py), [imatrix.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/imatrix.py), [topology.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/topology.py) |
+| **Adapters** | [lora_zephyr.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/lora_zephyr.py), [xlora_zephyr.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/xlora_zephyr.py), [anymoe.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/anymoe.py) |
+| **Advanced** | [paged_attention.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/paged_attention.py), [speculative.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/speculative.py), [multi_model_example.py](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/multi_model_example.py) |
+| **Cookbook** | [cookbook.ipynb](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/cookbook.ipynb), [tool_calling.ipynb](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/tool_calling.ipynb) |
 
-# Send request without model_id (uses default model)
-response = runner.send_chat_completion_request(
-    mistralrs.ChatCompletionRequest(
-        messages=[{"role": "user", "content": "Hello!"}],
-        max_tokens=100
-    )
-)
-```
-
-### Multi-model Management
-
-```python
-# List available models
-models = runner.list_models()
-print(f"Available models: {models}")
-
-# Get/set default model
-default_model = runner.get_default_model_id()
-print(f"Default model: {default_model}")
-
-# Change default model (model must be loaded)
-runner.set_default_model_id("google/gemma-4-E4B-it")
-
-# List models with their status
-models_with_status = runner.list_models_with_status()
-for model_id, status in models_with_status:
-    print(f"{model_id}: {status}")  # status is "loaded", "unloaded", or "reloading"
-```
-
-### Model Unloading and Reloading
-
-You can unload models to free memory and reload them on demand:
-
-```python
-model_id = "google/gemma-4-E4B-it"
-
-# Check if model is loaded
-is_loaded = runner.is_model_loaded(model_id)
-print(f"Model loaded: {is_loaded}")
-
-# List models with their status
-models_with_status = runner.list_models_with_status()
-for mid, status in models_with_status:
-    print(f"{mid}: {status}")
-
-# Unload a model to free memory (preserves configuration for reload)
-runner.unload_model(model_id)
-
-# Check status after unload
-is_loaded = runner.is_model_loaded(model_id)
-print(f"Model loaded after unload: {is_loaded}")  # False
-
-# Manually reload a model
-runner.reload_model(model_id)
-
-# Auto-reload: sending a request to an unloaded model will reload it automatically
-response = runner.send_chat_completion_request(
-    mistralrs.ChatCompletionRequest(
-        messages=[{"role": "user", "content": "Hello!"}]
-    ),
-    model_id=model_id  # Will auto-reload if unloaded
-)
-```
-
-### Request Methods with model_id
-
-All request methods accept an optional `model_id` parameter:
-
-```python
-# Chat completion
-response = runner.send_chat_completion_request(request, model_id="model-id")
-
-# Completion
-response = runner.send_completion_request(request, model_id="model-id")
-
-# Embeddings
-embeddings = runner.send_embedding_request(request, model_id="model-id")
-
-# Image generation
-image = runner.generate_image(prompt, response_format, model_id="model-id")
-
-# Audio generation
-audio = runner.generate_audio(prompt, model_id="model-id")
-
-# Tokenization
-tokens = runner.tokenize_text(text, add_special_tokens=True, model_id="model-id")
-text = runner.detokenize_text(tokens, skip_special_tokens=True, model_id="model-id")
-```
-
-When `model_id` is `None` or omitted, the default model is used.
-
-### Server Configuration
-For server-based multi-model deployment, see the [multi-model documentation](multi_model/overview.md).
-
-## MCP Client
-
-The `mistralrs` Python SDK now supports Model Context Protocol (MCP) clients, enabling AI assistants to connect to and interact with external tools and resources through standardized server interfaces.
-
-### MCP Server Configuration
-
-Configure MCP servers using `McpServerConfigPy`:
-
-```python
-# HTTP-based MCP server with Bearer token authentication
-http_server = mistralrs.McpServerConfigPy(
-    id="web_search",
-    name="Web Search MCP",
-    source=mistralrs.McpServerSourcePy.Http(
-        url="https://api.example.com/mcp",
-        timeout_secs=30,
-        headers={"X-API-Version": "v1"}  # Optional additional headers
-    ),
-    enabled=True,
-    tool_prefix="web",  # Prefixes tool names to avoid conflicts
-    resources=None,
-    bearer_token="your-api-token"  # Automatically added as Authorization header
-)
-
-# Process-based MCP server for local tools
-process_server = mistralrs.McpServerConfigPy(
-    id="filesystem",
-    name="Filesystem MCP",
-    source=mistralrs.McpServerSourcePy.Process(
-        command="mcp-server-filesystem",
-        args=["--root", "/tmp"],
-        work_dir=None,
-        env={"MCP_LOG_LEVEL": "debug"}  # Optional environment variables
-    ),
-    enabled=True,
-    tool_prefix="fs",
-    resources=["file://**"],  # Resource patterns this client is interested in
-    bearer_token=None  # Process servers typically don't need authentication
-)
-
-# WebSocket-based MCP server for real-time communication
-websocket_server = mistralrs.McpServerConfigPy(
-    id="realtime_data",
-    name="Real-time Data MCP",
-    source=mistralrs.McpServerSourcePy.WebSocket(
-        url="wss://realtime.example.com/mcp",
-        timeout_secs=60,
-        headers=None
-    ),
-    enabled=True,
-    tool_prefix="rt",
-    resources=None,
-    bearer_token="websocket-token"  # WebSocket Bearer token support
-)
-```
-
-### MCP Client Configuration
-
-Configure the MCP client using `McpClientConfigPy`:
-
-```python
-mcp_config = mistralrs.McpClientConfigPy(
-    servers=[http_server, process_server, websocket_server],
-    auto_register_tools=True,  # Automatically discover and register tools
-    tool_timeout_secs=30,      # Timeout for individual tool calls
-    max_concurrent_calls=5     # Maximum concurrent tool calls across all servers
-)
-```
-
-### Integration with Runner
-
-Pass the MCP client configuration to the `Runner`:
-
-```python
-runner = mistralrs.Runner(
-    which=mistralrs.Which.GGUF(
-        tok_model_id="mistralai/Mistral-7B-Instruct-v0.1",
-        quantized_model_id="TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
-        quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",
-    ),
-    mcp_client_config=mcp_config  # MCP tools automatically registered
-)
-```
-
-When `auto_register_tools=True`, the MCP client will:
-1. Connect to all enabled MCP servers
-2. Discover available tools from each server
-3. Register them for automatic tool calling with appropriate prefixes
-4. Make them available during model conversations
-
-### MCP Transport Types
-
-- **HTTP Transport**: Best for public APIs, RESTful services, servers behind load balancers. Supports SSE (Server-Sent Events) and standard HTTP semantics.
-
-- **Process Transport**: Best for local tools, development servers, sandboxed environments. Provides process isolation with no network overhead.
-
-- **WebSocket Transport**: Best for interactive applications, real-time data, low-latency requirements. Supports persistent connections and server-initiated notifications.
-
-### Authentication
-
-- **Bearer Tokens**: Automatically added as `Authorization: Bearer <token>` header for HTTP and WebSocket connections
-- **Custom Headers**: Additional headers can be specified for API keys, versioning, etc.
-- **Process Servers**: Typically don't require authentication as they run locally
-
-## Example
-```python
-from mistralrs import Runner, Which, ChatCompletionRequest
-
-runner = Runner(
-    which=Which.GGUF(
-        tok_model_id="mistralai/Mistral-7B-Instruct-v0.1",
-        quantized_model_id="TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
-        quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",
-    )
-)
-
-res = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="default",
-        messages=[{"role":"user", "content":"Tell me a story about the Rust type system."}],
-        max_tokens=256,
-        presence_penalty=1.0,
-        top_p=0.1,
-        temperature=0.1,
-    )
-)
-print(res.choices[0].message.content)
-print(res.usage)
-```
-
-## Embeddings example
-
-```python
-from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
-
-runner = Runner(
-    which=Which.Embedding(
-        model_id="google/embeddinggemma-300m",
-        arch=EmbeddingArchitecture.EmbeddingGemma,
-    )
-)
-
-embeddings = runner.send_embedding_request(
-    EmbeddingRequest(
-        input=[
-            "task: query | text: superconductors",
-            "task: query | text: graphene",
-        ],
-        truncate_sequence=True,
-    )
-)
-
-print(len(embeddings), len(embeddings[0]))
-
-# Swap the model_id and arch below to load Qwen/Qwen3-Embedding-0.6B instead:
-# Runner(
-#     which=Which.Embedding(
-#         model_id="Qwen/Qwen3-Embedding-0.6B",
-#         arch=EmbeddingArchitecture.Qwen3Embedding,
-#     )
-# )
-```
+Browse all examples: [examples/python/](https://github.com/EricLBuehler/mistral.rs/tree/master/examples/python)

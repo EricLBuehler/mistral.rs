@@ -924,24 +924,24 @@ When running in interactive mode (`mistralrs run`), the following commands are a
 
 | Command | Description |
 |---------|-------------|
-| `\help` | Display help message |
-| `\exit` | Quit interactive mode |
-| `\system <message>` | Add a system message without running the model |
-| `\clear` | Clear the chat history |
-| `\temperature <float>` | Set sampling temperature (0.0 to 2.0) |
-| `\topk <int>` | Set top-k sampling value (>0) |
-| `\topp <float>` | Set top-p sampling value (0.0 to 1.0) |
+| `/help` | Display help message |
+| `/exit` | Quit interactive mode |
+| `/system <message>` | Add a system message without running the model |
+| `/clear` | Clear the chat history |
+| `/temperature <float>` | Set sampling temperature (0.0 to 2.0) |
+| `/topk <int>` | Set top-k sampling value (>0) |
+| `/topp <float>` | Set top-p sampling value (0.0 to 1.0) |
 
 **Examples:**
 
 ```
-> \system Always respond as a pirate.
-> \temperature 0.7
-> \topk 50
+> /system Always respond as a pirate.
+> /temperature 0.7
+> /topk 50
 > Hello!
 Ahoy there, matey! What brings ye to these waters?
-> \clear
-> \exit
+> /clear
+> /exit
 ```
 
 **Multimodal Model Interactive Mode:**

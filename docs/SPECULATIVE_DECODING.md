@@ -206,3 +206,9 @@ Speculative decoding can be combined with:
 - **Device mapping** - Distribute models across multiple GPUs
 
 See `examples/python/speculative_xlora.py` for an example combining speculative decoding with X-LoRA.
+
+## See Also
+
+- [Performance Guide](PERFORMANCE.md): When speculative decoding helps
+- [CLI Reference](CLI.md): TOML configuration for speculative decoding
+- [ISQ](ISQ.md): Quantize draft or target models

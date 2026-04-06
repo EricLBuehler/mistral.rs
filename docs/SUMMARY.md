@@ -4,19 +4,20 @@
 
 # Getting Started
 
+- [Tutorial](GETTING_STARTED.md)
 - [Installation](INSTALLATION.md)
 - [Cargo Features](CARGO_FEATURES.md)
-- [CLI Reference](CLI.md)
-- [CLI TOML Configuration](CLI_CONFIG.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
 
-# SDKs & APIs
+# Using mistral.rs
 
-- [Rust SDK](RUST_SDK.md)
-- [Python SDK](PYTHON_SDK.md)
-- [Python Installation](PYTHON_INSTALLATION.md)
+- [CLI Reference](CLI.md)
+- [CLI TOML Configuration](CLI_CONFIG.md)
 - [HTTP Server](HTTP.md)
 - [OpenResponses API](OPENRESPONSES.md)
+- [Python SDK](PYTHON_SDK.md)
+  - [Python Installation](PYTHON_INSTALLATION.md)
+- [Rust SDK](RUST_SDK.md)
 
 # Models
 
@@ -67,14 +68,23 @@
 - [EmbeddingGemma](EMBEDDINGGEMMA.md)
 - [Qwen3 Embedding](QWEN3_EMBEDDING.md)
 
-# Quantization & Optimization
+# Performance & Optimization
 
+- [Performance Guide](PERFORMANCE.md)
 - [Quantization Overview](QUANTS.md)
 - [ISQ (In-Situ Quantization)](ISQ.md)
 - [UQFF Format](UQFF.md)
   - [UQFF Layout](UQFF/LAYOUT.md)
 - [Topology](TOPOLOGY.md)
 - [Importance Matrix](IMATRIX.md)
+- [PagedAttention](PAGED_ATTENTION.md)
+- [Flash Attention](FLASH_ATTENTION.md)
+- [MLA (Multi-head Latent Attention)](MLA.md)
+- [Speculative Decoding](SPECULATIVE_DECODING.md)
+- [Device Mapping](DEVICE_MAPPING.md)
+- [Distributed Inference](DISTRIBUTED/DISTRIBUTED.md)
+  - [NCCL Backend](DISTRIBUTED/NCCL.md)
+  - [Ring Backend](DISTRIBUTED/RING.md)
 
 # Adapters & Model Customization
 
@@ -84,19 +94,9 @@
 - [AnyMoE](ANYMOE.md)
 - [MatFormer](MATFORMER.md)
 
-# Performance & Hardware
-
-- [Device Mapping](DEVICE_MAPPING.md)
-- [PagedAttention](PAGED_ATTENTION.md)
-- [Speculative Decoding](SPECULATIVE_DECODING.md)
-- [Flash Attention](FLASH_ATTENTION.md)
-- [MLA (Multi-head Latent Attention)](MLA.md)
-- [Distributed Inference](DISTRIBUTED/DISTRIBUTED.md)
-  - [NCCL Backend](DISTRIBUTED/NCCL.md)
-  - [Ring Backend](DISTRIBUTED/RING.md)
-
 # Features
 
+- [Agentic Features](AGENTS.md)
 - [Tool Calling](TOOL_CALLING.md)
 - [Web Search](WEB_SEARCH.md)
 - [Chat Templates](CHAT_TOK.md)
@@ -116,3 +116,5 @@
 
 - [Configuration](CONFIGURATION.md)
 - [Engine Internals](ENGINE.md)
+- [FAQ](FAQ.md)
+- [Examples](EXAMPLES.md)

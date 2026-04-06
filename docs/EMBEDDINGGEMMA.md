@@ -1,15 +1,20 @@
-# EmbeddingGemma
+# EmbeddingGemma: [`google/embeddinggemma-300m`](https://huggingface.co/google/embeddinggemma-300m)
 
-EmbeddingGemma was the first embedding model supported by mistral.rs. This guide walks through serving the
-model via the OpenAI-compatible HTTP server, running it from Python, and embedding text directly in Rust.
+EmbeddingGemma was the first embedding model supported by mistral.rs. It generates optimized embeddings for various use cases such as document retrieval, question answering, and fact verification.
 
 For a catalog of available embedding models and general usage tips, see [EMBEDDINGS.md](EMBEDDINGS.md).
 
-## Prompt instructions
+## Quick Start
 
-EmbeddingGemma can generate optimized embeddings for various use cases-such as document retrieval, question answering, and fact verification-or for specific input types, either, a query or a document-using prompts that are prepended to the input strings. 
+```bash
+mistralrs serve embedding -m google/embeddinggemma-300m -p 1234
+```
 
-- Query prompts follow the form `task: {task description} | query: ` where the task description varies by the use case, with the default task description being search result. 
+## Prompt Instructions
+
+EmbeddingGemma can generate optimized embeddings for various use cases or for specific input types (query or document) using prompts that are prepended to the input strings.
+
+- Query prompts follow the form `task: {task description} | query: ` where the task description varies by the use case, with the default task description being search result.
 - Document-style prompts follow the form `title: {title | "none"} | text: ` where the title is either none (the default) or the actual title of the document. Note that providing a title, if available, will improve model performance for document prompts but may require manual formatting.
 
 | **Use Case (task type enum)** | **Descriptions** | **Recommended Prompt** |
@@ -23,16 +28,15 @@ EmbeddingGemma can generate optimized embeddings for various use cases-such as d
 | **Semantic Similarity** | Used to generate embeddings that are optimized to assess text similarity. This is not intended for retrieval use cases. | `task: sentence similarity \| query: {content}` |
 | **Code Retrieval** | Used to retrieve a code block based on a natural language query, such as *sort an array* or *reverse a linked list*. Embeddings of code blocks are computed using `retrieval_document`. | `task: code retrieval \| query: {content}` |
 
+## HTTP API
 
-## HTTP server
-
-Launch the server in embedding mode to expose an OpenAI-compatible `/v1/embeddings` endpoint:
+Start the server:
 
 ```bash
-mistralrs serve -p 1234 -m google/embeddinggemma-300m
+mistralrs serve embedding -m google/embeddinggemma-300m -p 1234
 ```
 
-Once running, call the endpoint with an OpenAI client or raw `curl`:
+Send a request:
 
 ```bash
 curl http://localhost:1234/v1/embeddings \
