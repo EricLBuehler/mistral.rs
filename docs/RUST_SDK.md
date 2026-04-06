@@ -31,8 +31,8 @@ mistralrs = "0.7"
 
 For GPU acceleration, enable the appropriate feature:
 ```toml
-mistralrs = { version = "0.7", features = ["metal"] }     # macOS
-mistralrs = { version = "0.7", features = ["cuda"] }       # NVIDIA
+mistralrs = { version = "0.8", features = ["metal"] }     # macOS
+mistralrs = { version = "0.8", features = ["cuda"] }       # NVIDIA
 ```
 
 ## Quick Start

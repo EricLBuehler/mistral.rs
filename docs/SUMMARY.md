@@ -97,6 +97,7 @@
 
 # Features
 
+- [Agentic Features](AGENTS.md)
 - [Tool Calling](TOOL_CALLING.md)
 - [Web Search](WEB_SEARCH.md)
 - [Chat Templates](CHAT_TOK.md)

@@ -31,9 +31,9 @@ UQFF builds on our ISQ feature by allowing serialization and deserialization for
 
 While ISQ is a powerful feature enabling easy quantization of models, the key limitation has been the time required for requantization. While the process is relatively fast with parallelization and other techniques, multiple runs can make the experience slow. 
 
-**Comparting UQFF to GGUF:**
+**Comparing UQFF to GGUF:**
 
-In contrast to GGUF, which only supports the GGUF quantizations, UQFF is designed with flexibiliuty in mind. At its code, it extends the power and flexibility of ISQ. The ability to support multiple quantization types (more to come!) in one simple, easy-to-use file is a critical feature.
+In contrast to GGUF, which only supports the GGUF quantizations, UQFF is designed with flexibility in mind. At its core, it extends the power and flexibility of ISQ. The ability to support multiple quantization types (more to come!) in one simple, easy-to-use file is a critical feature.
 
 Additionally, users will no longer need to wait for GGUF support to begin using post-training quantized models. As we add new models and quantization schemes to mistral.rs, the feature set of UQFF will grow.
 

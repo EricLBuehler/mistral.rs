@@ -71,7 +71,7 @@ mistralrs run --isq 4 -m microsoft/Phi-3-mini-4k-instruct
 mistralrs run -m kaitchup/Phi-3-mini-4k-instruct-gptq-4bit
 ```
 
-You can create your own GPTQ model using [`scripts/convert_to_gptq.py`][../scripts/convert_to_gptq.py]:
+You can create your own GPTQ model using [`scripts/convert_to_gptq.py`](https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/convert_to_gptq.py):
 ```
 pip install gptqmodel transformers datasets
 
