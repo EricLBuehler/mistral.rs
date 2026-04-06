@@ -1,21 +1,12 @@
-//! Server command implementation
+//! Server command implementation — converts CLI args and delegates to mistralrs-serve.
 
 use anyhow::{Context, Result};
-use tracing::info;
-
-use mistralrs_core::{
-    initialize_logging, DiffusionLoaderType, ModelSelected, PagedCacheType, SpeechLoaderType,
-};
-use mistralrs_server_core::{
-    mistralrs_for_server_builder::MistralRsForServerBuilder,
-    mistralrs_server_router_builder::MistralRsServerRouterBuilder,
-};
+use mistralrs_core::{DiffusionLoaderType, ModelSelected, PagedCacheType, SpeechLoaderType};
 
 use crate::args::{
     AdapterOptions, DeviceOptions, FormatOptions, GlobalOptions, ModelFormat, ModelSourceOptions,
     ModelType, QuantizationOptions, RuntimeOptions, ServerOptions,
 };
-use crate::ui::build_ui_router;
 
 /// Run the HTTP server with the specified model
 pub async fn run_server(
@@ -24,97 +15,55 @@ pub async fn run_server(
     runtime: RuntimeOptions,
     global: GlobalOptions,
 ) -> Result<()> {
-    initialize_logging();
-
-    // Convert our clean args to ModelSelected for the existing loader infrastructure
     let model_selected = convert_to_model_selected(&model_type)?;
 
-    // Extract paged attention settings
-    let (
-        paged_attn,
-        paged_attn_gpu_mem,
-        paged_attn_gpu_mem_usage,
-        paged_ctxt_len,
-        paged_attn_block_size,
-        paged_cache_type,
-    ) = extract_paged_attn_settings(&model_type);
+    let paged_attn_tuple = extract_paged_attn_settings(&model_type);
+    let paged_attn = mistralrs_serve::PagedAttnConfig {
+        paged_attn: paged_attn_tuple.0,
+        paged_attn_gpu_mem: paged_attn_tuple.1,
+        paged_attn_gpu_mem_usage: paged_attn_tuple.2,
+        paged_ctxt_len: paged_attn_tuple.3,
+        paged_attn_block_size: paged_attn_tuple.4,
+        paged_cache_type: paged_attn_tuple.5,
+    };
 
-    // Extract device settings
-    let (cpu, device_layers) = extract_device_settings(&model_type);
+    let device_tuple = extract_device_settings(&model_type);
+    let device = mistralrs_serve::DeviceConfig {
+        cpu: device_tuple.0,
+        device_layers: device_tuple.1,
+    };
 
-    // Extract quantization settings
     let isq = extract_isq_setting(&model_type);
 
-    // Build the MistralRs instance
-    let mut builder = MistralRsForServerBuilder::new()
-        .with_model(model_selected)
-        .with_max_seqs(runtime.max_seqs)
-        .with_no_kv_cache(runtime.no_kv_cache)
-        .with_token_source(global.token_source)
-        .with_interactive_mode(false)
-        .with_prefix_cache_n(runtime.prefix_cache_n)
-        .set_paged_attn(paged_attn)
-        .with_cpu(cpu)
-        .with_enable_search(runtime.enable_search)
-        .with_seed_optional(global.seed)
-        .with_log_optional(global.log.as_ref().map(|p| p.to_string_lossy().to_string()))
-        .with_chat_template_optional(
-            runtime
-                .chat_template
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-        )
-        .with_jinja_explicit_optional(
-            runtime
-                .jinja_explicit
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-        )
-        .with_num_device_layers_optional(device_layers)
-        .with_in_situ_quant_optional(isq)
-        .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)
-        .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
-        .with_paged_ctxt_len_optional(paged_ctxt_len)
-        .with_paged_attn_block_size_optional(paged_attn_block_size)
-        .with_paged_attn_cache_type(paged_cache_type);
-
-    if let Some(model) = runtime.search_embedding_model {
-        builder = builder.with_search_embedding_model(model.into());
-    }
-
-    let mistralrs = builder.build().await?;
-    let mistralrs_for_ui = mistralrs.clone();
-
-    // Build and run the server
-    let mut app = MistralRsServerRouterBuilder::new()
-        .with_mistralrs(mistralrs)
-        .with_max_tool_rounds_optional(server.max_tool_rounds)
-        .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
-        .build()
-        .await?;
-
-    if server.ui {
-        let ui_router = build_ui_router(
-            mistralrs_for_ui,
-            runtime.enable_search,
-            runtime.search_embedding_model.map(|m| m.into()),
-        )
-        .await?;
-        app = app.nest("/ui", ui_router);
-        info!("UI available at http://{}:{}/ui", server.host, server.port);
-    }
-
-    let listener =
-        tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
-
-    info!("Server listening on http://{}:{}", server.host, server.port);
-
-    axum::serve(listener, app).await?;
-
-    Ok(())
+    mistralrs_serve::run_server(
+        model_selected,
+        paged_attn,
+        device,
+        isq,
+        mistralrs_serve::ServerConfig {
+            host: server.host,
+            port: server.port,
+            ui: server.ui,
+        },
+        mistralrs_serve::RuntimeConfig {
+            max_seqs: runtime.max_seqs,
+            no_kv_cache: runtime.no_kv_cache,
+            prefix_cache_n: runtime.prefix_cache_n,
+            enable_search: runtime.enable_search,
+            search_embedding_model: runtime.search_embedding_model.map(|m| m.into()),
+            chat_template: runtime.chat_template,
+            jinja_explicit: runtime.jinja_explicit,
+        },
+        mistralrs_serve::GlobalConfig {
+            token_source: global.token_source,
+            seed: global.seed,
+            log: global.log,
+        },
+    )
+    .await
 }
 
-/// Convert our clean ModelType to the legacy ModelSelected enum
+/// Convert our clean ModelType to the ModelSelected enum
 pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelSelected> {
     match model_type {
         ModelType::Auto {
@@ -126,15 +75,12 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
             cache: _,
             multimodal,
         } => {
-            // If user explicitly specified a quantized format, handle it
             let format_type = format.format.unwrap_or(ModelFormat::Plain);
             let has_lora = adapter.lora.is_some();
             let has_xlora = adapter.xlora.is_some();
 
-            // For GGUF/GGML formats, delegate to text model conversion which has proper validation
             match format_type {
                 ModelFormat::Gguf | ModelFormat::Ggml => {
-                    // Validate that required options are present
                     if format.quantized_file.is_none() {
                         let format_name = match format_type {
                             ModelFormat::Gguf => "GGUF",
@@ -148,18 +94,15 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
                             fmt = format_name.to_lowercase()
                         );
                     }
-                    // Use the text model conversion which handles GGUF/GGML properly
                     return convert_text_model(model, format, adapter, quantization, device);
                 }
                 ModelFormat::Plain => {
-                    // For plain format with adapters, also use text model conversion
                     if has_lora || has_xlora {
                         return convert_text_model(model, format, adapter, quantization, device);
                     }
                 }
             }
 
-            // Use Run (auto-loader) for auto mode without explicit quantized format
             Ok(ModelSelected::Run {
                 model_id: model.model_id.clone(),
                 tokenizer_json: model
@@ -269,7 +212,6 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
     }
 }
 
-/// Convert text model with orthogonal format/adapter flags
 fn convert_text_model(
     model: &ModelSourceOptions,
     format_opts: &FormatOptions,
@@ -282,7 +224,6 @@ fn convert_text_model(
     let has_xlora = adapter.xlora.is_some();
 
     match (format_type, has_lora, has_xlora) {
-        // Plain format
         (ModelFormat::Plain, false, false) => Ok(ModelSelected::Plain {
             model_id: model.model_id.clone(),
             tokenizer_json: model
@@ -353,7 +294,6 @@ fn convert_text_model(
             hf_cache_path: device.hf_cache.clone(),
         }),
 
-        // GGUF format - quantized_filename is required String
         (ModelFormat::Gguf, false, false) => Ok(ModelSelected::GGUF {
             tok_model_id: format_opts.tok_model_id.clone(),
             quantized_model_id: model.model_id.clone(),
@@ -415,7 +355,6 @@ fn convert_text_model(
             max_batch_size: device.max_batch_size,
         }),
 
-        // GGML format
         (ModelFormat::Ggml, false, false) => Ok(ModelSelected::GGML {
             tok_model_id: format_opts
                 .tok_model_id

@@ -12,7 +12,6 @@ use mistralrs_server_core::{
 use crate::commands::run::interactive_mode;
 use crate::commands::serve::convert_to_model_selected;
 use crate::config::{load_cli_config, CliConfig};
-use crate::ui::build_ui_router;
 
 /// Execute the CLI using a TOML configuration file.
 pub async fn run_from_config(path: std::path::PathBuf) -> Result<()> {
@@ -99,7 +98,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         .await?;
 
     if server.ui {
-        let ui_router = build_ui_router(
+        let ui_router = mistralrs_serve::ui::build_ui_router(
             mistralrs_for_ui,
             runtime.enable_search,
             runtime.search_embedding_model.map(|m| m.into()),

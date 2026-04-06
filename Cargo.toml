@@ -5,6 +5,7 @@ members = [
     "mistralrs-cli",
     "mistralrs-core",
     "mistralrs-pyo3",
+    "mistralrs-serve",
     "mistralrs",
     "mistralrs-bench",
     "mistralrs-vision",
@@ -87,6 +88,7 @@ half = "2.7.1"
 rayon = "1.11.0"
 url = "2.5.8"
 utoipa = "5.4.0"
+comfy-table = "7.1"
 walkdir = "2.5.0"
 data-url = "0.3.2"
 float8 = "0.7.0"
@@ -187,6 +189,7 @@ mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.8.1" }
 mistralrs-quant = { path = "mistralrs-quant", version = "0.8.1" }
 mistralrs-vision = { path = "mistralrs-vision", version = "0.8.1" }
 mistralrs-server-core = { path = "mistralrs-server-core", version = "0.8.1" }
+mistralrs-serve = { path = "mistralrs-serve", version = "0.8.1" }
 mistralrs = { path = "mistralrs", version = "0.8.1" }
 mistralrs-audio = { path = "mistralrs-audio", version = "0.8.1" }
 mistralrs-mcp = { path = "mistralrs-mcp", version = "0.8.1" }

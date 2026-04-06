@@ -9,7 +9,6 @@
 mod args;
 mod commands;
 mod config;
-mod ui;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
