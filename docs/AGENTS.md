@@ -2,6 +2,30 @@
 
 mistral.rs can execute tools on behalf of the model in a server-side loop, eliminating client round-trips. This guide walks through each agentic capability from simplest to most advanced.
 
+Give a local model web search in one command:
+```bash
+mistralrs run --enable-search -m Qwen/Qwen3-4B
+```
+
+Or hit it from the standard OpenAI Python SDK — no custom client needed:
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:1234/v1/", api_key="foobar")
+response = client.chat.completions.create(
+    model="default",
+    messages=[{"role": "user", "content": "What happened in the news today?"}],
+    web_search_options={},
+)
+```
+
+| I want to... | Use... | Section |
+|---|---|---|
+| Add search to any model, zero code | Web Search | [Jump](#web-search) |
+| Run my own functions server-side | Tool Callbacks | [Jump](#tool-callbacks) |
+| Build a full agent in Rust | Agent Builder | [Jump](#agent-builder-rust-sdk) |
+| Connect to external tool servers | MCP Client | [Jump](#mcp-client) |
+| Dispatch tools over HTTP in production | Tool Dispatch URLs | [Jump](#tool-dispatch-urls) |
+
 ## Table of Contents
 
 1. [Overview](#overview)
@@ -9,33 +33,34 @@ mistral.rs can execute tools on behalf of the model in a server-side loop, elimi
    - [The agentic loop](#the-agentic-loop)
    - [Dispatch order](#dispatch-order)
    - [Supported models](#supported-models)
-2. [Web Search](#web-search)
+2. [Build a Full Agent in 5 Minutes](#build-a-full-agent-in-5-minutes)
+3. [Web Search](#web-search)
    - [Enabling web search](#enabling-web-search)
    - [Custom search callbacks](#custom-search-callbacks)
-3. [Tool Callbacks](#tool-callbacks)
+4. [Tool Callbacks](#tool-callbacks)
    - [Python SDK](#tool-callbacks-python-sdk)
    - [Rust SDK](#tool-callbacks-rust-sdk)
-4. [Agent Builder (Rust SDK)](#agent-builder-rust-sdk)
+5. [Agent Builder (Rust SDK)](#agent-builder-rust-sdk)
    - [The `#[tool]` macro](#the-tool-macro)
    - [Building an agent](#building-an-agent)
    - [Non-streaming execution](#non-streaming-execution)
    - [Streaming execution](#streaming-execution)
-5. [MCP Client](#mcp-client)
+6. [MCP Client](#mcp-client)
    - [Quick start with the CLI](#quick-start-with-the-cli)
    - [Rust SDK](#mcp-rust-sdk)
    - [Python SDK](#mcp-python-sdk)
    - [HTTP API](#mcp-http-api)
    - [Multi-server and authentication](#multi-server-and-authentication)
-6. [Tool Dispatch URLs](#tool-dispatch-urls)
+7. [Tool Dispatch URLs](#tool-dispatch-urls)
    - [Security model](#security-model)
    - [Setting up a tool server](#setting-up-a-tool-server)
    - [Configuration](#tool-dispatch-configuration)
-7. [Common Configuration](#common-configuration)
+8. [Common Configuration](#common-configuration)
    - [`max_tool_rounds`](#max_tool_rounds)
    - [Grammar enforcement and strict mode](#grammar-enforcement-and-strict-mode)
    - [Streaming support](#streaming-support)
-8. [Combining Features](#combining-features)
-9. [Further Reading](#further-reading)
+9. [Combining Features](#combining-features)
+10. [Further Reading](#further-reading)
 
 ---
 
