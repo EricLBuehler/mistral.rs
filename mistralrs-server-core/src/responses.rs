@@ -1559,59 +1559,67 @@ pub async fn create_response(
             }
 
             // Wait for response
-            match bg_rx.recv().await {
-                Some(Response::Done(chat_resp)) => {
-                    let response = chat_response_to_response_resource(
-                        &chat_resp,
-                        task_id.clone(),
-                        metadata_clone,
-                        &request_context,
-                    );
+            while let Some(msg) = bg_rx.recv().await {
+                match msg {
+                    Response::Chunk(_) => continue,
+                    Response::Done(chat_resp) => {
+                        let response = chat_response_to_response_resource(
+                            &chat_resp,
+                            task_id.clone(),
+                            metadata_clone.clone(),
+                            &request_context,
+                        );
 
-                    // Store if requested
-                    if store {
-                        let cache = get_response_cache();
-                        let _ = cache.store_response(task_id.clone(), response.clone());
+                        // Store if requested
+                        if store {
+                            let cache = get_response_cache();
+                            let _ = cache.store_response(task_id.clone(), response.clone());
 
-                        if let Some(mut history) = conversation_history {
-                            for choice in &chat_resp.choices {
-                                if let Some(content) = &choice.message.content {
-                                    history.push(Message {
-                                        content: Some(MessageContent::from_text(content.clone())),
-                                        role: choice.message.role.clone(),
-                                        name: None,
-                                        tool_calls: None,
-                                        tool_call_id: None,
-                                    });
+                            if let Some(mut history) = conversation_history.clone() {
+                                for choice in &chat_resp.choices {
+                                    if let Some(content) = &choice.message.content {
+                                        history.push(Message {
+                                            content: Some(MessageContent::from_text(content.clone())),
+                                            role: choice.message.role.clone(),
+                                            name: None,
+                                            tool_calls: None,
+                                            tool_call_id: None,
+                                        });
+                                    }
                                 }
+                                let _ = cache.store_conversation_history(task_id.clone(), history);
                             }
-                            let _ = cache.store_conversation_history(task_id.clone(), history);
                         }
-                    }
 
-                    task_manager.mark_completed(&task_id, response);
-                }
-                Some(Response::ModelError(msg, _partial_resp)) => {
-                    task_manager
-                        .mark_failed(&task_id, ResponseError::new("model_error", msg.to_string()));
-                }
-                Some(Response::ValidationError(e)) => {
-                    task_manager.mark_failed(
-                        &task_id,
-                        ResponseError::new("validation_error", e.to_string()),
-                    );
-                }
-                Some(Response::InternalError(e)) => {
-                    task_manager.mark_failed(
-                        &task_id,
-                        ResponseError::new("internal_error", e.to_string()),
-                    );
-                }
-                _ => {
-                    task_manager.mark_failed(
-                        &task_id,
-                        ResponseError::new("unknown_error", "Unexpected response type"),
-                    );
+                        task_manager.mark_completed(&task_id, response);
+                        break;
+                    }
+                    Response::ModelError(err_msg, _partial_resp) => {
+                        task_manager
+                            .mark_failed(&task_id, ResponseError::new("model_error", err_msg.to_string()));
+                        break;
+                    }
+                    Response::ValidationError(e) => {
+                        task_manager.mark_failed(
+                            &task_id,
+                            ResponseError::new("validation_error", e.to_string()),
+                        );
+                        break;
+                    }
+                    Response::InternalError(e) => {
+                        task_manager.mark_failed(
+                            &task_id,
+                            ResponseError::new("internal_error", e.to_string()),
+                        );
+                        break;
+                    }
+                    _ => {
+                        task_manager.mark_failed(
+                            &task_id,
+                            ResponseError::new("unknown_error", "Unexpected response type"),
+                        );
+                        break;
+                    }
                 }
             }
         });
