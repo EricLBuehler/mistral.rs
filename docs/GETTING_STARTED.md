@@ -89,6 +89,16 @@ mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
 
 To override the built-in UI with your own files, create a `ui/` directory next to the `mistralrs` executable. Files placed there are served in place of the embedded UI.
 
+### Auto-Discovery and Lazy Loading
+
+Instead of specifying a single model with `-m`, you can point `--models-dir` at a directory of models. Each subdirectory is treated as a separate model (GGUF, GGML, or Safetensors/Plain format is auto-detected). Models are loaded lazily on first request and the directory is polled for changes, so adding or removing a model subdirectory is picked up automatically.
+
+Combined with `--idle-timeout-secs`, models are automatically unloaded after a period of inactivity and reloaded on demand. This is useful for managing GPU memory when serving many models.
+
+```bash
+mistralrs serve --models-dir ./models --ui --idle-timeout-secs 1800
+```
+
 ## Step 5: Use the Python SDK
 
 ```bash

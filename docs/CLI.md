@@ -129,6 +129,12 @@ mistralrs serve -m Qwen/Qwen3-4B -p 3000
 
 # Start server with MCP support
 mistralrs serve -m Qwen/Qwen3-4B --mcp-port 8081
+
+# Serve all models in a directory with lazy loading
+mistralrs serve --models-dir ./models --idle-timeout-secs 1800
+
+# Combine auto-discovery with the web UI
+mistralrs serve --models-dir ./models --ui --idle-timeout-secs 1800
 ```
 
 **Server Options:**
@@ -140,6 +146,8 @@ mistralrs serve -m Qwen/Qwen3-4B --mcp-port 8081
 | `--ui` | disabled | Serve built-in web UI at `/ui` |
 
 To use a custom web UI, place your files in a `ui/` directory next to the `mistralrs` executable. Any file served from `/ui/` will be loaded from this directory if it exists, falling back to the built-in UI otherwise. The server logs a message at startup when a UI override directory is detected.
+| `--models-dir <PATH>` | none | Directory to scan for models (auto-discovery / lazy loading). Each subdirectory is treated as a separate model, loaded on first request |
+| `--idle-timeout-secs <N>` | `0` (disabled) | Auto-unload models after N seconds without requests. Unloaded models reload automatically on next request |
 | `--mcp-port <PORT>` | none | MCP protocol server port |
 | `--mcp-config <PATH>` | none | MCP client configuration file |
 
