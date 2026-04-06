@@ -87,6 +87,8 @@ mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
 # Visit http://localhost:1234/ui
 ```
 
+To override the built-in UI with your own files, create a `ui/` directory next to the `mistralrs` executable. Files placed there are served in place of the embedded UI.
+
 ## Step 5: Use the Python SDK
 
 ```bash

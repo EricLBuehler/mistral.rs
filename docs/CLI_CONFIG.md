@@ -57,6 +57,8 @@ HTTP server configuration.
 | `port` | `1234` | HTTP server port |
 | `host` | `"0.0.0.0"` | Bind address |
 | `ui` | `false` | Serve built-in web UI at `/ui` |
+
+Custom UI files can be placed in a `ui/` directory next to the executable (no config option needed). Files in this directory override the built-in UI.
 | `mcp_port` | none | MCP protocol server port (enables MCP if set) |
 | `mcp_config` | none | MCP client configuration file path |
 

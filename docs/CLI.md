@@ -138,6 +138,8 @@ mistralrs serve -m Qwen/Qwen3-4B --mcp-port 8081
 | `-p, --port <PORT>` | `1234` | HTTP server port |
 | `--host <HOST>` | `0.0.0.0` | Bind address |
 | `--ui` | disabled | Serve built-in web UI at `/ui` |
+
+To use a custom web UI, place your files in a `ui/` directory next to the `mistralrs` executable. Any file served from `/ui/` will be loaded from this directory if it exists, falling back to the built-in UI otherwise. The server logs a message at startup when a UI override directory is detected.
 | `--mcp-port <PORT>` | none | MCP protocol server port |
 | `--mcp-config <PATH>` | none | MCP client configuration file |
 
