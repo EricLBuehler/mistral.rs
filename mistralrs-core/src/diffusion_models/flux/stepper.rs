@@ -2,7 +2,7 @@ use std::{cmp::Ordering, fs::File, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::Module;
-use hf_hub::api::sync::{Api, ApiError};
+use hf_hub::api::sync::{Api, ApiBuilder, ApiError};
 use mistralrs_quant::ShardedVarBuilder;
 use tokenizers::Tokenizer;
 use tracing::info;
@@ -171,7 +171,7 @@ impl FluxStepper {
         silent: bool,
         offloaded: bool,
     ) -> anyhow::Result<Self> {
-        let api = Api::new()?;
+        let api = ApiBuilder::from_env().build()?;
 
         info!("Loading T5 XXL tokenizer.");
         let t5_tokenizer = get_t5_tokenizer(&api)?;
