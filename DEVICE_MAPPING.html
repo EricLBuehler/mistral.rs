@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7e40263e.js";
+            window.path_to_searchindex_js = "searchindex-0499d85f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-bbe877b8.js"></script>
+        <script src="toc-a5ca6495.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -189,14 +189,14 @@ by default in the CLI/server and Python SDK and does not make any changes when t
 completely fit on the available GPUs, or you wish to use automatic device mapping, you can disable tensor parallelism by setting <code>MISTRALRS_NO_NCCL=1</code>.</p>
 </blockquote>
 <p>Automatic device mapping works by prioritizing loading models into GPU memory, and any remaining parts are loaded into CPU memory.
-Models architectures such as vision models which greatly benefit from GPU acceleration also automatically prioritize keeping those
+Models architectures such as multimodal models which greatly benefit from GPU acceleration also automatically prioritize keeping those
 components on the GPU.</p>
 <p>To control the mapping across devices, you can set the following maximum parameters which the model should expect in a prompt.</p>
 <ul>
 <li>maximum sequence length (default: 4096)</li>
 <li>maximum batch size (default: 1)</li>
-<li>(vision models) maximum image length (length refers to the edge length) (default: 1024)</li>
-<li>(vision models) maximum number of images (default: 1)</li>
+<li>(multimodal models) maximum image length (length refers to the edge length) (default: 1024)</li>
+<li>(multimodal models) maximum number of images (default: 1)</li>
 </ul>
 <p>These parameters do not translate to hard limits during runtime, they only control the mapping.</p>
 <h3 id="unified-memory-systems"><a class="header" href="#unified-memory-systems">Unified memory systems</a></h3>
@@ -210,13 +210,13 @@ components on the GPU.</p>
 <li>Python
 <ul>
 <li>Text models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/text_auto_device_map.py">text_auto_device_map.py</a></li>
-<li>Vision models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/vision_auto_device_map.py">vision_auto_device_map.py</a></li>
+<li>Multimodal models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/multimodal_auto_device_map.py">multimodal_auto_device_map.py</a></li>
 </ul>
 </li>
 <li>Rust
 <ul>
 <li>Text models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs">text_auto_device_map/main.rs</a></li>
-<li>Vision models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs">vision_auto_device_map/main.rs</a></li>
+<li>Multimodal models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs">auto_device_map/main.rs</a></li>
 </ul>
 </li>
 <li>Server
@@ -226,7 +226,7 @@ components on the GPU.</p>
 <pre><code class="language-bash">mistralrs run --isq 4 -m meta-llama/Llama-3.3-70B-Instruct --max-seq-len 4096 --max-batch-size 2
 </code></pre>
 <ul>
-<li>Vision models:</li>
+<li>Multimodal models:</li>
 </ul>
 <pre><code class="language-bash">mistralrs run --isq 4 -m meta-llama/Llama-3.2-11B-Vision-Instruct --max-seq-len 4096 --max-batch-size 2 --max-num-images 2 --max-image-length 1024
 </code></pre>

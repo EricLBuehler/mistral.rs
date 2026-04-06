@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7e40263e.js";
+            window.path_to_searchindex_js = "searchindex-0499d85f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-bbe877b8.js"></script>
+        <script src="toc-a5ca6495.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -193,7 +193,7 @@ Enable it with <code>--mcp-port &lt;port&gt;</code> and see <a href="MCP/server.
 <li><code>top_k</code>: <code>int</code> | <code>null</code>. If non null, it is only relevant if positive.</li>
 <li><code>grammar</code>: <code>{"type" : "regex" | "lark" | "json_schema" | "llguidance", "value": string}</code> or <code>null</code>. Grammar to use. This is mutually exclusive to the OpenAI-compatible <code>response_format</code>.</li>
 <li><code>min_p</code>: <code>float</code> | <code>null</code>. If non null, it is only relevant if 1 &gt;= min_p &gt;= 0.</li>
-<li><code>enable_thinking</code>: <code>bool</code>, default to <code>false</code>. Enable thinking for models that support it.</li>
+<li><code>enable_thinking</code>: <code>bool</code> | <code>null</code>. Enable thinking for models that support it. If omitted or <code>null</code>, mistral.rs defers to the chat template’s default behavior instead of forcing thinking off. Templates with an explicit <code>enable_thinking</code> toggle use the repository fallback of <code>true</code> when the flag is omitted.</li>
 <li><code>truncate_sequence</code>: <code>bool</code> | <code>null</code>. When <code>true</code>, requests that exceed the model context length will be truncated instead of rejected; otherwise the server returns a validation error. Embedding requests truncate tokens at the end of the prompt, while chat/completion requests truncate tokens at the start of the prompt.</li>
 <li><code>repetition_penalty</code>: <code>float</code> | <code>null</code>. Penalty for repeating tokens. This is distinct from <code>frequency_penalty</code> and <code>presence_penalty</code> - it applies a direct multiplicative penalty to repeated token logits.</li>
 <li><code>web_search_options</code>: <code>object</code> | <code>null</code>. Enable web search integration (see <a href="WEB_SEARCH.html">WEB_SEARCH.md</a>). Contains optional fields: <code>search_context_size</code> (“low”, “medium”, “high”), <code>user_location</code> (object with location info), <code>search_description</code> (override search tool description), <code>extract_description</code> (override extraction tool description).</li>
@@ -202,7 +202,11 @@ Enable it with <code>--mcp-port &lt;port&gt;</code> and see <a href="MCP/server.
 <li><code>dry_base</code>: <code>float</code> | <code>null</code>. DRY sampling base value.</li>
 <li><code>dry_allowed_length</code>: <code>int</code> | <code>null</code>. DRY sampling allowed length before penalty applies.</li>
 <li><code>dry_sequence_breakers</code>: <code>array of strings</code> | <code>null</code>. Tokens that reset the DRY penalty sequence.</li>
+<li><code>max_tool_rounds</code>: <code>int</code> | <code>null</code>. Maximum number of tool-call rounds the server will auto-execute. When set, the server enters an agentic loop: the model calls tools, the server executes them via registered callbacks (MCP, search, or custom), feeds results back, and repeats until the model stops calling tools or this limit is reached. Default safety cap: 16. See <a href="TOOL_CALLING.html">TOOL_CALLING.md</a> for details.</li>
 </ul>
+<blockquote>
+<p><strong>Note:</strong> The tool dispatch URL (<code>--tool-dispatch-url</code>) is configured server-side only via the CLI flag for security (SSRF prevention). It cannot be set per-request via the HTTP API. The Rust and Python SDKs can set it per-request since they run trusted code. See <a href="TOOL_CALLING.html#tool-dispatch-url">TOOL_CALLING.md</a> for details.</p>
+</blockquote>
 <h2 id="response-extensions"><a class="header" href="#response-extensions">Response Extensions</a></h2>
 <p>The response objects include additional fields beyond the standard OpenAI API:</p>
 <h3 id="harmony-mode-responses"><a class="header" href="#harmony-mode-responses">Harmony Mode Responses</a></h3>
@@ -517,7 +521,31 @@ curl http://localhost:1234/v1/responses \
 "input": "What makes it memory safe?"
 }'
 </code></pre>
-<p>The API also supports multimodal inputs (images, audio) and streaming responses by setting <code>"stream": true</code> in the request JSON.</p>
+<p>The API also supports multimodal inputs (images, audio, video) and streaming responses by setting <code>"stream": true</code> in the request JSON.</p>
+<h3 id="multimodal-content-types"><a class="header" href="#multimodal-content-types">Multimodal Content Types</a></h3>
+<p>When sending multimodal messages, the <code>content</code> field of a message can be an array of content parts. The following content types are supported:</p>
+<ul>
+<li>
+<p><strong><code>text</code></strong>: Plain text input.</p>
+<pre><code class="language-json">{ "type": "text", "text": "Describe this image." }
+</code></pre>
+</li>
+<li>
+<p><strong><code>image_url</code></strong>: Image input. The URL may be a web URL, a local file path, or a base64-encoded data URI.</p>
+<pre><code class="language-json">{ "type": "image_url", "image_url": { "url": "https://example.com/photo.jpg" } }
+</code></pre>
+</li>
+<li>
+<p><strong><code>audio_url</code></strong>: Audio input. Supported by models with audio capabilities (e.g., Phi 4 Multimodal, Gemma 3n, Gemma 4).</p>
+<pre><code class="language-json">{ "type": "audio_url", "audio_url": { "url": "https://example.com/audio.ogg" } }
+</code></pre>
+</li>
+<li>
+<p><strong><code>video_url</code></strong>: Video input. Supported by models with video capabilities (e.g., Gemma 4). Frames are automatically extracted from the video at a configurable sampling rate.</p>
+<pre><code class="language-json">{ "type": "video_url", "video_url": { "url": "https://example.com/video.mp4" } }
+</code></pre>
+</li>
+</ul>
 <blockquote>
 <p>ℹ️ The Responses API forwards <code>truncate_sequence</code> to underlying chat completions. Enable it if you want over-length conversations to be truncated rather than rejected.</p>
 </blockquote>

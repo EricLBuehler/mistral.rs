@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7e40263e.js";
+            window.path_to_searchindex_js = "searchindex-0499d85f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-bbe877b8.js"></script>
+        <script src="toc-a5ca6495.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -232,9 +232,9 @@ async fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
 <tr><th>Builder</th><th>Use Case</th></tr>
 </thead>
 <tbody>
-<tr><td><code>ModelBuilder</code></td><td>Auto-detects model type (text, vision, embedding)</td></tr>
+<tr><td><code>ModelBuilder</code></td><td>Auto-detects model type (text, multimodal, embedding)</td></tr>
 <tr><td><code>TextModelBuilder</code></td><td>Text generation models</td></tr>
-<tr><td><code>VisionModelBuilder</code></td><td>Vision + text models (image/audio input)</td></tr>
+<tr><td><code>MultimodalModelBuilder</code></td><td>Multimodal models (image/audio input)</td></tr>
 <tr><td><code>GgufModelBuilder</code></td><td>GGUF quantized model files</td></tr>
 <tr><td><code>EmbeddingModelBuilder</code></td><td>Text embedding models</td></tr>
 <tr><td><code>DiffusionModelBuilder</code></td><td>Image generation (e.g., FLUX)</td></tr>
@@ -267,12 +267,12 @@ async fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
 </thead>
 <tbody>
 <tr><td><code>TextMessages</code></td><td>Simple text-only chat</td><td>Deterministic</td></tr>
-<tr><td><code>VisionMessages</code></td><td>Prompt includes images or audio</td><td>Deterministic</td></tr>
+<tr><td><code>MultimodalMessages</code></td><td>Prompt includes images or audio</td><td>Deterministic</td></tr>
 <tr><td><code>RequestBuilder</code></td><td>Tools, logprobs, custom sampling, constraints, or web search</td><td>Configurable</td></tr>
 </tbody>
 </table>
 </div>
-<p><code>TextMessages</code> and <code>VisionMessages</code> convert into <code>RequestBuilder</code> via <code>Into&lt;RequestBuilder&gt;</code> if you start simple and later need more control.</p>
+<p><code>TextMessages</code> and <code>MultimodalMessages</code> convert into <code>RequestBuilder</code> via <code>Into&lt;RequestBuilder&gt;</code> if you start simple and later need more control.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Simple
@@ -416,8 +416,8 @@ fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
 <tr><th>Category</th><th>Examples</th></tr>
 </thead>
 <tbody>
-<tr><td><strong>Getting Started</strong></td><td><code>text_generation</code>, <code>streaming</code>, <code>vision</code>, <code>gguf</code>, <code>gguf_locally</code>, <code>embedding</code></td></tr>
-<tr><td><strong>Models</strong></td><td><code>text_models</code>, <code>vision_models</code>, <code>audio</code>, <code>diffusion</code>, <code>speech</code>, <code>multimodal</code></td></tr>
+<tr><td><strong>Getting Started</strong></td><td><code>text_generation</code>, <code>streaming</code>, <code>multimodal_basic</code>, <code>gguf</code>, <code>gguf_locally</code>, <code>embedding</code></td></tr>
+<tr><td><strong>Models</strong></td><td><code>text_models</code>, <code>multimodal_models</code>, <code>audio</code>, <code>diffusion</code>, <code>speech</code>, <code>multimodal</code></td></tr>
 <tr><td><strong>Quantization</strong></td><td><code>isq</code>, <code>imatrix</code>, <code>uqff</code>, <code>topology</code>, <code>mixture_of_quant_experts</code></td></tr>
 <tr><td><strong>Advanced</strong></td><td><code>tools</code>, <code>agent</code>, <code>grammar</code>, <code>json_schema</code>, <code>web_search</code>, <code>mcp_client</code>, <code>batching</code>, <code>paged_attn</code>, <code>speculative</code>, <code>lora</code>, <code>error_handling</code>, and more</td></tr>
 <tr><td><strong>Cookbook</strong></td><td><code>cookbook_rag</code>, <code>cookbook_structured</code>, <code>cookbook_multiturn</code>, <code>cookbook_agent</code></td></tr>

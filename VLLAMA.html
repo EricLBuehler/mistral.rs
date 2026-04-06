@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7e40263e.js";
+            window.path_to_searchindex_js = "searchindex-0499d85f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-bbe877b8.js"></script>
+        <script src="toc-a5ca6495.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,7 +181,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="llama-32-vision-model-meta-llamallama-32-11b-vision-instruct"><a class="header" href="#llama-32-vision-model-meta-llamallama-32-11b-vision-instruct">Llama 3.2 Vision Model: <a href="https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct"><code>meta-llama/Llama-3.2-11B-Vision-Instruct</code></a></a></h1>
-<p>Mistral.rs supports the Llama 3.2 vision model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.</p>
+<p>Mistral.rs supports the Llama 3.2 multimodal model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.</p>
 <p>UQFF quantizations are also available.</p>
 <p>The Python and HTTP APIs support sending images as:</p>
 <ul>
@@ -210,12 +210,12 @@
 </li>
 </ul>
 <h2 id="interactive-mode"><a class="header" href="#interactive-mode">Interactive mode</a></h2>
-<p>Mistral.rs supports interactive mode for vision models! It is an easy way to interact with the model.</p>
+<p>Mistral.rs supports interactive mode for multimodal models! It is an easy way to interact with the model.</p>
 <p>https://github.com/user-attachments/assets/4d11c35c-9ea2-42b8-8cab-5f7e8e2ee9ff</p>
 <ol>
 <li>Start up interactive mode with the Llama 3.2 model</li>
 </ol>
-<pre><code>mistralrs run vision --isq 4 -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
+<pre><code>mistralrs run multimodal --isq 4 -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
 </code></pre>
 <ol start="2">
 <li>Say hello!</li>
@@ -243,7 +243,7 @@ The image appears to be of Mount Washington, which is the highest peak in the No
 </code></pre>
 <h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/llama_vision.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
@@ -274,7 +274,7 @@ Overall, the image showcases the diverse geological and ecological features of M
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 --isq 4 -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
+<pre><code>mistralrs serve multimodal -p 1234 --isq 4 -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -317,16 +317,16 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 const MODEL_ID: &amp;str = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k";
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
     let model =
-        VisionModelBuilder::new(MODEL_ID)
+        MultimodalModelBuilder::new(MODEL_ID)
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
@@ -340,7 +340,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         vec![image],
@@ -363,14 +363,14 @@ async fn main() -&gt; Result&lt;()&gt; {
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 MODEL_ID = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k"
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id=MODEL_ID,
-        arch=VisionArchitecture.VLlama,
+        arch=MultimodalArchitecture.VLlama,
     ),
 )
 

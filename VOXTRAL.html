@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7e40263e.js";
+            window.path_to_searchindex_js = "searchindex-0499d85f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-bbe877b8.js"></script>
+        <script src="toc-a5ca6495.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -191,7 +191,7 @@
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -m mistralai/Voxtral-Mini-4B-Realtime-2602
+<pre><code>mistralrs serve multimodal -m mistralai/Voxtral-Mini-4B-Realtime-2602
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -233,11 +233,11 @@ print(resp)
 <h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/asr/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{AudioInput, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{AudioInput, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
-    let model = VisionModelBuilder::new("mistralai/Voxtral-Mini-4B-Realtime-2602")
+    let model = MultimodalModelBuilder::new("mistralai/Voxtral-Mini-4B-Realtime-2602")
         .with_logging()
         .build()
         .await?;
@@ -245,11 +245,12 @@ async fn main() -&gt; Result&lt;()&gt; {
     let audio_bytes = std::fs::read("sample_audio.wav")?;
     let audio = AudioInput::from_bytes(&amp;audio_bytes)?;
 
-    let messages = VisionMessages::new().add_multimodal_message(
+    let messages = MultimodalMessages::new().add_multimodal_message(
         TextMessageRole::User,
         "Transcribe this audio.",
         vec![],
         vec![audio],
+        vec![],
     );
 
     let response = model.send_chat_request(messages).await?;
@@ -263,12 +264,12 @@ async fn main() -&gt; Result&lt;()&gt; {
     Ok(())
 }</code></pre>
 <h2 id="python"><a class="header" href="#python">Python</a></h2>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="mistralai/Voxtral-Mini-4B-Realtime-2602",
-        arch=VisionArchitecture.Voxtral,
+        arch=MultimodalArchitecture.Voxtral,
     ),
 )
 

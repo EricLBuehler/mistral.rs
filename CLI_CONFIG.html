@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7e40263e.js";
+            window.path_to_searchindex_js = "searchindex-0499d85f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-bbe877b8.js"></script>
+        <script src="toc-a5ca6495.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -211,7 +211,7 @@ in_situ_quant = "q4k"
 </thead>
 <tbody>
 <tr><td><code>command</code></td><td>all</td><td>Required. Either <code>"serve"</code> or <code>"run"</code></td></tr>
-<tr><td><code>enable_thinking</code></td><td>run</td><td>Enable thinking mode (default: false)</td></tr>
+<tr><td><code>thinking</code></td><td>run</td><td>Control thinking mode. Set to <code>true</code> to force on, <code>false</code> to force off. Omit to defer to chat template default.</td></tr>
 <tr><td><code>default_model_id</code></td><td>serve</td><td>Default model ID for API requests (must match a model_id in [[models]])</td></tr>
 </tbody>
 </table>
@@ -291,7 +291,7 @@ in_situ_quant = "q4k"
 <tr><th>Option</th><th>Required</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>kind</code></td><td>yes</td><td>Model type: <code>"auto"</code>, <code>"text"</code>, <code>"vision"</code>, <code>"diffusion"</code>, <code>"speech"</code>, <code>"embedding"</code></td></tr>
+<tr><td><code>kind</code></td><td>yes</td><td>Model type: <code>"auto"</code>, <code>"text"</code>, <code>"multimodal"</code>, <code>"diffusion"</code>, <code>"speech"</code>, <code>"embedding"</code></td></tr>
 <tr><td><code>model_id</code></td><td>yes</td><td>HuggingFace model ID or local path</td></tr>
 <tr><td><code>tokenizer</code></td><td>no</td><td>Path to local tokenizer.json</td></tr>
 <tr><td><code>arch</code></td><td>no</td><td>Model architecture (auto-detected if not specified)</td></tr>
@@ -360,7 +360,7 @@ in_situ_quant = "q4k"
 </tbody>
 </table>
 </div>
-<h4 id="modelsvision---vision-options"><a class="header" href="#modelsvision---vision-options">[models.vision] - Vision Options</a></h4>
+<h4 id="modelsmultimodal---multimodal-options"><a class="header" href="#modelsmultimodal---multimodal-options">[models.multimodal] - Multimodal Options</a></h4>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -402,10 +402,10 @@ dtype = "auto"
 in_situ_quant = "q4k"
 
 [[models]]
-kind = "vision"
+kind = "multimodal"
 model_id = "Qwen/Qwen2-VL-2B-Instruct"
 
-[models.vision]
+[models.multimodal]
 max_num_images = 4
 
 [[models]]
@@ -414,7 +414,7 @@ model_id = "google/embeddinggemma-300m"
 </code></pre>
 <h3 id="interactive-mode-with-thinking"><a class="header" href="#interactive-mode-with-thinking">Interactive Mode with Thinking</a></h3>
 <pre><code class="language-toml">command = "run"
-enable_thinking = true
+thinking = true
 
 [runtime]
 max_seqs = 16
@@ -423,6 +423,7 @@ max_seqs = 16
 kind = "auto"
 model_id = "Qwen/Qwen3-4B"
 </code></pre>
+<p>Set <code>thinking = true</code> to force thinking on, <code>thinking = false</code> to force thinking off. If omitted, <code>mistralrs from-config</code> defers to the chat template default. Templates with an explicit thinking toggle use the repository fallback of <code>true</code> when no override is provided.</p>
 <h3 id="gguf-model"><a class="header" href="#gguf-model">GGUF Model</a></h3>
 <pre><code class="language-toml">command = "serve"
 

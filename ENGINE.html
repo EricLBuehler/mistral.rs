@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7e40263e.js";
+            window.path_to_searchindex_js = "searchindex-0499d85f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-bbe877b8.js"></script>
+        <script src="toc-a5ca6495.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -185,12 +185,12 @@
 <h2 id="overview"><a class="header" href="#overview">Overview</a></h2>
 <p>The mistral.rs engine manages model inference through a background thread pool. Each loaded model runs in its own engine thread, which handles request queuing, batching, and execution.</p>
 <h2 id="warmup-run"><a class="header" href="#warmup-run">Warmup Run</a></h2>
-<p>When a text or vision model is loaded in a multi-threaded runtime, mistral.rs automatically performs a warmup (“dummy”) run:</p>
+<p>When a text or multimodal model is loaded in a multi-threaded runtime, mistral.rs automatically performs a warmup (“dummy”) run:</p>
 <ul>
 <li>Sends a short completion request (“hello” with max 1 token) to initialize CUDA kernels and caches</li>
 <li>Logs “Beginning dummy run.” when starting and “Dummy run completed in Xs.” when finished</li>
 <li>Helps ensure more consistent performance for the first real user request</li>
-<li>Only runs for text and vision models (not diffusion/speech)</li>
+<li>Only runs for text and multimodal models (not diffusion/speech)</li>
 </ul>
 <p>This warmup ensures that CUDA kernel compilation and memory allocation happens during model loading rather than during the first user request.</p>
 <h2 id="automatic-engine-recovery"><a class="header" href="#automatic-engine-recovery">Automatic Engine Recovery</a></h2>

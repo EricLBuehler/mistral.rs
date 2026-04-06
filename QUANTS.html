@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7e40263e.js";
+            window.path_to_searchindex_js = "searchindex-0499d85f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-bbe877b8.js"></script>
+        <script src="toc-a5ca6495.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -185,7 +185,7 @@
 <ul>
 <li>⭐ ISQ (<a href="ISQ.html">read more detail</a>)
 <ul>
-<li>Supported in all plain/vision and adapter models</li>
+<li>Supported in all plain/multimodal and adapter models</li>
 <li>Works on all supported devices</li>
 <li>Automatic selection to use the fastest and most accurate method</li>
 <li>Supports:
@@ -204,7 +204,7 @@
 <ul>
 <li>Q, K type</li>
 <li>Supported in GGUF/GGML and GGUF/GGML adapter models</li>
-<li>Supported in all plain/vision and adapter models</li>
+<li>Supported in all plain/multimodal and adapter models</li>
 <li>Imatrix quantization is supported</li>
 <li>I quants coming!</li>
 <li>CPU, CUDA, Metal (all supported devices)</li>
@@ -213,7 +213,7 @@
 </li>
 <li>GPTQ (convert with <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/convert_to_gptq.py">this script</a>)
 <ul>
-<li>Supported in all plain/vision and adapter models</li>
+<li>Supported in all plain/multimodal and adapter models</li>
 <li>CUDA only</li>
 <li>2, 3, 4, 8 bit</li>
 <li><a href="https://github.com/IST-DASLab/marlin">Marlin</a> kernel support in 4-bit and 8-bit.</li>
@@ -221,7 +221,7 @@
 </li>
 <li>AWQ (convert with <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/convert_awq_marlin.py">this script</a>)
 <ul>
-<li>Supported in all plain/vision and adapter models</li>
+<li>Supported in all plain/multimodal and adapter models</li>
 <li>CUDA only</li>
 <li>4 and 8 bit</li>
 <li><a href="https://github.com/IST-DASLab/marlin">Marlin</a> kernel support in 4-bit and 8-bit.</li>
@@ -229,20 +229,20 @@
 </li>
 <li>HQQ
 <ul>
-<li>Supported in all plain/vision and adapter models via ISQ</li>
+<li>Supported in all plain/multimodal and adapter models via ISQ</li>
 <li>4, 8 bit</li>
 <li>CPU, CUDA, Metal (all supported devices)</li>
 </ul>
 </li>
 <li>FP8
 <ul>
-<li>Supported in all plain/vision and adapter models</li>
+<li>Supported in all plain/multimodal and adapter models</li>
 <li>CPU, CUDA, Metal (all supported devices)</li>
 </ul>
 </li>
 <li>BNB
 <ul>
-<li>Supported in all plain/vision and adapter models</li>
+<li>Supported in all plain/multimodal and adapter models</li>
 <li>bitsandbytes int8, fp4, nf4 support</li>
 </ul>
 </li>
@@ -255,7 +255,7 @@
 </li>
 <li>MLX prequantized
 <ul>
-<li>Supported in all plain/vision and adapter models</li>
+<li>Supported in all plain/multimodal and adapter models</li>
 </ul>
 </li>
 </ul>
@@ -273,7 +273,7 @@
 <h2 id="using-a-gptq-quantized-model"><a class="header" href="#using-a-gptq-quantized-model">Using a GPTQ quantized model</a></h2>
 <ul>
 <li>Provide the model ID for the GPTQ model</li>
-<li>Mistral.rs will automatically detect and use GPTQ quantization for plain and vision models!</li>
+<li>Mistral.rs will automatically detect and use GPTQ quantization for plain and multimodal models!</li>
 <li>The <a href="https://github.com/IST-DASLab/marlin">Marlin</a> kernel will automatically be used for 4-bit and 8-bit.</li>
 </ul>
 <pre><code>mistralrs run -m kaitchup/Phi-3-mini-4k-instruct-gptq-4bit
@@ -286,7 +286,7 @@ python3 scripts/convert_to_gptq.py --src path/to/model --dst output/model/path -
 <h2 id="using-a-mlx-prequantized-model-on-metal"><a class="header" href="#using-a-mlx-prequantized-model-on-metal">Using a MLX prequantized model (on Metal)</a></h2>
 <ul>
 <li>Provide the model ID for the MLX prequantized model</li>
-<li>Mistral.rs will automatically detect and use quantization for plain and vision models!</li>
+<li>Mistral.rs will automatically detect and use quantization for plain and multimodal models!</li>
 <li>Specialized kernels will be used to accelerate inference!</li>
 </ul>
 <pre><code>mistralrs run -m mlx-community/Llama-3.8-1B-8bit

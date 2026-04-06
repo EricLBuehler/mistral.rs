@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7e40263e.js";
+            window.path_to_searchindex_js = "searchindex-0499d85f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-bbe877b8.js"></script>
+        <script src="toc-a5ca6495.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -199,7 +199,7 @@ Aspect ratio is not preserved in that case.</p>
 <p><a href="#audio-input"><strong>Phi 4 multimodal supports audio inputs!</strong></a>.</p>
 <h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
@@ -218,7 +218,7 @@ Aspect ratio is not preserved in that case.</p>
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 -m microsoft/Phi-4-multimodal-instruct
+<pre><code>mistralrs serve multimodal -p 1234 -m microsoft/Phi-4-multimodal-instruct
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -261,15 +261,15 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Phi 4 Multimodal model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
     let model =
-        VisionModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
+        MultimodalModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
@@ -283,7 +283,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         vec![image],
@@ -305,12 +305,12 @@ async fn main() -&gt; Result&lt;()&gt; {
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="microsoft/Phi-4-multimodal-instruct",
-        arch=VisionArchitecture.Phi4MM,
+        arch=MultimodalArchitecture.Phi4MM,
     ),
 )
 
@@ -368,11 +368,11 @@ print(res.usage)
 </code></pre>
 <h3 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h3>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{AudioInput, IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{AudioInput, IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
-    let model = VisionModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
+    let model = MultimodalModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()
@@ -392,12 +392,13 @@ async fn main() -&gt; Result&lt;()&gt; {
     .to_vec();
     let image = image::load_from_memory(&amp;image_bytes)?;
 
-    let messages = VisionMessages::new()
+    let messages = MultimodalMessages::new()
         .add_multimodal_message(
             TextMessageRole::User,
             "Describe in detail what is happening.",
             vec![image],
             vec![audio],
+            vec![],
         );
 
     let response = model.send_chat_request(messages).await?;

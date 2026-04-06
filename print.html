@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7e40263e.js";
+            window.path_to_searchindex_js = "searchindex-0499d85f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-bbe877b8.js"></script>
+        <script src="toc-a5ca6495.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -195,6 +195,7 @@
 <tr><td>Fix an error</td><td><a href="#troubleshooting-1">Troubleshooting</a></td></tr>
 <tr><td>Configure environment</td><td><a href="#configuration-reference">Configuration</a></td></tr>
 <tr><td>Check model support</td><td><a href="#supported-models">Supported Models</a></td></tr>
+<tr><td>Build agents</td><td><a href="AGENTS.html">Agentic Features Guide</a></td></tr>
 </tbody>
 </table>
 </div>
@@ -219,7 +220,7 @@
 <h3 id="by-category"><a class="header" href="#by-category">By Category</a></h3>
 <ul>
 <li><a href="#supported-models">Supported Models</a> - Complete model list and compatibility</li>
-<li><a href="#vision-model-support-in-mistralrs">Vision Models</a> - Vision model overview</li>
+<li><a href="#multimodal-model-support-in-mistralrs">Multimodal Models</a> - Multimodal model overview</li>
 <li><a href="#image-generation-model-support-in-mistralrs">Image Generation</a> - Diffusion models</li>
 <li><a href="#embeddings-overview">Embeddings</a> - Embedding model overview</li>
 </ul>
@@ -229,17 +230,17 @@
 <p><strong>Text Models:</strong></p>
 <ul>
 <li><a href="#deepseek-v2-deepseek-aideepseek-v2-lite">DeepSeek V2</a> | <a href="#deepseek-v3-deepseek-aideepseek-v3-deepseek-aideepseek-r1">DeepSeek V3</a></li>
-<li><a href="#gemma-2-model">Gemma 2</a> | <a href="#gemma-3-model-googlegemma-3-4b-it">Gemma 3</a> | <a href="#gemma-3n-model-googlegemma-3n-e4b-it">Gemma 3n</a></li>
+<li><a href="#gemma-2-model">Gemma 2</a> | <a href="#gemma-3-model-googlegemma-3-4b-it">Gemma 3</a> | <a href="#gemma-3n-model-googlegemma-3n-e4b-it">Gemma 3n</a> | <a href="#gemma-4-model-family-collection">Gemma 4</a></li>
 <li><a href="#glm4-model">GLM4</a> | <a href="#glm-47-flash-moe-zai-orgglm-47-flash">GLM-4.7-Flash</a> | <a href="#glm-47-moe-zai-orgglm-47">GLM-4.7</a></li>
 <li><a href="#qwen-3-collection">Qwen 3</a> | <a href="#qwen-3-next-collection">Qwen 3 Next</a> | <a href="#smollm3-huggingfacetbsmollm3-3b">SmolLM3</a> | <a href="#gpt-oss">GPT-OSS</a></li>
 </ul>
-<p><strong>Vision Models:</strong></p>
+<p><strong>Multimodal Models:</strong></p>
 <ul>
 <li><a href="#idefics-2-model-huggingfacem4idefics2-8b-chatty">Idefics 2</a> | <a href="#idefics-3-vision-huggingfacem4idefics3-8b-llama3">Idefics 3</a></li>
 <li><a href="#llava-and-llavanext-model-llava-hf-model-family">LLaVA</a> | <a href="#llama-32-vision-model-meta-llamallama-32-11b-vision-instruct">Llama 3.2 Vision</a> | <a href="#llama-4-series-meta-llamallama-4-scout-17b-16e-instruct">Llama 4</a></li>
 <li><a href="#minicpm-o-26-model-openbmbminicpm-o-2_6">MiniCPM-O 2.6</a> | <a href="#mistral-small-31-model-mistralaimistral-small-31-24b-instruct-2503">Mistral 3</a></li>
 <li><a href="#phi-35-model-microsoftphi-35-moe-instruct">Phi 3.5 MoE</a> | <a href="#phi-3-vision-model-microsoftphi-35-vision-instruct">Phi 3.5 Vision</a> | <a href="#phi-4-multimodal-model-microsoftphi-4-multimodal-instruct">Phi 4 Multimodal</a></li>
-<li><a href="#qwen-2-vision-model-qwen2-vl-collection">Qwen 2-VL</a> | <a href="#qwen-3-vision-model-qwen3-vl-collection">Qwen 3 VL</a> | <a href="#qwen-35-vision-models">Qwen 3.5</a></li>
+<li><a href="#qwen-2-vision-model-qwen2-vl-collection">Qwen 2-VL</a> | <a href="#qwen-3-vision-model-qwen3-vl-collection">Qwen 3 VL</a> | <a href="#qwen-35-multimodal-models">Qwen 3.5</a></li>
 </ul>
 <p><strong>Other Models:</strong></p>
 <ul>
@@ -279,6 +280,7 @@
 </ul>
 <h2 id="features"><a class="header" href="#features">Features</a></h2>
 <ul>
+<li><a href="AGENTS.html">Agentic Features Guide</a> - Web search, tool callbacks, agents, MCP, tool dispatch</li>
 <li><a href="#tool-calling-1">Tool Calling</a> - Function calling support</li>
 <li><a href="#web-search-tool-in-mistralrs">Web Search</a> - Integrated web search</li>
 <li><a href="#chat-templates-and-tokenizer-customization">Chat Templates</a> - Template customization</li>
@@ -327,6 +329,14 @@
 <pre><code class="language-bash">curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
 </code></pre>
+</li>
+<li>
+<p>(Optional) Install <a href="https://ffmpeg.org/">FFmpeg</a> for video input support:</p>
+<ul>
+<li>Linux: <code>sudo apt install ffmpeg</code> or <code>sudo dnf install ffmpeg</code></li>
+<li>macOS: <code>brew install ffmpeg</code></li>
+<li>See <a href="#video-input-support">Video Input</a> for details</li>
+</ul>
 </li>
 <li>
 <p>(Optional) Set up HuggingFace authentication:</p>
@@ -787,7 +797,7 @@ pip install mistralrs         # Generic CPU
 <ul>
 <li><a href="#commands">Commands</a>
 <ul>
-<li><a href="#run---interactive-mode">run</a>: run model in interactive mode</li>
+<li><a href="#run---interactive--one-shot-mode">run</a>: run model in interactive or one-shot mode</li>
 <li><a href="#serve---http-server">serve</a>: start HTTP/MCP server and (optionally) the UI</li>
 <li><a href="#from-config---toml-configuration">from-config</a>: run from a <a href="#mistralrs-cli-toml-config">TOML configuration file</a></li>
 <li><a href="#quantize---uqff-generation">quantize</a>: generate UQFF quantized model file</li>
@@ -803,7 +813,7 @@ pip install mistralrs         # Generic CPU
 <ul>
 <li><a href="#auto">auto</a></li>
 <li><a href="#text">text</a></li>
-<li><a href="#vision">vision</a></li>
+<li><a href="#multimodal">multimodal</a></li>
 <li><a href="#diffusion">diffusion</a></li>
 <li><a href="#speech">speech</a></li>
 <li><a href="#embedding">embedding</a></li>
@@ -826,23 +836,43 @@ pip install mistralrs         # Generic CPU
 </ul>
 <hr>
 <h2 id="commands"><a class="header" href="#commands">Commands</a></h2>
-<h3 id="run---interactive-mode"><a class="header" href="#run---interactive-mode">run - Interactive Mode</a></h3>
-<p>Start a model in interactive mode for conversational use.</p>
+<h3 id="run---interactive--one-shot-mode"><a class="header" href="#run---interactive--one-shot-mode">run - Interactive &amp; One-Shot Mode</a></h3>
+<p>Start a model in interactive mode for conversational use, or run a single one-shot request with <code>-i</code>.</p>
 <pre><code class="language-bash">mistralrs run [MODEL_TYPE] -m &lt;MODEL_ID&gt; [OPTIONS]
 </code></pre>
 <p>Note: <code>MODEL_TYPE</code> is optional and defaults to <code>auto</code> if not specified. This allows a shorter syntax.</p>
-<p><strong>Examples:</strong></p>
+<p><strong>Interactive mode examples:</strong></p>
 <pre><code class="language-bash"># Run a text model interactively (shorthand - auto type is implied)
 mistralrs run -m Qwen/Qwen3-4B
 
-# Explicit auto type (equivalent to above)
-mistralrs run -m Qwen/Qwen3-4B
-
 # Run with thinking mode enabled
-mistralrs run -m Qwen/Qwen3-4B --enable-thinking
+mistralrs run -m Qwen/Qwen3-4B --thinking
 
-# Run a vision model
-mistralrs run -m google/gemma-3-4b-it
+# Run a multimodal model
+mistralrs run -m google/gemma-4-E4B-it
+</code></pre>
+<p><strong>One-shot mode examples:</strong></p>
+<p>When <code>-i</code> is provided, the model processes a single request and exits. Combine with <code>--image</code>, <code>--video</code>, or <code>--audio</code> for multimodal input.</p>
+<pre><code class="language-bash"># Text-only one-shot
+mistralrs run -m Qwen/Qwen3-4B -i "What is the capital of France?"
+
+# Describe an image
+mistralrs run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
+
+# Multiple images
+mistralrs run -m google/gemma-4-E4B-it --image img1.jpg --image img2.png -i "Compare these images"
+
+# Video input
+mistralrs run -m google/gemma-4-E4B-it --video clip.mp4 -i "What happens in this video?"
+
+# Audio input
+mistralrs run -m google/gemma-4-E4B-it --audio recording.wav -i "Transcribe this audio"
+
+# Mixed media (image + audio)
+mistralrs run -m google/gemma-4-E4B-it --image photo.jpg --audio clip.mp3 -i "Describe the image and transcribe the audio"
+
+# URLs work too
+mistralrs run -m google/gemma-4-E4B-it --image https://example.com/photo.jpg -i "What is in this image?"
 </code></pre>
 <p><strong>Options:</strong></p>
 <div class="table-wrapper">
@@ -851,7 +881,11 @@ mistralrs run -m google/gemma-3-4b-it
 <tr><th>Option</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>--enable-thinking</code></td><td>Enable thinking mode for models that support it</td></tr>
+<tr><td><code>--thinking [true|false]</code></td><td>Control thinking mode. <code>--thinking</code> forces on, <code>--thinking false</code> forces off. Omit to use chat template default.</td></tr>
+<tr><td><code>-i, --input &lt;TEXT&gt;</code></td><td>One-shot prompt. Sends a single request and exits instead of entering interactive mode</td></tr>
+<tr><td><code>--image &lt;URL|PATH&gt;</code></td><td>Image file path or URL to include (repeatable, requires <code>-i</code>)</td></tr>
+<tr><td><code>--video &lt;URL|PATH&gt;</code></td><td>Video file path or URL to include (repeatable, requires <code>-i</code>)</td></tr>
+<tr><td><code>--audio &lt;URL|PATH&gt;</code></td><td>Audio file path or URL to include (repeatable, requires <code>-i</code>)</td></tr>
 </tbody>
 </table>
 </div>
@@ -912,8 +946,8 @@ mistralrs quantize -m Qwen/Qwen3-4B --isq q4k,q8_0 -o qwen3-4b-uqff/
 # Equivalent: repeated --isq flags
 mistralrs quantize -m Qwen/Qwen3-4B --isq q4k --isq q8_0 -o qwen3-4b-uqff/
 
-# Quantize a vision model
-mistralrs quantize -m google/gemma-3-4b-it --isq 4 -o gemma3-4b-uqff/
+# Quantize a multimodal model
+mistralrs quantize -m google/gemma-4-E4B-it --isq 4 -o gemma4-E4B-uqff/
 
 # Quantize with imatrix for better quality
 mistralrs quantize -m Qwen/Qwen3-4B --isq q4k --imatrix imatrix.dat -o qwen3-4b-uqff/qwen3-4b-q4k.uqff
@@ -1106,7 +1140,7 @@ mistralrs login --token hf_xxxxxxxxxxxxx
 │ Model                    │ Size     │ Last Used   │
 ├──────────────────────────┼──────────┼─────────────┤
 │ Qwen/Qwen3-4B            │ 8.5 GB   │ today       │
-│ google/gemma-3-4b-it     │ 6.2 GB   │ 2 days ago  │
+│ google/gemma-4-E4B-it     │ 6.2 GB   │ 2 days ago  │
 │ meta-llama/Llama-3.2-3B  │ 5.8 GB   │ 1 week ago  │
 └──────────────────────────┴──────────┴─────────────┘
 
@@ -1178,7 +1212,7 @@ Iterations: 3
 <p>The <code>bench</code> command also accepts all model loading options (ISQ, device mapping, etc.).</p>
 <hr>
 <h3 id="from-config---toml-configuration"><a class="header" href="#from-config---toml-configuration">from-config - TOML Configuration</a></h3>
-<p>Run the CLI from a TOML configuration file. This is the recommended way to run multiple models simultaneously, including models of different types (e.g., text + vision + embedding).</p>
+<p>Run the CLI from a TOML configuration file. This is the recommended way to run multiple models simultaneously, including models of different types (e.g., text + multimodal + embedding).</p>
 <p>See <a href="#mistralrs-cli-toml-config">CLI_CONFIG.md</a> for full TOML configuration format details.</p>
 <pre><code class="language-bash">mistralrs from-config --file &lt;PATH&gt;
 </code></pre>
@@ -1197,8 +1231,8 @@ kind = "auto"
 model_id = "Qwen/Qwen3-4B"
 
 [[models]]
-kind = "vision"
-model_id = "google/gemma-3-4b-it"
+kind = "multimodal"
+model_id = "google/gemma-4-E4B-it"
 
 [[models]]
 kind = "embedding"
@@ -1227,18 +1261,18 @@ mistralrs completions fish &gt; ~/.config/fish/completions/mistralrs.fish
 <pre><code class="language-bash">mistralrs run -m Qwen/Qwen3-4B
 mistralrs serve -m Qwen/Qwen3-4B
 </code></pre>
-<p>The <code>auto</code> type supports text, vision, and other model types through automatic detection.</p>
+<p>The <code>auto</code> type supports text, multimodal, and other model types through automatic detection.</p>
 <h3 id="text"><a class="header" href="#text">text</a></h3>
 <p>Explicit text generation model configuration.</p>
 <pre><code class="language-bash">mistralrs run text -m Qwen/Qwen3-4B
 mistralrs serve text -m Qwen/Qwen3-4B
 </code></pre>
-<h3 id="vision"><a class="header" href="#vision">vision</a></h3>
-<p>Vision-language models that can process images and text.</p>
-<pre><code class="language-bash">mistralrs run vision -m google/gemma-3-4b-it
-mistralrs serve vision -m google/gemma-3-4b-it
+<h3 id="multimodal"><a class="header" href="#multimodal">multimodal</a></h3>
+<p>Multimodal models that can process images, audio, and text.</p>
+<pre><code class="language-bash">mistralrs run multimodal -m google/gemma-4-E4B-it
+mistralrs serve multimodal -m google/gemma-4-E4B-it
 </code></pre>
-<p><strong>Vision Options:</strong></p>
+<p><strong>Multimodal Options:</strong></p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -1416,9 +1450,14 @@ mistralrs run -m Qwen/Qwen3-4B --enable-search --search-embedding-model embeddin
 </code></pre>
 <hr>
 <h3 id="thinking-mode"><a class="header" href="#thinking-mode">Thinking Mode</a></h3>
-<p>Enable thinking/reasoning mode for models that support it (like DeepSeek, Qwen3).</p>
-<pre><code class="language-bash">mistralrs run -m Qwen/Qwen3-4B --enable-thinking
+<p>Control thinking/reasoning mode for models that support it (like DeepSeek, Qwen3).</p>
+<pre><code class="language-bash"># Force thinking on (equivalent to --thinking true)
+mistralrs run -m Qwen/Qwen3-4B --thinking
+
+# Force thinking off
+mistralrs run -m Qwen/Qwen3-4B --thinking false
 </code></pre>
+<p><code>--thinking</code> (or <code>--thinking true</code>) forces thinking on. <code>--thinking false</code> forces thinking off. If you omit the flag entirely, <code>mistralrs run</code> defers to the chat template’s default behavior. Templates with an explicit thinking toggle use the repository fallback of <code>true</code> when no override is provided.</p>
 <p>In interactive mode, thinking content is displayed in gray text before the final response.</p>
 <hr>
 <h2 id="global-options"><a class="header" href="#global-options">Global Options</a></h2>
@@ -1541,15 +1580,16 @@ Ahoy there, matey! What brings ye to these waters?
 &gt; \clear
 &gt; \exit
 </code></pre>
-<p><strong>Vision Model Interactive Mode:</strong></p>
-<p>For vision models, you can include images in your prompts by specifying file paths or URLs:</p>
+<p><strong>Multimodal Model Interactive Mode:</strong></p>
+<p>For multimodal models, you can include images in your prompts by specifying file paths or URLs:</p>
 <pre><code>&gt; Describe this image: /path/to/image.jpg
 &gt; Compare these images: image1.png image2.png
 &gt; Describe the image and transcribe the audio: photo.jpg recording.mp3
 </code></pre>
-<p><strong>Note</strong>: The CLI automatically detects paths to supported image and audio files within your prompt. You do not need special syntax; simply paste the absolute or relative path to the file.</p>
+<p><strong>Note</strong>: The CLI automatically detects paths to supported image, audio, and video files within your prompt. You do not need special syntax; simply paste the absolute or relative path to the file.</p>
 <p>Supported image formats: PNG, JPEG, BMP, GIF, WebP
-Supported audio formats: WAV, MP3, FLAC, OGG</p>
+Supported audio formats: WAV, MP3, FLAC, OGG
+Supported video formats: MP4, AVI, MOV, MKV, WebM, M4V, GIF (see <a href="#video-input-support">VIDEO.md</a>)</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="mistralrs-cli-toml-config"><a class="header" href="#mistralrs-cli-toml-config">mistralrs-cli TOML Config</a></h1>
 <p><code>mistralrs-cli</code> can run entirely from a single TOML configuration file. This config supports multiple models and mirrors the CLI options.</p>
@@ -1582,7 +1622,7 @@ in_situ_quant = "q4k"
 </thead>
 <tbody>
 <tr><td><code>command</code></td><td>all</td><td>Required. Either <code>"serve"</code> or <code>"run"</code></td></tr>
-<tr><td><code>enable_thinking</code></td><td>run</td><td>Enable thinking mode (default: false)</td></tr>
+<tr><td><code>thinking</code></td><td>run</td><td>Control thinking mode. Set to <code>true</code> to force on, <code>false</code> to force off. Omit to defer to chat template default.</td></tr>
 <tr><td><code>default_model_id</code></td><td>serve</td><td>Default model ID for API requests (must match a model_id in [[models]])</td></tr>
 </tbody>
 </table>
@@ -1662,7 +1702,7 @@ in_situ_quant = "q4k"
 <tr><th>Option</th><th>Required</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>kind</code></td><td>yes</td><td>Model type: <code>"auto"</code>, <code>"text"</code>, <code>"vision"</code>, <code>"diffusion"</code>, <code>"speech"</code>, <code>"embedding"</code></td></tr>
+<tr><td><code>kind</code></td><td>yes</td><td>Model type: <code>"auto"</code>, <code>"text"</code>, <code>"multimodal"</code>, <code>"diffusion"</code>, <code>"speech"</code>, <code>"embedding"</code></td></tr>
 <tr><td><code>model_id</code></td><td>yes</td><td>HuggingFace model ID or local path</td></tr>
 <tr><td><code>tokenizer</code></td><td>no</td><td>Path to local tokenizer.json</td></tr>
 <tr><td><code>arch</code></td><td>no</td><td>Model architecture (auto-detected if not specified)</td></tr>
@@ -1731,7 +1771,7 @@ in_situ_quant = "q4k"
 </tbody>
 </table>
 </div>
-<h4 id="modelsvision---vision-options"><a class="header" href="#modelsvision---vision-options">[models.vision] - Vision Options</a></h4>
+<h4 id="modelsmultimodal---multimodal-options"><a class="header" href="#modelsmultimodal---multimodal-options">[models.multimodal] - Multimodal Options</a></h4>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -1773,10 +1813,10 @@ dtype = "auto"
 in_situ_quant = "q4k"
 
 [[models]]
-kind = "vision"
+kind = "multimodal"
 model_id = "Qwen/Qwen2-VL-2B-Instruct"
 
-[models.vision]
+[models.multimodal]
 max_num_images = 4
 
 [[models]]
@@ -1785,7 +1825,7 @@ model_id = "google/embeddinggemma-300m"
 </code></pre>
 <h3 id="interactive-mode-with-thinking"><a class="header" href="#interactive-mode-with-thinking">Interactive Mode with Thinking</a></h3>
 <pre><code class="language-toml">command = "run"
-enable_thinking = true
+thinking = true
 
 [runtime]
 max_seqs = 16
@@ -1794,6 +1834,7 @@ max_seqs = 16
 kind = "auto"
 model_id = "Qwen/Qwen3-4B"
 </code></pre>
+<p>Set <code>thinking = true</code> to force thinking on, <code>thinking = false</code> to force thinking off. If omitted, <code>mistralrs from-config</code> defers to the chat template default. Templates with an explicit thinking toggle use the repository fallback of <code>true</code> when no override is provided.</p>
 <h3 id="gguf-model"><a class="header" href="#gguf-model">GGUF Model</a></h3>
 <pre><code class="language-toml">command = "serve"
 
@@ -1992,9 +2033,9 @@ async fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
 <tr><th>Builder</th><th>Use Case</th></tr>
 </thead>
 <tbody>
-<tr><td><code>ModelBuilder</code></td><td>Auto-detects model type (text, vision, embedding)</td></tr>
+<tr><td><code>ModelBuilder</code></td><td>Auto-detects model type (text, multimodal, embedding)</td></tr>
 <tr><td><code>TextModelBuilder</code></td><td>Text generation models</td></tr>
-<tr><td><code>VisionModelBuilder</code></td><td>Vision + text models (image/audio input)</td></tr>
+<tr><td><code>MultimodalModelBuilder</code></td><td>Multimodal models (image/audio input)</td></tr>
 <tr><td><code>GgufModelBuilder</code></td><td>GGUF quantized model files</td></tr>
 <tr><td><code>EmbeddingModelBuilder</code></td><td>Text embedding models</td></tr>
 <tr><td><code>DiffusionModelBuilder</code></td><td>Image generation (e.g., FLUX)</td></tr>
@@ -2027,12 +2068,12 @@ async fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
 </thead>
 <tbody>
 <tr><td><code>TextMessages</code></td><td>Simple text-only chat</td><td>Deterministic</td></tr>
-<tr><td><code>VisionMessages</code></td><td>Prompt includes images or audio</td><td>Deterministic</td></tr>
+<tr><td><code>MultimodalMessages</code></td><td>Prompt includes images or audio</td><td>Deterministic</td></tr>
 <tr><td><code>RequestBuilder</code></td><td>Tools, logprobs, custom sampling, constraints, or web search</td><td>Configurable</td></tr>
 </tbody>
 </table>
 </div>
-<p><code>TextMessages</code> and <code>VisionMessages</code> convert into <code>RequestBuilder</code> via <code>Into&lt;RequestBuilder&gt;</code> if you start simple and later need more control.</p>
+<p><code>TextMessages</code> and <code>MultimodalMessages</code> convert into <code>RequestBuilder</code> via <code>Into&lt;RequestBuilder&gt;</code> if you start simple and later need more control.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Simple
@@ -2176,8 +2217,8 @@ fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
 <tr><th>Category</th><th>Examples</th></tr>
 </thead>
 <tbody>
-<tr><td><strong>Getting Started</strong></td><td><code>text_generation</code>, <code>streaming</code>, <code>vision</code>, <code>gguf</code>, <code>gguf_locally</code>, <code>embedding</code></td></tr>
-<tr><td><strong>Models</strong></td><td><code>text_models</code>, <code>vision_models</code>, <code>audio</code>, <code>diffusion</code>, <code>speech</code>, <code>multimodal</code></td></tr>
+<tr><td><strong>Getting Started</strong></td><td><code>text_generation</code>, <code>streaming</code>, <code>multimodal_basic</code>, <code>gguf</code>, <code>gguf_locally</code>, <code>embedding</code></td></tr>
+<tr><td><strong>Models</strong></td><td><code>text_models</code>, <code>multimodal_models</code>, <code>audio</code>, <code>diffusion</code>, <code>speech</code>, <code>multimodal</code></td></tr>
 <tr><td><strong>Quantization</strong></td><td><code>isq</code>, <code>imatrix</code>, <code>uqff</code>, <code>topology</code>, <code>mixture_of_quant_experts</code></td></tr>
 <tr><td><strong>Advanced</strong></td><td><code>tools</code>, <code>agent</code>, <code>grammar</code>, <code>json_schema</code>, <code>web_search</code>, <code>mcp_client</code>, <code>batching</code>, <code>paged_attn</code>, <code>speculative</code>, <code>lora</code>, <code>error_handling</code>, and more</td></tr>
 <tr><td><strong>Cookbook</strong></td><td><code>cookbook_rag</code>, <code>cookbook_structured</code>, <code>cookbook_multiturn</code>, <code>cookbook_agent</code></td></tr>
@@ -2235,7 +2276,7 @@ fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
 <li><code>Default</code></li>
 <li><code>MoQE</code>: if applicable, only quantize MoE experts. https://arxiv.org/abs/2310.02410</li>
 </ul>
-<h3 id="architecture-for-vision-models"><a class="header" href="#architecture-for-vision-models">Architecture for vision models</a></h3>
+<h3 id="architecture-for-multimodal-models"><a class="header" href="#architecture-for-multimodal-models">Architecture for multimodal models</a></h3>
 <ul>
 <li><code>Phi3V</code></li>
 <li><code>Idefics2</code></li>
@@ -2248,6 +2289,7 @@ fn main() -&gt; mistralrs::error::Result&lt;()&gt; {
 <li><code>Phi4MM</code></li>
 <li><code>Qwen2_5VL</code></li>
 <li><code>Gemma3</code></li>
+<li><code>Gemma4</code></li>
 <li><code>Mistral3</code></li>
 <li><code>Llama4</code></li>
 <li><code>Gemma3n</code></li>
@@ -2408,16 +2450,16 @@ Note: <code>truncate_sequence=True</code> trims prompts that would otherwise exc
         hf_cache_path: str | None = None
 
     @dataclass
-    class VisionPlain:
+    class MultimodalPlain:
         model_id: str
-        arch: VisionArchitecture
+        arch: MultimodalArchitecture
         tokenizer_json: str | None = None
         topology: str | None = None
         from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         max_edge: int | None = None
-        auto_map_params: VisionAutoMapParams | None = (None,)
+        auto_map_params: MultimodalAutoMapParams | None = (None,)
         calibration_file: str | None = None
         imatrix: str | None = None
         hf_cache_path: str | None = None
@@ -2440,18 +2482,18 @@ Note: <code>truncate_sequence=True</code> trims prompts that would otherwise exc
 <h3 id="basic-usage-with-model_id"><a class="header" href="#basic-usage-with-model_id">Basic Usage with model_id</a></h3>
 <pre><code class="language-python">import mistralrs
 
-# Create a Runner with a vision model (Gemma 3 4B)
+# Create a Runner with a multimodal model (Gemma 4 E4B)
 runner = mistralrs.Runner(
-    which=mistralrs.Which.VisionPlain(
-        model_id="google/gemma-3-4b-it",
-        arch=mistralrs.VisionArchitecture.Gemma3,
+    which=mistralrs.Which.MultimodalPlain(
+        model_id="google/gemma-4-E4B-it",
+        arch=mistralrs.MultimodalArchitecture.Gemma4,
     ),
     in_situ_quant="Q4K",
 )
 
 # List available models (model IDs are registered IDs, aliases if configured)
 models = runner.list_models()
-print(f"Available models: {models}")  # ["google/gemma-3-4b-it"]
+print(f"Available models: {models}")  # ["google/gemma-4-E4B-it"]
 
 # Send request to specific model using model_id parameter
 response = runner.send_chat_completion_request(
@@ -2459,7 +2501,7 @@ response = runner.send_chat_completion_request(
         messages=[{"role": "user", "content": "Hello!"}],
         max_tokens=100
     ),
-    model_id="google/gemma-3-4b-it"  # Target specific model
+    model_id="google/gemma-4-E4B-it"  # Target specific model
 )
 
 # Send request without model_id (uses default model)
@@ -2480,7 +2522,7 @@ default_model = runner.get_default_model_id()
 print(f"Default model: {default_model}")
 
 # Change default model (model must be loaded)
-runner.set_default_model_id("google/gemma-3-4b-it")
+runner.set_default_model_id("google/gemma-4-E4B-it")
 
 # List models with their status
 models_with_status = runner.list_models_with_status()
@@ -2489,7 +2531,7 @@ for model_id, status in models_with_status:
 </code></pre>
 <h3 id="model-unloading-and-reloading"><a class="header" href="#model-unloading-and-reloading">Model Unloading and Reloading</a></h3>
 <p>You can unload models to free memory and reload them on demand:</p>
-<pre><code class="language-python">model_id = "google/gemma-3-4b-it"
+<pre><code class="language-python">model_id = "google/gemma-4-E4B-it"
 
 # Check if model is loaded
 is_loaded = runner.is_model_loaded(model_id)
@@ -2856,7 +2898,7 @@ Enable it with <code>--mcp-port &lt;port&gt;</code> and see <a href="#mcp-protoc
 <li><code>top_k</code>: <code>int</code> | <code>null</code>. If non null, it is only relevant if positive.</li>
 <li><code>grammar</code>: <code>{"type" : "regex" | "lark" | "json_schema" | "llguidance", "value": string}</code> or <code>null</code>. Grammar to use. This is mutually exclusive to the OpenAI-compatible <code>response_format</code>.</li>
 <li><code>min_p</code>: <code>float</code> | <code>null</code>. If non null, it is only relevant if 1 &gt;= min_p &gt;= 0.</li>
-<li><code>enable_thinking</code>: <code>bool</code>, default to <code>false</code>. Enable thinking for models that support it.</li>
+<li><code>enable_thinking</code>: <code>bool</code> | <code>null</code>. Enable thinking for models that support it. If omitted or <code>null</code>, mistral.rs defers to the chat template’s default behavior instead of forcing thinking off. Templates with an explicit <code>enable_thinking</code> toggle use the repository fallback of <code>true</code> when the flag is omitted.</li>
 <li><code>truncate_sequence</code>: <code>bool</code> | <code>null</code>. When <code>true</code>, requests that exceed the model context length will be truncated instead of rejected; otherwise the server returns a validation error. Embedding requests truncate tokens at the end of the prompt, while chat/completion requests truncate tokens at the start of the prompt.</li>
 <li><code>repetition_penalty</code>: <code>float</code> | <code>null</code>. Penalty for repeating tokens. This is distinct from <code>frequency_penalty</code> and <code>presence_penalty</code> - it applies a direct multiplicative penalty to repeated token logits.</li>
 <li><code>web_search_options</code>: <code>object</code> | <code>null</code>. Enable web search integration (see <a href="#web-search-tool-in-mistralrs">WEB_SEARCH.md</a>). Contains optional fields: <code>search_context_size</code> (“low”, “medium”, “high”), <code>user_location</code> (object with location info), <code>search_description</code> (override search tool description), <code>extract_description</code> (override extraction tool description).</li>
@@ -2865,7 +2907,11 @@ Enable it with <code>--mcp-port &lt;port&gt;</code> and see <a href="#mcp-protoc
 <li><code>dry_base</code>: <code>float</code> | <code>null</code>. DRY sampling base value.</li>
 <li><code>dry_allowed_length</code>: <code>int</code> | <code>null</code>. DRY sampling allowed length before penalty applies.</li>
 <li><code>dry_sequence_breakers</code>: <code>array of strings</code> | <code>null</code>. Tokens that reset the DRY penalty sequence.</li>
+<li><code>max_tool_rounds</code>: <code>int</code> | <code>null</code>. Maximum number of tool-call rounds the server will auto-execute. When set, the server enters an agentic loop: the model calls tools, the server executes them via registered callbacks (MCP, search, or custom), feeds results back, and repeats until the model stops calling tools or this limit is reached. Default safety cap: 16. See <a href="#tool-calling-1">TOOL_CALLING.md</a> for details.</li>
 </ul>
+<blockquote>
+<p><strong>Note:</strong> The tool dispatch URL (<code>--tool-dispatch-url</code>) is configured server-side only via the CLI flag for security (SSRF prevention). It cannot be set per-request via the HTTP API. The Rust and Python SDKs can set it per-request since they run trusted code. See <a href="#tool-dispatch-url">TOOL_CALLING.md</a> for details.</p>
+</blockquote>
 <h2 id="response-extensions"><a class="header" href="#response-extensions">Response Extensions</a></h2>
 <p>The response objects include additional fields beyond the standard OpenAI API:</p>
 <h3 id="harmony-mode-responses"><a class="header" href="#harmony-mode-responses">Harmony Mode Responses</a></h3>
@@ -3180,7 +3226,31 @@ curl http://localhost:1234/v1/responses \
 "input": "What makes it memory safe?"
 }'
 </code></pre>
-<p>The API also supports multimodal inputs (images, audio) and streaming responses by setting <code>"stream": true</code> in the request JSON.</p>
+<p>The API also supports multimodal inputs (images, audio, video) and streaming responses by setting <code>"stream": true</code> in the request JSON.</p>
+<h3 id="multimodal-content-types"><a class="header" href="#multimodal-content-types">Multimodal Content Types</a></h3>
+<p>When sending multimodal messages, the <code>content</code> field of a message can be an array of content parts. The following content types are supported:</p>
+<ul>
+<li>
+<p><strong><code>text</code></strong>: Plain text input.</p>
+<pre><code class="language-json">{ "type": "text", "text": "Describe this image." }
+</code></pre>
+</li>
+<li>
+<p><strong><code>image_url</code></strong>: Image input. The URL may be a web URL, a local file path, or a base64-encoded data URI.</p>
+<pre><code class="language-json">{ "type": "image_url", "image_url": { "url": "https://example.com/photo.jpg" } }
+</code></pre>
+</li>
+<li>
+<p><strong><code>audio_url</code></strong>: Audio input. Supported by models with audio capabilities (e.g., Phi 4 Multimodal, Gemma 3n, Gemma 4).</p>
+<pre><code class="language-json">{ "type": "audio_url", "audio_url": { "url": "https://example.com/audio.ogg" } }
+</code></pre>
+</li>
+<li>
+<p><strong><code>video_url</code></strong>: Video input. Supported by models with video capabilities (e.g., Gemma 4). Frames are automatically extracted from the video at a configurable sampling rate.</p>
+<pre><code class="language-json">{ "type": "video_url", "video_url": { "url": "https://example.com/video.mp4" } }
+</code></pre>
+</li>
+</ul>
 <blockquote>
 <p>ℹ️ The Responses API forwards <code>truncate_sequence</code> to underlying chat completions. Enable it if you want over-length conversations to be truncated rather than rejected.</p>
 </blockquote>
@@ -3370,11 +3440,12 @@ curl http://localhost:1234/v1/responses \
 <li>Llama</li>
 <li>Mistral</li>
 </ul>
-<h3 id="vision-models"><a class="header" href="#vision-models">Vision Models</a></h3>
+<h3 id="multimodal-models"><a class="header" href="#multimodal-models">Multimodal Models</a></h3>
 <ul>
 <li>Qwen 3-VL</li>
 <li>Qwen 3-VL MoE</li>
 <li>Qwen 3.5</li>
+<li>Gemma 4 (text, image, video, audio)</li>
 <li>Gemma 3n</li>
 <li>Llama 4</li>
 <li>Gemma 3</li>
@@ -3460,6 +3531,7 @@ curl http://localhost:1234/v1/responses \
 <tr><td>Dia 1.6b</td><td></td><td></td><td>✅</td></tr>
 <tr><td>Voxtral</td><td></td><td></td><td>✅</td></tr>
 <tr><td>Gemma 3n</td><td></td><td></td><td>✅</td></tr>
+<tr><td>Gemma 4</td><td></td><td></td><td>✅</td></tr>
 <tr><td>Qwen 3 VL</td><td></td><td></td><td>✅</td></tr>
 <tr><td>Qwen 3 MoE</td><td>✅</td><td></td><td>✅</td></tr>
 <tr><td>Qwen 3-VL MoE</td><td></td><td></td><td>✅</td></tr>
@@ -3481,7 +3553,7 @@ curl http://localhost:1234/v1/responses \
 <tr><td>Plain</td><td>✅</td></tr>
 <tr><td>GGUF</td><td>✅</td></tr>
 <tr><td>GGML</td><td></td></tr>
-<tr><td>Vision Plain</td><td>✅</td></tr>
+<tr><td>Multimodal Plain</td><td>✅</td></tr>
 </tbody>
 </table>
 </div>
@@ -3521,6 +3593,7 @@ curl http://localhost:1234/v1/responses \
 <tr><td>Qwen 3</td><td></td><td></td><td></td></tr>
 <tr><td>SmolLM3</td><td>✅</td><td></td><td></td></tr>
 <tr><td>Gemma 3n</td><td></td><td></td><td></td></tr>
+<tr><td>Gemma 4</td><td></td><td></td><td></td></tr>
 <tr><td>Voxtral</td><td></td><td></td><td></td></tr>
 <tr><td>Qwen 3 VL</td><td></td><td></td><td></td></tr>
 <tr><td>Qwen 3-VL MoE</td><td></td><td></td><td></td></tr>
@@ -3569,6 +3642,7 @@ curl http://localhost:1234/v1/responses \
 <tr><td>Qwen 3</td><td></td></tr>
 <tr><td>SmolLM3</td><td>✅</td></tr>
 <tr><td>Gemma 3n</td><td></td></tr>
+<tr><td>Gemma 4</td><td></td></tr>
 <tr><td>Voxtral</td><td></td></tr>
 <tr><td>Qwen 3 VL</td><td></td></tr>
 <tr><td>Qwen 3-VL MoE</td><td></td></tr>
@@ -3609,8 +3683,8 @@ curl http://localhost:1234/v1/responses \
 <li><a href="#examples-of-lora-and-x-lora-models">LoRA and X-LoRA examples</a></li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="vision-model-support-in-mistralrs"><a class="header" href="#vision-model-support-in-mistralrs">Vision model support in mistral.rs</a></h1>
-<p>Mistral.rs supports various modalities of models, including vision models. Vision models take images and text as input and have the capability to reason over both.</p>
+<h1 id="multimodal-model-support-in-mistralrs"><a class="header" href="#multimodal-model-support-in-mistralrs">Multimodal model support in mistral.rs</a></h1>
+<p>Mistral.rs supports various modalities of models, including multimodal models. Multimodal models take images, audio, and text as input and have the capability to reason over all of them.</p>
 <p>Please see docs for the following model types:</p>
 <ul>
 <li>Phi 3 Vision: <a href="#phi-3-vision-model-microsoftphi-35-vision-instruct">PHI3V.md</a></li>
@@ -3622,12 +3696,28 @@ curl http://localhost:1234/v1/responses \
 <li>Phi 4 Multimodal: <a href="#phi-4-multimodal-model-microsoftphi-4-multimodal-instruct">PHI4MM.md</a></li>
 <li>Gemma 3: <a href="#gemma-3-model-googlegemma-3-4b-it">GEMMA3.md</a></li>
 <li>Gemma 3n: <a href="#gemma-3n-model-googlegemma-3n-e4b-it">GEMMA3N.md</a></li>
+<li>Gemma 4: <a href="#gemma-4-model-family-collection">GEMMA4.md</a></li>
 <li>Mistral 3: <a href="#mistral-small-31-model-mistralaimistral-small-31-24b-instruct-2503">MISTRAL3.md</a></li>
 <li>Llama 4: <a href="#llama-4-series-meta-llamallama-4-scout-17b-16e-instruct">LLAMA4.md</a></li>
 <li>Qwen 3-VL: <a href="#qwen-3-vision-model-qwen3-vl-collection">QWEN3VL.md</a></li>
-<li>Qwen 3.5: <a href="#qwen-35-vision-models">QWEN3_5.md</a></li>
+<li>Qwen 3.5: <a href="#qwen-35-multimodal-models">QWEN3_5.md</a></li>
 <li>MiniCPM-O 2.6: <a href="#minicpm-o-26-model-openbmbminicpm-o-2_6">MINICPMO_2_6.md</a></li>
 </ul>
+<h2 id="cli-one-shot-mode"><a class="header" href="#cli-one-shot-mode">CLI one-shot mode</a></h2>
+<p>You can query multimodal models directly from the command line using <code>-i</code> with <code>--image</code>, <code>--video</code>, or <code>--audio</code>:</p>
+<pre><code class="language-bash"># Image
+mistralrs run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
+
+# Video (requires FFmpeg for non-GIF formats, see VIDEO.md)
+mistralrs run -m google/gemma-4-E4B-it --video clip.mp4 -i "What happens in this video?"
+
+# Audio
+mistralrs run -m google/gemma-4-E4B-it --audio recording.wav -i "Transcribe this audio"
+
+# Multiple inputs
+mistralrs run -m google/gemma-4-E4B-it --image a.jpg --image b.jpg -i "Compare these images"
+</code></pre>
+<p>See the full <a href="#mistralrs-cli-reference">CLI reference</a> for all options.</p>
 <blockquote>
 <p>Note for the Python and HTTP APIs:
 We follow the OpenAI specification for structuring the image messages and allow both base64 encoded images as well as a URL/path to the image. There are many examples of this, see <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py">this Python example</a>.</p>
@@ -3649,7 +3739,7 @@ We follow the OpenAI specification for structuring the image messages and allow 
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="embeddings-overview"><a class="header" href="#embeddings-overview">Embeddings Overview</a></h1>
-<p>Mistral.rs can load embedding models alongside chat, vision, diffusion, and speech workloads. Embedding models
+<p>Mistral.rs can load embedding models alongside chat, multimodal, diffusion, and speech workloads. Embedding models
 produce dense vector representations that you can use for similarity search, clustering, reranking, and other
 semantic tasks.</p>
 <h2 id="supported-models-1"><a class="header" href="#supported-models-1">Supported models</a></h2>
@@ -3955,7 +4045,7 @@ print(res.usage)
 <p>The Rust SDK takes an image from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
 <h2 id="http-server-1"><a class="header" href="#http-server-1">HTTP server</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/gemma3.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
@@ -3978,7 +4068,7 @@ The winding path visible on the mountain slopes appears to be part of the Mount 
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 -m google/gemma-3-12b-it
+<pre><code>mistralrs serve multimodal -p 1234 -m google/gemma-3-12b-it
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -4026,15 +4116,15 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Gemma 3 model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
     let model =
-        VisionModelBuilder::new("google/gemma-3-12b-it")
+        MultimodalModelBuilder::new("google/gemma-3-12b-it")
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
@@ -4048,7 +4138,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         vec![image],
@@ -4070,12 +4160,12 @@ async fn main() -&gt; Result&lt;()&gt; {
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="google/gemma-3-12b-it",
-        arch=VisionArchitecture.Gemma3,
+        arch=MultimodalArchitecture.Gemma3,
     ),
 )
 
@@ -4147,18 +4237,18 @@ print(res.usage)
 </ul>
 <h3 id="command-line-example"><a class="header" href="#command-line-example">Command Line Example</a></h3>
 <pre><code class="language-bash"># Run with the E2.49B slice for balanced performance/efficiency
-mistralrs run vision -m google/gemma-3n-E4B-it \
+mistralrs run multimodal -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 </code></pre>
 <h3 id="python-sdk-example"><a class="header" href="#python-sdk-example">Python SDK Example</a></h3>
-<pre><code class="language-python">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-python">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 # Use the E2.49B slice for balanced performance/efficiency
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="google/gemma-3n-E4B-it",
-        arch=VisionArchitecture.Gemma3n,
+        arch=MultimodalArchitecture.Gemma3n,
         matformer_config_path="matformer_configs/gemma3n.csv",
         matformer_slice_name="Config for E2.49B (block-level)",
     ),
@@ -4193,13 +4283,13 @@ print(res.choices[0].message.content)
 </code></pre>
 <h3 id="rust-sdk-example"><a class="header" href="#rust-sdk-example">Rust SDK Example</a></h3>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
     // Build model with MatFormer E2.49B configuration
-    let model = VisionModelBuilder::new("google/gemma-3n-E4B-it")
+    let model = MultimodalModelBuilder::new("google/gemma-3n-E4B-it")
         .with_isq(IsqType::Q4K)
         .with_matformer_config_path(PathBuf::from("matformer_configs/gemma3n.csv"))
         .with_matformer_slice_name("Config for E2.49B (block-level)".to_string())
@@ -4215,7 +4305,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "Describe this image briefly.",
         vec![image],
@@ -4242,7 +4332,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 </ul>
 <h2 id="http-server-2"><a class="header" href="#http-server-2">HTTP server</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/gemma3n.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
@@ -4269,10 +4359,10 @@ The overall impression is one of grandeur, tranquility, and the raw beauty of a 
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 -m google/gemma-3n-E4B-it
+<pre><code>mistralrs serve multimodal -p 1234 -m google/gemma-3n-E4B-it
 
 # Or with MatFormer for balanced performance:
-mistralrs serve vision -p 1234 -m google/gemma-3n-E4B-it \
+mistralrs serve multimodal -p 1234 -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 </code></pre>
@@ -4317,15 +4407,15 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust-1"><a class="header" href="#rust-1">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Gemma 3n model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
     let model =
-        VisionModelBuilder::new("google/gemma-3n-E4B-it")
+        MultimodalModelBuilder::new("google/gemma-3n-E4B-it")
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
@@ -4339,7 +4429,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "Please describe the image in detail.",
         vec![image],
@@ -4361,12 +4451,12 @@ async fn main() -&gt; Result&lt;()&gt; {
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="google/gemma-3n-E4B-it",
-        arch=VisionArchitecture.Gemma3n,
+        arch=MultimodalArchitecture.Gemma3n,
     ),
 )
 
@@ -4421,11 +4511,11 @@ print(res.usage)
 </code></pre>
 <h3 id="rust-sdk-2"><a class="header" href="#rust-sdk-2">Rust SDK</a></h3>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{AudioInput, IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{AudioInput, IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
-    let model = VisionModelBuilder::new("google/gemma-3n-E4B-it")
+    let model = MultimodalModelBuilder::new("google/gemma-3n-E4B-it")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()
@@ -4445,12 +4535,13 @@ async fn main() -&gt; Result&lt;()&gt; {
     .to_vec();
     let image = image::load_from_memory(&amp;image_bytes)?;
 
-    let messages = VisionMessages::new()
+    let messages = MultimodalMessages::new()
         .add_multimodal_message(
             TextMessageRole::User,
             "Describe in detail what is happening.",
             vec![image],
             vec![audio],
+            vec![],
         );
 
     let response = model.send_chat_request(messages).await?;
@@ -5132,6 +5223,222 @@ async fn main() -&gt; Result&lt;()&gt; {
     Ok(())
 }</code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="gemma-4-model-family-collection"><a class="header" href="#gemma-4-model-family-collection">Gemma 4 Model Family: <a href="https://huggingface.co/collections/google/gemma-4"><code>Collection</code></a></a></h1>
+<p>Gemma 4 is a multimodal model that supports text, vision (image), video, and audio input with text output. It builds on the Gemma family with full multimodal capabilities across all four input modalities.</p>
+<p>We support the Gemma 4 Model in the Rust, Python, and HTTP APIs, including ISQ for increased performance.</p>
+<p>Pre-quantized UQFF models are available in the <a href="https://huggingface.co/collections/mistralrs-community/gemma-4">mistralrs-community Gemma 4 collection</a>.</p>
+<blockquote>
+<p><strong>Video support</strong>: Non-GIF video formats (mp4, avi, mov, etc.) require FFmpeg to be installed. See <a href="#video-input-support">VIDEO.md</a> for installation instructions and details.</p>
+</blockquote>
+<p>The Python and HTTP APIs support sending inputs as:</p>
+<ul>
+<li><strong>Images</strong>: URL, path to a local file, or <a href="https://en.wikipedia.org/wiki/Base64">Base64</a> encoded string (via <code>image_url</code>)</li>
+<li><strong>Videos</strong>: URL or path to a local file (via <code>video_url</code>)</li>
+<li><strong>Audio</strong>: URL or path to a local file (via <code>audio_url</code>)</li>
+</ul>
+<p>The Rust SDK takes images from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate, audio from <code>AudioInput</code>, and video from <code>VideoInput</code>.</p>
+<h2 id="running"><a class="header" href="#running">Running</a></h2>
+<p>With an image:</p>
+<pre><code>mistralrs run -m mistralrs-community/gemma-4-E2B-it-UQFF --from-uqff 8 --image image.png -i "Describe this image in detail."
+</code></pre>
+<p>With a video:</p>
+<pre><code>mistralrs run -m mistralrs-community/gemma-4-E2B-it-UQFF --from-uqff 8 --video video.mp4 -i "Describe this video in detail."
+</code></pre>
+<p>With audio:</p>
+<pre><code>mistralrs run -m mistralrs-community/gemma-4-E2B-it-UQFF --from-uqff 8 --audio audio.mp3 -i "Transcribe this fully."
+</code></pre>
+<h2 id="examples-1"><a class="header" href="#examples-1">Examples</a></h2>
+<h3 id="http-server-3"><a class="header" href="#http-server-3">HTTP server</a></h3>
+<p>We support an OpenAI compatible HTTP API for multimodal models. The examples below demonstrate sending chat completion requests with different input types.</p>
+<hr>
+<ol>
+<li>Start the server</li>
+</ol>
+<pre><code>mistralrs serve -m google/gemma-4-E4B-it --isq 8
+</code></pre>
+<ol start="2">
+<li>Send a request</li>
+</ol>
+<p><strong>Video example:</strong></p>
+<pre><code class="language-py">from openai import OpenAI
+
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
+
+completion = client.chat.completions.create(
+    model="default",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video_url",
+                    "video_url": {
+                        "url": "path/to/video.mp4"
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "What happens in this video?",
+                },
+            ],
+        }
+    ],
+    max_tokens=256,
+)
+print(completion.choices[0].message.content)
+</code></pre>
+<p><strong>Image example:</strong></p>
+<pre><code class="language-py">from openai import OpenAI
+
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
+
+completion = client.chat.completions.create(
+    model="default",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "What is this?",
+                },
+            ],
+        },
+    ],
+    max_tokens=256,
+    frequency_penalty=1.0,
+    top_p=0.1,
+    temperature=0,
+)
+print(completion.choices[0].message.content)
+</code></pre>
+<p><strong>Combined image + video + audio example:</strong></p>
+<pre><code class="language-py">from openai import OpenAI
+
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
+
+completion = client.chat.completions.create(
+    model="default",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                    },
+                },
+                {
+                    "type": "video_url",
+                    "video_url": {
+                        "url": "path/to/video.mp4"
+                    },
+                },
+                {
+                    "type": "audio_url",
+                    "audio_url": {
+                        "url": "path/to/audio.wav"
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "Describe what you see in the image and video, and what you hear in the audio.",
+                },
+            ],
+        },
+    ],
+    max_tokens=256,
+)
+print(completion.choices[0].message.content)
+</code></pre>
+<ul>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
+</ul>
+<hr>
+<h3 id="python-2"><a class="header" href="#python-2">Python</a></h3>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/gemma4.py">here</a>.</p>
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+
+runner = Runner(
+    which=Which.MultimodalPlain(
+        model_id="google/gemma-4-E4B-it",
+        arch=MultimodalArchitecture.Gemma4,
+    ),
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "What is this?",
+                    },
+                ],
+            }
+        ],
+        max_tokens=256,
+        presence_penalty=1.0,
+        top_p=0.1,
+        temperature=0.1,
+    )
+)
+print(res.choices[0].message.content)
+print(res.usage)
+</code></pre>
+<hr>
+<h3 id="rust-2"><a class="header" href="#rust-2">Rust</a></h3>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
+<p>This is a minimal example of running the Gemma 4 model with a video input. Video decoding uses the <code>parse_video_url</code> helper from <code>mistralrs-server-core</code>, which handles FFmpeg decoding and frame sampling automatically.</p>
+<pre class="playground"><code class="language-rust">use anyhow::Result;
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+use mistralrs_server_core::video::parse_video_url;
+
+#[tokio::main]
+async fn main() -&gt; Result&lt;()&gt; {
+    let model =
+        MultimodalModelBuilder::new("google/gemma-4-E4B-it")
+            .with_isq(IsqType::Q4K)
+            .with_logging()
+            .build()
+            .await?;
+
+    let video = parse_video_url("path/to/video.mp4", None).await?;
+
+    let messages = MultimodalMessages::new().add_video_message(
+        TextMessageRole::User,
+        "What happens in this video?",
+        vec![video],
+    );
+
+    let response = model.send_chat_request(messages).await?;
+
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    dbg!(
+        response.usage.avg_prompt_tok_per_sec,
+        response.usage.avg_compl_tok_per_sec
+    );
+
+    Ok(())
+}</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="idefics-2-model-huggingfacem4idefics2-8b-chatty"><a class="header" href="#idefics-2-model-huggingfacem4idefics2-8b-chatty">Idefics 2 Model: <a href="https://huggingface.co/HuggingFaceM4/idefics2-8b-chatty"><code>HuggingFaceM4/idefics2-8b-chatty</code></a></a></h1>
 <p>The Idefics 2 Model has support in the Rust, Python, and HTTP APIs. The Idefics 2 Model also supports ISQ for increased performance.</p>
 <blockquote>
@@ -5144,9 +5451,9 @@ async fn main() -&gt; Result&lt;()&gt; {
 <li><a href="https://en.wikipedia.org/wiki/Base64">Base64</a> encoded string</li>
 </ul>
 <p>The Rust SDK takes an image from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
-<h2 id="http-server-3"><a class="header" href="#http-server-3">HTTP server</a></h2>
+<h2 id="http-server-4"><a class="header" href="#http-server-4">HTTP server</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/idefics2.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
@@ -5163,7 +5470,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 --isq 4 -m HuggingFaceM4/idefics2-8b-chatty
+<pre><code>mistralrs serve multimodal -p 1234 --isq 4 -m HuggingFaceM4/idefics2-8b-chatty
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -5204,15 +5511,15 @@ print(resp)
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
 <hr>
-<h2 id="rust-2"><a class="header" href="#rust-2">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<h2 id="rust-3"><a class="header" href="#rust-3">Rust</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Idefics 2 model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
-    let model = VisionModelBuilder::new(
+    let model = MultimodalModelBuilder::new(
         "HuggingFaceM4/idefics2-8b-chatty",
     )
     .with_isq(IsqType::Q4K)
@@ -5228,7 +5535,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_idefics_image_message(
+    let messages = MultimodalMessages::new().add_idefics_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         image,
@@ -5245,18 +5552,18 @@ async fn main() -&gt; Result&lt;()&gt; {
     Ok(())
 }
 </code></pre>
-<h2 id="python-2"><a class="header" href="#python-2">Python</a></h2>
+<h2 id="python-3"><a class="header" href="#python-3">Python</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py">here</a>.</p>
 <p>This example demonstrates loading and sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="lamm-mit/Cephalo-Idefics-2-vision-8b-beta",
-        arch=VisionArchitecture.Idefics2,
+        arch=MultimodalArchitecture.Idefics2,
     ),
 )
 
@@ -5295,7 +5602,7 @@ print(res.usage)
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="idefics-3-vision-huggingfacem4idefics3-8b-llama3"><a class="header" href="#idefics-3-vision-huggingfacem4idefics3-8b-llama3">Idefics 3 Vision: <a href="https://huggingface.co/HuggingFaceM4/Idefics3-8B-Llama3"><code>HuggingFaceM4/Idefics3-8B-Llama3</code></a></a></h1>
-<p>Mistral.rs supports the Idefics 3 vision model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.</p>
+<p>Mistral.rs supports the Idefics 3 multimodal model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.</p>
 <p>UQFF quantizations are also available.</p>
 <p>The Python and HTTP APIs support sending images as:</p>
 <ul>
@@ -5314,9 +5621,9 @@ print(res.usage)
 <li><a href="#toc">ToC</a></li>
 <li><a href="#using-the--smol-vlm-models">Using the 🤗 Smol VLM models</a></li>
 <li><a href="#interactive-mode">Interactive mode</a></li>
-<li><a href="#http-server-4">HTTP server</a></li>
-<li><a href="#rust-3">Rust</a></li>
-<li><a href="#python-3">Python</a></li>
+<li><a href="#http-server-5">HTTP server</a></li>
+<li><a href="#rust-4">Rust</a></li>
+<li><a href="#python-4">Python</a></li>
 <li><a href="#uqff-models">UQFF models</a></li>
 </ul>
 </li>
@@ -5324,11 +5631,11 @@ print(res.usage)
 <h2 id="using-the--smol-vlm-models"><a class="header" href="#using-the--smol-vlm-models">Using the <a href="HuggingFaceTB/SmolVLM-Instruct">🤗 Smol VLM</a> models</a></h2>
 <p>Simply substitute the Idefics 3 model ID (<code>HuggingFaceM4/Idefics3-8B-Llama3</code>) with the Smol VLM one (<code>HuggingFaceTB/SmolVLM-Instruct</code>)!</p>
 <h2 id="interactive-mode"><a class="header" href="#interactive-mode">Interactive mode</a></h2>
-<p>Mistral.rs supports interactive mode for vision models! It is an easy way to interact with the model.</p>
+<p>Mistral.rs supports interactive mode for multimodal models! It is an easy way to interact with the model.</p>
 <ol>
 <li>Start up interactive mode with the Idefics 3 model</li>
 </ol>
-<pre><code>mistralrs run vision --isq 4 -m HuggingFaceM4/Idefics3-8B-Llama3
+<pre><code>mistralrs run multimodal --isq 4 -m HuggingFaceM4/Idefics3-8B-Llama3
 </code></pre>
 <ol start="2">
 <li>Ask a question</li>
@@ -5360,9 +5667,9 @@ In summary, this image captures a single red rose in full bloom with wet petals 
 &gt; \image https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg What mountain is this?
 The mountain is Mount Washington.
 </code></pre>
-<h2 id="http-server-4"><a class="header" href="#http-server-4">HTTP server</a></h2>
+<h2 id="http-server-5"><a class="header" href="#http-server-5">HTTP server</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/idefics3.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
@@ -5389,7 +5696,7 @@ On closer inspection near one side of this grandeur scene stands tall trees with
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 --isq 4 -m HuggingFaceM4/Idefics3-8B-Llama3
+<pre><code>mistralrs serve multimodal -p 1234 --isq 4 -m HuggingFaceM4/Idefics3-8B-Llama3
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -5430,16 +5737,16 @@ print(resp)
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
 <hr>
-<h2 id="rust-3"><a class="header" href="#rust-3">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<h2 id="rust-4"><a class="header" href="#rust-4">Rust</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 const MODEL_ID: &amp;str = "HuggingFaceM4/Idefics3-8B-Llama3";
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
-    let model = VisionModelBuilder::new(MODEL_ID)
+    let model = MultimodalModelBuilder::new(MODEL_ID)
         .with_isq(IsqType::Q8_0)
         .with_logging()
         .build()
@@ -5453,7 +5760,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         vec![image],
@@ -5470,18 +5777,18 @@ async fn main() -&gt; Result&lt;()&gt; {
     Ok(())
 }</code></pre>
 <hr>
-<h2 id="python-3"><a class="header" href="#python-3">Python</a></h2>
+<h2 id="python-4"><a class="header" href="#python-4">Python</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/idefics3.py">here</a>.</p>
 <p>This example demonstrates loading and sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="HuggingFaceM4/Idefics3-8B-Llama3",
-        arch=VisionArchitecture.Idefics3,
+        arch=MultimodalArchitecture.Idefics3,
     ),
 )
 
@@ -5538,9 +5845,9 @@ print(res.usage)
 <li><a href="https://en.wikipedia.org/wiki/Base64">Base64</a> encoded string</li>
 </ul>
 <p>The Rust SDK takes an image from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
-<h2 id="http-server-5"><a class="header" href="#http-server-5">HTTP server</a></h2>
+<h2 id="http-server-6"><a class="header" href="#http-server-6">HTTP server</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/llava_next.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
@@ -5559,9 +5866,9 @@ print(res.usage)
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 --isq 4 -m llava-hf/llava-v1.6-mistral-7b-hf
+<pre><code>mistralrs serve multimodal -p 1234 --isq 4 -m llava-hf/llava-v1.6-mistral-7b-hf
 # or for vicuna backend, specify the chat template:
-mistralrs serve vision -p 1234 --isq 4 -c ./chat_templates/vicuna.json -m llava-hf/llava-v1.6-vicuna-7b-hf
+mistralrs serve multimodal -p 1234 --isq 4 -c ./chat_templates/vicuna.json -m llava-hf/llava-v1.6-vicuna-7b-hf
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -5602,15 +5909,15 @@ print(resp)
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
 <hr>
-<h2 id="rust-4"><a class="header" href="#rust-4">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<h2 id="rust-5"><a class="header" href="#rust-5">Rust</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the LLaVA and LLaVANext model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
-    let model = VisionModelBuilder::new(
+    let model = MultimodalModelBuilder::new(
         "llava-hf/llava-v1.6-mistral-7b-hf",
     )
     .with_isq(IsqType::Q4K)
@@ -5626,7 +5933,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_llava_image_message(
+    let messages = MultimodalMessages::new().add_llava_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         image,
@@ -5642,18 +5949,18 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
-<h2 id="python-4"><a class="header" href="#python-4">Python</a></h2>
+<h2 id="python-5"><a class="header" href="#python-5">Python</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/llava_next.py">here</a>.</p>
 <p>This example demonstrates loading and sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="llava-hf/llava-v1.6-mistral-7b-hf",
-        arch=VisionArchitecture.LLaVANext,
+        arch=MultimodalArchitecture.LLaVANext,
     ),
 )
 
@@ -5692,7 +5999,7 @@ print(res.usage)
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="llama-32-vision-model-meta-llamallama-32-11b-vision-instruct"><a class="header" href="#llama-32-vision-model-meta-llamallama-32-11b-vision-instruct">Llama 3.2 Vision Model: <a href="https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct"><code>meta-llama/Llama-3.2-11B-Vision-Instruct</code></a></a></h1>
-<p>Mistral.rs supports the Llama 3.2 vision model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.</p>
+<p>Mistral.rs supports the Llama 3.2 multimodal model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.</p>
 <p>UQFF quantizations are also available.</p>
 <p>The Python and HTTP APIs support sending images as:</p>
 <ul>
@@ -5713,20 +6020,20 @@ print(res.usage)
 <ul>
 <li><a href="#toc-1">ToC</a></li>
 <li><a href="#interactive-mode-1">Interactive mode</a></li>
-<li><a href="#http-server-6">HTTP server</a></li>
-<li><a href="#rust-5">Rust</a></li>
-<li><a href="#python-5">Python</a></li>
+<li><a href="#http-server-7">HTTP server</a></li>
+<li><a href="#rust-6">Rust</a></li>
+<li><a href="#python-6">Python</a></li>
 <li><a href="#uqff-models-1">UQFF models</a></li>
 </ul>
 </li>
 </ul>
 <h2 id="interactive-mode-1"><a class="header" href="#interactive-mode-1">Interactive mode</a></h2>
-<p>Mistral.rs supports interactive mode for vision models! It is an easy way to interact with the model.</p>
+<p>Mistral.rs supports interactive mode for multimodal models! It is an easy way to interact with the model.</p>
 <p>https://github.com/user-attachments/assets/4d11c35c-9ea2-42b8-8cab-5f7e8e2ee9ff</p>
 <ol>
 <li>Start up interactive mode with the Llama 3.2 model</li>
 </ol>
-<pre><code>mistralrs run vision --isq 4 -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
+<pre><code>mistralrs run multimodal --isq 4 -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
 </code></pre>
 <ol start="2">
 <li>Say hello!</li>
@@ -5752,9 +6059,9 @@ The image shows a close-up view of a rose flower with dew drops on its petals. T
 &gt; \image https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg What mountain is this?
 The image appears to be of Mount Washington, which is the highest peak in the Northeastern United States. It is located in the White Mountains of New Hampshire and is known for its extreme weather conditions, including high winds and low temperatures. The mountain's summit reaches an elevation of approximately 6,288 feet (1,917 meters) above sea level.
 </code></pre>
-<h2 id="http-server-6"><a class="header" href="#http-server-6">HTTP server</a></h2>
+<h2 id="http-server-7"><a class="header" href="#http-server-7">HTTP server</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/llama_vision.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
@@ -5785,7 +6092,7 @@ Overall, the image showcases the diverse geological and ecological features of M
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 --isq 4 -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
+<pre><code>mistralrs serve multimodal -p 1234 --isq 4 -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -5827,17 +6134,17 @@ print(resp)
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
 <hr>
-<h2 id="rust-5"><a class="header" href="#rust-5">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<h2 id="rust-6"><a class="header" href="#rust-6">Rust</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 const MODEL_ID: &amp;str = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k";
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
     let model =
-        VisionModelBuilder::new(MODEL_ID)
+        MultimodalModelBuilder::new(MODEL_ID)
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
@@ -5851,7 +6158,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         vec![image],
@@ -5868,20 +6175,20 @@ async fn main() -&gt; Result&lt;()&gt; {
     Ok(())
 }</code></pre>
 <hr>
-<h2 id="python-5"><a class="header" href="#python-5">Python</a></h2>
+<h2 id="python-6"><a class="header" href="#python-6">Python</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/llama_vision.py">here</a>.</p>
 <p>This example demonstrates loading and sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 MODEL_ID = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k"
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id=MODEL_ID,
-        arch=VisionArchitecture.VLlama,
+        arch=MultimodalArchitecture.VLlama,
     ),
 )
 
@@ -5949,9 +6256,9 @@ print(res.usage)
 <li><a href="https://en.wikipedia.org/wiki/Base64">Base64</a> encoded string</li>
 </ul>
 <p>The Rust SDK takes an image from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
-<h2 id="http-server-7"><a class="header" href="#http-server-7">HTTP server</a></h2>
+<h2 id="http-server-8"><a class="header" href="#http-server-8">HTTP server</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/llama4.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
@@ -5981,7 +6288,7 @@ The image exudes a sense of serenity and majesty, capturing the beauty of nature
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 --isq 4 -m meta-llama/Llama-4-Scout-17B-16E-Instruct
+<pre><code>mistralrs serve multimodal -p 1234 --isq 4 -m meta-llama/Llama-4-Scout-17B-16E-Instruct
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -6028,15 +6335,15 @@ print(resp)
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
 <hr>
-<h2 id="rust-6"><a class="header" href="#rust-6">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<h2 id="rust-7"><a class="header" href="#rust-7">Rust</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Llama 4 model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
-    let model = VisionModelBuilder::new(
+    let model = MultimodalModelBuilder::new(
         "meta-llama/Llama-4-Scout-17B-16E-Instruct",
     )
     .with_isq(IsqType::Q4K)
@@ -6052,7 +6359,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is this?",
         vec![image],
@@ -6068,18 +6375,18 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
-<h2 id="python-6"><a class="header" href="#python-6">Python</a></h2>
+<h2 id="python-7"><a class="header" href="#python-7">Python</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/llama4.py">here</a>.</p>
 <p>This example demonstrates loading and sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="meta-llama/Llama-4-Scout-17B-16E-Instruct",
-        arch=VisionArchitecture.Llama4,
+        arch=MultimodalArchitecture.Llama4,
     ),
     in_situ_quant="4",
 )
@@ -6138,18 +6445,18 @@ print(res.usage)
 <ul>
 <li><a href="#toc-2">ToC</a></li>
 <li><a href="#interactive-mode-2">Interactive mode</a></li>
-<li><a href="#http-server-8">HTTP server</a></li>
-<li><a href="#rust-7">Rust</a></li>
-<li><a href="#python-7">Python</a></li>
+<li><a href="#http-server-9">HTTP server</a></li>
+<li><a href="#rust-8">Rust</a></li>
+<li><a href="#python-8">Python</a></li>
 </ul>
 </li>
 </ul>
 <h2 id="interactive-mode-2"><a class="header" href="#interactive-mode-2">Interactive mode</a></h2>
-<p>Mistral.rs supports interactive mode for vision models! It is an easy way to interact with the model.</p>
+<p>Mistral.rs supports interactive mode for multimodal models! It is an easy way to interact with the model.</p>
 <ol>
 <li>Start up interactive mode with the MiniCPM-O 2.6 Model model</li>
 </ol>
-<pre><code>mistralrs run vision --isq 4 -m openbmb/MiniCPM-o-2_6
+<pre><code>mistralrs run multimodal --isq 4 -m openbmb/MiniCPM-o-2_6
 </code></pre>
 <ol start="2">
 <li>Say hello!</li>
@@ -6165,9 +6472,9 @@ How can I assist you today?
 &gt; \image https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Rosa_Precious_platinum.jpg/220px-Rosa_Precious_platinum.jpg What is this image?
 The image shows a close-up view of a rose flower with dew drops on its petals. The rose is in full bloom, with its petals unfolding and displaying vibrant pink coloration. The dew drops on the petals create a delicate, glistening effect, adding to the overall visual appeal of the flower. The background is blurred, focusing attention on the intricate details of the rose.
 </code></pre>
-<h2 id="http-server-8"><a class="header" href="#http-server-8">HTTP server</a></h2>
+<h2 id="http-server-9"><a class="header" href="#http-server-9">HTTP server</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/minicpmo_2_6.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
@@ -6198,7 +6505,7 @@ Overall, the image showcases the diverse geological and ecological features of M
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 --isq 4 -m openbmb/MiniCPM-o-2_6
+<pre><code>mistralrs serve multimodal -p 1234 --isq 4 -m openbmb/MiniCPM-o-2_6
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -6240,17 +6547,17 @@ print(resp)
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
 <hr>
-<h2 id="rust-7"><a class="header" href="#rust-7">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<h2 id="rust-8"><a class="header" href="#rust-8">Rust</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 const MODEL_ID: &amp;str = "openbmb/MiniCPM-o-2_6";
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
     let model =
-        VisionModelBuilder::new(MODEL_ID)
+        MultimodalModelBuilder::new(MODEL_ID)
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
@@ -6264,7 +6571,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         vec![image],
@@ -6281,20 +6588,20 @@ async fn main() -&gt; Result&lt;()&gt; {
     Ok(())
 }</code></pre>
 <hr>
-<h2 id="python-7"><a class="header" href="#python-7">Python</a></h2>
+<h2 id="python-8"><a class="header" href="#python-8">Python</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/minicpmo_2_6.py">here</a>.</p>
 <p>This example demonstrates loading and sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 MODEL_ID = "openbmb/MiniCPM-o-2_6"
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id=MODEL_ID,
-        arch=VisionArchitecture.MiniCpmO,
+        arch=MultimodalArchitecture.MiniCpmO,
     ),
 )
 
@@ -6347,9 +6654,9 @@ print(res.usage)
 tool calling with Mistral Small 3.1, and you can use it by specifying the <code>jinja_explicit</code> parameter in the various APIs. For example:</p>
 <pre><code class="language-bash">mistralrs serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
 </code></pre>
-<h2 id="http-server-9"><a class="header" href="#http-server-9">HTTP server</a></h2>
+<h2 id="http-server-10"><a class="header" href="#http-server-10">HTTP server</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/mistral3.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
@@ -6372,7 +6679,7 @@ If there's anything specific about this flower or its care that interests you fu
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
+<pre><code>mistralrs serve multimodal -p 1234 -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -6419,16 +6726,16 @@ print(resp)
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
 <hr>
-<h2 id="rust-8"><a class="header" href="#rust-8">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<h2 id="rust-9"><a class="header" href="#rust-9">Rust</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Mistral 3 model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
     let model =
-        VisionModelBuilder::new("mistralai/Mistral-Small-3.1-24B-Instruct-2503")
+        MultimodalModelBuilder::new("mistralai/Mistral-Small-3.1-24B-Instruct-2503")
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
@@ -6442,7 +6749,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         vec![image],
@@ -6458,18 +6765,18 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
-<h2 id="python-8"><a class="header" href="#python-8">Python</a></h2>
+<h2 id="python-9"><a class="header" href="#python-9">Python</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/mistral3.py">here</a>.</p>
 <p>This example demonstrates loading and sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="mistralai/Mistral-Small-3.1-24B-Instruct-2503",
-        arch=VisionArchitecture.Mistral3,
+        arch=MultimodalArchitecture.Mistral3,
     ),
     in_situ_quant="4"
 )
@@ -6640,9 +6947,9 @@ async fn main() -&gt; Result&lt;()&gt; {
 <p>Note: when sending multiple images, they will be resized to the minimum dimension by which all will fit without cropping.
 Aspect ratio is not preserved in that case.</p>
 </blockquote>
-<h2 id="http-server-10"><a class="header" href="#http-server-10">HTTP server</a></h2>
+<h2 id="http-server-11"><a class="header" href="#http-server-11">HTTP server</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
@@ -6663,7 +6970,7 @@ The perspective from which this photo is taken offers an expansive view of the m
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 -m microsoft/Phi-3.5-vision-instruct
+<pre><code>mistralrs serve multimodal -p 1234 -m microsoft/Phi-3.5-vision-instruct
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -6705,16 +7012,16 @@ print(resp)
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
 <hr>
-<h2 id="rust-9"><a class="header" href="#rust-9">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<h2 id="rust-10"><a class="header" href="#rust-10">Rust</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Phi 3 Vision model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
     let model =
-        VisionModelBuilder::new("microsoft/Phi-3.5-vision-instruct")
+        MultimodalModelBuilder::new("microsoft/Phi-3.5-vision-instruct")
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
@@ -6728,7 +7035,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_phiv_image_message(
+    let messages = MultimodalMessages::new().add_phiv_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         image,
@@ -6744,18 +7051,18 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
-<h2 id="python-9"><a class="header" href="#python-9">Python</a></h2>
+<h2 id="python-10"><a class="header" href="#python-10">Python</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py">here</a>.</p>
 <p>This example demonstrates loading and sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="microsoft/Phi-3.5-vision-instruct",
-        arch=VisionArchitecture.Phi3V,
+        arch=MultimodalArchitecture.Phi3V,
     ),
 )
 
@@ -6810,9 +7117,9 @@ print(res.usage)
 Aspect ratio is not preserved in that case.</p>
 </blockquote>
 <p><a href="#audio-input"><strong>Phi 4 multimodal supports audio inputs!</strong></a>.</p>
-<h2 id="http-server-11"><a class="header" href="#http-server-11">HTTP server</a></h2>
+<h2 id="http-server-12"><a class="header" href="#http-server-12">HTTP server</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
@@ -6831,7 +7138,7 @@ Aspect ratio is not preserved in that case.</p>
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 -m microsoft/Phi-4-multimodal-instruct
+<pre><code>mistralrs serve multimodal -p 1234 -m microsoft/Phi-4-multimodal-instruct
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -6873,16 +7180,16 @@ print(resp)
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
 <hr>
-<h2 id="rust-10"><a class="header" href="#rust-10">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<h2 id="rust-11"><a class="header" href="#rust-11">Rust</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Phi 4 Multimodal model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
     let model =
-        VisionModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
+        MultimodalModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
@@ -6896,7 +7203,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         vec![image],
@@ -6912,18 +7219,18 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
-<h2 id="python-10"><a class="header" href="#python-10">Python</a></h2>
+<h2 id="python-11"><a class="header" href="#python-11">Python</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py">here</a>.</p>
 <p>This example demonstrates loading and sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="microsoft/Phi-4-multimodal-instruct",
-        arch=VisionArchitecture.Phi4MM,
+        arch=MultimodalArchitecture.Phi4MM,
     ),
 )
 
@@ -6981,11 +7288,11 @@ print(res.usage)
 </code></pre>
 <h3 id="rust-sdk-10"><a class="header" href="#rust-sdk-10">Rust SDK</a></h3>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{AudioInput, IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{AudioInput, IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
-    let model = VisionModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
+    let model = MultimodalModelBuilder::new("microsoft/Phi-4-multimodal-instruct")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()
@@ -7005,12 +7312,13 @@ async fn main() -&gt; Result&lt;()&gt; {
     .to_vec();
     let image = image::load_from_memory(&amp;image_bytes)?;
 
-    let messages = VisionMessages::new()
+    let messages = MultimodalMessages::new()
         .add_multimodal_message(
             TextMessageRole::User,
             "Describe in detail what is happening.",
             vec![image],
             vec![audio],
+            vec![],
         );
 
     let response = model.send_chat_request(messages).await?;
@@ -7025,7 +7333,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="qwen-2-vision-model-qwen2-vl-collection"><a class="header" href="#qwen-2-vision-model-qwen2-vl-collection">Qwen 2 Vision Model: <a href="https://huggingface.co/collections/Qwen/qwen2-vl-66cee7455501d7126940800d"><code>Qwen2-VL Collection</code></a></a></h1>
-<p>Mistral.rs supports the Qwen2-VL vision model family, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.</p>
+<p>Mistral.rs supports the Qwen2-VL multimodal model family, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.</p>
 <p>UQFF quantizations are also available.</p>
 <p>The Python and HTTP APIs support sending images as:</p>
 <ul>
@@ -7043,18 +7351,18 @@ async fn main() -&gt; Result&lt;()&gt; {
 <ul>
 <li><a href="#toc-3">ToC</a></li>
 <li><a href="#interactive-mode-3">Interactive mode</a></li>
-<li><a href="#http-server-12">HTTP server</a></li>
-<li><a href="#rust-11">Rust</a></li>
-<li><a href="#python-11">Python</a></li>
+<li><a href="#http-server-13">HTTP server</a></li>
+<li><a href="#rust-12">Rust</a></li>
+<li><a href="#python-12">Python</a></li>
 </ul>
 </li>
 </ul>
 <h2 id="interactive-mode-3"><a class="header" href="#interactive-mode-3">Interactive mode</a></h2>
-<p>Mistral.rs supports interactive mode for vision models! It is an easy way to interact with the model.</p>
+<p>Mistral.rs supports interactive mode for multimodal models! It is an easy way to interact with the model.</p>
 <ol>
 <li>Start up interactive mode with the Qwen2-VL model</li>
 </ol>
-<pre><code>mistralrs run vision -m Qwen/Qwen2-VL-2B-Instruct
+<pre><code>mistralrs run multimodal -m Qwen/Qwen2-VL-2B-Instruct
 </code></pre>
 <ol start="2">
 <li>Say hello!</li>
@@ -7078,9 +7386,9 @@ flowers are a type of flowering plant that produce flowers that are typically us
 
 camellias are also known for their resilience and ability to thrive in a variety of conditions, making them a popular choice for gardeners and landscapers. they require well-draining soil and full sun or partial shade, and can be grown in containers or in the ground. overall, camellias are a beautiful and versatile flower that can add beauty and interest to any garden or landscape.
 </code></pre>
-<h2 id="http-server-12"><a class="header" href="#http-server-12">HTTP server</a></h2>
+<h2 id="http-server-13"><a class="header" href="#http-server-13">HTTP server</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen2vl.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
@@ -7102,181 +7410,7 @@ In conclusion, camellias are beautiful flowers that add color and interest to ga
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 -m Qwen/Qwen2-VL-2B-Instruct
-</code></pre>
-<ol start="2">
-<li>Send a request</li>
-</ol>
-<pre><code class="language-py">from openai import OpenAI
-
-client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
-
-completion = client.chat.completions.create(
-    model="default",
-    messages=[
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": "https://www.garden-treasures.com/cdn/shop/products/IMG_6245.jpg"
-                    },
-                },
-                {
-                    "type": "text",
-                    "text": "What type of flower is this? Give some fun facts.",
-                },
-            ],
-        },
-    ],
-    max_tokens=256,
-    frequency_penalty=1.0,
-    top_p=0.1,
-    temperature=0,
-)
-resp = completion.choices[0].message.content
-print(resp)
-
-</code></pre>
-<ul>
-<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">image via base64 here</a>.</li>
-<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
-</ul>
-<hr>
-<h2 id="rust-11"><a class="header" href="#rust-11">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
-<pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
-
-const MODEL_ID: &amp;str = "Qwen/Qwen2-VL-2B-Instruct";
-
-#[tokio::main]
-async fn main() -&gt; Result&lt;()&gt; {
-    let model =
-        VisionModelBuilder::new(MODEL_ID)
-            .with_isq(IsqType::Q4K)
-            .with_logging()
-            .build()
-            .await?;
-
-    let bytes = match reqwest::blocking::get(
-        "https://www.garden-treasures.com/cdn/shop/products/IMG_6245.jpg",
-    ) {
-        Ok(http_resp) =&gt; http_resp.bytes()?.to_vec(),
-        Err(e) =&gt; anyhow::bail!(e),
-    };
-    let image = image::load_from_memory(&amp;bytes)?;
-
-    let messages = VisionMessages::new().add_image_message(
-        TextMessageRole::User,
-        "What type of flower is this? Give some fun facts.",
-        vec![image],
-    );
-
-    let response = model.send_chat_request(messages).await?;
-
-    println!("{}", response.choices[0].message.content.as_ref().unwrap());
-    dbg!(
-        response.usage.avg_prompt_tok_per_sec,
-        response.usage.avg_compl_tok_per_sec
-    );
-
-    Ok(())
-}</code></pre>
-<hr>
-<h2 id="python-11"><a class="header" href="#python-11">Python</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen2vl.py">here</a>.</p>
-<p>This example demonstrates loading and sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
-
-MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
-
-runner = Runner(
-    which=Which.VisionPlain(
-        model_id=MODEL_ID,
-        arch=VisionArchitecture.Qwen2VL,
-    ),
-)
-
-res = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="default",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://www.garden-treasures.com/cdn/shop/products/IMG_6245.jpg"
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": "What type of flower is this? Give some fun facts.",
-                    },
-                ],
-            }
-        ],
-        max_tokens=256,
-        presence_penalty=1.0,
-        top_p=0.1,
-        temperature=0.1,
-    )
-)
-print(res.choices[0].message.content)
-print(res.usage)
-</code></pre>
-<ul>
-<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
-<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
-</ul>
-<div style="break-before: page; page-break-before: always;"></div>
-<h1 id="qwen-3-vision-model-qwen3-vl-collection"><a class="header" href="#qwen-3-vision-model-qwen3-vl-collection">Qwen 3 Vision Model: <a href="https://huggingface.co/collections/Qwen/qwen3-vl"><code>Qwen3 VL Collection</code></a></a></h1>
-<p>The Qwen 3 VL models are the successors to the Qwen 2.5 VL models, featuring a diverse lineup of increased performance, flexible sizes, and reasoning-capable models.</p>
-<p>Mistral.rs supports the Qwen 3 VL vision model family (including MoE variants), with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements. MoE variants also support <a href="#in-situ-quantization-isq">MoQE</a> via the <code>--organization moqe</code> flag.</p>
-<p>UQFF quantizations are also available.</p>
-<p>The Python and HTTP APIs support sending images as:</p>
-<ul>
-<li>URL</li>
-<li>Path to a local image</li>
-<li><a href="https://en.wikipedia.org/wiki/Base64">Base64</a> encoded string</li>
-</ul>
-<p>The Rust SDK takes an image from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
-<blockquote>
-<p>Note: When using device mapping or model topology, only the text model and its layers will be managed. This is because it contains most of the model parameters.</p>
-</blockquote>
-<h2 id="toc-4"><a class="header" href="#toc-4">ToC</a></h2>
-<ul>
-<li><a href="#qwen-3-vision-model-qwen3-vl-collection">Qwen 3 Vision Model: <code>Qwen3 VL Collection</code></a>
-<ul>
-<li><a href="#toc-4">ToC</a></li>
-<li><a href="#interactive-mode-4">Interactive mode</a></li>
-<li><a href="#http-server-13">HTTP server</a></li>
-<li><a href="#rust-12">Rust</a></li>
-<li><a href="#python-12">Python</a></li>
-</ul>
-</li>
-</ul>
-<h2 id="interactive-mode-4"><a class="header" href="#interactive-mode-4">Interactive mode</a></h2>
-<p>Mistral.rs supports interactive mode for vision models! It is an easy way to interact with the model.</p>
-<p>Start up interactive mode with the Qwen3 VL model:</p>
-<pre><code>mistralrs run vision -m Qwen/Qwen3-VL-4B-Instruct
-</code></pre>
-<h2 id="http-server-13"><a class="header" href="#http-server-13">HTTP server</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_vl.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
-<blockquote>
-<p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
-</blockquote>
-<ol>
-<li>Start the server</li>
-</ol>
-<pre><code>mistralrs serve vision -p 1234 -m Qwen/Qwen3-VL-4B-Instruct
+<pre><code>mistralrs serve multimodal -p 1234 -m Qwen/Qwen2-VL-2B-Instruct
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -7319,29 +7453,32 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust-12"><a class="header" href="#rust-12">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+
+const MODEL_ID: &amp;str = "Qwen/Qwen2-VL-2B-Instruct";
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
-    let model = VisionModelBuilder::new("Qwen/Qwen3-VL-4B-Instruct")
-        .with_isq(IsqType::Q4K)
-        .with_logging()
-        .build()
-        .await?;
+    let model =
+        MultimodalModelBuilder::new(MODEL_ID)
+            .with_isq(IsqType::Q4K)
+            .with_logging()
+            .build()
+            .await?;
 
     let bytes = match reqwest::blocking::get(
-        "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg",
+        "https://www.garden-treasures.com/cdn/shop/products/IMG_6245.jpg",
     ) {
         Ok(http_resp) =&gt; http_resp.bytes()?.to_vec(),
         Err(e) =&gt; anyhow::bail!(e),
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
-        "What is this?",
+        "What type of flower is this? Give some fun facts.",
         vec![image],
     );
 
@@ -7357,19 +7494,19 @@ async fn main() -&gt; Result&lt;()&gt; {
 }</code></pre>
 <hr>
 <h2 id="python-12"><a class="header" href="#python-12">Python</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_vl.py">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen2vl.py">here</a>.</p>
 <p>This example demonstrates loading and sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
-MODEL_ID = "Qwen/Qwen3-VL-4B-Thinking"
+MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id=MODEL_ID,
-        arch=VisionArchitecture.Qwen3VL,
+        arch=MultimodalArchitecture.Qwen2VL,
     ),
 )
 
@@ -7407,13 +7544,9 @@ print(res.usage)
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="qwen-35-vision-models"><a class="header" href="#qwen-35-vision-models">Qwen 3.5 Vision Models</a></h1>
-<p>The Qwen 3.5 models are vision-language models using a hybrid Gated Delta Network (GDN) + full attention architecture. Both dense and MoE (Mixture of Experts) variants are supported:</p>
-<ul>
-<li><strong>Dense</strong>: <code>Qwen/Qwen3.5-27B</code></li>
-<li><strong>MoE</strong>: <code>Qwen/Qwen3.5-35B-A3B</code>, <code>Qwen/Qwen3.5-397B-A17B</code></li>
-</ul>
-<p>Mistral.rs supports the Qwen 3.5 vision model family with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements. MoE variants also support <a href="#in-situ-quantization-isq">MoQE</a> via the <code>--organization moqe</code> flag.</p>
+<h1 id="qwen-3-vision-model-qwen3-vl-collection"><a class="header" href="#qwen-3-vision-model-qwen3-vl-collection">Qwen 3 Vision Model: <a href="https://huggingface.co/collections/Qwen/qwen3-vl"><code>Qwen3 VL Collection</code></a></a></h1>
+<p>The Qwen 3 VL models are the successors to the Qwen 2.5 VL models, featuring a diverse lineup of increased performance, flexible sizes, and reasoning-capable models.</p>
+<p>Mistral.rs supports the Qwen 3 VL multimodal model family (including MoE variants), with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements. MoE variants also support <a href="#in-situ-quantization-isq">MoQE</a> via the <code>--organization moqe</code> flag.</p>
 <p>UQFF quantizations are also available.</p>
 <p>The Python and HTTP APIs support sending images as:</p>
 <ul>
@@ -7425,36 +7558,33 @@ print(res.usage)
 <blockquote>
 <p>Note: When using device mapping or model topology, only the text model and its layers will be managed. This is because it contains most of the model parameters.</p>
 </blockquote>
-<h2 id="toc-5"><a class="header" href="#toc-5">ToC</a></h2>
+<h2 id="toc-4"><a class="header" href="#toc-4">ToC</a></h2>
 <ul>
-<li><a href="#qwen-35-vision-models">Qwen 3.5 Vision Models</a>
+<li><a href="#qwen-3-vision-model-qwen3-vl-collection">Qwen 3 Vision Model: <code>Qwen3 VL Collection</code></a>
 <ul>
-<li><a href="#toc-5">ToC</a></li>
-<li><a href="#interactive-mode-5">Interactive mode</a></li>
+<li><a href="#toc-4">ToC</a></li>
+<li><a href="#interactive-mode-4">Interactive mode</a></li>
 <li><a href="#http-server-14">HTTP server</a></li>
 <li><a href="#rust-13">Rust</a></li>
 <li><a href="#python-13">Python</a></li>
 </ul>
 </li>
 </ul>
-<h2 id="interactive-mode-5"><a class="header" href="#interactive-mode-5">Interactive mode</a></h2>
-<p>Mistral.rs supports interactive mode for vision models! It is an easy way to interact with the model.</p>
-<p>Start up interactive mode with the Qwen 3.5 model (dense):</p>
-<pre><code>mistralrs run vision -m Qwen/Qwen3.5-27B
-</code></pre>
-<p>Or with the MoE variant:</p>
-<pre><code>mistralrs run vision -m Qwen/Qwen3.5-35B-A3B
+<h2 id="interactive-mode-4"><a class="header" href="#interactive-mode-4">Interactive mode</a></h2>
+<p>Mistral.rs supports interactive mode for multimodal models! It is an easy way to interact with the model.</p>
+<p>Start up interactive mode with the Qwen3 VL model:</p>
+<pre><code>mistralrs run multimodal -m Qwen/Qwen3-VL-4B-Instruct
 </code></pre>
 <h2 id="http-server-14"><a class="header" href="#http-server-14">HTTP server</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_5.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_vl.py">here</a>.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 -m Qwen/Qwen3.5-27B
+<pre><code>mistralrs serve multimodal -p 1234 -m Qwen/Qwen3-VL-4B-Instruct
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -7497,13 +7627,13 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust-13"><a class="header" href="#rust-13">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
-    let model = VisionModelBuilder::new("Qwen/Qwen3.5-27B")
+    let model = MultimodalModelBuilder::new("Qwen/Qwen3-VL-4B-Instruct")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()
@@ -7517,7 +7647,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is this?",
         vec![image],
@@ -7535,29 +7665,207 @@ async fn main() -&gt; Result&lt;()&gt; {
 }</code></pre>
 <hr>
 <h2 id="python-13"><a class="header" href="#python-13">Python</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_vl.py">here</a>.</p>
+<p>This example demonstrates loading and sending a chat completion request with an image.</p>
+<blockquote>
+<p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
+</blockquote>
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+
+MODEL_ID = "Qwen/Qwen3-VL-4B-Thinking"
+
+runner = Runner(
+    which=Which.MultimodalPlain(
+        model_id=MODEL_ID,
+        arch=MultimodalArchitecture.Qwen3VL,
+    ),
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://www.garden-treasures.com/cdn/shop/products/IMG_6245.jpg"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "What type of flower is this? Give some fun facts.",
+                    },
+                ],
+            }
+        ],
+        max_tokens=256,
+        presence_penalty=1.0,
+        top_p=0.1,
+        temperature=0.1,
+    )
+)
+print(res.choices[0].message.content)
+print(res.usage)
+</code></pre>
+<ul>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="qwen-35-multimodal-models"><a class="header" href="#qwen-35-multimodal-models">Qwen 3.5 Multimodal Models</a></h1>
+<p>The Qwen 3.5 models are vision-language models using a hybrid Gated Delta Network (GDN) + full attention architecture. Both dense and MoE (Mixture of Experts) variants are supported:</p>
+<ul>
+<li><strong>Dense</strong>: <code>Qwen/Qwen3.5-27B</code></li>
+<li><strong>MoE</strong>: <code>Qwen/Qwen3.5-35B-A3B</code>, <code>Qwen/Qwen3.5-397B-A17B</code></li>
+</ul>
+<p>Mistral.rs supports the Qwen 3.5 multimodal model family with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements. MoE variants also support <a href="#in-situ-quantization-isq">MoQE</a> via the <code>--organization moqe</code> flag.</p>
+<p>UQFF quantizations are also available.</p>
+<p>The Python and HTTP APIs support sending images as:</p>
+<ul>
+<li>URL</li>
+<li>Path to a local image</li>
+<li><a href="https://en.wikipedia.org/wiki/Base64">Base64</a> encoded string</li>
+</ul>
+<p>The Rust SDK takes an image from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
+<blockquote>
+<p>Note: When using device mapping or model topology, only the text model and its layers will be managed. This is because it contains most of the model parameters.</p>
+</blockquote>
+<h2 id="toc-5"><a class="header" href="#toc-5">ToC</a></h2>
+<ul>
+<li><a href="#qwen-35-multimodal-models">Qwen 3.5 Multimodal Models</a>
+<ul>
+<li><a href="#toc-5">ToC</a></li>
+<li><a href="#interactive-mode-5">Interactive mode</a></li>
+<li><a href="#http-server-15">HTTP server</a></li>
+<li><a href="#rust-14">Rust</a></li>
+<li><a href="#python-14">Python</a></li>
+</ul>
+</li>
+</ul>
+<h2 id="interactive-mode-5"><a class="header" href="#interactive-mode-5">Interactive mode</a></h2>
+<p>Mistral.rs supports interactive mode for multimodal models! It is an easy way to interact with the model.</p>
+<p>Start up interactive mode with the Qwen 3.5 model (dense):</p>
+<pre><code>mistralrs run multimodal -m Qwen/Qwen3.5-27B
+</code></pre>
+<p>Or with the MoE variant:</p>
+<pre><code>mistralrs run multimodal -m Qwen/Qwen3.5-35B-A3B
+</code></pre>
+<h2 id="http-server-15"><a class="header" href="#http-server-15">HTTP server</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/qwen3_5.py">here</a>.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
+<blockquote>
+<p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
+</blockquote>
+<ol>
+<li>Start the server</li>
+</ol>
+<pre><code>mistralrs serve multimodal -p 1234 -m Qwen/Qwen3.5-27B
+</code></pre>
+<ol start="2">
+<li>Send a request</li>
+</ol>
+<pre><code class="language-py">from openai import OpenAI
+
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
+
+completion = client.chat.completions.create(
+    model="default",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://www.garden-treasures.com/cdn/shop/products/IMG_6245.jpg"
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "What type of flower is this? Give some fun facts.",
+                },
+            ],
+        },
+    ],
+    max_tokens=256,
+    frequency_penalty=1.0,
+    top_p=0.1,
+    temperature=0,
+)
+resp = completion.choices[0].message.content
+print(resp)
+
+</code></pre>
+<ul>
+<li>You can find an example of encoding the <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py">image via base64 here</a>.</li>
+<li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py">image locally here</a>.</li>
+</ul>
+<hr>
+<h2 id="rust-14"><a class="header" href="#rust-14">Rust</a></h2>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
+<pre class="playground"><code class="language-rust">use anyhow::Result;
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
+
+#[tokio::main]
+async fn main() -&gt; Result&lt;()&gt; {
+    let model = MultimodalModelBuilder::new("Qwen/Qwen3.5-27B")
+        .with_isq(IsqType::Q4K)
+        .with_logging()
+        .build()
+        .await?;
+
+    let bytes = match reqwest::blocking::get(
+        "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg",
+    ) {
+        Ok(http_resp) =&gt; http_resp.bytes()?.to_vec(),
+        Err(e) =&gt; anyhow::bail!(e),
+    };
+    let image = image::load_from_memory(&amp;bytes)?;
+
+    let messages = MultimodalMessages::new().add_image_message(
+        TextMessageRole::User,
+        "What is this?",
+        vec![image],
+    );
+
+    let response = model.send_chat_request(messages).await?;
+
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    dbg!(
+        response.usage.avg_prompt_tok_per_sec,
+        response.usage.avg_compl_tok_per_sec
+    );
+
+    Ok(())
+}</code></pre>
+<hr>
+<h2 id="python-14"><a class="header" href="#python-14">Python</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/qwen3_5.py">here</a>.</p>
 <p>This example demonstrates loading and sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 # Dense variant
 MODEL_ID = "Qwen/Qwen3.5-27B"
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id=MODEL_ID,
-        arch=VisionArchitecture.Qwen3_5,
+        arch=MultimodalArchitecture.Qwen3_5,
     ),
 )
 
 # For MoE variant, use:
 # MODEL_ID = "Qwen/Qwen3.5-35B-A3B"
 # runner = Runner(
-#     which=Which.VisionPlain(
+#     which=Which.MultimodalPlain(
 #         model_id=MODEL_ID,
-#         arch=VisionArchitecture.Qwen3_5Moe,
+#         arch=MultimodalArchitecture.Qwen3_5Moe,
 #     ),
 # )
 
@@ -7595,6 +7903,94 @@ print(res.usage)
 <li>You can find an example of loading an <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py">image locally here</a>.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="video-input-support"><a class="header" href="#video-input-support">Video Input Support</a></h1>
+<p>mistral.rs supports video input for compatible multimodal models. Videos are decoded into frames and passed through the model’s vision encoder alongside any image or audio inputs.</p>
+<p><strong>Supported models:</strong> Gemma 4</p>
+<h2 id="ffmpeg-requirement"><a class="header" href="#ffmpeg-requirement">FFmpeg requirement</a></h2>
+<p>Non-GIF video formats require the <a href="https://ffmpeg.org/">FFmpeg</a> binary to be available on your <code>PATH</code>. FFmpeg is used to decode video files into individual frames for processing.</p>
+<p>GIF files are decoded natively using the <code>image</code> crate and do not require FFmpeg.</p>
+<h3 id="installation-1"><a class="header" href="#installation-1">Installation</a></h3>
+<p><strong>Linux (Debian/Ubuntu):</strong></p>
+<pre><code class="language-bash">sudo apt install ffmpeg
+</code></pre>
+<p><strong>Linux (Fedora/RHEL):</strong></p>
+<pre><code class="language-bash">sudo dnf install ffmpeg
+</code></pre>
+<p><strong>macOS:</strong></p>
+<pre><code class="language-bash">brew install ffmpeg
+</code></pre>
+<p><strong>Windows:</strong></p>
+<p>Download from <a href="https://ffmpeg.org/download.html">https://ffmpeg.org/download.html</a> and add the binary to your <code>PATH</code>.</p>
+<p><strong>Docker:</strong></p>
+<pre><code class="language-dockerfile">RUN apt-get update &amp;&amp; apt-get install -y ffmpeg
+</code></pre>
+<h2 id="frame-sampling"><a class="header" href="#frame-sampling">Frame sampling</a></h2>
+<p>Videos are uniformly sampled to 32 frames by default. The sampled frames are evenly spaced across the full duration of the video, preserving temporal coverage regardless of the original frame rate or video length.</p>
+<h2 id="supported-formats"><a class="header" href="#supported-formats">Supported formats</a></h2>
+<p>Any format that FFmpeg can decode is supported, including:</p>
+<ul>
+<li>mp4</li>
+<li>avi</li>
+<li>mov</li>
+<li>mkv</li>
+<li>webm</li>
+<li>m4v</li>
+<li>gif (decoded natively without FFmpeg)</li>
+</ul>
+<h2 id="api-format"><a class="header" href="#api-format">API format</a></h2>
+<p>Video inputs use the <code>video_url</code> content type in the OpenAI-compatible chat completion API:</p>
+<pre><code class="language-json">{
+    "type": "video_url",
+    "video_url": {
+        "url": "path/to/video.mp4"
+    }
+}
+</code></pre>
+<p>The <code>url</code> field accepts either a local file path or a URL.</p>
+<h2 id="cli-example"><a class="header" href="#cli-example">CLI example</a></h2>
+<p>Use <code>--video</code> with <code>-i</code> for one-shot video queries from the command line:</p>
+<pre><code class="language-bash"># Describe a local video
+mistralrs run -m google/gemma-4-E4B-it --video clip.mp4 -i "What happens in this video?"
+
+# Use a URL
+mistralrs run -m google/gemma-4-E4B-it --video https://example.com/video.mp4 -i "Summarize this video"
+
+# Multiple videos
+mistralrs run -m google/gemma-4-E4B-it --video clip1.mp4 --video clip2.mp4 -i "Compare these two videos"
+</code></pre>
+<p>Or use video files directly in interactive mode by including the path in your prompt:</p>
+<pre><code>&gt; What happens in this video? clip.mp4
+</code></pre>
+<h2 id="http-api-example"><a class="header" href="#http-api-example">HTTP API example</a></h2>
+<pre><code class="language-py">from openai import OpenAI
+
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
+
+completion = client.chat.completions.create(
+    model="default",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video_url",
+                    "video_url": {
+                        "url": "path/to/video.mp4"
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "What happens in this video?",
+                },
+            ],
+        }
+    ],
+    max_tokens=256,
+)
+print(completion.choices[0].message.content)
+</code></pre>
+<p>See <a href="#gemma-4-model-family-collection">GEMMA4.md</a> for full examples across all APIs.</p>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="flux1-model-black-forest-labsflux1-schnell"><a class="header" href="#flux1-model-black-forest-labsflux1-schnell">FLUX.1 Model: <a href="https://huggingface.co/black-forest-labs/FLUX.1-schnell"><code>black-forest-labs/FLUX.1-schnell</code></a></a></h1>
 <p>The FLUX model is a 12 billion parameter rectified flow transformer capable of generating images from text descriptions.</p>
 <p>We support both the <code>-schnell</code> and <code>-dev</code> versions of the model.</p>
@@ -7612,7 +8008,7 @@ print(res.usage)
 </tbody>
 </table>
 </div>
-<h2 id="http-server-15"><a class="header" href="#http-server-15">HTTP server</a></h2>
+<h2 id="http-server-16"><a class="header" href="#http-server-16">HTTP server</a></h2>
 <p>The OpenAI HTTP server provides a compatible way to easily use this implementation. As per the specification, output images can be returned as local paths to images or be encoded to base64.</p>
 <pre><code>mistralrs serve diffusion -p 1234 -m black-forest-labs/FLUX.1-schnell -a flux
 </code></pre>
@@ -7692,12 +8088,12 @@ print(res.choices[0].url)
 <blockquote>
 <p>Note: Voxtral uses Mistral’s native format (<code>params.json</code>, <code>consolidated.safetensors</code>, <code>tekken.json</code>), which mistral.rs handles automatically.</p>
 </blockquote>
-<h2 id="http-server-16"><a class="header" href="#http-server-16">HTTP server</a></h2>
+<h2 id="http-server-17"><a class="header" href="#http-server-17">HTTP server</a></h2>
 <p>We support an OpenAI compatible HTTP API for audio models.</p>
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -m mistralai/Voxtral-Mini-4B-Realtime-2602
+<pre><code>mistralrs serve multimodal -m mistralai/Voxtral-Mini-4B-Realtime-2602
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -7736,14 +8132,14 @@ completion = client.chat.completions.create(
 resp = completion.choices[0].message.content
 print(resp)
 </code></pre>
-<h2 id="rust-14"><a class="header" href="#rust-14">Rust</a></h2>
+<h2 id="rust-15"><a class="header" href="#rust-15">Rust</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/asr/main.rs">here</a>.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{AudioInput, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{AudioInput, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
-    let model = VisionModelBuilder::new("mistralai/Voxtral-Mini-4B-Realtime-2602")
+    let model = MultimodalModelBuilder::new("mistralai/Voxtral-Mini-4B-Realtime-2602")
         .with_logging()
         .build()
         .await?;
@@ -7751,11 +8147,12 @@ async fn main() -&gt; Result&lt;()&gt; {
     let audio_bytes = std::fs::read("sample_audio.wav")?;
     let audio = AudioInput::from_bytes(&amp;audio_bytes)?;
 
-    let messages = VisionMessages::new().add_multimodal_message(
+    let messages = MultimodalMessages::new().add_multimodal_message(
         TextMessageRole::User,
         "Transcribe this audio.",
         vec![],
         vec![audio],
+        vec![],
     );
 
     let response = model.send_chat_request(messages).await?;
@@ -7768,13 +8165,13 @@ async fn main() -&gt; Result&lt;()&gt; {
 
     Ok(())
 }</code></pre>
-<h2 id="python-14"><a class="header" href="#python-14">Python</a></h2>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<h2 id="python-15"><a class="header" href="#python-15">Python</a></h2>
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="mistralai/Voxtral-Mini-4B-Realtime-2602",
-        arch=VisionArchitecture.Voxtral,
+        arch=MultimodalArchitecture.Voxtral,
     ),
 )
 
@@ -7816,7 +8213,7 @@ print(res.usage)
 <blockquote>
 <p>Note: voice cloning support is coming!</p>
 </blockquote>
-<h2 id="http-server-17"><a class="header" href="#http-server-17">HTTP server</a></h2>
+<h2 id="http-server-18"><a class="header" href="#http-server-18">HTTP server</a></h2>
 <p>The OpenAI HTTP server provides a drop-in compatible way to easily use Dia locally!</p>
 <blockquote>
 <p>Note: we only support <code>pcm</code> and <code>wav</code> outputs.</p>
@@ -7830,7 +8227,7 @@ from openai import OpenAI
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 # text_to_speak = "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face."
-text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and vision models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python SDK. [S2] Check it out on github."
+text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and multimodal models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python SDK. [S2] Check it out on github."
 
 response = client.audio.speech.create(
     model="default", voice="N/A", input=text_to_speak, response_format="wav"
@@ -7856,7 +8253,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     let start = Instant::now();
 
     // let text_to_speak = "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face.";
-    let text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and vision models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python SDK. [S2] Check it out on github.";
+    let text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and multimodal models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python SDK. [S2] Check it out on github.";
 
     let (pcm, rate, channels) = model.generate_speech(text_to_speak).await?;
 
@@ -7882,7 +8279,7 @@ from pathlib import Path
 import wave, struct
 
 # text_to_speak = "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face."
-text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and vision models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python SDK. [S2] Check it out on github."
+text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and multimodal models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python SDK. [S2] Check it out on github."
 
 runner = Runner(
     which=Which.Speech(
@@ -7935,7 +8332,7 @@ model via the OpenAI-compatible HTTP server, running it from Python, and embeddi
 </tbody>
 </table>
 </div>
-<h2 id="http-server-18"><a class="header" href="#http-server-18">HTTP server</a></h2>
+<h2 id="http-server-19"><a class="header" href="#http-server-19">HTTP server</a></h2>
 <p>Launch the server in embedding mode to expose an OpenAI-compatible <code>/v1/embeddings</code> endpoint:</p>
 <pre><code class="language-bash">mistralrs serve -p 1234 -m google/embeddinggemma-300m
 </code></pre>
@@ -8009,7 +8406,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 <h1 id="qwen3-embedding"><a class="header" href="#qwen3-embedding">Qwen3 Embedding</a></h1>
 <p>The Qwen3 Embedding model series is the latest proprietary model of the Qwen family, specifically designed for text embedding and ranking tasks.</p>
 <p>For a catalog of all embedding backends, see <a href="#embeddings-overview">EMBEDDINGS.md</a>.</p>
-<h2 id="http-server-19"><a class="header" href="#http-server-19">HTTP server</a></h2>
+<h2 id="http-server-20"><a class="header" href="#http-server-20">HTTP server</a></h2>
 <p>Serve the model with the OpenAI-compatible endpoint enabled:</p>
 <pre><code class="language-bash">mistralrs serve -p 1234 -m Qwen/Qwen3-Embedding-0.6B
 </code></pre>
@@ -8084,7 +8481,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 <ul>
 <li>⭐ ISQ (<a href="#in-situ-quantization-isq">read more detail</a>)
 <ul>
-<li>Supported in all plain/vision and adapter models</li>
+<li>Supported in all plain/multimodal and adapter models</li>
 <li>Works on all supported devices</li>
 <li>Automatic selection to use the fastest and most accurate method</li>
 <li>Supports:
@@ -8103,7 +8500,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 <ul>
 <li>Q, K type</li>
 <li>Supported in GGUF/GGML and GGUF/GGML adapter models</li>
-<li>Supported in all plain/vision and adapter models</li>
+<li>Supported in all plain/multimodal and adapter models</li>
 <li>Imatrix quantization is supported</li>
 <li>I quants coming!</li>
 <li>CPU, CUDA, Metal (all supported devices)</li>
@@ -8112,7 +8509,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 </li>
 <li>GPTQ (convert with <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/convert_to_gptq.py">this script</a>)
 <ul>
-<li>Supported in all plain/vision and adapter models</li>
+<li>Supported in all plain/multimodal and adapter models</li>
 <li>CUDA only</li>
 <li>2, 3, 4, 8 bit</li>
 <li><a href="https://github.com/IST-DASLab/marlin">Marlin</a> kernel support in 4-bit and 8-bit.</li>
@@ -8120,7 +8517,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 </li>
 <li>AWQ (convert with <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/convert_awq_marlin.py">this script</a>)
 <ul>
-<li>Supported in all plain/vision and adapter models</li>
+<li>Supported in all plain/multimodal and adapter models</li>
 <li>CUDA only</li>
 <li>4 and 8 bit</li>
 <li><a href="https://github.com/IST-DASLab/marlin">Marlin</a> kernel support in 4-bit and 8-bit.</li>
@@ -8128,20 +8525,20 @@ async fn main() -&gt; Result&lt;()&gt; {
 </li>
 <li>HQQ
 <ul>
-<li>Supported in all plain/vision and adapter models via ISQ</li>
+<li>Supported in all plain/multimodal and adapter models via ISQ</li>
 <li>4, 8 bit</li>
 <li>CPU, CUDA, Metal (all supported devices)</li>
 </ul>
 </li>
 <li>FP8
 <ul>
-<li>Supported in all plain/vision and adapter models</li>
+<li>Supported in all plain/multimodal and adapter models</li>
 <li>CPU, CUDA, Metal (all supported devices)</li>
 </ul>
 </li>
 <li>BNB
 <ul>
-<li>Supported in all plain/vision and adapter models</li>
+<li>Supported in all plain/multimodal and adapter models</li>
 <li>bitsandbytes int8, fp4, nf4 support</li>
 </ul>
 </li>
@@ -8154,7 +8551,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 </li>
 <li>MLX prequantized
 <ul>
-<li>Supported in all plain/vision and adapter models</li>
+<li>Supported in all plain/multimodal and adapter models</li>
 </ul>
 </li>
 </ul>
@@ -8172,7 +8569,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 <h2 id="using-a-gptq-quantized-model"><a class="header" href="#using-a-gptq-quantized-model">Using a GPTQ quantized model</a></h2>
 <ul>
 <li>Provide the model ID for the GPTQ model</li>
-<li>Mistral.rs will automatically detect and use GPTQ quantization for plain and vision models!</li>
+<li>Mistral.rs will automatically detect and use GPTQ quantization for plain and multimodal models!</li>
 <li>The <a href="https://github.com/IST-DASLab/marlin">Marlin</a> kernel will automatically be used for 4-bit and 8-bit.</li>
 </ul>
 <pre><code>mistralrs run -m kaitchup/Phi-3-mini-4k-instruct-gptq-4bit
@@ -8185,7 +8582,7 @@ python3 scripts/convert_to_gptq.py --src path/to/model --dst output/model/path -
 <h2 id="using-a-mlx-prequantized-model-on-metal"><a class="header" href="#using-a-mlx-prequantized-model-on-metal">Using a MLX prequantized model (on Metal)</a></h2>
 <ul>
 <li>Provide the model ID for the MLX prequantized model</li>
-<li>Mistral.rs will automatically detect and use quantization for plain and vision models!</li>
+<li>Mistral.rs will automatically detect and use quantization for plain and multimodal models!</li>
 <li>Specialized kernels will be used to accelerate inference!</li>
 </ul>
 <pre><code>mistralrs run -m mlx-community/Llama-3.8-1B-8bit
@@ -8402,7 +8799,7 @@ mistralrs run -m EricB/MyModel-UQFF --from-uqff q4k-0.uqff
 <p>Check out the following examples:</p>
 <ul>
 <li>Normal: <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/uqff/main.rs">uqff/main.rs</a></li>
-<li>Vision: <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/uqff_vision/main.rs">uqff_vision/main.rs</a></li>
+<li>Multimodal: <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/quantization/uqff_multimodal/main.rs">uqff_multimodal/main.rs</a></li>
 </ul>
 <h3 id="using-the-python-sdk"><a class="header" href="#using-the-python-sdk">Using the Python SDK</a></h3>
 <p>Modify the <code>Which</code> instantiation as follows:</p>
@@ -8710,7 +9107,7 @@ mistralrs quantize -m microsoft/Phi-3.5-mini-instruct --isq q4k --isq q8_0 -o ph
   device: cuda[0]
 </code></pre>
 <p>Model topologies may be applied to all model types.</p>
-<h2 id="cli-example"><a class="header" href="#cli-example">CLI example</a></h2>
+<h2 id="cli-example-1"><a class="header" href="#cli-example-1">CLI example</a></h2>
 <pre><code>mistralrs run -m microsoft/Phi-3-mini-128k-instruct --topology topologies/isq.yml
 </code></pre>
 <h2 id="http-server-example"><a class="header" href="#http-server-example">HTTP server example</a></h2>
@@ -8889,7 +9286,7 @@ The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X
 <p>This can be enabled by passing <code>--tgt-non-granular-index</code> followed by $k$:</p>
 <pre><code class="language-bash">mistralrs serve -p 1234 --xlora lamm-mit/x-lora --xlora-order orderings/xlora-paper-ordering.json --tgt-non-granular-index 5
 </code></pre>
-<h3 id="python-15"><a class="header" href="#python-15">Python</a></h3>
+<h3 id="python-16"><a class="header" href="#python-16">Python</a></h3>
 <p>Set the <code>tgt_non_granular_index</code> attribute to a non-<code>None</code> value in the <code>Which</code> selection:</p>
 <pre><code class="language-py">from mistralrs import Runner, Which
 
@@ -8914,7 +9311,7 @@ runner = Runner(
 <li>Apply AnyMoE to any supported model
 <ul>
 <li><code>plain</code></li>
-<li><code>vision-plain</code></li>
+<li><code>multimodal-plain</code></li>
 </ul>
 </li>
 <li>Specify the layers to apply AnyMoE to for efficient training</li>
@@ -8940,7 +9337,7 @@ runner = Runner(
 }
   
 </code></pre>
-<p>For a vision model, <code>image_urls</code> may contain an array of image URLs/local paths or Base64 encoded images.</p>
+<p>For a multimodal model, <code>image_urls</code> may contain an array of image URLs/local paths or Base64 encoded images.</p>
 <h2 id="experts"><a class="header" href="#experts">Experts</a></h2>
 <p>AnyMoE experts can be either fine-tuned models or LoRA adapter models. Only the mlp layers will be loaded from each. The experts must be homogeneous: they must be all fine-tuned or all adapter. Additionally, certain layers can be specified to apply AnyMoE.</p>
 <blockquote>
@@ -8982,7 +9379,7 @@ rank = 16
 alpha = 16
 target_modules = ["gate_proj"]
 </code></pre>
-<h2 id="examples-1"><a class="header" href="#examples-1">Examples</a></h2>
+<h2 id="examples-2"><a class="header" href="#examples-2">Examples</a></h2>
 <h2 id="cli"><a class="header" href="#cli">CLI</a></h2>
 <p>CLI usage is via the <a href="#anymoe">TOML selector</a> where you can also find docs on the required fields.</p>
 <p>For example, to use the demo fine-tuned expert:</p>
@@ -9105,25 +9502,25 @@ mistralrs run -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 </code></pre>
-<h3 id="python-16"><a class="header" href="#python-16">Python</a></h3>
-<pre><code class="language-python">from mistralrs import Runner, Which, VisionArchitecture
+<h3 id="python-17"><a class="header" href="#python-17">Python</a></h3>
+<pre><code class="language-python">from mistralrs import Runner, Which, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="google/gemma-3n-E4B-it",
-        arch=VisionArchitecture.Gemma3n,
+        arch=MultimodalArchitecture.Gemma3n,
         matformer_config_path="matformer_configs/gemma3n.csv",
         matformer_slice_name="Config for E2.49B (block-level)",
     ),
 )
 </code></pre>
-<h3 id="rust-15"><a class="header" href="#rust-15">Rust</a></h3>
+<h3 id="rust-16"><a class="header" href="#rust-16">Rust</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use mistralrs::VisionModelBuilder;
+</span>use mistralrs::MultimodalModelBuilder;
 use std::path::PathBuf;
 
-let model = VisionModelBuilder::new("google/gemma-3n-E4B-it")
+let model = MultimodalModelBuilder::new("google/gemma-3n-E4B-it")
     .with_matformer_config_path(PathBuf::from("matformer_configs/gemma3n.csv"))
     .with_matformer_slice_name("Config for E2.49B (block-level)".to_string())
     .build()
@@ -9197,9 +9594,9 @@ Config for E2.49B (block-level),35,2.49,54.50%,"[8192, 8192, ..., 16384, 16384, 
 <h3 id="with-quantization"><a class="header" href="#with-quantization">With Quantization</a></h3>
 <p>Combine Matformer with ISQ for maximum efficiency:</p>
 <pre><code class="language-python">runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="google/gemma-3n-E4B-it",
-        arch=VisionArchitecture.Gemma3n,
+        arch=MultimodalArchitecture.Gemma3n,
         matformer_config_path="matformer_configs/gemma3n.csv",
         matformer_slice_name="Config for E2.49B (block-level)",
     ),
@@ -9210,13 +9607,13 @@ Config for E2.49B (block-level),35,2.49,54.50%,"[8192, 8192, ..., 16384, 16384, 
 <p>Matformer works seamlessly with automatic device mapping:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use mistralrs::{VisionModelBuilder, DeviceMapSetting, AutoDeviceMapParams};
+</span>use mistralrs::{MultimodalModelBuilder, DeviceMapSetting, AutoDeviceMapParams};
 
-let model = VisionModelBuilder::new("google/gemma-3n-E4B-it")
+let model = MultimodalModelBuilder::new("google/gemma-3n-E4B-it")
     .with_matformer_config_path(PathBuf::from("matformer_configs/gemma3n.csv"))
     .with_matformer_slice_name("Config for E2.49B (block-level)".to_string())
     .with_device_mapping(DeviceMapSetting::Auto(
-        AutoDeviceMapParams::default_vision()
+        AutoDeviceMapParams::default_multimodal()
     ))
     .build()
     .await?;
@@ -9247,9 +9644,9 @@ Tiny,15,0.8,"[4096, 4096, ...]","[5,6,7,10,11,12,15,16,17,20,21,22,25,26,27,30,3
 <li><code>--matformer-slice-name NAME</code>: Exact name of slice from CSV</li>
 </ul>
 <h3 id="python-parameters"><a class="header" href="#python-parameters">Python Parameters</a></h3>
-<pre><code class="language-python">Which.VisionPlain(
+<pre><code class="language-python">Which.MultimodalPlain(
     model_id: str,
-    arch: VisionArchitecture,
+    arch: MultimodalArchitecture,
     matformer_config_path: str = None,  # Path to CSV
     matformer_slice_name: str = None,   # Slice name
     # ... other parameters
@@ -9258,7 +9655,7 @@ Tiny,15,0.8,"[4096, 4096, ...]","[5,6,7,10,11,12,15,16,17,20,21,22,25,26,27,30,3
 <h3 id="rust-methods"><a class="header" href="#rust-methods">Rust Methods</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// For VisionModelBuilder
+</span>// For MultimodalModelBuilder
 .with_matformer_config_path(path: PathBuf)
 .with_matformer_slice_name(name: String)
 
@@ -9317,14 +9714,14 @@ by default in the CLI/server and Python SDK and does not make any changes when t
 completely fit on the available GPUs, or you wish to use automatic device mapping, you can disable tensor parallelism by setting <code>MISTRALRS_NO_NCCL=1</code>.</p>
 </blockquote>
 <p>Automatic device mapping works by prioritizing loading models into GPU memory, and any remaining parts are loaded into CPU memory.
-Models architectures such as vision models which greatly benefit from GPU acceleration also automatically prioritize keeping those
+Models architectures such as multimodal models which greatly benefit from GPU acceleration also automatically prioritize keeping those
 components on the GPU.</p>
 <p>To control the mapping across devices, you can set the following maximum parameters which the model should expect in a prompt.</p>
 <ul>
 <li>maximum sequence length (default: 4096)</li>
 <li>maximum batch size (default: 1)</li>
-<li>(vision models) maximum image length (length refers to the edge length) (default: 1024)</li>
-<li>(vision models) maximum number of images (default: 1)</li>
+<li>(multimodal models) maximum image length (length refers to the edge length) (default: 1024)</li>
+<li>(multimodal models) maximum number of images (default: 1)</li>
 </ul>
 <p>These parameters do not translate to hard limits during runtime, they only control the mapping.</p>
 <h3 id="unified-memory-systems"><a class="header" href="#unified-memory-systems">Unified memory systems</a></h3>
@@ -9333,18 +9730,18 @@ components on the GPU.</p>
 <p class="blockquote-tag-title"><svg viewbox="0 0 16 16" width="18" height="18"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"></path></svg>Note</p>
 <p>The maximum sequence length is also used to ensure that a KV cache will fit for with and without PagedAttention.</p>
 </blockquote>
-<h2 id="examples-2"><a class="header" href="#examples-2">Examples</a></h2>
+<h2 id="examples-3"><a class="header" href="#examples-3">Examples</a></h2>
 <ul>
 <li>Python
 <ul>
 <li>Text models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/text_auto_device_map.py">text_auto_device_map.py</a></li>
-<li>Vision models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/vision_auto_device_map.py">vision_auto_device_map.py</a></li>
+<li>Multimodal models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/multimodal_auto_device_map.py">multimodal_auto_device_map.py</a></li>
 </ul>
 </li>
 <li>Rust
 <ul>
 <li>Text models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs">text_auto_device_map/main.rs</a></li>
-<li>Vision models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs">vision_auto_device_map/main.rs</a></li>
+<li>Multimodal models <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/auto_device_map/main.rs">auto_device_map/main.rs</a></li>
 </ul>
 </li>
 <li>Server
@@ -9354,7 +9751,7 @@ components on the GPU.</p>
 <pre><code class="language-bash">mistralrs run --isq 4 -m meta-llama/Llama-3.3-70B-Instruct --max-seq-len 4096 --max-batch-size 2
 </code></pre>
 <ul>
-<li>Vision models:</li>
+<li>Multimodal models:</li>
 </ul>
 <pre><code class="language-bash">mistralrs run --isq 4 -m meta-llama/Llama-3.2-11B-Vision-Instruct --max-seq-len 4096 --max-batch-size 2 --max-num-images 2 --max-image-length 1024
 </code></pre>
@@ -9489,7 +9886,7 @@ components on the GPU.</p>
 <ul>
 <li>Normal models</li>
 <li>GGUF models</li>
-<li>Vision models</li>
+<li>Multimodal models</li>
 </ul>
 <blockquote>
 <p>Note: Prefix caching is supported when using PagedAttention. Configure the number of sequences to cache on the device with:</p>
@@ -9647,7 +10044,7 @@ runner = Runner(
 <h2 id="requirements"><a class="header" href="#requirements">Requirements</a></h2>
 <ul>
 <li><strong>Same tokenizer:</strong> Both target and draft models must share the same tokenizer vocabulary</li>
-<li><strong>Same model category:</strong> Both must be the same type (e.g., both text models or both vision models)</li>
+<li><strong>Same model category:</strong> Both must be the same type (e.g., both text models or both multimodal models)</li>
 <li><strong>KV cache enabled:</strong> Both models must have KV caching enabled (default behavior)</li>
 </ul>
 <h2 id="compatibility"><a class="header" href="#compatibility">Compatibility</a></h2>
@@ -9948,7 +10345,7 @@ For example, you can connect 2 Metal systems, or 2 Metal and 1 CPU system with t
 <p>Note: Multi-node support is coming! Distributed inference on Apple hardware is also being investigated.</p>
 </blockquote>
 <p>Tensor Parallelism (TP) is automatically used to accelerate distributed inference when more than one CUDA GPUs are detected. The tensor parallelism size is always automatically set to the total number of GPUs.</p>
-<p>TP splits the model into shards and benefits from fast single-node interconnects like NVLink. Both <code>normal</code> and <code>vision</code> models support tensor parallelism.</p>
+<p>TP splits the model into shards and benefits from fast single-node interconnects like NVLink. Both <code>normal</code> and <code>multimodal</code> models support tensor parallelism.</p>
 <p><strong>Important</strong>: The world size (total number of GPUs) must be a power of 2 (e.g., 1, 2, 4, 8, 16, 32, etc.). This is a requirement for optimal performance and correct operation of the distributed algorithms.</p>
 <blockquote>
 <p>Note: In mistral.rs, if NCCL is enabled, then automatic device mapping <em>will not</em> be used.</p>
@@ -10122,14 +10519,11 @@ cargo run --release --features ring -- ...
 <p>The ring backend will automatically handle collective communication for tensor-parallel inference.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="tool-calling-1"><a class="header" href="#tool-calling-1">Tool calling</a></h1>
-<p>Tool calling makes LLMs smarter.</p>
-<p>LLMs use tool calling to interact with the outside world. Mistral.rs has OpenAI compatible support for tool calling in all APIs, HTTP, Python, and Rust.</p>
-<p>Note that some models, such as Mistral Small/Nemo models, require a chat template to be specified. For example:</p>
-<pre><code class="language-bash">mistralrs serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
-</code></pre>
-<p>OpenAI docs: https://cookbook.openai.com/examples/how_to_call_functions_with_chat_models</p>
-<p>We support the following models’ tool calling in OpenAI-compatible and parse native tool calling:</p>
+<p>Mistral.rs supports OpenAI-compatible tool calling across all APIs (HTTP, Python SDK, Rust SDK). The model decides which tools to call and generates structured arguments; you decide how the tools get executed — either client-side or automatically on the server.</p>
+<h2 id="supported-models-4"><a class="header" href="#supported-models-4">Supported models</a></h2>
+<p>All supported models respond according to the <a href="https://cookbook.openai.com/examples/how_to_call_functions_with_chat_models">OpenAI tool calling API</a>:</p>
 <ul>
+<li>Gemma 4</li>
 <li>Llama 4</li>
 <li>Llama 3.1/3.2/3.3</li>
 <li>Mistral Small (including 3.1 + multimodal)</li>
@@ -10138,41 +10532,176 @@ cargo run --release --features ring -- ...
 <li>Hermes 3</li>
 <li>DeepSeek V2/V3/R1</li>
 <li>Qwen 3</li>
+<li>GPT-OSS</li>
 </ul>
-<p>All models that support tool calling will respond according to the OpenAI tool calling API.</p>
-<h2 id="openai-compatible-http-example"><a class="header" href="#openai-compatible-http-example">OpenAI compatible HTTP example</a></h2>
-<p>Please see <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/tool_calling.py">our example here</a>.</p>
 <blockquote>
-<p>OpenAI docs: https://platform.openai.com/docs/api-reference/chat/create?lang=curl</p>
+<p>Some models (e.g. Mistral Small/Nemo) require a specific chat template:</p>
+<pre><code class="language-bash">mistralrs serve -p 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja -m mistralai/Mistral-Small-3.1-24B-Instruct-2503
+</code></pre>
 </blockquote>
-<h2 id="rust-example-4"><a class="header" href="#rust-example-4">Rust example</a></h2>
-<p>Please see <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/tools/main.rs">our example here</a>.</p>
-<h2 id="python-example-5"><a class="header" href="#python-example-5">Python example</a></h2>
-<p>Please see <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/tool_calling.ipynb">our notebook here</a>.</p>
-<h2 id="tool-callbacks"><a class="header" href="#tool-callbacks">Tool callbacks</a></h2>
-<p>You can override tool execution using a <strong>tool callback</strong>. The callback receives
-the tool name and a dictionary of arguments and must return the tool output as a
-string.</p>
-<h3 id="python-17"><a class="header" href="#python-17">Python</a></h3>
-<pre><code class="language-py">def tool_cb(name: str, args: dict) -&gt; str:
-    if name == "local_search":
-        return json.dumps(local_search(args.get("query", "")))
+<h2 id="two-modes-of-tool-calling"><a class="header" href="#two-modes-of-tool-calling">Two modes of tool calling</a></h2>
+<h3 id="basic-client-side-execution"><a class="header" href="#basic-client-side-execution">Basic (client-side execution)</a></h3>
+<p>The model generates a tool call, the server returns it to the client, and your code executes the tool and sends the result back in a follow-up request. This is the standard OpenAI flow.</p>
+<h3 id="agentic-server-side-execution"><a class="header" href="#agentic-server-side-execution">Agentic (server-side execution)</a></h3>
+<p>The server executes tools automatically and feeds results back to the model in a loop — no client round-trips needed. The model calls a tool, the server runs it, appends the result, and lets the model continue until it produces a final text answer or hits the round limit.</p>
+<p>To use the agentic loop, you need two things:</p>
+<ol>
+<li><strong>A way to execute tools</strong> — register callbacks (Python/Rust SDK), connect MCP servers, enable web search, or set a tool dispatch URL</li>
+<li><strong><code>max_tool_rounds</code></strong> — tells the server how many loop iterations to allow</li>
+</ol>
+<h2 id="grammar-enforcement"><a class="header" href="#grammar-enforcement">Grammar enforcement</a></h2>
+<p>When tools are provided in a request, mistral.rs automatically constrains the model’s output to valid tool call syntax using <a href="https://github.com/guidance-ai/llguidance">llguidance</a>. This prevents malformed JSON, hallucinated tool names, and missing delimiters.</p>
+<ol>
+<li>The model generates normally until a tool call prefix is detected.</li>
+<li>A grammar activates mid-stream and constrains tokens to valid tool call structure.</li>
+<li>When the tool call is complete, the grammar deactivates.</li>
+<li>For multi-tool turns, the grammar re-activates for each subsequent tool call.</li>
+</ol>
+<p>This is automatic — no configuration needed. If a user-specified grammar is already active on the request, tool call grammar is skipped.</p>
+<h3 id="strict-mode"><a class="header" href="#strict-mode">Strict mode</a></h3>
+<p>By default, grammar enforcement ensures valid syntax but allows any argument keys and types. <strong>Strict mode</strong> additionally enforces the tool’s JSON schema on the arguments.</p>
+<p>Set <code>"strict": true</code> on the function definition:</p>
+<pre><code class="language-json">{
+  "type": "function",
+  "function": {
+    "name": "get_weather",
+    "description": "Get the weather for a city.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "city": { "type": "string" },
+        "units": { "type": "string", "enum": ["celsius", "fahrenheit"] }
+      },
+      "required": ["city"]
+    },
+    "strict": true
+  }
+}
+</code></pre>
+<p>What strict mode enforces:</p>
+<ul>
+<li>Only declared property names are accepted as argument keys</li>
+<li>Value types match the schema (string, number, integer, boolean, null)</li>
+<li>Enum values are constrained to the declared set</li>
+<li>Nested objects and typed arrays follow their sub-schemas</li>
+<li>Required fields must appear; optional fields may be omitted</li>
+</ul>
+<p>Notes:</p>
+<ul>
+<li>Strict and non-strict tools can be mixed in the same request.</li>
+<li>Built-in web search tools use strict mode automatically.</li>
+<li>MCP tools are automatically promoted to strict mode when they provide an input schema.</li>
+<li>For Gemma 4, arguments are emitted in alphabetical key order (matching the model’s native <code>dictsort</code> convention).</li>
+</ul>
+<p>In the Rust SDK, set <code>strict: Some(true)</code> on the <code>Function</code> struct. In the Python SDK, include <code>"strict": true</code> in the tool JSON string passed to <code>tool_schemas</code>.</p>
+<h2 id="agentic-loop"><a class="header" href="#agentic-loop">Agentic loop</a></h2>
+<h3 id="enabling-the-loop"><a class="header" href="#enabling-the-loop">Enabling the loop</a></h3>
+<p>Set <code>max_tool_rounds</code> to activate server-side tool execution. The server will loop until the model stops calling tools or the limit is reached.</p>
+<p><strong>HTTP API:</strong></p>
+<pre><code class="language-json">{
+  "model": "default",
+  "messages": [{"role": "user", "content": "What's the weather in Tokyo?"}],
+  "tools": [...],
+  "tool_choice": "auto",
+  "max_tool_rounds": 5
+}
+</code></pre>
+<p><strong>Rust SDK:</strong></p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let response = model.send_chat_request(
+    RequestBuilder::new()
+        .add_message(TextMessageRole::User, "What's the weather in Tokyo?")
+        .set_tools(tools)
+        .set_tool_choice(ToolChoice::Auto)
+        .set_max_tool_rounds(5)
+).await?;
+<span class="boring">}</span></code></pre>
+<p><strong>Python SDK:</strong></p>
+<pre><code class="language-python">request = ChatCompletionRequest(
+    messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
+    model="default",
+    tool_schemas=tools,
+    tool_choice=ToolChoice.Auto,
+    max_tool_rounds=5,
+)
+response = runner.send_chat_completion_request(request)
+</code></pre>
+<p><strong>CLI default:</strong> You can set a server-wide default with <code>--max-tool-rounds &lt;N&gt;</code>. Per-request values from the HTTP API override it. Safety cap is 16 rounds if unset.</p>
+<h3 id="how-tools-get-executed"><a class="header" href="#how-tools-get-executed">How tools get executed</a></h3>
+<p>When the model calls a tool during the agentic loop, the server tries these dispatch methods in order:</p>
+<ol>
+<li><strong>Built-in search tools</strong> (<code>search_the_web</code>, <code>website_content_extractor</code>) — if web search is enabled</li>
+<li><strong>Registered callbacks</strong> — tool callbacks from the Python/Rust SDK or MCP servers</li>
+<li><strong>Tool dispatch URL</strong> — POSTs the tool call to your HTTP endpoint</li>
+<li><strong>No handler found</strong> — the loop stops and the un-executed tool call is returned to the client</li>
+</ol>
+<p>Streaming is supported: tool call chunks are forwarded to the client so you can see which tools are being called mid-loop.</p>
+<h3 id="tool-dispatch-url"><a class="header" href="#tool-dispatch-url">Tool dispatch URL</a></h3>
+<p>The tool dispatch URL lets the server POST unhandled tool calls to your HTTP endpoint. This is how HTTP API users get server-side tool execution without registering callbacks.</p>
+<p><strong>Security:</strong> To prevent SSRF, <code>tool_dispatch_url</code> cannot be set per-request via the HTTP API. Configure it server-side or in trusted SDK code:</p>
+<pre><code class="language-bash"># CLI: applies to all requests
+mistralrs serve -p 1234 --tool-dispatch-url https://my-service.com/tools --max-tool-rounds 5 -m Qwen/Qwen3-4B
+</code></pre>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Rust SDK: per-request (trusted code)
+RequestBuilder::new()
+    .set_tool_dispatch_url("https://my-service.com/tools")
+    .set_max_tool_rounds(5)
+<span class="boring">}</span></code></pre>
+<pre><code class="language-python"># Python SDK: per-request (trusted code)
+ChatCompletionRequest(
+    ...,
+    tool_dispatch_url="https://my-service.com/tools",
+    max_tool_rounds=5,
+)
+</code></pre>
+<p>The server POSTs to your URL with:</p>
+<pre><code class="language-json">{"name": "get_weather", "arguments": {"city": "Tokyo"}}
+</code></pre>
+<p>Your endpoint returns:</p>
+<pre><code class="language-json">{"content": "Sunny, 22°C"}
+</code></pre>
+<p>The response can also be a bare string. One URL handles all tools — dispatch by <code>name</code>.</p>
+<h3 id="tool-callbacks"><a class="header" href="#tool-callbacks">Tool callbacks</a></h3>
+<p>Register custom functions to handle tool calls directly in your code. The callback receives the tool name and arguments, and returns the result as a string.</p>
+<p><strong>Python SDK:</strong></p>
+<pre><code class="language-python">def tool_cb(name: str, args: dict) -&gt; str:
+    if name == "get_weather":
+        return json.dumps({"temp": 22, "condition": "Sunny"})
     return ""
 
 runner = Runner(
-    which=Which.Plain(model_id="YourModel/ID", arch=Architecture.Llama),
-    tool_callback=tool_cb,
+    which=Which.Plain(model_id="Qwen/Qwen3-4B", arch=Architecture.Qwen3),
+    tool_callbacks={"get_weather": tool_cb},
 )
 </code></pre>
-<p>See <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_search.py">custom_search.py</a> for a full
-example. In Rust pass <code>.with_tool_callback(...)</code> to the builder as demonstrated
-in <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/tool_callback/main.rs">tool_callback/main.rs</a>.</p>
-<h2 id="search-callbacks"><a class="header" href="#search-callbacks">Search callbacks</a></h2>
-<p>Web search uses a DuckDuckGo-based callback by default. Provide your own search
-function with <code>search_callback</code> in Python or <code>.with_search_callback(...)</code> in
-Rust. Each callback should return a list of results with <code>title</code>, <code>description</code>,
-<code>url</code> and <code>content</code> fields. See <a href="#web-search-tool-in-mistralrs">WEB_SEARCH.md</a> for more details
-and examples.</p>
+<p><strong>Rust SDK:</strong> Pass <code>.with_tool_callback(name, callback)</code> to the builder. See <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/tool_callback/main.rs">tool_callback/main.rs</a>.</p>
+<h3 id="search-callbacks"><a class="header" href="#search-callbacks">Search callbacks</a></h3>
+<p>Web search uses DuckDuckGo by default. Override it with a custom search function using <code>search_callback</code> in Python or <code>.with_search_callback(...)</code> in Rust. Each callback should return a list of results with <code>title</code>, <code>description</code>, <code>url</code>, and <code>content</code> fields. See <a href="#web-search-tool-in-mistralrs">WEB_SEARCH.md</a> for details.</p>
+<h2 id="examples-4"><a class="header" href="#examples-4">Examples</a></h2>
+<h3 id="http-api-11"><a class="header" href="#http-api-11">HTTP API</a></h3>
+<ul>
+<li><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/tool_calling.py">Basic tool calling (single round)</a></li>
+<li><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/tool_dispatch.py">Tool dispatch URL (agentic loop)</a></li>
+<li><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/agentic_tool_rounds.py">Agentic tool rounds with MCP</a></li>
+</ul>
+<blockquote>
+<p>OpenAI API reference: https://platform.openai.com/docs/api-reference/chat/create</p>
+</blockquote>
+<h3 id="rust-sdk-14"><a class="header" href="#rust-sdk-14">Rust SDK</a></h3>
+<ul>
+<li><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/tools/main.rs">Tool calling</a></li>
+<li><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/advanced/tool_callback/main.rs">Tool callbacks</a></li>
+</ul>
+<h3 id="python-sdk-14"><a class="header" href="#python-sdk-14">Python SDK</a></h3>
+<ul>
+<li><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/tool_calling.ipynb">Tool calling notebook</a></li>
+<li><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/agentic_tools.py">Agentic tools (callbacks + max_tool_rounds)</a></li>
+<li><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_tool_call.py">Custom tool callback</a></li>
+<li><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_search.py">Custom search callback</a></li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="web-search-tool-in-mistralrs"><a class="header" href="#web-search-tool-in-mistralrs">Web search tool in mistral.rs</a></h1>
 <p>mistral.rs is compatible with OpenAI’s <code>web_search_options</code> parameter! Once enabled, this allows web searching for models.</p>
@@ -10219,7 +10748,7 @@ runner = Runner(
     search_callback=search_callback,
 )
 </code></pre>
-<h2 id="http-server-20"><a class="header" href="#http-server-20">HTTP server</a></h2>
+<h2 id="http-server-21"><a class="header" href="#http-server-21">HTTP server</a></h2>
 <p><strong>Be sure to add <code>--enable-search</code>!</strong></p>
 <p>Here are some examples using various models. Note that this works for both streaming and completion requests, so interactive mode is featured here!</p>
 <pre><code class="language-bash">mistralrs run --enable-search --isq 4 -m Qwen/Qwen3-4B
@@ -10255,7 +10784,7 @@ if completion.choices[0].message.tool_calls is not None:
     tool_called = completion.choices[0].message.tool_calls[0].function
     print(tool_called)
 </code></pre>
-<h2 id="python-sdk-14"><a class="header" href="#python-sdk-14">Python SDK</a></h2>
+<h2 id="python-sdk-15"><a class="header" href="#python-sdk-15">Python SDK</a></h2>
 <pre><code class="language-py">from mistralrs import (
     Runner,
     Which,
@@ -10306,7 +10835,7 @@ res = runner.send_chat_completion_request(
 print(res.choices[0].message.content)
 print(res.usage)
 </code></pre>
-<h2 id="rust-sdk-14"><a class="header" href="#rust-sdk-14">Rust SDK</a></h2>
+<h2 id="rust-sdk-15"><a class="header" href="#rust-sdk-15">Rust SDK</a></h2>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use mistralrs::{
     SearchEmbeddingModel, IsqType, RequestBuilder, TextMessageRole, TextMessages, TextModelBuilder,
@@ -10443,7 +10972,7 @@ $ mistralrs serve -p 1234 --log output.log -m microsoft/Orca-2-13b --tokenizer-j
 </code></pre>
 <h2 id="api-usage"><a class="header" href="#api-usage">API Usage</a></h2>
 <p>All sampling parameters can be set in API requests:</p>
-<h3 id="http-api-11"><a class="header" href="#http-api-11">HTTP API</a></h3>
+<h3 id="http-api-12"><a class="header" href="#http-api-12">HTTP API</a></h3>
 <pre><code class="language-json">{
   "model": "default",
   "messages": [...],
@@ -10461,7 +10990,7 @@ $ mistralrs serve -p 1234 --log output.log -m microsoft/Orca-2-13b --tokenizer-j
   "dry_sequence_breakers": ["\n"]
 }
 </code></pre>
-<h3 id="python-sdk-15"><a class="header" href="#python-sdk-15">Python SDK</a></h3>
+<h3 id="python-sdk-16"><a class="header" href="#python-sdk-16">Python SDK</a></h3>
 <pre><code class="language-python">response = runner.send_chat_completion_request(
     ChatCompletionRequest(
         model="default",
@@ -10701,7 +11230,7 @@ curl http://localhost:1234/v1/chat/completions \
 <p><strong>New syntax:</strong></p>
 <pre><code class="language-bash">mistralrs from-config --file &lt;CONFIG&gt;
 </code></pre>
-<h2 id="examples-3"><a class="header" href="#examples-3">Examples</a></h2>
+<h2 id="examples-5"><a class="header" href="#examples-5">Examples</a></h2>
 <h3 id="example-1-text-models"><a class="header" href="#example-1-text-models">Example 1: Text Models</a></h3>
 <pre><code class="language-json">{
   "llama3-3b": {
@@ -10724,9 +11253,9 @@ curl http://localhost:1234/v1/chat/completions \
       "model_id": "meta-llama/Llama-3.2-3B-Instruct"
     }
   },
-  "vision-model": {
-    "VisionPlain": {
-      "model_id": "google/gemma-3-4b-it"
+  "multimodal-model": {
+    "MultimodalPlain": {
+      "model_id": "google/gemma-4-E4B-it"
     }
   }
 }
@@ -10825,17 +11354,17 @@ curl http://localhost:1234/v1/chat/completions \
 <h2 id="rust-sdk-usage"><a class="header" href="#rust-sdk-usage">Rust SDK Usage</a></h2>
 <p>The <code>mistralrs</code> crate provides <code>MultiModelBuilder</code> for loading multiple models and <code>Model</code> methods for multi-model management.</p>
 <h3 id="loading-multiple-models"><a class="header" href="#loading-multiple-models">Loading Multiple Models</a></h3>
-<p>By default, model IDs are the pipeline names (usually the HuggingFace model path, e.g., <code>"google/gemma-3-4b-it"</code>). You can provide custom aliases with <code>add_model_with_alias</code> for shorter IDs.</p>
-<pre class="playground"><code class="language-rust">use mistralrs::{IsqType, MultiModelBuilder, TextModelBuilder, VisionModelBuilder, TextMessages, TextMessageRole};
+<p>By default, model IDs are the pipeline names (usually the HuggingFace model path, e.g., <code>"google/gemma-4-E4B-it"</code>). You can provide custom aliases with <code>add_model_with_alias</code> for shorter IDs.</p>
+<pre class="playground"><code class="language-rust">use mistralrs::{IsqType, MultiModelBuilder, TextModelBuilder, MultimodalModelBuilder, TextMessages, TextMessageRole};
 
 #[tokio::main]
 async fn main() -&gt; anyhow::Result&lt;()&gt; {
-    // Build a multi-model instance with a vision model and a text model
+    // Build a multi-model instance with a multimodal model and a text model
     // Use aliases for shorter model IDs in requests
     let model = MultiModelBuilder::new()
         .add_model_with_alias(
-            "gemma-vision",
-            VisionModelBuilder::new("google/gemma-3-4b-it")  // Vision model
+            "gemma-multimodal",
+            MultimodalModelBuilder::new("google/gemma-4-E4B-it")  // Multimodal model
                 .with_isq(IsqType::Q4K)
                 .with_logging(),
         )
@@ -10844,7 +11373,7 @@ async fn main() -&gt; anyhow::Result&lt;()&gt; {
             TextModelBuilder::new("Qwen/Qwen3-4B")  // Text model
                 .with_isq(IsqType::Q4K),
         )
-        .with_default_model("gemma-vision")
+        .with_default_model("gemma-multimodal")
         .build()
         .await?;
 
@@ -10875,13 +11404,13 @@ let status = model.list_models_with_status()?;
 // Returns Vec&lt;(String, ModelStatus)&gt; where ModelStatus is Loaded, Unloaded, or Reloading
 
 // Check if a model is loaded
-let is_loaded = model.is_model_loaded("gemma-vision")?;
+let is_loaded = model.is_model_loaded("gemma-multimodal")?;
 
 // Unload a model to free memory
-model.unload_model("gemma-vision")?;
+model.unload_model("gemma-multimodal")?;
 
 // Reload when needed
-model.reload_model("gemma-vision").await?;
+model.reload_model("gemma-multimodal").await?;
 <span class="boring">}</span></code></pre>
 <h3 id="available-_with_model-methods"><a class="header" href="#available-_with_model-methods">Available <code>_with_model</code> Methods</a></h3>
 <p>All request methods have <code>_with_model</code> variants that accept an optional model ID:</p>
@@ -10901,13 +11430,13 @@ model.reload_model("gemma-vision").await?;
 <h2 id="python-sdk-usage"><a class="header" href="#python-sdk-usage">Python SDK Usage</a></h2>
 <p>The Python <code>Runner</code> class supports multi-model operations directly.</p>
 <h3 id="basic-usage"><a class="header" href="#basic-usage">Basic Usage</a></h3>
-<pre><code class="language-python">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture, Architecture
+<pre><code class="language-python">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture, Architecture
 
-# Create a runner with a vision model (Gemma 3 4B)
+# Create a runner with a multimodal model (Gemma 4 E4B)
 runner = Runner(
-    which=Which.VisionPlain(
-        model_id="google/gemma-3-4b-it",
-        arch=VisionArchitecture.Gemma3,
+    which=Which.MultimodalPlain(
+        model_id="google/gemma-4-E4B-it",
+        arch=MultimodalArchitecture.Gemma4,
     ),
     in_situ_quant="Q4K",
 )
@@ -10927,7 +11456,7 @@ print(f"Available models: {models}")
 
 # Get/set default model
 default = runner.get_default_model_id()
-runner.set_default_model_id("google/gemma-3-4b-it")
+runner.set_default_model_id("google/gemma-4-E4B-it")
 
 # Send request with specific model_id
 request = ChatCompletionRequest(
@@ -10942,13 +11471,13 @@ status = runner.list_models_with_status()
 # Returns list of (model_id, status) tuples
 
 # Check if a model is loaded
-is_loaded = runner.is_model_loaded("google/gemma-3-4b-it")
+is_loaded = runner.is_model_loaded("google/gemma-4-E4B-it")
 
 # Unload a model to free memory
-runner.unload_model("google/gemma-3-4b-it")
+runner.unload_model("google/gemma-4-E4B-it")
 
 # Reload when needed
-runner.reload_model("google/gemma-3-4b-it")
+runner.reload_model("google/gemma-4-E4B-it")
 </code></pre>
 <h3 id="request-methods-with-model_id-1"><a class="header" href="#request-methods-with-model_id-1">Request Methods with model_id</a></h3>
 <p>All request methods accept an optional <code>model_id</code> parameter:</p>
@@ -10983,7 +11512,7 @@ multi.send_chat_request_to_model(request, "model-id").await?;
 
 // New - model IDs are pipeline names by default (aliases optional)
 let model = MultiModelBuilder::new()
-    .add_model(VisionModelBuilder::new("google/gemma-3-4b-it"))
+    .add_model(MultimodalModelBuilder::new("google/gemma-4-E4B-it"))
     .add_model(TextModelBuilder::new("Qwen/Qwen3-4B"))
     .build()
     .await?;
@@ -10996,15 +11525,15 @@ multi_runner = MultiModelRunner(runner)
 multi_runner.send_chat_completion_request_to_model(request, "model-id")
 
 # New - model IDs are the registered IDs (aliases if configured)
-runner = Runner(which=Which.Plain(model_id="google/gemma-3-4b-it", ...))
-runner.send_chat_completion_request(request, model_id="google/gemma-3-4b-it")
+runner = Runner(which=Which.Plain(model_id="google/gemma-4-E4B-it", ...))
+runner.send_chat_completion_request(request, model_id="google/gemma-4-E4B-it")
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="mcp-model-context-protocol-client"><a class="header" href="#mcp-model-context-protocol-client">MCP (Model Context Protocol) Client</a></h1>
 <p>mistral.rs includes a built-in MCP client that allows models to connect to external tools and services through the Model Context Protocol. This enables automatic tool discovery and usage from any MCP-compatible server.</p>
 <h2 id="quick-start-2"><a class="header" href="#quick-start-2">Quick Start</a></h2>
 <p>Examples below show HTTP (Hugging Face), Process (filesystem), and WebSocket transports. Replace <code>hf_xxx</code> with your actual Hugging Face token for HTTP examples.</p>
-<h3 id="rust-sdk-15"><a class="header" href="#rust-sdk-15">Rust SDK</a></h3>
+<h3 id="rust-sdk-16"><a class="header" href="#rust-sdk-16">Rust SDK</a></h3>
 <pre class="playground"><code class="language-rust">use mistralrs::{
     TextModelBuilder, McpClientConfig, McpServerConfig, McpServerSource,
     TextMessages, TextMessageRole,
@@ -11082,7 +11611,7 @@ async fn main() -&gt; anyhow::Result&lt;()&gt; {
     
     Ok(())
 }</code></pre>
-<h3 id="python-sdk-16"><a class="header" href="#python-sdk-16">Python SDK</a></h3>
+<h3 id="python-sdk-17"><a class="header" href="#python-sdk-17">Python SDK</a></h3>
 <pre><code class="language-python">import mistralrs
 
 # Process example (filesystem server - recommended for getting started)
@@ -11152,7 +11681,7 @@ res = runner.send_chat_completion_request(
 )
 print(res.choices[0].message.content)
 </code></pre>
-<h3 id="http-api-12"><a class="header" href="#http-api-12">HTTP API</a></h3>
+<h3 id="http-api-13"><a class="header" href="#http-api-13">HTTP API</a></h3>
 <ol>
 <li>Create <code>mcp-config.json</code>:</li>
 </ol>
@@ -11325,12 +11854,12 @@ print(res.choices[0].message.content)
 <li><a href="#mcp-protocol-support">MCP protocol support</a>
 <ul>
 <li><a href="#toc-8">ToC</a></li>
-<li><a href="#running">Running</a></li>
+<li><a href="#running-1">Running</a></li>
 <li><a href="#check-if-its-working">Check if it’s working</a></li>
 <li><a href="#example-clients">Example clients</a>
 <ul>
 <li><a href="#python-18">Python</a></li>
-<li><a href="#rust-16">Rust</a></li>
+<li><a href="#rust-17">Rust</a></li>
 <li><a href="#http">HTTP</a></li>
 </ul>
 </li>
@@ -11339,7 +11868,7 @@ print(res.choices[0].message.content)
 </li>
 </ul>
 <hr>
-<h2 id="running"><a class="header" href="#running">Running</a></h2>
+<h2 id="running-1"><a class="header" href="#running-1">Running</a></h2>
 <p>Start the normal HTTP server and add the <code>--mcp-port</code> flag to expose an MCP endpoint <strong>in parallel</strong> on a separate port:</p>
 <pre><code class="language-bash">mistralrs serve \
   -p 1234 \
@@ -11404,7 +11933,7 @@ async def main() -&gt; None:
 if __name__ == "__main__":
     asyncio.run(main())
 </code></pre>
-<h3 id="rust-16"><a class="header" href="#rust-16">Rust</a></h3>
+<h3 id="rust-17"><a class="header" href="#rust-17">Rust</a></h3>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
 use rust_mcp_sdk::{
     mcp_client::client_runtime,
@@ -12338,12 +12867,12 @@ def cached_tool_call(tool_name, args_json):
 <h2 id="overview"><a class="header" href="#overview">Overview</a></h2>
 <p>The mistral.rs engine manages model inference through a background thread pool. Each loaded model runs in its own engine thread, which handles request queuing, batching, and execution.</p>
 <h2 id="warmup-run"><a class="header" href="#warmup-run">Warmup Run</a></h2>
-<p>When a text or vision model is loaded in a multi-threaded runtime, mistral.rs automatically performs a warmup (“dummy”) run:</p>
+<p>When a text or multimodal model is loaded in a multi-threaded runtime, mistral.rs automatically performs a warmup (“dummy”) run:</p>
 <ul>
 <li>Sends a short completion request (“hello” with max 1 token) to initialize CUDA kernels and caches</li>
 <li>Logs “Beginning dummy run.” when starting and “Dummy run completed in Xs.” when finished</li>
 <li>Helps ensure more consistent performance for the first real user request</li>
-<li>Only runs for text and vision models (not diffusion/speech)</li>
+<li>Only runs for text and multimodal models (not diffusion/speech)</li>
 </ul>
 <p>This warmup ensures that CUDA kernel compilation and memory allocation happens during model loading rather than during the first user request.</p>
 <h2 id="automatic-engine-recovery"><a class="header" href="#automatic-engine-recovery">Automatic Engine Recovery</a></h2>

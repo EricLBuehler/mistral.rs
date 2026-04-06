@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7e40263e.js";
+            window.path_to_searchindex_js = "searchindex-0499d85f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-bbe877b8.js"></script>
+        <script src="toc-a5ca6495.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -226,7 +226,7 @@
 <li><code>Default</code></li>
 <li><code>MoQE</code>: if applicable, only quantize MoE experts. https://arxiv.org/abs/2310.02410</li>
 </ul>
-<h3 id="architecture-for-vision-models"><a class="header" href="#architecture-for-vision-models">Architecture for vision models</a></h3>
+<h3 id="architecture-for-multimodal-models"><a class="header" href="#architecture-for-multimodal-models">Architecture for multimodal models</a></h3>
 <ul>
 <li><code>Phi3V</code></li>
 <li><code>Idefics2</code></li>
@@ -239,6 +239,7 @@
 <li><code>Phi4MM</code></li>
 <li><code>Qwen2_5VL</code></li>
 <li><code>Gemma3</code></li>
+<li><code>Gemma4</code></li>
 <li><code>Mistral3</code></li>
 <li><code>Llama4</code></li>
 <li><code>Gemma3n</code></li>
@@ -399,16 +400,16 @@ Note: <code>truncate_sequence=True</code> trims prompts that would otherwise exc
         hf_cache_path: str | None = None
 
     @dataclass
-    class VisionPlain:
+    class MultimodalPlain:
         model_id: str
-        arch: VisionArchitecture
+        arch: MultimodalArchitecture
         tokenizer_json: str | None = None
         topology: str | None = None
         from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         max_edge: int | None = None
-        auto_map_params: VisionAutoMapParams | None = (None,)
+        auto_map_params: MultimodalAutoMapParams | None = (None,)
         calibration_file: str | None = None
         imatrix: str | None = None
         hf_cache_path: str | None = None
@@ -431,18 +432,18 @@ Note: <code>truncate_sequence=True</code> trims prompts that would otherwise exc
 <h3 id="basic-usage-with-model_id"><a class="header" href="#basic-usage-with-model_id">Basic Usage with model_id</a></h3>
 <pre><code class="language-python">import mistralrs
 
-# Create a Runner with a vision model (Gemma 3 4B)
+# Create a Runner with a multimodal model (Gemma 4 E4B)
 runner = mistralrs.Runner(
-    which=mistralrs.Which.VisionPlain(
-        model_id="google/gemma-3-4b-it",
-        arch=mistralrs.VisionArchitecture.Gemma3,
+    which=mistralrs.Which.MultimodalPlain(
+        model_id="google/gemma-4-E4B-it",
+        arch=mistralrs.MultimodalArchitecture.Gemma4,
     ),
     in_situ_quant="Q4K",
 )
 
 # List available models (model IDs are registered IDs, aliases if configured)
 models = runner.list_models()
-print(f"Available models: {models}")  # ["google/gemma-3-4b-it"]
+print(f"Available models: {models}")  # ["google/gemma-4-E4B-it"]
 
 # Send request to specific model using model_id parameter
 response = runner.send_chat_completion_request(
@@ -450,7 +451,7 @@ response = runner.send_chat_completion_request(
         messages=[{"role": "user", "content": "Hello!"}],
         max_tokens=100
     ),
-    model_id="google/gemma-3-4b-it"  # Target specific model
+    model_id="google/gemma-4-E4B-it"  # Target specific model
 )
 
 # Send request without model_id (uses default model)
@@ -471,7 +472,7 @@ default_model = runner.get_default_model_id()
 print(f"Default model: {default_model}")
 
 # Change default model (model must be loaded)
-runner.set_default_model_id("google/gemma-3-4b-it")
+runner.set_default_model_id("google/gemma-4-E4B-it")
 
 # List models with their status
 models_with_status = runner.list_models_with_status()
@@ -480,7 +481,7 @@ for model_id, status in models_with_status:
 </code></pre>
 <h3 id="model-unloading-and-reloading"><a class="header" href="#model-unloading-and-reloading">Model Unloading and Reloading</a></h3>
 <p>You can unload models to free memory and reload them on demand:</p>
-<pre><code class="language-python">model_id = "google/gemma-3-4b-it"
+<pre><code class="language-python">model_id = "google/gemma-4-E4B-it"
 
 # Check if model is loaded
 is_loaded = runner.is_model_loaded(model_id)

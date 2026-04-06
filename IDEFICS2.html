@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7e40263e.js";
+            window.path_to_searchindex_js = "searchindex-0499d85f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-bbe877b8.js"></script>
+        <script src="toc-a5ca6495.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -194,7 +194,7 @@
 <p>The Rust SDK takes an image from the <a href="https://docs.rs/image/latest/image/index.html">image</a> crate.</p>
 <h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/idefics2.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
@@ -211,7 +211,7 @@
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 --isq 4 -m HuggingFaceM4/idefics2-8b-chatty
+<pre><code>mistralrs serve multimodal -p 1234 --isq 4 -m HuggingFaceM4/idefics2-8b-chatty
 </code></pre>
 <ol start="2">
 <li>Send a request</li>
@@ -253,14 +253,14 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Idefics 2 model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
-    let model = VisionModelBuilder::new(
+    let model = MultimodalModelBuilder::new(
         "HuggingFaceM4/idefics2-8b-chatty",
     )
     .with_isq(IsqType::Q4K)
@@ -276,7 +276,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_idefics_image_message(
+    let messages = MultimodalMessages::new().add_idefics_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         image,
@@ -299,12 +299,12 @@ async fn main() -&gt; Result&lt;()&gt; {
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="lamm-mit/Cephalo-Idefics-2-vision-8b-beta",
-        arch=VisionArchitecture.Idefics2,
+        arch=MultimodalArchitecture.Idefics2,
     ),
 )
 
@@ -346,7 +346,7 @@ print(res.usage)
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="SMOLLM3.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="GEMMA4.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -360,7 +360,7 @@ print(res.usage)
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="SMOLLM3.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="GEMMA4.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

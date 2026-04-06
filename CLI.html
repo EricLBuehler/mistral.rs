@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7e40263e.js";
+            window.path_to_searchindex_js = "searchindex-0499d85f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-bbe877b8.js"></script>
+        <script src="toc-a5ca6495.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -186,7 +186,7 @@
 <ul>
 <li><a href="#commands">Commands</a>
 <ul>
-<li><a href="#run---interactive-mode">run</a>: run model in interactive mode</li>
+<li><a href="#run---interactive--one-shot-mode">run</a>: run model in interactive or one-shot mode</li>
 <li><a href="#serve---http-server">serve</a>: start HTTP/MCP server and (optionally) the UI</li>
 <li><a href="#from-config---toml-configuration">from-config</a>: run from a <a href="CLI_CONFIG.html">TOML configuration file</a></li>
 <li><a href="#quantize---uqff-generation">quantize</a>: generate UQFF quantized model file</li>
@@ -202,7 +202,7 @@
 <ul>
 <li><a href="#auto">auto</a></li>
 <li><a href="#text">text</a></li>
-<li><a href="#vision">vision</a></li>
+<li><a href="#multimodal">multimodal</a></li>
 <li><a href="#diffusion">diffusion</a></li>
 <li><a href="#speech">speech</a></li>
 <li><a href="#embedding">embedding</a></li>
@@ -225,23 +225,43 @@
 </ul>
 <hr>
 <h2 id="commands"><a class="header" href="#commands">Commands</a></h2>
-<h3 id="run---interactive-mode"><a class="header" href="#run---interactive-mode">run - Interactive Mode</a></h3>
-<p>Start a model in interactive mode for conversational use.</p>
+<h3 id="run---interactive--one-shot-mode"><a class="header" href="#run---interactive--one-shot-mode">run - Interactive &amp; One-Shot Mode</a></h3>
+<p>Start a model in interactive mode for conversational use, or run a single one-shot request with <code>-i</code>.</p>
 <pre><code class="language-bash">mistralrs run [MODEL_TYPE] -m &lt;MODEL_ID&gt; [OPTIONS]
 </code></pre>
 <p>Note: <code>MODEL_TYPE</code> is optional and defaults to <code>auto</code> if not specified. This allows a shorter syntax.</p>
-<p><strong>Examples:</strong></p>
+<p><strong>Interactive mode examples:</strong></p>
 <pre><code class="language-bash"># Run a text model interactively (shorthand - auto type is implied)
 mistralrs run -m Qwen/Qwen3-4B
 
-# Explicit auto type (equivalent to above)
-mistralrs run -m Qwen/Qwen3-4B
-
 # Run with thinking mode enabled
-mistralrs run -m Qwen/Qwen3-4B --enable-thinking
+mistralrs run -m Qwen/Qwen3-4B --thinking
 
-# Run a vision model
-mistralrs run -m google/gemma-3-4b-it
+# Run a multimodal model
+mistralrs run -m google/gemma-4-E4B-it
+</code></pre>
+<p><strong>One-shot mode examples:</strong></p>
+<p>When <code>-i</code> is provided, the model processes a single request and exits. Combine with <code>--image</code>, <code>--video</code>, or <code>--audio</code> for multimodal input.</p>
+<pre><code class="language-bash"># Text-only one-shot
+mistralrs run -m Qwen/Qwen3-4B -i "What is the capital of France?"
+
+# Describe an image
+mistralrs run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
+
+# Multiple images
+mistralrs run -m google/gemma-4-E4B-it --image img1.jpg --image img2.png -i "Compare these images"
+
+# Video input
+mistralrs run -m google/gemma-4-E4B-it --video clip.mp4 -i "What happens in this video?"
+
+# Audio input
+mistralrs run -m google/gemma-4-E4B-it --audio recording.wav -i "Transcribe this audio"
+
+# Mixed media (image + audio)
+mistralrs run -m google/gemma-4-E4B-it --image photo.jpg --audio clip.mp3 -i "Describe the image and transcribe the audio"
+
+# URLs work too
+mistralrs run -m google/gemma-4-E4B-it --image https://example.com/photo.jpg -i "What is in this image?"
 </code></pre>
 <p><strong>Options:</strong></p>
 <div class="table-wrapper">
@@ -250,7 +270,11 @@ mistralrs run -m google/gemma-3-4b-it
 <tr><th>Option</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>--enable-thinking</code></td><td>Enable thinking mode for models that support it</td></tr>
+<tr><td><code>--thinking [true|false]</code></td><td>Control thinking mode. <code>--thinking</code> forces on, <code>--thinking false</code> forces off. Omit to use chat template default.</td></tr>
+<tr><td><code>-i, --input &lt;TEXT&gt;</code></td><td>One-shot prompt. Sends a single request and exits instead of entering interactive mode</td></tr>
+<tr><td><code>--image &lt;URL|PATH&gt;</code></td><td>Image file path or URL to include (repeatable, requires <code>-i</code>)</td></tr>
+<tr><td><code>--video &lt;URL|PATH&gt;</code></td><td>Video file path or URL to include (repeatable, requires <code>-i</code>)</td></tr>
+<tr><td><code>--audio &lt;URL|PATH&gt;</code></td><td>Audio file path or URL to include (repeatable, requires <code>-i</code>)</td></tr>
 </tbody>
 </table>
 </div>
@@ -311,8 +335,8 @@ mistralrs quantize -m Qwen/Qwen3-4B --isq q4k,q8_0 -o qwen3-4b-uqff/
 # Equivalent: repeated --isq flags
 mistralrs quantize -m Qwen/Qwen3-4B --isq q4k --isq q8_0 -o qwen3-4b-uqff/
 
-# Quantize a vision model
-mistralrs quantize -m google/gemma-3-4b-it --isq 4 -o gemma3-4b-uqff/
+# Quantize a multimodal model
+mistralrs quantize -m google/gemma-4-E4B-it --isq 4 -o gemma4-E4B-uqff/
 
 # Quantize with imatrix for better quality
 mistralrs quantize -m Qwen/Qwen3-4B --isq q4k --imatrix imatrix.dat -o qwen3-4b-uqff/qwen3-4b-q4k.uqff
@@ -505,7 +529,7 @@ mistralrs login --token hf_xxxxxxxxxxxxx
 │ Model                    │ Size     │ Last Used   │
 ├──────────────────────────┼──────────┼─────────────┤
 │ Qwen/Qwen3-4B            │ 8.5 GB   │ today       │
-│ google/gemma-3-4b-it     │ 6.2 GB   │ 2 days ago  │
+│ google/gemma-4-E4B-it     │ 6.2 GB   │ 2 days ago  │
 │ meta-llama/Llama-3.2-3B  │ 5.8 GB   │ 1 week ago  │
 └──────────────────────────┴──────────┴─────────────┘
 
@@ -577,7 +601,7 @@ Iterations: 3
 <p>The <code>bench</code> command also accepts all model loading options (ISQ, device mapping, etc.).</p>
 <hr>
 <h3 id="from-config---toml-configuration"><a class="header" href="#from-config---toml-configuration">from-config - TOML Configuration</a></h3>
-<p>Run the CLI from a TOML configuration file. This is the recommended way to run multiple models simultaneously, including models of different types (e.g., text + vision + embedding).</p>
+<p>Run the CLI from a TOML configuration file. This is the recommended way to run multiple models simultaneously, including models of different types (e.g., text + multimodal + embedding).</p>
 <p>See <a href="CLI_CONFIG.html">CLI_CONFIG.md</a> for full TOML configuration format details.</p>
 <pre><code class="language-bash">mistralrs from-config --file &lt;PATH&gt;
 </code></pre>
@@ -596,8 +620,8 @@ kind = "auto"
 model_id = "Qwen/Qwen3-4B"
 
 [[models]]
-kind = "vision"
-model_id = "google/gemma-3-4b-it"
+kind = "multimodal"
+model_id = "google/gemma-4-E4B-it"
 
 [[models]]
 kind = "embedding"
@@ -626,18 +650,18 @@ mistralrs completions fish &gt; ~/.config/fish/completions/mistralrs.fish
 <pre><code class="language-bash">mistralrs run -m Qwen/Qwen3-4B
 mistralrs serve -m Qwen/Qwen3-4B
 </code></pre>
-<p>The <code>auto</code> type supports text, vision, and other model types through automatic detection.</p>
+<p>The <code>auto</code> type supports text, multimodal, and other model types through automatic detection.</p>
 <h3 id="text"><a class="header" href="#text">text</a></h3>
 <p>Explicit text generation model configuration.</p>
 <pre><code class="language-bash">mistralrs run text -m Qwen/Qwen3-4B
 mistralrs serve text -m Qwen/Qwen3-4B
 </code></pre>
-<h3 id="vision"><a class="header" href="#vision">vision</a></h3>
-<p>Vision-language models that can process images and text.</p>
-<pre><code class="language-bash">mistralrs run vision -m google/gemma-3-4b-it
-mistralrs serve vision -m google/gemma-3-4b-it
+<h3 id="multimodal"><a class="header" href="#multimodal">multimodal</a></h3>
+<p>Multimodal models that can process images, audio, and text.</p>
+<pre><code class="language-bash">mistralrs run multimodal -m google/gemma-4-E4B-it
+mistralrs serve multimodal -m google/gemma-4-E4B-it
 </code></pre>
-<p><strong>Vision Options:</strong></p>
+<p><strong>Multimodal Options:</strong></p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -815,9 +839,14 @@ mistralrs run -m Qwen/Qwen3-4B --enable-search --search-embedding-model embeddin
 </code></pre>
 <hr>
 <h3 id="thinking-mode"><a class="header" href="#thinking-mode">Thinking Mode</a></h3>
-<p>Enable thinking/reasoning mode for models that support it (like DeepSeek, Qwen3).</p>
-<pre><code class="language-bash">mistralrs run -m Qwen/Qwen3-4B --enable-thinking
+<p>Control thinking/reasoning mode for models that support it (like DeepSeek, Qwen3).</p>
+<pre><code class="language-bash"># Force thinking on (equivalent to --thinking true)
+mistralrs run -m Qwen/Qwen3-4B --thinking
+
+# Force thinking off
+mistralrs run -m Qwen/Qwen3-4B --thinking false
 </code></pre>
+<p><code>--thinking</code> (or <code>--thinking true</code>) forces thinking on. <code>--thinking false</code> forces thinking off. If you omit the flag entirely, <code>mistralrs run</code> defers to the chat template’s default behavior. Templates with an explicit thinking toggle use the repository fallback of <code>true</code> when no override is provided.</p>
 <p>In interactive mode, thinking content is displayed in gray text before the final response.</p>
 <hr>
 <h2 id="global-options"><a class="header" href="#global-options">Global Options</a></h2>
@@ -940,15 +969,16 @@ Ahoy there, matey! What brings ye to these waters?
 &gt; \clear
 &gt; \exit
 </code></pre>
-<p><strong>Vision Model Interactive Mode:</strong></p>
-<p>For vision models, you can include images in your prompts by specifying file paths or URLs:</p>
+<p><strong>Multimodal Model Interactive Mode:</strong></p>
+<p>For multimodal models, you can include images in your prompts by specifying file paths or URLs:</p>
 <pre><code>&gt; Describe this image: /path/to/image.jpg
 &gt; Compare these images: image1.png image2.png
 &gt; Describe the image and transcribe the audio: photo.jpg recording.mp3
 </code></pre>
-<p><strong>Note</strong>: The CLI automatically detects paths to supported image and audio files within your prompt. You do not need special syntax; simply paste the absolute or relative path to the file.</p>
+<p><strong>Note</strong>: The CLI automatically detects paths to supported image, audio, and video files within your prompt. You do not need special syntax; simply paste the absolute or relative path to the file.</p>
 <p>Supported image formats: PNG, JPEG, BMP, GIF, WebP
-Supported audio formats: WAV, MP3, FLAC, OGG</p>
+Supported audio formats: WAV, MP3, FLAC, OGG
+Supported video formats: MP4, AVI, MOV, MKV, WebM, M4V, GIF (see <a href="VIDEO.html">VIDEO.md</a>)</p>
 
                     </main>
 

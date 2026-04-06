@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7e40263e.js";
+            window.path_to_searchindex_js = "searchindex-0499d85f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-bbe877b8.js"></script>
+        <script src="toc-a5ca6495.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -187,7 +187,7 @@
 <li>Apply AnyMoE to any supported model
 <ul>
 <li><code>plain</code></li>
-<li><code>vision-plain</code></li>
+<li><code>multimodal-plain</code></li>
 </ul>
 </li>
 <li>Specify the layers to apply AnyMoE to for efficient training</li>
@@ -213,7 +213,7 @@
 }
   
 </code></pre>
-<p>For a vision model, <code>image_urls</code> may contain an array of image URLs/local paths or Base64 encoded images.</p>
+<p>For a multimodal model, <code>image_urls</code> may contain an array of image URLs/local paths or Base64 encoded images.</p>
 <h2 id="experts"><a class="header" href="#experts">Experts</a></h2>
 <p>AnyMoE experts can be either fine-tuned models or LoRA adapter models. Only the mlp layers will be loaded from each. The experts must be homogeneous: they must be all fine-tuned or all adapter. Additionally, certain layers can be specified to apply AnyMoE.</p>
 <blockquote>

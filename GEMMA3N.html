@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-7e40263e.js";
+            window.path_to_searchindex_js = "searchindex-0499d85f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-bbe877b8.js"></script>
+        <script src="toc-a5ca6495.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -213,18 +213,18 @@
 </ul>
 <h3 id="command-line-example"><a class="header" href="#command-line-example">Command Line Example</a></h3>
 <pre><code class="language-bash"># Run with the E2.49B slice for balanced performance/efficiency
-mistralrs run vision -m google/gemma-3n-E4B-it \
+mistralrs run multimodal -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 </code></pre>
 <h3 id="python-sdk-example"><a class="header" href="#python-sdk-example">Python SDK Example</a></h3>
-<pre><code class="language-python">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-python">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 # Use the E2.49B slice for balanced performance/efficiency
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="google/gemma-3n-E4B-it",
-        arch=VisionArchitecture.Gemma3n,
+        arch=MultimodalArchitecture.Gemma3n,
         matformer_config_path="matformer_configs/gemma3n.csv",
         matformer_slice_name="Config for E2.49B (block-level)",
     ),
@@ -259,13 +259,13 @@ print(res.choices[0].message.content)
 </code></pre>
 <h3 id="rust-sdk-example"><a class="header" href="#rust-sdk-example">Rust SDK Example</a></h3>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
     // Build model with MatFormer E2.49B configuration
-    let model = VisionModelBuilder::new("google/gemma-3n-E4B-it")
+    let model = MultimodalModelBuilder::new("google/gemma-3n-E4B-it")
         .with_isq(IsqType::Q4K)
         .with_matformer_config_path(PathBuf::from("matformer_configs/gemma3n.csv"))
         .with_matformer_slice_name("Config for E2.49B (block-level)".to_string())
@@ -281,7 +281,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "Describe this image briefly.",
         vec![image],
@@ -308,7 +308,7 @@ async fn main() -&gt; Result&lt;()&gt; {
 </ul>
 <h2 id="http-server"><a class="header" href="#http-server">HTTP server</a></h2>
 <p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/gemma3n.py">here</a>.</p>
-<p>We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.</p>
+<p>We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.</p>
 <blockquote>
 <p>Note: The image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
@@ -335,10 +335,10 @@ The overall impression is one of grandeur, tranquility, and the raw beauty of a 
 <ol>
 <li>Start the server</li>
 </ol>
-<pre><code>mistralrs serve vision -p 1234 -m google/gemma-3n-E4B-it
+<pre><code>mistralrs serve multimodal -p 1234 -m google/gemma-3n-E4B-it
 
 # Or with MatFormer for balanced performance:
-mistralrs serve vision -p 1234 -m google/gemma-3n-E4B-it \
+mistralrs serve multimodal -p 1234 -m google/gemma-3n-E4B-it \
   --matformer-config-path matformer_configs/gemma3n.csv \
   --matformer-slice-name "Config for E2.49B (block-level)"
 </code></pre>
@@ -383,15 +383,15 @@ print(resp)
 </ul>
 <hr>
 <h2 id="rust"><a class="header" href="#rust">Rust</a></h2>
-<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/vision_models/main.rs">here</a>.</p>
+<p>You can find this example <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs">here</a>.</p>
 <p>This is a minimal example of running the Gemma 3n model with a dummy image.</p>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
     let model =
-        VisionModelBuilder::new("google/gemma-3n-E4B-it")
+        MultimodalModelBuilder::new("google/gemma-3n-E4B-it")
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
@@ -405,7 +405,7 @@ async fn main() -&gt; Result&lt;()&gt; {
     };
     let image = image::load_from_memory(&amp;bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "Please describe the image in detail.",
         vec![image],
@@ -427,12 +427,12 @@ async fn main() -&gt; Result&lt;()&gt; {
 <blockquote>
 <p>Note: the image_url may be either a path, URL, or a base64 encoded string.</p>
 </blockquote>
-<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+<pre><code class="language-py">from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="google/gemma-3n-E4B-it",
-        arch=VisionArchitecture.Gemma3n,
+        arch=MultimodalArchitecture.Gemma3n,
     ),
 )
 
@@ -487,11 +487,11 @@ print(res.usage)
 </code></pre>
 <h3 id="rust-sdk"><a class="header" href="#rust-sdk">Rust SDK</a></h3>
 <pre class="playground"><code class="language-rust">use anyhow::Result;
-use mistralrs::{AudioInput, IsqType, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{AudioInput, IsqType, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -&gt; Result&lt;()&gt; {
-    let model = VisionModelBuilder::new("google/gemma-3n-E4B-it")
+    let model = MultimodalModelBuilder::new("google/gemma-3n-E4B-it")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .build()
@@ -511,12 +511,13 @@ async fn main() -&gt; Result&lt;()&gt; {
     .to_vec();
     let image = image::load_from_memory(&amp;image_bytes)?;
 
-    let messages = VisionMessages::new()
+    let messages = MultimodalMessages::new()
         .add_multimodal_message(
             TextMessageRole::User,
             "Describe in detail what is happening.",
             vec![image],
             vec![audio],
+            vec![],
         );
 
     let response = model.send_chat_request(messages).await?;

@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "../searchindex-7e40263e.js";
+            window.path_to_searchindex_js = "../searchindex-0499d85f.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-bbe877b8.js"></script>
+        <script src="../toc-a5ca6495.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -186,7 +186,7 @@
 <p>Note: Multi-node support is coming! Distributed inference on Apple hardware is also being investigated.</p>
 </blockquote>
 <p>Tensor Parallelism (TP) is automatically used to accelerate distributed inference when more than one CUDA GPUs are detected. The tensor parallelism size is always automatically set to the total number of GPUs.</p>
-<p>TP splits the model into shards and benefits from fast single-node interconnects like NVLink. Both <code>normal</code> and <code>vision</code> models support tensor parallelism.</p>
+<p>TP splits the model into shards and benefits from fast single-node interconnects like NVLink. Both <code>normal</code> and <code>multimodal</code> models support tensor parallelism.</p>
 <p><strong>Important</strong>: The world size (total number of GPUs) must be a power of 2 (e.g., 1, 2, 4, 8, 16, 32, etc.). This is a requirement for optimal performance and correct operation of the distributed algorithms.</p>
 <blockquote>
 <p>Note: In mistral.rs, if NCCL is enabled, then automatic device mapping <em>will not</em> be used.</p>
