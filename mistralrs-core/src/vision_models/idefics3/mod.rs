@@ -15,6 +15,7 @@ pub use inputs_processor::Idefics3Processor;
 use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 use vision::{Idefics3Connector, Idefics3VisionTransformer};
 
+use crate::attention::AttentionMask;
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
@@ -214,7 +215,9 @@ impl Idefics3Model {
                     for &i in &miss_indices {
                         let pv = pixel_values.get(i)?.unsqueeze(0)?;
                         let mask = patch_attention_mask.get(i)?.unsqueeze(0)?;
-                        let hidden = self.vision.forward(&pv, Some(&mask))?;
+                        let hidden = self
+                            .vision
+                            .forward(&pv, &AttentionMask::Custom(mask.clone()))?;
                         let hidden = self.connector.forward(&hidden)?;
                         let result = hidden.squeeze(0)?;
                         {
@@ -231,9 +234,10 @@ impl Idefics3Model {
                 Tensor::stack(&slices, 0)?
             } else {
                 // No caching: original path
-                let image_hidden_states = self
-                    .vision
-                    .forward(&pixel_values, Some(&patch_attention_mask))?;
+                let image_hidden_states = self.vision.forward(
+                    &pixel_values,
+                    &AttentionMask::Custom(patch_attention_mask.clone()),
+                )?;
                 self.connector.forward(&image_hidden_states)?
             };
 

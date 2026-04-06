@@ -1,10 +1,11 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::layers_masker::CausalMaskConfig;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     layers::{self, Activation, GemmaRmsNorm, RotaryEmbedding, Sdpa},
     lora::{linear_b as linear, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
@@ -235,7 +236,7 @@ impl Attention {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Option<Tensor>,
@@ -387,7 +388,7 @@ impl DecoderLayer {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Option<Tensor>,
@@ -611,11 +612,11 @@ impl XLoraModel {
             self.cache.full().lock()
         };
         let xs = self.embed_tokens.forward(input_ids)?;
-        let attention_mask = CausalMasker.make_causal_mask_matrix(
+        let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &*cache,
             xs.dtype(),
-            self.cfg.num_attn_heads,
+            &CausalMaskConfig::default(),
         )?;
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
@@ -623,7 +624,7 @@ impl XLoraModel {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                attention_mask.as_ref().map(|m| m.get(xs.device())),
+                &attention_mask.get(xs.device()),
                 seqlen_offsets,
                 &mut cache[i],
                 scalings.clone(),

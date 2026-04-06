@@ -62,6 +62,7 @@ async fn main() -> Result<()> {
             description: Some("Local filesystem search".to_string()),
             name: "local_search".to_string(),
             parameters: Some(parameters),
+            strict: None,
         },
     };
 

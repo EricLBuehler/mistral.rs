@@ -1,26 +1,14 @@
 """
-https://llama.meta.com/docs/model-cards-and-prompt-formats/llama3_1/
+Basic client-side tool calling with the HTTP API.
 
-Llama 3.1 may be used:
-```
-cargo run --release --features cuda -- --port 1234 --isq Q4K plain -m meta-llama/Meta-Llama-3.1-8B-Instruct -a llama
-```
+Start the server:
+    mistralrs serve -p 1234 --isq 4 -m Qwen/Qwen3-4B
 
-And then:
-```
-python3 examples/server/tool_calling_llama_31.py
-```
-
-The output should be something like:
-```
-Called tool `run_python`
-The final answer is $\boxed{50.26548245743669}$.
-```
+Then run this script:
+    python examples/server/tool_calling.py
 """
 
 import json
-import sys
-from io import StringIO
 from openai import OpenAI
 
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
@@ -29,107 +17,70 @@ tools = [
     {
         "type": "function",
         "function": {
-            "name": "run_python",
-            "description": "Run some Python code",
+            "name": "get_weather",
+            "description": "Get the current weather for a city.",
             "parameters": {
-                "type": "string",
+                "type": "object",
                 "properties": {
-                    "code": {
-                        "type": "string",
-                        "description": "The Python code to evaluate. The return value whatever was printed out from `print`.",
-                    },
+                    "city": {"type": "string", "description": "City name"},
                 },
-                "required": ["code"],
+                "required": ["city"],
             },
+            "strict": True,
         },
     }
 ]
 
 
-def custom_serializer(obj):
-    try:
-        res = json.dumps(obj)
-    except:
-        # Handle serializing, for example, an imported module
-        res = None
-    return res
+def get_weather(city: str) -> str:
+    """Simulated weather lookup."""
+    data = {"tokyo": "Sunny, 22C", "london": "Cloudy, 15C"}
+    return data.get(city.lower(), f"Unknown city: {city}")
 
 
-def run_python(code: str) -> str:
-    lcls = dict()
-    # No opening of files
-    glbls = {"open": None}
+messages = [{"role": "user", "content": "What's the weather in Tokyo?"}]
 
-    print(f"Running:\n```py\n{code}\n```")
-
-    old_stdout = sys.stdout
-    out = StringIO()
-    sys.stdout = out
-    exec(code, glbls, lcls)
-    sys.stdout = old_stdout
-
-    return out.getvalue()
-
-
-functions = {
-    "run_python": run_python,
-}
-
-messages = [
-    {
-        "role": "user",
-        "content": "Please write and run a python script to do a matmul. Then tell me JUST the result of the matmul.",
-    }
-]
-
+# Step 1: Model generates a tool call
 completion = client.chat.completions.create(
-    model="default",
-    messages=messages,
-    tools=tools,
-    tool_choice="auto",
+    model="default", messages=messages, tools=tools, tool_choice="auto"
+)
+msg = completion.choices[0].message
+print(f"Model wants to call: {msg.tool_calls[0].function.name}")
+
+# Step 2: Execute the tool locally
+tool_call = msg.tool_calls[0]
+args = json.loads(tool_call.function.arguments)
+result = get_weather(**args)
+print(f"Tool result: {result}")
+
+# Step 3: Send the result back
+messages.append(
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": tool_call.id,
+                "type": "function",
+                "function": {
+                    "name": tool_call.function.name,
+                    "arguments": tool_call.function.arguments,
+                },
+            }
+        ],
+    }
+)
+messages.append(
+    {
+        "role": "tool",
+        "tool_call_id": tool_call.id,
+        "name": tool_call.function.name,
+        "content": result,
+    }
 )
 
-# print(completion.usage)
-print(completion.choices[0].message)
-
-tool_call = completion.choices[0].message.tool_calls[0]
-tool_called = tool_call.function
-
-if tool_called.name in functions:
-    args = json.loads(tool_called.arguments)
-    result = functions[tool_called.name](**args)
-    print(f"Called tool `{tool_called.name}`")
-
-    # Append the assistant message with tool_calls (must include the original message)
-    messages.append(
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {
-                    "id": tool_call.id,
-                    "type": "function",
-                    "function": {
-                        "name": tool_called.name,
-                        "arguments": tool_called.arguments,
-                    },
-                }
-            ],
-        }
-    )
-
-    # Append the tool response with tool_call_id
-    messages.append(
-        {
-            "role": "tool",
-            "tool_call_id": tool_call.id,
-            "name": tool_called.name,
-            "content": result,
-        }
-    )
-
-    completion = client.chat.completions.create(
-        model="default", messages=messages, tools=tools, tool_choice="auto"
-    )
-    # print(completion.usage)
-    print(completion.choices[0].message)
+# Step 4: Model produces the final answer
+completion = client.chat.completions.create(
+    model="default", messages=messages, tools=tools, tool_choice="auto"
+)
+print(completion.choices[0].message.content)

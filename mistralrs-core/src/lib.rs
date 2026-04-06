@@ -162,8 +162,7 @@ pub struct EngineConfig {
     pub throughput_logging_enabled: bool,
     pub search_embedding_model: Option<SearchEmbeddingModel>,
     pub search_callback: Option<Arc<SearchCallback>>,
-    pub tool_callbacks: tools::ToolCallbacks,
-    pub tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+    pub tool_callbacks: tools::ToolCallbacksWithTools,
 }
 
 impl Default for EngineConfig {
@@ -177,7 +176,6 @@ impl Default for EngineConfig {
             search_embedding_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
-            tool_callbacks_with_tools: HashMap::new(),
         }
     }
 }
@@ -322,8 +320,7 @@ struct RebootState {
     throughput_logging_enabled: bool,
     search_embedding_model: Option<SearchEmbeddingModel>,
     search_callback: Option<Arc<search::SearchCallback>>,
-    tool_callbacks: tools::ToolCallbacks,
-    tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+    tool_callbacks: tools::ToolCallbacksWithTools,
     mcp_client_config: Option<McpClientConfig>,
     /// Optional loader config for reloading after unload
     loader_config: Option<ModelLoaderConfig>,
@@ -395,8 +392,7 @@ pub struct MistralRsBuilder {
     throughput_logging_enabled: bool,
     search_embedding_model: Option<SearchEmbeddingModel>,
     search_callback: Option<Arc<SearchCallback>>,
-    tool_callbacks: tools::ToolCallbacks,
-    tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+    tool_callbacks: tools::ToolCallbacksWithTools,
     mcp_client_config: Option<McpClientConfig>,
     loader_config: Option<ModelLoaderConfig>,
 }
@@ -424,7 +420,6 @@ impl MistralRsBuilder {
             search_embedding_model,
             search_callback: None,
             tool_callbacks: HashMap::new(),
-            tool_callbacks_with_tools: HashMap::new(),
             mcp_client_config: None,
             loader_config: None,
         }
@@ -479,7 +474,23 @@ impl MistralRsBuilder {
         name: impl Into<String>,
         tool_callback: Arc<ToolCallback>,
     ) -> Self {
-        self.tool_callbacks.insert(name.into(), tool_callback);
+        let name = name.into();
+        // Wrap bare callback with a minimal tool definition.
+        self.tool_callbacks.insert(
+            name.clone(),
+            ToolCallbackWithTool {
+                callback: tool_callback,
+                tool: Tool {
+                    tp: ToolType::Function,
+                    function: Function {
+                        description: None,
+                        name,
+                        parameters: None,
+                        strict: None,
+                    },
+                },
+            },
+        );
         self
     }
 
@@ -492,7 +503,7 @@ impl MistralRsBuilder {
         tool: Tool,
     ) -> Self {
         let name = name.into();
-        self.tool_callbacks_with_tools.insert(
+        self.tool_callbacks.insert(
             name,
             ToolCallbackWithTool {
                 callback: tool_callback,
@@ -586,7 +597,6 @@ impl MistralRs {
                         config.search_embedding_model,
                         config.search_callback.clone(),
                         config.tool_callbacks.clone(),
-                        config.tool_callbacks_with_tools.clone(),
                         logger_for_engine,
                     )
                     .expect("Engine creation failed.");
@@ -611,7 +621,6 @@ impl MistralRs {
                         config.search_embedding_model,
                         config.search_callback.clone(),
                         config.tool_callbacks.clone(),
-                        config.tool_callbacks_with_tools.clone(),
                         logger_for_engine,
                     )
                     .expect("Engine creation failed.");
@@ -644,8 +653,7 @@ impl MistralRs {
             throughput_logging_enabled,
             search_embedding_model,
             search_callback,
-            tool_callbacks,
-            mut tool_callbacks_with_tools,
+            mut tool_callbacks,
             mcp_client_config,
             loader_config,
         } = config;
@@ -671,7 +679,7 @@ impl MistralRs {
 
                     // Merge MCP tool callbacks with tools into the new collection
                     for (name, callback_with_tool) in mcp_callbacks_with_tools {
-                        tool_callbacks_with_tools.insert(name.clone(), callback_with_tool.clone());
+                        tool_callbacks.insert(name.clone(), callback_with_tool.clone());
                     }
 
                     if tools_count == 0 {
@@ -707,7 +715,6 @@ impl MistralRs {
             search_embedding_model,
             search_callback: search_callback.clone(),
             tool_callbacks: tool_callbacks.clone(),
-            tool_callbacks_with_tools: tool_callbacks_with_tools.clone(),
             mcp_client_config: mcp_client_config.clone(),
             loader_config,
         };
@@ -722,7 +729,6 @@ impl MistralRs {
             search_embedding_model,
             search_callback,
             tool_callbacks,
-            tool_callbacks_with_tools,
         };
 
         // Create the engine instance
@@ -793,6 +799,8 @@ impl MistralRs {
                     logits_processors: None,
                     return_raw_logits: false,
                     web_search_options: None,
+                    max_tool_rounds: None,
+                    tool_dispatch_url: None,
                     model_id: None,
                     truncate_sequence: false,
                 }));
@@ -864,7 +872,6 @@ impl MistralRs {
                 search_embedding_model: reboot_state.search_embedding_model,
                 search_callback: reboot_state.search_callback.clone(),
                 tool_callbacks: reboot_state.tool_callbacks.clone(),
-                tool_callbacks_with_tools: reboot_state.tool_callbacks_with_tools.clone(),
             };
             let new_engine_instance = Self::create_engine_instance(
                 reboot_state.pipeline.clone(),
@@ -1212,7 +1219,6 @@ impl MistralRs {
             search_embedding_model: config.engine_config.search_embedding_model,
             search_callback: config.engine_config.search_callback.clone(),
             tool_callbacks: config.engine_config.tool_callbacks.clone(),
-            tool_callbacks_with_tools: config.engine_config.tool_callbacks_with_tools.clone(),
             mcp_client_config: config.mcp_client_config.clone(),
             loader_config: config.loader_config.clone(),
         };
@@ -1392,7 +1398,7 @@ impl MistralRs {
             .read()
             .map_err(|_| "Failed to acquire read lock on engines")?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
-            Ok(engine_instance.reboot_state.tool_callbacks_with_tools.len())
+            Ok(engine_instance.reboot_state.tool_callbacks.len())
         } else {
             Err(format!("Model {resolved_model_id} not found"))
         }
@@ -1483,10 +1489,6 @@ impl MistralRs {
                 search_embedding_model: engine_instance.reboot_state.search_embedding_model,
                 search_callback: engine_instance.reboot_state.search_callback.clone(),
                 tool_callbacks: engine_instance.reboot_state.tool_callbacks.clone(),
-                tool_callbacks_with_tools: engine_instance
-                    .reboot_state
-                    .tool_callbacks_with_tools
-                    .clone(),
             },
             mcp_client_config: engine_instance.reboot_state.mcp_client_config.clone(),
             category: engine_instance.category.clone(),
@@ -1623,10 +1625,6 @@ impl MistralRs {
             search_embedding_model: unloaded_state.engine_config.search_embedding_model,
             search_callback: unloaded_state.engine_config.search_callback.clone(),
             tool_callbacks: unloaded_state.engine_config.tool_callbacks.clone(),
-            tool_callbacks_with_tools: unloaded_state
-                .engine_config
-                .tool_callbacks_with_tools
-                .clone(),
             mcp_client_config: unloaded_state.mcp_client_config.clone(),
             loader_config: Some(unloaded_state.loader_config.clone()),
         };

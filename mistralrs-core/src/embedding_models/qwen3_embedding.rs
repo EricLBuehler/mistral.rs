@@ -1,6 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
+use crate::layers_masker::CausalMaskConfig;
 use candle_core::{Device, Module, Result, Tensor};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, RowParallelLayer, ShardedVarBuilder,
@@ -10,7 +11,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     device_map::DeviceMapper,
     layers::{embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::NotACache,
@@ -212,7 +213,7 @@ impl Attention {
             &q,
             &k,
             &v,
-            Some(attention_mask),
+            &AttentionMask::Custom(attention_mask.clone()),
             Some(flash_params),
             &self.sdpa_params,
         )?;
@@ -311,6 +312,7 @@ pub struct Model {
     sliding_window: Option<usize>,
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    #[allow(dead_code)]
     cfg: ModelConfigMetadata,
 }
 
@@ -450,15 +452,18 @@ impl Model {
         let (bs, _seqlen) = input_ids.dims2()?;
         let seqlen_offsets = vec![0; bs];
 
-        let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+        let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &NotACache,
-            self.sliding_window,
             xs.dtype(),
-            self.cfg.num_attn_heads,
+            &CausalMaskConfig {
+                sliding_window: self.sliding_window,
+                ..Default::default()
+            },
         )?;
-        let Some(attention_mask) = attention_mask else {
-            unreachable!()
+        let attention_mask = match attention_mask {
+            crate::attention::AttentionMask::Custom(t) => t,
+            _ => unreachable!(),
         };
 
         for (i, layer) in self.layers.iter().enumerate() {

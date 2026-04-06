@@ -31,6 +31,18 @@ pub struct ServerOptions {
     #[arg(long)]
     #[serde(default)]
     pub ui: bool,
+
+    /// Default maximum tool-call rounds for the agentic loop.
+    /// Per-request values from the HTTP API override this. Safety cap: 16 if unset.
+    #[arg(long)]
+    #[serde(default)]
+    pub max_tool_rounds: Option<usize>,
+
+    /// URL to POST tool calls to for server-side execution.
+    /// For security, this is only configurable server-side (not per-request via HTTP API).
+    #[arg(long)]
+    #[serde(default)]
+    pub tool_dispatch_url: Option<String>,
 }
 
 impl Default for ServerOptions {
@@ -41,6 +53,8 @@ impl Default for ServerOptions {
             mcp_port: None,
             mcp_config: None,
             ui: false,
+            max_tool_rounds: None,
+            tool_dispatch_url: None,
         }
     }
 }

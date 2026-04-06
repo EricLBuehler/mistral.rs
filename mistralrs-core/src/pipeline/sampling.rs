@@ -52,13 +52,10 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     if let Some(ref t) = seq.tools {
         if let Ok(Some(ref d)) = seq.peek_delta() {
             let (_tool_use_still_possible, tool_use_is_done) =
-                t.prefix_could_be_tool(this, d.as_str())?;
+                t.prefix_could_be_tool(d.as_str())?;
 
             if tool_use_is_done
-                && matches!(
-                    parse_text_tools(this, d, seq.tools.clone()),
-                    Ok((None, _tools))
-                )
+                && matches!(parse_text_tools(d, seq.tools.clone()), Ok((None, _tools)))
             {
                 seq.set_state(SequenceState::Done(StopReason::Eos));
                 is_done = Some(StopReason::Eos);
@@ -66,86 +63,143 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         }
     };
 
+    // Mid-stream grammar activation for tool calls.
+    // When a tool call prefix is detected and no grammar is already active,
+    // build a format-specific grammar and activate it so subsequent tokens
+    // are constrained to valid tool call syntax.
+    // For Harmony mode, tool calls are signaled by token-level markers (not
+    // text prefixes), so we also check HarmonyContext for new tool calls.
+    if matches!(seq.recognizer, SequenceRecognizer::None) {
+        // Try text-based detection first, then Harmony token-based detection.
+        let grm = if let Some(ref t) = seq.tools {
+            seq.peek_delta()
+                .ok()
+                .flatten()
+                .and_then(|text| t.build_tool_call_grammar(text.as_str()))
+        } else {
+            None
+        };
+        let grm = grm.or_else(|| {
+            if seq.needs_harmony_tool_grammar() {
+                let recipient = seq.harmony_current_tool_recipient();
+                seq.tools
+                    .as_ref()?
+                    .build_harmony_tool_grammar(recipient.as_deref())
+            } else {
+                None
+            }
+        });
+
+        if let Some(grm) = grm {
+            if let Some(ref factory) = metadata.llg_factory {
+                match crate::pipeline::llg::constraint_from_llg_grammar(factory, grm) {
+                    Ok(matcher) => {
+                        tracing::debug!("Activated tool call grammar");
+                        seq.recognizer = SequenceRecognizer::Llguidance(Box::new(matcher));
+                        seq.set_tool_grammar_active(true);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to build tool call grammar: {e}. \
+                             Continuing without constraint."
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     // Handle streaming requests
     if seq.get_mut_group().is_streaming {
         let mut tool_use_still_possible = false;
         let mut tool_use_is_done = false;
         if let Some(ref t) = seq.tools {
             if let Ok(Some(ref d)) = seq.peek_delta() {
-                (tool_use_still_possible, tool_use_is_done) =
-                    t.prefix_could_be_tool(this, d.as_str())?;
+                (tool_use_still_possible, tool_use_is_done) = t.prefix_could_be_tool(d.as_str())?;
             }
         };
 
-        // let send = seq.get_toks().len() % 2 == 0 || is_done.is_some();
-        let send = true;
         // Send chunks when:
         // 1. Tool call is not possible (!tool_use_still_possible) - normal streaming
         // 2. Tool call is complete (tool_use_is_done) - send the tool call
         // 3. Sequence is done (is_done.is_some()) - send buffered output as text since it wasn't a valid tool call
         if !tool_use_still_possible || tool_use_is_done || is_done.is_some() {
-            if send {
-                if is_done.is_some() && seq.reasoning_mode().is_some() {
-                    seq.finalize_reasoning();
-                }
-                let delta_result = seq.get_delta();
-                if let Some(delta) = crate::handle_seq_error_ok!(delta_result, seq.responder()) {
-                    if seq.get_mut_group().is_chat {
-                        let (content_delta, reasoning_delta) = if seq.reasoning_mode().is_some() {
-                            (
-                                seq.get_response_content_delta(),
-                                seq.get_reasoning_content_delta(),
-                            )
-                        } else {
-                            let (text_new, _) =
-                                parse_text_tools(this, delta.as_str(), seq.tools.clone())
-                                    .map_err(candle_core::Error::msg)?;
-                            (text_new.map(ToString::to_string), None)
-                        };
+            if is_done.is_some() && seq.reasoning_mode().is_some() {
+                seq.finalize_reasoning();
+            }
+            let delta_result = seq.get_delta();
+            if let Some(delta) = crate::handle_seq_error_ok!(delta_result, seq.responder()) {
+                if seq.get_mut_group().is_chat {
+                    let (content_delta, reasoning_delta) = if seq.reasoning_mode().is_some() {
+                        (
+                            seq.get_response_content_delta(),
+                            seq.get_reasoning_content_delta(),
+                        )
+                    } else {
+                        let (text_new, _) = parse_text_tools(delta.as_str(), seq.tools.clone())
+                            .map_err(candle_core::Error::msg)?;
+                        (text_new.map(ToString::to_string), None)
+                    };
 
-                        // Detect tool calls
-                        let tool_calls = if seq.is_harmony_mode() {
-                            // In Harmony mode, only finalize tool calls when the sequence is done
-                            // (EOS token or stop string), not when we first detect a tool call.
-                            // This ensures tool call arguments are fully generated.
-                            if is_done.is_some() && seq.has_harmony_tool_calls() {
-                                // Sequence is done and has tool calls - finalize and send them
-                                is_done = Some(StopReason::ToolCalls);
-                                let harmony_tool_calls = seq.get_harmony_tool_calls();
-                                harmony_tool_calls
-                                    .into_iter()
-                                    .enumerate()
-                                    .map(|(i, tc)| ToolCallResponse {
-                                        index: i,
-                                        id: tc.id,
-                                        tp: ToolCallType::Function,
-                                        function: CalledFunction {
-                                            name: tc.name,
-                                            arguments: tc.arguments,
-                                        },
-                                    })
-                                    .collect()
-                            } else {
-                                vec![]
-                            }
+                    // Detect tool calls
+                    let tool_calls = if seq.is_harmony_mode() {
+                        // In Harmony mode, only finalize tool calls when the sequence is done
+                        // (EOS token or stop string), not when we first detect a tool call.
+                        // This ensures tool call arguments are fully generated.
+                        if is_done.is_some() && seq.has_harmony_tool_calls() {
+                            // Sequence is done and has tool calls - finalize and send them
+                            is_done = Some(StopReason::ToolCalls);
+                            let harmony_tool_calls = seq.get_harmony_tool_calls();
+                            harmony_tool_calls
+                                .into_iter()
+                                .enumerate()
+                                .map(|(i, tc)| ToolCallResponse {
+                                    index: i,
+                                    id: tc.id,
+                                    tp: ToolCallType::Function,
+                                    function: CalledFunction {
+                                        name: tc.name,
+                                        arguments: tc.arguments,
+                                    },
+                                })
+                                .collect()
                         } else {
-                            // Not in Harmony mode - parse text for tool calls
-                            let (_, tool_calls) =
-                                parse_text_tools(this, delta.as_str(), seq.tools.clone())
-                                    .map_err(candle_core::Error::msg)?;
-                            if !tool_calls.is_empty() {
-                                is_done = Some(StopReason::ToolCalls);
-                            }
-                            tool_calls
-                        };
+                            vec![]
+                        }
+                    } else {
+                        // Not in Harmony mode - parse text for tool calls
+                        let (_, tool_calls) = parse_text_tools(delta.as_str(), seq.tools.clone())
+                            .map_err(candle_core::Error::msg)?;
+                        if !tool_calls.is_empty() {
+                            is_done = Some(StopReason::ToolCalls);
+                        }
+                        tool_calls
+                    };
 
-                        seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
-                            delta: crate::Delta {
-                                content: fixup_sentencepiece!(Option content_delta),
-                                role: "assistant".to_string(),
-                                tool_calls: Some(tool_calls).filter(|v| !v.is_empty()),
-                                reasoning_content: reasoning_delta,
-                            },
+                    seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
+                        delta: crate::Delta {
+                            content: fixup_sentencepiece!(Option content_delta),
+                            role: "assistant".to_string(),
+                            tool_calls: Some(tool_calls).filter(|v| !v.is_empty()),
+                            reasoning_content: reasoning_delta,
+                        },
+                        index: seq.get_response_index(),
+                        finish_reason: is_done.map(|x| x.to_string()),
+                        logprobs: if seq.return_logprobs() {
+                            Some(crate::ResponseLogprob {
+                                token: delta,
+                                bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
+                                logprob: logprobs.logprob,
+                                top_logprobs: logprobs.top_logprobs.unwrap().clone(),
+                            })
+                        } else {
+                            None
+                        },
+                    });
+                } else {
+                    seq.add_streaming_completion_chunk_choice_to_group(
+                        crate::CompletionChunkChoice {
+                            text: fixup_sentencepiece!(delta),
                             index: seq.get_response_index(),
                             finish_reason: is_done.map(|x| x.to_string()),
                             logprobs: if seq.return_logprobs() {
@@ -158,26 +212,8 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             } else {
                                 None
                             },
-                        });
-                    } else {
-                        seq.add_streaming_completion_chunk_choice_to_group(
-                            crate::CompletionChunkChoice {
-                                text: fixup_sentencepiece!(delta),
-                                index: seq.get_response_index(),
-                                finish_reason: is_done.map(|x| x.to_string()),
-                                logprobs: if seq.return_logprobs() {
-                                    Some(crate::ResponseLogprob {
-                                        token: delta,
-                                        bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
-                                        logprob: logprobs.logprob,
-                                        top_logprobs: logprobs.top_logprobs.unwrap().clone(),
-                                    })
-                                } else {
-                                    None
-                                },
-                            },
-                        );
-                    }
+                        },
+                    );
                 }
             }
 
@@ -309,7 +345,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             })
                             .collect()
                     } else if let Some(ref content) = final_content {
-                        let (_, tc) = parse_text_tools(this, content.as_str(), seq.tools.clone())
+                        let (_, tc) = parse_text_tools(content.as_str(), seq.tools.clone())
                             .map_err(candle_core::Error::msg)?;
                         tc
                     } else {
@@ -318,9 +354,8 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 
                     (final_content, tool_calls, reasoning)
                 } else {
-                    let (text_new, tool_calls) =
-                        parse_text_tools(this, text.as_str(), seq.tools.clone())
-                            .map_err(candle_core::Error::msg)?;
+                    let (text_new, tool_calls) = parse_text_tools(text.as_str(), seq.tools.clone())
+                        .map_err(candle_core::Error::msg)?;
                     (text_new.map(ToString::to_string), tool_calls, None)
                 };
 
@@ -559,6 +594,18 @@ pub async fn sample_sequence(
             }
         }
         SequenceRecognizer::None => {}
+    }
+
+    // Deactivate mid-stream tool grammar when the grammar has completed
+    // (i.e. the full tool call body and closing delimiter have been
+    // generated).  This allows re-activation for subsequent tool calls
+    // in multi-tool-call turns.
+    if let SequenceRecognizer::Llguidance(ref llg) = seq.recognizer {
+        if llg.is_stopped() && seq.is_tool_grammar_active() {
+            seq.recognizer = SequenceRecognizer::None;
+            seq.set_tool_grammar_active(false);
+            tracing::debug!("Deactivated tool call grammar (body complete)");
+        }
     }
 
     Ok(second_logprobs_response)

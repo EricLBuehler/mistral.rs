@@ -5,6 +5,7 @@
     clippy::too_many_arguments
 )]
 
+use crate::layers_masker::CausalMaskConfig;
 use std::sync::Arc;
 
 use candle_core::{DType, Device, Result, Tensor};
@@ -16,7 +17,7 @@ use mistralrs_quant::{
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
     layers::{
@@ -53,7 +54,7 @@ impl CausalSelfAttention {
     fn forward(
         &self,
         x: &Tensor,
-        attention_mask: &Option<Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         block_idx: usize,
         kv_cache: &mut crate::pipeline::LayerCaches,
@@ -97,7 +98,7 @@ impl CausalSelfAttention {
                     &q,
                     &k,
                     &v,
-                    attention_mask.clone().as_ref(),
+                    attention_mask,
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
@@ -109,12 +110,12 @@ impl CausalSelfAttention {
                     // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
                     let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
                     // Sanity check.
-                    assert!(attention_mask.is_some());
+                    assert!(!matches!(attention_mask, AttentionMask::None));
                     paged_attn.forward(
                         &q,
                         &k,
                         &v,
-                        attention_mask.clone().as_ref(),
+                        attention_mask,
                         None,
                         None,
                         &input_metadata,
@@ -131,7 +132,7 @@ impl CausalSelfAttention {
                     &q,
                     &k,
                     &v,
-                    attention_mask.clone().as_ref(),
+                    attention_mask,
                     Some(flash_params),
                     &self.sdpa_params,
                 )?
@@ -141,7 +142,7 @@ impl CausalSelfAttention {
         if let Some(t) = self.q_proj.quantized_act_type() {
             y = y.to_dtype(t)?;
         }
-        y = if attention_mask.is_some() {
+        y = if !matches!(attention_mask, AttentionMask::None) {
             y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
         } else {
             y.reshape((b_sz, seq_len, ()))?
@@ -346,7 +347,7 @@ impl Block {
     fn forward(
         &self,
         x: &Tensor,
-        attention_mask: &Option<Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         block_idx: usize,
         kv_cache: &mut crate::pipeline::LayerCaches,
@@ -585,27 +586,30 @@ impl LLaVALLM for Llama {
     ) -> Result<Tensor> {
         let mut x = input_embed;
         let mut cache = self.kv_cache.full().lock();
-        let mask = CausalMasker.make_causal_mask_matrix(
+        let mask = CausalMasker.make_causal_mask(
             input_ids,
             metadata
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(&*cache as &dyn PastKvLenCache),
             x.dtype(),
-            self.blocks[0].attn.num_attention_heads,
+            &CausalMaskConfig::default(),
         )?;
-        let mask = mask.filter(|_| {
-            metadata
-                .as_ref()
-                .map(|(_, meta)| meta.is_first_prompt_chunk)
-                .unwrap_or(true)
-        });
+        let mask = if metadata
+            .as_ref()
+            .map(|(_, meta)| meta.is_first_prompt_chunk)
+            .unwrap_or(true)
+        {
+            mask
+        } else {
+            AttentionMask::None
+        };
         let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
             x = block.forward(
                 &x,
-                &mask.as_ref().map(|m| m.get(x.device()).clone()),
+                &mask.get(x.device()),
                 seqlen_offsets,
                 block_idx,
                 &mut cache,

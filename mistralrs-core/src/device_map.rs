@@ -591,46 +591,59 @@ impl DeviceMapper for NcclPipelineParallelMapper {
 /// (which allocates new GPU storage each time when src != dst device), create a
 /// `DeviceMappedMask` once before the loop and call `.get(device)` inside the loop
 /// for zero-allocation mask lookup.
-pub struct DeviceMappedMask {
-    masks: HashMap<DeviceLocation, Tensor>,
+pub enum DeviceMappedMask {
+    /// No masking.
+    None,
+    /// Flash attention handles causality. No tensor needed.
+    CausalFlash,
+    /// Explicit mask tensor, replicated to each device.
+    Custom(HashMap<DeviceLocation, Tensor>),
 }
 
 impl DeviceMappedMask {
-    /// Build a device-mapped mask. Returns `Ok(None)` when the input mask is `None`.
-    pub fn new(mask: Option<Tensor>, mapper: &dyn DeviceMapper) -> Result<Option<Self>> {
-        let mask = match mask {
-            Some(m) => m,
-            None => return Ok(None),
-        };
-        let mut masks = HashMap::new();
-        for device in mapper.get_unique_devices() {
-            let loc = device.location();
-            if let std::collections::hash_map::Entry::Vacant(e) = masks.entry(loc) {
-                e.insert(mask.to_device(&device)?);
+    /// Build a device-mapped mask from an [`AttentionMask`].
+    pub fn new(mask: crate::attention::AttentionMask, mapper: &dyn DeviceMapper) -> Result<Self> {
+        match mask {
+            crate::attention::AttentionMask::None => Ok(Self::None),
+            crate::attention::AttentionMask::CausalFlash => Ok(Self::CausalFlash),
+            crate::attention::AttentionMask::Custom(tensor) => {
+                let mut masks = HashMap::new();
+                for device in mapper.get_unique_devices() {
+                    let loc = device.location();
+                    if let std::collections::hash_map::Entry::Vacant(e) = masks.entry(loc) {
+                        e.insert(tensor.to_device(&device)?);
+                    }
+                }
+                Ok(Self::Custom(masks))
             }
         }
-        Ok(Some(Self { masks }))
     }
 
     /// Build a device-mapped mask from a single tensor on its current device.
-    /// Useful for quantized models where the mapper may be `None`.
-    /// Returns `None` when the input mask is `None`.
-    pub fn from_single(mask: Option<Tensor>) -> Option<Self> {
-        mask.map(|m| {
-            let mut masks = HashMap::new();
-            masks.insert(m.device().location(), m);
-            Self { masks }
-        })
+    pub fn from_single(mask: crate::attention::AttentionMask) -> Self {
+        match mask {
+            crate::attention::AttentionMask::None => Self::None,
+            crate::attention::AttentionMask::CausalFlash => Self::CausalFlash,
+            crate::attention::AttentionMask::Custom(tensor) => {
+                let mut masks = HashMap::new();
+                masks.insert(tensor.device().location(), tensor);
+                Self::Custom(masks)
+            }
+        }
     }
 
-    /// Look up the pre-allocated mask for the given device.
-    ///
-    /// # Panics
-    /// Panics if `device` was not among the mapper's unique devices.
-    pub fn get(&self, device: &Device) -> &Tensor {
-        self.masks
-            .get(&device.location())
-            .expect("DeviceMappedMask: device not in mapper's unique devices")
+    /// Look up the [`AttentionMask`] for the given device.
+    pub fn get(&self, device: &Device) -> crate::attention::AttentionMask {
+        match self {
+            Self::None => crate::attention::AttentionMask::None,
+            Self::CausalFlash => crate::attention::AttentionMask::CausalFlash,
+            Self::Custom(masks) => {
+                let tensor = masks
+                    .get(&device.location())
+                    .expect("DeviceMappedMask: device not in mapper's unique devices");
+                crate::attention::AttentionMask::Custom(tensor.clone())
+            }
+        }
     }
 }
 

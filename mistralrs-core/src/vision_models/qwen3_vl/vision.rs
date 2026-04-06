@@ -5,7 +5,7 @@ use candle_nn::{Embedding, LayerNorm, LayerNormConfig, Linear, Module};
 use mistralrs_quant::{QuantizedConfig, ShardedVarBuilder};
 
 use crate::{
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     layers::{self, Activation, Conv3dConfig, Conv3dNoBias, Sdpa},
     pipeline::text_models_inputs_processor::FlashParams,
     utils::unvarbuilder::UnVarBuilder,
@@ -188,7 +188,7 @@ impl VisionAttention {
                     &q_chunk.unsqueeze(0)?,
                     &k_chunk.unsqueeze(0)?,
                     &v_chunk.unsqueeze(0)?,
-                    None,
+                    &AttentionMask::None,
                     Some(&flash_params),
                     &SdpaParams {
                         n_kv_groups: 1,

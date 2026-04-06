@@ -19,7 +19,7 @@ use mistralrs_quant::{
 use serde::{Deserialize, Serialize};
 
 pub use crate::attention::Sdpa;
-pub use crate::layers_masker::CausalMasker;
+pub use crate::layers_masker::{CausalMaskConfig, CausalMasker};
 pub use crate::layers_utils::repeat_kv;
 use crate::{
     amoe::{AnyMoeTrainableLayer, MlpLayer},

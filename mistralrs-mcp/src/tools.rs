@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -36,6 +36,41 @@ pub struct Function {
     pub name: String,
     #[serde(alias = "arguments")]
     pub parameters: Option<HashMap<String, Value>>,
+    /// When `true`, the tool's `parameters` JSON schema is enforced on the
+    /// generated arguments via constrained decoding (llguidance).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
+}
+
+impl Function {
+    /// Returns the parameters as a JSON Schema [`Value`] when strict mode is
+    /// enabled.  Returns `None` when strict is absent or `false`.
+    pub fn strict_parameters_schema(&self) -> Option<Value> {
+        if self.strict != Some(true) {
+            return None;
+        }
+        match &self.parameters {
+            Some(p) => match serde_json::to_value(p) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to serialize parameters for strict tool `{}`: {e}. \
+                         Falling back to generic object schema.",
+                        self.name,
+                    );
+                    Some(json!({"type": "object"}))
+                }
+            },
+            None => {
+                tracing::warn!(
+                    "Tool `{}` has strict: true but no parameters schema defined. \
+                     Cannot enforce strict mode — falling back to generic object schema.",
+                    self.name,
+                );
+                Some(json!({"type": "object"}))
+            }
+        }
+    }
 }
 
 /// Tool definition

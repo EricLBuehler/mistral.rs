@@ -37,7 +37,7 @@ Fast, flexible LLM inference.
 - **Built-in web UI**: `mistralrs serve --ui` gives you a web interface instantly.
 - **Hardware-aware**: `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
-- **Agentic features** — tool calling, web search, and MCP client built in
+- **[Agentic features](docs/AGENTS.md)** — server-side tool loop, web search, MCP client, and HTTP tool dispatch
 
 ## Quick Start
 
@@ -120,9 +120,12 @@ mistralrs doctor
 - [Multiple models](docs/multi_model/README.md): Load/unload at runtime
 
 **Agentic Features**
-- Integrated [tool calling](docs/TOOL_CALLING.md) with Python/Rust callbacks
-- ⭐ [Web search integration](docs/WEB_SEARCH.md)
-- ⭐ [MCP client](docs/MCP/client.md): Connect to external tools automatically
+- Integrated [tool calling](docs/TOOL_CALLING.md) with grammar enforcement and strict schema mode
+- ⭐ Server-side [agentic loop](docs/TOOL_CALLING.md#agentic-loop): auto-execute tools and feed results back
+- ⭐ [Tool dispatch URL](docs/TOOL_CALLING.md#tool-dispatch-url): POST tool calls to your own endpoint
+- ⭐ [Web search integration](docs/WEB_SEARCH.md) with embedding-based ranking
+- ⭐ [MCP client](docs/MCP/client.md): Connect to external tools via Process, HTTP, or WebSocket
+- Python/Rust [tool callbacks](docs/TOOL_CALLING.md#tool-callbacks) for custom execution
 
 [Full feature documentation](docs/README.md)
 

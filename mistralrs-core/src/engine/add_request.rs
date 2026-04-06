@@ -33,11 +33,13 @@ impl Engine {
                     &request.messages,
                     RequestMessage::Chat { .. } | RequestMessage::MultimodalChat { .. }
                 );
-                let has_tooling =
-                    !self.tool_callbacks.is_empty() || !self.tool_callbacks_with_tools.is_empty();
+                let has_tooling = !self.tool_callbacks.is_empty()
+                    && request.tools.as_ref().is_some_and(|t| !t.is_empty());
                 let has_search = request.web_search_options.is_some();
+                let has_agentic =
+                    request.max_tool_rounds.is_some() || request.tool_dispatch_url.is_some();
 
-                if is_chat && (has_search || has_tooling) {
+                if is_chat && (has_search || has_tooling || has_agentic) {
                     search_request::search_request(self.clone(), *request).await;
                 } else {
                     self.add_request(*request).await;
@@ -142,7 +144,10 @@ impl Engine {
         };
         let has_tools = request.tools.as_ref().is_some_and(|t| !t.is_empty());
         let matcher = Arc::new(handle_seq_error!(
-            ToolCallingMatcher::new(request.tool_choice.unwrap_or(ToolChoice::Auto),),
+            ToolCallingMatcher::new(
+                request.tool_choice.unwrap_or(ToolChoice::Auto),
+                request.tools.as_deref(),
+            ),
             request.response
         ));
 

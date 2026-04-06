@@ -883,6 +883,23 @@ pub trait IsqModel {
                         );
                         std::fs::write(&chat_template_jinja_out, template)
                             .map_err(candle_core::Error::msg)?;
+
+                        // When the chat template is a .jinja file, also save the
+                        // tokenizer_config.json that lives alongside it. This file
+                        // contains bos_token/eos_token/unk_token which are needed
+                        // to render the template correctly. Without it, special
+                        // tokens render as "none" in minijinja.
+                        let sibling_cfg = template_filename
+                            .parent()
+                            .map(|dir| dir.join("tokenizer_config.json"));
+                        if let Some(cfg_path) = sibling_cfg.filter(|p| p.exists()) {
+                            info!(
+                                "Serializing tokenizer config to `{}`.",
+                                tokenizer_cfg_out.display()
+                            );
+                            std::fs::copy(&cfg_path, &tokenizer_cfg_out)
+                                .map_err(candle_core::Error::msg)?;
+                        }
                     } else {
                         info!(
                             "Serializing tokenizer config to `{}`.",

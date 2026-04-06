@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
@@ -9,7 +10,7 @@ use statrs::distribution::{ContinuousCDF, Normal};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
         self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, MatMul, RmsNorm,
@@ -386,8 +387,8 @@ impl Attention {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
-        sliding_attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
+        sliding_attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_caches: &mut [KvCache],
         flash_params: &FlashParams,
@@ -435,53 +436,48 @@ impl Attention {
 
         // Adjust mask dimensions if using shared KV cache
         let mask = if is_shared_kv {
-            if let Some(mask) = mask {
+            if let AttentionMask::Custom(mask) = mask {
                 let kv_seq_len = k.dims()[2];
                 let mask_dims = mask.dims();
 
                 // Only narrow when the target dimension is strictly longer; otherwise reuse as-is.
-                match mask.rank() {
+                let narrowed = match mask.rank() {
                     2 => {
                         // 2D masks: (q_len, kv_len)
                         if mask_dims[1] > kv_seq_len {
-                            Some(mask.narrow(1, 0, kv_seq_len)?)
+                            mask.narrow(1, 0, kv_seq_len)?
                         } else {
-                            Some(mask.clone())
+                            mask.clone()
                         }
                     }
                     3 => {
                         // 3D masks: (batch, q_len, kv_len)
                         if mask_dims[2] > kv_seq_len {
-                            Some(mask.narrow(2, 0, kv_seq_len)?)
+                            mask.narrow(2, 0, kv_seq_len)?
                         } else {
-                            Some(mask.clone())
+                            mask.clone()
                         }
                     }
                     4 => {
                         // 4D masks: (batch, heads, q_len, kv_len)
                         if mask_dims[3] > kv_seq_len {
-                            Some(mask.narrow(3, 0, kv_seq_len)?)
+                            mask.narrow(3, 0, kv_seq_len)?
                         } else {
-                            Some(mask.clone())
+                            mask.clone()
                         }
                     }
-                    _ => Some(mask.clone()),
-                }
+                    _ => mask.clone(),
+                };
+                AttentionMask::Custom(narrowed)
             } else {
-                None
+                AttentionMask::None
             }
         } else {
-            mask.cloned()
+            mask.clone()
         };
 
-        let mut attn_output = Sdpa.run_attention(
-            &q,
-            &k,
-            &v,
-            mask.as_ref(),
-            Some(flash_params),
-            &self.sdpa_params,
-        )?;
+        let mut attn_output =
+            Sdpa.run_attention(&q, &k, &v, &mask, Some(flash_params), &self.sdpa_params)?;
 
         attn_output = attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?;
         self.o_proj.forward_autocast(&attn_output)
@@ -755,8 +751,8 @@ impl DecoderLayer {
         &self,
         xs: &Tensor,
         per_layer_input: &Tensor,
-        attention_mask: Option<&Tensor>,
-        sliding_attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
+        sliding_attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_caches: &mut [KvCache],
         flash_params: &FlashParams,
@@ -1336,18 +1332,20 @@ impl TextModel {
         let per_layer_inputs = per_layer_inputs.to_dtype(xs.dtype())?;
 
         let cache = &mut self.cache.normal().0;
-        let attention_mask = CausalMasker.make_causal_mask_matrix(
+        let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &*cache,
             xs.dtype(),
-            self.cfg.num_attn_heads,
+            &CausalMaskConfig::default(),
         )?;
-        let sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+        let sliding_attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &*cache,
-            Some(self.sliding_window),
             xs.dtype(),
-            self.cfg.num_attn_heads,
+            &CausalMaskConfig {
+                sliding_window: Some(self.sliding_window),
+                ..Default::default()
+            },
         )?;
 
         // Already using float32 for magnitude calculations
@@ -1385,8 +1383,8 @@ impl TextModel {
             xs = layer.forward(
                 &xs,
                 &per_layer_input.to_device(xs.device())?,
-                attention_mask.as_ref().map(|m| m.get(xs.device())),
-                sliding_attention_mask.as_ref().map(|m| m.get(xs.device())),
+                &attention_mask.get(xs.device()),
+                &sliding_attention_mask.get(xs.device()),
                 seqlen_offsets,
                 &mut *cache,
                 flash_params,
