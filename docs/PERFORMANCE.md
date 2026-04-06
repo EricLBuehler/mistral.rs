@@ -18,29 +18,13 @@ For precise recommendations, use `mistralrs tune -m <model>` which analyzes your
 
 ## The Performance Stack
 
-When a request arrives, it passes through several optimization layers:
+mistral.rs has several independent optimization layers. You can use any combination:
 
-```
-Request
-  |
-  v
-[Quantization] ---- Reduces model weight memory (ISQ, GGUF, UQFF)
-  |
-  v
-[Prefill] --------- Processes prompt tokens (FlashAttention accelerates this)
-  |
-  v
-[Decode] ---------- Generates tokens one at a time (PagedAttention manages KV cache)
-  |                  (MLA compresses KV cache for DeepSeek/GLM models)
-  |
-  v
-[Speculative] ----- Draft model proposes multiple tokens at once (optional)
-  |
-  v
-Response
-```
-
-Each layer is independent — you can use any combination.
+- **Quantization** — Reduces model weight memory (ISQ, GGUF, UQFF)
+- **FlashAttention** — Accelerates prompt processing (prefill phase)
+- **PagedAttention** — Efficiently manages KV cache memory during generation
+- **MLA** — Compresses KV cache for DeepSeek/GLM models
+- **Speculative Decoding** — Uses a draft model to propose multiple tokens at once
 
 ## Quantization: Choosing a Method
 
@@ -48,27 +32,36 @@ Quantization reduces model size by using lower-precision weights. mistral.rs off
 
 | Method | When to use | Details |
 |---|---|---|
-| **ISQ** (`--isq 4`) | Default choice. Quantize any model at load time | [ISQ docs](ISQ.md) |
+| **ISQ** (`--isq <level>`) | Default choice. Quantize any model at load time. Levels: 2-8 | [ISQ docs](ISQ.md) |
 | **GGUF** (`--format gguf`) | Load pre-quantized GGUF files from the community | [GGUF section](QUANTS.md#using-a-gguf-quantized-model) |
 | **UQFF** (`--from-uqff`) | Load pre-quantized UQFF files (faster startup than ISQ) | [UQFF docs](UQFF.md) |
 | **Topology** (`--topology`) | Per-layer control: different quantization per layer | [Topology docs](TOPOLOGY.md) |
 | **GPTQ/AWQ** | Use GPTQ or AWQ models from HF (auto-detected, CUDA only) | [GPTQ/AWQ section](QUANTS.md#using-a-gptq-quantized-model) |
 
-**ISQ levels at a glance** (approximate, for a 7B parameter model):
+**ISQ levels at a glance:**
 
-| Level | VRAM | Quality | Best for |
-|---|---|---|---|
-| `--isq 8` (Q8_0) | ~7 GB | Near-lossless | When you have the VRAM |
-| `--isq 6` (Q6K) | ~5.5 GB | Good | Balanced quality/size |
-| `--isq 4` (Q4K) | ~4 GB | Acceptable | Most common choice |
-| `--isq 3` (Q3K) | ~3 GB | Degraded | Tight VRAM budget |
-| `--isq 2` (Q2K) | ~2.5 GB | Significantly degraded | Extreme constraint |
+| Level | Quality | Notes |
+|---|---|---|
+| `--isq 8` (Q8_0/AFQ8) | Near-lossless | Use when you have VRAM headroom |
+| `--isq 6` (Q6K/AFQ6) | Good | Balanced quality and size |
+| `--isq 5` (Q5K) | Good | Slightly better quality than Q4K |
+| `--isq 4` (Q4K/AFQ4) | Acceptable | Most common choice |
+| `--isq 3` (Q3K/AFQ3) | Degraded | Tight VRAM budget |
+| `--isq 2` (Q2K/AFQ2) | Significantly degraded | Extreme constraint |
 
-On **Metal**, `--isq 4` uses AFQ4 (optimized for Apple Silicon). On **CUDA/CPU**, it uses Q4K.
+On **Metal**, ISQ will prefer using AFQ (optimized for Apple Silicon). On **CUDA/CPU**, it uses Q/K quantization.
 
 To improve ISQ accuracy, use an importance matrix: `--calibration-file calibration_data/calibration_datav3_small.txt`. See [Importance Matrix](IMATRIX.md).
 
-For MoE models (DeepSeek, Qwen3 MoE, GLM-4.7), use `--isq-organization moqe` to only quantize expert layers. See [MoQE](ISQ.md#isq-quantization-types).
+### MoQE: Smarter Quantization for MoE Models
+
+For Mixture of Experts models (DeepSeek V2/V3, Qwen3 MoE, Qwen3-VL MoE, GLM-4.7), [MoQE](https://arxiv.org/abs/2310.02410) quantizes only the expert layers while keeping attention and other layers at higher precision. This preserves more quality than uniform quantization since expert layers make up the bulk of parameters in MoE models.
+
+```bash
+mistralrs run --isq 4 --isq-organization moqe -m deepseek-ai/DeepSeek-R1
+```
+
+MoQE is available in the CLI (`--isq-organization moqe`), Python SDK (`organization="MoQE"`), and Rust SDK. See [ISQ docs](ISQ.md#isq-quantization-types) for the full list of supported models.
 
 > Full quantization reference: [Quantization Overview](QUANTS.md)
 
@@ -77,7 +70,7 @@ For MoE models (DeepSeek, Qwen3 MoE, GLM-4.7), use `--isq-organization moqe` to 
 PagedAttention manages KV cache memory efficiently, enabling longer contexts and higher throughput through continuous batching.
 
 **Default behavior:**
-- **CUDA**: Enabled automatically, allocates 90% of free VRAM for KV cache
+- **CUDA**: Enabled automatically
 - **Metal**: Disabled by default (enable with `--paged-attn on`)
 - **CPU**: Not supported
 
@@ -184,7 +177,7 @@ This measures prefill speed (tokens/sec processing the prompt) and decode speed 
 
 - **Prefill T/s**: Higher is better. Affected by FlashAttention, GPU compute.
 - **Decode T/s**: Higher is better. Affected by memory bandwidth, quantization, PagedAttention.
-- **TTFT (Time to First Token)**: The prefill latency in ms. Critical for interactive use.
+- **TTFT (Time to First Token)**: The prefill latency in ms.
 
 **Automated recommendations:**
 
@@ -193,45 +186,3 @@ mistralrs tune -m <model>
 ```
 
 Shows a table of quantization options ranked by fit, quality, and performance for your hardware. Use `--profile quality` or `--profile fast` to shift the ranking.
-
-## Optimization Recipes
-
-### Maximum throughput server (CUDA)
-
-```bash
-mistralrs serve -m <model> \
-  --isq 4 \
-  --pa-memory-fraction 0.9 \
-  --max-seqs 32
-```
-
-Key: maximize PagedAttention memory, allow many concurrent sequences.
-
-### Lowest VRAM for a 70B model
-
-```bash
-MISTRALRS_NO_NCCL=1 mistralrs serve -m <70B-model> \
-  --isq 3 \
-  --pa-context-len 4096 \
-  --max-seq-len 4096
-```
-
-Key: aggressive quantization, limit context length, auto device mapping offloads to CPU.
-
-### Fastest TTFT for interactive chat
-
-```bash
-mistralrs serve -m <model> \
-  --isq 4 \
-  --prefix-cache-n 16
-```
-
-Key: prefix caching reuses KV cache across turns. FlashAttention (compile-time flag) accelerates prefill.
-
-### Apple Silicon optimization
-
-```bash
-mistralrs serve -m <model> --isq 4
-```
-
-On Metal, `--isq 4` automatically uses AFQ4 which is optimized for Apple Silicon. PagedAttention is off by default on Metal — enable with `--paged-attn on` if you need higher throughput. The auto device mapper respects unified memory limits.

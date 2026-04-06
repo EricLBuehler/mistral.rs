@@ -1,44 +1,28 @@
 # Idefics 2 Model: [`HuggingFaceM4/idefics2-8b-chatty`](https://huggingface.co/HuggingFaceM4/idefics2-8b-chatty)
 
-The Idefics 2 Model has support in the Rust, Python, and HTTP APIs. The Idefics 2 Model also supports ISQ for increased performance. 
+The Idefics 2 Model has support in the Rust, Python, and HTTP APIs. The Idefics 2 Model also supports ISQ for increased performance.
 
 > Note: Some of examples use our [Cephalo model series](https://huggingface.co/collections/lamm-mit/cephalo-664f3342267c4890d2f46b33) but could be used with any model ID.
 
-The Python and HTTP APIs support sending images as:
-- URL
-- Path to a local image
-- [Base64](https://en.wikipedia.org/wiki/Base64) encoded string
+## Quick Start
 
-The Rust SDK takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
-
-## HTTP server
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/idefics2.py).
-
-We support an OpenAI compatible HTTP API for multimodal models. This example demonstrates sending a chat completion request with an image.
-
-> Note: The image_url may be either a path, URL, or a base64 encoded string.
-
----
-
-**Image:**
-<img src="https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg" width = "1000" height = "666">
-
-**Prompt:**
-```
-What is shown in this image?
+```bash
+mistralrs run -m HuggingFaceM4/idefics2-8b-chatty --isq 4 --image photo.jpg -i "Describe this image"
 ```
 
-**Output:**
-```
-The image depicts a group of orange ants climbing over a black pole. The ants are moving in the same direction, forming a line as they ascend the pole.
-```
+## Input Formats
 
----
+The Python and HTTP APIs support sending inputs as:
+- **Images**: URL, path to a local file, or base64 encoded string (via `image_url`)
+
+The Rust SDK takes images from the [image](https://docs.rs/image/latest/image/index.html) crate.
+
+## HTTP API
 
 1) Start the server
 
-```
-mistralrs serve multimodal -p 1234 --isq 4 -m HuggingFaceM4/idefics2-8b-chatty
+```bash
+mistralrs serve -m HuggingFaceM4/idefics2-8b-chatty --isq 4 -p 1234
 ```
 
 2) Send a request
@@ -57,34 +41,71 @@ completion = client.chat.completions.create(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": "https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg"
+                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
                     },
                 },
                 {
                     "type": "text",
-                    "text": "What is shown in this image?",
+                    "text": "What is this?",
                 },
             ],
         },
     ],
     max_tokens=256,
-    frequency_penalty=1.0,
-    top_p=0.1,
-    temperature=0,
 )
-resp = completion.choices[0].message.content
-print(resp)
+print(completion.choices[0].message.content)
 ```
 
 - You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_base64.py).
 - You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/phi3v_local_img.py).
 
----
+## Python SDK
 
-## Rust
+You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py).
+
+```py
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
+
+runner = Runner(
+    which=Which.MultimodalPlain(
+        model_id="lamm-mit/Cephalo-Idefics-2-vision-8b-beta",
+        arch=MultimodalArchitecture.Idefics2,
+    ),
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "What is shown in this image?",
+                    },
+                ],
+            },
+        ],
+        max_tokens=256,
+    )
+)
+print(res.choices[0].message.content)
+print(res.usage)
+```
+
+- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).
+
+## Rust SDK
+
 You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/multimodal_models/main.rs).
-
-This is a minimal example of running the Idefics 2 model with a dummy image.
 
 ```rust
 use anyhow::Result;
@@ -124,55 +145,4 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-
 ```
-
-## Python
-You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v.py).
-
-This example demonstrates loading and sending a chat completion request with an image.
-
-> Note: the image_url may be either a path, URL, or a base64 encoded string.
-
-```py
-from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
-
-runner = Runner(
-    which=Which.MultimodalPlain(
-        model_id="lamm-mit/Cephalo-Idefics-2-vision-8b-beta",
-        arch=MultimodalArchitecture.Idefics2,
-    ),
-)
-
-res = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="default",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg"
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": "What is shown in this image?",
-                    },
-                ],
-            },
-        ],
-        max_tokens=256,
-        presence_penalty=1.0,
-        top_p=0.1,
-        temperature=0.1,
-    )
-)
-print(res.choices[0].message.content)
-print(res.usage)
-```
-
-- You can find an example of encoding the [image via base64 here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/phi3v_local_img.py).
