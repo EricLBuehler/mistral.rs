@@ -237,6 +237,9 @@ pub struct MistralRsForServerBuilder {
 
     /// PagedAttention KV cache type
     paged_cache_type: PagedCacheType,
+
+    /// Idle timeout in seconds. Models are auto-unloaded after this many seconds without requests.
+    idle_timeout_secs: u64,
 }
 
 impl Default for MistralRsForServerBuilder {
@@ -269,6 +272,7 @@ impl Default for MistralRsForServerBuilder {
             search_callback: defaults::SEARCH_CALLBACK,
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
+            idle_timeout_secs: 0,
         }
     }
 }
@@ -531,6 +535,14 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Set the idle timeout in seconds. Models will be automatically unloaded
+    /// after this many seconds without requests, and reloaded on demand.
+    /// Set to 0 to disable (default).
+    pub fn with_idle_timeout_secs(mut self, idle_timeout_secs: u64) -> Self {
+        self.idle_timeout_secs = idle_timeout_secs;
+        self
+    }
+
     /// Sets the block size for PagedAttention if provided.
     pub fn with_paged_attn_block_size_optional(
         mut self,
@@ -699,7 +711,8 @@ impl MistralRsForServerBuilder {
         .with_opt_log(self.log)
         .with_no_kv_cache(self.no_kv_cache)
         .with_prefix_cache_n(self.prefix_cache_n)
-        .with_loader_config(loader_config);
+        .with_loader_config(loader_config)
+        .with_idle_timeout_secs(self.idle_timeout_secs);
 
         // Add MCP client configuration if provided
         if let Some(mcp_config) = self.mcp_client_config {
@@ -832,7 +845,8 @@ impl MistralRsForServerBuilder {
         )
         .with_opt_log(self.log.clone())
         .with_no_kv_cache(self.no_kv_cache)
-        .with_prefix_cache_n(self.prefix_cache_n);
+        .with_prefix_cache_n(self.prefix_cache_n)
+        .with_idle_timeout_secs(self.idle_timeout_secs);
         if first_primary_id != first_pipeline_name {
             builder = builder.with_model_id(first_primary_id.clone());
         }

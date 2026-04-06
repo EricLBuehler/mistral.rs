@@ -58,7 +58,8 @@ pub async fn run_server(
         .with_paged_attn_gpu_mem_usage_optional(paged_attn.paged_attn_gpu_mem_usage)
         .with_paged_ctxt_len_optional(paged_attn.paged_ctxt_len)
         .with_paged_attn_block_size_optional(paged_attn.paged_attn_block_size)
-        .with_paged_attn_cache_type(paged_attn.paged_cache_type);
+        .with_paged_attn_cache_type(paged_attn.paged_cache_type)
+        .with_idle_timeout_secs(server.idle_timeout_secs);
 
     if let Some(model) = runtime.search_embedding_model {
         builder = builder.with_search_embedding_model(model);

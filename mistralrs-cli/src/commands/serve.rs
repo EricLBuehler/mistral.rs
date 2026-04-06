@@ -44,6 +44,7 @@ pub async fn run_server(
             host: server.host,
             port: server.port,
             ui: server.ui,
+            idle_timeout_secs: server.idle_timeout_secs,
         },
         mistralrs_serve::RuntimeConfig {
             max_seqs: runtime.max_seqs,

@@ -43,6 +43,11 @@ pub struct ServerOptions {
     #[arg(long)]
     #[serde(default)]
     pub tool_dispatch_url: Option<String>,
+
+    /// Auto-unload models after this many seconds without requests (0 to disable)
+    #[arg(long, default_value_t = 0)]
+    #[serde(default)]
+    pub idle_timeout_secs: u64,
 }
 
 impl Default for ServerOptions {
@@ -55,6 +60,7 @@ impl Default for ServerOptions {
             ui: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
+            idle_timeout_secs: 0,
         }
     }
 }

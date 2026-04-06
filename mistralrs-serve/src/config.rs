@@ -11,6 +11,7 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub ui: bool,
+    pub idle_timeout_secs: u64,
 }
 
 /// Runtime inference options
