@@ -1464,6 +1464,7 @@ async fn parse_openresponses_request(
         tool_choice: oairequest.tool_choice,
         response_format,
         web_search_options: oairequest.web_search_options,
+        max_tool_rounds: None,
         top_k: oairequest.top_k,
         grammar: oairequest.grammar,
         min_p: oairequest.min_p,

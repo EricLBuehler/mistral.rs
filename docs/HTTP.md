@@ -23,6 +23,7 @@ To support additional features, we have extended the completion and chat complet
 - `dry_base`: `float` | `null`. DRY sampling base value.
 - `dry_allowed_length`: `int` | `null`. DRY sampling allowed length before penalty applies.
 - `dry_sequence_breakers`: `array of strings` | `null`. Tokens that reset the DRY penalty sequence.
+- `max_tool_rounds`: `int` | `null`. Maximum number of tool-call rounds the server will auto-execute. When set, the server enters an agentic loop: the model calls tools, the server executes them via registered callbacks (MCP, search, or custom), feeds results back, and repeats until the model stops calling tools or this limit is reached. Default safety cap: 16. See [TOOL_CALLING.md](TOOL_CALLING.md) for details.
 
 ## Response Extensions
 

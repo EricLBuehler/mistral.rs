@@ -32,6 +32,10 @@ pub trait RequestLike {
     fn take_sampling_params(&mut self) -> SamplingParams;
     /// Take web search options, if configured.
     fn take_web_search_options(&mut self) -> Option<WebSearchOptions>;
+    /// Maximum tool-call rounds for the agentic loop.
+    fn max_tool_rounds(&self) -> Option<usize> {
+        None
+    }
     /// Whether to silently truncate prompts that exceed the model's context length.
     fn truncate_sequence(&self) -> bool {
         false
@@ -450,6 +454,7 @@ pub struct RequestBuilder {
     tool_choice: ToolChoice,
     sampling_params: SamplingParams,
     web_search_options: Option<WebSearchOptions>,
+    max_tool_rounds: Option<usize>,
     enable_thinking: Option<bool>,
     truncate_sequence: bool,
     pending_prefixes: Vec<PendingMediaPrefix>,
@@ -476,6 +481,7 @@ impl From<TextMessages> for RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
+            max_tool_rounds: None,
             enable_thinking: None,
             truncate_sequence: false,
             pending_prefixes: Vec::new(),
@@ -498,6 +504,7 @@ impl From<MultimodalMessages> for RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
+            max_tool_rounds: None,
             enable_thinking: None,
             truncate_sequence: false,
             pending_prefixes: value.pending_prefixes,
@@ -521,6 +528,7 @@ impl RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
+            max_tool_rounds: None,
             enable_thinking: None,
             truncate_sequence: false,
             pending_prefixes: Vec::new(),
@@ -739,6 +747,15 @@ impl RequestBuilder {
         self
     }
 
+    /// Set the maximum number of agentic tool-call rounds.
+    /// When set, the engine auto-executes tools via registered callbacks
+    /// and feeds results back to the model, repeating until the model
+    /// stops calling tools or this limit is reached.
+    pub fn set_max_tool_rounds(mut self, n: usize) -> Self {
+        self.max_tool_rounds = Some(n);
+        self
+    }
+
     /// Request log-probabilities for each generated token.
     pub fn return_logprobs(mut self, return_logprobs: bool) -> Self {
         self.return_logprobs = return_logprobs;
@@ -950,6 +967,10 @@ impl RequestLike for RequestBuilder {
         let mut other = None;
         std::mem::swap(&mut other, &mut self.web_search_options);
         other
+    }
+
+    fn max_tool_rounds(&self) -> Option<usize> {
+        self.max_tool_rounds
     }
 
     fn truncate_sequence(&self) -> bool {

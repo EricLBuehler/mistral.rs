@@ -260,6 +260,7 @@ async fn fetch_embedding(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
+        max_tool_rounds: None,
         model_id: model_id.map(|m| m.to_string()),
         truncate_sequence,
     }));
@@ -293,6 +294,7 @@ async fn fetch_embedding_tokens(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
+        max_tool_rounds: None,
         model_id: model_id.map(|m| m.to_string()),
         truncate_sequence,
     }));

@@ -80,6 +80,7 @@ pub fn parse_request(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
+        max_tool_rounds: None,
         model_id: if oairequest.model == "default" {
             None
         } else {

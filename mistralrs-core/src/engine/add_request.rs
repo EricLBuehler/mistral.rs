@@ -36,8 +36,9 @@ impl Engine {
                 let has_tooling = !self.tool_callbacks.is_empty()
                     && request.tools.as_ref().is_some_and(|t| !t.is_empty());
                 let has_search = request.web_search_options.is_some();
+                let has_agentic = request.max_tool_rounds.is_some();
 
-                if is_chat && (has_search || has_tooling) {
+                if is_chat && (has_search || has_tooling || has_agentic) {
                     search_request::search_request(self.clone(), *request).await;
                 } else {
                     self.add_request(*request).await;

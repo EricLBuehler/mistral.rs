@@ -79,6 +79,41 @@ Set `"strict": true` on the function definition to enable it:
 
 In the Rust SDK, set `strict: Some(true)` on the `Function` struct. In the Python SDK, include `"strict": true` in the tool JSON string passed to `tool_schemas`.
 
+## Agentic loop
+
+When tool callbacks are registered (via MCP servers, the Rust/Python SDK, or web search), mistral.rs can automatically execute tools server-side and feed results back to the model in a loop. The model calls a tool, the server executes it, appends the result to the conversation, and lets the model continue — repeating until the model produces a final text response or the round limit is reached.
+
+**How to enable from the HTTP API:**
+
+Set `max_tool_rounds` in your chat completion request:
+
+```json
+{
+  "model": "default",
+  "messages": [{"role": "user", "content": "What's the weather in Tokyo?"}],
+  "tools": [...],
+  "tool_choice": "auto",
+  "max_tool_rounds": 5
+}
+```
+
+The server will auto-execute any tool that has a registered callback (MCP tools, built-in search/extract, or SDK-registered callbacks). If a tool call has no matching callback, the loop stops and the response is returned with the un-executed tool call for client-side handling.
+
+**Default behavior:**
+- Safety cap: 16 rounds (applies even when `max_tool_rounds` is not set but the agentic loop is active via callbacks or web search)
+- Streaming: tool call chunks are forwarded to the client, so you can see which tools are being called mid-loop
+
+**Rust SDK:**
+```rust
+let response = model.send_chat_request(
+    RequestBuilder::new()
+        .add_message(TextMessageRole::User, "Search for Rust news")
+        .set_tools(tools)
+        .set_tool_choice(ToolChoice::Auto)
+        .set_max_tool_rounds(5)
+).await?;
+```
+
 ## OpenAI compatible HTTP example
 Please see [our example here](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server/tool_calling.py).
 
