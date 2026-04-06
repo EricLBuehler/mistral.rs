@@ -31,28 +31,20 @@ That's it. mistral.rs auto-detects the model architecture, downloads weights fro
 ```
 > What is Rust's ownership model?
 Rust uses an ownership system where each value has a single owner...
-> \exit
+> /exit
 ```
 
-Use `\exit` to quit, `\clear` to reset the conversation, or `\help` for all commands.
+Use `/exit` to quit, `/clear` to reset the conversation, or `/help` for all commands.
 
 ## Step 3: Reduce Memory with Quantization
 
-Most models load in FP16 by default. If you're short on VRAM, quantize at load time with `--isq`:
+Most models load in BF16 by default. If you're short on VRAM, quantize at load time with `--isq`:
 
 ```bash
 mistralrs run --isq 4 -m Qwen/Qwen3-4B
 ```
 
 The `--isq 4` flag quantizes weights to 4-bit as they load — the full model never needs to fit in memory. mistral.rs picks the best quantization format for your hardware automatically (AFQ on Metal, Q4K on CUDA/CPU).
-
-**Approximate VRAM for a 7B model:**
-
-| Precision | VRAM |
-|-----------|------|
-| FP16 (no ISQ) | ~14 GB |
-| 8-bit (`--isq 8`) | ~7 GB |
-| 4-bit (`--isq 4`) | ~4 GB |
 
 > Not sure what settings to use? Run `mistralrs tune -m <model>` and it will analyze your hardware and recommend the best configuration.
 

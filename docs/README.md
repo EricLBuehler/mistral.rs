@@ -1,6 +1,6 @@
 ![mistral.rs](banner.png)
 
-**Fast, flexible LLM inference.** Run 60+ model families (text, vision, video, audio, speech, image generation, and embeddings) with automatic hardware optimization, OpenAI-compatible APIs, and built-in agentic features.
+**Fast, flexible LLM inference.** Run 40+ model families (text, vision, video, audio, speech, image generation, and embeddings) with automatic hardware optimization, OpenAI-compatible APIs, and built-in agentic features.
 
 ## Quick Start
 
