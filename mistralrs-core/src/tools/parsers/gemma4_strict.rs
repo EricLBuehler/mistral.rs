@@ -119,8 +119,7 @@ impl GemmaLarkBuilder {
                         // comma only appears when the field does.
                         let wid = self.next_id();
                         let wrapper = format!("w{wid}");
-                        self.rules
-                            .push(format!(r#"{wrapper}: "," {name}"#));
+                        self.rules.push(format!(r#"{wrapper}: "," {name}"#));
                         seq.push(format!("{wrapper}?"));
                     }
                 } else if is_req {
@@ -129,8 +128,7 @@ impl GemmaLarkBuilder {
                     seq.push(format!("{name}?"));
                 }
             }
-            self.rules
-                .push(format!("{args_name}: {}", seq.join(" ")));
+            self.rules.push(format!("{args_name}: {}", seq.join(" ")));
         }
 
         args_name
@@ -170,7 +168,10 @@ impl GemmaLarkBuilder {
     fn emit_union_rule(&mut self, variants: &[Value]) -> String {
         let id = self.next_id();
         let name = format!("u{id}");
-        let alts: Vec<String> = variants.iter().map(|v| self.schema_to_value_rule(v)).collect();
+        let alts: Vec<String> = variants
+            .iter()
+            .map(|v| self.schema_to_value_rule(v))
+            .collect();
         self.rules.push(format!("{name}: {}", alts.join(" | ")));
         name
     }
@@ -199,10 +200,8 @@ impl GemmaLarkBuilder {
             Value::String(s) => {
                 let id = self.next_id();
                 let name = format!("c{id}");
-                self.rules.push(format!(
-                    r##"{name}: <|"|> "{}" <|"|>"##,
-                    lark_escape_str(s)
-                ));
+                self.rules
+                    .push(format!(r##"{name}: <|"|> "{}" <|"|>"##, lark_escape_str(s)));
                 name
             }
             Value::Number(n) => format!(r#""{n}""#),
@@ -221,8 +220,7 @@ impl GemmaLarkBuilder {
             let inner = self.emit_constrained_args(schema);
             let id = self.next_id();
             let name = format!("o{id}");
-            self.rules
-                .push(format!(r#"{name}: "{{" {inner} "}}""#));
+            self.rules.push(format!(r#"{name}: "{{" {inner} "}}""#));
             name
         } else {
             "generic_object".to_string()
@@ -316,8 +314,7 @@ mod tests {
     fn strict_grammar_basic() {
         let tools = vec![strict_weather_tool()];
         let mut builder = GemmaLarkBuilder::new();
-        let branches: Vec<String> =
-            tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
+        let branches: Vec<String> = tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
         builder.emit_shared_rules();
         let lark = builder.build(&branches);
 
@@ -333,8 +330,7 @@ mod tests {
     fn strict_grammar_mixed_tools() {
         let tools = vec![strict_weather_tool(), non_strict_search_tool()];
         let mut builder = GemmaLarkBuilder::new();
-        let branches: Vec<String> =
-            tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
+        let branches: Vec<String> = tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
         builder.emit_shared_rules();
         let lark = builder.build(&branches);
 
@@ -369,8 +365,7 @@ mod tests {
             },
         }];
         let mut builder = GemmaLarkBuilder::new();
-        let branches: Vec<String> =
-            tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
+        let branches: Vec<String> = tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
         builder.emit_shared_rules();
         let lark = builder.build(&branches);
 
@@ -400,8 +395,7 @@ mod tests {
             },
         }];
         let mut builder = GemmaLarkBuilder::new();
-        let branches: Vec<String> =
-            tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
+        let branches: Vec<String> = tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
         builder.emit_shared_rules();
         let lark = builder.build(&branches);
 
@@ -436,8 +430,7 @@ mod tests {
             },
         }];
         let mut builder = GemmaLarkBuilder::new();
-        let branches: Vec<String> =
-            tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
+        let branches: Vec<String> = tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
         builder.emit_shared_rules();
         let lark = builder.build(&branches);
 
@@ -470,8 +463,7 @@ mod tests {
             },
         }];
         let mut builder = GemmaLarkBuilder::new();
-        let branches: Vec<String> =
-            tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
+        let branches: Vec<String> = tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
         builder.emit_shared_rules();
         let lark = builder.build(&branches);
 
@@ -487,8 +479,7 @@ mod tests {
         // Grammar should be: city (required) then ","temp (optional via ?).
         let tools = vec![strict_weather_tool()];
         let mut builder = GemmaLarkBuilder::new();
-        let branches: Vec<String> =
-            tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
+        let branches: Vec<String> = tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
         builder.emit_shared_rules();
         let lark = builder.build(&branches);
 
@@ -499,7 +490,10 @@ mod tests {
             .find(|l| l.starts_with('a') && l.contains(": p"))
             .expect("should have args rule");
         // Required city pair is NOT wrapped in ?
-        assert!(!args_line.contains("p1?"), "required field should not be optional");
+        assert!(
+            !args_line.contains("p1?"),
+            "required field should not be optional"
+        );
         // Optional temp pair IS wrapped in ?
         assert!(args_line.contains('?'), "optional field should use ?");
     }
@@ -528,8 +522,7 @@ mod tests {
             },
         }];
         let mut builder = GemmaLarkBuilder::new();
-        let branches: Vec<String> =
-            tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
+        let branches: Vec<String> = tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
         builder.emit_shared_rules();
         let lark = builder.build(&branches);
 
@@ -539,8 +532,14 @@ mod tests {
             .find(|l| l.starts_with('a') && l.contains(": p"))
             .expect("should have args rule");
         // No optional markers — both required.
-        assert!(!args_line.contains('?'), "all-required should have no optional fields");
+        assert!(
+            !args_line.contains('?'),
+            "all-required should have no optional fields"
+        );
         // No Kleene star — fixed sequence, not a bag.
-        assert!(!args_line.contains('*'), "all-required should not use bag pattern");
+        assert!(
+            !args_line.contains('*'),
+            "all-required should not use bag pattern"
+        );
     }
 }

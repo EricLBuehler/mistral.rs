@@ -81,6 +81,7 @@ pub fn parse_request(
         return_raw_logits: false,
         web_search_options: None,
         max_tool_rounds: None,
+        tool_dispatch_url: None,
         model_id: if oairequest.model == "default" {
             None
         } else {

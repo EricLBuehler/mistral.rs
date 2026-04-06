@@ -300,3 +300,63 @@ pub(super) fn execute_custom_tool(engine: &Engine, tc: &ToolCallResponse) -> Too
 
     ToolResult { content }
 }
+
+// ── HTTP callback tools ──────────────────────────────────────────────────
+
+/// Execute a tool by POSTing to its `url`.
+///
+/// Sends `{"name": "...", "arguments": {...}}` and expects
+/// `{"content": "..."}` back.
+pub(super) fn execute_http_tool(tc: &ToolCallResponse, url: &str) -> ToolResult {
+    let name = &tc.function.name;
+    let args: serde_json::Value = serde_json::from_str(&tc.function.arguments)
+        .unwrap_or(serde_json::Value::String(tc.function.arguments.clone()));
+    let payload = serde_json::json!({ "name": name, "arguments": args });
+
+    // Must use block_in_place because reqwest::blocking creates its own
+    // tokio runtime, which panics if called from an async context.
+    let content = tokio::task::block_in_place(|| match _http_post(url, &payload) {
+        Ok(body) => {
+            // Accept either {"content": "..."} or a bare string.
+            if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&body) {
+                obj.get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&body)
+                    .to_string()
+            } else {
+                body
+            }
+        }
+        Err(e) => {
+            tracing::error!("HTTP tool callback for `{name}` failed: {e}");
+            serde_json::json!({
+                "error": format!("{e}"),
+                "tool": name,
+                "status": "failed"
+            })
+            .to_string()
+        }
+    });
+
+    ToolResult { content }
+}
+
+fn _http_post(url: &str, payload: &serde_json::Value) -> anyhow::Result<String> {
+    use std::env::consts::{ARCH, FAMILY, OS};
+    let version = env!("CARGO_PKG_VERSION");
+    let user_agent = format!("mistralrs/{version} ({OS}; {ARCH}; {FAMILY})");
+
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .post(url)
+        .header("User-Agent", &user_agent)
+        .header("Content-Type", "application/json")
+        .json(payload)
+        .send()?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("HTTP {} from tool callback URL: {}", response.status(), url);
+    }
+
+    Ok(response.text()?)
+}

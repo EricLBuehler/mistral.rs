@@ -34,8 +34,7 @@ impl ToolFormatParser for Gemma4Parser {
 
         let lark = if any_strict {
             let mut builder = GemmaLarkBuilder::new();
-            let branches: Vec<String> =
-                tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
+            let branches: Vec<String> = tools.iter().map(|t| builder.emit_tool_branch(t)).collect();
             builder.emit_shared_rules();
             builder.build(&branches)
         } else {

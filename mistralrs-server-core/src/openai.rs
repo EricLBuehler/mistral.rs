@@ -604,6 +604,9 @@ pub struct ChatCompletionRequest {
     /// Maximum number of tool-call rounds the server will auto-execute.
     #[schema(example = json!(Option::None::<usize>))]
     pub max_tool_rounds: Option<usize>,
+    /// URL to POST tool calls to for server-side execution.
+    #[schema(example = json!(Option::None::<String>))]
+    pub tool_dispatch_url: Option<String>,
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,

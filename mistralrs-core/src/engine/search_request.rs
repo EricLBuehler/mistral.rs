@@ -158,6 +158,17 @@ async fn do_custom_tool(
     request
 }
 
+fn do_http_tool(mut request: NormalRequest, tc: &ToolCallResponse, url: &str) -> NormalRequest {
+    let messages = get_messages_mut(&mut request);
+    append_assistant_tool_call(messages, tc);
+
+    let result = tool_dispatch::execute_http_tool(tc, url);
+    append_tool_response(messages, &tc.function.name, result.content);
+
+    request.tool_choice = Some(ToolChoice::Auto);
+    request
+}
+
 /// Drive one or more web-search / extraction rounds without recursion.
 ///
 /// Strategy:
@@ -169,6 +180,7 @@ async fn do_custom_tool(
 ///    probe that discovers whether a tool call is needed.
 pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
     let web_search_options = request.web_search_options.clone();
+    let dispatch_url = request.tool_dispatch_url.clone();
 
     // The sender that ultimately delivers data back to the caller.
     let user_sender = request.response.clone();
@@ -225,9 +237,11 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
             current.response = sender;
 
             // Kick the request into the engine via the channel.
-            // Clear web_search_options so the engine doesn't re-enter the
+            // Clear fields that would cause the engine to re-enter the
             // search flow — this loop already manages tool orchestration.
             current.web_search_options = None;
+            current.max_tool_rounds = None;
+            current.tool_dispatch_url = None;
             let _ = this_clone
                 .tx
                 .send(crate::request::Request::Normal(Box::new(current)))
@@ -273,18 +287,8 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                 // Tool requested -> build the next turn.
                 let tc = tc_opt.unwrap();
 
-                // If no callback is registered for this tool, forward the
-                // response (with the tool call) for client-side handling.
-                if !search::search_tool_called(&tc.function.name)
-                    && !this_clone.tool_callbacks.contains_key(&tc.function.name)
-                {
-                    user_sender
-                        .send(Response::Done(done.clone()))
-                        .await
-                        .unwrap();
-                    return;
-                }
-
+                // Resolve how to execute this tool: built-in search,
+                // registered callback, dispatch URL, or bail.
                 let next_visible = if search::search_tool_called(&tc.function.name) {
                     let web_search_options = web_search_options.as_ref().unwrap();
                     if tc.function.name == search::SEARCH_TOOL_NAME {
@@ -292,8 +296,17 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                     } else {
                         do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
                     }
-                } else {
+                } else if this_clone.tool_callbacks.contains_key(&tc.function.name) {
                     do_custom_tool(this_clone.clone(), visible_req, tc).await
+                } else if let Some(ref url) = dispatch_url {
+                    do_http_tool(visible_req, tc, url)
+                } else {
+                    // No way to execute — return to client.
+                    user_sender
+                        .send(Response::Done(done.clone()))
+                        .await
+                        .unwrap();
+                    return;
                 };
                 round += 1;
 
@@ -358,13 +371,6 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
 
                 let tc = tc_opt.unwrap();
 
-                // No callback for this tool -> done, client handles it.
-                if !search::search_tool_called(&tc.function.name)
-                    && !this_clone.tool_callbacks.contains_key(&tc.function.name)
-                {
-                    break;
-                }
-
                 let next_visible = if search::search_tool_called(&tc.function.name) {
                     let web_search_options = web_search_options.as_ref().unwrap();
                     if tc.function.name == search::SEARCH_TOOL_NAME {
@@ -372,8 +378,12 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                     } else {
                         do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
                     }
-                } else {
+                } else if this_clone.tool_callbacks.contains_key(&tc.function.name) {
                     do_custom_tool(this_clone.clone(), visible_req, tc).await
+                } else if let Some(ref url) = dispatch_url {
+                    do_http_tool(visible_req, tc, url)
+                } else {
+                    break; // No way to execute — client handles it.
                 };
                 round += 1;
 

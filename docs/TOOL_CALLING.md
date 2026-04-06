@@ -97,7 +97,48 @@ Set `max_tool_rounds` in your chat completion request:
 }
 ```
 
-The server will auto-execute any tool that has a registered callback (MCP tools, built-in search/extract, or SDK-registered callbacks). If a tool call has no matching callback, the loop stops and the response is returned with the un-executed tool call for client-side handling.
+The server will auto-execute any tool that has a registered callback (MCP tools, built-in search/extract, or SDK-registered callbacks). You can also set `tool_dispatch_url` to have the server POST tool calls to your endpoint — see below.
+
+If a tool call has no matching callback and no dispatch URL, the loop stops and the response is returned with the un-executed tool call for client-side handling.
+
+### Tool dispatch URL
+
+Set `tool_dispatch_url` on the request to have the server POST all unhandled tool calls to your endpoint. This enables the agentic loop for HTTP API users without requiring server-side callback registration:
+
+```json
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Get weather for a city",
+        "parameters": {
+          "type": "object",
+          "properties": { "city": { "type": "string" } },
+          "required": ["city"]
+        },
+        "strict": true
+      }
+    }
+  ],
+  "max_tool_rounds": 5,
+  "tool_choice": "auto",
+  "tool_dispatch_url": "https://my-service.com/tools"
+}
+```
+
+When the model calls a tool, the server POSTs to your dispatch URL:
+```json
+{"name": "get_weather", "arguments": {"city": "Tokyo"}}
+```
+
+Your endpoint should return:
+```json
+{"content": "Sunny, 22°C"}
+```
+
+The response can also be a bare string (without the `{"content": ...}` wrapper). Your endpoint dispatches by `name` — one URL handles all tools.
 
 **Default behavior:**
 - Safety cap: 16 rounds (applies even when `max_tool_rounds` is not set but the agentic loop is active via callbacks or web search)

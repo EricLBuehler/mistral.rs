@@ -36,6 +36,10 @@ pub trait RequestLike {
     fn max_tool_rounds(&self) -> Option<usize> {
         None
     }
+    /// URL to POST tool calls to for server-side execution.
+    fn tool_dispatch_url(&self) -> Option<&str> {
+        None
+    }
     /// Whether to silently truncate prompts that exceed the model's context length.
     fn truncate_sequence(&self) -> bool {
         false
@@ -455,6 +459,7 @@ pub struct RequestBuilder {
     sampling_params: SamplingParams,
     web_search_options: Option<WebSearchOptions>,
     max_tool_rounds: Option<usize>,
+    tool_dispatch_url: Option<String>,
     enable_thinking: Option<bool>,
     truncate_sequence: bool,
     pending_prefixes: Vec<PendingMediaPrefix>,
@@ -482,6 +487,7 @@ impl From<TextMessages> for RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             max_tool_rounds: None,
+            tool_dispatch_url: None,
             enable_thinking: None,
             truncate_sequence: false,
             pending_prefixes: Vec::new(),
@@ -505,6 +511,7 @@ impl From<MultimodalMessages> for RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             max_tool_rounds: None,
+            tool_dispatch_url: None,
             enable_thinking: None,
             truncate_sequence: false,
             pending_prefixes: value.pending_prefixes,
@@ -529,6 +536,7 @@ impl RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             max_tool_rounds: None,
+            tool_dispatch_url: None,
             enable_thinking: None,
             truncate_sequence: false,
             pending_prefixes: Vec::new(),
@@ -756,6 +764,14 @@ impl RequestBuilder {
         self
     }
 
+    /// Set the URL to POST tool calls to for server-side execution.
+    /// When set and the model calls a tool with no registered callback,
+    /// the server POSTs `{"name": "...", "arguments": {...}}` to this URL.
+    pub fn set_tool_dispatch_url(mut self, url: impl Into<String>) -> Self {
+        self.tool_dispatch_url = Some(url.into());
+        self
+    }
+
     /// Request log-probabilities for each generated token.
     pub fn return_logprobs(mut self, return_logprobs: bool) -> Self {
         self.return_logprobs = return_logprobs;
@@ -971,6 +987,10 @@ impl RequestLike for RequestBuilder {
 
     fn max_tool_rounds(&self) -> Option<usize> {
         self.max_tool_rounds
+    }
+
+    fn tool_dispatch_url(&self) -> Option<&str> {
+        self.tool_dispatch_url.as_deref()
     }
 
     fn truncate_sequence(&self) -> bool {
