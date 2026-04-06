@@ -618,6 +618,42 @@ impl MistralRsForServerBuilder {
         }
     }
 
+    /// Build an empty MistralRs instance with no models loaded.
+    /// Models must be registered as pending and loaded on demand.
+    /// Returns both the MistralRs instance and the Device for use in PendingModelConfig.
+    pub async fn build_empty(self) -> Result<(SharedMistralRsState, Device, Option<PagedAttentionConfig>)> {
+        let device = if let Some(device) = self.device {
+            device
+        } else {
+            init_device(self.cpu, self.seed)?
+        };
+
+        let paged_attn = configure_paged_attn(&device, self.paged_attn);
+
+        let cache_config = init_cache_config(
+            self.paged_attn_block_size,
+            self.paged_attn_gpu_mem,
+            self.paged_attn_gpu_mem_usage,
+            self.paged_ctxt_len,
+            self.paged_cache_type,
+            !paged_attn,
+        )?;
+
+        let mut builder = MistralRsBuilder::new_empty()
+            .with_opt_log(self.log)
+            .with_no_kv_cache(self.no_kv_cache)
+            .with_prefix_cache_n(self.prefix_cache_n)
+            .with_idle_timeout_secs(self.idle_timeout_secs);
+
+        if let Some(mcp_config) = self.mcp_client_config {
+            builder = builder.with_mcp_client(mcp_config);
+        }
+
+        let mistralrs = builder.build().await;
+
+        Ok((mistralrs, device, cache_config))
+    }
+
     /// Build a single-model instance (legacy mode)
     async fn build_single_model(mut self) -> Result<SharedMistralRsState> {
         let model = self.model.context("Model was None")?;

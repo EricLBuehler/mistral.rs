@@ -411,7 +411,7 @@ impl From<MistralRsError> for pyo3::PyErr {
 /// an Engine and a MistralRs instance. The Engine runs on a separate thread, and the MistralRs
 /// instance stays on the calling thread.
 pub struct MistralRsBuilder {
-    pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
+    pipeline: Option<Arc<tokio::sync::Mutex<dyn Pipeline>>>,
     method: SchedulerConfig,
     model_id_override: Option<String>,
     log: Option<String>,
@@ -439,7 +439,7 @@ impl MistralRsBuilder {
         search_embedding_model: Option<SearchEmbeddingModel>,
     ) -> Self {
         Self {
-            pipeline,
+            pipeline: Some(pipeline),
             method,
             model_id_override: None,
             log: None,
@@ -449,6 +449,30 @@ impl MistralRsBuilder {
             disable_eos_stop: None,
             throughput_logging_enabled: throughput_logging,
             search_embedding_model,
+            search_callback: None,
+            tool_callbacks: HashMap::new(),
+            mcp_client_config: None,
+            loader_config: None,
+            idle_timeout_secs: None,
+        }
+    }
+
+    /// Creates a new builder with no pipeline (for lazy-loading / pending-models mode).
+    /// The resulting MistralRs has zero engines and no default model.
+    pub fn new_empty() -> Self {
+        Self {
+            pipeline: None,
+            method: SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(16.try_into().unwrap()),
+            },
+            model_id_override: None,
+            log: None,
+            no_kv_cache: None,
+            no_prefix_cache: None,
+            prefix_cache_n: None,
+            disable_eos_stop: None,
+            throughput_logging_enabled: true,
+            search_embedding_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
             mcp_client_config: None,
@@ -560,7 +584,11 @@ impl MistralRsBuilder {
     }
 
     pub async fn build(self) -> Arc<MistralRs> {
-        MistralRs::new(self).await
+        if self.pipeline.is_some() {
+            MistralRs::new(self).await
+        } else {
+            MistralRs::new_empty(self)
+        }
     }
 }
 
@@ -577,6 +605,56 @@ impl Drop for MistralRs {
 }
 
 impl MistralRs {
+    /// Create an empty MistralRs instance with no engines.
+    /// Models must be registered as pending and loaded on demand.
+    fn new_empty(config: MistralRsBuilder) -> Arc<Self> {
+        info!("git revision: {MISTRALRS_GIT_REVISION}");
+        let MistralRsBuilder {
+            pipeline: None,
+            log,
+            idle_timeout_secs,
+            ..
+        } = config else {
+            panic!("new_empty requires a builder created with MistralRsBuilder::new_empty()");
+        };
+
+        let this = Arc::new(Self {
+            engines: RwLock::new(HashMap::new()),
+            unloaded_models: RwLock::new(HashMap::new()),
+            reloading_models: RwLock::new(HashSet::new()),
+            pending_models: RwLock::new(HashMap::new()),
+            default_engine_id: RwLock::new(None),
+            model_aliases: RwLock::new(HashMap::new()),
+            log,
+            id: String::from("lazy-server"),
+            creation_time: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Time travel has occurred!")
+                .as_secs(),
+            next_request_id: Mutex::new(RefCell::new(1)),
+            idle_timeout_secs: idle_timeout_secs.unwrap_or(0),
+        });
+
+        info!("MistralRs instance created in empty/lazy mode — no models loaded");
+
+        // Spawn idle timeout watchdog if configured
+        if this.idle_timeout_secs > 0 {
+            info!(
+                "Idle timeout enabled: models will be unloaded after {}s of inactivity",
+                this.idle_timeout_secs
+            );
+            let this_clone = this.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    Self::check_idle_and_unload(&this_clone);
+                }
+            });
+        }
+
+        this
+    }
+
     /// Create an engine instance with the given configuration
     fn create_engine_instance(
         pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
@@ -683,7 +761,7 @@ impl MistralRs {
     async fn new(config: MistralRsBuilder) -> Arc<Self> {
         info!("git revision: {MISTRALRS_GIT_REVISION}");
         let MistralRsBuilder {
-            pipeline,
+            pipeline: Some(pipeline),
             method,
             model_id_override,
             log,
@@ -698,7 +776,9 @@ impl MistralRs {
             mcp_client_config,
             loader_config,
             idle_timeout_secs,
-        } = config;
+        } = config else {
+            panic!("MistralRs::new() called with a builder that has no pipeline. Use MistralRs::new_empty() instead.");
+        };
 
         mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
             get_mut_arcmutex!(pipeline).device(),

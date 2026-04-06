@@ -17,5 +17,5 @@ pub use doctor::run_doctor;
 pub use login::run_login;
 pub use quantize::run_quantize;
 pub use run::run_interactive;
-pub use serve::run_server;
+pub use serve::{run_server, run_server_lazy};
 pub use tune::run_tune;

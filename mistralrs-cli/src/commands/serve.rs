@@ -1,7 +1,14 @@
 //! Server command implementation — converts CLI args and delegates to mistralrs-serve.
 
 use anyhow::{Context, Result};
-use mistralrs_core::{DiffusionLoaderType, ModelSelected, PagedCacheType, SpeechLoaderType};
+use mistralrs_core::{
+    initialize_logging, DiffusionLoaderType, ModelSelected, PagedCacheType, SpeechLoaderType,
+};
+use mistralrs_server_core::{
+    mistralrs_for_server_builder::MistralRsForServerBuilder,
+    mistralrs_server_router_builder::MistralRsServerRouterBuilder,
+};
+use tracing::{info, warn};
 
 use crate::args::{
     AdapterOptions, DeviceOptions, FormatOptions, GlobalOptions, ModelFormat, ModelSourceOptions,
@@ -484,4 +491,177 @@ pub(crate) fn extract_isq_setting(model_type: &ModelType) -> Option<String> {
         ModelType::Embedding { quantization, .. } => quantization.in_situ_quant.clone(),
         _ => None,
     }
+}
+
+/// Run the HTTP server with lazy model loading from a models directory.
+pub async fn run_server_lazy(
+    server: crate::args::ServerOptions,
+    runtime: crate::args::RuntimeOptions,
+    global: crate::args::GlobalOptions,
+) -> anyhow::Result<()> {
+    use crate::model_scanner::scan_models_dir;
+
+    initialize_logging();
+
+    let models_dir = server
+        .models_dir
+        .as_ref()
+        .context("--models-dir is required for lazy mode")?;
+
+    if !models_dir.is_dir() {
+        anyhow::bail!("Models directory does not exist: {}", models_dir.display());
+    }
+
+    info!("Scanning models directory: {}", models_dir.display());
+
+    let builder = MistralRsForServerBuilder::new()
+        .with_max_seqs(runtime.max_seqs)
+        .with_no_kv_cache(runtime.no_kv_cache)
+        .with_token_source(global.token_source)
+        .with_interactive_mode(false)
+        .with_prefix_cache_n(runtime.prefix_cache_n)
+        .set_paged_attn(None)
+        .with_seed_optional(global.seed)
+        .with_log_optional(global.log.as_ref().map(|p| p.to_string_lossy().to_string()))
+        .with_idle_timeout_secs(server.idle_timeout_secs);
+
+    let (mistralrs, device, cache_config) = builder.build_empty().await?;
+    let mistralrs_for_ui = mistralrs.clone();
+    let mistralrs_for_watcher = mistralrs.clone();
+
+    let discovered = scan_models_dir(models_dir);
+    if discovered.is_empty() {
+        warn!("No models found in {}", models_dir.display());
+    } else {
+        info!("Found {} model(s):", discovered.len());
+        for model in &discovered {
+            info!("  - {} ({})", model.name, format_label(&model.format));
+        }
+    }
+
+    for model in &discovered {
+        let config = discovered_to_pending_config(model, &device, cache_config.clone())?;
+        if let Err(e) = mistralrs.register_pending_model(&model.name, config) {
+            warn!("Failed to register model '{}': {}", model.name, e);
+        }
+    }
+
+    crate::model_watcher::spawn_model_watcher(mistralrs_for_watcher, models_dir.to_path_buf(), device, cache_config);
+
+    let mut app = MistralRsServerRouterBuilder::new()
+        .with_mistralrs(mistralrs)
+        .build()
+        .await?;
+
+    if server.ui {
+        let ui_router = mistralrs_serve::ui::build_ui_router(
+            mistralrs_for_ui,
+            runtime.enable_search,
+            runtime.search_embedding_model.map(|m| m.into()),
+        )
+        .await?;
+        app = app.nest("/ui", ui_router);
+        info!("UI available at http://{}:{}/ui", server.host, server.port);
+    }
+
+    let listener = tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
+    info!("Server listening on http://{}:{}", server.host, server.port);
+    info!("Models will be loaded on first request (lazy mode)");
+
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+fn format_label(format: &crate::model_scanner::ModelFileFormat) -> &'static str {
+    match format {
+        crate::model_scanner::ModelFileFormat::Gguf { .. } => "GGUF",
+        crate::model_scanner::ModelFileFormat::Ggml { .. } => "GGML",
+        crate::model_scanner::ModelFileFormat::Plain => "Plain",
+    }
+}
+
+/// Convert a DiscoveredModel to a PendingModelConfig.
+pub(crate) fn discovered_to_pending_config(
+    model: &crate::model_scanner::DiscoveredModel,
+    device: &candle_core::Device,
+    paged_attn_config: Option<mistralrs_core::PagedAttentionConfig>,
+) -> anyhow::Result<mistralrs_core::PendingModelConfig> {
+    use mistralrs_core::{
+        AutoDeviceMapParams, DeviceMapSetting, EngineConfig, ModelDType, ModelSelected,
+        PendingModelConfig, SchedulerConfig, TokenSource,
+    };
+    use crate::model_scanner::ModelFileFormat;
+
+    let model_selected = match &model.format {
+        ModelFileFormat::Gguf { filename } => ModelSelected::GGUF {
+            tok_model_id: None,
+            quantized_model_id: model.path.to_string_lossy().to_string(),
+            quantized_filename: filename.clone(),
+            dtype: ModelDType::Auto,
+            topology: None,
+            max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
+        },
+        ModelFileFormat::Ggml { filename } => ModelSelected::GGML {
+            tok_model_id: model.path.to_string_lossy().to_string(),
+            tokenizer_json: None,
+            quantized_model_id: model.path.to_string_lossy().to_string(),
+            quantized_filename: filename.clone(),
+            gqa: 1,
+            dtype: ModelDType::Auto,
+            topology: None,
+            max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
+        },
+        ModelFileFormat::Plain => ModelSelected::Plain {
+            model_id: model.path.to_string_lossy().to_string(),
+            tokenizer_json: None,
+            arch: None,
+            dtype: ModelDType::Auto,
+            topology: None,
+            organization: None,
+            write_uqff: None,
+            from_uqff: None,
+            imatrix: None,
+            calibration_file: None,
+            max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
+            hf_cache_path: None,
+            matformer_config_path: None,
+            matformer_slice_name: None,
+        },
+    };
+
+    let engine_config = EngineConfig {
+        no_kv_cache: false,
+        no_prefix_cache: false,
+        prefix_cache_n: 16,
+        disable_eos_stop: false,
+        throughput_logging_enabled: true,
+        search_embedding_model: None,
+        search_callback: None,
+        tool_callbacks: std::collections::HashMap::new(),
+    };
+
+    let scheduler_config = SchedulerConfig::DefaultScheduler {
+        method: mistralrs_core::DefaultSchedulerMethod::Fixed(16.try_into().unwrap()),
+    };
+
+    Ok(PendingModelConfig {
+        model_selected,
+        token_source: TokenSource::CacheToken,
+        dtype: ModelDType::Auto,
+        device: device.clone(),
+        device_map_setting: DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()),
+        isq: None,
+        paged_attn_config,
+        silent: true,
+        chat_template: None,
+        jinja_explicit: None,
+        engine_config,
+        scheduler_config,
+        category: mistralrs_core::ModelCategory::Text,
+        mcp_client_config: None,
+    })
 }
