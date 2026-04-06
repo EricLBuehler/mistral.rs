@@ -19,7 +19,7 @@ the prefill phase.
 
 ## See Also
 
-- [Performance Guide](PERFORMANCE.md) — How FlashAttention fits into the optimization stack
-- [PagedAttention](PAGED_ATTENTION.md) — Memory-efficient KV cache management
-- [Cargo Features](CARGO_FEATURES.md) — Build flags for FlashAttention
-- [Installation](INSTALLATION.md) — Hardware requirements
+- [Performance Guide](PERFORMANCE.md): How FlashAttention fits into the optimization stack
+- [PagedAttention](PAGED_ATTENTION.md): Memory-efficient KV cache management
+- [Cargo Features](CARGO_FEATURES.md): Build flags for FlashAttention
+- [Installation](INSTALLATION.md): Hardware requirements

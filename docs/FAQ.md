@@ -10,13 +10,13 @@ It depends on the model, quantization level, context length, and batch size. The
 mistralrs tune -m <model>
 ```
 
-This shows a table of quantization options with estimated memory usage, context headroom, and quality trade-offs — specific to your GPU. Quantization (`--isq 4`) typically reduces memory by 3-4x compared to FP16.
+This shows a table of quantization options with estimated memory usage, context headroom, and quality trade-offs, all specific to your GPU. Quantization (`--isq 4`) typically reduces memory by 3-4x compared to FP16.
 
 ### Which quantization should I use?
 
 - **Just want it to work?** Use `--isq 4`. mistral.rs picks the best format for your hardware.
 - **Have plenty of VRAM?** Use `--isq 8` for near-lossless quality.
-- **Want the fastest loading?** Use a pre-quantized [UQFF](UQFF.md) or [GGUF](QUANTS.md#using-a-gguf-quantized-model) model — no quantization at load time.
+- **Want the fastest loading?** Use a pre-quantized [UQFF](UQFF.md) or [GGUF](QUANTS.md#using-a-gguf-quantized-model) model. No quantization happens at load time.
 - **Need per-layer control?** Use a [topology file](TOPOLOGY.md) to set different quantization per layer.
 - **On Apple Silicon?** `--isq 4` uses AFQ4, which is optimized for Metal.
 
@@ -52,7 +52,7 @@ Alternatively, use `--token-source env:HF_TOKEN` with a Hugging Face token in yo
 
 ### How do I update mistral.rs?
 
-Re-run the install script — it will build the latest version:
+Re-run the install script to build the latest version:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
@@ -75,7 +75,7 @@ Yes, but **WSL2 is recommended** for the best experience. Native Windows builds 
 
 ### Why is the first request slow?
 
-mistral.rs performs a warmup run when loading a model — it sends a short dummy request to initialize CUDA kernels and caches. You'll see "Beginning dummy run..." and "Dummy run completed" in the logs. After this, subsequent requests are much faster.
+mistral.rs performs a warmup run when loading a model. It sends a short dummy request to initialize CUDA kernels and caches. You'll see "Beginning dummy run..." and "Dummy run completed" in the logs. After this, subsequent requests are much faster.
 
 ### How do I increase throughput?
 
@@ -118,7 +118,7 @@ from openai import OpenAI
 client = OpenAI(base_url="http://localhost:1234/v1/", api_key="foobar")
 ```
 
-The `api_key` can be any non-empty string — mistral.rs doesn't validate it.
+The `api_key` can be any non-empty string. mistral.rs doesn't validate it.
 
 ### Can I use LangChain or LlamaIndex?
 
@@ -131,7 +131,7 @@ llm = ChatOpenAI(base_url="http://localhost:1234/v1/", api_key="foobar")
 
 ### Which models are supported?
 
-See [Supported Models](SUPPORTED_MODELS.md) for the complete list. Architecture is auto-detected — just point mistral.rs at the model and it works.
+See [Supported Models](SUPPORTED_MODELS.md) for the complete list. Architecture is auto-detected, so just point mistral.rs at the model and it works.
 
 ### Can I run multiple models at once?
 

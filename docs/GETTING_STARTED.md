@@ -1,6 +1,6 @@
 # Getting Started with mistral.rs
 
-mistral.rs is a fast, flexible LLM inference engine. It supports 40+ model families — text, vision, audio, speech, image generation, and embeddings — with an OpenAI-compatible API, Python SDK, and Rust SDK.
+mistral.rs is a fast, flexible LLM inference engine. It supports 40+ model families (text, vision, audio, speech, image generation, and embeddings) with an OpenAI-compatible API, Python SDK, and Rust SDK.
 
 This tutorial takes you from zero to running models in about 5 minutes.
 
@@ -44,7 +44,7 @@ Most models load in BF16 by default. If you're short on VRAM, quantize at load t
 mistralrs run --isq 4 -m Qwen/Qwen3-4B
 ```
 
-The `--isq 4` flag quantizes weights to 4-bit as they load — the full model never needs to fit in memory. mistral.rs picks the best quantization format for your hardware automatically (AFQ on Metal, Q4K on CUDA/CPU).
+The `--isq 4` flag quantizes weights to 4-bit as they load, so the full model never needs to fit in memory. mistral.rs picks the best quantization format for your hardware automatically (AFQ on Metal, Q4K on CUDA/CPU).
 
 > Not sure what settings to use? Run `mistralrs tune -m <model>` and it will analyze your hardware and recommend the best configuration.
 
@@ -67,7 +67,7 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-Or use the OpenAI Python client — no changes needed:
+Or use the OpenAI Python client directly, no changes needed:
 
 ```python
 from openai import OpenAI
@@ -130,7 +130,7 @@ mistralrs run -m google/gemma-4-E4B-it --video clip.mp4 -i "What happens here?"
 mistralrs run -m google/gemma-4-E4B-it --audio recording.wav -i "Transcribe this"
 ```
 
-In interactive mode, just paste file paths directly into your prompt — mistral.rs detects image, video, and audio files automatically.
+In interactive mode, just paste file paths directly into your prompt. mistral.rs detects image, video, and audio files automatically.
 
 ## Step 7: Auto-Tune Your Setup
 

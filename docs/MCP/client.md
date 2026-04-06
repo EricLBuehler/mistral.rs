@@ -272,10 +272,10 @@ curl -X POST http://localhost:1234/v1/chat/completions \
 
 ## Next Steps
 
-- [Configuration Reference](./configuration.md) - Detailed configuration options
-- [Transport Types](./transports.md) - HTTP, WebSocket, and Process transports
-- [Advanced Usage](./advanced.md) - Multi-server setups, custom headers, and more
-- [MCP Server Development](./server.md) - Building your own MCP server
+- [Configuration Reference](./configuration.md): Detailed configuration options
+- [Transport Types](./transports.md): HTTP, WebSocket, and Process transports
+- [Advanced Usage](./advanced.md): Multi-server setups, custom headers, and more
+- [MCP Server Development](./server.md): Building your own MCP server
 
 ## Common MCP Servers
 
@@ -284,8 +284,8 @@ curl -X POST http://localhost:1234/v1/chat/completions \
 - **Postgres**: `@modelcontextprotocol/server-postgres` - Database operations (Process)
 
 **Additional servers (install separately):**
-- [Brave Search](https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search) - Web search capabilities
-- [GitHub](https://github.com/modelcontextprotocol/servers/tree/main/src/github) - GitHub API access
+- [Brave Search](https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search): Web search capabilities
+- [GitHub](https://github.com/modelcontextprotocol/servers/tree/main/src/github): GitHub API access
 
 Replace placeholder tokens and URLs with actual values for your use case.
 
@@ -312,5 +312,5 @@ Replace placeholder tokens and URLs with actual values for your use case.
 - Verify API endpoints are accessible: `curl -H "Authorization: Bearer YOUR_TOKEN" https://hf.co/mcp`
 
 **Need help?**
-- [MCP Server Registry](https://github.com/modelcontextprotocol/servers) - Find more servers
-- [Discord Community](https://discord.gg/SZrecqK8qw) - Get support
+- [MCP Server Registry](https://github.com/modelcontextprotocol/servers): Find more servers
+- [Discord Community](https://discord.gg/SZrecqK8qw): Get support

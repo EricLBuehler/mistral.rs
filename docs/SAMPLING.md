@@ -131,5 +131,5 @@ Please suggest more sampling techniques by [raising an issue](https://github.com
 
 ## See Also
 
-- [HTTP Server](HTTP.md) — All sampling parameters in the HTTP API
-- [CLI Reference](CLI.md) — Interactive mode sampling commands
+- [HTTP Server](HTTP.md): All sampling parameters in the HTTP API
+- [CLI Reference](CLI.md): Interactive mode sampling commands

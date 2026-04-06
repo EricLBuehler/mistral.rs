@@ -268,7 +268,7 @@ response = runner.send_chat_completion_request(request, model_id="model-id")
 # Model management
 runner.unload_model("model-id")     # Free memory
 runner.reload_model("model-id")     # Reload on demand
-# Or just send a request — unloaded models auto-reload
+# Or just send a request. Unloaded models auto-reload.
 ```
 
 For server-based multi-model deployment, see [Multi-Model Support](multi_model/overview.md).
@@ -304,7 +304,7 @@ MCP tools are automatically discovered and available to the model. Supports Proc
 ## Configuration Reference
 
 <details>
-<summary>Which enum — full type definitions</summary>
+<summary>Which enum: full type definitions</summary>
 
 ### Architecture for plain models
 
@@ -401,7 +401,7 @@ class Which(Enum):
         dtype: ModelDType = ModelDType.Auto
 ```
 
-> Note: `from_uqff` specifies a UQFF path to load from. For sharded models, you only need to specify the first shard (e.g., `q4k-0.uqff`) — the remaining shards are auto-discovered.
+> Note: `from_uqff` specifies a UQFF path to load from. For sharded models, you only need to specify the first shard (e.g., `q4k-0.uqff`). The remaining shards are auto-discovered.
 
 > Note: `enable_thinking` enables thinking for models that support it.
 

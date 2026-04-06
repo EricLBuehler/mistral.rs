@@ -63,7 +63,7 @@ For multi-node setups, configure the head node and workers using environment var
 
 ## See Also
 
-- [CLI Reference](CLI.md) - Command-line options
-- [CLI TOML Configuration](CLI_CONFIG.md) - File-based configuration
-- [Distributed Inference](DISTRIBUTED/DISTRIBUTED.md) - Multi-node setup guide
-- [PagedAttention](PAGED_ATTENTION.md) - Memory management options
+- [CLI Reference](CLI.md): Command-line options
+- [CLI TOML Configuration](CLI_CONFIG.md): File-based configuration
+- [Distributed Inference](DISTRIBUTED/DISTRIBUTED.md): Multi-node setup guide
+- [PagedAttention](PAGED_ATTENTION.md): Memory management options

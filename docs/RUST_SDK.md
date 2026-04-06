@@ -240,7 +240,7 @@ fn main() -> mistralrs::error::Result<()> {
 | `accelerate` | Apple Accelerate framework |
 | `mkl` | Intel MKL acceleration |
 
-The default feature set (no flags) builds with pure Rust — no C compiler or system libraries required.
+The default feature set (no flags) builds with pure Rust. No C compiler or system libraries required.
 
 ## Examples
 
@@ -263,8 +263,8 @@ Browse all examples: [`mistralrs/examples/`](https://github.com/EricLBuehler/mis
 
 ## See Also
 
-- [Getting Started](GETTING_STARTED.md) — Quick tutorial
-- [Agentic Features Guide](AGENTS.md) — Agent builder, tool callbacks, web search
-- [Tool Calling](TOOL_CALLING.md) — Tool calling reference
-- [Performance Guide](PERFORMANCE.md) — Optimization options
-- [API Docs (docs.rs)](https://docs.rs/mistralrs) — Full API reference
+- [Getting Started](GETTING_STARTED.md): Quick tutorial
+- [Agentic Features Guide](AGENTS.md): Agent builder, tool callbacks, web search
+- [Tool Calling](TOOL_CALLING.md): Tool calling reference
+- [Performance Guide](PERFORMANCE.md): Optimization options
+- [API Docs (docs.rs)](https://docs.rs/mistralrs): Full API reference

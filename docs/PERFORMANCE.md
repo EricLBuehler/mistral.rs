@@ -20,11 +20,11 @@ For precise recommendations, use `mistralrs tune -m <model>` which analyzes your
 
 mistral.rs has several independent optimization layers. You can use any combination:
 
-- **Quantization** — Reduces model weight memory (ISQ, GGUF, UQFF)
-- **FlashAttention** — Accelerates prompt processing (prefill phase)
-- **PagedAttention** — Efficiently manages KV cache memory during generation
-- **MLA** — Compresses KV cache for DeepSeek/GLM models
-- **Speculative Decoding** — Uses a draft model to propose multiple tokens at once
+- **Quantization**: Reduces model weight memory (ISQ, GGUF, UQFF)
+- **FlashAttention**: Accelerates prompt processing (prefill phase)
+- **PagedAttention**: Efficiently manages KV cache memory during generation
+- **MLA**: Compresses KV cache for DeepSeek/GLM models
+- **Speculative Decoding**: Uses a draft model to propose multiple tokens at once
 
 ## Quantization: Choosing a Method
 

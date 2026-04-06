@@ -7,7 +7,7 @@ Give a local model web search in one command:
 mistralrs run --enable-search -m Qwen/Qwen3-4B
 ```
 
-Or hit it from the standard OpenAI Python SDK — no custom client needed:
+Or use the standard OpenAI Python SDK. No custom client needed:
 ```python
 from openai import OpenAI
 client = OpenAI(base_url="http://localhost:1234/v1/", api_key="foobar")
@@ -70,7 +70,7 @@ response = client.chat.completions.create(
 
 In **basic** tool calling, the model generates a tool call, the server returns it to your code, and you execute the tool yourself before sending the result back. This is the standard OpenAI flow.
 
-In **agentic** tool calling, the server executes tools automatically and feeds results back to the model in a loop — no client round-trips needed. You get a final text answer instead of intermediate tool calls.
+In **agentic** tool calling, the server executes tools automatically and feeds results back to the model in a loop. No client round-trips needed. You get a final text answer instead of intermediate tool calls.
 
 For basic tool calling details, see [TOOL_CALLING.md](TOOL_CALLING.md).
 
@@ -86,20 +86,20 @@ For basic tool calling details, see [TOOL_CALLING.md](TOOL_CALLING.md).
 
 When the model calls a tool, the server tries these handlers in order:
 
-1. **Built-in search tools** — `search_the_web` and `website_content_extractor` (if web search is enabled)
-2. **Registered callbacks** — tool callbacks from the Python/Rust SDK or auto-registered MCP tools
-3. **Tool dispatch URL** — POSTs the tool call to your HTTP endpoint
-4. **No handler found** — the loop stops and the un-executed tool call is returned to the client
+1. **Built-in search tools**: `search_the_web` and `website_content_extractor` (if web search is enabled)
+2. **Registered callbacks**: tool callbacks from the Python/Rust SDK or auto-registered MCP tools
+3. **Tool dispatch URL**: POSTs the tool call to your HTTP endpoint
+4. **No handler found**: the loop stops and the un-executed tool call is returned to the client
 
 ### Supported models
 
-Agentic features work with any model that supports tool calling. See [TOOL_CALLING.md](TOOL_CALLING.md#supported-models) for the full list. Qwen 3 is recommended for best results.
+Agentic features work with any model that supports tool calling. See [TOOL_CALLING.md](TOOL_CALLING.md#supported-models) for the full list.
 
 ---
 
 ## Web Search
 
-The simplest agentic feature: flip one flag and the model can search the web. mistral.rs uses DuckDuckGo for search and [EmbeddingGemma](https://huggingface.co/google/embeddinggemma-300m) for result reranking. No tool schemas needed from the user — the search tools are injected automatically.
+The simplest agentic feature: flip one flag and the model can search the web. mistral.rs uses DuckDuckGo for search and [EmbeddingGemma](https://huggingface.co/google/embeddinggemma-300m) for result reranking. No tool schemas needed from the user; the search tools are injected automatically.
 
 ### Enabling web search
 
@@ -406,10 +406,10 @@ for (i, step) in response.steps.iter().enumerate() {
 ```
 
 `AgentStopReason` tells you why the agent stopped:
-- `TextResponse` — model produced a final text answer
-- `MaxIterations` — hit the iteration limit
-- `NoAction` — model produced no response
-- `Error(e)` — an error occurred
+- `TextResponse`: model produced a final text answer
+- `MaxIterations`: hit the iteration limit
+- `NoAction`: model produced no response
+- `Error(e)`: an error occurred
 
 ### Streaming execution
 
@@ -452,9 +452,9 @@ while let Some(event) = stream.next().await {
 Connect to external [MCP](https://modelcontextprotocol.io/) servers to give the model access to tools like filesystem operations, databases, APIs, and more. Tools are auto-discovered from connected servers at startup.
 
 Three transport types are supported:
-- **Process** — local command (stdin/stdout communication)
-- **HTTP** — remote JSON-RPC over HTTP
-- **WebSocket** — remote real-time communication
+- **Process**: local command (stdin/stdout communication)
+- **HTTP**: remote JSON-RPC over HTTP
+- **WebSocket**: remote real-time communication
 
 ### Quick start with the CLI
 

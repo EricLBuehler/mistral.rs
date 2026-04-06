@@ -166,7 +166,7 @@ mistralrs run --format gguf -m author/model-repo -f file.gguf -t author/official
 
 ## Next Steps
 
-- [CLI Reference](CLI.md) - All commands and options
-- [HTTP API](HTTP.md) - Run as an OpenAI-compatible server
-- [Python SDK](PYTHON_SDK.md) - Python package documentation
-- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and solutions
+- [CLI Reference](CLI.md): All commands and options
+- [HTTP API](HTTP.md): Run as an OpenAI-compatible server
+- [Python SDK](PYTHON_SDK.md): Python package documentation
+- [Troubleshooting](TROUBLESHOOTING.md): Common issues and solutions

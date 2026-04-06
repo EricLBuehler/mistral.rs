@@ -74,7 +74,7 @@ mistralrs run -n 16 -m gradientai/Llama-3-8B-Instruct-262k
 ```
 ## See Also
 
-- [Performance Guide](PERFORMANCE.md) — Overall performance optimization
-- [Distributed Inference](DISTRIBUTED/DISTRIBUTED.md) — Multi-GPU tensor parallelism
-- [Topology](TOPOLOGY.md) — Per-layer device and quantization control
-- [PagedAttention](PAGED_ATTENTION.md) — Memory management for KV cache
+- [Performance Guide](PERFORMANCE.md): Overall performance optimization
+- [Distributed Inference](DISTRIBUTED/DISTRIBUTED.md): Multi-GPU tensor parallelism
+- [Topology](TOPOLOGY.md): Per-layer device and quantization control
+- [PagedAttention](PAGED_ATTENTION.md): Memory management for KV cache

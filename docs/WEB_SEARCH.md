@@ -2,12 +2,12 @@
 
 mistral.rs is compatible with OpenAI's `web_search_options` parameter! Once enabled, this allows web searching for models.
 
-This works with all models that support [tool calling](TOOL_CALLING.md). However, your mileage may vary depending on the specific model. The following models work during testing and are recommended for usage:
+This works with all models that support [tool calling](TOOL_CALLING.md). The following models have been tested:
 
 - Hermes 3 3b/8b
 - Mistral 3 24b
 - Llama 4 Scout/Maverick
-- Qwen 3 (⭐ Recommended!)
+- Qwen 3
 
 Web search is supported both in streaming and completion responses! This makes it easy to integrate and test out in interactive mode!
 
@@ -191,6 +191,6 @@ async fn main() -> Result<()> {
 
 ## See Also
 
-- [Agentic Features Guide](AGENTS.md) — Complete agentic capabilities overview
-- [Tool Calling](TOOL_CALLING.md) — How tool calling works under the hood
-- [MCP Client](MCP/client.md) — Connect to external tool servers
+- [Agentic Features Guide](AGENTS.md): Complete agentic capabilities overview
+- [Tool Calling](TOOL_CALLING.md): How tool calling works under the hood
+- [MCP Client](MCP/client.md): Connect to external tool servers

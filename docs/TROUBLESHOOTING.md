@@ -281,9 +281,9 @@ mistralrs run -m <model> --token-source env:HF_TOKEN
 
 If you're still stuck:
 
-- [Discord](https://discord.gg/SZrecqK8qw) - Community support
-- [Matrix](https://matrix.to/#/#mistral.rs:matrix.org) - Alternative chat
-- [GitHub Issues](https://github.com/EricLBuehler/mistral.rs/issues) - Bug reports and feature requests
+- [Discord](https://discord.gg/SZrecqK8qw): Community support
+- [Matrix](https://matrix.to/#/#mistral.rs:matrix.org): Alternative chat
+- [GitHub Issues](https://github.com/EricLBuehler/mistral.rs/issues): Bug reports and feature requests
 
 When reporting issues, please include:
 1. Output of `mistralrs doctor`

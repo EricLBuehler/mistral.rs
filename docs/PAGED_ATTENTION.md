@@ -103,7 +103,7 @@ The prefix cache operates at the block level (not token level) for efficiency:
 
 On Metal (macOS Apple Silicon), the GPU and CPU share the same physical RAM (unified memory). Unlike CUDA GPUs with dedicated VRAM where unused memory would otherwise be wasted, allocating large KV caches on Metal wires physical RAM away from the OS and CPU, which can cause system-wide memory pressure and thrashing.
 
-To avoid this, mistral.rs automatically caps the PagedAttention KV cache on Metal to `max_seq_len * max_batch_size` tokens — just enough for the configured context length. On CUDA, the full available memory is used for maximum request concurrency (following the vLLM approach).
+To avoid this, mistral.rs automatically caps the PagedAttention KV cache on Metal to `max_seq_len * max_batch_size` tokens, which is just enough for the configured context length. On CUDA, the full available memory is used for maximum request concurrency (following the vLLM approach).
 
 You can override this behavior on any platform with `--pa-memory-mb` to set an explicit KV cache budget in megabytes.
 
@@ -251,7 +251,7 @@ runner = Runner(
 ```
 ## See Also
 
-- [Performance Guide](PERFORMANCE.md) — How PagedAttention fits into the optimization stack
-- [FlashAttention](FLASH_ATTENTION.md) — Accelerates prefill when used with PagedAttention
-- [MLA](MLA.md) — KV cache compression for DeepSeek/GLM models
-- [Device Mapping](DEVICE_MAPPING.md) — Multi-GPU and CPU offloading
+- [Performance Guide](PERFORMANCE.md): How PagedAttention fits into the optimization stack
+- [FlashAttention](FLASH_ATTENTION.md): Accelerates prefill when used with PagedAttention
+- [MLA](MLA.md): KV cache compression for DeepSeek/GLM models
+- [Device Mapping](DEVICE_MAPPING.md): Multi-GPU and CPU offloading

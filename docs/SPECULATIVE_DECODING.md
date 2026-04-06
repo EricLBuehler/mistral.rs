@@ -209,6 +209,6 @@ See `examples/python/speculative_xlora.py` for an example combining speculative 
 
 ## See Also
 
-- [Performance Guide](PERFORMANCE.md) — When speculative decoding helps
-- [CLI Reference](CLI.md) — TOML configuration for speculative decoding
-- [ISQ](ISQ.md) — Quantize draft or target models
+- [Performance Guide](PERFORMANCE.md): When speculative decoding helps
+- [CLI Reference](CLI.md): TOML configuration for speculative decoding
+- [ISQ](ISQ.md): Quantize draft or target models
