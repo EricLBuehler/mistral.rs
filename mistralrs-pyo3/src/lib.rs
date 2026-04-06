@@ -1277,8 +1277,8 @@ impl Runner {
                 logits_processors: None,
                 return_raw_logits: false,
                 web_search_options: request.web_search_options.clone(),
-                max_tool_rounds: None,
-                tool_dispatch_url: None,
+                max_tool_rounds: request.max_tool_rounds,
+                tool_dispatch_url: request.tool_dispatch_url.clone(),
                 model_id: model_id.clone(),
                 truncate_sequence: request.truncate_sequence,
             }));
@@ -2061,8 +2061,8 @@ impl Runner {
                 logits_processors: None,
                 return_raw_logits: false,
                 web_search_options: request.web_search_options.clone(),
-                max_tool_rounds: None,
-                tool_dispatch_url: None,
+                max_tool_rounds: request.max_tool_rounds,
+                tool_dispatch_url: request.tool_dispatch_url.clone(),
                 model_id: Some(model_id.clone()),
                 truncate_sequence: request.truncate_sequence,
             }));

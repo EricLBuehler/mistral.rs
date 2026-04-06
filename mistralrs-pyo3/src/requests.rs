@@ -263,6 +263,10 @@ pub struct ChatCompletionRequest {
     /// Reasoning effort level for models that support extended thinking.
     /// Valid values: "low", "medium", "high"
     pub(crate) reasoning_effort: Option<String>,
+    /// Maximum number of tool-call rounds the server will auto-execute.
+    pub(crate) max_tool_rounds: Option<usize>,
+    /// URL to POST tool calls to for server-side execution.
+    pub(crate) tool_dispatch_url: Option<String>,
 }
 
 #[pymethods]
@@ -297,6 +301,8 @@ impl ChatCompletionRequest {
         enable_thinking=false,
         truncate_sequence=false,
         reasoning_effort=None,
+        max_tool_rounds=None,
+        tool_dispatch_url=None,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -327,6 +333,8 @@ impl ChatCompletionRequest {
         enable_thinking: Option<bool>,
         truncate_sequence: Option<bool>,
         reasoning_effort: Option<String>,
+        max_tool_rounds: Option<usize>,
+        tool_dispatch_url: Option<String>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -405,6 +413,8 @@ impl ChatCompletionRequest {
             enable_thinking,
             truncate_sequence: truncate_sequence.unwrap_or(false),
             reasoning_effort,
+            max_tool_rounds,
+            tool_dispatch_url,
         })
     }
 }

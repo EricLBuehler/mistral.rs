@@ -10,6 +10,7 @@ use axum::{
         sse::{Event, KeepAlive, KeepAliveStream},
         IntoResponse, Sse,
     },
+    Extension,
 };
 use either::Either;
 use indexmap::IndexMap;
@@ -30,6 +31,7 @@ use crate::{
         base_process_non_streaming_response, create_response_channel, send_request_with_model,
         BaseJsonModelError, ErrorToResponse, JsonError, ModelErrorMessage,
     },
+    mistralrs_server_router_builder::AgenticDefaults,
     openai::{
         ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
         ResponseFormat,
@@ -221,6 +223,7 @@ pub async fn parse_request(
     oairequest: ChatCompletionRequest,
     state: SharedMistralRsState,
     tx: Sender<Response>,
+    tool_dispatch_url: Option<String>,
 ) -> Result<(Request, bool)> {
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
@@ -641,7 +644,7 @@ pub async fn parse_request(
             return_raw_logits: false,
             web_search_options: oairequest.web_search_options,
             max_tool_rounds: oairequest.max_tool_rounds,
-            tool_dispatch_url: oairequest.tool_dispatch_url,
+            tool_dispatch_url,
             model_id: if oairequest.model == "default" {
                 None
             } else {
@@ -663,9 +666,15 @@ pub async fn parse_request(
 )]
 pub async fn chatcompletions(
     State(state): ExtractedMistralRsState,
-    Json(oairequest): Json<ChatCompletionRequest>,
+    Extension(agentic_defaults): Extension<AgenticDefaults>,
+    Json(mut oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
     let (tx, mut rx) = create_response_channel(None);
+
+    // Apply server-level default for max_tool_rounds (per-request value takes priority)
+    oairequest.max_tool_rounds = oairequest
+        .max_tool_rounds
+        .or(agentic_defaults.max_tool_rounds);
 
     // Extract model_id for routing before parsing
     let model_id = if oairequest.model == "default" {
@@ -674,7 +683,15 @@ pub async fn chatcompletions(
         Some(oairequest.model.clone())
     };
 
-    let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx).await {
+    // tool_dispatch_url is server-level only (not settable per-request via HTTP API) for security
+    let (request, is_streaming) = match parse_request(
+        oairequest,
+        state.clone(),
+        tx,
+        agentic_defaults.tool_dispatch_url,
+    )
+    .await
+    {
         Ok(x) => x,
         Err(e) => return handle_error(state, e.into()),
     };

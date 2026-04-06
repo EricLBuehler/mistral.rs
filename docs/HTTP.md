@@ -24,7 +24,8 @@ To support additional features, we have extended the completion and chat complet
 - `dry_allowed_length`: `int` | `null`. DRY sampling allowed length before penalty applies.
 - `dry_sequence_breakers`: `array of strings` | `null`. Tokens that reset the DRY penalty sequence.
 - `max_tool_rounds`: `int` | `null`. Maximum number of tool-call rounds the server will auto-execute. When set, the server enters an agentic loop: the model calls tools, the server executes them via registered callbacks (MCP, search, or custom), feeds results back, and repeats until the model stops calling tools or this limit is reached. Default safety cap: 16. See [TOOL_CALLING.md](TOOL_CALLING.md) for details.
-- `tool_dispatch_url`: `string` | `null`. URL to POST tool calls to for server-side execution. When the model calls a tool with no registered callback, the server POSTs `{"name": "...", "arguments": {...}}` to this URL and uses the response. See [TOOL_CALLING.md](TOOL_CALLING.md) for details.
+
+> **Note:** The tool dispatch URL (`--tool-dispatch-url`) is configured server-side only via the CLI flag for security (SSRF prevention). It cannot be set per-request via the HTTP API. The Rust and Python SDKs can set it per-request since they run trusted code. See [TOOL_CALLING.md](TOOL_CALLING.md#tool-dispatch-url) for details.
 
 ## Response Extensions
 
