@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
 
-use crate::model_scanner::scan_models_dir;
 use crate::commands::serve::discovered_to_pending_config;
+use crate::model_scanner::scan_models_dir;
 
 /// Spawns a background task that watches the models directory for changes.
 /// Re-scans every 10 seconds and registers/unregisters pending models.

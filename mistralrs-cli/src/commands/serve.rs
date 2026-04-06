@@ -546,7 +546,12 @@ pub async fn run_server_lazy(
         }
     }
 
-    crate::model_watcher::spawn_model_watcher(mistralrs_for_watcher, models_dir.to_path_buf(), device, cache_config);
+    crate::model_watcher::spawn_model_watcher(
+        mistralrs_for_watcher,
+        models_dir.to_path_buf(),
+        device,
+        cache_config,
+    );
 
     let mut app = MistralRsServerRouterBuilder::new()
         .with_mistralrs(mistralrs)
@@ -564,7 +569,8 @@ pub async fn run_server_lazy(
         info!("UI available at http://{}:{}/ui", server.host, server.port);
     }
 
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
+    let listener =
+        tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
     info!("Server listening on http://{}:{}", server.host, server.port);
     info!("Models will be loaded on first request (lazy mode)");
 
@@ -587,11 +593,11 @@ pub(crate) fn discovered_to_pending_config(
     device: &candle_core::Device,
     paged_attn_config: Option<mistralrs_core::PagedAttentionConfig>,
 ) -> anyhow::Result<mistralrs_core::PendingModelConfig> {
+    use crate::model_scanner::ModelFileFormat;
     use mistralrs_core::{
         AutoDeviceMapParams, DeviceMapSetting, EngineConfig, ModelDType, ModelSelected,
         PendingModelConfig, SchedulerConfig, TokenSource,
     };
-    use crate::model_scanner::ModelFileFormat;
 
     let model_selected = match &model.format {
         ModelFileFormat::Gguf { filename } => ModelSelected::GGUF {

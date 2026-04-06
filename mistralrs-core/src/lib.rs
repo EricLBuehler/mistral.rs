@@ -614,7 +614,8 @@ impl MistralRs {
             log,
             idle_timeout_secs,
             ..
-        } = config else {
+        } = config
+        else {
             panic!("new_empty requires a builder created with MistralRsBuilder::new_empty()");
         };
 
@@ -776,7 +777,8 @@ impl MistralRs {
             mcp_client_config,
             loader_config,
             idle_timeout_secs,
-        } = config else {
+        } = config
+        else {
             panic!("MistralRs::new() called with a builder that has no pipeline. Use MistralRs::new_empty() instead.");
         };
 
