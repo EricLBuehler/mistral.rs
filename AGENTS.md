@@ -116,7 +116,8 @@ cargo build --release -p mistralrs-cli
   Start-Process nssm -ArgumentList 'stop','MistralRs' -Verb RunAs -Wait
   Start-Process nssm -ArgumentList 'start','MistralRs' -Verb RunAs -Wait
   ```
-- Command: `mistralrs.exe serve --ui --idle-timeout-secs 1800 --models-dir "E:\MistralRs\models" -p 1234`
+- Command: `mistralrs.exe serve --ui --idle-timeout-secs 1800 --models-dir=E:\MistralRs\models -p 1234`
+- **NSSM quoting gotcha:** NSSM calls `CreateProcess` directly (not cmd.exe), so quotes around argument values with spaces get stripped. Use `--param=value` syntax (no quotes needed) instead of `--param "value with spaces"`. Example: `--models-dir=E:\MistralRs\models`, NOT `--models-dir "E:\MistralRs\models"`.
 - Models dir: `E:\MistralRs\models\` (contains llama-3.1-8b, mistral-7b-v03, phi-3.5-mini, qwen3-4b, qwen3-8b)
 - UI override dir: `E:\MistralRs\ui\` (optional disk-based UI files; accessed at `http://127.0.0.1:1234/ui` — note: no trailing slash)
 
