@@ -464,16 +464,17 @@ impl Attention {
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => {
                 // Paged attention path, do NOT use normal kv_caches.
+                // Select the correct per-layer mask: sliding window for
+                // sliding layers, full causal for full-attention layers.
+                // This must be used even when paged attention is active
+                // because `Custom` masks route to eager attention (not
+                // flash), so flash attn's `window_size_left` never applies.
                 let mask = if self.is_sliding {
                     sliding_attention_mask
                 } else {
                     attention_mask
                 };
-                let paged_mask = if flash_params.is_some() {
-                    attention_mask
-                } else {
-                    mask
-                };
+                let paged_mask = mask;
 
                 let is_shared = self.kv_shared_layer_index.is_some();
 
