@@ -33,6 +33,41 @@ function flushPendingChatRestore() {
 
 window.flushPendingChatRestore = flushPendingChatRestore;
 
+const CONFIRM_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+const DELETE_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+const ARM_TIMEOUT = 3000;
+
+/**
+ * Arm a delete button: first click shows ✓ confirmation, second click executes.
+ * Auto-reverts after ARM_TIMEOUT ms.
+ */
+function armDeleteBtn(btn, onConfirm) {
+  // If already armed, confirm the action
+  if (btn.dataset.armed === 'true') {
+    clearTimeout(parseInt(btn.dataset.armTimer, 10));
+    resetDeleteBtn(btn);
+    onConfirm();
+    return;
+  }
+
+  // Arm the button
+  btn.dataset.armed = 'true';
+  btn.innerHTML = CONFIRM_ICON;
+  btn.title = 'Click again to confirm';
+  btn.classList.add('armed');
+
+  // Auto-revert after timeout
+  const timer = setTimeout(() => resetDeleteBtn(btn), ARM_TIMEOUT);
+  btn.dataset.armTimer = String(timer);
+}
+
+function resetDeleteBtn(btn) {
+  btn.dataset.armed = 'false';
+  btn.innerHTML = DELETE_ICON;
+  btn.title = 'Delete chat';
+  btn.classList.remove('armed');
+}
+
 /**
  * Refresh the chat list in the sidebar
  */
@@ -73,20 +108,22 @@ async function refreshChatList() {
     delBtn.className = 'chat-delete-btn';
     delBtn.title = 'Delete chat';
     delBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+    delBtn.dataset.chatId = c.id;
     delBtn.onclick = (ev) => {
       ev.stopPropagation();
-      if (!confirm('Delete this chat permanently?')) return;
-      fetch(apiUrl('api/delete_chat'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: c.id })
-      }).then(res => {
-        if (!res.ok) { alert('Failed to delete chat'); return; }
-        if (currentChatId === c.id) {
-          currentChatId = null;
-          document.getElementById('log').innerHTML = '';
-        }
-        refreshChatList();
+      armDeleteBtn(delBtn, () => {
+        fetch(apiUrl('api/delete_chat'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: c.id })
+        }).then(res => {
+          if (!res.ok) return;
+          if (currentChatId === c.id) {
+            currentChatId = null;
+            document.getElementById('log').innerHTML = '';
+          }
+          refreshChatList();
+        });
       });
     };
 
@@ -283,35 +320,30 @@ function initChatHandlers() {
     }
   });
 
-  deleteBtn.addEventListener('click', async () => {
-    if (!currentChatId) { 
-      alert('No chat selected'); 
-      return; 
-    }
-    if (!confirm('Delete this chat permanently?')) return;
-    const res = await fetch(apiUrl('api/delete_chat'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: currentChatId })
+  deleteBtn.addEventListener('click', () => {
+    if (!currentChatId) return;
+    armDeleteBtn(deleteBtn, async () => {
+      const res = await fetch(apiUrl('api/delete_chat'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: currentChatId })
+      });
+      if (!res.ok) return;
+      currentChatId = null;
+      document.getElementById('log').innerHTML = '';
+      clearImagePreviews();
+      clearTextFilePreviews();
+      clearAudioPreviews();
+      await refreshChatList();
+
+      // Move to newest chat if any, otherwise create a fresh one
+      const chatList = document.getElementById('chatList');
+      const firstLi = chatList.querySelector('li');
+      if (firstLi) {
+        loadChat(firstLi.dataset.id);
+      } else if (prevModel) {
+        newChatBtn.click();
+      }
     });
-    if (!res.ok) { 
-      alert('Failed to delete chat'); 
-      return; 
-    }
-    currentChatId = null;
-    document.getElementById('log').innerHTML = '';
-    clearImagePreviews();
-    clearTextFilePreviews();
-    clearAudioPreviews();
-    await refreshChatList();
-    
-    // Move to newest chat if any, otherwise create a fresh one
-    const chatList = document.getElementById('chatList');
-    const firstLi = chatList.querySelector('li');
-    if (firstLi) {
-      loadChat(firstLi.dataset.id);
-    } else if (prevModel) {
-      newChatBtn.click();
-    }
   });
 }
