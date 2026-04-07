@@ -108,7 +108,10 @@ macro_rules! handle_pipeline_forward_error {
                             let p = get_mut_arcmutex!($pipeline);
                             p.set_none_cache($seq_slice, true, true, false);
                         }
-                        get_mut_arcmutex!($prefix_cacher).evict_all_caches().unwrap();
+                        get_mut_arcmutex!($prefix_cacher).evict_all_caches().unwrap_or_else(|e| {
+                            tracing::warn!("Failed to evict caches during error handling: {e}");
+                            0
+                        });
                         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                         continue $label;
                     }
@@ -123,8 +126,7 @@ macro_rules! handle_pipeline_forward_error {
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
                 use $crate::response::SYSTEM_FINGERPRINT;
-                use tracing::error;
-                error!("{} - Model failed with error: {:?}", $stage, &e);
+                tracing::error!("{} - Model failed with error: {:?}", $stage, &e);
                 for seq in $seq_slice.iter_mut() {
                     // Step 1: Add all choices to groups
                     let start = seq.prompt_tokens().min(seq.get_toks().len());
@@ -174,13 +176,15 @@ macro_rules! handle_pipeline_forward_error {
                             usage: group.get_usage(),
                         };
 
-                        seq.responder()
+                        if let Err(err) = seq.responder()
                             .send(Response::ModelError(
                                 e.to_string(),
                                 partial_completion_response
                             ))
                             .await
-                            .unwrap();
+                        {
+                            tracing::warn!("Failed to send error response to client (disconnected?): {err}");
+                        }
                     } else {
                         let partial_completion_response = CompletionResponse {
                             id: seq.id().to_string(),
@@ -192,13 +196,15 @@ macro_rules! handle_pipeline_forward_error {
                             usage: group.get_usage(),
                         };
 
-                        seq.responder()
+                        if let Err(err) = seq.responder()
                             .send(Response::CompletionModelError(
                                 e.to_string(),
                                 partial_completion_response
                             ))
                             .await
-                            .unwrap();
+                        {
+                            tracing::warn!("Failed to send error response to client (disconnected?): {err}");
+                        }
                     }
                 }
                 for seq in $seq_slice.iter_mut() {
@@ -211,9 +217,12 @@ macro_rules! handle_pipeline_forward_error {
                 // - The sequence is gone
                 // - We should reset the state then, including draft.
                 p.set_none_cache($seq_slice, true, true, false);
-                get_mut_arcmutex!($prefix_cacher).evict_all_caches().unwrap();
+                get_mut_arcmutex!($prefix_cacher).evict_all_caches().unwrap_or_else(|e| {
+                    tracing::warn!("Failed to evict caches during error handling: {e}");
+                    0
+                });
 
-                continue $label;
+                continue $label
             }
         }
     };
