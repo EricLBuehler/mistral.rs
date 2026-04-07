@@ -613,6 +613,6 @@ pub async fn refresh_models(Extension(app): Extension<Arc<AppState>>) -> impl In
     // Update the in-memory model list
     *app.models.write().await = updated.clone();
 
-    let model_names: Vec<_> = updated.keys().cloned().collect();
-    Json(json!({ "models": model_names }))
+    let models: Vec<_> = updated.values().cloned().collect();
+    Json(json!({ "models": models }))
 }

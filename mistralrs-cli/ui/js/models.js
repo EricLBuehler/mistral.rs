@@ -8,7 +8,7 @@ let prevModel = null;
  * Refresh the list of available models
  */
 async function refreshModels() {
-  const res = await fetch(apiUrl('api/list_models'));
+  const res = await fetch(apiUrl('api/refresh_models'));
   const data = await res.json();
   const modelSelect = document.getElementById('modelSelect');
   

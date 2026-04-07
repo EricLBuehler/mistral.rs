@@ -61,15 +61,38 @@ async function refreshChatList() {
       : `Chat #${data.chats.length - idx}`;
 
     const titleDiv = document.createElement('div');
+    titleDiv.className = 'chat-title';
     titleDiv.textContent = display;
 
     const dateDiv = document.createElement('div');
+    dateDiv.className = 'chat-date';
     dateDiv.textContent = new Date(c.created_at).toLocaleString();
-    dateDiv.style.fontSize = '0.8em';
-    dateDiv.style.color = 'var(--text-muted)';
+
+    // Delete button (visible on hover)
+    const delBtn = document.createElement('button');
+    delBtn.className = 'chat-delete-btn';
+    delBtn.title = 'Delete chat';
+    delBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+    delBtn.onclick = (ev) => {
+      ev.stopPropagation();
+      if (!confirm('Delete this chat permanently?')) return;
+      fetch(apiUrl('api/delete_chat'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: c.id })
+      }).then(res => {
+        if (!res.ok) { alert('Failed to delete chat'); return; }
+        if (currentChatId === c.id) {
+          currentChatId = null;
+          document.getElementById('log').innerHTML = '';
+        }
+        refreshChatList();
+      });
+    };
 
     li.appendChild(titleDiv);
     li.appendChild(dateDiv);
+    li.appendChild(delBtn);
     chatList.appendChild(li);
   });
 }

@@ -6,6 +6,22 @@ let ws;
 let assistantBuf = '';
 let assistantDiv = null;
 let currentSpinner = null;
+let generationStopped = false;
+
+// Stop button visibility management
+function showStopBtn() {
+  const stopBtn = document.getElementById('stopBtn');
+  const sendBtn = document.querySelector('.btn-send');
+  if (stopBtn) stopBtn.classList.remove('hidden');
+  if (sendBtn) sendBtn.classList.add('hidden');
+}
+
+function hideStopBtn() {
+  const stopBtn = document.getElementById('stopBtn');
+  const sendBtn = document.querySelector('.btn-send');
+  if (stopBtn) stopBtn.classList.add('hidden');
+  if (sendBtn) sendBtn.classList.remove('hidden');
+}
 
 /**
  * Initialize WebSocket connection with reconnection support
@@ -99,6 +115,11 @@ function hideSpinner() {
 function handleWebSocketMessage(ev) {
   const logEl = document.getElementById('log');
 
+  // Ignore content tokens if generation was stopped
+  if (generationStopped && ev.data !== '[DONE]') {
+    return;
+  }
+
   // Handle system messages
   if (ev.data === '[Context cleared]') {
     pendingClear = false;
@@ -117,9 +138,24 @@ function handleWebSocketMessage(ev) {
     return;
   }
 
+  if (ev.data === '[DONE]') {
+    generationStopped = false;
+    hideStopBtn();
+    hideLoadingIndicator();
+    return;
+  }
+
+  // Handle model loading indicator
+  if (ev.data === '[LOADING]') {
+    showLoadingIndicator();
+    return;
+  }
+
   // Handle error messages from server
   if (ev.data.startsWith('Error:') || ev.data.startsWith('No model selected') || ev.data.startsWith('Selected model not found')) {
     hideSpinner();
+    hideStopBtn();
+    hideLoadingIndicator();
     showError(ev.data);
     return;
   }
@@ -325,8 +361,10 @@ ${content}
   
   assistantBuf = ''; 
   assistantDiv = null;
+  generationStopped = false;
   
   showSpinner();
+  showStopBtn();
   
   // Build message payload with generation params
   const payload = {
@@ -373,12 +411,30 @@ function initMessageSending() {
 
   input.addEventListener('keydown', ev => {
     if (ev.key === 'Enter' && !ev.shiftKey) {
-      if (ev.ctrlKey || ev.metaKey) {
-        ev.preventDefault();
-        sendMessage();
-      } else {
-        ev.preventDefault();
-      }
+      ev.preventDefault();
+      sendMessage();
     }
   });
+}
+
+/**
+ * Show model loading indicator
+ */
+function showLoadingIndicator() {
+  hideLoadingIndicator();
+  const log = document.getElementById('log');
+  const loadingDiv = document.createElement('div');
+  loadingDiv.className = 'loading-indicator';
+  loadingDiv.id = 'modelLoading';
+  loadingDiv.innerHTML = '<span class="loading-spinner"></span> Loading model...';
+  log.appendChild(loadingDiv);
+  log.scrollTop = log.scrollHeight;
+}
+
+/**
+ * Hide model loading indicator
+ */
+function hideLoadingIndicator() {
+  const el = document.getElementById('modelLoading');
+  if (el) el.remove();
 }
