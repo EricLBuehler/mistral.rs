@@ -69,7 +69,11 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     // are constrained to valid tool call syntax.
     // For Harmony mode, tool calls are signaled by token-level markers (not
     // text prefixes), so we also check HarmonyContext for new tool calls.
-    if matches!(seq.recognizer, SequenceRecognizer::None) {
+    //
+    // Skip when the sequence is already done — peek_delta() still contains
+    // the tool call prefix from earlier generation, which would spuriously
+    // re-activate the grammar on a completed sequence.
+    if matches!(seq.recognizer, SequenceRecognizer::None) && is_done.is_none() {
         // Try text-based detection first, then Harmony token-based detection.
         let grm = if let Some(ref t) = seq.tools {
             seq.peek_delta()

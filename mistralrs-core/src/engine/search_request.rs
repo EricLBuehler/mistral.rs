@@ -327,10 +327,15 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                     };
                     match resp {
                         Response::Chunk(chunk) => {
-                            // Forward all chunks including tool calls so
-                            // streaming clients see the full agentic flow.
+                            // Forward content-bearing chunks, suppress tool-call chunks.
+                            // Forwarding tool call chunks would cause streaming clients
+                            // to see a premature finish_reason before the tool loop
+                            // has a chance to execute the tool and continue.
                             let first_choice = &chunk.choices[0];
-                            let _ = user_sender.send(Response::Chunk(chunk.clone())).await;
+                            if first_choice.delta.tool_calls.is_none() {
+                                let _ =
+                                    user_sender.send(Response::Chunk(chunk.clone())).await;
+                            }
                             last_choice = Some(first_choice.clone());
 
                             if last_choice
