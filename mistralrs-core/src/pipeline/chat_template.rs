@@ -399,9 +399,7 @@ fn preprocess_gemma4_tool_messages(messages: &mut Vec<IndexMap<String, MessageCo
                     _ => None,
                 })
                 .is_some_and(|r| r == "assistant");
-            if is_assistant
-                && (msg.contains_key("tool_calls") || !msg.contains_key("content"))
-            {
+            if is_assistant && (msg.contains_key("tool_calls") || !msg.contains_key("content")) {
                 msg.insert("content".to_string(), Either::Left(String::new()));
             }
 
