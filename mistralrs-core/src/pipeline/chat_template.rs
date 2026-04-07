@@ -601,8 +601,10 @@ pub fn apply_chat_template_to(
         })
         .collect();
 
-    if tools.is_empty() {
-        Ok(tmpl.render(context! {
+    let is_gemma4 = is_gemma4_tool_template(&resolved_template);
+
+    let mut rendered = if tools.is_empty() {
+        tmpl.render(context! {
             messages => new_messages,
             add_generation_prompt => add_generation_prompt,
             bos_token => bos_tok,
@@ -611,9 +613,9 @@ pub fn apply_chat_template_to(
             date_string => date_string,
             enable_thinking => enable_thinking.unwrap_or(DEFAULT_ENABLE_THINKING),
             reasoning_effort => reasoning_effort_str,
-        })?)
+        })?
     } else {
-        Ok(tmpl.render(context! {
+        tmpl.render(context! {
             messages => new_messages,
             add_generation_prompt => add_generation_prompt,
             bos_token => bos_tok,
@@ -625,8 +627,19 @@ pub fn apply_chat_template_to(
             date_string => date_string,
             enable_thinking => enable_thinking.unwrap_or(DEFAULT_ENABLE_THINKING),
             reasoning_effort => reasoning_effort_str,
-        })?)
+        })?
+    };
+
+    // Gemma 4 fix: when tool_responses are in a user turn (the correct
+    // format), the template's generation-prompt logic skips `<|turn>model\n`
+    // because it checks `prev_message_type != 'tool_response'`.  But the
+    // training data ALWAYS has `<|turn>model\n` before the model generates.
+    // Append it when the template left it out.
+    if is_gemma4 && add_generation_prompt && rendered.ends_with("<tool_response|>") {
+        rendered.push_str("<|turn>model\n");
     }
+
+    Ok(rendered)
 }
 
 #[cfg(test)]
