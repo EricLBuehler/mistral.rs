@@ -108,14 +108,17 @@ cargo build --release -p mistralrs-cli
 ```
 
 **Deploy to Windows service:**
-- Service name: `MistralRs` (managed by Servy at `C:\ProgramData\Servy`)
+- Service name: `MistralRs` (managed by NSSM — Non-Sucking Service Manager)
 - Deploy dir: `E:\MistralRs\`
 - Binary: `target\release\mistralrs.exe` → copy to `E:\MistralRs\mistralrs.exe`
-- Start/stop requires admin elevation via Servy CLI or `Start-Process -Verb RunAs`
-- Config: `E:\MistralRs\run_server.bat` — `mistralrs.exe serve --ui --idle-timeout-secs 1800 --models-dir "E:\MistralRs\models" -p 1234`
-- Logs: `E:\MistralRs\service.log` / `E:\MistralRs\service_err.log`
+- Start/stop (requires UAC elevation):
+  ```powershell
+  Start-Process nssm -ArgumentList 'stop','MistralRs' -Verb RunAs -Wait
+  Start-Process nssm -ArgumentList 'start','MistralRs' -Verb RunAs -Wait
+  ```
+- Command: `mistralrs.exe serve --ui --idle-timeout-secs 1800 --models-dir "E:\MistralRs\models" -p 1234`
 - Models dir: `E:\MistralRs\models\` (contains llama-3.1-8b, mistral-7b-v03, phi-3.5-mini, qwen3-4b, qwen3-8b)
-- UI override dir: `E:\MistralRs\ui\` (optional disk-based UI files)
+- UI override dir: `E:\MistralRs\ui\` (optional disk-based UI files; accessed at `http://127.0.0.1:1234/ui` — note: no trailing slash)
 
 **DO NOT commit:** `build.bat`, `deploy.ps1`, `nvcc_wrapper.bat` (local tooling)
 **DO NOT touch:** `E:\MistralRs\` deployment directory (permission-blocked from git)
