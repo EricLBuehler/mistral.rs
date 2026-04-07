@@ -467,9 +467,72 @@ html.dark .icon-sun        { display: inline-block; }
 
 /* ---------- Topbar ---------- */
 .topbar {
-  display: none; /* visible on mobile */
+  display: flex;
+  align-items: center;
   padding: 8px 12px;
   flex-shrink: 0;
+}
+
+/* ---------- Connection Status Indicator ---------- */
+.connection-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 12px;
+  margin-left: 12px;
+  white-space: nowrap;
+  user-select: none;
+  transition: background-color 0.2s, color 0.2s;
+}
+.connection-status::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.connection-status.connected {
+  background: #dcfce7;
+  color: #166534;
+}
+.connection-status.connected::before {
+  background: #22c55e;
+}
+.connection-status.reconnecting {
+  background: #fef3c7;
+  color: #92400e;
+  animation: pulse-status 2s ease-in-out infinite;
+}
+.connection-status.reconnecting::before {
+  background: #f59e0b;
+}
+.connection-status.disconnected {
+  background: #fee2e2;
+  color: #991b1b;
+}
+.connection-status.disconnected::before {
+  background: #ef4444;
+}
+html.dark .connection-status.connected {
+  background: #14532d;
+  color: #86efac;
+}
+html.dark .connection-status.reconnecting {
+  background: #451a03;
+  color: #fcd34d;
+}
+html.dark .connection-status.disconnected {
+  background: #450a0a;
+  color: #fca5a5;
+}
+
+@keyframes pulse-status {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 #sidebarToggle {
   display: flex;
@@ -931,4 +994,37 @@ pre:hover .copy-btn {
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
+}
+
+/* ---------- Initialization Error Banner ---------- */
+.init-error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  color: #991b1b;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin-top: 12px;
+}
+html.dark .init-error {
+  background: #450a0a;
+  border-color: #7f1d1d;
+  color: #fca5a5;
+}
+.init-error strong {
+  display: block;
+  font-size: 1rem;
+  margin-bottom: 4px;
+}
+.init-error small {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.init-error a {
+  color: #dc2626;
+  text-decoration: underline;
+}
+html.dark .init-error a {
+  color: #f87171;
 }

@@ -23,14 +23,25 @@ function hideStopBtn() {
   if (sendBtn) sendBtn.classList.remove('hidden');
 }
 
-/**
- * Initialize WebSocket connection with reconnection support
- */
+// WebSocket reconnection state
+let wsReconnectAttempts = 0;
+const WS_MAX_RECONNECT_ATTEMPTS = 10;
+const WS_BASE_DELAY = 1000;      // 1s initial delay
+const WS_MAX_DELAY = 30000;       // 30s max delay
+
 function initWebSocket() {
+  // Close existing connection if any
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    ws.onclose = null; // Prevent the close handler from triggering reconnect
+    ws.close();
+  }
+
   ws = new WebSocket(wsUrl('ws'));
 
   ws.addEventListener('open', () => {
     console.log('WebSocket connected');
+    wsReconnectAttempts = 0;
+    updateConnectionStatus('connected');
     // Send system prompt if set
     if (typeof getSetting === 'function') {
       const sysPrompt = getSetting('system_prompt');
@@ -55,16 +66,53 @@ function initWebSocket() {
   ws.addEventListener('close', (e) => {
     console.log('WebSocket closed:', e.code, e.reason);
     hideSpinner();
-    // Auto-reconnect after a delay (unless it was a clean close)
+    // Auto-reconnect with exponential backoff (unless it was a clean close)
     if (e.code !== 1000) {
+      if (wsReconnectAttempts >= WS_MAX_RECONNECT_ATTEMPTS) {
+        console.error('Max reconnection attempts reached');
+        updateConnectionStatus('disconnected');
+        return;
+      }
+      const delay = Math.min(WS_BASE_DELAY * Math.pow(2, wsReconnectAttempts), WS_MAX_DELAY);
+      // Add small jitter (±20%) to avoid thundering herd
+      const jitter = delay * (0.8 + Math.random() * 0.4);
+      wsReconnectAttempts++;
+      console.log(`Reconnecting in ${Math.round(jitter / 1000)}s (attempt ${wsReconnectAttempts}/${WS_MAX_RECONNECT_ATTEMPTS})...`);
+      updateConnectionStatus('reconnecting', wsReconnectAttempts);
       setTimeout(() => {
-        console.log('Attempting to reconnect...');
         initWebSocket();
-      }, 2000);
+      }, jitter);
+    } else {
+      updateConnectionStatus('disconnected');
     }
   });
 
   return ws;
+}
+
+/**
+ * Update the connection status indicator in the UI
+ * @param {'connected'|'reconnecting'|'disconnected'} status
+ * @param {number} [attempt] - Current reconnection attempt number
+ */
+function updateConnectionStatus(status, attempt) {
+  const indicator = document.getElementById('connectionStatus');
+  if (!indicator) return;
+
+  const labels = {
+    connected: 'Connected',
+    reconnecting: attempt ? `Reconnecting (${attempt}/${WS_MAX_RECONNECT_ATTEMPTS})` : 'Reconnecting…',
+    disconnected: 'Disconnected'
+  };
+  const titles = {
+    connected: 'WebSocket is connected',
+    reconnecting: 'WebSocket is reconnecting…',
+    disconnected: 'WebSocket is disconnected — refresh the page'
+  };
+
+  indicator.className = `connection-status ${status}`;
+  indicator.textContent = labels[status] || status;
+  indicator.title = titles[status] || '';
 }
 
 /**

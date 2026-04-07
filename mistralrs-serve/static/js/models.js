@@ -9,6 +9,9 @@ let prevModel = null;
  */
 async function refreshModels() {
   const res = await fetch(apiUrl('api/refresh_models'));
+  if (!res.ok) {
+    throw new Error(`Failed to refresh models (HTTP ${res.status})`);
+  }
   const data = await res.json();
   const modelSelect = document.getElementById('modelSelect');
   

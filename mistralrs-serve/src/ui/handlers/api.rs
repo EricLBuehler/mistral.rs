@@ -335,6 +335,7 @@ pub async fn list_chats(Extension(app): Extension<Arc<AppState>>) -> impl IntoRe
                                 "model": chat.model,
                                 "kind": chat.kind,
                                 "created_at": chat.created_at,
+                                "message_count": chat.messages.len(),
                             }));
                         }
                     }
