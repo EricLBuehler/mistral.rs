@@ -626,96 +626,6 @@ vd_q6_K_q8_1(const void *__restrict__ vbq,
   return vec_dot_q6_K_q8_1_impl_mmvq(vl, vh, u, scales, bq6_K->d, d8);
 }
 
-// ============== BF16 quantize to Q8_1 (skips F32 intermediate) ==============
-
-static __device__ __forceinline__ float warp_reduce_max(float x) {
-#pragma unroll
-  for (int mask = 16; mask > 0; mask >>= 1) {
-    x = fmaxf(x, __shfl_xor_sync(0xffffffff, x, mask, 32));
-  }
-  return x;
-}
-
-extern "C" __global__ void quantize_bf16_q8_1(
-    const nv_bfloat16 *__restrict__ x, void *__restrict__ vy,
-    const int kx, const int kx_padded) {
-  const int ix = blockDim.x * blockIdx.x + threadIdx.x;
-  if (ix >= kx_padded) return;
-
-  const int iy = blockDim.y * blockIdx.y + threadIdx.y;
-  const int i_padded = iy * kx_padded + ix;
-  block_q8_1 *y = (block_q8_1 *)vy;
-
-  const int ib = i_padded / QK8_1;
-  const int iqs = i_padded % QK8_1;
-
-  const float xi = ix < kx ? __bfloat162float(x[iy * kx + ix]) : 0.0f;
-  float amax = fabsf(xi);
-  float sum = xi;
-
-  amax = warp_reduce_max(amax);
-  sum = warp_reduce_sum(sum);
-
-  const float d = amax / 127;
-  const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
-
-  y[ib].qs[iqs] = q;
-  if (iqs > 0) return;
-
-  reinterpret_cast<half &>(y[ib].ds.x) = d;
-  reinterpret_cast<half &>(y[ib].ds.y) = sum;
-}
-
-extern "C" __global__ void quantize_f16_q8_1(
-    const half *__restrict__ x, void *__restrict__ vy,
-    const int kx, const int kx_padded) {
-  const int ix = blockDim.x * blockIdx.x + threadIdx.x;
-  if (ix >= kx_padded) return;
-
-  const int iy = blockDim.y * blockIdx.y + threadIdx.y;
-  const int i_padded = iy * kx_padded + ix;
-  block_q8_1 *y = (block_q8_1 *)vy;
-
-  const int ib = i_padded / QK8_1;
-  const int iqs = i_padded % QK8_1;
-
-  const float xi = ix < kx ? __half2float(x[iy * kx + ix]) : 0.0f;
-  float amax = fabsf(xi);
-  float sum = xi;
-
-  amax = warp_reduce_max(amax);
-  sum = warp_reduce_sum(sum);
-
-  const float d = amax / 127;
-  const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
-
-  y[ib].qs[iqs] = q;
-  if (iqs > 0) return;
-
-  reinterpret_cast<half &>(y[ib].ds.x) = d;
-  reinterpret_cast<half &>(y[ib].ds.y) = sum;
-}
-
-extern "C" void launch_quantize_bf16_q8_1(
-    const void *x, void *vy, int kx, int kx_padded,
-    int num_blocks_x, int num_rows, void *stream) {
-  dim3 grid(num_blocks_x, num_rows, 1);
-  dim3 block(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
-  cudaStream_t s = static_cast<cudaStream_t>(stream);
-  quantize_bf16_q8_1<<<grid, block, 0, s>>>(
-      (const nv_bfloat16 *)x, vy, kx, kx_padded);
-}
-
-extern "C" void launch_quantize_f16_q8_1(
-    const void *x, void *vy, int kx, int kx_padded,
-    int num_blocks_x, int num_rows, void *stream) {
-  dim3 grid(num_blocks_x, num_rows, 1);
-  dim3 block(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
-  cudaStream_t s = static_cast<cudaStream_t>(stream);
-  quantize_f16_q8_1<<<grid, block, 0, s>>>(
-      (const half *)x, vy, kx, kx_padded);
-}
-
 // ============== Dispatch kernels ==============
 
 // Phase 1: Count tokens per expert using atomics
@@ -759,31 +669,24 @@ static __global__ void moe_dispatch_scatter_kernel(
   }
 }
 
-// ============== Tiled MoE GEMM kernel (MMQ-style) for Q8_0 ==============
+// ============== Tiled MoE GEMM kernel (all quant types) ==============
 //
-// True GEMM tiling: each block processes MMQ_Y output features × MMQ_X tokens
-// for one expert, accumulating over K in shared-memory tile chunks.
+// Each block processes MMQ_Y output features x MMQ_X tokens for one expert.
+// Both weight blocks and input Q8_1 blocks are loaded into shared memory
+// as raw bytes, then vec_dot is called on the shared memory pointers.
+// This works for ANY quant type since vec_dot handles unpacking internally.
 //
 // Grid: (ceil(N/MMQ_Y), num_experts), Block: (32, MMQ_NWARPS)
-// Each thread computes acc_cols × acc_rows output elements.
-// K processed in chunks of K_TILE (256 elements = 8 Q8_0 blocks).
+// K processed in chunks of K_TILE_BLOCKS weight blocks at a time.
 
-#define MMQ_X 64    // Tokens per block tile
-#define MMQ_Y 64    // Output features per block tile
+#define MMQ_X 64
+#define MMQ_Y 64
 #define MMQ_NWARPS 8
-#define K_TILE 256  // K elements per tile (8 Q8_0 blocks)
-#define K_TILE_Q8 (K_TILE / QK8_0)  // 8 Q8_0 blocks per tile
+#define K_TILE_BLOCKS 8  // weight blocks per K-tile
 
-// Shared memory sizes (int32 units for qs, float for scales)
-#define W_QS_STRIDE (K_TILE / 4)               // 64 int32 per row
-#define W_QS_SIZE   (MMQ_Y * W_QS_STRIDE)      // 32*64 = 2048 int32
-#define W_D_SIZE    (MMQ_Y * K_TILE_Q8)         // 32*8 = 256 float
-#define X_QS_STRIDE (K_TILE / 4)               // 64 int32 per row
-#define X_QS_SIZE   (MMQ_X * X_QS_STRIDE)      // 64*64 = 4096 int32
-#define X_D_SIZE    (MMQ_X * K_TILE_Q8)         // 64*8 = 512 float
-// Total smem: (2048+4096)*4 + (256+512)*4 = 24576 + 3072 = 27648 bytes
-
-static __device__ void moe_tiled_gemm_q8_0_impl(
+template <int qk, int qi, typename block_q_t, int vdr,
+          vec_dot_q_cuda_t vec_dot_q_cuda>
+static __device__ void moe_tiled_gemm_impl(
     const void *__restrict__ all_weights,
     const void *__restrict__ all_inputs,
     const int32_t *__restrict__ expert_bounds,
@@ -801,43 +704,42 @@ static __device__ void moe_tiled_gemm_q8_0_impl(
   const int t_end = expert_bounds[expert + 1];
   if (t_start >= t_end) return;
 
-  const int blocks_per_row_w = K / QK8_0;
+  const int blocks_per_row_w = K / qk;
   const int blocks_per_row_x = K_padded / QK8_1;
+  constexpr int x_blocks_per_w_block = qk / QK8_1;  // Q8_1 blocks per weight block
+  constexpr int x_blocks_per_k_tile = K_TILE_BLOCKS * x_blocks_per_w_block;
+  constexpr size_t w_block_bytes = sizeof(block_q_t);
+  constexpr size_t x_block_bytes = sizeof(block_q8_1);
 
-  const block_q8_0 *w_all = (const block_q8_0 *)all_weights;
-  const block_q8_1 *x_all = (const block_q8_1 *)all_inputs;
-
-  // Expert weight base: w_all + expert * N * blocks_per_row_w
-  const size_t expert_w_offset = (size_t)expert * N * blocks_per_row_w;
+  const char *w_bytes = (const char *)all_weights;
+  const char *x_bytes = (const char *)all_inputs;
+  const size_t expert_w_off = (size_t)expert * N * blocks_per_row_w * w_block_bytes;
 
   const int tid = threadIdx.y * WARP_SIZE + threadIdx.x;
-  const int nthreads = MMQ_NWARPS * WARP_SIZE; // 256
+  const int nthreads = MMQ_NWARPS * WARP_SIZE;
 
-  // Shared memory
+  // Shared memory: w_tile + x_tile + tok_cache
   extern __shared__ char smem[];
-  int   *w_qs = (int *)smem;
-  float *w_d  = (float *)(w_qs + W_QS_SIZE);
-  int   *x_qs = (int *)(w_d + W_D_SIZE);
-  float *x_d  = (float *)(x_qs + X_QS_SIZE);
-  // After x_d: space for token index cache
-  int   *tok_cache = (int *)(x_d + X_D_SIZE);  // [MMQ_X] token input row indices
+  char *w_tile = smem;
+  constexpr size_t w_tile_bytes = MMQ_Y * K_TILE_BLOCKS * w_block_bytes;
+  char *x_tile = w_tile + w_tile_bytes;
+  constexpr size_t x_tile_bytes = MMQ_X * x_blocks_per_k_tile * x_block_bytes;
+  int *tok_cache = (int *)(x_tile + x_tile_bytes);
 
-  constexpr int acc_rows = MMQ_Y / WARP_SIZE;  // 1
-  constexpr int acc_cols = MMQ_X / MMQ_NWARPS; // 8
+  constexpr int acc_rows = MMQ_Y / WARP_SIZE;
+  constexpr int acc_cols = MMQ_X / MMQ_NWARPS;
 
-  // Process tokens in chunks of MMQ_X
   for (int t_base = t_start; t_base < t_end; t_base += MMQ_X) {
     const int m_count = min(MMQ_X, t_end - t_base);
 
-    // Cache token→input_row mapping in shared memory (once per token chunk)
     __syncthreads();
     for (int idx = tid; idx < m_count; idx += nthreads) {
       const int ti = t_base + idx;
       const int flat_idx = sorted_token_ids[ti];
-      tok_cache[idx] = (input_dim1 == 0) ? ti : ((input_dim1 == 1) ? (flat_idx / topk) : flat_idx);
+      tok_cache[idx] = (input_dim1 == 0) ? ti
+        : ((input_dim1 == 1) ? (flat_idx / topk) : flat_idx);
     }
 
-    // Zero accumulators
     float acc[acc_cols][acc_rows];
     #pragma unroll
     for (int j = 0; j < acc_cols; j++)
@@ -845,123 +747,94 @@ static __device__ void moe_tiled_gemm_q8_0_impl(
       for (int i = 0; i < acc_rows; i++)
         acc[j][i] = 0.0f;
 
-    // K-loop: process K in chunks of K_TILE
-    for (int k_base = 0; k_base < K; k_base += K_TILE) {
-      const int k_tile_actual = min(K_TILE, K - k_base);
-      const int k_tile_q8 = k_tile_actual / QK8_0;
+    for (int kb_base = 0; kb_base < blocks_per_row_w; kb_base += K_TILE_BLOCKS) {
+      const int kb_count = min(K_TILE_BLOCKS, blocks_per_row_w - kb_base);
+      const int xb_base = kb_base * x_blocks_per_w_block;
 
       __syncthreads();
 
-      // === Load weight tile [MMQ_Y × K_TILE] ===
-      for (int idx = tid; idx < W_QS_SIZE; idx += nthreads) {
-        const int row = idx / W_QS_STRIDE;
-        const int col = idx % W_QS_STRIDE;
-        const int n_row = n_base + row;
-        const int k_elem = col * 4;
-        if (n_row < N && k_elem < k_tile_actual) {
-          const int qb = (k_base + k_elem) / QK8_0;
-          const int qo = (k_elem % QK8_0) / 4;
-          w_qs[idx] = get_int_from_int8(w_all[expert_w_offset + (size_t)n_row * blocks_per_row_w + qb].qs, qo);
-        } else {
-          w_qs[idx] = 0;
-        }
-      }
-      for (int idx = tid; idx < MMQ_Y * k_tile_q8; idx += nthreads) {
-        const int row = idx / k_tile_q8;
-        const int kb = idx % k_tile_q8;
-        const int n_row = n_base + row;
-        const int qb = k_base / QK8_0 + kb;
-        if (n_row < N && qb < blocks_per_row_w) {
-          w_d[row * K_TILE_Q8 + kb] = __half2float(w_all[expert_w_offset + (size_t)n_row * blocks_per_row_w + qb].d);
-        } else {
-          w_d[row * K_TILE_Q8 + kb] = 0.0f;
+      // Load weight tile: MMQ_Y rows x kb_count blocks (byte-level copy)
+      {
+        const int total_bytes = MMQ_Y * kb_count * w_block_bytes;
+        const int row_bytes = kb_count * w_block_bytes;
+        const int row_bytes_padded = K_TILE_BLOCKS * w_block_bytes;
+        for (int idx = tid; idx < total_bytes; idx += nthreads) {
+          const int row = idx / row_bytes;
+          const int col = idx % row_bytes;
+          const int n_row = n_base + row;
+          const int dst = row * row_bytes_padded + col;
+          if (n_row < N) {
+            const size_t src_off = expert_w_off + (size_t)n_row * blocks_per_row_w * w_block_bytes
+                                 + (size_t)kb_base * w_block_bytes + col;
+            w_tile[dst] = w_bytes[src_off];
+          } else {
+            w_tile[dst] = 0;
+          }
         }
       }
 
-      // === Load input tile [MMQ_X × K_TILE] ===
-      for (int idx = tid; idx < X_QS_SIZE; idx += nthreads) {
-        const int row = idx / X_QS_STRIDE;
-        const int col = idx % X_QS_STRIDE;
-        const int k_elem = col * 4;
-        if (row < m_count && k_elem < k_tile_actual) {
-          const int input_row = tok_cache[row];
-          const int qb = (k_base + k_elem) / QK8_1;
-          const int qo = (k_elem % QK8_1) / 4;
-          x_qs[idx] = get_int_from_int8_aligned(x_all[(size_t)input_row * blocks_per_row_x + qb].qs, qo);
-        } else {
-          x_qs[idx] = 0;
-        }
-      }
-      for (int idx = tid; idx < MMQ_X * k_tile_q8; idx += nthreads) {
-        const int row = idx / k_tile_q8;
-        const int kb = idx % k_tile_q8;
-        if (row < m_count) {
-          const int input_row = tok_cache[row];
-          const int qb = k_base / QK8_1 + kb;
-          if (qb < blocks_per_row_x) {
-            x_d[row * K_TILE_Q8 + kb] = __low2float(x_all[(size_t)input_row * blocks_per_row_x + qb].ds);
+      // Load input tile: m_count rows x xb_count Q8_1 blocks (byte-level copy)
+      {
+        const int xb_count = kb_count * x_blocks_per_w_block;
+        const int total_bytes = m_count * xb_count * x_block_bytes;
+        const int row_bytes = xb_count * x_block_bytes;
+        const int row_bytes_padded = x_blocks_per_k_tile * x_block_bytes;
+        for (int idx = tid; idx < total_bytes; idx += nthreads) {
+          const int row = idx / row_bytes;
+          const int col = idx % row_bytes;
+          const int dst = row * row_bytes_padded + col;
+          if (row < m_count) {
+            const int input_row = tok_cache[row];
+            const size_t src_off = (size_t)input_row * blocks_per_row_x * x_block_bytes
+                                 + (size_t)xb_base * x_block_bytes + col;
+            x_tile[dst] = x_bytes[src_off];
           } else {
-            x_d[row * K_TILE_Q8 + kb] = 0.0f;
+            x_tile[dst] = 0;
           }
         }
       }
 
       __syncthreads();
 
-      // === Compute dp4a dot products from shared memory ===
-      // Each thread: acc_cols=8 tokens × acc_rows=1 features
-      // threadIdx.x → feature index, threadIdx.y → token group
-      #pragma unroll
-      for (int kb = 0; kb < K_TILE_Q8; kb++) {
-        const int k_start = kb * (QK8_0 / 4);  // 8 int32s per Q8_0 block
-
+      // Compute: vec_dot on shared memory block pointers
+      for (int kb = 0; kb < kb_count; kb++) {
         #pragma unroll
         for (int i_local = 0; i_local < acc_rows; i_local++) {
           const int i = i_local * WARP_SIZE + threadIdx.x;
           if (n_base + i >= N) continue;
-          const float d_w = w_d[i * K_TILE_Q8 + kb];
 
-          // Load weight values into registers
-          int w_vals[8];
-          #pragma unroll
-          for (int kk = 0; kk < 8; kk++)
-            w_vals[kk] = w_qs[i * W_QS_STRIDE + k_start + kk];
+          const block_q_t *w_blk = (const block_q_t *)(
+            w_tile + (size_t)i * K_TILE_BLOCKS * w_block_bytes + (size_t)kb * w_block_bytes);
 
           #pragma unroll
           for (int j_local = 0; j_local < acc_cols; j_local++) {
             const int j = threadIdx.y * acc_cols + j_local;
             if (j >= m_count) continue;
 
-            const float d_x = x_d[j * K_TILE_Q8 + kb];
+            const block_q8_1 *x_blk = (const block_q8_1 *)(
+              x_tile + (size_t)j * x_blocks_per_k_tile * x_block_bytes
+                     + (size_t)kb * x_blocks_per_w_block * x_block_bytes);
 
-            int sumi = 0;
-            #pragma unroll
-            for (int kk = 0; kk < 8; kk++) {
-              sumi = ggml_cuda_dp4a(w_vals[kk],
-                                    x_qs[j * X_QS_STRIDE + k_start + kk],
-                                    sumi);
+            // Sum over all sub-elements in this block using vec_dot
+            for (int iqs = 0; iqs < qi; iqs += vdr) {
+              acc[j_local][i_local] += vec_dot_q_cuda(w_blk, x_blk, iqs);
             }
-
-            acc[j_local][i_local] += d_w * d_x * (float)sumi;
           }
         }
       }
     } // end K loop
 
-    // === Write results ===
+    // Write results
     #pragma unroll
     for (int j_local = 0; j_local < acc_cols; j_local++) {
       const int j = threadIdx.y * acc_cols + j_local;
       if (j >= m_count) continue;
-
       const int ti = t_base + j;
       const int flat_idx = sorted_token_ids[ti];
-
       #pragma unroll
       for (int i_local = 0; i_local < acc_rows; i_local++) {
         const int n_row = i_local * WARP_SIZE + threadIdx.x + n_base;
         if (n_row >= N) continue;
-
         if (topk_weights) {
           atomicAdd(&all_outputs[(size_t)(flat_idx / topk) * N + n_row],
                     acc[j_local][i_local] * topk_weights[flat_idx]);
@@ -970,229 +843,175 @@ static __device__ void moe_tiled_gemm_q8_0_impl(
         }
       }
     }
-  } // end token chunk loop
-}
-
-// Fallback: keep the simpler N-tiled kernel for non-Q8_0 types
-#define N_TILE 16
-#define M_BATCH 4
-
-template <int qk, int qi, typename block_q_t, int vdr,
-          vec_dot_q_cuda_t vec_dot_q_cuda>
-static __device__ void moe_grouped_gemm_impl(
-    const void *__restrict__ all_weights,
-    const void *__restrict__ all_inputs,
-    const int32_t *__restrict__ expert_bounds,
-    const int32_t *__restrict__ sorted_token_ids,
-    const float *__restrict__ topk_weights,
-    float *__restrict__ all_outputs,
-    const int N, const int K, const int K_padded,
-    const int num_experts, const int topk, const int input_dim1) {
-
-  const int n_base = blockIdx.x * N_TILE;
-  const int expert = blockIdx.y;
-
-  if (n_base >= N || expert >= num_experts) return;
-
-  const int t_start = expert_bounds[expert];
-  const int t_end = expert_bounds[expert + 1];
-  if (t_start >= t_end) return;
-
-  const int blocks_per_row_w = K / qk;
-  const int blocks_per_row_x = K_padded / QK8_1;
-  const block_q_t *w_base = (const block_q_t *)all_weights;
-  const block_q8_1 *x_base = (const block_q8_1 *)all_inputs;
-
-  const int n_row = n_base + threadIdx.y;
-  const bool valid_row = (n_row < N);
-  const block_q_t *w_row = valid_row ?
-      w_base + ((size_t)expert * N + n_row) * blocks_per_row_w : nullptr;
-  constexpr int blocks_per_iter_warp = vdr * WARP_SIZE / qi;
-
-  for (int ti_base = t_start; ti_base < t_end; ti_base += M_BATCH) {
-    const int m_count = min(M_BATCH, t_end - ti_base);
-    float acc[M_BATCH];
-    #pragma unroll
-    for (int m = 0; m < M_BATCH; m++) acc[m] = 0.0f;
-
-    if (valid_row) {
-      for (int kbx = threadIdx.x / (qi / vdr); kbx < blocks_per_row_w;
-           kbx += blocks_per_iter_warp) {
-        const int kqs = vdr * (threadIdx.x % (qi / vdr));
-        #pragma unroll
-        for (int m = 0; m < M_BATCH; m++) {
-          if (m < m_count) {
-            const int ti = ti_base + m;
-            const int flat_idx = sorted_token_ids[ti];
-            const int input_row = (input_dim1 == 0) ? ti : ((input_dim1 == 1) ? (flat_idx / topk) : flat_idx);
-            const block_q8_1 *x = x_base + (size_t)input_row * blocks_per_row_x;
-            acc[m] += vec_dot_q_cuda(&w_row[kbx], &x[kbx * (qk / QK8_1)], kqs);
-          }
-        }
-      }
-      #pragma unroll
-      for (int m = 0; m < M_BATCH; m++) acc[m] = warp_reduce_sum(acc[m]);
-
-      if (threadIdx.x == 0) {
-        #pragma unroll
-        for (int m = 0; m < M_BATCH; m++) {
-          if (m < m_count) {
-            const int ti = ti_base + m;
-            const int flat_idx = sorted_token_ids[ti];
-            if (topk_weights) {
-              atomicAdd(&all_outputs[(size_t)(flat_idx / topk) * N + n_row],
-                        acc[m] * topk_weights[flat_idx]);
-            } else {
-              all_outputs[(size_t)ti * N + n_row] = acc[m];
-            }
-          }
-        }
-      }
-    }
   }
 }
 
 // ============== Kernel instantiations ==============
+
+#define MOE_KERNEL_INST(suffix, QK, QI, BLOCK_T, VDR, VEC_DOT) \
+extern "C" __global__ void moe_grouped_gemm_##suffix( \
+    const void *all_weights, const void *all_inputs, \
+    const int32_t *expert_bounds, const int32_t *sorted_token_ids, \
+    const float *topk_weights, float *all_outputs, \
+    int N, int K, int K_padded, int num_experts, int topk, int input_dim1) { \
+  moe_tiled_gemm_impl<QK, QI, BLOCK_T, VDR, VEC_DOT>( \
+      all_weights, all_inputs, expert_bounds, sorted_token_ids, \
+      topk_weights, all_outputs, N, K, K_padded, num_experts, topk, input_dim1); \
+}
+
+// Q8_0 uses the explicit dp4a shared-memory tiled kernel for maximum performance.
+// The generic tiled kernel is used for all other quant types.
+#define K_TILE 256
+#define K_TILE_Q8 (K_TILE / QK8_0)
+#define W_QS_STRIDE (K_TILE / 4)
+#define W_QS_SIZE   (MMQ_Y * W_QS_STRIDE)
+#define W_D_SIZE    (MMQ_Y * K_TILE_Q8)
+#define X_QS_STRIDE (K_TILE / 4)
+#define X_QS_SIZE   (MMQ_X * X_QS_STRIDE)
+#define X_D_SIZE    (MMQ_X * K_TILE_Q8)
+
+static __device__ void moe_tiled_gemm_q8_0_impl(
+    const void *__restrict__ all_weights, const void *__restrict__ all_inputs,
+    const int32_t *__restrict__ expert_bounds, const int32_t *__restrict__ sorted_token_ids,
+    const float *__restrict__ topk_weights, float *__restrict__ all_outputs,
+    const int N, const int K, const int K_padded,
+    const int num_experts, const int topk, const int input_dim1) {
+  const int n_base = blockIdx.x * MMQ_Y;
+  const int expert = blockIdx.y;
+  if (n_base >= N || expert >= num_experts) return;
+  const int t_start = expert_bounds[expert];
+  const int t_end = expert_bounds[expert + 1];
+  if (t_start >= t_end) return;
+  const int blocks_per_row_w = K / QK8_0;
+  const int blocks_per_row_x = K_padded / QK8_1;
+  const block_q8_0 *w_all = (const block_q8_0 *)all_weights;
+  const block_q8_1 *x_all = (const block_q8_1 *)all_inputs;
+  const size_t expert_w_offset = (size_t)expert * N * blocks_per_row_w;
+  const int tid = threadIdx.y * WARP_SIZE + threadIdx.x;
+  const int nthreads = MMQ_NWARPS * WARP_SIZE;
+  extern __shared__ char smem_q8[];
+  int *w_qs = (int *)smem_q8;
+  float *w_d = (float *)(w_qs + W_QS_SIZE);
+  int *x_qs = (int *)(w_d + W_D_SIZE);
+  float *x_d = (float *)(x_qs + X_QS_SIZE);
+  int *tok_cache = (int *)(x_d + X_D_SIZE);
+  constexpr int acc_rows = MMQ_Y / WARP_SIZE;
+  constexpr int acc_cols = MMQ_X / MMQ_NWARPS;
+  for (int t_base = t_start; t_base < t_end; t_base += MMQ_X) {
+    const int m_count = min(MMQ_X, t_end - t_base);
+    __syncthreads();
+    for (int idx = tid; idx < m_count; idx += nthreads) {
+      const int ti = t_base + idx;
+      const int flat_idx = sorted_token_ids[ti];
+      tok_cache[idx] = (input_dim1 == 0) ? ti : ((input_dim1 == 1) ? (flat_idx / topk) : flat_idx);
+    }
+    float acc[acc_cols][acc_rows];
+    for (int j = 0; j < acc_cols; j++) for (int i = 0; i < acc_rows; i++) acc[j][i] = 0.0f;
+    for (int k_base = 0; k_base < K; k_base += K_TILE) {
+      const int k_tile_actual = min(K_TILE, K - k_base);
+      const int k_tile_q8 = k_tile_actual / QK8_0;
+      __syncthreads();
+      for (int idx = tid; idx < W_QS_SIZE; idx += nthreads) {
+        const int row = idx / W_QS_STRIDE, col = idx % W_QS_STRIDE;
+        const int n_row = n_base + row, k_elem = col * 4;
+        if (n_row < N && k_elem < k_tile_actual) {
+          const int qb = (k_base + k_elem) / QK8_0, qo = (k_elem % QK8_0) / 4;
+          w_qs[idx] = get_int_from_int8(w_all[expert_w_offset + (size_t)n_row * blocks_per_row_w + qb].qs, qo);
+        } else w_qs[idx] = 0;
+      }
+      for (int idx = tid; idx < MMQ_Y * k_tile_q8; idx += nthreads) {
+        const int row = idx / k_tile_q8, kb = idx % k_tile_q8;
+        const int n_row = n_base + row, qb = k_base / QK8_0 + kb;
+        w_d[row * K_TILE_Q8 + kb] = (n_row < N && qb < blocks_per_row_w) ? __half2float(w_all[expert_w_offset + (size_t)n_row * blocks_per_row_w + qb].d) : 0.0f;
+      }
+      for (int idx = tid; idx < X_QS_SIZE; idx += nthreads) {
+        const int row = idx / X_QS_STRIDE, col = idx % X_QS_STRIDE, k_elem = col * 4;
+        if (row < m_count && k_elem < k_tile_actual) {
+          const int input_row = tok_cache[row];
+          const int qb = (k_base + k_elem) / QK8_1, qo = (k_elem % QK8_1) / 4;
+          x_qs[idx] = get_int_from_int8_aligned(x_all[(size_t)input_row * blocks_per_row_x + qb].qs, qo);
+        } else x_qs[idx] = 0;
+      }
+      for (int idx = tid; idx < MMQ_X * k_tile_q8; idx += nthreads) {
+        const int row = idx / k_tile_q8, kb = idx % k_tile_q8;
+        if (row < m_count) {
+          const int input_row = tok_cache[row], qb = k_base / QK8_1 + kb;
+          x_d[row * K_TILE_Q8 + kb] = (qb < blocks_per_row_x) ? __low2float(x_all[(size_t)input_row * blocks_per_row_x + qb].ds) : 0.0f;
+        }
+      }
+      __syncthreads();
+      #pragma unroll
+      for (int kb = 0; kb < K_TILE_Q8; kb++) {
+        const int k_start = kb * (QK8_0 / 4);
+        #pragma unroll
+        for (int i_local = 0; i_local < acc_rows; i_local++) {
+          const int i = i_local * WARP_SIZE + threadIdx.x;
+          if (n_base + i >= N) continue;
+          const float d_w = w_d[i * K_TILE_Q8 + kb];
+          int w_vals[8];
+          #pragma unroll
+          for (int kk = 0; kk < 8; kk++) w_vals[kk] = w_qs[i * W_QS_STRIDE + k_start + kk];
+          #pragma unroll
+          for (int j_local = 0; j_local < acc_cols; j_local++) {
+            const int j = threadIdx.y * acc_cols + j_local;
+            if (j >= m_count) continue;
+            const float d_x = x_d[j * K_TILE_Q8 + kb];
+            int sumi = 0;
+            #pragma unroll
+            for (int kk = 0; kk < 8; kk++) sumi = ggml_cuda_dp4a(w_vals[kk], x_qs[j * X_QS_STRIDE + k_start + kk], sumi);
+            acc[j_local][i_local] += d_w * d_x * (float)sumi;
+          }
+        }
+      }
+    }
+    #pragma unroll
+    for (int j_local = 0; j_local < acc_cols; j_local++) {
+      const int j = threadIdx.y * acc_cols + j_local;
+      if (j >= m_count) continue;
+      const int ti = t_base + j, flat_idx = sorted_token_ids[ti];
+      #pragma unroll
+      for (int i_local = 0; i_local < acc_rows; i_local++) {
+        const int n_row = i_local * WARP_SIZE + threadIdx.x + n_base;
+        if (n_row >= N) continue;
+        if (topk_weights) atomicAdd(&all_outputs[(size_t)(flat_idx / topk) * N + n_row], acc[j_local][i_local] * topk_weights[flat_idx]);
+        else all_outputs[(size_t)ti * N + n_row] = acc[j_local][i_local];
+      }
+    }
+  }
+}
 
 extern "C" __global__ void moe_grouped_gemm_q8_0(
     const void *all_weights, const void *all_inputs,
     const int32_t *expert_bounds, const int32_t *sorted_token_ids,
     const float *topk_weights, float *all_outputs,
     int N, int K, int K_padded, int num_experts, int topk, int input_dim1) {
-  // Use tiled GEMM for Q8_0 (MMQ-style, much faster for prefill)
-  moe_tiled_gemm_q8_0_impl(
-      all_weights, all_inputs, expert_bounds, sorted_token_ids,
+  moe_tiled_gemm_q8_0_impl(all_weights, all_inputs, expert_bounds, sorted_token_ids,
       topk_weights, all_outputs, N, K, K_padded, num_experts, topk, input_dim1);
 }
+// Other quant types use the generic tiled kernel:
 
-extern "C" __global__ void moe_grouped_gemm_q4_0(
-    const void *all_weights, const void *all_inputs,
-    const int32_t *expert_bounds, const int32_t *sorted_token_ids,
-    const float *topk_weights, float *all_outputs,
-    int N, int K, int K_padded, int num_experts, int topk, int input_dim1) {
-  moe_grouped_gemm_impl<QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ,
-                          vd_q4_0_q8_1>(
-      all_weights, all_inputs, expert_bounds, sorted_token_ids,
-      topk_weights, all_outputs, N, K, K_padded, num_experts, topk, input_dim1);
-}
-
-extern "C" __global__ void moe_grouped_gemm_q4_1(
-    const void *all_weights, const void *all_inputs,
-    const int32_t *expert_bounds, const int32_t *sorted_token_ids,
-    const float *topk_weights, float *all_outputs,
-    int N, int K, int K_padded, int num_experts, int topk, int input_dim1) {
-  moe_grouped_gemm_impl<QK4_1, QI4_1, block_q4_1, VDR_Q4_1_Q8_1_MMVQ,
-                          vd_q4_1_q8_1>(
-      all_weights, all_inputs, expert_bounds, sorted_token_ids,
-      topk_weights, all_outputs, N, K, K_padded, num_experts, topk, input_dim1);
-}
-
-extern "C" __global__ void moe_grouped_gemm_q5_0(
-    const void *all_weights, const void *all_inputs,
-    const int32_t *expert_bounds, const int32_t *sorted_token_ids,
-    const float *topk_weights, float *all_outputs,
-    int N, int K, int K_padded, int num_experts, int topk, int input_dim1) {
-  moe_grouped_gemm_impl<QK5_0, QI5_0, block_q5_0, VDR_Q5_0_Q8_1_MMVQ,
-                          vd_q5_0_q8_1>(
-      all_weights, all_inputs, expert_bounds, sorted_token_ids,
-      topk_weights, all_outputs, N, K, K_padded, num_experts, topk, input_dim1);
-}
-
-extern "C" __global__ void moe_grouped_gemm_q5_1(
-    const void *all_weights, const void *all_inputs,
-    const int32_t *expert_bounds, const int32_t *sorted_token_ids,
-    const float *topk_weights, float *all_outputs,
-    int N, int K, int K_padded, int num_experts, int topk, int input_dim1) {
-  moe_grouped_gemm_impl<QK5_1, QI5_1, block_q5_1, VDR_Q5_1_Q8_1_MMVQ,
-                          vd_q5_1_q8_1>(
-      all_weights, all_inputs, expert_bounds, sorted_token_ids,
-      topk_weights, all_outputs, N, K, K_padded, num_experts, topk, input_dim1);
-}
-
-extern "C" __global__ void moe_grouped_gemm_q8_1(
-    const void *all_weights, const void *all_inputs,
-    const int32_t *expert_bounds, const int32_t *sorted_token_ids,
-    const float *topk_weights, float *all_outputs,
-    int N, int K, int K_padded, int num_experts, int topk, int input_dim1) {
-  moe_grouped_gemm_impl<QK8_1, QI8_1, block_q8_1, VDR_Q8_1_Q8_1_MMVQ,
-                          vd_q8_1_q8_1>(
-      all_weights, all_inputs, expert_bounds, sorted_token_ids,
-      topk_weights, all_outputs, N, K, K_padded, num_experts, topk, input_dim1);
-}
-
-extern "C" __global__ void moe_grouped_gemm_q2k(
-    const void *all_weights, const void *all_inputs,
-    const int32_t *expert_bounds, const int32_t *sorted_token_ids,
-    const float *topk_weights, float *all_outputs,
-    int N, int K, int K_padded, int num_experts, int topk, int input_dim1) {
-  moe_grouped_gemm_impl<QK_K, QI2_K, block_q2_K, VDR_Q2_K_Q8_1_MMVQ,
-                          vd_q2_K_q8_1>(
-      all_weights, all_inputs, expert_bounds, sorted_token_ids,
-      topk_weights, all_outputs, N, K, K_padded, num_experts, topk, input_dim1);
-}
-
-extern "C" __global__ void moe_grouped_gemm_q3k(
-    const void *all_weights, const void *all_inputs,
-    const int32_t *expert_bounds, const int32_t *sorted_token_ids,
-    const float *topk_weights, float *all_outputs,
-    int N, int K, int K_padded, int num_experts, int topk, int input_dim1) {
-  moe_grouped_gemm_impl<QK_K, QI3_K, block_q3_K, VDR_Q3_K_Q8_1_MMVQ,
-                          vd_q3_K_q8_1>(
-      all_weights, all_inputs, expert_bounds, sorted_token_ids,
-      topk_weights, all_outputs, N, K, K_padded, num_experts, topk, input_dim1);
-}
-
-extern "C" __global__ void moe_grouped_gemm_q4k(
-    const void *all_weights, const void *all_inputs,
-    const int32_t *expert_bounds, const int32_t *sorted_token_ids,
-    const float *topk_weights, float *all_outputs,
-    int N, int K, int K_padded, int num_experts, int topk, int input_dim1) {
-  moe_grouped_gemm_impl<QK_K, QI4_K, block_q4_K, VDR_Q4_K_Q8_1_MMVQ,
-                          vd_q4_K_q8_1>(
-      all_weights, all_inputs, expert_bounds, sorted_token_ids,
-      topk_weights, all_outputs, N, K, K_padded, num_experts, topk, input_dim1);
-}
-
-extern "C" __global__ void moe_grouped_gemm_q5k(
-    const void *all_weights, const void *all_inputs,
-    const int32_t *expert_bounds, const int32_t *sorted_token_ids,
-    const float *topk_weights, float *all_outputs,
-    int N, int K, int K_padded, int num_experts, int topk, int input_dim1) {
-  moe_grouped_gemm_impl<QK_K, QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ,
-                          vd_q5_K_q8_1>(
-      all_weights, all_inputs, expert_bounds, sorted_token_ids,
-      topk_weights, all_outputs, N, K, K_padded, num_experts, topk, input_dim1);
-}
-
-extern "C" __global__ void moe_grouped_gemm_q6k(
-    const void *all_weights, const void *all_inputs,
-    const int32_t *expert_bounds, const int32_t *sorted_token_ids,
-    const float *topk_weights, float *all_outputs,
-    int N, int K, int K_padded, int num_experts, int topk, int input_dim1) {
-  moe_grouped_gemm_impl<QK_K, QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ,
-                          vd_q6_K_q8_1>(
-      all_weights, all_inputs, expert_bounds, sorted_token_ids,
-      topk_weights, all_outputs, N, K, K_padded, num_experts, topk, input_dim1);
-}
+MOE_KERNEL_INST(q4_0, QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ, vd_q4_0_q8_1)
+MOE_KERNEL_INST(q4_1, QK4_1, QI4_1, block_q4_1, VDR_Q4_1_Q8_1_MMVQ, vd_q4_1_q8_1)
+MOE_KERNEL_INST(q5_0, QK5_0, QI5_0, block_q5_0, VDR_Q5_0_Q8_1_MMVQ, vd_q5_0_q8_1)
+MOE_KERNEL_INST(q5_1, QK5_1, QI5_1, block_q5_1, VDR_Q5_1_Q8_1_MMVQ, vd_q5_1_q8_1)
+MOE_KERNEL_INST(q8_1, QK8_1, QI8_1, block_q8_1, VDR_Q8_1_Q8_1_MMVQ, vd_q8_1_q8_1)
+MOE_KERNEL_INST(q2k,  QK_K,  QI2_K, block_q2_K, VDR_Q2_K_Q8_1_MMVQ, vd_q2_K_q8_1)
+MOE_KERNEL_INST(q3k,  QK_K,  QI3_K, block_q3_K, VDR_Q3_K_Q8_1_MMVQ, vd_q3_K_q8_1)
+MOE_KERNEL_INST(q4k,  QK_K,  QI4_K, block_q4_K, VDR_Q4_K_Q8_1_MMVQ, vd_q4_K_q8_1)
+MOE_KERNEL_INST(q5k,  QK_K,  QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vd_q5_K_q8_1)
+MOE_KERNEL_INST(q6k,  QK_K,  QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ, vd_q6_K_q8_1)
 
 // ============== C wrapper functions for FFI ==============
 
 extern "C" void launch_moe_dispatch(
-    const int32_t *topk_ids,        // [total_assignments] flattened, device
-    int32_t *expert_bounds,          // [num_experts + 1] output, device
-    int32_t *sorted_token_ids,       // [total_assignments] output, device
-    int total_assignments,
-    int num_experts,
-    void *stream) {
+    const int32_t *topk_ids, int32_t *expert_bounds, int32_t *sorted_token_ids,
+    int total_assignments, int num_experts, void *stream) {
   cudaStream_t s = static_cast<cudaStream_t>(stream);
 
-  // Allocate temporary buffers
-  int32_t *expert_counts;
-  int32_t *expert_cursors;
+  int32_t *expert_counts, *expert_cursors;
   cudaMallocAsync(&expert_counts, num_experts * sizeof(int32_t), s);
   cudaMallocAsync(&expert_cursors, num_experts * sizeof(int32_t), s);
 
-  // Phase 1: Count tokens per expert
   cudaMemsetAsync(expert_counts, 0, num_experts * sizeof(int32_t), s);
   {
     int threads = 256;
@@ -1201,15 +1020,12 @@ extern "C" void launch_moe_dispatch(
         topk_ids, expert_counts, total_assignments);
   }
 
-  // Phase 2: Prefix sum -> expert_bounds
   moe_dispatch_prefix_sum_kernel<<<1, 1, 0, s>>>(
       expert_counts, expert_bounds, num_experts);
 
-  // Phase 3: Copy expert_bounds to expert_cursors for scatter
   cudaMemcpyAsync(expert_cursors, expert_bounds,
                   num_experts * sizeof(int32_t), cudaMemcpyDeviceToDevice, s);
 
-  // Phase 4: Scatter token indices
   {
     int threads = 256;
     int blocks = (total_assignments + threads - 1) / threads;
@@ -1221,52 +1037,56 @@ extern "C" void launch_moe_dispatch(
   cudaFreeAsync(expert_cursors, s);
 }
 
-// Macro for generating launch wrappers
 #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
 
-#define LAUNCH_MOE_GROUPED_GEMM(suffix)                                        \
-  extern "C" void launch_moe_grouped_gemm_##suffix(                            \
-      const void *all_weights, const void *all_inputs,                         \
-      const int32_t *expert_bounds, const int32_t *sorted_token_ids,           \
-      const float *topk_weights, float *all_outputs, int N, int K,            \
-      int K_padded, int num_experts, int topk, int input_dim1,                \
-      void *stream) {                                                          \
-    cudaStream_t s = static_cast<cudaStream_t>(stream);                        \
-    dim3 grid(CEILDIV(N, N_TILE), num_experts);                                \
-    dim3 block(WARP_SIZE, N_TILE, 1);                                          \
-    moe_grouped_gemm_##suffix<<<grid, block, 0, s>>>(                          \
-        all_weights, all_inputs, expert_bounds, sorted_token_ids,              \
-        topk_weights, all_outputs, N, K, K_padded, num_experts, topk,         \
-        input_dim1);                                                           \
-  }
+// Compute shared memory size for a given quant type
+template <typename block_q_t, int qk>
+static size_t moe_tiled_smem_bytes() {
+  constexpr int x_blocks_per_k_tile = K_TILE_BLOCKS * (qk / QK8_1);
+  constexpr size_t w_bytes = MMQ_Y * K_TILE_BLOCKS * sizeof(block_q_t);
+  constexpr size_t x_bytes = MMQ_X * x_blocks_per_k_tile * sizeof(block_q8_1);
+  return w_bytes + x_bytes + MMQ_X * sizeof(int);
+}
 
-// Q8_0 uses the tiled GEMM with different grid/block dimensions
+#define LAUNCH_MOE_TILED_GEMM(suffix, BLOCK_T, QK_VAL) \
+extern "C" void launch_moe_grouped_gemm_##suffix( \
+    const void *all_weights, const void *all_inputs, \
+    const int32_t *expert_bounds, const int32_t *sorted_token_ids, \
+    const float *topk_weights, float *all_outputs, int N, int K, \
+    int K_padded, int num_experts, int topk, int input_dim1, \
+    void *stream) { \
+  cudaStream_t s = static_cast<cudaStream_t>(stream); \
+  dim3 grid(CEILDIV(N, MMQ_Y), num_experts); \
+  dim3 block(WARP_SIZE, MMQ_NWARPS, 1); \
+  size_t smem = moe_tiled_smem_bytes<BLOCK_T, QK_VAL>(); \
+  moe_grouped_gemm_##suffix<<<grid, block, smem, s>>>( \
+      all_weights, all_inputs, expert_bounds, sorted_token_ids, \
+      topk_weights, all_outputs, N, K, K_padded, num_experts, topk, \
+      input_dim1); \
+}
+
+// Q8_0 launch uses the dp4a-specific smem layout
 extern "C" void launch_moe_grouped_gemm_q8_0(
     const void *all_weights, const void *all_inputs,
     const int32_t *expert_bounds, const int32_t *sorted_token_ids,
     const float *topk_weights, float *all_outputs, int N, int K,
-    int K_padded, int num_experts, int topk, int input_dim1,
-    void *stream) {
+    int K_padded, int num_experts, int topk, int input_dim1, void *stream) {
   cudaStream_t s = static_cast<cudaStream_t>(stream);
   dim3 grid(CEILDIV(N, MMQ_Y), num_experts);
   dim3 block(WARP_SIZE, MMQ_NWARPS, 1);
-  // Shared memory: weight tile + input tile + token index cache
-  size_t smem = (W_QS_SIZE + X_QS_SIZE) * sizeof(int)
-              + (W_D_SIZE + X_D_SIZE) * sizeof(float)
-              + MMQ_X * sizeof(int);
+  size_t smem = (W_QS_SIZE + X_QS_SIZE) * sizeof(int) + (W_D_SIZE + X_D_SIZE) * sizeof(float) + MMQ_X * sizeof(int);
   moe_grouped_gemm_q8_0<<<grid, block, smem, s>>>(
       all_weights, all_inputs, expert_bounds, sorted_token_ids,
-      topk_weights, all_outputs, N, K, K_padded, num_experts, topk,
-      input_dim1);
+      topk_weights, all_outputs, N, K, K_padded, num_experts, topk, input_dim1);
 }
-
-LAUNCH_MOE_GROUPED_GEMM(q4_0)
-LAUNCH_MOE_GROUPED_GEMM(q4_1)
-LAUNCH_MOE_GROUPED_GEMM(q5_0)
-LAUNCH_MOE_GROUPED_GEMM(q5_1)
-LAUNCH_MOE_GROUPED_GEMM(q8_1)
-LAUNCH_MOE_GROUPED_GEMM(q2k)
-LAUNCH_MOE_GROUPED_GEMM(q3k)
-LAUNCH_MOE_GROUPED_GEMM(q4k)
-LAUNCH_MOE_GROUPED_GEMM(q5k)
-LAUNCH_MOE_GROUPED_GEMM(q6k)
+// Other quant types:
+LAUNCH_MOE_TILED_GEMM(q4_0, block_q4_0, QK4_0)
+LAUNCH_MOE_TILED_GEMM(q4_1, block_q4_1, QK4_1)
+LAUNCH_MOE_TILED_GEMM(q5_0, block_q5_0, QK5_0)
+LAUNCH_MOE_TILED_GEMM(q5_1, block_q5_1, QK5_1)
+LAUNCH_MOE_TILED_GEMM(q8_1, block_q8_1, QK8_1)
+LAUNCH_MOE_TILED_GEMM(q2k,  block_q2_K, QK_K)
+LAUNCH_MOE_TILED_GEMM(q3k,  block_q3_K, QK_K)
+LAUNCH_MOE_TILED_GEMM(q4k,  block_q4_K, QK_K)
+LAUNCH_MOE_TILED_GEMM(q5k,  block_q5_K, QK_K)
+LAUNCH_MOE_TILED_GEMM(q6k,  block_q6_K, QK_K)
