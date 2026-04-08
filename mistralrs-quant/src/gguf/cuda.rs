@@ -600,8 +600,9 @@ pub fn indexed_moe_fused_decode(
     act_type: i32,
     dev: &CudaDevice,
 ) -> Result<Tensor> {
-    let dtype = gate_qt.dtype();
-    assert!(up_qt.dtype() == dtype && down_qt.dtype() == dtype);
+    let gate_up_dtype = gate_qt.dtype();
+    assert!(up_qt.dtype() == gate_up_dtype);
+    let down_dtype = down_qt.dtype();
 
     let (_, n_gate, k_gate) = gate_qt.shape().dims3()?;
     let (_, n_down, k_down) = down_qt.shape().dims3()?;
@@ -635,7 +636,7 @@ pub fn indexed_moe_fused_decode(
             *mut f32, i32, i32, i32, i32, i32, i32, *mut std::ffi::c_void,
         );
 
-        let launch_fn: FusedGateUpFn = match dtype {
+        let launch_fn: FusedGateUpFn = match gate_up_dtype {
             GgmlDType::Q8_0 => ffi::launch_moe_gemv_fused_gate_up_q8_0_q8_1,
             GgmlDType::Q4_0 => ffi::launch_moe_gemv_fused_gate_up_q4_0_q8_1,
             GgmlDType::Q4_1 => ffi::launch_moe_gemv_fused_gate_up_q4_1_q8_1,
@@ -647,7 +648,7 @@ pub fn indexed_moe_fused_decode(
             GgmlDType::Q4K => ffi::launch_moe_gemv_fused_gate_up_q4k_q8_1,
             GgmlDType::Q5K => ffi::launch_moe_gemv_fused_gate_up_q5k_q8_1,
             GgmlDType::Q6K => ffi::launch_moe_gemv_fused_gate_up_q6k_q8_1,
-            _ => candle_core::bail!("unsupported dtype for fused MoE decode: {dtype:?}"),
+            _ => candle_core::bail!("unsupported dtype for fused MoE decode: {gate_up_dtype:?}"),
         };
 
         unsafe {
@@ -707,7 +708,7 @@ pub fn indexed_moe_fused_decode(
             *mut f32, i32, i32, i32, i32, i32, *mut std::ffi::c_void,
         );
 
-        let launch_fn: DownAggregateFn = match dtype {
+        let launch_fn: DownAggregateFn = match down_dtype {
             GgmlDType::Q8_0 => ffi::launch_moe_gemv_down_aggregate_q8_0_q8_1,
             GgmlDType::Q4_0 => ffi::launch_moe_gemv_down_aggregate_q4_0_q8_1,
             GgmlDType::Q4_1 => ffi::launch_moe_gemv_down_aggregate_q4_1_q8_1,
@@ -719,7 +720,7 @@ pub fn indexed_moe_fused_decode(
             GgmlDType::Q4K => ffi::launch_moe_gemv_down_aggregate_q4k_q8_1,
             GgmlDType::Q5K => ffi::launch_moe_gemv_down_aggregate_q5k_q8_1,
             GgmlDType::Q6K => ffi::launch_moe_gemv_down_aggregate_q6k_q8_1,
-            _ => candle_core::bail!("unsupported dtype for fused MoE decode: {dtype:?}"),
+            _ => candle_core::bail!("unsupported dtype for fused MoE decode: {down_dtype:?}"),
         };
 
         unsafe {
