@@ -21,7 +21,7 @@ use crate::ui::types::{
     AppState, ChatFile, DeleteChatRequest, LoadChatRequest, NewChatRequest, RenameChatRequest,
     SelectRequest,
 };
-use crate::ui::utils::{get_cache_dir, is_chat_id_safe};
+use crate::ui::utils::get_cache_dir;
 
 fn validate_image_upload(
     filename: Option<&str>,
@@ -373,9 +373,7 @@ pub async fn delete_chat(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<DeleteChatRequest>,
 ) -> impl IntoResponse {
-    if !is_chat_id_safe(&req.id) {
-        return (StatusCode::BAD_REQUEST, "invalid chat id").into_response();
-    }
+
     let path = format!("{}/{}.json", app.chats_dir, req.id);
     match fs::remove_file(&path).await {
         Ok(_) => (StatusCode::OK, "Deleted").into_response(),
@@ -387,9 +385,7 @@ pub async fn load_chat(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<LoadChatRequest>,
 ) -> impl IntoResponse {
-    if !is_chat_id_safe(&req.id) {
-        return (StatusCode::BAD_REQUEST, "invalid chat id").into_response();
-    }
+
     let path = format!("{}/{}.json", app.chats_dir, req.id);
     if let Ok(bytes) = fs::read(&path).await {
         if let Ok(chat) = serde_json::from_slice::<ChatFile>(&bytes) {
@@ -405,9 +401,7 @@ pub async fn rename_chat(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<RenameChatRequest>,
 ) -> impl IntoResponse {
-    if !is_chat_id_safe(&req.id) {
-        return (StatusCode::BAD_REQUEST, "invalid chat id").into_response();
-    }
+
     let path = format!("{}/{}.json", app.chats_dir, req.id);
     if let Ok(bytes) = fs::read(&path).await {
         if let Ok(mut chat) = serde_json::from_slice::<ChatFile>(&bytes) {
@@ -436,9 +430,7 @@ pub async fn append_message(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<AppendMessageRequest>,
 ) -> impl IntoResponse {
-    if !is_chat_id_safe(&req.id) {
-        return (StatusCode::BAD_REQUEST, "invalid chat id").into_response();
-    }
+
     if let Err(e) = append_chat_message(&app, &req.id, &req.role, &req.content, req.images).await {
         error!("append message error: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "append failed").into_response();
