@@ -701,16 +701,18 @@ pub fn qtensor_grouped_moe_forward_tensor(
     )))
 }
 
-/// Quantize f32 input to Q8_1 format, returning the quantized buffer.
+/// Quantize input to Q8_1 format, returning the quantized buffer.
 ///
-/// This allows quantizing once and sharing across multiple projections.
+/// Supports F32, BF16, and F16 inputs directly without dtype conversion.
 pub fn quantize_input_q8_1(
     xs: &Tensor,
     dev: &CudaDevice,
 ) -> Result<(CudaSlice<u8>, usize, usize)> {
-    let xs_f32 = xs.to_dtype(candle_core::DType::F32)?.contiguous()?;
-    let num_rows = xs_f32.dim(0)?;
-    let k = xs_f32.dim(1)?;
+    use candle_core::DType;
+
+    let xs_c = xs.contiguous()?;
+    let num_rows = xs_c.dim(0)?;
+    let k = xs_c.dim(1)?;
     let k_padded = pad(k, MATRIX_ROW_PADDING);
 
     let q8_1_block_size = GgmlDType::Q8_1.block_size();
@@ -718,17 +720,86 @@ pub fn quantize_input_q8_1(
     let num_blocks_per_row = k_padded / q8_1_block_size;
     let dst_row_size_bytes = num_blocks_per_row * q8_1_type_size;
     let y_size_in_bytes = num_rows * dst_row_size_bytes;
+    let num_blocks_x = ceil_div(k_padded, CUDA_QUANTIZE_BLOCK_SIZE);
 
-    let (xs_storage, xs_layout) = xs_f32.storage_and_layout();
+    let (xs_storage, xs_layout) = xs_c.storage_and_layout();
     let xs_cuda = match &*xs_storage {
         Storage::Cuda(c) => c,
         _ => candle_core::bail!("expected CUDA tensor"),
     };
-    let xs_slice = xs_cuda.as_cuda_slice::<f32>()?;
-    assert!(xs_layout.start_offset() == 0);
+    assert!(xs_layout.start_offset() == 0, "expected contiguous tensor");
 
     let mut input_quant = dev.alloc_zeros::<u8>(y_size_in_bytes)?;
-    quantize_q8_1(xs_slice, &mut input_quant, k, num_rows, dev)?;
+    let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+
+    match xs_c.dtype() {
+        DType::F32 => {
+            let xs_slice = xs_cuda.as_cuda_slice::<f32>()?;
+            quantize_q8_1(&xs_slice, &mut input_quant, k, num_rows, dev)?;
+        }
+        DType::BF16 => {
+            let xs_slice = xs_cuda.as_cuda_slice::<half::bf16>()?;
+            let (src_ptr, _guard) = slice_ptr(&xs_slice, 0);
+            let (dst_ptr, _dguard) = slice_ptr(&input_quant, 0);
+
+            const CHUNK_SIZE: usize = 65535;
+            let mut rows_processed = 0;
+            while rows_processed < num_rows {
+                let rows_in_chunk = std::cmp::min(CHUNK_SIZE, num_rows - rows_processed);
+                let src_offset = rows_processed * k;
+                let dst_offset = rows_processed * dst_row_size_bytes;
+                let (sp, _sg) = slice_ptr(&xs_slice, src_offset);
+                let (dp, _dg) = slice_ptr(&input_quant, dst_offset);
+                unsafe {
+                    ffi::launch_quantize_bf16_q8_1(
+                        sp as *const std::ffi::c_void,
+                        dp as *mut std::ffi::c_void,
+                        k as i32,
+                        k_padded as i32,
+                        num_blocks_x as i32,
+                        rows_in_chunk as i32,
+                        stream,
+                    );
+                }
+                rows_processed += rows_in_chunk;
+            }
+        }
+        DType::F16 => {
+            let xs_slice = xs_cuda.as_cuda_slice::<half::f16>()?;
+            const CHUNK_SIZE: usize = 65535;
+            let mut rows_processed = 0;
+            while rows_processed < num_rows {
+                let rows_in_chunk = std::cmp::min(CHUNK_SIZE, num_rows - rows_processed);
+                let src_offset = rows_processed * k;
+                let dst_offset = rows_processed * dst_row_size_bytes;
+                let (sp, _sg) = slice_ptr(&xs_slice, src_offset);
+                let (dp, _dg) = slice_ptr(&input_quant, dst_offset);
+                unsafe {
+                    ffi::launch_quantize_f16_q8_1(
+                        sp as *const std::ffi::c_void,
+                        dp as *mut std::ffi::c_void,
+                        k as i32,
+                        k_padded as i32,
+                        num_blocks_x as i32,
+                        rows_in_chunk as i32,
+                        stream,
+                    );
+                }
+                rows_processed += rows_in_chunk;
+            }
+        }
+        other => {
+            // Fallback: convert to F32 first
+            let xs_f32 = xs_c.to_dtype(DType::F32)?;
+            let (f32_s, f32_l) = xs_f32.storage_and_layout();
+            let f32_cuda = match &*f32_s {
+                Storage::Cuda(c) => c,
+                _ => candle_core::bail!("expected CUDA"),
+            };
+            let f32_slice = f32_cuda.as_cuda_slice::<f32>()?;
+            quantize_q8_1(&f32_slice, &mut input_quant, k, num_rows, dev)?;
+        }
+    }
 
     Ok((input_quant, k, k_padded))
 }

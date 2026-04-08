@@ -80,7 +80,9 @@ struct FastExpertsWeights {
     fused_gate_proj: Arc<dyn QuantMethod>,
     fused_up_proj: Arc<dyn QuantMethod>,
     fused_down_proj: Arc<dyn QuantMethod>,
-    /// Cached dequantized weights for WMMA prefill path [E, K, N] format
+    /// Combined gate_up QTensor [E, hidden, 2*inter] for fused GEMM prefill
+    #[cfg(feature = "cuda")]
+    combined_gate_up_qt: Option<std::sync::Arc<candle_core::quantized::QTensor>>,
     #[cfg(feature = "cuda")]
     dequant_cache: std::sync::Mutex<Option<(Tensor, Tensor, Tensor)>>,
 }
@@ -446,6 +448,8 @@ impl MoEExperts {
             fused_up_proj,
             fused_down_proj,
             #[cfg(feature = "cuda")]
+            combined_gate_up_qt: None,
+            #[cfg(feature = "cuda")]
             dequant_cache: std::sync::Mutex::new(None),
         })
     }
@@ -473,6 +477,8 @@ impl MoEExperts {
                 fused_gate_proj,
                 fused_up_proj,
                 fused_down_proj,
+                #[cfg(feature = "cuda")]
+                combined_gate_up_qt: None,
                 #[cfg(feature = "cuda")]
                 dequant_cache: std::sync::Mutex::new(None),
             });
@@ -525,6 +531,8 @@ impl MoEExperts {
             fused_gate_proj,
             fused_up_proj,
             fused_down_proj,
+            #[cfg(feature = "cuda")]
+            combined_gate_up_qt: None,
             #[cfg(feature = "cuda")]
             dequant_cache: std::sync::Mutex::new(None),
         })
@@ -651,6 +659,8 @@ impl MoEExperts {
             fused_up_proj,
             fused_down_proj,
             #[cfg(feature = "cuda")]
+            combined_gate_up_qt: None,
+            #[cfg(feature = "cuda")]
             dequant_cache: std::sync::Mutex::new(None),
         })
     }
@@ -678,6 +688,8 @@ impl MoEExperts {
             fused_gate_proj,
             fused_up_proj,
             fused_down_proj,
+            #[cfg(feature = "cuda")]
+            combined_gate_up_qt: None,
             #[cfg(feature = "cuda")]
             dequant_cache: std::sync::Mutex::new(None),
         })
@@ -944,10 +956,10 @@ impl MoEExperts {
             None => return Ok(None),
         };
 
-        // Quantize input to Q8_1 ONCE, shared between gate and up
-        let xs_f32 = xs_flat.to_dtype(DType::F32)?.contiguous()?;
+        // Quantize input to Q8_1 ONCE, shared between gate and up.
+        // quantize_input_q8_1 accepts BF16/F16/F32 directly (no conversion needed).
         let (input_q8, k, k_padded) =
-            mistralrs_quant::quantize_input_q8_1(&xs_f32, dev)?;
+            mistralrs_quant::quantize_input_q8_1(xs_flat, dev)?;
 
         // Gate projection using pre-quantized input
         let gate = mistralrs_quant::grouped_moe_gemm_prequantized(

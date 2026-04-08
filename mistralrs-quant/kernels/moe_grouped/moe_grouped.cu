@@ -626,6 +626,96 @@ vd_q6_K_q8_1(const void *__restrict__ vbq,
   return vec_dot_q6_K_q8_1_impl_mmvq(vl, vh, u, scales, bq6_K->d, d8);
 }
 
+// ============== BF16 quantize to Q8_1 (skips F32 intermediate) ==============
+
+static __device__ __forceinline__ float warp_reduce_max(float x) {
+#pragma unroll
+  for (int mask = 16; mask > 0; mask >>= 1) {
+    x = fmaxf(x, __shfl_xor_sync(0xffffffff, x, mask, 32));
+  }
+  return x;
+}
+
+extern "C" __global__ void quantize_bf16_q8_1(
+    const nv_bfloat16 *__restrict__ x, void *__restrict__ vy,
+    const int kx, const int kx_padded) {
+  const int ix = blockDim.x * blockIdx.x + threadIdx.x;
+  if (ix >= kx_padded) return;
+
+  const int iy = blockDim.y * blockIdx.y + threadIdx.y;
+  const int i_padded = iy * kx_padded + ix;
+  block_q8_1 *y = (block_q8_1 *)vy;
+
+  const int ib = i_padded / QK8_1;
+  const int iqs = i_padded % QK8_1;
+
+  const float xi = ix < kx ? __bfloat162float(x[iy * kx + ix]) : 0.0f;
+  float amax = fabsf(xi);
+  float sum = xi;
+
+  amax = warp_reduce_max(amax);
+  sum = warp_reduce_sum(sum);
+
+  const float d = amax / 127;
+  const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
+
+  y[ib].qs[iqs] = q;
+  if (iqs > 0) return;
+
+  reinterpret_cast<half &>(y[ib].ds.x) = d;
+  reinterpret_cast<half &>(y[ib].ds.y) = sum;
+}
+
+extern "C" __global__ void quantize_f16_q8_1(
+    const half *__restrict__ x, void *__restrict__ vy,
+    const int kx, const int kx_padded) {
+  const int ix = blockDim.x * blockIdx.x + threadIdx.x;
+  if (ix >= kx_padded) return;
+
+  const int iy = blockDim.y * blockIdx.y + threadIdx.y;
+  const int i_padded = iy * kx_padded + ix;
+  block_q8_1 *y = (block_q8_1 *)vy;
+
+  const int ib = i_padded / QK8_1;
+  const int iqs = i_padded % QK8_1;
+
+  const float xi = ix < kx ? __half2float(x[iy * kx + ix]) : 0.0f;
+  float amax = fabsf(xi);
+  float sum = xi;
+
+  amax = warp_reduce_max(amax);
+  sum = warp_reduce_sum(sum);
+
+  const float d = amax / 127;
+  const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
+
+  y[ib].qs[iqs] = q;
+  if (iqs > 0) return;
+
+  reinterpret_cast<half &>(y[ib].ds.x) = d;
+  reinterpret_cast<half &>(y[ib].ds.y) = sum;
+}
+
+extern "C" void launch_quantize_bf16_q8_1(
+    const void *x, void *vy, int kx, int kx_padded,
+    int num_blocks_x, int num_rows, void *stream) {
+  dim3 grid(num_blocks_x, num_rows, 1);
+  dim3 block(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
+  cudaStream_t s = static_cast<cudaStream_t>(stream);
+  quantize_bf16_q8_1<<<grid, block, 0, s>>>(
+      (const nv_bfloat16 *)x, vy, kx, kx_padded);
+}
+
+extern "C" void launch_quantize_f16_q8_1(
+    const void *x, void *vy, int kx, int kx_padded,
+    int num_blocks_x, int num_rows, void *stream) {
+  dim3 grid(num_blocks_x, num_rows, 1);
+  dim3 block(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
+  cudaStream_t s = static_cast<cudaStream_t>(stream);
+  quantize_f16_q8_1<<<grid, block, 0, s>>>(
+      (const half *)x, vy, kx, kx_padded);
+}
+
 // ============== Dispatch kernels ==============
 
 // Phase 1: Count tokens per expert using atomics
@@ -669,75 +759,266 @@ static __global__ void moe_dispatch_scatter_kernel(
   }
 }
 
-// ============== Grouped MoE GEMM kernel ==============
+// ============== Tiled MoE GEMM kernel (MMQ-style) for Q8_0 ==============
 //
-// N-tiled with M-batching: Grid (ceil(N/N_TILE), num_experts)
-// Block (32, N_TILE) = 32*N_TILE threads.
-// Each warp handles one output row and processes M_BATCH tokens simultaneously,
-// amortizing weight loads across multiple tokens.
+// True GEMM tiling: each block processes MMQ_Y output features × MMQ_X tokens
+// for one expert, accumulating over K in shared-memory tile chunks.
 //
-// Output modes:
-// - topk_weights == NULL: output in sorted order [total_assignments, N]
-// - topk_weights != NULL: atomicAdd to per-token output [num_tokens, N]
+// Grid: (ceil(N/MMQ_Y), num_experts), Block: (32, MMQ_NWARPS)
+// Each thread computes acc_cols × acc_rows output elements.
+// K processed in chunks of K_TILE (256 elements = 8 Q8_0 blocks).
 
+#define MMQ_X 64    // Tokens per block tile
+#define MMQ_Y 64    // Output features per block tile
+#define MMQ_NWARPS 8
+#define K_TILE 256  // K elements per tile (8 Q8_0 blocks)
+#define K_TILE_Q8 (K_TILE / QK8_0)  // 8 Q8_0 blocks per tile
+
+// Shared memory sizes (int32 units for qs, float for scales)
+#define W_QS_STRIDE (K_TILE / 4)               // 64 int32 per row
+#define W_QS_SIZE   (MMQ_Y * W_QS_STRIDE)      // 32*64 = 2048 int32
+#define W_D_SIZE    (MMQ_Y * K_TILE_Q8)         // 32*8 = 256 float
+#define X_QS_STRIDE (K_TILE / 4)               // 64 int32 per row
+#define X_QS_SIZE   (MMQ_X * X_QS_STRIDE)      // 64*64 = 4096 int32
+#define X_D_SIZE    (MMQ_X * K_TILE_Q8)         // 64*8 = 512 float
+// Total smem: (2048+4096)*4 + (256+512)*4 = 24576 + 3072 = 27648 bytes
+
+static __device__ void moe_tiled_gemm_q8_0_impl(
+    const void *__restrict__ all_weights,
+    const void *__restrict__ all_inputs,
+    const int32_t *__restrict__ expert_bounds,
+    const int32_t *__restrict__ sorted_token_ids,
+    const float *__restrict__ topk_weights,
+    float *__restrict__ all_outputs,
+    const int N, const int K, const int K_padded,
+    const int num_experts, const int topk, const int input_dim1) {
+
+  const int n_base = blockIdx.x * MMQ_Y;
+  const int expert = blockIdx.y;
+  if (n_base >= N || expert >= num_experts) return;
+
+  const int t_start = expert_bounds[expert];
+  const int t_end = expert_bounds[expert + 1];
+  if (t_start >= t_end) return;
+
+  const int blocks_per_row_w = K / QK8_0;
+  const int blocks_per_row_x = K_padded / QK8_1;
+
+  const block_q8_0 *w_all = (const block_q8_0 *)all_weights;
+  const block_q8_1 *x_all = (const block_q8_1 *)all_inputs;
+
+  // Expert weight base: w_all + expert * N * blocks_per_row_w
+  const size_t expert_w_offset = (size_t)expert * N * blocks_per_row_w;
+
+  const int tid = threadIdx.y * WARP_SIZE + threadIdx.x;
+  const int nthreads = MMQ_NWARPS * WARP_SIZE; // 256
+
+  // Shared memory
+  extern __shared__ char smem[];
+  int   *w_qs = (int *)smem;
+  float *w_d  = (float *)(w_qs + W_QS_SIZE);
+  int   *x_qs = (int *)(w_d + W_D_SIZE);
+  float *x_d  = (float *)(x_qs + X_QS_SIZE);
+  // After x_d: space for token index cache
+  int   *tok_cache = (int *)(x_d + X_D_SIZE);  // [MMQ_X] token input row indices
+
+  constexpr int acc_rows = MMQ_Y / WARP_SIZE;  // 1
+  constexpr int acc_cols = MMQ_X / MMQ_NWARPS; // 8
+
+  // Process tokens in chunks of MMQ_X
+  for (int t_base = t_start; t_base < t_end; t_base += MMQ_X) {
+    const int m_count = min(MMQ_X, t_end - t_base);
+
+    // Cache token→input_row mapping in shared memory (once per token chunk)
+    __syncthreads();
+    for (int idx = tid; idx < m_count; idx += nthreads) {
+      const int ti = t_base + idx;
+      const int flat_idx = sorted_token_ids[ti];
+      tok_cache[idx] = (input_dim1 == 0) ? ti : ((input_dim1 == 1) ? (flat_idx / topk) : flat_idx);
+    }
+
+    // Zero accumulators
+    float acc[acc_cols][acc_rows];
+    #pragma unroll
+    for (int j = 0; j < acc_cols; j++)
+      #pragma unroll
+      for (int i = 0; i < acc_rows; i++)
+        acc[j][i] = 0.0f;
+
+    // K-loop: process K in chunks of K_TILE
+    for (int k_base = 0; k_base < K; k_base += K_TILE) {
+      const int k_tile_actual = min(K_TILE, K - k_base);
+      const int k_tile_q8 = k_tile_actual / QK8_0;
+
+      __syncthreads();
+
+      // === Load weight tile [MMQ_Y × K_TILE] ===
+      for (int idx = tid; idx < W_QS_SIZE; idx += nthreads) {
+        const int row = idx / W_QS_STRIDE;
+        const int col = idx % W_QS_STRIDE;
+        const int n_row = n_base + row;
+        const int k_elem = col * 4;
+        if (n_row < N && k_elem < k_tile_actual) {
+          const int qb = (k_base + k_elem) / QK8_0;
+          const int qo = (k_elem % QK8_0) / 4;
+          w_qs[idx] = get_int_from_int8(w_all[expert_w_offset + (size_t)n_row * blocks_per_row_w + qb].qs, qo);
+        } else {
+          w_qs[idx] = 0;
+        }
+      }
+      for (int idx = tid; idx < MMQ_Y * k_tile_q8; idx += nthreads) {
+        const int row = idx / k_tile_q8;
+        const int kb = idx % k_tile_q8;
+        const int n_row = n_base + row;
+        const int qb = k_base / QK8_0 + kb;
+        if (n_row < N && qb < blocks_per_row_w) {
+          w_d[row * K_TILE_Q8 + kb] = __half2float(w_all[expert_w_offset + (size_t)n_row * blocks_per_row_w + qb].d);
+        } else {
+          w_d[row * K_TILE_Q8 + kb] = 0.0f;
+        }
+      }
+
+      // === Load input tile [MMQ_X × K_TILE] ===
+      for (int idx = tid; idx < X_QS_SIZE; idx += nthreads) {
+        const int row = idx / X_QS_STRIDE;
+        const int col = idx % X_QS_STRIDE;
+        const int k_elem = col * 4;
+        if (row < m_count && k_elem < k_tile_actual) {
+          const int input_row = tok_cache[row];
+          const int qb = (k_base + k_elem) / QK8_1;
+          const int qo = (k_elem % QK8_1) / 4;
+          x_qs[idx] = get_int_from_int8_aligned(x_all[(size_t)input_row * blocks_per_row_x + qb].qs, qo);
+        } else {
+          x_qs[idx] = 0;
+        }
+      }
+      for (int idx = tid; idx < MMQ_X * k_tile_q8; idx += nthreads) {
+        const int row = idx / k_tile_q8;
+        const int kb = idx % k_tile_q8;
+        if (row < m_count) {
+          const int input_row = tok_cache[row];
+          const int qb = k_base / QK8_1 + kb;
+          if (qb < blocks_per_row_x) {
+            x_d[row * K_TILE_Q8 + kb] = __low2float(x_all[(size_t)input_row * blocks_per_row_x + qb].ds);
+          } else {
+            x_d[row * K_TILE_Q8 + kb] = 0.0f;
+          }
+        }
+      }
+
+      __syncthreads();
+
+      // === Compute dp4a dot products from shared memory ===
+      // Each thread: acc_cols=8 tokens × acc_rows=1 features
+      // threadIdx.x → feature index, threadIdx.y → token group
+      #pragma unroll
+      for (int kb = 0; kb < K_TILE_Q8; kb++) {
+        const int k_start = kb * (QK8_0 / 4);  // 8 int32s per Q8_0 block
+
+        #pragma unroll
+        for (int i_local = 0; i_local < acc_rows; i_local++) {
+          const int i = i_local * WARP_SIZE + threadIdx.x;
+          if (n_base + i >= N) continue;
+          const float d_w = w_d[i * K_TILE_Q8 + kb];
+
+          // Load weight values into registers
+          int w_vals[8];
+          #pragma unroll
+          for (int kk = 0; kk < 8; kk++)
+            w_vals[kk] = w_qs[i * W_QS_STRIDE + k_start + kk];
+
+          #pragma unroll
+          for (int j_local = 0; j_local < acc_cols; j_local++) {
+            const int j = threadIdx.y * acc_cols + j_local;
+            if (j >= m_count) continue;
+
+            const float d_x = x_d[j * K_TILE_Q8 + kb];
+
+            int sumi = 0;
+            #pragma unroll
+            for (int kk = 0; kk < 8; kk++) {
+              sumi = ggml_cuda_dp4a(w_vals[kk],
+                                    x_qs[j * X_QS_STRIDE + k_start + kk],
+                                    sumi);
+            }
+
+            acc[j_local][i_local] += d_w * d_x * (float)sumi;
+          }
+        }
+      }
+    } // end K loop
+
+    // === Write results ===
+    #pragma unroll
+    for (int j_local = 0; j_local < acc_cols; j_local++) {
+      const int j = threadIdx.y * acc_cols + j_local;
+      if (j >= m_count) continue;
+
+      const int ti = t_base + j;
+      const int flat_idx = sorted_token_ids[ti];
+
+      #pragma unroll
+      for (int i_local = 0; i_local < acc_rows; i_local++) {
+        const int n_row = i_local * WARP_SIZE + threadIdx.x + n_base;
+        if (n_row >= N) continue;
+
+        if (topk_weights) {
+          atomicAdd(&all_outputs[(size_t)(flat_idx / topk) * N + n_row],
+                    acc[j_local][i_local] * topk_weights[flat_idx]);
+        } else {
+          all_outputs[(size_t)ti * N + n_row] = acc[j_local][i_local];
+        }
+      }
+    }
+  } // end token chunk loop
+}
+
+// Fallback: keep the simpler N-tiled kernel for non-Q8_0 types
 #define N_TILE 16
-#define M_BATCH 4  // Process this many tokens per K-block iteration
+#define M_BATCH 4
 
 template <int qk, int qi, typename block_q_t, int vdr,
           vec_dot_q_cuda_t vec_dot_q_cuda>
 static __device__ void moe_grouped_gemm_impl(
-    const void *__restrict__ all_weights, // [num_experts, N, K] in quantized blocks
-    const void *__restrict__ all_inputs,  // [num_input_rows, K_padded] in Q8_1 blocks
-    const int32_t *__restrict__ expert_bounds,    // [num_experts + 1]
-    const int32_t *__restrict__ sorted_token_ids, // [total_assignments]
-    const float *__restrict__ topk_weights,       // [total_assignments] or NULL
-    float *__restrict__ all_outputs,              // output buffer
+    const void *__restrict__ all_weights,
+    const void *__restrict__ all_inputs,
+    const int32_t *__restrict__ expert_bounds,
+    const int32_t *__restrict__ sorted_token_ids,
+    const float *__restrict__ topk_weights,
+    float *__restrict__ all_outputs,
     const int N, const int K, const int K_padded,
     const int num_experts, const int topk, const int input_dim1) {
 
   const int n_base = blockIdx.x * N_TILE;
   const int expert = blockIdx.y;
 
-  if (n_base >= N || expert >= num_experts)
-    return;
+  if (n_base >= N || expert >= num_experts) return;
 
   const int t_start = expert_bounds[expert];
   const int t_end = expert_bounds[expert + 1];
-  const int num_tokens_expert = t_end - t_start;
-
-  if (num_tokens_expert <= 0)
-    return;
+  if (t_start >= t_end) return;
 
   const int blocks_per_row_w = K / qk;
   const int blocks_per_row_x = K_padded / QK8_1;
-
   const block_q_t *w_base = (const block_q_t *)all_weights;
   const block_q8_1 *x_base = (const block_q8_1 *)all_inputs;
 
   const int n_row = n_base + threadIdx.y;
   const bool valid_row = (n_row < N);
-
   const block_q_t *w_row = valid_row ?
       w_base + ((size_t)expert * N + n_row) * blocks_per_row_w : nullptr;
-
   constexpr int blocks_per_iter_warp = vdr * WARP_SIZE / qi;
 
-  // Process M_BATCH tokens at a time
   for (int ti_base = t_start; ti_base < t_end; ti_base += M_BATCH) {
     const int m_count = min(M_BATCH, t_end - ti_base);
-
-    // Accumulators for M_BATCH tokens
     float acc[M_BATCH];
     #pragma unroll
     for (int m = 0; m < M_BATCH; m++) acc[m] = 0.0f;
 
     if (valid_row) {
-      // Iterate over K blocks - weight data loaded once, reused across M_BATCH tokens
       for (int kbx = threadIdx.x / (qi / vdr); kbx < blocks_per_row_w;
            kbx += blocks_per_iter_warp) {
         const int kqs = vdr * (threadIdx.x % (qi / vdr));
-
-        // Process each token in the batch against the same weight block
         #pragma unroll
         for (int m = 0; m < M_BATCH; m++) {
           if (m < m_count) {
@@ -745,19 +1026,13 @@ static __device__ void moe_grouped_gemm_impl(
             const int flat_idx = sorted_token_ids[ti];
             const int input_row = (input_dim1 == 0) ? ti : ((input_dim1 == 1) ? (flat_idx / topk) : flat_idx);
             const block_q8_1 *x = x_base + (size_t)input_row * blocks_per_row_x;
-            const int kby = kbx * (qk / QK8_1);
-            acc[m] += vec_dot_q_cuda(&w_row[kbx], &x[kby], kqs);
+            acc[m] += vec_dot_q_cuda(&w_row[kbx], &x[kbx * (qk / QK8_1)], kqs);
           }
         }
       }
-
-      // Warp-level reduction for each token
       #pragma unroll
-      for (int m = 0; m < M_BATCH; m++) {
-        acc[m] = warp_reduce_sum(acc[m]);
-      }
+      for (int m = 0; m < M_BATCH; m++) acc[m] = warp_reduce_sum(acc[m]);
 
-      // Write results
       if (threadIdx.x == 0) {
         #pragma unroll
         for (int m = 0; m < M_BATCH; m++) {
@@ -765,9 +1040,8 @@ static __device__ void moe_grouped_gemm_impl(
             const int ti = ti_base + m;
             const int flat_idx = sorted_token_ids[ti];
             if (topk_weights) {
-              const float result = acc[m] * topk_weights[flat_idx];
-              const int token_id = flat_idx / topk;
-              atomicAdd(&all_outputs[(size_t)token_id * N + n_row], result);
+              atomicAdd(&all_outputs[(size_t)(flat_idx / topk) * N + n_row],
+                        acc[m] * topk_weights[flat_idx]);
             } else {
               all_outputs[(size_t)ti * N + n_row] = acc[m];
             }
@@ -785,8 +1059,8 @@ extern "C" __global__ void moe_grouped_gemm_q8_0(
     const int32_t *expert_bounds, const int32_t *sorted_token_ids,
     const float *topk_weights, float *all_outputs,
     int N, int K, int K_padded, int num_experts, int topk, int input_dim1) {
-  moe_grouped_gemm_impl<QK8_0, QI8_0, block_q8_0, VDR_Q8_0_Q8_1_MMVQ,
-                          vd_q8_0_q8_1>(
+  // Use tiled GEMM for Q8_0 (MMQ-style, much faster for prefill)
+  moe_tiled_gemm_q8_0_impl(
       all_weights, all_inputs, expert_bounds, sorted_token_ids,
       topk_weights, all_outputs, N, K, K_padded, num_experts, topk, input_dim1);
 }
@@ -966,7 +1240,26 @@ extern "C" void launch_moe_dispatch(
         input_dim1);                                                           \
   }
 
-LAUNCH_MOE_GROUPED_GEMM(q8_0)
+// Q8_0 uses the tiled GEMM with different grid/block dimensions
+extern "C" void launch_moe_grouped_gemm_q8_0(
+    const void *all_weights, const void *all_inputs,
+    const int32_t *expert_bounds, const int32_t *sorted_token_ids,
+    const float *topk_weights, float *all_outputs, int N, int K,
+    int K_padded, int num_experts, int topk, int input_dim1,
+    void *stream) {
+  cudaStream_t s = static_cast<cudaStream_t>(stream);
+  dim3 grid(CEILDIV(N, MMQ_Y), num_experts);
+  dim3 block(WARP_SIZE, MMQ_NWARPS, 1);
+  // Shared memory: weight tile + input tile + token index cache
+  size_t smem = (W_QS_SIZE + X_QS_SIZE) * sizeof(int)
+              + (W_D_SIZE + X_D_SIZE) * sizeof(float)
+              + MMQ_X * sizeof(int);
+  moe_grouped_gemm_q8_0<<<grid, block, smem, s>>>(
+      all_weights, all_inputs, expert_bounds, sorted_token_ids,
+      topk_weights, all_outputs, N, K, K_padded, num_experts, topk,
+      input_dim1);
+}
+
 LAUNCH_MOE_GROUPED_GEMM(q4_0)
 LAUNCH_MOE_GROUPED_GEMM(q4_1)
 LAUNCH_MOE_GROUPED_GEMM(q5_0)

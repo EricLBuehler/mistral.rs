@@ -186,6 +186,28 @@ extern "C" {
         stream: *mut c_void,
     );
 
+    // ============== BF16/F16 → Q8_1 quantize (skip F32 intermediate) ==============
+
+    pub fn launch_quantize_bf16_q8_1(
+        x: *const c_void,
+        vy: *mut c_void,
+        kx: i32,
+        kx_padded: i32,
+        num_blocks_x: i32,
+        num_rows: i32,
+        stream: *mut c_void,
+    );
+
+    pub fn launch_quantize_f16_q8_1(
+        x: *const c_void,
+        vy: *mut c_void,
+        kx: i32,
+        kx_padded: i32,
+        num_blocks_x: i32,
+        num_rows: i32,
+        stream: *mut c_void,
+    );
+
     // ============== Grouped MoE dispatch and GEMM ==============
 
     /// Build expert dispatch tables on GPU: expert_bounds + sorted_token_ids
