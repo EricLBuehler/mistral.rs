@@ -682,10 +682,16 @@ static __global__ void moe_dispatch_scatter_kernel(
 #define MMQ_X 64
 #define MMQ_Y 64
 #define MMQ_NWARPS 8
-#define K_TILE_BLOCKS 8  // weight blocks per K-tile
+
+// K_TILE_BLOCKS controls how many weight blocks are processed per K-tile.
+// For K-type quants (QK_K=256), each weight block maps to 8 Q8_1 input blocks,
+// so shared memory scales as K_TILE_BLOCKS * 8.  Use a smaller tile for K-types
+// to keep shared memory under the 48 KB default CUDA limit.
+#define K_TILE_BLOCKS_SMALL 1   // for QK_K=256 types (Q2K..Q6K)
+#define K_TILE_BLOCKS_LARGE 8   // for QK=32 types (Q4_0..Q8_1)
 
 template <int qk, int qi, typename block_q_t, int vdr,
-          vec_dot_q_cuda_t vec_dot_q_cuda>
+          vec_dot_q_cuda_t vec_dot_q_cuda, int k_tile_blocks>
 static __device__ void moe_tiled_gemm_impl(
     const void *__restrict__ all_weights,
     const void *__restrict__ all_inputs,
@@ -707,7 +713,7 @@ static __device__ void moe_tiled_gemm_impl(
   const int blocks_per_row_w = K / qk;
   const int blocks_per_row_x = K_padded / QK8_1;
   constexpr int x_blocks_per_w_block = qk / QK8_1;  // Q8_1 blocks per weight block
-  constexpr int x_blocks_per_k_tile = K_TILE_BLOCKS * x_blocks_per_w_block;
+  constexpr int x_blocks_per_k_tile = k_tile_blocks * x_blocks_per_w_block;
   constexpr size_t w_block_bytes = sizeof(block_q_t);
   constexpr size_t x_block_bytes = sizeof(block_q8_1);
 
@@ -721,7 +727,7 @@ static __device__ void moe_tiled_gemm_impl(
   // Shared memory: w_tile + x_tile + tok_cache
   extern __shared__ char smem[];
   char *w_tile = smem;
-  constexpr size_t w_tile_bytes = MMQ_Y * K_TILE_BLOCKS * w_block_bytes;
+  constexpr size_t w_tile_bytes = MMQ_Y * k_tile_blocks * w_block_bytes;
   char *x_tile = w_tile + w_tile_bytes;
   constexpr size_t x_tile_bytes = MMQ_X * x_blocks_per_k_tile * x_block_bytes;
   int *tok_cache = (int *)(x_tile + x_tile_bytes);
@@ -747,8 +753,8 @@ static __device__ void moe_tiled_gemm_impl(
       for (int i = 0; i < acc_rows; i++)
         acc[j][i] = 0.0f;
 
-    for (int kb_base = 0; kb_base < blocks_per_row_w; kb_base += K_TILE_BLOCKS) {
-      const int kb_count = min(K_TILE_BLOCKS, blocks_per_row_w - kb_base);
+    for (int kb_base = 0; kb_base < blocks_per_row_w; kb_base += k_tile_blocks) {
+      const int kb_count = min(k_tile_blocks, blocks_per_row_w - kb_base);
       const int xb_base = kb_base * x_blocks_per_w_block;
 
       __syncthreads();
@@ -757,7 +763,7 @@ static __device__ void moe_tiled_gemm_impl(
       {
         const int total_bytes = MMQ_Y * kb_count * w_block_bytes;
         const int row_bytes = kb_count * w_block_bytes;
-        const int row_bytes_padded = K_TILE_BLOCKS * w_block_bytes;
+        const int row_bytes_padded = k_tile_blocks * w_block_bytes;
         for (int idx = tid; idx < total_bytes; idx += nthreads) {
           const int row = idx / row_bytes;
           const int col = idx % row_bytes;
@@ -804,7 +810,7 @@ static __device__ void moe_tiled_gemm_impl(
           if (n_base + i >= N) continue;
 
           const block_q_t *w_blk = (const block_q_t *)(
-            w_tile + (size_t)i * K_TILE_BLOCKS * w_block_bytes + (size_t)kb * w_block_bytes);
+            w_tile + (size_t)i * k_tile_blocks * w_block_bytes + (size_t)kb * w_block_bytes);
 
           #pragma unroll
           for (int j_local = 0; j_local < acc_cols; j_local++) {
@@ -848,13 +854,13 @@ static __device__ void moe_tiled_gemm_impl(
 
 // ============== Kernel instantiations ==============
 
-#define MOE_KERNEL_INST(suffix, QK, QI, BLOCK_T, VDR, VEC_DOT) \
+#define MOE_KERNEL_INST(suffix, QK, QI, BLOCK_T, VDR, VEC_DOT, KTB) \
 extern "C" __global__ void moe_grouped_gemm_##suffix( \
     const void *all_weights, const void *all_inputs, \
     const int32_t *expert_bounds, const int32_t *sorted_token_ids, \
     const float *topk_weights, float *all_outputs, \
     int N, int K, int K_padded, int num_experts, int topk, int input_dim1) { \
-  moe_tiled_gemm_impl<QK, QI, BLOCK_T, VDR, VEC_DOT>( \
+  moe_tiled_gemm_impl<QK, QI, BLOCK_T, VDR, VEC_DOT, KTB>( \
       all_weights, all_inputs, expert_bounds, sorted_token_ids, \
       topk_weights, all_outputs, N, K, K_padded, num_experts, topk, input_dim1); \
 }
@@ -990,16 +996,16 @@ extern "C" __global__ void moe_grouped_gemm_q8_0(
 }
 // Other quant types use the generic tiled kernel:
 
-MOE_KERNEL_INST(q4_0, QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ, vd_q4_0_q8_1)
-MOE_KERNEL_INST(q4_1, QK4_1, QI4_1, block_q4_1, VDR_Q4_1_Q8_1_MMVQ, vd_q4_1_q8_1)
-MOE_KERNEL_INST(q5_0, QK5_0, QI5_0, block_q5_0, VDR_Q5_0_Q8_1_MMVQ, vd_q5_0_q8_1)
-MOE_KERNEL_INST(q5_1, QK5_1, QI5_1, block_q5_1, VDR_Q5_1_Q8_1_MMVQ, vd_q5_1_q8_1)
-MOE_KERNEL_INST(q8_1, QK8_1, QI8_1, block_q8_1, VDR_Q8_1_Q8_1_MMVQ, vd_q8_1_q8_1)
-MOE_KERNEL_INST(q2k,  QK_K,  QI2_K, block_q2_K, VDR_Q2_K_Q8_1_MMVQ, vd_q2_K_q8_1)
-MOE_KERNEL_INST(q3k,  QK_K,  QI3_K, block_q3_K, VDR_Q3_K_Q8_1_MMVQ, vd_q3_K_q8_1)
-MOE_KERNEL_INST(q4k,  QK_K,  QI4_K, block_q4_K, VDR_Q4_K_Q8_1_MMVQ, vd_q4_K_q8_1)
-MOE_KERNEL_INST(q5k,  QK_K,  QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vd_q5_K_q8_1)
-MOE_KERNEL_INST(q6k,  QK_K,  QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ, vd_q6_K_q8_1)
+MOE_KERNEL_INST(q4_0, QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ, vd_q4_0_q8_1, K_TILE_BLOCKS_LARGE)
+MOE_KERNEL_INST(q4_1, QK4_1, QI4_1, block_q4_1, VDR_Q4_1_Q8_1_MMVQ, vd_q4_1_q8_1, K_TILE_BLOCKS_LARGE)
+MOE_KERNEL_INST(q5_0, QK5_0, QI5_0, block_q5_0, VDR_Q5_0_Q8_1_MMVQ, vd_q5_0_q8_1, K_TILE_BLOCKS_LARGE)
+MOE_KERNEL_INST(q5_1, QK5_1, QI5_1, block_q5_1, VDR_Q5_1_Q8_1_MMVQ, vd_q5_1_q8_1, K_TILE_BLOCKS_LARGE)
+MOE_KERNEL_INST(q8_1, QK8_1, QI8_1, block_q8_1, VDR_Q8_1_Q8_1_MMVQ, vd_q8_1_q8_1, K_TILE_BLOCKS_LARGE)
+MOE_KERNEL_INST(q2k,  QK_K,  QI2_K, block_q2_K, VDR_Q2_K_Q8_1_MMVQ, vd_q2_K_q8_1, K_TILE_BLOCKS_SMALL)
+MOE_KERNEL_INST(q3k,  QK_K,  QI3_K, block_q3_K, VDR_Q3_K_Q8_1_MMVQ, vd_q3_K_q8_1, K_TILE_BLOCKS_SMALL)
+MOE_KERNEL_INST(q4k,  QK_K,  QI4_K, block_q4_K, VDR_Q4_K_Q8_1_MMVQ, vd_q4_K_q8_1, K_TILE_BLOCKS_SMALL)
+MOE_KERNEL_INST(q5k,  QK_K,  QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vd_q5_K_q8_1, K_TILE_BLOCKS_SMALL)
+MOE_KERNEL_INST(q6k,  QK_K,  QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ, vd_q6_K_q8_1, K_TILE_BLOCKS_SMALL)
 
 // ============== C wrapper functions for FFI ==============
 
@@ -1039,16 +1045,16 @@ extern "C" void launch_moe_dispatch(
 
 #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
 
-// Compute shared memory size for a given quant type
-template <typename block_q_t, int qk>
+// Compute shared memory size for a given quant type and tile configuration
+template <typename block_q_t, int qk, int ktb>
 static size_t moe_tiled_smem_bytes() {
-  constexpr int x_blocks_per_k_tile = K_TILE_BLOCKS * (qk / QK8_1);
-  constexpr size_t w_bytes = MMQ_Y * K_TILE_BLOCKS * sizeof(block_q_t);
+  constexpr int x_blocks_per_k_tile = ktb * (qk / QK8_1);
+  constexpr size_t w_bytes = MMQ_Y * ktb * sizeof(block_q_t);
   constexpr size_t x_bytes = MMQ_X * x_blocks_per_k_tile * sizeof(block_q8_1);
   return w_bytes + x_bytes + MMQ_X * sizeof(int);
 }
 
-#define LAUNCH_MOE_TILED_GEMM(suffix, BLOCK_T, QK_VAL) \
+#define LAUNCH_MOE_TILED_GEMM(suffix, BLOCK_T, QK_VAL, KTB) \
 extern "C" void launch_moe_grouped_gemm_##suffix( \
     const void *all_weights, const void *all_inputs, \
     const int32_t *expert_bounds, const int32_t *sorted_token_ids, \
@@ -1058,7 +1064,7 @@ extern "C" void launch_moe_grouped_gemm_##suffix( \
   cudaStream_t s = static_cast<cudaStream_t>(stream); \
   dim3 grid(CEILDIV(N, MMQ_Y), num_experts); \
   dim3 block(WARP_SIZE, MMQ_NWARPS, 1); \
-  size_t smem = moe_tiled_smem_bytes<BLOCK_T, QK_VAL>(); \
+  size_t smem = moe_tiled_smem_bytes<BLOCK_T, QK_VAL, KTB>(); \
   moe_grouped_gemm_##suffix<<<grid, block, smem, s>>>( \
       all_weights, all_inputs, expert_bounds, sorted_token_ids, \
       topk_weights, all_outputs, N, K, K_padded, num_experts, topk, \
@@ -1080,13 +1086,13 @@ extern "C" void launch_moe_grouped_gemm_q8_0(
       topk_weights, all_outputs, N, K, K_padded, num_experts, topk, input_dim1);
 }
 // Other quant types:
-LAUNCH_MOE_TILED_GEMM(q4_0, block_q4_0, QK4_0)
-LAUNCH_MOE_TILED_GEMM(q4_1, block_q4_1, QK4_1)
-LAUNCH_MOE_TILED_GEMM(q5_0, block_q5_0, QK5_0)
-LAUNCH_MOE_TILED_GEMM(q5_1, block_q5_1, QK5_1)
-LAUNCH_MOE_TILED_GEMM(q8_1, block_q8_1, QK8_1)
-LAUNCH_MOE_TILED_GEMM(q2k,  block_q2_K, QK_K)
-LAUNCH_MOE_TILED_GEMM(q3k,  block_q3_K, QK_K)
-LAUNCH_MOE_TILED_GEMM(q4k,  block_q4_K, QK_K)
-LAUNCH_MOE_TILED_GEMM(q5k,  block_q5_K, QK_K)
-LAUNCH_MOE_TILED_GEMM(q6k,  block_q6_K, QK_K)
+LAUNCH_MOE_TILED_GEMM(q4_0, block_q4_0, QK4_0, K_TILE_BLOCKS_LARGE)
+LAUNCH_MOE_TILED_GEMM(q4_1, block_q4_1, QK4_1, K_TILE_BLOCKS_LARGE)
+LAUNCH_MOE_TILED_GEMM(q5_0, block_q5_0, QK5_0, K_TILE_BLOCKS_LARGE)
+LAUNCH_MOE_TILED_GEMM(q5_1, block_q5_1, QK5_1, K_TILE_BLOCKS_LARGE)
+LAUNCH_MOE_TILED_GEMM(q8_1, block_q8_1, QK8_1, K_TILE_BLOCKS_LARGE)
+LAUNCH_MOE_TILED_GEMM(q2k,  block_q2_K, QK_K, K_TILE_BLOCKS_SMALL)
+LAUNCH_MOE_TILED_GEMM(q3k,  block_q3_K, QK_K, K_TILE_BLOCKS_SMALL)
+LAUNCH_MOE_TILED_GEMM(q4k,  block_q4_K, QK_K, K_TILE_BLOCKS_SMALL)
+LAUNCH_MOE_TILED_GEMM(q5k,  block_q5_K, QK_K, K_TILE_BLOCKS_SMALL)
+LAUNCH_MOE_TILED_GEMM(q6k,  block_q6_K, QK_K, K_TILE_BLOCKS_SMALL)
