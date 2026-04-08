@@ -80,6 +80,9 @@ struct FastExpertsWeights {
     fused_gate_proj: Arc<dyn QuantMethod>,
     fused_up_proj: Arc<dyn QuantMethod>,
     fused_down_proj: Arc<dyn QuantMethod>,
+    /// Cached dequantized weights for WMMA prefill path [E, K, N] format
+    #[cfg(feature = "cuda")]
+    dequant_cache: std::sync::Mutex<Option<(Tensor, Tensor, Tensor)>>,
 }
 
 /// Internal representation for loop-based experts (quantized fallback)
@@ -442,6 +445,8 @@ impl MoEExperts {
             fused_gate_proj,
             fused_up_proj,
             fused_down_proj,
+            #[cfg(feature = "cuda")]
+            dequant_cache: std::sync::Mutex::new(None),
         })
     }
 
@@ -468,6 +473,8 @@ impl MoEExperts {
                 fused_gate_proj,
                 fused_up_proj,
                 fused_down_proj,
+                #[cfg(feature = "cuda")]
+                dequant_cache: std::sync::Mutex::new(None),
             });
         }
 
@@ -518,6 +525,8 @@ impl MoEExperts {
             fused_gate_proj,
             fused_up_proj,
             fused_down_proj,
+            #[cfg(feature = "cuda")]
+            dequant_cache: std::sync::Mutex::new(None),
         })
     }
 
@@ -641,6 +650,8 @@ impl MoEExperts {
             fused_gate_proj,
             fused_up_proj,
             fused_down_proj,
+            #[cfg(feature = "cuda")]
+            dequant_cache: std::sync::Mutex::new(None),
         })
     }
 
@@ -667,6 +678,8 @@ impl MoEExperts {
             fused_gate_proj,
             fused_up_proj,
             fused_down_proj,
+            #[cfg(feature = "cuda")]
+            dequant_cache: std::sync::Mutex::new(None),
         })
     }
 
@@ -825,8 +838,9 @@ impl MoEExperts {
         let xs_flat = xs.reshape((num_tokens, hidden_dim))?;
 
         // Try grouped MoE path for CUDA prefill (much faster for many tokens)
+        // Only use for large prefills where the overhead is worthwhile
         #[cfg(feature = "cuda")]
-        if is_prefill && xs.device().is_cuda() {
+        if is_prefill && xs.device().is_cuda() && num_tokens >= 32 {
             if let Some(result) = self.forward_fast_grouped(
                 &xs_flat,
                 topk_weights,
@@ -906,85 +920,81 @@ impl MoEExperts {
         let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
         assert!(ti_layout.start_offset() == 0, "expected contiguous tensor");
 
-        // SAFETY: u32 and i32 have the same size/alignment. Expert IDs fit in both.
-        let dispatch_ids: &candle_core::cuda::cudarc::driver::CudaSlice<i32> = unsafe {
-            std::mem::transmute(ti_u32_slice)
-        };
-
         // Build dispatch tables on GPU (no CPU-GPU sync)
+        // moe_dispatch_build takes u32 and casts to i32 internally for the CUDA kernel
         let (expert_bounds, sorted_token_ids) =
             mistralrs_quant::moe_dispatch_build(
-                dispatch_ids,
+                ti_u32_slice,
                 total_assignments,
                 num_experts,
                 dev,
             )?;
 
-        // Gate projection: input is [num_tokens, hidden_dim], input_dim1=1
+        // Use the pre-quantized Q8_0 grouped kernel path
+        let gate_qt = match weights.fused_gate_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+        let up_qt = match weights.fused_up_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+        let down_qt = match weights.fused_down_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+
+        // Quantize input to Q8_1 ONCE, shared between gate and up
         let xs_f32 = xs_flat.to_dtype(DType::F32)?.contiguous()?;
+        let (input_q8, k, k_padded) =
+            mistralrs_quant::quantize_input_q8_1(&xs_f32, dev)?;
 
-        let gate = match weights.fused_gate_proj.grouped_moe_forward(
-            &xs_f32, &expert_bounds, &sorted_token_ids,
-            None, total_assignments, topk, num_experts, 1,
-        ) {
-            Some(Ok(r)) => r,
-            Some(Err(e)) => return Err(e),
-            None => return Ok(None),
-        };
+        // Gate projection using pre-quantized input
+        let gate = mistralrs_quant::grouped_moe_gemm_prequantized(
+            gate_qt, &input_q8, k, k_padded, num_tokens,
+            &expert_bounds, &sorted_token_ids,
+            None, total_assignments, topk, num_experts, 1, dev,
+        )?;
 
-        // Up projection: same input
-        let up = match weights.fused_up_proj.grouped_moe_forward(
-            &xs_f32, &expert_bounds, &sorted_token_ids,
-            None, total_assignments, topk, num_experts, 1,
-        ) {
-            Some(Ok(r)) => r,
-            Some(Err(e)) => return Err(e),
-            None => return Ok(None),
-        };
+        // Up projection reusing same pre-quantized input
+        let up = mistralrs_quant::grouped_moe_gemm_prequantized(
+            up_qt, &input_q8, k, k_padded, num_tokens,
+            &expert_bounds, &sorted_token_ids,
+            None, total_assignments, topk, num_experts, 1, dev,
+        )?;
 
-        // Apply activation: [total_assignments, intermediate_size]
+        drop(input_q8);
+
+        // Apply activation
         let activated = (up * gate.apply(&self.act)?)?.contiguous()?;
 
-        // Down projection: input_dim1=topk (each assignment has its own row)
-        let down = match weights.fused_down_proj.grouped_moe_forward(
-            &activated, &expert_bounds, &sorted_token_ids,
-            None, total_assignments, topk, num_experts, topk,
-        ) {
-            Some(Ok(r)) => r,
-            Some(Err(e)) => return Err(e),
-            None => return Ok(None),
-        };
+        // Quantize down projection input
+        let (down_input_q8, down_k, down_k_padded) =
+            mistralrs_quant::quantize_input_q8_1(&activated, dev)?;
 
-        // Unsort: scatter from expert-sorted order back to original flat order
-        // sorted_token_ids[ti] = original flat index for sorted position ti
-        let sorted_ids_tensor = {
-            let s = candle_core::CudaStorage::wrap_cuda_slice(
-                sorted_token_ids.clone(),
-                dev.clone(),
-            );
-            Tensor::from((
-                candle_core::Storage::Cuda(s),
-                candle_core::Shape::from(total_assignments),
-            ))
-            .to_dtype(DType::U32)?
+        // Get topk_weights pointer
+        use candle_core::cuda::cudarc::driver::DevicePtr;
+        let tw_f32 = topk_weights.flatten_all()?.to_dtype(DType::F32)?.contiguous()?;
+        let (tw_storage, tw_layout) = tw_f32.storage_and_layout();
+        let tw_cuda = match &*tw_storage {
+            candle_core::Storage::Cuda(c) => c,
+            _ => return Ok(None),
         };
+        let tw_slice = tw_cuda.as_cuda_slice::<f32>()?;
+        let tw_ptr = tw_slice
+            .slice(tw_layout.start_offset()..)
+            .device_ptr(tw_slice.stream())
+            .0 as *const f32;
 
-        let unsorted = Tensor::zeros(
-            (total_assignments, hidden_dim),
-            down.dtype(),
-            xs_flat.device(),
+        // Down projection with topk_weights + atomicAdd
+        let down = mistralrs_quant::grouped_moe_gemm_prequantized(
+            down_qt, &down_input_q8, down_k, down_k_padded, total_assignments,
+            &expert_bounds, &sorted_token_ids,
+            Some((tw_ptr, 0)),
+            total_assignments, topk, num_experts, 0, dev,
         )?;
-        let unsorted = unsorted.index_add(&sorted_ids_tensor, &down, 0)?;
 
-        // Reshape to [num_tokens, topk, hidden_dim], apply topk_weights, sum
-        let result = unsorted
-            .reshape((num_tokens, topk, hidden_dim))?
-            .to_dtype(DType::F32)?
-            .broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
-            .sum(D::Minus2)?
-            .to_dtype(original_dtype)?;
-
-        Ok(Some(result))
+        Ok(Some(down.to_dtype(original_dtype)?))
     }
 
     /// Loop-based forward pass (quantized fallback)

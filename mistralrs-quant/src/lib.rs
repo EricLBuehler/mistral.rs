@@ -65,7 +65,9 @@ pub use gemv::gemv;
 pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
 pub use gguf::GgufMatMul;
 #[cfg(feature = "cuda")]
-pub use gguf::cuda::moe_dispatch_build;
+pub use gguf::cuda::{
+    grouped_moe_gemm_prequantized, moe_dispatch_build, quantize_input_q8_1,
+};
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::{CollectedImatrixData, ImatrixLayerStats};
@@ -1023,14 +1025,21 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     fn grouped_moe_forward(
         &self,
         _xs: &Tensor,
-        _expert_bounds: &candle_core::cuda::cudarc::driver::CudaSlice<i32>,
-        _sorted_token_ids: &candle_core::cuda::cudarc::driver::CudaSlice<i32>,
+        _expert_bounds: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
+        _sorted_token_ids: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
         _topk_weights: Option<&Tensor>,
         _total_assignments: usize,
         _topk: usize,
         _num_experts: usize,
         _input_dim1: usize,
     ) -> Option<Result<Tensor>> {
+        None
+    }
+
+    /// Get the underlying QTensor if this is a GGUF quantized layer.
+    /// Used for direct kernel access in the grouped MoE prefill path.
+    #[cfg(feature = "cuda")]
+    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
         None
     }
 

@@ -94,8 +94,8 @@ impl QuantMethod for GgufMatMul {
     fn grouped_moe_forward(
         &self,
         xs: &Tensor,
-        expert_bounds: &candle_core::cuda::cudarc::driver::CudaSlice<i32>,
-        sorted_token_ids: &candle_core::cuda::cudarc::driver::CudaSlice<i32>,
+        expert_bounds: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
+        sorted_token_ids: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
         topk_weights: Option<&Tensor>,
         total_assignments: usize,
         topk: usize,
@@ -116,6 +116,14 @@ impl QuantMethod for GgufMatMul {
                     input_dim1,
                 ))
             }
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+        match &self.w {
+            candle_core::quantized::QMatMul::QTensor(qt) => Some(qt),
             _ => None,
         }
     }
