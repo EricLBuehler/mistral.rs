@@ -63,6 +63,8 @@ pub use fp8::FP8Linear;
 #[cfg(feature = "cuda")]
 pub use gemv::gemv;
 pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
+#[cfg(feature = "cuda")]
+pub use gguf::cuda::{grouped_moe_gemm_prequantized, moe_dispatch_build, quantize_input_q8_1};
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
@@ -1009,6 +1011,13 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
             "{} does not support `gather_forward`. Please raise an issue.",
             self.name()
         )
+    }
+
+    /// Get the underlying QTensor if this is a GGUF quantized layer.
+    /// Used for direct kernel access in the grouped MoE prefill path.
+    #[cfg(feature = "cuda")]
+    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+        None
     }
 
     /// If a quantized method, return the activation dtype.

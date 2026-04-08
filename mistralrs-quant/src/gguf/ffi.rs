@@ -185,4 +185,203 @@ extern "C" {
         input_dim1: i32,
         stream: *mut c_void,
     );
+
+    // ============== Grouped MoE dispatch and GEMM ==============
+
+    /// Build expert dispatch tables on GPU: expert_bounds + sorted_token_ids
+    pub fn launch_moe_dispatch(
+        topk_ids: *const i32,
+        expert_bounds: *mut i32,
+        sorted_token_ids: *mut i32,
+        total_assignments: i32,
+        num_experts: i32,
+        stream: *mut c_void,
+    );
+
+    /// Grouped MoE GEMM for Q8_0 weights
+    pub fn launch_moe_grouped_gemm_q8_0(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        expert_bounds: *const i32,
+        sorted_token_ids: *const i32,
+        topk_weights: *const f32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        k_padded: i32,
+        num_experts: i32,
+        topk: i32,
+        input_dim1: i32,
+        stream: *mut c_void,
+    );
+
+    /// Grouped MoE GEMM for Q4_0 weights
+    pub fn launch_moe_grouped_gemm_q4_0(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        expert_bounds: *const i32,
+        sorted_token_ids: *const i32,
+        topk_weights: *const f32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        k_padded: i32,
+        num_experts: i32,
+        topk: i32,
+        input_dim1: i32,
+        stream: *mut c_void,
+    );
+
+    /// Grouped MoE GEMM for Q4_1 weights
+    pub fn launch_moe_grouped_gemm_q4_1(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        expert_bounds: *const i32,
+        sorted_token_ids: *const i32,
+        topk_weights: *const f32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        k_padded: i32,
+        num_experts: i32,
+        topk: i32,
+        input_dim1: i32,
+        stream: *mut c_void,
+    );
+
+    /// Grouped MoE GEMM for Q5_0 weights
+    pub fn launch_moe_grouped_gemm_q5_0(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        expert_bounds: *const i32,
+        sorted_token_ids: *const i32,
+        topk_weights: *const f32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        k_padded: i32,
+        num_experts: i32,
+        topk: i32,
+        input_dim1: i32,
+        stream: *mut c_void,
+    );
+
+    /// Grouped MoE GEMM for Q5_1 weights
+    pub fn launch_moe_grouped_gemm_q5_1(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        expert_bounds: *const i32,
+        sorted_token_ids: *const i32,
+        topk_weights: *const f32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        k_padded: i32,
+        num_experts: i32,
+        topk: i32,
+        input_dim1: i32,
+        stream: *mut c_void,
+    );
+
+    /// Grouped MoE GEMM for Q8_1 weights
+    pub fn launch_moe_grouped_gemm_q8_1(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        expert_bounds: *const i32,
+        sorted_token_ids: *const i32,
+        topk_weights: *const f32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        k_padded: i32,
+        num_experts: i32,
+        topk: i32,
+        input_dim1: i32,
+        stream: *mut c_void,
+    );
+
+    /// Grouped MoE GEMM for Q2_K weights
+    pub fn launch_moe_grouped_gemm_q2k(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        expert_bounds: *const i32,
+        sorted_token_ids: *const i32,
+        topk_weights: *const f32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        k_padded: i32,
+        num_experts: i32,
+        topk: i32,
+        input_dim1: i32,
+        stream: *mut c_void,
+    );
+
+    /// Grouped MoE GEMM for Q3_K weights
+    pub fn launch_moe_grouped_gemm_q3k(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        expert_bounds: *const i32,
+        sorted_token_ids: *const i32,
+        topk_weights: *const f32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        k_padded: i32,
+        num_experts: i32,
+        topk: i32,
+        input_dim1: i32,
+        stream: *mut c_void,
+    );
+
+    /// Grouped MoE GEMM for Q4_K weights
+    pub fn launch_moe_grouped_gemm_q4k(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        expert_bounds: *const i32,
+        sorted_token_ids: *const i32,
+        topk_weights: *const f32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        k_padded: i32,
+        num_experts: i32,
+        topk: i32,
+        input_dim1: i32,
+        stream: *mut c_void,
+    );
+
+    /// Grouped MoE GEMM for Q5_K weights
+    pub fn launch_moe_grouped_gemm_q5k(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        expert_bounds: *const i32,
+        sorted_token_ids: *const i32,
+        topk_weights: *const f32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        k_padded: i32,
+        num_experts: i32,
+        topk: i32,
+        input_dim1: i32,
+        stream: *mut c_void,
+    );
+
+    /// Grouped MoE GEMM for Q6_K weights
+    pub fn launch_moe_grouped_gemm_q6k(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        expert_bounds: *const i32,
+        sorted_token_ids: *const i32,
+        topk_weights: *const f32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        k_padded: i32,
+        num_experts: i32,
+        topk: i32,
+        input_dim1: i32,
+        stream: *mut c_void,
+    );
 }
