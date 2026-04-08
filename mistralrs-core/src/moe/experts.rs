@@ -824,19 +824,35 @@ impl MoEExperts {
 
         let xs_flat = xs.reshape((num_tokens, hidden_dim))?;
 
-        // Try grouped MoE path for CUDA prefill (much faster for many tokens)
-        // Only use for large prefills where the overhead is worthwhile
         #[cfg(feature = "cuda")]
-        if is_prefill && xs.device().is_cuda() && num_tokens >= 32 {
-            if let Some(result) = self.forward_fast_grouped(
-                &xs_flat,
-                topk_weights,
-                topk_ids,
-                weights,
-                num_tokens,
-                original_dtype,
-            )? {
-                return Ok(result);
+        if xs.device().is_cuda() {
+            // Try fused decode path for single-token decode (most impactful)
+            if !is_prefill {
+                if let Some(result) = self.forward_fast_decode(
+                    &xs_flat,
+                    topk_weights,
+                    topk_ids,
+                    weights,
+                    num_tokens,
+                    original_dtype,
+                )? {
+                    return Ok(result);
+                }
+            }
+
+            // Try grouped MoE path for CUDA prefill (much faster for many tokens)
+            // Only use for large prefills where the overhead is worthwhile
+            if is_prefill && num_tokens >= 32 {
+                if let Some(result) = self.forward_fast_grouped(
+                    &xs_flat,
+                    topk_weights,
+                    topk_ids,
+                    weights,
+                    num_tokens,
+                    original_dtype,
+                )? {
+                    return Ok(result);
+                }
             }
         }
 
@@ -873,6 +889,91 @@ impl MoEExperts {
             .broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
             .sum(D::Minus2)?
             .to_dtype(original_dtype)
+    }
+
+    /// Fused MoE decode path for CUDA.
+    ///
+    /// Reduces kernel launches from ~20 to 4 per MoE layer by:
+    /// 1. Quantizing input to Q8_1 once (shared between gate+up)
+    /// 2. Fusing gate+up projections with activation+multiply in one kernel
+    /// 3. Fusing down projection with topk_weights and cross-expert aggregation
+    ///
+    /// Returns Ok(Some(result)) if fused path succeeded, Ok(None) to fall back.
+    #[cfg(feature = "cuda")]
+    fn forward_fast_decode(
+        &self,
+        xs_flat: &Tensor,
+        topk_weights: &Tensor,
+        topk_ids: &Tensor,
+        weights: &FastExpertsWeights,
+        num_tokens: usize,
+        original_dtype: DType,
+    ) -> Result<Option<Tensor>> {
+        use candle_core::cuda::cudarc::driver::DevicePtr;
+
+        let dev = xs_flat.device().as_cuda_device()?;
+
+        // Get QTensors - bail to fallback if not quantized
+        let gate_qt = match weights.fused_gate_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+        let up_qt = match weights.fused_up_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+        let down_qt = match weights.fused_down_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+
+        // Get topk_ids as contiguous u32 CudaSlice
+        let topk_ids_flat = topk_ids.flatten_all()?.contiguous()?;
+        let (ti_storage, ti_layout) = topk_ids_flat.storage_and_layout();
+        let ti_cuda = match &*ti_storage {
+            candle_core::Storage::Cuda(c) => c,
+            _ => return Ok(None),
+        };
+        let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
+        assert!(ti_layout.start_offset() == 0, "expected contiguous tensor");
+
+        // Get topk_weights as contiguous f32 CudaSlice
+        let tw_f32 = topk_weights
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .contiguous()?;
+        let (tw_storage, tw_layout) = tw_f32.storage_and_layout();
+        let tw_cuda = match &*tw_storage {
+            candle_core::Storage::Cuda(c) => c,
+            _ => return Ok(None),
+        };
+        let tw_slice = tw_cuda.as_cuda_slice::<f32>()?;
+        let tw_ptr = tw_slice
+            .slice(tw_layout.start_offset()..)
+            .device_ptr(tw_slice.stream())
+            .0 as *const f32;
+
+        // Map activation to CUDA kernel act_type
+        let act_type = match self.act {
+            Activation::GeluPytorchTanh => mistralrs_quant::ACT_GELU_PYTORCH_TANH,
+            Activation::Silu | Activation::Swish => mistralrs_quant::ACT_SILU,
+            _ => return Ok(None), // Fall back for unsupported activations
+        };
+
+        let result = mistralrs_quant::indexed_moe_fused_decode(
+            gate_qt,
+            up_qt,
+            down_qt,
+            xs_flat,
+            ti_u32_slice,
+            tw_ptr,
+            num_tokens,
+            self.num_experts_per_tok,
+            act_type,
+            dev,
+        )?;
+
+        Ok(Some(result.to_dtype(original_dtype)?))
     }
 
     /// Grouped MoE forward for CUDA prefill.
