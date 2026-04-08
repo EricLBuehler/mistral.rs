@@ -1,7 +1,7 @@
 #[cfg(not(feature = "cuda"))]
 mod cpu;
 #[cfg(feature = "cuda")]
-mod cuda;
+pub(crate) mod cuda;
 #[cfg(feature = "cuda")]
 mod ffi;
 
@@ -87,6 +87,36 @@ impl QuantMethod for GgufMatMul {
             res.broadcast_add(b)
         } else {
             Ok(res)
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn grouped_moe_forward(
+        &self,
+        xs: &Tensor,
+        expert_bounds: &candle_core::cuda::cudarc::driver::CudaSlice<i32>,
+        sorted_token_ids: &candle_core::cuda::cudarc::driver::CudaSlice<i32>,
+        topk_weights: Option<&Tensor>,
+        total_assignments: usize,
+        topk: usize,
+        num_experts: usize,
+        input_dim1: usize,
+    ) -> Option<Result<Tensor>> {
+        match &self.w {
+            candle_core::quantized::QMatMul::QTensor(qtensor) => {
+                Some(cuda::qtensor_grouped_moe_forward_tensor(
+                    qtensor,
+                    xs,
+                    expert_bounds,
+                    sorted_token_ids,
+                    topk_weights,
+                    total_assignments,
+                    topk,
+                    num_experts,
+                    input_dim1,
+                ))
+            }
+            _ => None,
         }
     }
 

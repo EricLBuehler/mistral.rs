@@ -64,6 +64,8 @@ pub use fp8::FP8Linear;
 pub use gemv::gemv;
 pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
 pub use gguf::GgufMatMul;
+#[cfg(feature = "cuda")]
+pub use gguf::cuda::moe_dispatch_build;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::{CollectedImatrixData, ImatrixLayerStats};
@@ -1009,6 +1011,27 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
             "{} does not support `gather_forward`. Please raise an issue.",
             self.name()
         )
+    }
+
+    /// Grouped MoE forward pass optimized for prefill.
+    ///
+    /// Returns `None` if this QuantMethod doesn't support grouped execution.
+    /// `xs` must be f32 on CUDA. `expert_bounds` is i32 [num_experts+1],
+    /// `sorted_token_ids` is i32 [total_assignments].
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    fn grouped_moe_forward(
+        &self,
+        _xs: &Tensor,
+        _expert_bounds: &candle_core::cuda::cudarc::driver::CudaSlice<i32>,
+        _sorted_token_ids: &candle_core::cuda::cudarc::driver::CudaSlice<i32>,
+        _topk_weights: Option<&Tensor>,
+        _total_assignments: usize,
+        _topk: usize,
+        _num_experts: usize,
+        _input_dim1: usize,
+    ) -> Option<Result<Tensor>> {
+        None
     }
 
     /// If a quantized method, return the activation dtype.

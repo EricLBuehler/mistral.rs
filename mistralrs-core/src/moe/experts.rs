@@ -95,6 +95,7 @@ struct SlowExpertsWeights {
 pub struct MoEExperts {
     backend: MoEExpertsBackendImpl,
     act: Activation,
+    num_experts: usize,
     num_experts_per_tok: usize,
     all_reduce: SumAllReduce,
     world_size: usize,
@@ -181,6 +182,7 @@ impl MoEExperts {
         Ok(Self {
             backend: backend_impl,
             act,
+            num_experts: cfg.num_experts,
             num_experts_per_tok: cfg.num_experts_per_tok,
             all_reduce: SumAllReduce::new(comm),
             world_size: comm.world_size(),
@@ -247,6 +249,7 @@ impl MoEExperts {
         Ok(Self {
             backend: backend_impl,
             act,
+            num_experts: cfg.num_experts,
             num_experts_per_tok: cfg.num_experts_per_tok,
             all_reduce: SumAllReduce::new(comm),
             world_size: comm.world_size(),
@@ -817,8 +820,25 @@ impl MoEExperts {
         let original_dtype = xs.dtype();
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let num_tokens = b_size * seq_len;
+        let is_prefill = seq_len > 1;
 
         let xs_flat = xs.reshape((num_tokens, hidden_dim))?;
+
+        // Try grouped MoE path for CUDA prefill (much faster for many tokens)
+        #[cfg(feature = "cuda")]
+        if is_prefill && xs.device().is_cuda() {
+            if let Some(result) = self.forward_fast_grouped(
+                &xs_flat,
+                topk_weights,
+                topk_ids,
+                weights,
+                num_tokens,
+                hidden_dim,
+                original_dtype,
+            )? {
+                return Ok(result);
+            }
+        }
 
         let ys = if xs.device().is_cuda() {
             // CUDA path: use indexed_moe_forward compatible shapes
@@ -853,6 +873,118 @@ impl MoEExperts {
             .broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
             .sum(D::Minus2)?
             .to_dtype(original_dtype)
+    }
+
+    /// Grouped MoE forward for CUDA prefill.
+    ///
+    /// Returns Ok(Some(result)) if grouped path succeeded, Ok(None) to fall back.
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    fn forward_fast_grouped(
+        &self,
+        xs_flat: &Tensor,
+        topk_weights: &Tensor,
+        topk_ids: &Tensor,
+        weights: &FastExpertsWeights,
+        num_tokens: usize,
+        hidden_dim: usize,
+        original_dtype: DType,
+    ) -> Result<Option<Tensor>> {
+        let topk = self.num_experts_per_tok;
+        let num_experts = self.num_experts;
+        let total_assignments = num_tokens * topk;
+
+        let dev = xs_flat.device().as_cuda_device()?;
+
+        // Get topk_ids as contiguous u32 CudaSlice
+        let topk_ids_flat = topk_ids.flatten_all()?.contiguous()?;
+        let (ti_storage, ti_layout) = topk_ids_flat.storage_and_layout();
+        let ti_cuda = match &*ti_storage {
+            candle_core::Storage::Cuda(c) => c,
+            _ => return Ok(None),
+        };
+        let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
+        assert!(ti_layout.start_offset() == 0, "expected contiguous tensor");
+
+        // SAFETY: u32 and i32 have the same size/alignment. Expert IDs fit in both.
+        let dispatch_ids: &candle_core::cuda::cudarc::driver::CudaSlice<i32> = unsafe {
+            std::mem::transmute(ti_u32_slice)
+        };
+
+        // Build dispatch tables on GPU (no CPU-GPU sync)
+        let (expert_bounds, sorted_token_ids) =
+            mistralrs_quant::moe_dispatch_build(
+                dispatch_ids,
+                total_assignments,
+                num_experts,
+                dev,
+            )?;
+
+        // Gate projection: input is [num_tokens, hidden_dim], input_dim1=1
+        let xs_f32 = xs_flat.to_dtype(DType::F32)?.contiguous()?;
+
+        let gate = match weights.fused_gate_proj.grouped_moe_forward(
+            &xs_f32, &expert_bounds, &sorted_token_ids,
+            None, total_assignments, topk, num_experts, 1,
+        ) {
+            Some(Ok(r)) => r,
+            Some(Err(e)) => return Err(e),
+            None => return Ok(None),
+        };
+
+        // Up projection: same input
+        let up = match weights.fused_up_proj.grouped_moe_forward(
+            &xs_f32, &expert_bounds, &sorted_token_ids,
+            None, total_assignments, topk, num_experts, 1,
+        ) {
+            Some(Ok(r)) => r,
+            Some(Err(e)) => return Err(e),
+            None => return Ok(None),
+        };
+
+        // Apply activation: [total_assignments, intermediate_size]
+        let activated = (up * gate.apply(&self.act)?)?.contiguous()?;
+
+        // Down projection: input_dim1=topk (each assignment has its own row)
+        let down = match weights.fused_down_proj.grouped_moe_forward(
+            &activated, &expert_bounds, &sorted_token_ids,
+            None, total_assignments, topk, num_experts, topk,
+        ) {
+            Some(Ok(r)) => r,
+            Some(Err(e)) => return Err(e),
+            None => return Ok(None),
+        };
+
+        // Unsort: scatter from expert-sorted order back to original flat order
+        // sorted_token_ids[ti] = original flat index for sorted position ti
+        let sorted_ids_tensor = {
+            let s = candle_core::CudaStorage::wrap_cuda_slice(
+                sorted_token_ids.clone(),
+                dev.clone(),
+            );
+            Tensor::from((
+                candle_core::Storage::Cuda(s),
+                candle_core::Shape::from(total_assignments),
+            ))
+            .to_dtype(DType::U32)?
+        };
+
+        let unsorted = Tensor::zeros(
+            (total_assignments, hidden_dim),
+            down.dtype(),
+            xs_flat.device(),
+        )?;
+        let unsorted = unsorted.index_add(&sorted_ids_tensor, &down, 0)?;
+
+        // Reshape to [num_tokens, topk, hidden_dim], apply topk_weights, sum
+        let result = unsorted
+            .reshape((num_tokens, topk, hidden_dim))?
+            .to_dtype(DType::F32)?
+            .broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
+            .sum(D::Minus2)?
+            .to_dtype(original_dtype)?;
+
+        Ok(Some(result))
     }
 
     /// Loop-based forward pass (quantized fallback)
