@@ -500,7 +500,6 @@ pub fn grouped_moe_gemm_prequantized(
     input_quant: &CudaSlice<u8>,
     k: usize,
     k_padded: usize,
-    num_input_rows: usize,
     expert_bounds: &CudaSlice<u32>,
     sorted_token_ids: &CudaSlice<u32>,
     topk_weights: Option<(*const f32, usize)>, // (ptr, guard_token) - raw pointer

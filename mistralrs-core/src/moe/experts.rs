@@ -834,7 +834,6 @@ impl MoEExperts {
                 topk_ids,
                 weights,
                 num_tokens,
-                hidden_dim,
                 original_dtype,
             )? {
                 return Ok(result);
@@ -888,7 +887,6 @@ impl MoEExperts {
         topk_ids: &Tensor,
         weights: &FastExpertsWeights,
         num_tokens: usize,
-        hidden_dim: usize,
         original_dtype: DType,
     ) -> Result<Option<Tensor>> {
         let topk = self.num_experts_per_tok;
@@ -936,7 +934,6 @@ impl MoEExperts {
             &input_q8,
             k,
             k_padded,
-            num_tokens,
             &expert_bounds,
             &sorted_token_ids,
             None,
@@ -953,7 +950,6 @@ impl MoEExperts {
             &input_q8,
             k,
             k_padded,
-            num_tokens,
             &expert_bounds,
             &sorted_token_ids,
             None,
@@ -996,7 +992,6 @@ impl MoEExperts {
             &down_input_q8,
             down_k,
             down_k_padded,
-            total_assignments,
             &expert_bounds,
             &sorted_token_ids,
             Some((tw_ptr, 0)),
