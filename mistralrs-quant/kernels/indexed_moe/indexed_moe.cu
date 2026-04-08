@@ -1076,7 +1076,7 @@ static __device__ __forceinline__ float silu(float x) {
 
 // Fused gate+up+activation+multiply kernel template
 // Computes: output = up(x) * activation(gate(x)) for each expert assignment
-// Grid: (ceildiv(n, 2), topk, batch)
+// Grid: (ceildiv(n, ROWS_PER_BLOCK), topk, batch)
 // Block: (WARP_SIZE, 1, 1)
 template <int qk, int qi, typename block_q_t, int vdr,
           vec_dot_q_cuda_t vec_dot_q_cuda>
@@ -1101,17 +1101,14 @@ __device__ void moe_gemv_fused_gate_up_impl(
   const int task_id = current_batch * topk + current_topk;
   const unsigned int expert_id = indices[task_id];
 
-  // Weight layout: [num_experts, n, k_blocks] where k_blocks = ceil(k/qk)
   const size_t weight_block_size = sizeof(block_q_t);
   const size_t input_block_size = sizeof(block_q8_1);
   const size_t blocks_per_row = ((size_t)k + qk - 1) / qk;
   const size_t expert_stride_bytes = (size_t)n * blocks_per_row * weight_block_size;
   const size_t input_stride_bytes = (size_t)k_padded / QK8_1 * input_block_size;
 
-  // Input is shared across all topk slots (input_dim1=1 for gate/up)
   const block_q8_1 *x = (const block_q8_1 *)((const char *)all_inputs +
                           (size_t)current_batch * input_stride_bytes);
-
   const block_q_t *gate_w = (const block_q_t *)((const char *)gate_weights +
                               (size_t)expert_id * expert_stride_bytes);
   const block_q_t *up_w = (const block_q_t *)((const char *)up_weights +
@@ -1150,7 +1147,7 @@ __device__ void moe_gemv_fused_gate_up_impl(
 // Fused down+aggregate kernel template
 // Computes: output[batch] += topk_weight * down_proj(intermediate) for each expert
 // Uses atomicAdd for cross-expert aggregation
-// Grid: (ceildiv(n, 2), topk, batch)
+// Grid: (ceildiv(n, ROWS_PER_BLOCK), topk, batch)
 // Block: (WARP_SIZE, 1, 1)
 template <int qk, int qi, typename block_q_t, int vdr,
           vec_dot_q_cuda_t vec_dot_q_cuda>
@@ -1163,7 +1160,7 @@ __device__ void moe_gemv_down_aggregate_impl(
     const int n, const int k, const int batch,
     const int topk, const int k_padded) {
 
-  constexpr int ROWS_PER_BLOCK = 2;
+  constexpr int ROWS_PER_BLOCK = 4;
 
   const int row0 = ROWS_PER_BLOCK * blockIdx.x;
   const int current_topk = blockIdx.y;
@@ -1307,7 +1304,7 @@ extern "C" void launch_moe_gemv_down_aggregate_##suffix( \
     const unsigned int *indices, const float *topk_weights_ptr, \
     float *all_outputs, int n, int k, int batch, \
     int topk, int k_padded, void *stream) { \
-  dim3 grid((n + 1) / 2, topk, batch); \
+  dim3 grid((n + 3) / 4, topk, batch); \
   dim3 block(WARP_SIZE, 1, 1); \
   cudaStream_t s = static_cast<cudaStream_t>(stream); \
   moe_gemv_down_aggregate_##suffix<<<grid, block, 0, s>>>( \
