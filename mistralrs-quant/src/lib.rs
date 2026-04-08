@@ -64,7 +64,10 @@ pub use fp8::FP8Linear;
 pub use gemv::gemv;
 pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
 #[cfg(feature = "cuda")]
-pub use gguf::cuda::{grouped_moe_gemm_prequantized, moe_dispatch_build, quantize_input_q8_1};
+pub use gguf::cuda::{
+    grouped_moe_gemm_prequantized, indexed_moe_fused_decode, moe_dispatch_build,
+    quantize_input_q8_1, ACT_GELU_PYTORCH_TANH, ACT_SILU,
+};
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
