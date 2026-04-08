@@ -757,6 +757,7 @@ impl Sequence {
             *self.state.read().unwrap(),
             SequenceState::FinishedAborted
                 | SequenceState::FinishedIgnored
+                | SequenceState::Error
                 | SequenceState::Done(_)
         )
     }

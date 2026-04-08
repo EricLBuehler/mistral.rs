@@ -36,9 +36,16 @@ pub(crate) fn naive_sdpa(
             MatMul.matmul_affine_mul(q_chunk, &k.t()?, sdpa_params.softmax_scale.into())?;
 
         if let Some(softcap) = sdpa_params.softcap {
+            let att_dtype = att.dtype();
+            if att_dtype == candle_core::DType::BF16 || att_dtype == candle_core::DType::F16 {
+                att = att.to_dtype(candle_core::DType::F32)?;
+            }
             att = (att / softcap as f64)?;
             att = att.tanh()?;
             att = (att * softcap as f64)?;
+            if att.dtype() != att_dtype {
+                att = att.to_dtype(att_dtype)?;
+            }
         }
 
         if let Some(mask) = mask_chunk {
