@@ -90,7 +90,7 @@ impl Loader for DiffusionLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         let paths: anyhow::Result<Box<dyn ModelPaths>> = {
-            let api = ApiBuilder::new()
+            let api = ApiBuilder::from_env()
                 .with_progress(!silent)
                 .with_token(get_token(&token_source)?)
                 .build()?;
