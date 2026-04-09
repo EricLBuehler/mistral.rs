@@ -20,6 +20,7 @@ pub(crate) fn flash_attn(
         {
             let k_meta = &params.logical_k;
             let cumulative_seqlens_k = &k_meta.cumulative_seqlens[&q.device().location()];
+
             let window_size_right = if params.causal { Some(0) } else { None };
             let qshape = q.shape();
             let q = q.flatten_to(1)?;

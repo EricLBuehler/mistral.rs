@@ -1,6 +1,12 @@
-# Dia 1.6b Model: [`nari-labs/Dia-1.6B`](https://huggingface.co/nari-labs/Dia-1.6B)
+# Dia 1.6B: [`nari-labs/Dia-1.6B`](https://huggingface.co/nari-labs/Dia-1.6B)
 
 Dia is a 1.6B parameter text to speech model created by Nari Labs. You can condition the output on audio, enabling emotion and tone control. The model can also produce nonverbal communications like laughter, coughing, clearing throat, etc.
+
+## Quick Start
+
+```bash
+mistralrs run speech -m nari-labs/Dia-1.6B -a dia
+```
 
 - Generate dialogue via the [S1] and [S2] tags
 - Generate non-verbal like (laughs), (coughs), etc.
@@ -8,17 +14,18 @@ Dia is a 1.6B parameter text to speech model created by Nari Labs. You can condi
 
 > Note: voice cloning support is coming!
 
-## HTTP server
-
-The OpenAI HTTP server provides a drop-in compatible way to easily use Dia locally!
-
 > Note: we only support `pcm` and `wav` outputs.
 
+## HTTP API
+
+Start the server:
+
 ```
-mistralrs run speech -m nari-labs/Dia-1.6B -a dia
+mistralrs serve speech -m nari-labs/Dia-1.6B -a dia -p 1234
 ```
 
-After this, you can send requests via the HTTP server:
+Send a request:
+
 ```py
 from pathlib import Path
 from openai import OpenAI
@@ -37,7 +44,8 @@ output_path.write_bytes(response.read())
 print(f"WAV audio written to {output_path.resolve()}")
 ```
 
-## Rust example
+## Rust SDK
+
 ```rust
 use std::time::Instant;
 
@@ -72,7 +80,8 @@ async fn main() -> Result<()> {
 }
 ```
 
-## Python example
+## Python SDK
+
 ```py
 from mistralrs import (
     Runner,

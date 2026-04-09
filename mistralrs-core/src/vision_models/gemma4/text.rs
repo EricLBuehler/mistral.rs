@@ -6,8 +6,8 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantMethodConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder, UnquantLinear,
+    ColumnParallelLayer, GgufMatMul, QuantMethod, QuantMethodConfig, ReplicatedLayer,
+    RowParallelLayer, ShardedVarBuilder,
 };
 
 use crate::{
@@ -464,16 +464,17 @@ impl Attention {
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => {
                 // Paged attention path, do NOT use normal kv_caches.
+                // Select the correct per-layer mask: sliding window for
+                // sliding layers, full causal for full-attention layers.
+                // This must be used even when paged attention is active
+                // because `Custom` masks route to eager attention (not
+                // flash), so flash attn's `window_size_left` never applies.
                 let mask = if self.is_sliding {
                     sliding_attention_mask
                 } else {
                     attention_mask
                 };
-                let paged_mask = if flash_params.is_some() {
-                    attention_mask
-                } else {
-                    mask
-                };
+                let paged_mask = mask;
 
                 let is_shared = self.kv_shared_layer_index.is_some();
 
@@ -1204,18 +1205,23 @@ impl TextModel {
                 mapper.set_nm_device(vb_m.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            // Keep Gemma 4's tied output projection in BF16. Quantizing the
-            // enormous tied lm_head destabilizes low-bit decoding first, which is
-            // especially visible around rare control tokens.
-            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        false, // Tied lm_head is excluded from ISQ, so always place on target device
-                    )?,
-                    None,
-                ),
-            ))?)
+            // Quantize the tied lm_head to Q8_0 for faster decode.
+            // The embedding stays in BF16 for token lookup; lm_head gets a separate
+            // quantized copy. Q8_0 has sufficient precision for logit computation.
+            let weight = mapper.cast_nm_device(embed_tokens.embeddings(), false)?;
+            let target_device = weight.device().clone();
+            let weight_cpu = weight.to_device(&candle_core::Device::Cpu)?;
+            let qt = std::sync::Arc::new(
+                candle_core::quantized::QTensor::quantize_onto(
+                    &weight_cpu,
+                    candle_core::quantized::GgmlDType::Q8_0,
+                    &target_device,
+                )?,
+            );
+            Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                q_weight: qt,
+                b: None,
+            })?)
         };
 
         // PLE global components

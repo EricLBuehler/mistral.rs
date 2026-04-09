@@ -32,7 +32,7 @@ When running the HTTP server with `mistralrs serve`, these defaults apply:
 |---------|---------------|
 | Server IP | `0.0.0.0` (all interfaces) |
 | Max request body | 50 MB |
-| Max running sequences | 16 |
+| Max running sequences | 32 |
 | Prefix cache count | 16 |
 | SSE keep-alive | 10 seconds |
 | PagedAttention (CUDA) | Enabled |
@@ -63,7 +63,7 @@ For multi-node setups, configure the head node and workers using environment var
 
 ## See Also
 
-- [CLI Reference](CLI.md) - Command-line options
-- [CLI TOML Configuration](CLI_CONFIG.md) - File-based configuration
-- [Distributed Inference](DISTRIBUTED/DISTRIBUTED.md) - Multi-node setup guide
-- [PagedAttention](PAGED_ATTENTION.md) - Memory management options
+- [CLI Reference](CLI.md): Command-line options
+- [CLI TOML Configuration](CLI_CONFIG.md): File-based configuration
+- [Distributed Inference](DISTRIBUTED/DISTRIBUTED.md): Multi-node setup guide
+- [PagedAttention](PAGED_ATTENTION.md): Memory management options

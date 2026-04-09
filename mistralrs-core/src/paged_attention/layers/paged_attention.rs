@@ -34,6 +34,7 @@ fn cumulative_seqlens_from_lengths(lengths: &[usize], device: &Device) -> Result
     let mut cumulative = Vec::with_capacity(lengths.len() + 1);
     cumulative.push(0u32);
     for &len in lengths {
+        #[allow(clippy::cast_possible_truncation)]
         cumulative.push(cumulative.last().copied().unwrap_or(0) + len as u32);
     }
     Tensor::new(&cumulative[..], &Device::Cpu)?.to_device(device)
@@ -168,6 +169,9 @@ impl PagedAttention {
             slot_mapping_full
         };
 
+        let (batch_size, attention_heads, seq_len, head_size) = query.shape().dims4()?;
+        let (_, key_value_heads, _, _) = key.shape().dims4()?;
+
         // For models with per-layer sliding windows (GPT-OSS, Gemma2):
         // - Full-attention layers (sliding_window == None) use the full block tables.
         // - Sliding-window layers (sliding_window == Some) use the windowed block tables.
@@ -195,9 +199,6 @@ impl PagedAttention {
         } else {
             None
         };
-
-        let (batch_size, attention_heads, seq_len, head_size) = query.shape().dims4()?;
-        let (_, key_value_heads, _, _) = key.shape().dims4()?;
 
         // === Prefix cache / donor-gather prompt path ===
         // Entered when:

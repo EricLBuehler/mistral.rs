@@ -9,6 +9,7 @@ Please see docs for the following model types:
 - LLaVA and LLaVANext: [LLAVA.md](LLaVA.md)
 - Llama 3.2 Vision: [VLLAMA.md](VLLAMA.md)
 - Qwen2-VL: [QWEN2VL.md](QWEN2VL.md)
+- Qwen 2.5-VL: [QWEN2VL.md](QWEN2VL.md)
 - Idefics 3 and Smol VLM: [IDEFICS3.md](IDEFICS3.md)
 - Phi 4 Multimodal: [PHI4MM.md](PHI4MM.md)
 - Gemma 3: [GEMMA3.md](GEMMA3.md)

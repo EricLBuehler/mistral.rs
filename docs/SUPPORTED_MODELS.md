@@ -33,6 +33,7 @@ Complete reference for model support in mistral.rs.
 - Qwen 3-VL
 - Qwen 3-VL MoE
 - Qwen 3.5
+- Qwen 3.5 MoE
 - Gemma 4 (text, image, video, audio)
 - Gemma 3n
 - Llama 4

@@ -2,11 +2,13 @@
 
 Qwen3-Coder-Next is a coding-focused language model using a hybrid Gated Delta Network (GDN) + full attention architecture with Mixture of Experts. With only 3B activated parameters (80B total), it achieves performance comparable to models with 10-20x more active parameters. It supports a 256K context window.
 
-> Note: mistral.rs can load the [FP8 pre-quantized version](https://huggingface.co/Qwen/Qwen3-Coder-Next-FP8) natively! Simply replace the model ID.
+## Quick Start
 
 ```bash
 mistralrs run --isq 4 -m Qwen/Qwen3-Coder-Next
 ```
+
+> Note: mistral.rs can load the [FP8 pre-quantized version](https://huggingface.co/Qwen/Qwen3-Coder-Next-FP8) natively! Simply replace the model ID.
 
 GGUF quantized models are also supported:
 
@@ -22,30 +24,18 @@ mistralrs serve --isq 4 -p 1234 -m Qwen/Qwen3-Coder-Next
 ```
 
 ```py
-import openai
+from openai import OpenAI
 
-client = openai.OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
-messages = []
-prompt = input("Enter system prompt >>> ")
-if len(prompt) > 0:
-    messages.append({"role": "system", "content": prompt})
-
-
-while True:
-    prompt = input(">>> ")
-    messages.append({"role": "user", "content": prompt})
-    completion = client.chat.completions.create(
-        model="default",
-        messages=messages,
-        max_tokens=256,
-        frequency_penalty=1.0,
-        top_p=0.1,
-        temperature=0,
-    )
-    resp = completion.choices[0].message.content
-    print(resp)
-    messages.append({"role": "assistant", "content": resp})
+completion = client.chat.completions.create(
+    model="default",
+    messages=[
+        {"role": "user", "content": "Tell me a story about the Rust type system."}
+    ],
+    max_tokens=256,
+)
+print(completion.choices[0].message.content)
 ```
 
 ## Python SDK
@@ -97,18 +87,10 @@ async fn main() -> Result<()> {
         .await?;
 
     let messages = TextMessages::new()
-        .add_message(
-            TextMessageRole::User,
-            "Write a Python function to compute fibonacci numbers.",
-        );
+        .add_message(TextMessageRole::User, "Hello!");
 
     let response = model.send_chat_request(messages).await?;
-
     println!("{}", response.choices[0].message.content.as_ref().unwrap());
-    dbg!(
-        response.usage.avg_prompt_tok_per_sec,
-        response.usage.avg_compl_tok_per_sec
-    );
 
     Ok(())
 }

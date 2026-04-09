@@ -16,3 +16,10 @@ the prefill phase.
 
 > Note: FlashAttention V2 and V3 are mutually exclusive
 > Note: To use FlashAttention in the Python SDK, [compile from source](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/README.md).
+
+## See Also
+
+- [Performance Guide](PERFORMANCE.md): How FlashAttention fits into the optimization stack
+- [PagedAttention](PAGED_ATTENTION.md): Memory-efficient KV cache management
+- [Cargo Features](CARGO_FEATURES.md): Build flags for FlashAttention
+- [Installation](INSTALLATION.md): Hardware requirements

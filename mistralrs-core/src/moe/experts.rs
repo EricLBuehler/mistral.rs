@@ -95,6 +95,7 @@ struct SlowExpertsWeights {
 pub struct MoEExperts {
     backend: MoEExpertsBackendImpl,
     act: Activation,
+    num_experts: usize,
     num_experts_per_tok: usize,
     all_reduce: SumAllReduce,
     world_size: usize,
@@ -181,6 +182,7 @@ impl MoEExperts {
         Ok(Self {
             backend: backend_impl,
             act,
+            num_experts: cfg.num_experts,
             num_experts_per_tok: cfg.num_experts_per_tok,
             all_reduce: SumAllReduce::new(comm),
             world_size: comm.world_size(),
@@ -247,6 +249,7 @@ impl MoEExperts {
         Ok(Self {
             backend: backend_impl,
             act,
+            num_experts: cfg.num_experts,
             num_experts_per_tok: cfg.num_experts_per_tok,
             all_reduce: SumAllReduce::new(comm),
             world_size: comm.world_size(),
@@ -817,8 +820,41 @@ impl MoEExperts {
         let original_dtype = xs.dtype();
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let num_tokens = b_size * seq_len;
+        let is_prefill = seq_len > 1;
 
         let xs_flat = xs.reshape((num_tokens, hidden_dim))?;
+
+        #[cfg(feature = "cuda")]
+        if xs.device().is_cuda() {
+            // Try fused decode path for single-token decode (most impactful)
+            if !is_prefill {
+                if let Some(result) = self.forward_fast_decode(
+                    &xs_flat,
+                    topk_weights,
+                    topk_ids,
+                    weights,
+                    num_tokens,
+                    original_dtype,
+                )? {
+                    return Ok(result);
+                }
+            }
+
+            // Try grouped MoE path for CUDA prefill (much faster for many tokens)
+            // Only use for large prefills where the overhead is worthwhile
+            if is_prefill && num_tokens >= 32 {
+                if let Some(result) = self.forward_fast_grouped(
+                    &xs_flat,
+                    topk_weights,
+                    topk_ids,
+                    weights,
+                    num_tokens,
+                    original_dtype,
+                )? {
+                    return Ok(result);
+                }
+            }
+        }
 
         let ys = if xs.device().is_cuda() {
             // CUDA path: use indexed_moe_forward compatible shapes
@@ -853,6 +889,221 @@ impl MoEExperts {
             .broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
             .sum(D::Minus2)?
             .to_dtype(original_dtype)
+    }
+
+    /// Fused MoE decode path for CUDA.
+    ///
+    /// Reduces kernel launches from ~20 to 4 per MoE layer by:
+    /// 1. Quantizing input to Q8_1 once (shared between gate+up)
+    /// 2. Fusing gate+up projections with activation+multiply in one kernel
+    /// 3. Fusing down projection with topk_weights and cross-expert aggregation
+    ///
+    /// Returns Ok(Some(result)) if fused path succeeded, Ok(None) to fall back.
+    #[cfg(feature = "cuda")]
+    fn forward_fast_decode(
+        &self,
+        xs_flat: &Tensor,
+        topk_weights: &Tensor,
+        topk_ids: &Tensor,
+        weights: &FastExpertsWeights,
+        num_tokens: usize,
+        original_dtype: DType,
+    ) -> Result<Option<Tensor>> {
+        use candle_core::cuda::cudarc::driver::DevicePtr;
+
+        let dev = xs_flat.device().as_cuda_device()?;
+
+        // Get QTensors - bail to fallback if not quantized
+        let gate_qt = match weights.fused_gate_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+        let up_qt = match weights.fused_up_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+        let down_qt = match weights.fused_down_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+
+        // Get topk_ids as contiguous u32 CudaSlice
+        let topk_ids_flat = topk_ids.flatten_all()?.contiguous()?;
+        let (ti_storage, ti_layout) = topk_ids_flat.storage_and_layout();
+        let ti_cuda = match &*ti_storage {
+            candle_core::Storage::Cuda(c) => c,
+            _ => return Ok(None),
+        };
+        let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
+        assert!(ti_layout.start_offset() == 0, "expected contiguous tensor");
+
+        // Get topk_weights as contiguous f32 CudaSlice
+        let tw_f32 = topk_weights
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .contiguous()?;
+        let (tw_storage, tw_layout) = tw_f32.storage_and_layout();
+        let tw_cuda = match &*tw_storage {
+            candle_core::Storage::Cuda(c) => c,
+            _ => return Ok(None),
+        };
+        let tw_slice = tw_cuda.as_cuda_slice::<f32>()?;
+        let tw_ptr = tw_slice
+            .slice(tw_layout.start_offset()..)
+            .device_ptr(tw_slice.stream())
+            .0 as *const f32;
+
+        // Map activation to CUDA kernel act_type
+        let act_type = match self.act {
+            Activation::GeluPytorchTanh => mistralrs_quant::ACT_GELU_PYTORCH_TANH,
+            Activation::Silu | Activation::Swish => mistralrs_quant::ACT_SILU,
+            _ => return Ok(None), // Fall back for unsupported activations
+        };
+
+        let result = mistralrs_quant::indexed_moe_fused_decode(
+            gate_qt,
+            up_qt,
+            down_qt,
+            xs_flat,
+            ti_u32_slice,
+            tw_ptr,
+            num_tokens,
+            self.num_experts_per_tok,
+            act_type,
+            dev,
+        )?;
+
+        Ok(Some(result.to_dtype(original_dtype)?))
+    }
+
+    /// Grouped MoE forward for CUDA prefill.
+    ///
+    /// Returns Ok(Some(result)) if grouped path succeeded, Ok(None) to fall back.
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    fn forward_fast_grouped(
+        &self,
+        xs_flat: &Tensor,
+        topk_weights: &Tensor,
+        topk_ids: &Tensor,
+        weights: &FastExpertsWeights,
+        num_tokens: usize,
+        original_dtype: DType,
+    ) -> Result<Option<Tensor>> {
+        let topk = self.num_experts_per_tok;
+        let num_experts = self.num_experts;
+        let total_assignments = num_tokens * topk;
+
+        let dev = xs_flat.device().as_cuda_device()?;
+
+        // Get topk_ids as contiguous u32 CudaSlice
+        let topk_ids_flat = topk_ids.flatten_all()?.contiguous()?;
+        let (ti_storage, ti_layout) = topk_ids_flat.storage_and_layout();
+        let ti_cuda = match &*ti_storage {
+            candle_core::Storage::Cuda(c) => c,
+            _ => return Ok(None),
+        };
+        let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
+        assert!(ti_layout.start_offset() == 0, "expected contiguous tensor");
+
+        // Build dispatch tables on GPU (no CPU-GPU sync)
+        // moe_dispatch_build takes u32 and casts to i32 internally for the CUDA kernel
+        let (expert_bounds, sorted_token_ids) =
+            mistralrs_quant::moe_dispatch_build(ti_u32_slice, total_assignments, num_experts, dev)?;
+
+        // Use the pre-quantized Q8_0 grouped kernel path
+        let gate_qt = match weights.fused_gate_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+        let up_qt = match weights.fused_up_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+        let down_qt = match weights.fused_down_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+
+        // Quantize input to Q8_1 ONCE, shared between gate and up.
+        // quantize_input_q8_1 accepts BF16/F16/F32 directly (no conversion needed).
+        let (input_q8, k, k_padded) = mistralrs_quant::quantize_input_q8_1(xs_flat, dev)?;
+
+        // Gate projection using pre-quantized input
+        let gate = mistralrs_quant::grouped_moe_gemm_prequantized(
+            gate_qt,
+            &input_q8,
+            k,
+            k_padded,
+            &expert_bounds,
+            &sorted_token_ids,
+            None,
+            total_assignments,
+            topk,
+            num_experts,
+            1,
+            dev,
+        )?;
+
+        // Up projection reusing same pre-quantized input
+        let up = mistralrs_quant::grouped_moe_gemm_prequantized(
+            up_qt,
+            &input_q8,
+            k,
+            k_padded,
+            &expert_bounds,
+            &sorted_token_ids,
+            None,
+            total_assignments,
+            topk,
+            num_experts,
+            1,
+            dev,
+        )?;
+
+        drop(input_q8);
+
+        // Apply activation
+        let activated = (up * gate.apply(&self.act)?)?.contiguous()?;
+
+        // Quantize down projection input
+        let (down_input_q8, down_k, down_k_padded) =
+            mistralrs_quant::quantize_input_q8_1(&activated, dev)?;
+
+        // Get topk_weights pointer
+        use candle_core::cuda::cudarc::driver::DevicePtr;
+        let tw_f32 = topk_weights
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .contiguous()?;
+        let (tw_storage, tw_layout) = tw_f32.storage_and_layout();
+        let tw_cuda = match &*tw_storage {
+            candle_core::Storage::Cuda(c) => c,
+            _ => return Ok(None),
+        };
+        let tw_slice = tw_cuda.as_cuda_slice::<f32>()?;
+        let tw_ptr = tw_slice
+            .slice(tw_layout.start_offset()..)
+            .device_ptr(tw_slice.stream())
+            .0 as *const f32;
+
+        // Down projection with topk_weights + atomicAdd
+        let down = mistralrs_quant::grouped_moe_gemm_prequantized(
+            down_qt,
+            &down_input_q8,
+            down_k,
+            down_k_padded,
+            &expert_bounds,
+            &sorted_token_ids,
+            Some((tw_ptr, 0)),
+            total_assignments,
+            topk,
+            num_experts,
+            0,
+            dev,
+        )?;
+
+        Ok(Some(down.to_dtype(original_dtype)?))
     }
 
     /// Loop-based forward pass (quantized fallback)

@@ -1,6 +1,6 @@
 # Tool calling
 
-Mistral.rs supports OpenAI-compatible tool calling across all APIs (HTTP, Python SDK, Rust SDK). The model decides which tools to call and generates structured arguments; you decide how the tools get executed — either client-side or automatically on the server.
+Mistral.rs supports OpenAI-compatible tool calling across all APIs (HTTP, Python SDK, Rust SDK). The model decides which tools to call and generates structured arguments; you decide how the tools get executed: either client-side or automatically on the server.
 
 ## Supported models
 
@@ -30,11 +30,11 @@ The model generates a tool call, the server returns it to the client, and your c
 
 ### Agentic (server-side execution)
 
-The server executes tools automatically and feeds results back to the model in a loop — no client round-trips needed. The model calls a tool, the server runs it, appends the result, and lets the model continue until it produces a final text answer or hits the round limit.
+The server executes tools automatically and feeds results back to the model in a loop without any client round-trips. The model calls a tool, the server runs it, appends the result, and lets the model continue until it produces a final text answer or hits the round limit.
 
 To use the agentic loop, you need two things:
-1. **A way to execute tools** — register callbacks (Python/Rust SDK), connect MCP servers, enable web search, or set a tool dispatch URL
-2. **`max_tool_rounds`** — tells the server how many loop iterations to allow
+1. **A way to execute tools**: register callbacks (Python/Rust SDK), connect MCP servers, enable web search, or set a tool dispatch URL
+2. **`max_tool_rounds`**: tells the server how many loop iterations to allow
 
 ## Grammar enforcement
 
@@ -45,7 +45,7 @@ When tools are provided in a request, mistral.rs automatically constrains the mo
 3. When the tool call is complete, the grammar deactivates.
 4. For multi-tool turns, the grammar re-activates for each subsequent tool call.
 
-This is automatic — no configuration needed. If a user-specified grammar is already active on the request, tool call grammar is skipped.
+This is automatic and requires no configuration. If a user-specified grammar is already active on the request, tool call grammar is skipped.
 
 ### Strict mode
 
@@ -133,10 +133,10 @@ response = runner.send_chat_completion_request(request)
 
 When the model calls a tool during the agentic loop, the server tries these dispatch methods in order:
 
-1. **Built-in search tools** (`search_the_web`, `website_content_extractor`) — if web search is enabled
-2. **Registered callbacks** — tool callbacks from the Python/Rust SDK or MCP servers
-3. **Tool dispatch URL** — POSTs the tool call to your HTTP endpoint
-4. **No handler found** — the loop stops and the un-executed tool call is returned to the client
+1. **Built-in search tools** (`search_the_web`, `website_content_extractor`): if web search is enabled
+2. **Registered callbacks**: tool callbacks from the Python/Rust SDK or MCP servers
+3. **Tool dispatch URL**: POSTs the tool call to your HTTP endpoint
+4. **No handler found**: the loop stops and the un-executed tool call is returned to the client
 
 Streaming is supported: tool call chunks are forwarded to the client so you can see which tools are being called mid-loop.
 
@@ -148,7 +148,7 @@ The tool dispatch URL lets the server POST unhandled tool calls to your HTTP end
 
 ```bash
 # CLI: applies to all requests
-mistralrs serve -p 1234 --tool-dispatch-url https://my-service.com/tools --max-tool-rounds 5 -m Qwen/Qwen3-4B
+mistralrs serve -p 1234 --tool-dispatch-url https://my-service.com/tools --max-tool-rounds 5 -m google/gemma-4-E4B-it
 ```
 
 ```rust
@@ -177,7 +177,7 @@ Your endpoint returns:
 {"content": "Sunny, 22°C"}
 ```
 
-The response can also be a bare string. One URL handles all tools — dispatch by `name`.
+The response can also be a bare string. One URL handles all tools, dispatched by `name`.
 
 ### Tool callbacks
 
@@ -220,3 +220,9 @@ Web search uses DuckDuckGo by default. Override it with a custom search function
 - [Agentic tools (callbacks + max_tool_rounds)](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/agentic_tools.py)
 - [Custom tool callback](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_tool_call.py)
 - [Custom search callback](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/custom_search.py)
+
+## See Also
+
+- [Agentic Features Guide](AGENTS.md): Server-side tool execution, web search, MCP, and tool dispatch
+- [Web Search](WEB_SEARCH.md): Built-in web search integration
+- [MCP Client](MCP/client.md): Connect to external tool servers

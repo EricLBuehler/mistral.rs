@@ -71,7 +71,7 @@ mistralrs run --isq 4 -m microsoft/Phi-3-mini-4k-instruct
 mistralrs run -m kaitchup/Phi-3-mini-4k-instruct-gptq-4bit
 ```
 
-You can create your own GPTQ model using [`scripts/convert_to_gptq.py`][../scripts/convert_to_gptq.py]:
+You can create your own GPTQ model using [`scripts/convert_to_gptq.py`](https://github.com/EricLBuehler/mistral.rs/blob/master/scripts/convert_to_gptq.py):
 ```
 pip install gptqmodel transformers datasets
 
@@ -86,3 +86,9 @@ python3 scripts/convert_to_gptq.py --src path/to/model --dst output/model/path -
 ```
 mistralrs run -m mlx-community/Llama-3.8-1B-8bit
 ```
+## See Also
+
+- [Performance Guide](PERFORMANCE.md): Choosing the right quantization for your hardware
+- [ISQ (In-Situ Quantization)](ISQ.md): Quantize any model at load time
+- [UQFF Format](UQFF.md): Pre-quantized model format
+- [Topology](TOPOLOGY.md): Per-layer quantization control

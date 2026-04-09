@@ -413,3 +413,336 @@ pub fn qmatmul_indexed_moe_forward(qmatmul: &QMatMul, x: &Tensor, ids: &Tensor) 
         }
     }
 }
+
+// ============== Grouped MoE (prefill-optimized) ==============
+
+/// Build expert dispatch tables on GPU.
+///
+/// Takes flattened topk_ids and produces expert_bounds + sorted_token_ids
+/// entirely on GPU with no CPU-GPU sync.
+///
+/// # Returns
+/// (expert_bounds CudaSlice<i32>, sorted_token_ids CudaSlice<i32>)
+/// Build expert dispatch tables on GPU using u32 buffers.
+///
+/// Returns (expert_bounds, sorted_token_ids) as u32 CudaSlices.
+/// Values are always non-negative so u32 and i32 are interchangeable.
+/// We use u32 so the sorted_token_ids can be wrapped directly into
+/// Candle tensors (which don't support i32).
+pub fn moe_dispatch_build(
+    topk_ids_flat: &CudaSlice<u32>,
+    total_assignments: usize,
+    num_experts: usize,
+    dev: &CudaDevice,
+) -> Result<(CudaSlice<u32>, CudaSlice<u32>)> {
+    let expert_bounds = unsafe { dev.alloc::<u32>(num_experts + 1) }?;
+    let sorted_token_ids = unsafe { dev.alloc::<u32>(total_assignments) }?;
+
+    let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+
+    {
+        // Cast u32 pointers to i32 for the CUDA kernel (same bit pattern)
+        let (topk_ptr, _topk_guard) = slice_ptr(topk_ids_flat, 0);
+        let (bounds_ptr, _bounds_guard) = slice_ptr(&expert_bounds, 0);
+        let (sorted_ptr, _sorted_guard) = slice_ptr(&sorted_token_ids, 0);
+
+        unsafe {
+            ffi::launch_moe_dispatch(
+                topk_ptr as *const i32,
+                bounds_ptr as *mut i32,
+                sorted_ptr as *mut i32,
+                total_assignments as i32,
+                num_experts as i32,
+                stream,
+            );
+        }
+    }
+
+    Ok((expert_bounds, sorted_token_ids))
+}
+
+/// Quantize input to Q8_1 format, returning the quantized buffer.
+///
+/// Supports F32, BF16, and F16 inputs directly without dtype conversion.
+pub fn quantize_input_q8_1(xs: &Tensor, dev: &CudaDevice) -> Result<(CudaSlice<u8>, usize, usize)> {
+    // Convert to F32 if needed, then quantize to Q8_1
+    let xs_f32 = xs.to_dtype(candle_core::DType::F32)?.contiguous()?;
+    let num_rows = xs_f32.dim(0)?;
+    let k = xs_f32.dim(1)?;
+    let k_padded = pad(k, MATRIX_ROW_PADDING);
+
+    let q8_1_block_size = GgmlDType::Q8_1.block_size();
+    let q8_1_type_size = GgmlDType::Q8_1.type_size();
+    let num_blocks_per_row = k_padded / q8_1_block_size;
+    let dst_row_size_bytes = num_blocks_per_row * q8_1_type_size;
+    let y_size_in_bytes = num_rows * dst_row_size_bytes;
+
+    let (xs_storage, xs_layout) = xs_f32.storage_and_layout();
+    let xs_cuda = match &*xs_storage {
+        Storage::Cuda(c) => c,
+        _ => candle_core::bail!("expected CUDA tensor"),
+    };
+    let xs_slice = xs_cuda.as_cuda_slice::<f32>()?;
+    assert!(xs_layout.start_offset() == 0);
+
+    let mut input_quant = dev.alloc_zeros::<u8>(y_size_in_bytes)?;
+    quantize_q8_1(&xs_slice, &mut input_quant, k, num_rows, dev)?;
+
+    Ok((input_quant, k, k_padded))
+}
+
+/// Run grouped MoE GEMM with pre-quantized Q8_1 input.
+///
+/// Avoids re-quantizing the input when the same input is used for multiple projections.
+#[allow(clippy::too_many_arguments)]
+pub fn grouped_moe_gemm_prequantized(
+    qtensor: &QTensor,
+    input_quant: &CudaSlice<u8>,
+    k: usize,
+    k_padded: usize,
+    expert_bounds: &CudaSlice<u32>,
+    sorted_token_ids: &CudaSlice<u32>,
+    topk_weights: Option<(*const f32, usize)>, // (ptr, guard_token) - raw pointer
+    total_assignments: usize,
+    topk: usize,
+    num_experts: usize,
+    input_dim1: usize,
+    dev: &CudaDevice,
+) -> Result<Tensor> {
+    let dtype = qtensor.dtype();
+    let (_, n, k_w) = qtensor.shape().dims3()?;
+    assert!(k == k_w, "K mismatch");
+
+    let has_topk_weights = topk_weights.is_some();
+    let num_tokens = total_assignments / topk;
+    let out_rows = if has_topk_weights {
+        num_tokens
+    } else {
+        total_assignments
+    };
+    let out = dev.alloc_zeros::<f32>(out_rows * n)?;
+
+    let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+    let weight_ptr = qtensor.device_ptr()? as *const std::ffi::c_void;
+
+    let topk_w_ptr = topk_weights.map(|(p, _)| p).unwrap_or(std::ptr::null());
+
+    {
+        let (inputs_ptr, _ig) = slice_ptr(input_quant, 0);
+        let (bounds_ptr, _bg) = slice_ptr(expert_bounds, 0);
+        let (sorted_ptr, _sg) = slice_ptr(sorted_token_ids, 0);
+        let (out_ptr, _og) = slice_ptr(&out, 0);
+
+        unsafe {
+            let launch_fn = match dtype {
+                GgmlDType::Q8_0 => ffi::launch_moe_grouped_gemm_q8_0,
+                GgmlDType::Q4_0 => ffi::launch_moe_grouped_gemm_q4_0,
+                GgmlDType::Q4_1 => ffi::launch_moe_grouped_gemm_q4_1,
+                GgmlDType::Q5_0 => ffi::launch_moe_grouped_gemm_q5_0,
+                GgmlDType::Q5_1 => ffi::launch_moe_grouped_gemm_q5_1,
+                GgmlDType::Q8_1 => ffi::launch_moe_grouped_gemm_q8_1,
+                GgmlDType::Q2K => ffi::launch_moe_grouped_gemm_q2k,
+                GgmlDType::Q3K => ffi::launch_moe_grouped_gemm_q3k,
+                GgmlDType::Q4K => ffi::launch_moe_grouped_gemm_q4k,
+                GgmlDType::Q5K => ffi::launch_moe_grouped_gemm_q5k,
+                GgmlDType::Q6K => ffi::launch_moe_grouped_gemm_q6k,
+                _ => candle_core::bail!("unsupported dtype: {dtype:?}"),
+            };
+
+            launch_fn(
+                weight_ptr,
+                inputs_ptr as *const std::ffi::c_void,
+                bounds_ptr as *const i32,
+                sorted_ptr as *const i32,
+                topk_w_ptr,
+                out_ptr as *mut f32,
+                n as i32,
+                k as i32,
+                k_padded as i32,
+                num_experts as i32,
+                topk as i32,
+                input_dim1 as i32,
+                stream,
+            );
+        }
+    }
+
+    let out_shape: Shape = vec![out_rows, n].into();
+    Ok(Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(out, dev.clone())),
+        out_shape,
+    )))
+}
+
+/// Activation type IDs matching the CUDA kernel's act_type parameter.
+pub const ACT_GELU_PYTORCH_TANH: i32 = 0;
+pub const ACT_SILU: i32 = 1;
+
+/// Perform fused MoE decode: gate+up+activation → quantize → down+aggregate.
+///
+/// This fuses the entire MoE decode into 4 kernel launches:
+///   1. quantize input to Q8_1
+///   2. fused gate+up+activation+multiply
+///   3. quantize intermediate to Q8_1
+///   4. fused down+topk_weights+atomicAdd aggregation
+///
+/// Returns the aggregated output tensor of shape [batch, hidden_size].
+#[allow(clippy::too_many_arguments)]
+pub fn indexed_moe_fused_decode(
+    gate_qt: &QTensor,
+    up_qt: &QTensor,
+    down_qt: &QTensor,
+    xs_flat: &Tensor,
+    topk_ids: &CudaSlice<u32>,
+    topk_weights_ptr: *const f32,
+    batch: usize,
+    topk: usize,
+    act_type: i32,
+    dev: &CudaDevice,
+) -> Result<Tensor> {
+    let gate_up_dtype = gate_qt.dtype();
+    assert!(up_qt.dtype() == gate_up_dtype);
+    let down_dtype = down_qt.dtype();
+
+    let (_, n_gate, k_gate) = gate_qt.shape().dims3()?;
+    let (_, n_down, k_down) = down_qt.shape().dims3()?;
+
+    // gate and up: [E, intermediate, hidden], down: [E, hidden, intermediate]
+    let hidden_size = k_gate;
+    let intermediate_size = n_gate;
+    assert!(n_down == hidden_size);
+    assert!(k_down == intermediate_size);
+
+    // Step 1: Quantize input to Q8_1 (shared between gate and up)
+    let (input_q8, k, k_padded) = quantize_input_q8_1(xs_flat, dev)?;
+
+    let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+
+    // Step 2: Fused gate+up+activation+multiply
+    let gate_up_outsize = batch * topk * intermediate_size;
+    let gate_up_out = dev.alloc_zeros::<f32>(gate_up_outsize)?;
+
+    let gate_ptr = gate_qt.device_ptr()? as *const std::ffi::c_void;
+    let up_ptr = up_qt.device_ptr()? as *const std::ffi::c_void;
+
+    {
+        let (inp_ptr, _ig) = slice_ptr(&input_q8, 0);
+        let (ids_ptr, _idg) = slice_ptr(topk_ids, 0);
+        let (out_ptr, _og) = slice_ptr(&gate_up_out, 0);
+
+        type FusedGateUpFn = unsafe extern "C" fn(
+            *const std::ffi::c_void, *const std::ffi::c_void,
+            *const std::ffi::c_void, *const u32,
+            *mut f32, i32, i32, i32, i32, i32, i32, *mut std::ffi::c_void,
+        );
+
+        let launch_fn: FusedGateUpFn = match gate_up_dtype {
+            GgmlDType::Q8_0 => ffi::launch_moe_gemv_fused_gate_up_q8_0_q8_1,
+            GgmlDType::Q4_0 => ffi::launch_moe_gemv_fused_gate_up_q4_0_q8_1,
+            GgmlDType::Q4_1 => ffi::launch_moe_gemv_fused_gate_up_q4_1_q8_1,
+            GgmlDType::Q5_0 => ffi::launch_moe_gemv_fused_gate_up_q5_0_q8_1,
+            GgmlDType::Q5_1 => ffi::launch_moe_gemv_fused_gate_up_q5_1_q8_1,
+            GgmlDType::Q8_1 => ffi::launch_moe_gemv_fused_gate_up_q8_1_q8_1,
+            GgmlDType::Q2K => ffi::launch_moe_gemv_fused_gate_up_q2k_q8_1,
+            GgmlDType::Q3K => ffi::launch_moe_gemv_fused_gate_up_q3k_q8_1,
+            GgmlDType::Q4K => ffi::launch_moe_gemv_fused_gate_up_q4k_q8_1,
+            GgmlDType::Q5K => ffi::launch_moe_gemv_fused_gate_up_q5k_q8_1,
+            GgmlDType::Q6K => ffi::launch_moe_gemv_fused_gate_up_q6k_q8_1,
+            _ => candle_core::bail!("unsupported dtype for fused MoE decode: {gate_up_dtype:?}"),
+        };
+
+        unsafe {
+            launch_fn(
+                gate_ptr,
+                up_ptr,
+                inp_ptr as *const std::ffi::c_void,
+                ids_ptr as *const u32,
+                out_ptr as *mut f32,
+                intermediate_size as i32,
+                k as i32,
+                batch as i32,
+                topk as i32,
+                k_padded as i32,
+                act_type,
+                stream,
+            );
+        }
+    }
+
+    drop(input_q8);
+
+    // Step 3: Quantize the intermediate output for down projection
+    // gate_up_out is [batch * topk, intermediate_size] in f32
+    let intermediate_rows = batch * topk;
+    let k_down_padded = pad(intermediate_size, MATRIX_ROW_PADDING);
+    let q8_1_block_size = GgmlDType::Q8_1.block_size();
+    let q8_1_type_size = GgmlDType::Q8_1.type_size();
+    let num_blocks_per_row = k_down_padded / q8_1_block_size;
+    let dst_row_size_bytes = num_blocks_per_row * q8_1_type_size;
+    let y_size_in_bytes = intermediate_rows * dst_row_size_bytes;
+    let mut intermediate_q8 = dev.alloc_zeros::<u8>(y_size_in_bytes)?;
+    quantize_q8_1(
+        &gate_up_out,
+        &mut intermediate_q8,
+        intermediate_size,
+        intermediate_rows,
+        dev,
+    )?;
+
+    drop(gate_up_out);
+
+    // Step 4: Fused down+aggregate with topk_weights and atomicAdd
+    let final_outsize = batch * hidden_size;
+    let final_out = dev.alloc_zeros::<f32>(final_outsize)?;
+
+    let down_ptr = down_qt.device_ptr()? as *const std::ffi::c_void;
+
+    {
+        let (inp_ptr, _ig) = slice_ptr(&intermediate_q8, 0);
+        let (ids_ptr, _idg) = slice_ptr(topk_ids, 0);
+        let (out_ptr, _og) = slice_ptr(&final_out, 0);
+
+        type DownAggregateFn = unsafe extern "C" fn(
+            *const std::ffi::c_void, *const std::ffi::c_void,
+            *const u32, *const f32,
+            *mut f32, i32, i32, i32, i32, i32, *mut std::ffi::c_void,
+        );
+
+        let launch_fn: DownAggregateFn = match down_dtype {
+            GgmlDType::Q8_0 => ffi::launch_moe_gemv_down_aggregate_q8_0_q8_1,
+            GgmlDType::Q4_0 => ffi::launch_moe_gemv_down_aggregate_q4_0_q8_1,
+            GgmlDType::Q4_1 => ffi::launch_moe_gemv_down_aggregate_q4_1_q8_1,
+            GgmlDType::Q5_0 => ffi::launch_moe_gemv_down_aggregate_q5_0_q8_1,
+            GgmlDType::Q5_1 => ffi::launch_moe_gemv_down_aggregate_q5_1_q8_1,
+            GgmlDType::Q8_1 => ffi::launch_moe_gemv_down_aggregate_q8_1_q8_1,
+            GgmlDType::Q2K => ffi::launch_moe_gemv_down_aggregate_q2k_q8_1,
+            GgmlDType::Q3K => ffi::launch_moe_gemv_down_aggregate_q3k_q8_1,
+            GgmlDType::Q4K => ffi::launch_moe_gemv_down_aggregate_q4k_q8_1,
+            GgmlDType::Q5K => ffi::launch_moe_gemv_down_aggregate_q5k_q8_1,
+            GgmlDType::Q6K => ffi::launch_moe_gemv_down_aggregate_q6k_q8_1,
+            _ => candle_core::bail!("unsupported dtype for fused MoE decode: {down_dtype:?}"),
+        };
+
+        unsafe {
+            launch_fn(
+                down_ptr,
+                inp_ptr as *const std::ffi::c_void,
+                ids_ptr as *const u32,
+                topk_weights_ptr,
+                out_ptr as *mut f32,
+                hidden_size as i32,
+                intermediate_size as i32,
+                batch as i32,
+                topk as i32,
+                k_down_padded as i32,
+                stream,
+            );
+        }
+    }
+
+    let out_shape: Shape = vec![batch, hidden_size].into();
+    Ok(Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(final_out, dev.clone())),
+        out_shape,
+    )))
+}
