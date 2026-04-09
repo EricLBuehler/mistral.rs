@@ -658,9 +658,18 @@ pub fn indexed_moe_fused_decode(
         let (out_ptr, _og) = slice_ptr(&gate_up_out, 0);
 
         type FusedGateUpFn = unsafe extern "C" fn(
-            *const std::ffi::c_void, *const std::ffi::c_void,
-            *const std::ffi::c_void, *const u32,
-            *mut f32, i32, i32, i32, i32, i32, i32, *mut std::ffi::c_void,
+            *const std::ffi::c_void,
+            *const std::ffi::c_void,
+            *const std::ffi::c_void,
+            *const u32,
+            *mut f32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            *mut std::ffi::c_void,
         );
 
         let launch_fn: FusedGateUpFn = match gate_up_dtype {
@@ -731,9 +740,17 @@ pub fn indexed_moe_fused_decode(
         let (out_ptr, _og) = slice_ptr(&final_out, 0);
 
         type DownAggregateFn = unsafe extern "C" fn(
-            *const std::ffi::c_void, *const std::ffi::c_void,
-            *const u32, *const f32,
-            *mut f32, i32, i32, i32, i32, i32, *mut std::ffi::c_void,
+            *const std::ffi::c_void,
+            *const std::ffi::c_void,
+            *const u32,
+            *const f32,
+            *mut f32,
+            i32,
+            i32,
+            i32,
+            i32,
+            i32,
+            *mut std::ffi::c_void,
         );
 
         let launch_fn: DownAggregateFn = match down_dtype {

@@ -341,7 +341,9 @@ impl Attention {
             mapper.set_device(layer_idx, vb.pp("k_norm"), false),
         )?;
         // V norm: fused RmsNorm with weight=1.0 (no learned parameter)
-        let v_dev = mapper.device_for(layer_idx, false).unwrap_or(&candle_core::Device::Cpu);
+        let v_dev = mapper
+            .device_for(layer_idx, false)
+            .unwrap_or(&candle_core::Device::Cpu);
         let v_norm_weight = Tensor::ones(head_dim, vb.dtype(), v_dev)?;
         let v_norm_rms = RmsNorm::from_w(v_norm_weight, cfg.rms_norm_eps)?;
 
@@ -1197,13 +1199,11 @@ impl TextModel {
             let weight = mapper.cast_nm_device(embed_tokens.embeddings(), false)?;
             let target_device = weight.device().clone();
             let weight_cpu = weight.to_device(&candle_core::Device::Cpu)?;
-            let qt = std::sync::Arc::new(
-                candle_core::quantized::QTensor::quantize_onto(
-                    &weight_cpu,
-                    candle_core::quantized::GgmlDType::Q8_0,
-                    &target_device,
-                )?,
-            );
+            let qt = std::sync::Arc::new(candle_core::quantized::QTensor::quantize_onto(
+                &weight_cpu,
+                candle_core::quantized::GgmlDType::Q8_0,
+                &target_device,
+            )?);
             Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                 q_weight: qt,
                 b: None,
