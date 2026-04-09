@@ -481,7 +481,7 @@ pub fn quantize_input_q8_1(xs: &Tensor, dev: &CudaDevice) -> Result<(CudaSlice<u
     // SAFETY: quantize kernel writes all elements up to k_padded per row
     let mut input_quant = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
 
-    // Use fused BF16→Q8_1 kernel when input is BF16 (avoids separate cast kernel)
+    // Use fused BF16->Q8_1 kernel when input is BF16
     if xs_contig.dtype() == candle_core::DType::BF16 {
         let (xs_storage, xs_layout) = xs_contig.storage_and_layout();
         let xs_cuda = match &*xs_storage {

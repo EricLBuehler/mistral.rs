@@ -64,8 +64,6 @@ fn kv_shared_layer_index(cfg: &Gemma4TextConfig, layer_idx: usize) -> Result<Opt
         })
 }
 
-// v_norm: Use fused RmsNorm with ones weight (no learned parameter) for efficiency.
-
 /// Proportional RoPE for Gemma4 full-attention layers.
 ///
 /// Unlike standard RotaryEmbedding, this computes inv_freq for only the first
@@ -192,15 +190,11 @@ impl Gemma4Router {
 
     /// Returns (topk_weights, topk_ids) both of shape [num_tokens, top_k].
     fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
-        // Fused RMS norm with pre-combined scale: replaces manual sqr/mean/sqrt/div/mul
         let normed = xs.apply(&self.norm)?;
 
         let logits = normed
             .to_dtype(self.proj.weight().dtype())?
             .apply(&self.proj)?;
-        // Clamp sanitizes both extreme values and NaN (CUDA fminf/fmaxf
-        // return the non-NaN argument, so NaN → bound value → near-zero
-        // probability after softmax).
         let logits_f32 = logits.to_dtype(DType::F32)?.clamp(-1e4, 1e4)?;
         let probs = candle_nn::ops::softmax_last_dim(&logits_f32)?;
 
@@ -430,7 +424,7 @@ impl Attention {
             (q, k, v)
         };
 
-        // Apply Q/K/V norms (all fused RmsNorm)
+        // Apply Q/K/V norms
         q = q.apply(&self.q_norm)?;
         k = k.apply(&self.k_norm)?;
         v = v.apply(&self.v_norm_rms)?;
