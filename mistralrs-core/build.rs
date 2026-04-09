@@ -8,6 +8,7 @@ fn main() {
     {
         use std::path::PathBuf;
         println!("cargo:rerun-if-changed=build.rs");
+        println!("cargo:rerun-if-env-changed=ALLOW_LEGACY");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
         let mut builder = cudaforge::KernelBuilder::new()
@@ -26,12 +27,22 @@ fn main() {
             .arg("--compiler-options")
             .arg("-fPIC");
 
+        let allow_legacy = std::env::var("ALLOW_LEGACY").unwrap_or_default();
+        let allow_legacy_bf16 = allow_legacy == "all"
+            || allow_legacy
+                .split(',')
+                .map(str::trim)
+                .any(|value| value == "bf16");
+
         // Check if CUDA_COMPUTE_CAP < 80 and disable bf16 kernels if so.
         // bf16 WMMA operations and certain bf16 intrinsics are only available on sm_80+.
         if let Some(compute_cap) = builder.get_compute_cap() {
-            if compute_cap < 80 {
+            if compute_cap < 80 && !allow_legacy_bf16 {
                 builder = builder.arg("-DNO_BF16_KERNEL");
             }
+        }
+        if allow_legacy_bf16 {
+            builder = builder.arg("-DALLOW_LEGACY_BF16");
         }
 
         // https://github.com/EricLBuehler/mistral.rs/issues/286

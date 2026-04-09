@@ -24,6 +24,17 @@ pub struct UnquantLinear {
     stats: Option<ImatrixLayerStats>,
 }
 
+fn use_legacy_bf16_fallback(a: &Tensor) -> bool {
+    cfg!(feature = "cuda")
+        && cfg!(allow_legacy_bf16)
+        && a.device().is_cuda()
+        && a.dtype() == DType::BF16
+}
+
+fn bf16_safe_matmul(a: &Tensor, b: &Tensor) -> Result<Tensor> {
+    a.matmul(b)
+}
+
 impl QuantMethod for UnquantLinear {
     fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
     where
@@ -55,10 +66,11 @@ impl QuantMethod for UnquantLinear {
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(a.device().clone());
+        let use_legacy_bf16_fallback = use_legacy_bf16_fallback(a);
 
         // Try custom GEMV for single-token decode (batch_size=1)
         #[cfg(feature = "cuda")]
-        if crate::gemv::should_use_gemv(a, &self.w) {
+        if !use_legacy_bf16_fallback && crate::gemv::should_use_gemv(a, &self.w) {
             return crate::gemv::gemv(a, &self.w, self.b.as_ref());
         }
 
@@ -80,27 +92,32 @@ impl QuantMethod for UnquantLinear {
             match a.device().location() {
                 DeviceLocation::Cuda { .. } => {
                     // Try to use cublaslt, otherwise fallback to gemm
-                    if let (Device::Cuda(_), Some(cublaslt)) =
-                        (a.device(), CUBLASLT_CONTROLLER.get_for_device(a.device()))
-                    {
-                        cublaslt
-                            .batch_matmul(
-                                a,
-                                &w,
-                                Some(&b.t()?.contiguous()?),
-                                None,
-                                Some(1.0),
-                                None,
-                                None,
-                            )?
-                            .t()
+                    if !use_legacy_bf16_fallback {
+                        if let (Device::Cuda(_), Some(cublaslt)) =
+                            (a.device(), CUBLASLT_CONTROLLER.get_for_device(a.device()))
+                        {
+                            cublaslt
+                                .batch_matmul(
+                                    a,
+                                    &w,
+                                    Some(&b.t()?.contiguous()?),
+                                    None,
+                                    Some(1.0),
+                                    None,
+                                    None,
+                                )?
+                                .t()
+                        } else {
+                            let matmul_result = bf16_safe_matmul(a, &w.t()?)?;
+                            matmul_result.broadcast_add(&b)
+                        }
                     } else {
-                        let matmul_result = a.matmul(&w.t()?)?;
+                        let matmul_result = bf16_safe_matmul(a, &w.t()?)?;
                         matmul_result.broadcast_add(&b)
                     }
                 }
                 DeviceLocation::Metal { .. } => {
-                    let matmul_result = a.matmul(&w.t()?)?;
+                    let matmul_result = bf16_safe_matmul(a, &w.t()?)?;
                     matmul_result.broadcast_add(&b)
                 }
                 DeviceLocation::Cpu => {
@@ -125,22 +142,26 @@ impl QuantMethod for UnquantLinear {
         } else {
             match a.device().location() {
                 DeviceLocation::Cuda { .. } => {
-                    if let (Device::Cuda(_), Some(cublaslt)) =
-                        (a.device(), CUBLASLT_CONTROLLER.get_for_device(a.device()))
-                    {
-                        // cuBLAS batch_matmul requires 3D tensors, fall back to regular matmul for 2D.
-                        if a.rank() >= 3 && w.rank() >= 3 {
-                            cublaslt
-                                .batch_matmul(a, &w, None, None, None, None, None)?
-                                .t()
+                    if !use_legacy_bf16_fallback {
+                        if let (Device::Cuda(_), Some(cublaslt)) =
+                            (a.device(), CUBLASLT_CONTROLLER.get_for_device(a.device()))
+                        {
+                            // cuBLAS batch_matmul requires 3D tensors, fall back to regular matmul for 2D.
+                            if a.rank() >= 3 && w.rank() >= 3 {
+                                cublaslt
+                                    .batch_matmul(a, &w, None, None, None, None, None)?
+                                    .t()
+                            } else {
+                                bf16_safe_matmul(a, &w.t()?)
+                            }
                         } else {
-                            a.matmul(&w.t()?)
+                            bf16_safe_matmul(a, &w.t()?)
                         }
                     } else {
-                        a.matmul(&w.t()?)
+                        bf16_safe_matmul(a, &w.t()?)
                     }
                 }
-                DeviceLocation::Metal { .. } => a.matmul(&w.t()?),
+                DeviceLocation::Metal { .. } => bf16_safe_matmul(a, &w.t()?),
                 DeviceLocation::Cpu => {
                     #[cfg(feature = "accelerate")]
                     {
@@ -191,10 +212,9 @@ impl QuantMethod for UnquantLinear {
                     .reshape((b_size * seq_len * num_experts_per_tok, hidden_dim))?;
 
                 // Matmul: [b*s*k, hidden_dim] @ [b*s*k, hidden_dim, out_features] -> [b*s*k, out_features]
-                let result = a_expanded
-                    .unsqueeze(1)?
-                    .matmul(&selected_w.transpose(1, 2)?)?
-                    .squeeze(1)?;
+                let result =
+                    bf16_safe_matmul(&a_expanded.unsqueeze(1)?, &selected_w.transpose(1, 2)?)?
+                        .squeeze(1)?;
 
                 // Reshape back to [b, s, k, out_features]
                 result.reshape((b_size, seq_len, num_experts_per_tok, out_features))
@@ -215,10 +235,9 @@ impl QuantMethod for UnquantLinear {
                     .reshape((num_tokens * num_experts_per_tok, hidden_dim))?;
 
                 // Matmul: [n*k, hidden] @ [n*k, hidden, out] -> [n*k, out]
-                let result = a_expanded
-                    .unsqueeze(1)?
-                    .matmul(&selected_w.transpose(1, 2)?)?
-                    .squeeze(1)?;
+                let result =
+                    bf16_safe_matmul(&a_expanded.unsqueeze(1)?, &selected_w.transpose(1, 2)?)?
+                        .squeeze(1)?;
 
                 // Reshape to [n, k, out]
                 result.reshape((num_tokens, num_experts_per_tok, out_features))
@@ -551,5 +570,116 @@ impl QuantizedSerde for UnquantLinear {
             }),
             b,
         ))
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "cuda")]
+mod tests {
+    use std::sync::{LazyLock, Mutex};
+
+    use candle_core::{DType, Device, Result, Tensor};
+    use candle_nn::Linear;
+
+    use super::*;
+    use crate::GEMV_CONTROLLER;
+
+    static CUDA_FALLBACK_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    struct FallbackControllerGuard {
+        gemv_was_enabled: bool,
+    }
+
+    impl FallbackControllerGuard {
+        fn force_candle_matmul() -> Self {
+            let guard = Self {
+                gemv_was_enabled: GEMV_CONTROLLER.is_enabled(),
+            };
+            GEMV_CONTROLLER.set_enabled(false);
+            CUBLASLT_CONTROLLER.set_inhibit(true);
+            guard
+        }
+    }
+
+    impl Drop for FallbackControllerGuard {
+        fn drop(&mut self) {
+            GEMV_CONTROLLER.set_enabled(self.gemv_was_enabled);
+            CUBLASLT_CONTROLLER.set_inhibit(false);
+        }
+    }
+
+    fn assert_close(lhs: &Tensor, rhs: &Tensor, max_abs_diff: f32) -> Result<()> {
+        let max_diff = (lhs.to_dtype(DType::F32)? - rhs.to_dtype(DType::F32)?)?
+            .abs()?
+            .max_all()?
+            .to_vec0::<f32>()?;
+        assert!(
+            max_diff <= max_abs_diff,
+            "max abs diff {max_diff} exceeded tolerance {max_abs_diff}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_forward_bf16_without_bias_falls_back_to_candle_matmul_when_specialized_paths_are_off(
+    ) -> Result<()> {
+        let _lock = CUDA_FALLBACK_TEST_LOCK.lock().unwrap();
+        let device = Device::new_cuda(0)?;
+        maybe_init_cublas_lt_wrapper(device.clone());
+
+        let input = Tensor::randn(0., 1., (1, 8), &device)?
+            .to_dtype(DType::BF16)?
+            .contiguous()?;
+        let weight = Tensor::randn(0., 1., (6, 8), &device)?
+            .to_dtype(DType::BF16)?
+            .contiguous()?;
+        assert!(crate::gemv::should_use_gemv(&input, &weight));
+
+        let layer = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
+            weight.clone(),
+            None,
+        )))?;
+
+        let _controllers = FallbackControllerGuard::force_candle_matmul();
+        let actual = layer.forward(&input)?;
+        let expected = input.matmul(&weight.t()?)?;
+
+        assert_eq!(actual.dtype(), DType::BF16);
+        assert_close(&actual, &expected, 1e-2)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_forward_bf16_with_bias_falls_back_to_candle_matmul_when_specialized_paths_are_off(
+    ) -> Result<()> {
+        let _lock = CUDA_FALLBACK_TEST_LOCK.lock().unwrap();
+        let device = Device::new_cuda(0)?;
+        maybe_init_cublas_lt_wrapper(device.clone());
+
+        let input = Tensor::randn(0., 1., (1, 1, 8), &device)?
+            .to_dtype(DType::BF16)?
+            .contiguous()?;
+        let weight = Tensor::randn(0., 1., (6, 8), &device)?
+            .to_dtype(DType::BF16)?
+            .contiguous()?;
+        let bias = Tensor::randn(0., 1., 6, &device)?
+            .to_dtype(DType::BF16)?
+            .contiguous()?;
+        assert!(crate::gemv::should_use_gemv(&input, &weight));
+
+        let layer = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
+            weight.clone(),
+            Some(bias.clone()),
+        )))?;
+
+        let _controllers = FallbackControllerGuard::force_candle_matmul();
+        let actual = layer.forward(&input)?;
+        let expected = input
+            .matmul(&weight.broadcast_left(1)?.t()?)?
+            .broadcast_add(&bias)?;
+
+        assert_eq!(actual.dtype(), DType::BF16);
+        assert_close(&actual, &expected, 1e-2)?;
+        Ok(())
     }
 }

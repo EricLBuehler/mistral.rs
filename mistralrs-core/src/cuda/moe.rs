@@ -1,6 +1,16 @@
 use candle_core::{Result, Tensor};
 
 #[cfg(feature = "cuda")]
+fn supports_wmma(dev: &candle_core::cuda_backend::CudaDevice) -> Result<bool> {
+    let (major, _) = dev
+        .cuda_stream()
+        .context()
+        .compute_capability()
+        .map_err(|err| candle_core::Error::Msg(err.to_string()))?;
+    Ok(major >= 7)
+}
+
+#[cfg(feature = "cuda")]
 pub fn moe_gemm(
     input: &Tensor,
     weights: &Tensor,
@@ -92,7 +102,7 @@ pub fn moe_gemm(
 
         let output = unsafe { dev.alloc::<T>(size_m * size_n) }?;
 
-        let stream = dev.cuda_stream().cu_stream() as i64;
+        let stream = input.stream().cu_stream() as i64;
         use core::ffi::c_void;
 
         // Threshold for using GEMV kernel (optimized for small batch sizes)
@@ -108,8 +118,27 @@ pub fn moe_gemm(
         // - Prefill (larger batches): use WMMA-based kernel for tensor core acceleration
         // - Decode with small M (<=8): use GEMV kernel optimized for warp reductions
         // - Decode with larger M: use standard moe_gemm kernel
+        let use_wmma = supports_wmma(dev)?;
         let moe_func = if is_prefill {
-            crate::cuda::ffi::moe_gemm_wmma
+            if use_wmma {
+                crate::cuda::ffi::moe_gemm_wmma
+            } else {
+                return launch_hfma2::<T>(
+                    dev,
+                    input,
+                    weights,
+                    topk_weights_ptr,
+                    sorted_token_ids,
+                    experts_ids,
+                    num_experts,
+                    topk,
+                    size_m,
+                    size_n,
+                    size_k,
+                    data_type,
+                    stream,
+                );
+            }
         } else if size_m_i32 <= GEMV_THRESHOLD {
             crate::cuda::ffi::moe_gemv
         } else {
@@ -284,7 +313,7 @@ pub fn moe_gemm_transposed(
 
         let output = unsafe { dev.alloc::<T>(size_m * size_n) }?;
 
-        let stream = dev.cuda_stream().cu_stream() as i64;
+        let stream = input.stream().cu_stream() as i64;
         use core::ffi::c_void;
 
         // Threshold for using GEMV kernel (optimized for small batch sizes)
@@ -300,8 +329,13 @@ pub fn moe_gemm_transposed(
         // - Prefill (larger batches): use WMMA-based kernel for tensor core acceleration
         // - Decode with small M (<=8): use GEMV kernel optimized for warp reductions
         // - Decode with larger M: use standard moe_gemm_transposed kernel
+        let use_wmma = supports_wmma(dev)?;
         let moe_func = if is_prefill {
-            crate::cuda::ffi::moe_gemm_wmma_transposed
+            if use_wmma {
+                crate::cuda::ffi::moe_gemm_wmma_transposed
+            } else {
+                crate::cuda::ffi::moe_gemm_transposed
+            }
         } else if size_m_i32 <= GEMV_THRESHOLD {
             crate::cuda::ffi::moe_gemv_transposed
         } else {
@@ -378,4 +412,60 @@ pub fn moe_gemm_transposed(
     _: bool,
 ) -> Result<Tensor> {
     candle_core::bail!("moe_gemm_transposed is not implemented on this platform!")
+}
+
+#[cfg(feature = "cuda")]
+fn launch_hfma2<
+    T: candle_core::cuda_backend::CudaDType + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
+>(
+    dev: &candle_core::cuda_backend::CudaDevice,
+    input: &candle_core::cuda_backend::cudarc::driver::CudaSlice<T>,
+    weights: &candle_core::cuda_backend::cudarc::driver::CudaSlice<T>,
+    topk_weights_ptr: *const f32,
+    sorted_token_ids: &candle_core::cuda_backend::cudarc::driver::CudaSlice<u32>,
+    experts_ids: &candle_core::cuda_backend::cudarc::driver::CudaSlice<u32>,
+    num_experts: usize,
+    topk: usize,
+    size_m: usize,
+    size_n: usize,
+    size_k: usize,
+    data_type: i32,
+    stream: i64,
+) -> Result<Tensor> {
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::CudaStorage;
+
+    let num_experts_i32 = i32::try_from(num_experts).expect("num_experts too large for i32");
+    let topk_i32 = i32::try_from(topk).expect("topk too large for i32");
+    let size_m_i32 = i32::try_from(size_m).expect("size_m too large for i32");
+    let size_n_i32 = i32::try_from(size_n).expect("size_n too large for i32");
+    let size_k_i32 = i32::try_from(size_k).expect("size_k too large for i32");
+
+    let expert_offsets = unsafe { dev.alloc::<i32>(num_experts + 1) }?;
+    let output = unsafe { dev.alloc::<T>(size_m * size_n) }?;
+
+    unsafe {
+        crate::cuda::ffi::moe_gemm_hfma2(
+            input.device_ptr(input.stream()).0 as *const std::ffi::c_void,
+            weights.device_ptr(weights.stream()).0 as *const std::ffi::c_void,
+            sorted_token_ids.device_ptr(sorted_token_ids.stream()).0 as *const i32,
+            experts_ids.device_ptr(experts_ids.stream()).0 as *const i32,
+            topk_weights_ptr,
+            output.device_ptr(output.stream()).0 as *mut std::ffi::c_void,
+            expert_offsets.device_ptr(expert_offsets.stream()).0 as *mut i32,
+            num_experts_i32,
+            topk_i32,
+            size_m_i32,
+            size_n_i32,
+            size_k_i32,
+            data_type,
+            stream,
+        );
+    }
+
+    let output = CudaStorage::wrap_cuda_slice(output, dev.clone());
+    Ok(Tensor::from((
+        candle_core::Storage::Cuda(output),
+        (size_m, size_n),
+    )))
 }
