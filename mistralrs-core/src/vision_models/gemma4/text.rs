@@ -64,14 +64,7 @@ fn kv_shared_layer_index(cfg: &Gemma4TextConfig, layer_idx: usize) -> Result<Opt
         })
 }
 
-/// Pure RMS normalization without learned weight (used for V norm).
-fn v_norm(v: &Tensor, eps: f64) -> Result<Tensor> {
-    let original_dtype = v.dtype();
-    let v_f32 = v.to_dtype(DType::F32)?;
-    let mean_sq = v_f32.sqr()?.mean_keepdim(D::Minus1)?;
-    let rms = (mean_sq + eps)?.sqrt()?;
-    v_f32.broadcast_div(&rms)?.to_dtype(original_dtype)
-}
+// v_norm: Use fused RmsNorm with ones weight (no learned parameter) for efficiency.
 
 /// Proportional RoPE for Gemma4 full-attention layers.
 ///
@@ -168,11 +161,10 @@ impl ProportionalRotaryEmbedding {
 // ────────────────────────────────────────────────────────────────────────────
 
 struct Gemma4Router {
+    norm: RmsNorm,
     scale: Tensor,
     proj: candle_nn::Linear,
-    hidden_size: usize,
     top_k: usize,
-    eps: f64,
 }
 
 impl Gemma4Router {
@@ -186,40 +178,30 @@ impl Gemma4Router {
         let scale = vb.get(hidden_size, "scale")?;
         let proj_w = vb.pp("proj").get((num_experts, hidden_size), "weight")?;
         let proj = candle_nn::Linear::new(proj_w, None);
+        // Pre-combine: weight = scale * hidden_size^(-0.5)
+        let root_size = (hidden_size as f64).powf(-0.5);
+        let combined_weight = (&scale * root_size)?;
+        let norm = RmsNorm::from_w(combined_weight, eps)?;
         Ok(Self {
+            norm,
             scale,
             proj,
-            hidden_size,
             top_k,
-            eps,
         })
     }
 
     /// Returns (topk_weights, topk_ids) both of shape [num_tokens, top_k].
     fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
-        let xs_f32 = xs.to_dtype(DType::F32)?;
-        let rms = (xs_f32.sqr()?.mean_keepdim(D::Minus1)? + self.eps)?.sqrt()?;
-        let normed = xs_f32.broadcast_div(&rms)?;
+        // Fused RMS norm with pre-combined scale: replaces manual sqr/mean/sqrt/div/mul
+        let normed = xs.apply(&self.norm)?;
 
-        let root_size = (self.hidden_size as f64).powf(-0.5);
-        let scaled = (normed * root_size)?;
-        let scale_f32 = self
-            .scale
-            .to_dtype(DType::F32)?
-            .unsqueeze(0)?
-            .unsqueeze(0)?;
-        let scaled = scaled.broadcast_mul(&scale_f32)?;
-
-        let logits = scaled
+        let logits = normed
             .to_dtype(self.proj.weight().dtype())?
             .apply(&self.proj)?;
-        let logits_f32 = logits.to_dtype(DType::F32)?;
-        // ISQ can occasionally produce NaN router rows. Sanitize before
-        // softmax so we never emit invalid expert ids from the CUDA top-k
-        // kernel.
-        let finite_mask = logits_f32.eq(&logits_f32)?;
-        let logits_f32 = finite_mask.where_cond(&logits_f32, &Tensor::zeros_like(&logits_f32)?)?;
-        let logits_f32 = logits_f32.clamp(-1e4, 1e4)?;
+        // Clamp sanitizes both extreme values and NaN (CUDA fminf/fmaxf
+        // return the non-NaN argument, so NaN → bound value → near-zero
+        // probability after softmax).
+        let logits_f32 = logits.to_dtype(DType::F32)?.clamp(-1e4, 1e4)?;
         let probs = candle_nn::ops::softmax_last_dim(&logits_f32)?;
 
         // Select top-k experts by PROBABILITY
@@ -257,8 +239,8 @@ struct Attention {
     sdpa_params: SdpaParams,
     q_norm: RmsNorm,
     k_norm: RmsNorm,
+    v_norm_rms: RmsNorm,
     kv_shared_layer_index: Option<usize>,
-    rms_norm_eps: f64,
     layer_idx: usize,
 }
 
@@ -358,6 +340,10 @@ impl Attention {
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("k_norm"), false),
         )?;
+        // V norm: fused RmsNorm with weight=1.0 (no learned parameter)
+        let v_dev = mapper.device_for(layer_idx, false).unwrap_or(&candle_core::Device::Cpu);
+        let v_norm_weight = Tensor::ones(head_dim, vb.dtype(), v_dev)?;
+        let v_norm_rms = RmsNorm::from_w(v_norm_weight, cfg.rms_norm_eps)?;
 
         Ok(Self {
             q_proj,
@@ -386,8 +372,8 @@ impl Attention {
             },
             q_norm,
             k_norm,
+            v_norm_rms,
             kv_shared_layer_index,
-            rms_norm_eps: cfg.rms_norm_eps,
             layer_idx,
         })
     }
@@ -442,11 +428,10 @@ impl Attention {
             (q, k, v)
         };
 
-        // Apply Q/K norms
+        // Apply Q/K/V norms (all fused RmsNorm)
         q = q.apply(&self.q_norm)?;
         k = k.apply(&self.k_norm)?;
-        // V norm (RMS without learnable weight)
-        v = v_norm(&v, self.rms_norm_eps)?;
+        v = v.apply(&self.v_norm_rms)?;
 
         // Apply RoPE
         if self.is_sliding {
@@ -732,7 +717,8 @@ impl DecoderLayer {
             let scale = moe_vb
                 .get(num_experts, "per_expert_scale")
                 .or_else(|_| moe_explicit_vb.get(num_experts, "per_expert_scale"))
-                .or_else(|_| router_vb.get(num_experts, "per_expert_scale"))?;
+                .or_else(|_| router_vb.get(num_experts, "per_expert_scale"))?
+                .to_dtype(DType::F32)?;
             let rtr = Gemma4Router::new(
                 cfg.hidden_size,
                 num_experts,
@@ -880,20 +866,20 @@ impl DecoderLayer {
             // Branch 2: MoE with pre_feedforward_layernorm_2 → post_feedforward_layernorm_2
             let (topk_weights, topk_ids) = router.forward(&xs)?;
 
-            // Fold per_expert_scale into routing weights
-            let scales = per_expert_scale
-                .to_dtype(DType::F32)?
-                .index_select(&topk_ids.flatten_all()?.to_dtype(DType::U32)?, 0)?
-                .reshape(topk_ids.shape())?;
-            let topk_weights = (topk_weights.to_dtype(DType::F32)? * scales)?;
-
             let moe_input = xs.apply(pre_ff_2)?;
-
             let (b, s, _) = moe_input.dims3()?;
-            let topk_weights = topk_weights.reshape((b * s, ()))?;
-            let topk_ids = topk_ids.reshape((b * s, ()))?.to_dtype(DType::U32)?;
 
-            let moe_result = moe.forward(&moe_input, topk_weights, &topk_ids)?;
+            // Flatten and convert types once (reused for scale indexing and MoE forward)
+            let topk_ids_u32 = topk_ids.reshape((b * s, ()))?.to_dtype(DType::U32)?;
+            let topk_weights = topk_weights.reshape((b * s, ()))?.to_dtype(DType::F32)?;
+
+            // Fold per_expert_scale into routing weights (scale already F32 from init)
+            let scales = per_expert_scale
+                .index_select(&topk_ids_u32.flatten_all()?, 0)?
+                .reshape(topk_ids_u32.shape())?;
+            let topk_weights = (topk_weights * scales)?;
+
+            let moe_result = moe.forward(&moe_input, topk_weights, &topk_ids_u32)?;
             let moe_normed = moe_result.apply(post_ff_2)?;
 
             // Combine branches, then apply post_feedforward_layernorm (matches HF line 1694)

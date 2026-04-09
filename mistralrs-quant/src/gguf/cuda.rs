@@ -465,10 +465,11 @@ pub fn moe_dispatch_build(
 ///
 /// Supports F32, BF16, and F16 inputs directly without dtype conversion.
 pub fn quantize_input_q8_1(xs: &Tensor, dev: &CudaDevice) -> Result<(CudaSlice<u8>, usize, usize)> {
-    // Convert to F32 if needed, then quantize to Q8_1
-    let xs_f32 = xs.to_dtype(candle_core::DType::F32)?.contiguous()?;
-    let num_rows = xs_f32.dim(0)?;
-    let k = xs_f32.dim(1)?;
+    use candle_core::cuda::cudarc::driver::DevicePtr;
+
+    let xs_contig = xs.contiguous()?;
+    let num_rows = xs_contig.dim(0)?;
+    let k = xs_contig.dim(1)?;
     let k_padded = pad(k, MATRIX_ROW_PADDING);
 
     let q8_1_block_size = GgmlDType::Q8_1.block_size();
@@ -477,16 +478,41 @@ pub fn quantize_input_q8_1(xs: &Tensor, dev: &CudaDevice) -> Result<(CudaSlice<u
     let dst_row_size_bytes = num_blocks_per_row * q8_1_type_size;
     let y_size_in_bytes = num_rows * dst_row_size_bytes;
 
-    let (xs_storage, xs_layout) = xs_f32.storage_and_layout();
-    let xs_cuda = match &*xs_storage {
-        Storage::Cuda(c) => c,
-        _ => candle_core::bail!("expected CUDA tensor"),
-    };
-    let xs_slice = xs_cuda.as_cuda_slice::<f32>()?;
-    assert!(xs_layout.start_offset() == 0);
+    // SAFETY: quantize kernel writes all elements up to k_padded per row
+    let mut input_quant = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
 
-    let mut input_quant = dev.alloc_zeros::<u8>(y_size_in_bytes)?;
-    quantize_q8_1(&xs_slice, &mut input_quant, k, num_rows, dev)?;
+    // Use fused BF16→Q8_1 kernel when input is BF16 (avoids separate cast kernel)
+    if xs_contig.dtype() == candle_core::DType::BF16 {
+        let (xs_storage, xs_layout) = xs_contig.storage_and_layout();
+        let xs_cuda = match &*xs_storage {
+            Storage::Cuda(c) => c,
+            _ => candle_core::bail!("expected CUDA tensor"),
+        };
+        let xs_slice = xs_cuda.as_cuda_slice::<half::bf16>()?;
+        assert!(xs_layout.start_offset() == 0);
+        let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+        let (out_ptr, _og) = slice_ptr(&input_quant, 0);
+        unsafe {
+            ffi::launch_quantize_q8_1_bf16(
+                xs_slice.slice(0..).device_ptr(xs_slice.stream()).0 as *const std::ffi::c_void,
+                out_ptr as *mut std::ffi::c_void,
+                k as i32,
+                k_padded as i32,
+                num_rows as i32,
+                stream,
+            );
+        }
+    } else {
+        let xs_f32 = xs_contig.to_dtype(candle_core::DType::F32)?;
+        let (xs_storage, xs_layout) = xs_f32.storage_and_layout();
+        let xs_cuda = match &*xs_storage {
+            Storage::Cuda(c) => c,
+            _ => candle_core::bail!("expected CUDA tensor"),
+        };
+        let xs_slice = xs_cuda.as_cuda_slice::<f32>()?;
+        assert!(xs_layout.start_offset() == 0);
+        quantize_q8_1(&xs_slice, &mut input_quant, k, num_rows, dev)?;
+    }
 
     Ok((input_quant, k, k_padded))
 }
@@ -619,8 +645,9 @@ pub fn indexed_moe_fused_decode(
     let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
 
     // Step 2: Fused gate+up+activation+multiply
+    // SAFETY: gate_up kernel writes every element, no zeroing needed
     let gate_up_outsize = batch * topk * intermediate_size;
-    let gate_up_out = dev.alloc_zeros::<f32>(gate_up_outsize)?;
+    let gate_up_out = unsafe { dev.alloc::<f32>(gate_up_outsize)? };
 
     let gate_ptr = gate_qt.device_ptr()? as *const std::ffi::c_void;
     let up_ptr = up_qt.device_ptr()? as *const std::ffi::c_void;
@@ -680,7 +707,8 @@ pub fn indexed_moe_fused_decode(
     let num_blocks_per_row = k_down_padded / q8_1_block_size;
     let dst_row_size_bytes = num_blocks_per_row * q8_1_type_size;
     let y_size_in_bytes = intermediate_rows * dst_row_size_bytes;
-    let mut intermediate_q8 = dev.alloc_zeros::<u8>(y_size_in_bytes)?;
+    // SAFETY: quantize_q8_1 kernel writes every element, no zeroing needed
+    let mut intermediate_q8 = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
     quantize_q8_1(
         &gate_up_out,
         &mut intermediate_q8,
