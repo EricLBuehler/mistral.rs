@@ -670,7 +670,7 @@ vec_dot_q6_K_q8_1(const void *__restrict__ vbq,
   return vec_dot_q6_K_q8_1_impl_mmvq(vl, vh, u, scales, bq6_K->d, d8);
 }
 
-// quantize_q8_1 kernel
+// quantize_q8_1 kernel (F32 input)
 extern "C" __global__ void quantize_q8_1(const float *__restrict__ x,
                                          void *__restrict__ vy, const int kx,
                                          const int kx_padded) {
@@ -705,6 +705,102 @@ extern "C" __global__ void quantize_q8_1(const float *__restrict__ x,
 
   reinterpret_cast<half &>(y[ib].ds.x) = d;
   reinterpret_cast<half &>(y[ib].ds.y) = sum;
+}
+
+// quantize_q8_1 kernel (BF16 input — fuses bf16→f32 cast + quantization)
+extern "C" __global__ void quantize_q8_1_bf16(const __nv_bfloat16 *__restrict__ x,
+                                              void *__restrict__ vy, const int kx,
+                                              const int kx_padded) {
+  const int ix = blockDim.x * blockIdx.x + threadIdx.x;
+
+  if (ix >= kx_padded) {
+    return;
+  }
+
+  const int iy = blockDim.y * blockIdx.y + threadIdx.y;
+  const int i_padded = iy * kx_padded + ix;
+  block_q8_1 *y = (block_q8_1 *)vy;
+
+  const int ib = i_padded / QK8_1;
+  const int iqs = i_padded % QK8_1;
+
+  const float xi = ix < kx ? __bfloat162float(x[iy * kx + ix]) : 0.0f;
+  float amax = fabsf(xi);
+  float sum = xi;
+
+  amax = warp_reduce_max(amax);
+  sum = warp_reduce_sum(sum);
+
+  const float d = amax / 127;
+  const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
+
+  y[ib].qs[iqs] = q;
+
+  if (iqs > 0) {
+    return;
+  }
+
+  reinterpret_cast<half &>(y[ib].ds.x) = d;
+  reinterpret_cast<half &>(y[ib].ds.y) = sum;
+}
+
+// quantize_q8_1 kernel (F16 input — fuses f16→f32 cast + quantization)
+extern "C" __global__ void quantize_q8_1_f16(const half *__restrict__ x,
+                                              void *__restrict__ vy, const int kx,
+                                              const int kx_padded) {
+  const int ix = blockDim.x * blockIdx.x + threadIdx.x;
+
+  if (ix >= kx_padded) {
+    return;
+  }
+
+  const int iy = blockDim.y * blockIdx.y + threadIdx.y;
+  const int i_padded = iy * kx_padded + ix;
+  block_q8_1 *y = (block_q8_1 *)vy;
+
+  const int ib = i_padded / QK8_1;
+  const int iqs = i_padded % QK8_1;
+
+  const float xi = ix < kx ? __half2float(x[iy * kx + ix]) : 0.0f;
+  float amax = fabsf(xi);
+  float sum = xi;
+
+  amax = warp_reduce_max(amax);
+  sum = warp_reduce_sum(sum);
+
+  const float d = amax / 127;
+  const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
+
+  y[ib].qs[iqs] = q;
+
+  if (iqs > 0) {
+    return;
+  }
+
+  reinterpret_cast<half &>(y[ib].ds.x) = d;
+  reinterpret_cast<half &>(y[ib].ds.y) = sum;
+}
+
+// Launch wrapper for BF16 quantize
+extern "C" void launch_quantize_q8_1_bf16(const void *x, void *vy,
+                                           int kx, int kx_padded,
+                                           int num_rows, void *stream) {
+  int num_blocks_x = (kx_padded + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
+  dim3 grid(num_blocks_x, num_rows, 1);
+  dim3 block(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
+  cudaStream_t s = static_cast<cudaStream_t>(stream);
+  quantize_q8_1_bf16<<<grid, block, 0, s>>>((const __nv_bfloat16 *)x, vy, kx, kx_padded);
+}
+
+// Launch wrapper for F16 quantize
+extern "C" void launch_quantize_q8_1_f16(const void *x, void *vy,
+                                          int kx, int kx_padded,
+                                          int num_rows, void *stream) {
+  int num_blocks_x = (kx_padded + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
+  dim3 grid(num_blocks_x, num_rows, 1);
+  dim3 block(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
+  cudaStream_t s = static_cast<cudaStream_t>(stream);
+  quantize_q8_1_f16<<<grid, block, 0, s>>>((const half *)x, vy, kx, kx_padded);
 }
 
 // indexed_moe_forward template
@@ -1076,8 +1172,9 @@ static __device__ __forceinline__ float silu(float x) {
 
 // Fused gate+up+activation+multiply kernel template
 // Computes: output = up(x) * activation(gate(x)) for each expert assignment
-// Grid: (ceildiv(n, ROWS_PER_BLOCK), topk, batch)
-// Block: (WARP_SIZE, 1, 1)
+// Grid: (ceildiv(n, NWARPS * ROWS_PER_WARP), topk, batch)
+// Block: (WARP_SIZE, NWARPS, 1)
+// Each warp independently handles ROWS_PER_WARP output rows
 template <int qk, int qi, typename block_q_t, int vdr,
           vec_dot_q_cuda_t vec_dot_q_cuda>
 __device__ void moe_gemv_fused_gate_up_impl(
@@ -1090,9 +1187,12 @@ __device__ void moe_gemv_fused_gate_up_impl(
     const int topk, const int k_padded,
     const int act_type) {  // 0=gelu_pytorch_tanh, 1=silu
 
-  constexpr int ROWS_PER_BLOCK = 2;
+  constexpr int ROWS_PER_WARP = 2;
+  constexpr int NWARPS = 4;
+  constexpr int ROWS_PER_BLOCK = NWARPS * ROWS_PER_WARP;
 
-  const int row0 = ROWS_PER_BLOCK * blockIdx.x;
+  const int warp_id = threadIdx.y;
+  const int row0 = ROWS_PER_BLOCK * blockIdx.x + warp_id * ROWS_PER_WARP;
   const int current_topk = blockIdx.y;
   const int current_batch = blockIdx.z;
 
@@ -1119,7 +1219,7 @@ __device__ void moe_gemv_fused_gate_up_impl(
 
   float *out = all_outputs + (size_t)task_id * n;
 
-  for (int r = 0; r < ROWS_PER_BLOCK && row0 + r < n; ++r) {
+  for (int r = 0; r < ROWS_PER_WARP && row0 + r < n; ++r) {
     const int row = row0 + r;
     float g_sum = 0.0f;
     float u_sum = 0.0f;
@@ -1147,8 +1247,9 @@ __device__ void moe_gemv_fused_gate_up_impl(
 // Fused down+aggregate kernel template
 // Computes: output[batch] += topk_weight * down_proj(intermediate) for each expert
 // Uses atomicAdd for cross-expert aggregation
-// Grid: (ceildiv(n, ROWS_PER_BLOCK), topk, batch)
-// Block: (WARP_SIZE, 1, 1)
+// Grid: (ceildiv(n, NWARPS * ROWS_PER_WARP), topk, batch)
+// Block: (WARP_SIZE, NWARPS, 1)
+// Each warp independently handles ROWS_PER_WARP output rows
 template <int qk, int qi, typename block_q_t, int vdr,
           vec_dot_q_cuda_t vec_dot_q_cuda>
 __device__ void moe_gemv_down_aggregate_impl(
@@ -1160,9 +1261,12 @@ __device__ void moe_gemv_down_aggregate_impl(
     const int n, const int k, const int batch,
     const int topk, const int k_padded) {
 
-  constexpr int ROWS_PER_BLOCK = 4;
+  constexpr int ROWS_PER_WARP = 4;
+  constexpr int NWARPS = 4;
+  constexpr int ROWS_PER_BLOCK = NWARPS * ROWS_PER_WARP;
 
-  const int row0 = ROWS_PER_BLOCK * blockIdx.x;
+  const int warp_id = threadIdx.y;
+  const int row0 = ROWS_PER_BLOCK * blockIdx.x + warp_id * ROWS_PER_WARP;
   const int current_topk = blockIdx.y;
   const int current_batch = blockIdx.z;
 
@@ -1192,7 +1296,7 @@ __device__ void moe_gemv_down_aggregate_impl(
   // Output is aggregated across experts: [batch, n]
   float *out = all_outputs + (size_t)current_batch * n;
 
-  for (int r = 0; r < ROWS_PER_BLOCK && row0 + r < n; ++r) {
+  for (int r = 0; r < ROWS_PER_WARP && row0 + r < n; ++r) {
     const int row = row0 + r;
     float tmp = 0.0f;
 
@@ -1276,8 +1380,11 @@ extern "C" void launch_moe_gemv_fused_gate_up_##suffix( \
     const void *all_inputs, const unsigned int *indices, \
     float *all_outputs, int n, int k, int batch, \
     int topk, int k_padded, int act_type, void *stream) { \
-  dim3 grid((n + 1) / 2, topk, batch); \
-  dim3 block(WARP_SIZE, 1, 1); \
+  const int NWARPS = 4; \
+  const int ROWS_PER_WARP = 2; \
+  const int ROWS_PER_BLOCK = NWARPS * ROWS_PER_WARP; \
+  dim3 grid((n + ROWS_PER_BLOCK - 1) / ROWS_PER_BLOCK, topk, batch); \
+  dim3 block(WARP_SIZE, NWARPS, 1); \
   cudaStream_t s = static_cast<cudaStream_t>(stream); \
   moe_gemv_fused_gate_up_##suffix<<<grid, block, 0, s>>>( \
       gate_weights, up_weights, all_inputs, indices, all_outputs, \
@@ -1304,8 +1411,11 @@ extern "C" void launch_moe_gemv_down_aggregate_##suffix( \
     const unsigned int *indices, const float *topk_weights_ptr, \
     float *all_outputs, int n, int k, int batch, \
     int topk, int k_padded, void *stream) { \
-  dim3 grid((n + 3) / 4, topk, batch); \
-  dim3 block(WARP_SIZE, 1, 1); \
+  const int NWARPS = 4; \
+  const int ROWS_PER_WARP = 4; \
+  const int ROWS_PER_BLOCK = NWARPS * ROWS_PER_WARP; \
+  dim3 grid((n + ROWS_PER_BLOCK - 1) / ROWS_PER_BLOCK, topk, batch); \
+  dim3 block(WARP_SIZE, NWARPS, 1); \
   cudaStream_t s = static_cast<cudaStream_t>(stream); \
   moe_gemv_down_aggregate_##suffix<<<grid, block, 0, s>>>( \
       all_weights, all_inputs, indices, topk_weights_ptr, all_outputs, \
