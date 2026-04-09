@@ -481,26 +481,41 @@ pub fn quantize_input_q8_1(xs: &Tensor, dev: &CudaDevice) -> Result<(CudaSlice<u
     // SAFETY: quantize kernel writes all elements up to k_padded per row
     let mut input_quant = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
 
-    // Use fused BF16->Q8_1 kernel when input is BF16
-    if xs_contig.dtype() == candle_core::DType::BF16 {
+    // Use fused half->Q8_1 kernels when input is BF16/F16 (avoids separate cast kernel)
+    if xs_contig.dtype() == candle_core::DType::BF16 || xs_contig.dtype() == candle_core::DType::F16
+    {
         let (xs_storage, xs_layout) = xs_contig.storage_and_layout();
         let xs_cuda = match &*xs_storage {
             Storage::Cuda(c) => c,
             _ => candle_core::bail!("expected CUDA tensor"),
         };
-        let xs_slice = xs_cuda.as_cuda_slice::<half::bf16>()?;
         assert!(xs_layout.start_offset() == 0);
         let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
         let (out_ptr, _og) = slice_ptr(&input_quant, 0);
-        unsafe {
-            ffi::launch_quantize_q8_1_bf16(
-                xs_slice.slice(0..).device_ptr(xs_slice.stream()).0 as *const std::ffi::c_void,
-                out_ptr as *mut std::ffi::c_void,
-                k as i32,
-                k_padded as i32,
-                num_rows as i32,
-                stream,
-            );
+        if xs_contig.dtype() == candle_core::DType::BF16 {
+            let xs_slice = xs_cuda.as_cuda_slice::<half::bf16>()?;
+            unsafe {
+                ffi::launch_quantize_q8_1_bf16(
+                    xs_slice.slice(0..).device_ptr(xs_slice.stream()).0 as *const std::ffi::c_void,
+                    out_ptr as *mut std::ffi::c_void,
+                    k as i32,
+                    k_padded as i32,
+                    num_rows as i32,
+                    stream,
+                );
+            }
+        } else {
+            let xs_slice = xs_cuda.as_cuda_slice::<half::f16>()?;
+            unsafe {
+                ffi::launch_quantize_q8_1_f16(
+                    xs_slice.slice(0..).device_ptr(xs_slice.stream()).0 as *const std::ffi::c_void,
+                    out_ptr as *mut std::ffi::c_void,
+                    k as i32,
+                    k_padded as i32,
+                    num_rows as i32,
+                    stream,
+                );
+            }
         }
     } else {
         let xs_f32 = xs_contig.to_dtype(candle_core::DType::F32)?;
