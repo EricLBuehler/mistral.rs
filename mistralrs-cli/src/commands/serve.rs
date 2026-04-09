@@ -1,8 +1,6 @@
-//! Server command implementation
+//! Server command implementation — converts CLI args and delegates to mistralrs-serve.
 
 use anyhow::{Context, Result};
-use tracing::info;
-
 use mistralrs_core::{
     initialize_logging, DiffusionLoaderType, ModelSelected, PagedCacheType, SpeechLoaderType,
 };
@@ -10,12 +8,12 @@ use mistralrs_server_core::{
     mistralrs_for_server_builder::MistralRsForServerBuilder,
     mistralrs_server_router_builder::MistralRsServerRouterBuilder,
 };
+use tracing::{info, warn};
 
 use crate::args::{
     AdapterOptions, DeviceOptions, FormatOptions, GlobalOptions, ModelFormat, ModelSourceOptions,
     ModelType, QuantizationOptions, RuntimeOptions, ServerOptions,
 };
-use crate::ui::build_ui_router;
 
 /// Run the HTTP server with the specified model
 pub async fn run_server(
@@ -24,97 +22,56 @@ pub async fn run_server(
     runtime: RuntimeOptions,
     global: GlobalOptions,
 ) -> Result<()> {
-    initialize_logging();
-
-    // Convert our clean args to ModelSelected for the existing loader infrastructure
     let model_selected = convert_to_model_selected(&model_type)?;
 
-    // Extract paged attention settings
-    let (
-        paged_attn,
-        paged_attn_gpu_mem,
-        paged_attn_gpu_mem_usage,
-        paged_ctxt_len,
-        paged_attn_block_size,
-        paged_cache_type,
-    ) = extract_paged_attn_settings(&model_type);
+    let paged_attn_tuple = extract_paged_attn_settings(&model_type);
+    let paged_attn = mistralrs_serve::PagedAttnConfig {
+        paged_attn: paged_attn_tuple.0,
+        paged_attn_gpu_mem: paged_attn_tuple.1,
+        paged_attn_gpu_mem_usage: paged_attn_tuple.2,
+        paged_ctxt_len: paged_attn_tuple.3,
+        paged_attn_block_size: paged_attn_tuple.4,
+        paged_cache_type: paged_attn_tuple.5,
+    };
 
-    // Extract device settings
-    let (cpu, device_layers) = extract_device_settings(&model_type);
+    let device_tuple = extract_device_settings(&model_type);
+    let device = mistralrs_serve::DeviceConfig {
+        cpu: device_tuple.0,
+        device_layers: device_tuple.1,
+    };
 
-    // Extract quantization settings
     let isq = extract_isq_setting(&model_type);
 
-    // Build the MistralRs instance
-    let mut builder = MistralRsForServerBuilder::new()
-        .with_model(model_selected)
-        .with_max_seqs(runtime.max_seqs)
-        .with_no_kv_cache(runtime.no_kv_cache)
-        .with_token_source(global.token_source)
-        .with_interactive_mode(false)
-        .with_prefix_cache_n(runtime.prefix_cache_n)
-        .set_paged_attn(paged_attn)
-        .with_cpu(cpu)
-        .with_enable_search(runtime.enable_search)
-        .with_seed_optional(global.seed)
-        .with_log_optional(global.log.as_ref().map(|p| p.to_string_lossy().to_string()))
-        .with_chat_template_optional(
-            runtime
-                .chat_template
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-        )
-        .with_jinja_explicit_optional(
-            runtime
-                .jinja_explicit
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-        )
-        .with_num_device_layers_optional(device_layers)
-        .with_in_situ_quant_optional(isq)
-        .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)
-        .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
-        .with_paged_ctxt_len_optional(paged_ctxt_len)
-        .with_paged_attn_block_size_optional(paged_attn_block_size)
-        .with_paged_attn_cache_type(paged_cache_type);
-
-    if let Some(model) = runtime.search_embedding_model {
-        builder = builder.with_search_embedding_model(model.into());
-    }
-
-    let mistralrs = builder.build().await?;
-    let mistralrs_for_ui = mistralrs.clone();
-
-    // Build and run the server
-    let mut app = MistralRsServerRouterBuilder::new()
-        .with_mistralrs(mistralrs)
-        .with_max_tool_rounds_optional(server.max_tool_rounds)
-        .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
-        .build()
-        .await?;
-
-    if server.ui {
-        let ui_router = build_ui_router(
-            mistralrs_for_ui,
-            runtime.enable_search,
-            runtime.search_embedding_model.map(|m| m.into()),
-        )
-        .await?;
-        app = app.nest("/ui", ui_router);
-        info!("UI available at http://{}:{}/ui", server.host, server.port);
-    }
-
-    let listener =
-        tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
-
-    info!("Server listening on http://{}:{}", server.host, server.port);
-
-    axum::serve(listener, app).await?;
-
-    Ok(())
+    mistralrs_serve::run_server(
+        model_selected,
+        paged_attn,
+        device,
+        isq,
+        mistralrs_serve::ServerConfig {
+            host: server.host,
+            port: server.port,
+            ui: server.ui,
+            idle_timeout_secs: server.idle_timeout_secs,
+        },
+        mistralrs_serve::RuntimeConfig {
+            max_seqs: runtime.max_seqs,
+            no_kv_cache: runtime.no_kv_cache,
+            prefix_cache_n: runtime.prefix_cache_n,
+            enable_search: runtime.enable_search,
+            search_embedding_model: runtime.search_embedding_model.map(|m| m.into()),
+            chat_template: runtime.chat_template,
+            jinja_explicit: runtime.jinja_explicit,
+        },
+        mistralrs_serve::GlobalConfig {
+            token_source: global.token_source,
+            seed: global.seed,
+            log: global.log,
+        },
+    )
+    .await
 }
 
-/// Convert our clean ModelType to the legacy ModelSelected enum
+/// Convert our clean ModelType to the ModelSelected enum
 pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelSelected> {
     match model_type {
         ModelType::Auto {
@@ -126,15 +83,12 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
             cache: _,
             multimodal,
         } => {
-            // If user explicitly specified a quantized format, handle it
             let format_type = format.format.unwrap_or(ModelFormat::Plain);
             let has_lora = adapter.lora.is_some();
             let has_xlora = adapter.xlora.is_some();
 
-            // For GGUF/GGML formats, delegate to text model conversion which has proper validation
             match format_type {
                 ModelFormat::Gguf | ModelFormat::Ggml => {
-                    // Validate that required options are present
                     if format.quantized_file.is_none() {
                         let format_name = match format_type {
                             ModelFormat::Gguf => "GGUF",
@@ -148,18 +102,15 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
                             fmt = format_name.to_lowercase()
                         );
                     }
-                    // Use the text model conversion which handles GGUF/GGML properly
                     return convert_text_model(model, format, adapter, quantization, device);
                 }
                 ModelFormat::Plain => {
-                    // For plain format with adapters, also use text model conversion
                     if has_lora || has_xlora {
                         return convert_text_model(model, format, adapter, quantization, device);
                     }
                 }
             }
 
-            // Use Run (auto-loader) for auto mode without explicit quantized format
             Ok(ModelSelected::Run {
                 model_id: model.model_id.clone(),
                 tokenizer_json: model
@@ -269,7 +220,6 @@ pub(crate) fn convert_to_model_selected(model_type: &ModelType) -> Result<ModelS
     }
 }
 
-/// Convert text model with orthogonal format/adapter flags
 fn convert_text_model(
     model: &ModelSourceOptions,
     format_opts: &FormatOptions,
@@ -282,7 +232,6 @@ fn convert_text_model(
     let has_xlora = adapter.xlora.is_some();
 
     match (format_type, has_lora, has_xlora) {
-        // Plain format
         (ModelFormat::Plain, false, false) => Ok(ModelSelected::Plain {
             model_id: model.model_id.clone(),
             tokenizer_json: model
@@ -353,7 +302,6 @@ fn convert_text_model(
             hf_cache_path: device.hf_cache.clone(),
         }),
 
-        // GGUF format - quantized_filename is required String
         (ModelFormat::Gguf, false, false) => Ok(ModelSelected::GGUF {
             tok_model_id: format_opts.tok_model_id.clone(),
             quantized_model_id: model.model_id.clone(),
@@ -415,7 +363,6 @@ fn convert_text_model(
             max_batch_size: device.max_batch_size,
         }),
 
-        // GGML format
         (ModelFormat::Ggml, false, false) => Ok(ModelSelected::GGML {
             tok_model_id: format_opts
                 .tok_model_id
@@ -544,4 +491,183 @@ pub(crate) fn extract_isq_setting(model_type: &ModelType) -> Option<String> {
         ModelType::Embedding { quantization, .. } => quantization.in_situ_quant.clone(),
         _ => None,
     }
+}
+
+/// Run the HTTP server with lazy model loading from a models directory.
+pub async fn run_server_lazy(
+    server: crate::args::ServerOptions,
+    runtime: crate::args::RuntimeOptions,
+    global: crate::args::GlobalOptions,
+) -> anyhow::Result<()> {
+    use crate::model_scanner::scan_models_dir;
+
+    initialize_logging();
+
+    let models_dir = server
+        .models_dir
+        .as_ref()
+        .context("--models-dir is required for lazy mode")?;
+
+    if !models_dir.is_dir() {
+        anyhow::bail!("Models directory does not exist: {}", models_dir.display());
+    }
+
+    info!("Scanning models directory: {}", models_dir.display());
+
+    let builder = MistralRsForServerBuilder::new()
+        .with_max_seqs(runtime.max_seqs)
+        .with_no_kv_cache(runtime.no_kv_cache)
+        .with_token_source(global.token_source)
+        .with_interactive_mode(false)
+        .with_prefix_cache_n(runtime.prefix_cache_n)
+        .set_paged_attn(None)
+        .with_seed_optional(global.seed)
+        .with_log_optional(global.log.as_ref().map(|p| p.to_string_lossy().to_string()))
+        .with_idle_timeout_secs(server.idle_timeout_secs);
+
+    let (mistralrs, device, cache_config) = builder.build_empty().await?;
+    let mistralrs_for_ui = mistralrs.clone();
+    let mistralrs_for_watcher = mistralrs.clone();
+
+    let discovered = scan_models_dir(models_dir);
+    if discovered.is_empty() {
+        warn!("No models found in {}", models_dir.display());
+    } else {
+        info!("Found {} model(s):", discovered.len());
+        for model in &discovered {
+            info!("  - {} ({})", model.name, format_label(&model.format));
+        }
+    }
+
+    for model in &discovered {
+        let config = discovered_to_pending_config(model, &device, cache_config.clone())?;
+        if let Err(e) = mistralrs.register_pending_model(&model.name, config) {
+            warn!("Failed to register model '{}': {}", model.name, e);
+        }
+    }
+
+    crate::model_watcher::spawn_model_watcher(
+        mistralrs_for_watcher,
+        models_dir.to_path_buf(),
+        device,
+        cache_config,
+    );
+
+    let mut app = MistralRsServerRouterBuilder::new()
+        .with_mistralrs(mistralrs)
+        .build()
+        .await?;
+
+    if server.ui {
+        let ui_router = mistralrs_serve::ui::build_ui_router(
+            mistralrs_for_ui,
+            runtime.enable_search,
+            runtime.search_embedding_model.map(|m| m.into()),
+        )
+        .await?;
+        app = app.nest("/ui", ui_router);
+        info!("UI available at http://{}:{}/ui", server.host, server.port);
+    }
+
+    let listener =
+        tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
+    info!("Server listening on http://{}:{}", server.host, server.port);
+    info!("Models will be loaded on first request (lazy mode)");
+
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+fn format_label(format: &crate::model_scanner::ModelFileFormat) -> &'static str {
+    match format {
+        crate::model_scanner::ModelFileFormat::Gguf { .. } => "GGUF",
+        crate::model_scanner::ModelFileFormat::Ggml { .. } => "GGML",
+        crate::model_scanner::ModelFileFormat::Plain => "Plain",
+    }
+}
+
+/// Convert a DiscoveredModel to a PendingModelConfig.
+pub(crate) fn discovered_to_pending_config(
+    model: &crate::model_scanner::DiscoveredModel,
+    device: &candle_core::Device,
+    paged_attn_config: Option<mistralrs_core::PagedAttentionConfig>,
+) -> anyhow::Result<mistralrs_core::PendingModelConfig> {
+    use crate::model_scanner::ModelFileFormat;
+    use mistralrs_core::{
+        AutoDeviceMapParams, DeviceMapSetting, EngineConfig, ModelDType, ModelSelected,
+        PendingModelConfig, SchedulerConfig, TokenSource,
+    };
+
+    let model_selected = match &model.format {
+        ModelFileFormat::Gguf { filename } => ModelSelected::GGUF {
+            tok_model_id: None,
+            quantized_model_id: model.path.to_string_lossy().to_string(),
+            quantized_filename: filename.clone(),
+            dtype: ModelDType::Auto,
+            topology: None,
+            max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
+        },
+        ModelFileFormat::Ggml { filename } => ModelSelected::GGML {
+            tok_model_id: model.path.to_string_lossy().to_string(),
+            tokenizer_json: None,
+            quantized_model_id: model.path.to_string_lossy().to_string(),
+            quantized_filename: filename.clone(),
+            gqa: 1,
+            dtype: ModelDType::Auto,
+            topology: None,
+            max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
+        },
+        ModelFileFormat::Plain => ModelSelected::Plain {
+            model_id: model.path.to_string_lossy().to_string(),
+            tokenizer_json: None,
+            arch: None,
+            dtype: ModelDType::Auto,
+            topology: None,
+            organization: None,
+            write_uqff: None,
+            from_uqff: None,
+            imatrix: None,
+            calibration_file: None,
+            max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
+            hf_cache_path: None,
+            matformer_config_path: None,
+            matformer_slice_name: None,
+        },
+    };
+
+    let engine_config = EngineConfig {
+        no_kv_cache: false,
+        no_prefix_cache: false,
+        prefix_cache_n: 16,
+        disable_eos_stop: false,
+        throughput_logging_enabled: true,
+        search_embedding_model: None,
+        search_callback: None,
+        tool_callbacks: std::collections::HashMap::new(),
+    };
+
+    let scheduler_config = SchedulerConfig::DefaultScheduler {
+        method: mistralrs_core::DefaultSchedulerMethod::Fixed(16.try_into().unwrap()),
+    };
+
+    Ok(PendingModelConfig {
+        model_selected,
+        token_source: TokenSource::CacheToken,
+        dtype: ModelDType::Auto,
+        device: device.clone(),
+        device_map_setting: DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()),
+        isq: None,
+        paged_attn_config,
+        silent: true,
+        chat_template: None,
+        jinja_explicit: None,
+        engine_config,
+        scheduler_config,
+        category: mistralrs_core::ModelCategory::Text,
+        mcp_client_config: None,
+    })
 }

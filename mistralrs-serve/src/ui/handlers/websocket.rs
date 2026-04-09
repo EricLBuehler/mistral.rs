@@ -120,6 +120,8 @@ where
                     }
                 }
             }
+            // Signal end of generation to the client
+            let _ = socket.send(Message::Text("[DONE]".into())).await;
             Ok(assistant_reply)
         }
         Err(e) => {
@@ -270,11 +272,13 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                         let cur = app.current.read().await;
                         cur.clone()
                     };
-                    let model_kind = model_id
-                        .as_ref()
-                        .and_then(|id| app.models.get(id))
-                        .map(|m| m.kind.as_str())
-                        .unwrap_or("text");
+                    let model_kind = {
+                        let models = app.models.read().await;
+                        model_id
+                            .as_ref()
+                            .and_then(|id| models.get(id).map(|m| m.kind.clone()))
+                            .unwrap_or_else(|| "text".to_string())
+                    };
 
                     if model_kind == "multimodal" {
                         if is_user && !msg.images.is_empty() {
@@ -330,16 +334,28 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 continue;
             }
         };
-        let model_kind = app
-            .models
-            .get(&model_id)
-            .map(|m| m.kind.clone())
-            .unwrap_or_else(|| "text".to_string());
-        let generation_defaults = app
-            .models
-            .get(&model_id)
-            .map(|m| m.generation_defaults.clone())
-            .unwrap_or_else(|| app.default_params.clone());
+
+        // Check if model is pending and notify client
+        let (is_pending, model_kind, generation_defaults) = {
+            let models = app.models.read().await;
+            let is_pending = models
+                .get(&model_id)
+                .and_then(|m| m.status.as_deref())
+                .map(|s| s == "pending")
+                .unwrap_or(false);
+            let model_kind = models
+                .get(&model_id)
+                .map(|m| m.kind.clone())
+                .unwrap_or_else(|| "text".to_string());
+            let generation_defaults = models
+                .get(&model_id)
+                .map(|m| m.generation_defaults.clone())
+                .unwrap_or_else(|| app.default_params.clone());
+            (is_pending, model_kind, generation_defaults)
+        };
+        if is_pending {
+            let _ = socket.send(Message::Text("[LOADING]".into())).await;
+        }
 
         let mut gen_params: Option<MessageGenerationParams> = None;
         let mut web_search_opts: Option<WebSearchOptions> = None;

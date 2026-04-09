@@ -20,28 +20,11 @@ function wsUrl(path) {
 }
 
 /**
- * Render markdown to HTML with proper escaping
+ * Render markdown to HTML with proper escaping (DOMPurify handles sanitization)
  */
 function renderMarkdown(src) {
-  // Helper: escape & < > once
-  const escape = s =>
-    s.replace(/&(?![a-zA-Z0-9#]+;)/g,'&amp;')
-     .replace(/</g,'&lt;')
-     .replace(/>/g,'&gt;');
-
-  // Split the markdown into segments that are either
-  // (1) fenced code blocks  ``` ... ```
-  // (2) inline code  `...`
-  // (3) normal text  (everything else)
-  //
-  // We only escape (3).
-  const pattern = /(```[\s\S]*?```|`[^`]*`)/g;
-  const escaped = src.split(pattern).map(seg=>{
-    // segments that start with back-tick are code, keep raw
-    return seg.startsWith('`') ? seg : escape(seg);
-  }).join('');
-
-  return marked.parse(escaped);
+  const rawHtml = marked.parse(src);
+  return DOMPurify.sanitize(rawHtml);
 }
 
 /**
@@ -51,10 +34,14 @@ function append(html, cls = '') {
   const d = document.createElement('div');
   if (cls) d.className = cls;
   d.innerHTML = html;
-  addCopyBtns(d); 
+  addCopyBtns(d);
   fixLinks(d);
-  log.appendChild(d); 
-  log.scrollTop = log.scrollHeight; 
+  // Apply syntax highlighting to code blocks
+  d.querySelectorAll('pre code').forEach(block => {
+    hljs.highlightElement(block);
+  });
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
   return d;
 }
 
@@ -145,15 +132,15 @@ function updateImageVisibility(kind) {
   const isText = (kind === 'text');
 
   // Show audio upload for vision models as well (covers audio-enabled models)
-  audioLabel.style.display = isVision ? 'inline-block' : 'none';
+  audioLabel.style.display = isVision ? '' : 'none';
   if (!isVision) audioInput.value = '';
   
   // Toggle image upload only for vision models
-  imageLabel.style.display = isVision ? 'inline-block' : 'none';
+  imageLabel.style.display = isVision ? '' : 'none';
   if (!isVision) imageInput.value = '';
   
   // Toggle file upload only for text models
-  textLabel.style.display = isText ? 'inline-block' : 'none';
+  textLabel.style.display = isText ? '' : 'none';
   if (!isText) textInput.value = '';
 }
 

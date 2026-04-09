@@ -18,6 +18,10 @@ const mainArea = document.getElementById('main');
  * Initialize the entire application
  */
 async function initApp() {
+  // Initialize theme (must be first to prevent flash)
+  initTheme();
+  initThemeToggle();
+
   // Initialize WebSocket connection
   initWebSocket();
 

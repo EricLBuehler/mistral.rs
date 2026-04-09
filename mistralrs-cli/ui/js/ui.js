@@ -273,28 +273,19 @@ function initDragAndDrop() {
 function initStopButton() {
   const stopBtn = document.getElementById('stopBtn');
   if (!stopBtn) return;
+  // Start hidden
+  stopBtn.classList.add('hidden');
   stopBtn.addEventListener('click', async () => {
-    // Save partial assistant response
-    if (typeof assistantBuf !== 'undefined' && assistantBuf) {
-      if (typeof currentChatId !== 'undefined' && currentChatId) {
-        try {
-          await fetch(apiUrl('api/append_message'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: currentChatId, role: 'assistant', content: assistantBuf })
-          });
-        } catch (e) {
-          console.error('Failed to append partial message:', e);
-        }
-      }
+    // Tell the server to cancel generation
+    try {
+      await fetch(apiUrl('api/stop'), { method: 'POST' });
+    } catch (e) {
+      console.error('Failed to stop generation:', e);
     }
-    // Close and reset WebSocket
-    if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+    // Mark generation as stopped so straggling tokens are ignored
+    generationStopped = true;
     hideSpinner();
-    assistantBuf = '';
-    assistantDiv = null;
-    // Reconnect WebSocket for further messages
-    initWebSocket();
+    hideStopBtn();
   });
 }
 
@@ -321,6 +312,7 @@ function initUI() {
   initDragAndDrop();
   initWebSearchControls();
   initStopButton();
+  initSidebarToggle();
 }
 
 // ---------------------- Audio Upload ----------------------
@@ -379,4 +371,38 @@ function initAudioUpload() {
     await handleAudioUpload(f);
     audioInput.value = '';
   });
+}
+
+// ---------------------- Sidebar Toggle (Mobile) ----------------------
+
+function initSidebarToggle() {
+  const toggleBtn = document.getElementById('sidebarToggle');
+  const overlay = document.getElementById('sidebarOverlay');
+  const sidebar = document.getElementById('sidebar');
+
+  if (!toggleBtn || !overlay) return;
+
+  function openSidebar() {
+    document.body.classList.add('sidebar-open');
+  }
+
+  function closeSidebar() {
+    document.body.classList.remove('sidebar-open');
+  }
+
+  toggleBtn.addEventListener('click', () => {
+    if (document.body.classList.contains('sidebar-open')) {
+      closeSidebar();
+    } else {
+      openSidebar();
+    }
+  });
+
+  overlay.addEventListener('click', closeSidebar);
+
+  // Close sidebar when a chat item is clicked (mobile UX)
+  const chatList = document.getElementById('chatList');
+  if (chatList) {
+    chatList.addEventListener('click', closeSidebar);
+  }
 }

@@ -9,3 +9,8 @@ mistralrs-web-chat/cache
 
 # mdbook output
 docs/book/
+
+# Local build tooling (machine-specific)
+build.bat
+nvcc_wrapper.bat
+deploy.ps1

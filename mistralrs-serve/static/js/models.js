@@ -8,10 +8,14 @@ let prevModel = null;
  * Refresh the list of available models
  */
 async function refreshModels() {
-  const res = await fetch(apiUrl('api/list_models'));
+  const res = await fetch(apiUrl('api/refresh_models'));
+  if (!res.ok) {
+    throw new Error(`Failed to refresh models (HTTP ${res.status})`);
+  }
   const data = await res.json();
   const modelSelect = document.getElementById('modelSelect');
   
+  const prevValue = modelSelect.value;
   modelSelect.innerHTML = '';
   Object.keys(models).forEach(k => delete models[k]);
   
@@ -19,17 +23,30 @@ async function refreshModels() {
     models[m.name] = m.kind;
     const opt = document.createElement('option');
     opt.value = m.name;
-    // Prefix icon based on model kind
-    let prefix = '📝 ';
-    if (m.kind === 'vision') prefix = '🖼️ ';
-    else if (m.kind === 'speech') prefix = '🔊 ';
-    opt.textContent = prefix + m.name;
+    const statusIcon = {
+      'loaded': '\u25CF',
+      'pending': '\u25CB',
+      'reloading': '\u27F3',
+      'unloaded': '\u25CB'
+    }[m.status] || '';
+    opt.textContent = m.status && m.status !== 'loaded' 
+      ? `${statusIcon} ${m.name} (${m.status})`
+      : m.name;
+    opt.dataset.status = m.status || 'loaded';
     modelSelect.appendChild(opt);
   });
   
-  if (modelSelect.options.length) {
+  // Restore previous selection if still available
+  if (prevValue && [...modelSelect.options].some(o => o.value === prevValue)) {
+    modelSelect.value = prevValue;
+  }
+  
+  if (modelSelect.options.length && !modelSelect.value) {
     modelSelect.selectedIndex = 0;
-    prevModel = modelSelect.value;
+  }
+  
+  prevModel = modelSelect.value;
+  if (prevModel) {
     updateImageVisibility(models[prevModel]);
     await selectModel(prevModel, false);
   }
@@ -37,6 +54,12 @@ async function refreshModels() {
   await refreshChatList();
   if (!currentChatId) {
     document.getElementById('newChatBtn').click();
+  }
+
+  // Periodically refresh model list to catch status changes
+  if (!refreshModels._intervalSet) {
+    refreshModels._intervalSet = true;
+    setInterval(refreshModels, 30000);
   }
 }
 

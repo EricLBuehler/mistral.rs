@@ -8,17 +8,22 @@ This file provides instructions for AI agents to understand the layout of the `m
 - `/mistralrs/`           : Main Rust crate (text & multimodal inference API)
 - `/mistralrs-core/`      : Core inference logic and tensor operations (text models)
 - `/mistralrs-vision/`    : Image processing utilities (resizing, preprocessing for multimodal models)
+- `/mistralrs-audio/`     : Audio processing
 - `/mistralrs-quant/`     : Quantization support (ISQ, GGUF, GPTQ, AWQ, FP8, HQQ, etc.)
 - `/mistralrs-paged-attn/`: PagedAttention implementation
 - `/mistralrs-pyo3/`      : Python bindings (PyO3)
 - `/mistralrs-cli/`       : Unified CLI binary (commands: run, serve, bench, from-config)
 - `/mistralrs-server-core/`: Shared server core logic
+- `/mistralrs-server/`    : Server binary (standalone, separate from CLI)
+- `/mistralrs-serve/`     : Web UI and HTTP API (served by mistralrs-cli/mistralrs-server)
+- `/mistralrs-mcp/`       : Model Context Protocol client
+- `/mistralrs-macros/`    : Procedural macros for derive helpers
 - `/mistralrs-web-chat/`  : (Deprecated) Use `mistralrs serve --ui` instead
 - `/mistralrs-bench/`     : (Deprecated) Use `mistralrs bench` instead
 - `/docs/`                : Markdown documentation for models, features, and guides
 - `/examples/`            : Usage examples (Rust, Python, server samples, notebooks)
 - `/chat_templates/`      : Chat formatting templates (JSON/Jinja)
-- `/scripts/`             : Utility scripts (e.g., AWQ conversion)
+- `/scripts/`             : Utility scripts (e.g., AWZ conversion)
   
 ## Feature Organization
 
@@ -63,6 +68,61 @@ Mistral.rs supports multiple model types and advanced features via dedicated cra
    cargo build --release --package mistralrs-cli --features "<features>"
    cargo install --path mistralrs-cli --features "<features>"
    ```
+
+### Building with CUDA on this machine
+
+This machine has CUDA 13.2 at `E:\Cuda` and Visual Studio 2022 (v18) at `E:\Program Files\Microsoft Visual Studio\18\Community`. The shell session does NOT have MSVC in PATH by default — you must source `vcvars64.bat` first.
+
+**The CCCL + MSVC preprocessor problem:** CUDA 13.2's CCCL library requires MSVC's conformant preprocessor (`/Zc:preprocessor`). MSVC defaults to the "traditional" preprocessor, causing a fatal `#error` in `<cuda/std/__cccl/preprocessor.h>`. The fix is to inject `--compiler-options /Zc:preprocessor` into every nvcc invocation. This is done via an nvcc wrapper script — see `nvcc_wrapper.bat` below. The wrapper is transparent to all CUDA builds (mistralrs-quant, mistralrs-core, candle-kernels) because `cudaforge` respects the `NVCC` env var.
+
+**Local build scripts (DO NOT commit):**
+
+`nvcc_wrapper.bat` — wraps nvcc, injecting `/Zc:preprocessor`:
+```bat
+@echo off
+E:\Cuda\bin\nvcc.exe --compiler-options /Zc:preprocessor %*
+```
+
+`build.bat` — sets up MSVC toolchain, points NVCC to wrapper, runs cargo:
+```bat
+@echo off
+call "E:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >NUL 2>&1
+set CUDA_COMPUTE_CAP=86
+set NVCC=%~dp0nvcc_wrapper.bat
+cargo build --release -p mistralrs-cli --features cuda %*
+```
+
+**Build from PowerShell (one-liner, no local scripts needed):**
+```powershell
+pwsh -NoProfile -Command 'cmd /c "call ""E:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"" >NUL 2>&1 && set CUDA_COMPUTE_CAP=86 && set NVCC=E:\Development\Rust\mistral.rs\nvcc_wrapper.bat && cargo build --release -p mistralrs-cli --features cuda 2>&1"'
+```
+
+**Key env vars:**
+- `NVCC=<path_to_wrapper>` — tells `cudaforge` to use the wrapper instead of raw nvcc (required on this machine with CUDA 13.2 + MSVC)
+- `CUDA_COMPUTE_CAP=86` — target GPU architecture (RTX 3070)
+- `CCCL_IGNORE_MSVC_TRADITIONAL_PREPROCESSOR_WARNING=1` — does NOT work reliably; the wrapper approach above is required instead
+
+**Build only the CLI (no CUDA kernels):**
+```bash
+cargo build --release -p mistralrs-cli
+```
+
+**Deploy to Windows service:**
+- Service name: `MistralRs` (managed by NSSM — Non-Sucking Service Manager)
+- Deploy dir: `E:\MistralRs\`
+- Binary: `target\release\mistralrs.exe` → copy to `E:\MistralRs\mistralrs.exe`
+- Start/stop (requires UAC elevation):
+  ```powershell
+  Start-Process nssm -ArgumentList 'stop','MistralRs' -Verb RunAs -Wait
+  Start-Process nssm -ArgumentList 'start','MistralRs' -Verb RunAs -Wait
+  ```
+- Command: `mistralrs.exe serve --ui --idle-timeout-secs 1800 --models-dir=E:\MistralRs\models -p 1234`
+- **NSSM quoting gotcha:** NSSM calls `CreateProcess` directly (not cmd.exe), so quotes around argument values with spaces get stripped. Use `--param=value` syntax (no quotes needed) instead of `--param "value with spaces"`. Example: `--models-dir=E:\MistralRs\models`, NOT `--models-dir "E:\MistralRs\models"`.
+- Models dir: `E:\MistralRs\models\` (contains llama-3.1-8b, mistral-7b-v03, phi-3.5-mini, qwen3-4b, qwen3-8b)
+- UI override dir: `E:\MistralRs\ui\` (optional disk-based UI files; accessed at `http://127.0.0.1:1234/ui` — note: no trailing slash)
+
+**DO NOT commit:** `build.bat`, `deploy.ps1`, `nvcc_wrapper.bat` (local tooling)
+**DO NOT touch:** `E:\MistralRs\` deployment directory (permission-blocked from git)
 
 ## Models
 

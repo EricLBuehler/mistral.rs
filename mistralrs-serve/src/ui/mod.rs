@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -12,6 +13,7 @@ use mistralrs::{Model, SearchEmbeddingModel};
 use mistralrs_core::{MistralRs, ModelCategory};
 use tokio::fs;
 use tower_http::services::ServeDir;
+use tracing::info;
 
 use crate::ui::handlers::{api::*, websocket::ws_handler};
 use crate::ui::types::{AppState, GenerationParams, UiModelInfo};
@@ -24,9 +26,32 @@ mod utils;
 
 static STATIC_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/static");
 
-async fn static_handler(uri: axum::http::Uri) -> Response<Body> {
+#[derive(Clone)]
+struct UiState {
+    override_dir: Option<Arc<PathBuf>>,
+}
+
+async fn static_handler(
+    axum::extract::State(state): axum::extract::State<UiState>,
+    uri: axum::http::Uri,
+) -> Response<Body> {
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
+
+    // Try disk override first
+    if let Some(ref dir) = state.override_dir {
+        let file_path = dir.join(path);
+        if let Ok(contents) = tokio::fs::read(&file_path).await {
+            let mime = mime_guess::from_path(path).first_or_octet_stream();
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(axum::http::header::CONTENT_TYPE, mime.as_ref())
+                .body(Body::from(contents))
+                .unwrap();
+        }
+    }
+
+    // Fall back to embedded files
     if let Some(file) = STATIC_DIR.get_file(path) {
         let mime = mime_guess::from_path(path).first_or_octet_stream();
         Response::builder()
@@ -44,36 +69,52 @@ async fn static_handler(uri: axum::http::Uri) -> Response<Body> {
 
 fn build_model_list(mistralrs: &Arc<MistralRs>) -> IndexMap<String, UiModelInfo> {
     let mut models = IndexMap::new();
-    if let Ok(list) = mistralrs.list_models() {
-        for model_id in list {
-            if let Ok(category) = mistralrs.get_model_category(Some(&model_id)) {
-                let kind = match category {
+
+    let all_models = mistralrs.list_models_with_status().unwrap_or_default();
+
+    for (model_id, status) in &all_models {
+        let status_str = status.to_string();
+
+        let (kind, generation_defaults) = if status_str == "loaded" {
+            let kind = mistralrs
+                .get_model_category(Some(model_id))
+                .ok()
+                .map(|cat| match cat {
                     ModelCategory::Text => "text",
                     ModelCategory::Multimodal { .. } => "multimodal",
                     ModelCategory::Speech => "speech",
                     ModelCategory::Audio => "audio",
                     ModelCategory::Embedding => "embedding",
                     ModelCategory::Diffusion => "diffusion",
-                };
-                if matches!(kind, "text" | "multimodal" | "speech") {
-                    let generation_defaults = mistralrs
-                        .config(Some(&model_id))
-                        .ok()
-                        .and_then(|cfg| cfg.generation_defaults);
-                    models.insert(
-                        model_id.clone(),
-                        UiModelInfo {
-                            name: model_id,
-                            kind: kind.to_string(),
-                            generation_defaults: GenerationParams::from_model_defaults(
-                                generation_defaults.as_ref(),
-                            ),
-                        },
-                    );
-                }
-            }
+                })
+                .unwrap_or("text");
+
+            let defaults = mistralrs
+                .config(Some(model_id))
+                .ok()
+                .and_then(|cfg| cfg.generation_defaults);
+
+            (
+                kind.to_string(),
+                GenerationParams::from_model_defaults(defaults.as_ref()),
+            )
+        } else {
+            ("text".to_string(), GenerationParams::default())
+        };
+
+        if matches!(kind.as_str(), "text" | "multimodal" | "speech") {
+            models.insert(
+                model_id.clone(),
+                UiModelInfo {
+                    name: model_id.clone(),
+                    kind,
+                    status: Some(status_str),
+                    generation_defaults,
+                },
+            );
         }
     }
+
     models
 }
 
@@ -84,6 +125,16 @@ pub async fn build_ui_router(
 ) -> Result<Router> {
     let models = build_model_list(&mistralrs);
     let model_wrapper = Model::new(mistralrs.clone());
+
+    // Detect UI override directory next to the executable
+    let ui_override_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.join("ui")))
+        .filter(|dir| dir.is_dir());
+    if let Some(ref dir) = ui_override_dir {
+        info!("UI override directory detected: {}", dir.display());
+    }
+    let ui_override_dir = ui_override_dir.map(Arc::new);
 
     let base_cache = get_cache_dir();
     let chats_dir = base_cache.join("chats");
@@ -117,7 +168,7 @@ pub async fn build_ui_router(
 
     let app_state = Arc::new(AppState {
         model: model_wrapper,
-        models,
+        models: tokio::sync::RwLock::new(models),
         current: tokio::sync::RwLock::new(default_model),
         chats_dir: chats_dir.to_string_lossy().to_string(),
         speech_dir: speech_dir.to_string_lossy().to_string(),
@@ -143,10 +194,15 @@ pub async fn build_ui_router(
         .route("/api/append_message", post(append_message))
         .route("/api/settings", get(get_settings))
         .route("/api/generate_speech", post(generate_speech))
+        .route("/api/stop", post(stop_generation))
+        .route("/api/refresh_models", get(refresh_models))
         .nest_service("/speech", get_service(ServeDir::new(speech_dir.clone())))
         .nest_service("/uploads", get_service(ServeDir::new(uploads_dir.clone())))
         .route("/", get(static_handler))
         .route("/{*path}", get(static_handler))
+        .with_state(UiState {
+            override_dir: ui_override_dir,
+        })
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(axum::extract::Extension(app_state));
 

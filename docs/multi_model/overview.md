@@ -255,11 +255,16 @@ Response:
 
 Possible status values:
 - `loaded`: Model is loaded and ready
+- `pending`: Model is registered but not yet loaded (will load on first request)
 - `unloaded`: Model is unloaded but can be reloaded
 - `reloading`: Model is currently being reloaded
 - `not_found`: Model ID not recognized
 - `no_loader_config`: Model cannot be reloaded (missing loader configuration)
 - `internal_error`: An internal error occurred
+
+### Idle Timeout
+
+When the `--idle-timeout-secs` option is set (or `idle_timeout_secs` in the config file), models are automatically unloaded after the specified number of seconds without any requests. Unloaded models are reloaded automatically on the next request targeting them.
 
 ### Auto-Reload
 

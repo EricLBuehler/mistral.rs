@@ -9,7 +9,8 @@
 mod args;
 mod commands;
 mod config;
-mod ui;
+mod model_scanner;
+mod model_watcher;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
@@ -19,7 +20,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 use args::{resolve_model_type, resolve_quantize_model_type, CacheCommand, Cli, Command};
 use commands::{
     run_bench, run_cache_delete, run_cache_list, run_doctor, run_from_config, run_interactive,
-    run_login, run_quantize, run_server, run_tune,
+    run_login, run_quantize, run_server, run_server_lazy, run_tune,
 };
 
 #[tokio::main]
@@ -39,8 +40,12 @@ async fn main() -> Result<()> {
             server,
             runtime,
         } => {
-            let model_type = resolve_model_type(model_type, default_model)?;
-            run_server(model_type, server, runtime, cli.global).await?;
+            if server.models_dir.is_some() {
+                run_server_lazy(server, runtime, cli.global).await?;
+            } else {
+                let model_type = resolve_model_type(model_type, default_model)?;
+                run_server(model_type, server, runtime, cli.global).await?;
+            }
         }
 
         Command::Run {

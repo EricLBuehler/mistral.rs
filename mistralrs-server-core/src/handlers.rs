@@ -144,6 +144,7 @@ pub struct ModelOperationRequest {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, ToSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelStatus {
+    Pending,
     Loaded,
     Unloaded,
     Reloading,
@@ -260,6 +261,7 @@ pub async fn get_model_status(
     match state.get_model_status(&model_id) {
         Ok(Some(core_status)) => {
             let status = match core_status {
+                CoreModelStatus::Pending => ModelStatus::Pending,
                 CoreModelStatus::Loaded => ModelStatus::Loaded,
                 CoreModelStatus::Unloaded => ModelStatus::Unloaded,
                 CoreModelStatus::Reloading => ModelStatus::Reloading,

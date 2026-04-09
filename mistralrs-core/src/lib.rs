@@ -250,6 +250,25 @@ pub struct ModelLoaderConfig {
     pub jinja_explicit: Option<String>,
 }
 
+/// Configuration for a model that is registered but not yet loaded.
+#[derive(Clone)]
+pub struct PendingModelConfig {
+    pub model_selected: ModelSelected,
+    pub token_source: TokenSource,
+    pub dtype: ModelDType,
+    pub device: Device,
+    pub device_map_setting: DeviceMapSetting,
+    pub isq: Option<IsqType>,
+    pub paged_attn_config: Option<PagedAttentionConfig>,
+    pub silent: bool,
+    pub chat_template: Option<String>,
+    pub jinja_explicit: Option<String>,
+    pub engine_config: EngineConfig,
+    pub scheduler_config: SchedulerConfig,
+    pub category: ModelCategory,
+    pub mcp_client_config: Option<McpClientConfig>,
+}
+
 /// State preserved when a model is unloaded.
 /// This contains all the information needed to reload the model on demand.
 #[derive(Clone)]
@@ -276,6 +295,7 @@ struct EngineInstance {
     config: MistralRsConfig,
     category: ModelCategory,
     logger: Arc<IntervalLogger>,
+    last_activity: Mutex<Instant>,
 }
 
 /// The MistralRs struct handles sending requests to multiple engines.
@@ -290,8 +310,9 @@ struct EngineInstance {
 /// 1. `reloading_models`
 /// 2. `engines`
 /// 3. `unloaded_models`
-/// 4. `default_engine_id`
-/// 5. `model_aliases`
+/// 4. `pending_models`
+/// 5. `default_engine_id`
+/// 6. `model_aliases`
 ///
 /// Use scope-based lock management and explicit `drop()` calls.
 pub struct MistralRs {
@@ -300,6 +321,8 @@ pub struct MistralRs {
     unloaded_models: RwLock<HashMap<String, UnloadedModelState>>,
     /// Models currently being reloaded (to prevent concurrent reloads)
     reloading_models: RwLock<HashSet<String>>,
+    /// Models that are registered but not yet loaded (lazy loading)
+    pending_models: RwLock<HashMap<String, PendingModelConfig>>,
     default_engine_id: RwLock<Option<String>>,
     /// Alternate IDs that resolve to primary model IDs.
     model_aliases: RwLock<HashMap<String, String>>,
@@ -307,6 +330,7 @@ pub struct MistralRs {
     id: String,
     creation_time: u64,
     next_request_id: Mutex<RefCell<usize>>,
+    idle_timeout_secs: u64,
 }
 
 #[derive(Clone)]
@@ -329,6 +353,7 @@ struct RebootState {
 /// Model status for loaded/unloaded state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelStatus {
+    Pending,
     Loaded,
     Unloaded,
     Reloading,
@@ -337,6 +362,7 @@ pub enum ModelStatus {
 impl std::fmt::Display for ModelStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ModelStatus::Pending => write!(f, "pending"),
             ModelStatus::Loaded => write!(f, "loaded"),
             ModelStatus::Unloaded => write!(f, "unloaded"),
             ModelStatus::Reloading => write!(f, "reloading"),
@@ -360,6 +386,10 @@ pub enum MistralRsError {
     ModelAlreadyLoaded(String),
     /// Model is already unloaded
     ModelAlreadyUnloaded(String),
+    /// Model is not pending
+    ModelNotPending(String),
+    /// Model is already pending
+    ModelAlreadyPending(String),
 }
 
 impl std::fmt::Display for MistralRsError {
@@ -381,7 +411,7 @@ impl From<MistralRsError> for pyo3::PyErr {
 /// an Engine and a MistralRs instance. The Engine runs on a separate thread, and the MistralRs
 /// instance stays on the calling thread.
 pub struct MistralRsBuilder {
-    pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
+    pipeline: Option<Arc<tokio::sync::Mutex<dyn Pipeline>>>,
     method: SchedulerConfig,
     model_id_override: Option<String>,
     log: Option<String>,
@@ -395,6 +425,7 @@ pub struct MistralRsBuilder {
     tool_callbacks: tools::ToolCallbacksWithTools,
     mcp_client_config: Option<McpClientConfig>,
     loader_config: Option<ModelLoaderConfig>,
+    idle_timeout_secs: Option<u64>,
 }
 
 impl MistralRsBuilder {
@@ -408,7 +439,7 @@ impl MistralRsBuilder {
         search_embedding_model: Option<SearchEmbeddingModel>,
     ) -> Self {
         Self {
-            pipeline,
+            pipeline: Some(pipeline),
             method,
             model_id_override: None,
             log: None,
@@ -422,6 +453,31 @@ impl MistralRsBuilder {
             tool_callbacks: HashMap::new(),
             mcp_client_config: None,
             loader_config: None,
+            idle_timeout_secs: None,
+        }
+    }
+
+    /// Creates a new builder with no pipeline (for lazy-loading / pending-models mode).
+    /// The resulting MistralRs has zero engines and no default model.
+    pub fn new_empty() -> Self {
+        Self {
+            pipeline: None,
+            method: SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(16.try_into().unwrap()),
+            },
+            model_id_override: None,
+            log: None,
+            no_kv_cache: None,
+            no_prefix_cache: None,
+            prefix_cache_n: None,
+            disable_eos_stop: None,
+            throughput_logging_enabled: true,
+            search_embedding_model: None,
+            search_callback: None,
+            tool_callbacks: HashMap::new(),
+            mcp_client_config: None,
+            loader_config: None,
+            idle_timeout_secs: None,
         }
     }
 
@@ -437,6 +493,14 @@ impl MistralRsBuilder {
         self.loader_config = Some(loader_config);
         self
     }
+
+    /// Set the idle timeout in seconds. Models will be automatically unloaded
+    /// after this many seconds without any requests, and reloaded on demand.
+    pub fn with_idle_timeout_secs(mut self, timeout_secs: u64) -> Self {
+        self.idle_timeout_secs = Some(timeout_secs);
+        self
+    }
+
     pub fn with_log(mut self, log: String) -> Self {
         self.log = Some(log);
         self
@@ -520,7 +584,11 @@ impl MistralRsBuilder {
     }
 
     pub async fn build(self) -> Arc<MistralRs> {
-        MistralRs::new(self).await
+        if self.pipeline.is_some() {
+            MistralRs::new(self).await
+        } else {
+            MistralRs::new_empty(self)
+        }
     }
 }
 
@@ -537,6 +605,57 @@ impl Drop for MistralRs {
 }
 
 impl MistralRs {
+    /// Create an empty MistralRs instance with no engines.
+    /// Models must be registered as pending and loaded on demand.
+    fn new_empty(config: MistralRsBuilder) -> Arc<Self> {
+        info!("git revision: {MISTRALRS_GIT_REVISION}");
+        let MistralRsBuilder {
+            pipeline: None,
+            log,
+            idle_timeout_secs,
+            ..
+        } = config
+        else {
+            panic!("new_empty requires a builder created with MistralRsBuilder::new_empty()");
+        };
+
+        let this = Arc::new(Self {
+            engines: RwLock::new(HashMap::new()),
+            unloaded_models: RwLock::new(HashMap::new()),
+            reloading_models: RwLock::new(HashSet::new()),
+            pending_models: RwLock::new(HashMap::new()),
+            default_engine_id: RwLock::new(None),
+            model_aliases: RwLock::new(HashMap::new()),
+            log,
+            id: String::from("lazy-server"),
+            creation_time: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Time travel has occurred!")
+                .as_secs(),
+            next_request_id: Mutex::new(RefCell::new(1)),
+            idle_timeout_secs: idle_timeout_secs.unwrap_or(0),
+        });
+
+        info!("MistralRs instance created in empty/lazy mode — no models loaded");
+
+        // Spawn idle timeout watchdog if configured
+        if this.idle_timeout_secs > 0 {
+            info!(
+                "Idle timeout enabled: models will be unloaded after {}s of inactivity",
+                this.idle_timeout_secs
+            );
+            let this_clone = this.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    Self::check_idle_and_unload(&this_clone);
+                }
+            });
+        }
+
+        this
+    }
+
     /// Create an engine instance with the given configuration
     fn create_engine_instance(
         pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
@@ -636,13 +755,14 @@ impl MistralRs {
             config: mistralrs_config,
             category,
             logger,
+            last_activity: Mutex::new(Instant::now()),
         })
     }
 
     async fn new(config: MistralRsBuilder) -> Arc<Self> {
         info!("git revision: {MISTRALRS_GIT_REVISION}");
         let MistralRsBuilder {
-            pipeline,
+            pipeline: Some(pipeline),
             method,
             model_id_override,
             log,
@@ -656,7 +776,11 @@ impl MistralRs {
             mut tool_callbacks,
             mcp_client_config,
             loader_config,
-        } = config;
+            idle_timeout_secs,
+        } = config
+        else {
+            panic!("MistralRs::new() called with a builder that has no pipeline. Use MistralRs::new_empty() instead.");
+        };
 
         mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
             get_mut_arcmutex!(pipeline).device(),
@@ -833,10 +957,11 @@ impl MistralRs {
         let mut engines = HashMap::new();
         engines.insert(id.clone(), engine_instance);
 
-        Arc::new(Self {
+        let this = Arc::new(Self {
             engines: RwLock::new(engines),
             unloaded_models: RwLock::new(HashMap::new()),
             reloading_models: RwLock::new(HashSet::new()),
+            pending_models: RwLock::new(HashMap::new()),
             default_engine_id: RwLock::new(Some(id.clone())),
             model_aliases: RwLock::new(alias_map),
             log,
@@ -846,7 +971,25 @@ impl MistralRs {
                 .expect("Time travel has occurred!")
                 .as_secs(),
             next_request_id: Mutex::new(RefCell::new(1)),
-        })
+            idle_timeout_secs: idle_timeout_secs.unwrap_or(0),
+        });
+
+        // Spawn idle timeout watchdog if configured
+        if this.idle_timeout_secs > 0 {
+            info!(
+                "Idle timeout enabled: models will be unloaded after {}s of inactivity",
+                this.idle_timeout_secs
+            );
+            let this_clone = this.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    Self::check_idle_and_unload(&this_clone);
+                }
+            });
+        }
+
+        this
     }
 
     /// Attempts to reboot a specific engine by model_id
@@ -931,6 +1074,32 @@ impl MistralRs {
                 .read()
                 .map_err(|_| MistralRsError::SenderPoisoned)?;
             if let Some(engine_instance) = engines.get(&resolved_model_id) {
+                *engine_instance.last_activity.lock().unwrap() = Instant::now();
+                return Ok(engine_instance.sender.clone());
+            }
+        }
+
+        // Check if model is pending (first-time load)
+        let is_pending = {
+            let pending = self
+                .pending_models
+                .read()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            pending.contains_key(&resolved_model_id)
+        };
+
+        if is_pending {
+            tracing::info!(
+                "Model {} is pending, performing first-time load",
+                resolved_model_id
+            );
+            self.load_pending_model_blocking(&resolved_model_id)?;
+
+            let engines = self
+                .engines
+                .read()
+                .map_err(|_| MistralRsError::SenderPoisoned)?;
+            if let Some(engine_instance) = engines.get(&resolved_model_id) {
                 return Ok(engine_instance.sender.clone());
             }
         }
@@ -957,6 +1126,7 @@ impl MistralRs {
                 .read()
                 .map_err(|_| MistralRsError::SenderPoisoned)?;
             if let Some(engine_instance) = engines.get(&resolved_model_id) {
+                *engine_instance.last_activity.lock().unwrap() = Instant::now();
                 return Ok(engine_instance.sender.clone());
             }
         }
@@ -1092,6 +1262,15 @@ impl MistralRs {
             .read()
             .map_err(|_| MistralRsError::EnginePoisoned)?;
         if unloaded.contains_key(&resolved_model_id) {
+            return Ok(true);
+        }
+        drop(unloaded);
+
+        let pending = self
+            .pending_models
+            .read()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
+        if pending.contains_key(&resolved_model_id) {
             return Ok(true);
         }
 
@@ -1438,6 +1617,64 @@ impl MistralRs {
         }
     }
 
+    /// Check all loaded models and unload any that have been idle longer than the configured timeout.
+    fn check_idle_and_unload(this: &Arc<Self>) {
+        let timeout = this.idle_timeout_secs;
+        if timeout == 0 {
+            return;
+        }
+        let timeout_duration = Duration::from_secs(timeout);
+
+        let engine_ids: Vec<String> = {
+            let engines = match this.engines.read() {
+                Ok(e) => e,
+                Err(_) => return,
+            };
+            engines.keys().cloned().collect()
+        };
+
+        for model_id in engine_ids {
+            let idle_duration = {
+                let engines = match this.engines.read() {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                match engines.get(&model_id) {
+                    Some(instance) => match instance.last_activity.lock() {
+                        Ok(last) => last.elapsed(),
+                        Err(_) => continue,
+                    },
+                    None => continue,
+                }
+            };
+
+            if idle_duration >= timeout_duration {
+                // Check if this model has a loader_config (can be reloaded)
+                let has_loader_config = {
+                    let engines = match this.engines.read() {
+                        Ok(e) => e,
+                        Err(_) => continue,
+                    };
+                    engines
+                        .get(&model_id)
+                        .map(|i| i.reboot_state.loader_config.is_some())
+                        .unwrap_or(false)
+                };
+
+                if has_loader_config {
+                    info!(
+                        "Model {} has been idle for {}s (timeout: {}s), unloading",
+                        model_id,
+                        idle_duration.as_secs(),
+                        timeout
+                    );
+                    // Ignore errors - model may have been unloaded concurrently
+                    let _ = this.unload_model(&model_id);
+                }
+            }
+        }
+    }
+
     /// Unload a model from memory while preserving its configuration for later reload.
     /// The model can be reloaded automatically when a request is sent to it, or manually
     /// using `reload_model()`.
@@ -1705,6 +1942,316 @@ impl MistralRs {
         Ok(engines.contains_key(&resolved_model_id))
     }
 
+    /// Register a model that will be loaded lazily on first request.
+    /// The model is registered but not loaded until `get_sender()` targets it.
+    pub fn register_pending_model(
+        &self,
+        model_id: impl Into<String>,
+        config: PendingModelConfig,
+    ) -> Result<(), MistralRsError> {
+        let model_id = model_id.into();
+        let resolved_model_id = self.resolve_alias(&model_id)?;
+
+        // Check for conflicts
+        {
+            let reloading = self
+                .reloading_models
+                .read()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            if reloading.contains(&resolved_model_id) {
+                return Err(MistralRsError::ModelReloading(resolved_model_id));
+            }
+        }
+        {
+            let engines = self
+                .engines
+                .read()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            if engines.contains_key(&resolved_model_id) {
+                return Err(MistralRsError::ModelAlreadyLoaded(resolved_model_id));
+            }
+        }
+        {
+            let unloaded = self
+                .unloaded_models
+                .read()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            if unloaded.contains_key(&resolved_model_id) {
+                return Err(MistralRsError::ModelAlreadyUnloaded(resolved_model_id));
+            }
+        }
+        {
+            let pending = self
+                .pending_models
+                .read()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            if pending.contains_key(&resolved_model_id) {
+                return Err(MistralRsError::ModelAlreadyPending(resolved_model_id));
+            }
+        }
+        {
+            let aliases = self
+                .model_aliases
+                .read()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            if aliases.contains_key(&resolved_model_id) {
+                return Err(MistralRsError::ModelNotFound(format!(
+                    "Model ID '{}' conflicts with an existing alias",
+                    resolved_model_id
+                )));
+            }
+        }
+
+        let mut pending = self
+            .pending_models
+            .write()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
+        pending.insert(resolved_model_id.clone(), config);
+
+        info!(
+            "Model {} registered as pending (lazy load)",
+            resolved_model_id
+        );
+        Ok(())
+    }
+
+    /// Unregister a pending model that has not yet been loaded.
+    /// Returns an error if the model is not in the pending state.
+    pub fn unregister_pending_model(&self, model_id: &str) -> Result<(), MistralRsError> {
+        let resolved_model_id = self.resolve_alias(model_id)?;
+
+        let mut pending = self
+            .pending_models
+            .write()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
+
+        if pending.remove(&resolved_model_id).is_some() {
+            info!("Model {} unregistered from pending", resolved_model_id);
+            Ok(())
+        } else {
+            Err(MistralRsError::ModelNotPending(resolved_model_id))
+        }
+    }
+
+    /// Check if a model is known (loaded, unloaded, pending, or reloading), resolving aliases.
+    /// Unlike `model_exists()`, this also considers pending models.
+    pub fn model_is_known(&self, model_id: &str) -> Result<bool, MistralRsError> {
+        let resolved_model_id = self.resolve_alias(model_id)?;
+
+        let reloading = self
+            .reloading_models
+            .read()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
+        if reloading.contains(&resolved_model_id) {
+            return Ok(true);
+        }
+        drop(reloading);
+
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
+        if engines.contains_key(&resolved_model_id) {
+            return Ok(true);
+        }
+        drop(engines);
+
+        let unloaded = self
+            .unloaded_models
+            .read()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
+        if unloaded.contains_key(&resolved_model_id) {
+            return Ok(true);
+        }
+        drop(unloaded);
+
+        let pending = self
+            .pending_models
+            .read()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
+        if pending.contains_key(&resolved_model_id) {
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    /// Synchronously load a pending model (blocking).
+    /// Moves the model from pending_models through the full load process into engines,
+    /// and stores UnloadedModelState for future reloads.
+    fn load_pending_model_blocking(&self, model_id: &str) -> Result<(), MistralRsError> {
+        // Check if already reloading
+        {
+            let reloading = self
+                .reloading_models
+                .read()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            if reloading.contains(model_id) {
+                return Err(MistralRsError::ModelReloading(model_id.to_string()));
+            }
+        }
+
+        // Mark as reloading
+        {
+            let mut reloading = self
+                .reloading_models
+                .write()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            reloading.insert(model_id.to_string());
+        }
+
+        // Take the pending config
+        let pending_config = {
+            let mut pending = self
+                .pending_models
+                .write()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            pending
+                .remove(model_id)
+                .ok_or_else(|| MistralRsError::ModelNotPending(model_id.to_string()))?
+        };
+
+        // Perform the load synchronously
+        let result = self.do_load_pending_model(model_id, pending_config);
+
+        // Remove from reloading set
+        {
+            let mut reloading = self
+                .reloading_models
+                .write()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            reloading.remove(model_id);
+        }
+
+        result
+    }
+
+    /// Internal method to perform the actual pending model load (synchronous).
+    fn do_load_pending_model(
+        &self,
+        model_id: &str,
+        pending_config: PendingModelConfig,
+    ) -> Result<(), MistralRsError> {
+        use crate::model_loader::LoaderBuilder;
+
+        info!("Loading pending model: {}", model_id);
+
+        // Build the loader from the pending config
+        let loader = LoaderBuilder::new(pending_config.model_selected.clone())
+            .with_chat_template(pending_config.chat_template.clone())
+            .with_jinja_explicit(pending_config.jinja_explicit.clone())
+            .build()
+            .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to build loader: {e}")))?;
+
+        // Load the model
+        let pipeline = loader
+            .load_model_from_hf(
+                None,
+                pending_config.token_source.clone(),
+                &pending_config.dtype,
+                &pending_config.device,
+                pending_config.silent,
+                pending_config.device_map_setting.clone(),
+                pending_config.isq,
+                pending_config.paged_attn_config,
+            )
+            .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to load model: {e}")))?;
+
+        // Get the mistralrs config from the loaded pipeline
+        let mistralrs_config = {
+            let pipeline_guard = pipeline.try_lock().unwrap();
+            let metadata = pipeline_guard.get_metadata();
+            let category = pipeline_guard.category();
+            let device = pipeline_guard.device();
+            let modalities = metadata.modalities.clone();
+            let max_seq_len = match &category {
+                ModelCategory::Diffusion | ModelCategory::Speech => None,
+                _ => Some(metadata.max_seq_len),
+            };
+            let generation_defaults = pipeline_guard.generation_defaults();
+            drop(pipeline_guard);
+            MistralRsConfig {
+                kind: metadata.kind.clone(),
+                device,
+                category: category.clone(),
+                modalities,
+                max_seq_len,
+                generation_defaults,
+            }
+        };
+
+        // Build a ModelLoaderConfig for future reloads
+        let loader_config = ModelLoaderConfig {
+            model_selected: pending_config.model_selected,
+            token_source: pending_config.token_source,
+            hf_revision: None,
+            dtype: pending_config.dtype,
+            device: pending_config.device,
+            device_map_setting: pending_config.device_map_setting,
+            isq: pending_config.isq,
+            paged_attn_config: pending_config.paged_attn_config,
+            silent: pending_config.silent,
+            chat_template: pending_config.chat_template,
+            jinja_explicit: pending_config.jinja_explicit,
+        };
+
+        // Create the reboot state
+        let reboot_state = RebootState {
+            pipeline: pipeline.clone(),
+            method: pending_config.scheduler_config.clone(),
+            no_kv_cache: pending_config.engine_config.no_kv_cache,
+            no_prefix_cache: pending_config.engine_config.no_prefix_cache,
+            prefix_cache_n: pending_config.engine_config.prefix_cache_n,
+            disable_eos_stop: pending_config.engine_config.disable_eos_stop,
+            throughput_logging_enabled: pending_config.engine_config.throughput_logging_enabled,
+            search_embedding_model: pending_config.engine_config.search_embedding_model,
+            search_callback: pending_config.engine_config.search_callback.clone(),
+            tool_callbacks: pending_config.engine_config.tool_callbacks.clone(),
+            mcp_client_config: pending_config.mcp_client_config.clone(),
+            loader_config: Some(loader_config.clone()),
+        };
+
+        // Create the engine instance
+        let engine_instance = Self::create_engine_instance(
+            pipeline,
+            pending_config.scheduler_config.clone(),
+            pending_config.engine_config.clone(),
+            reboot_state,
+        )
+        .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to create engine: {e}")))?;
+
+        // Store UnloadedModelState for future reloads (before moving engine_instance)
+        let unloaded_state = UnloadedModelState {
+            loader_config,
+            scheduler_config: pending_config.scheduler_config.clone(),
+            engine_config: pending_config.engine_config.clone(),
+            mcp_client_config: pending_config.mcp_client_config.clone(),
+            category: pending_config.category.clone(),
+            mistralrs_config,
+        };
+
+        // Add to engines map
+        {
+            let mut engines = self
+                .engines
+                .write()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            engines.insert(model_id.to_string(), engine_instance);
+        }
+
+        // Store unloaded state for future reloads
+        {
+            let mut unloaded = self
+                .unloaded_models
+                .write()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            unloaded.insert(model_id.to_string(), unloaded_state);
+        }
+
+        info!("Model {} loaded from pending successfully", model_id);
+        Ok(())
+    }
+
     /// Get the status of a model, or None if not found
     pub fn get_model_status(&self, model_id: &str) -> Result<Option<ModelStatus>, MistralRsError> {
         let resolved_model_id = self.resolve_alias(model_id)?;
@@ -1738,6 +2285,17 @@ impl MistralRs {
                 .map_err(|_| MistralRsError::EnginePoisoned)?;
             if unloaded.contains_key(&resolved_model_id) {
                 return Ok(Some(ModelStatus::Unloaded));
+            }
+        }
+
+        // Check if pending
+        {
+            let pending = self
+                .pending_models
+                .read()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            if pending.contains_key(&resolved_model_id) {
+                return Ok(Some(ModelStatus::Pending));
             }
         }
 
@@ -1777,6 +2335,19 @@ impl MistralRs {
             // Skip if already in reloading
             if !result.iter().any(|(id, _)| id == model_id) {
                 result.push((model_id.clone(), ModelStatus::Unloaded));
+            }
+        }
+        drop(unloaded);
+
+        // Get pending models
+        let pending = self
+            .pending_models
+            .read()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
+        for model_id in pending.keys() {
+            // Skip if already in result
+            if !result.iter().any(|(id, _)| id == model_id) {
+                result.push((model_id.clone(), ModelStatus::Pending));
             }
         }
 

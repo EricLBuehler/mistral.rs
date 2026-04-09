@@ -544,6 +544,7 @@ The `status` field in responses can be one of:
 | Status | Description |
 |--------|-------------|
 | `loaded` | Model is loaded and ready to serve requests |
+| `pending` | Model is registered but not yet loaded (will load on first request) |
 | `unloaded` | Model is unloaded but can be reloaded |
 | `reloading` | Model is currently being reloaded |
 | `not_found` | Model ID not recognized |
@@ -558,6 +559,10 @@ When an error occurs, the response may include an `error` field with additional 
   "error": null
 }
 ```
+
+### Idle Timeout
+
+When the `--idle-timeout-secs` option is set (or `idle_timeout_secs` in the config file), models are automatically unloaded after the specified number of seconds without any requests. Unloaded models are reloaded automatically on the next request targeting them. This works in both single-model and multi-model modes.
 
 ### Auto-Reload Behavior
 

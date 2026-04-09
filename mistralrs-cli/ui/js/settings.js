@@ -313,3 +313,40 @@ async function initSettings() {
   await loadSettings();
   initSettingsHandlers();
 }
+
+// ===== Theme Toggle =====
+
+/**
+ * Initialize theme from localStorage or system preference
+ */
+function initTheme() {
+  const stored = localStorage.getItem('mistralrs_theme');
+  if (stored === 'dark') {
+    document.documentElement.classList.add('dark');
+  } else if (stored === 'light') {
+    document.documentElement.classList.remove('dark');
+  } else {
+    // No stored preference — follow system
+    if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      document.documentElement.classList.add('dark');
+    }
+  }
+}
+
+/**
+ * Toggle between light and dark mode
+ */
+function toggleTheme() {
+  const isDark = document.documentElement.classList.toggle('dark');
+  localStorage.setItem('mistralrs_theme', isDark ? 'dark' : 'light');
+}
+
+/**
+ * Initialize theme toggle button
+ */
+function initThemeToggle() {
+  const btn = document.getElementById('themeToggle');
+  if (btn) {
+    btn.addEventListener('click', toggleTheme);
+  }
+}
