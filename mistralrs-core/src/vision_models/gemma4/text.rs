@@ -509,8 +509,11 @@ impl Attention {
                 // Eager attention path, use normal kv_caches.
                 let (k, v) = if let Some(donor_idx) = self.kv_shared_layer_index {
                     let donor_cache = &kv_caches[donor_idx];
-                    let dk = donor_cache.k()?.unwrap().to_device(q.device())?;
-                    let dv = donor_cache.v()?.unwrap().to_device(q.device())?;
+                    // Use appended_k/v to get the full K/V from the donor's last
+                    // append (retained + new during prefill), not the truncated
+                    // sliding-window buffer that current_data()/k()/v() returns.
+                    let dk = donor_cache.appended_k()?.unwrap().to_device(q.device())?;
+                    let dv = donor_cache.appended_v()?.unwrap().to_device(q.device())?;
                     (dk, dv)
                 } else {
                     kv_caches[self.layer_idx].append(&k, &v)?
