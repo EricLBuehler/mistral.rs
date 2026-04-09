@@ -6,8 +6,8 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
 use mistralrs_quant::{
-    ColumnParallelLayer, UnquantLinear, QuantMethod, QuantMethodConfig, ReplicatedLayer,
-    RowParallelLayer, ShardedVarBuilder,
+    ColumnParallelLayer, QuantMethod, QuantMethodConfig, ReplicatedLayer, RowParallelLayer,
+    ShardedVarBuilder, UnquantLinear,
 };
 
 use crate::{
@@ -1516,22 +1516,33 @@ impl TextModel {
 
             (attention_mask, sliding_attention_mask, Some(&bidir_flash))
         } else {
-            // Full-attention layers (head_dim=512) use eager attention because
-            // flash-attn v2 produces incorrect results for head_dim > 256.
-            // Eager attention needs a real causal mask (not the 1x1 flash dummy).
+            // Full-attention layers (head_dim=512): use flash attention if the GPU supports it, otherwise fall back to eager via force_custom.
+            let force_custom_global = {
+                #[cfg(feature = "flash-attn")]
+                {
+                    !candle_flash_attn::supports_head_dim(
+                        xs.device().as_cuda_device()?,
+                        self.layers
+                            .iter()
+                            .find(|l| !l.self_attn.is_sliding)
+                            .map(|l| l.self_attn.head_dim)
+                            .unwrap_or(256),
+                    )
+                }
+                #[cfg(not(feature = "flash-attn"))]
+                {
+                    true
+                }
+            };
             let attention_mask = CausalMasker.make_causal_mask(
                 input_ids,
                 mask_cache,
                 xs.dtype(),
                 &CausalMaskConfig {
-                    force_custom: true,
+                    force_custom: force_custom_global,
                     ..Default::default()
                 },
             )?;
-            let attention_mask = match attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
-                other => other,
-            };
             let is_first = metadata
                 .as_ref()
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
@@ -1550,10 +1561,6 @@ impl TextModel {
                     ..Default::default()
                 },
             )?;
-            let sliding_attention_mask = match sliding_attention_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
-                other => other,
-            };
             let sliding_attention_mask = if metadata
                 .as_ref()
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
