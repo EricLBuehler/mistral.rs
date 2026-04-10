@@ -11,6 +11,10 @@ pub struct RotatingCache {
     // max_seq_len is the number of retained tokens in the sliding window.
     pub max_seq_len: usize,
     pub capacity_seq_len: usize,
+    // The full K/V tensor returned by the last `append()` call.
+    // During prefill this may be larger than the internal buffer (retained + new),
+    // which is what shared KV layers need for correct attention.
+    pub last_append_result: Option<Tensor>,
 }
 
 impl RotatingCache {
@@ -21,6 +25,7 @@ impl RotatingCache {
             current_seq_len: 0,
             max_seq_len,
             capacity_seq_len: capacity_seq_len.min(max_seq_len),
+            last_append_result: None,
         }
     }
 
@@ -54,9 +59,14 @@ impl RotatingCache {
         Ok(data)
     }
 
+    pub fn last_append_result(&self) -> Option<&Tensor> {
+        self.last_append_result.as_ref()
+    }
+
     pub fn reset(&mut self) {
         self.current_seq_len = 0;
         self.all_data = None;
+        self.last_append_result = None;
     }
 
     pub fn try_set_len(&self, len: usize) -> candle_core::Result<()> {
@@ -84,6 +94,7 @@ impl RotatingCache {
     pub fn set_len(&mut self, len: usize) -> candle_core::Result<()> {
         self.try_set_len(len)?;
         self.current_seq_len = len;
+        self.last_append_result = None;
         Ok(())
     }
 
@@ -135,37 +146,40 @@ impl RotatingCache {
 
         self.current_seq_len += seq_len;
 
-        if seq_len >= self.max_seq_len {
+        let result = if seq_len >= self.max_seq_len {
             let to_copy = src
                 .narrow(self.dim, seq_len - self.max_seq_len, self.max_seq_len)?
                 .contiguous()?;
             ad.slice_set(&to_copy, self.dim, 0)?;
-            return if let Some(full_kv) = prefill_full_kv {
-                Ok(full_kv)
+            if let Some(full_kv) = prefill_full_kv {
+                full_kv
             } else {
-                Ok(ad.clone())
-            };
-        }
-
-        let keep_from_old = retained_len.min(self.max_seq_len - seq_len);
-        if keep_from_old > 0 {
-            let keep_start = retained_len - keep_from_old;
-            let kept = ad
-                .narrow(self.dim, keep_start, keep_from_old)?
-                .copy()?
-                .contiguous()?;
-            ad.slice_set(&kept, self.dim, 0)?;
-        }
-
-        ad.slice_set(&src.contiguous()?, self.dim, keep_from_old)?;
-
-        if let Some(full_kv) = prefill_full_kv {
-            Ok(full_kv)
-        } else if self.current_seq_len >= self.max_seq_len {
-            Ok(ad.clone())
+                ad.clone()
+            }
         } else {
-            Ok(ad.narrow(self.dim, 0, self.current_seq_len)?)
-        }
+            let keep_from_old = retained_len.min(self.max_seq_len - seq_len);
+            if keep_from_old > 0 {
+                let keep_start = retained_len - keep_from_old;
+                let kept = ad
+                    .narrow(self.dim, keep_start, keep_from_old)?
+                    .copy()?
+                    .contiguous()?;
+                ad.slice_set(&kept, self.dim, 0)?;
+            }
+
+            ad.slice_set(&src.contiguous()?, self.dim, keep_from_old)?;
+
+            if let Some(full_kv) = prefill_full_kv {
+                full_kv
+            } else if self.current_seq_len >= self.max_seq_len {
+                ad.clone()
+            } else {
+                ad.narrow(self.dim, 0, self.current_seq_len)?
+            }
+        };
+
+        self.last_append_result = Some(result.clone());
+        Ok(result)
     }
 }
 

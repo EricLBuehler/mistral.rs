@@ -509,9 +509,32 @@ impl Attention {
                 // Eager attention path, use normal kv_caches.
                 let (k, v) = if let Some(donor_idx) = self.kv_shared_layer_index {
                     let donor_cache = &kv_caches[donor_idx];
-                    let dk = donor_cache.k()?.unwrap().to_device(q.device())?;
-                    let dv = donor_cache.v()?.unwrap().to_device(q.device())?;
-                    (dk, dv)
+                    // Use appended_k/v to get the full K/V from the donor's last
+                    // append (retained + new during prefill), not the truncated
+                    // sliding-window buffer that current_data()/k()/v() returns.
+                    let dk = donor_cache.appended_k()?.unwrap().to_device(q.device())?;
+                    let dv = donor_cache.appended_v()?.unwrap().to_device(q.device())?;
+                    // Shared sliding-window layers read from a full (non-rotating) donor cache.
+                    // During decode (q_len == 1) there is no explicit mask, so narrow the KV to the sliding window.
+                    // During prefill the mask handles this.
+                    if self.is_sliding && q_len == 1 {
+                        if let Some(window) = self.sdpa_params.sliding_window {
+                            let kv_len = dk.dim(2)?;
+                            if kv_len > window {
+                                let start = kv_len - window;
+                                (
+                                    dk.narrow(2, start, window)?,
+                                    dv.narrow(2, start, window)?,
+                                )
+                            } else {
+                                (dk, dv)
+                            }
+                        } else {
+                            (dk, dv)
+                        }
+                    } else {
+                        (dk, dv)
+                    }
                 } else {
                     kv_caches[self.layer_idx].append(&k, &v)?
                 };
@@ -558,7 +581,24 @@ impl Attention {
                     None => AttentionMask::None,
                 };
 
-                Sdpa.run_attention(&q, &k, &v, &mask, flash_params, &self.sdpa_params)?
+
+                // Gemma 4 attention scores reach magnitude 15-20 with
+                // softmax_scale=1. At that range BF16 precision is ~0.15,
+                // so the Metal SDPA vector kernel (F32 internally) resolves
+                // score differences that a BF16 matmul rounds away,
+                // producing different softmax winners. Promote to F32
+                // during decode so both code paths agree.
+                if q_len == 1 && q.dtype() != candle_core::DType::F32 {
+                    let q32 = q.to_dtype(candle_core::DType::F32)?;
+                    let k32 = k.to_dtype(candle_core::DType::F32)?;
+                    let v32 = v.to_dtype(candle_core::DType::F32)?;
+                    Sdpa.run_attention(
+                        &q32, &k32, &v32, &mask, flash_params, &self.sdpa_params,
+                    )?
+                    .to_dtype(q.dtype())?
+                } else {
+                    Sdpa.run_attention(&q, &k, &v, &mask, flash_params, &self.sdpa_params)?
+                }
             }
         };
 

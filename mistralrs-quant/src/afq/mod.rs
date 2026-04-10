@@ -152,46 +152,18 @@ impl QuantMethod for AfqLayer {
         )
     }
 
-    fn gather_forward(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        let w = self.dequantize_w()?.to_dtype(a.dtype())?;
-        let (_num_experts, out_features, _in_features) = w.dims3()?;
-
-        match a.dims() {
-            &[b_size, seq_len, 1, 1, hidden_dim] => {
-                let (_b, _s, num_experts_per_tok) = indices.dims3()?;
-                let flat_indices = indices.reshape((b_size * seq_len * num_experts_per_tok,))?;
-                let selected_w = w.index_select(&flat_indices, 0)?;
-                let a_flat = a.reshape((b_size * seq_len, hidden_dim))?;
-                let a_expanded = a_flat
-                    .unsqueeze(1)?
-                    .broadcast_as((b_size * seq_len, num_experts_per_tok, hidden_dim))?
-                    .reshape((b_size * seq_len * num_experts_per_tok, hidden_dim))?;
-                let result = a_expanded
-                    .unsqueeze(1)?
-                    .matmul(&selected_w.transpose(1, 2)?)?
-                    .squeeze(1)?;
-                result.reshape((b_size, seq_len, num_experts_per_tok, out_features))
-            }
-            &[num_tokens, _mid, hidden_dim] => {
-                let (_, num_experts_per_tok) = indices.dims2()?;
-                let flat_indices = indices.reshape((num_tokens * num_experts_per_tok,))?;
-                let selected_w = w.index_select(&flat_indices, 0)?;
-                let a_expanded = a
-                    .broadcast_as((num_tokens, num_experts_per_tok, hidden_dim))?
-                    .reshape((num_tokens * num_experts_per_tok, hidden_dim))?;
-                let result = a_expanded
-                    .unsqueeze(1)?
-                    .matmul(&selected_w.transpose(1, 2)?)?
-                    .squeeze(1)?;
-                result.reshape((num_tokens, num_experts_per_tok, out_features))
-            }
-            dims => {
-                candle_core::bail!(
-                    "AfqLayer::gather_forward: unsupported input shape {:?}",
-                    dims
-                );
-            }
-        }
+    fn gather_forward(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        ops::afq_mm_op(
+            x,
+            &self.w_q,
+            &self.scales,
+            &self.biases,
+            None,
+            Some(indices),
+            self.group_size,
+            self.bits,
+            true,
+        )
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
