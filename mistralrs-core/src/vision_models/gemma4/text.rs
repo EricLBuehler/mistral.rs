@@ -6,8 +6,8 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
 use mistralrs_quant::{
-    ColumnParallelLayer, UnquantLinear, QuantMethod, QuantMethodConfig, ReplicatedLayer,
-    RowParallelLayer, ShardedVarBuilder,
+    ColumnParallelLayer, GgufMatMul, QuantMethod, QuantMethodConfig, ReplicatedLayer,
+    RowParallelLayer, ShardedVarBuilder, UnquantLinear,
 };
 
 use crate::{
@@ -1218,7 +1218,7 @@ impl TextModel {
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
 
-        let lm_head = if !cfg.tie_word_embeddings {
+        let lm_head: Arc<dyn QuantMethod> = if !cfg.tie_word_embeddings {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
@@ -1227,15 +1227,28 @@ impl TextModel {
                 mapper.set_nm_device(vb_m.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        false,
-                    )?,
-                    None,
-                ),
-            ))?)
+            // Fix #7: keep the lm_head as Q8_0 on CUDA so the output
+            // projection flows through the fast BF16-native mmvq kernel
+            // instead of a BF16 GEMV that costs ~5.8 ms/token. The
+            // underlying ScaledEmbedding is untouched — token-lookup
+            // continues to use the dequantized BF16 tensor.
+            let embed_weight = mapper.cast_nm_device(embed_tokens.embeddings(), false)?;
+            let embed_dev = embed_weight.device().clone();
+            if embed_dev.is_cuda() {
+                let w_f32 = embed_weight.to_dtype(DType::F32)?;
+                let q_weight = candle_core::quantized::QTensor::quantize(
+                    &w_f32,
+                    candle_core::quantized::GgmlDType::Q8_0,
+                )?;
+                Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: Arc::new(q_weight),
+                    b: None,
+                })?) as Arc<dyn QuantMethod>
+            } else {
+                Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                    candle_nn::Linear::new(embed_weight, None),
+                ))?) as Arc<dyn QuantMethod>
+            }
         };
 
         // PLE global components
