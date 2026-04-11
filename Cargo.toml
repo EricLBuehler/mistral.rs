@@ -192,6 +192,9 @@ mistralrs-macros = { path = "mistralrs-macros", version = "0.8.1" }
 mistralrs-kvcache-compression = { path = "mistralrs-kvcache-compression", version = "0.8.1" }
 turboquant = { git = "https://github.com/GQAdonis/turboquant-rs.git", branch = "main", features = ["simd"] }
 
+# MLX Rust bindings for Apple Silicon KV cache acceleration (macOS-only)
+mlx-rs = { version = "=0.25.3" }
+
 [profile.release-with-debug]
 inherits = "release"
 debug = true

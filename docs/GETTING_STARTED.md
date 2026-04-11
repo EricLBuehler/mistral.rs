@@ -48,6 +48,8 @@ mistralrs run --isq 4 -m google/gemma-4-E4B-it
 
 The `--isq 4` flag quantizes weights to 4-bit as they load, so the full model never needs to fit in memory. mistral.rs picks the best quantization format for your hardware automatically (AFQ on Metal, Q4K on CUDA/CPU).
 
+> **Apple Silicon users**: Build with `--features "metal accelerate mlx"` to enable MLX-accelerated KV cache compression. This provides 15-22% faster inference at long context lengths (32K+ tokens). See the [MLX Apple Silicon assessment](MLX_APPLE_SILICON_GEMMA4.md) for Gemma 4 performance estimates by chip.
+
 > Not sure what settings to use? Run `mistralrs tune -m <model>` and it will analyze your hardware and recommend the best configuration.
 
 ## Step 4: Start an HTTP Server

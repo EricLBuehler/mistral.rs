@@ -42,7 +42,7 @@ irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1
 | Accelerator              | Feature Flag  | Additional Flags       |
 |--------------------------|---------------|------------------------|
 | NVIDIA GPUs (CUDA)       | `cuda`        | `flash-attn`, `flash-attn-v3`, `cudnn`  |
-| Apple Silicon GPU (Metal)| `metal`       |                        |
+| Apple Silicon GPU (Metal)| `metal`       | `mlx` (KV cache accel) |
 | CPU (Intel)              | `mkl`         |                        |
 | CPU (Apple Accelerate)   | `accelerate`  |                        |
 | Generic CPU (ARM/AVX)    | _none_        | ARM NEON / AVX enabled by default |
@@ -58,7 +58,7 @@ Determine which features to enable based on your hardware:
 | NVIDIA GPU (Ampere+, compute >=80) | `cuda cudnn flash-attn` |
 | NVIDIA GPU (Hopper, compute 90) | `cuda cudnn flash-attn flash-attn-v3` |
 | NVIDIA GPU (older) | `cuda cudnn` |
-| Apple Silicon (macOS) | `metal accelerate` |
+| Apple Silicon (macOS) | `metal accelerate` or `metal accelerate mlx` |
 | Intel CPU with MKL | `mkl` |
 | CPU only | (no features needed) |
 

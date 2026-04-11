@@ -19,6 +19,9 @@ mod single_cache;
 #[cfg(test)]
 mod tests;
 
+#[cfg(all(feature = "mlx", target_os = "macos"))]
+pub mod mlx;
+
 #[cfg(feature = "kvcache-compression")]
 pub use mistralrs_kvcache_compression::{CompressionBits, CompressionPolicy, KvCompressionConfig};
 
@@ -67,6 +70,13 @@ pub enum KvCache {
         layer_idx: usize,
         device: Option<candle_core::Device>,
     },
+    /// MLX-accelerated TurboQuant compressed KV cache (macOS Apple Silicon only).
+    /// Routes KV cache compression/decompression through MLX Metal kernels.
+    #[cfg(all(feature = "mlx", target_os = "macos"))]
+    MlxCompressed {
+        cache: mlx::MlxCompressedCache,
+        dim: usize,
+    },
 }
 
 impl KvCache {
@@ -104,6 +114,18 @@ impl KvCache {
         }
     }
 
+    /// Create a new MLX-accelerated compressed cache.
+    /// Routes TurboQuant compress/decompress through MLX Metal kernels.
+    #[cfg(all(feature = "mlx", target_os = "macos"))]
+    pub fn new_mlx_compressed(
+        dim: usize,
+        head_dim: usize,
+        config: &KvCompressionConfig,
+    ) -> Result<Self> {
+        let cache = mlx::MlxCompressedCache::new(dim, head_dim, config)?;
+        Ok(Self::MlxCompressed { cache, dim })
+    }
+
     pub fn k(&self) -> Result<Option<Tensor>> {
         match self {
             Self::Normal { k, .. } => k.current_data(),
@@ -132,6 +154,8 @@ impl KvCache {
                     (Some(h), Some(t)) => Ok(Some(Tensor::cat(&[&h, t], *dim)?)),
                 }
             }
+            #[cfg(all(feature = "mlx", target_os = "macos"))]
+            Self::MlxCompressed { cache, .. } => cache.k(),
         }
     }
 
@@ -163,6 +187,8 @@ impl KvCache {
                     (Some(h), Some(t)) => Ok(Some(Tensor::cat(&[&h, t], *dim)?)),
                 }
             }
+            #[cfg(all(feature = "mlx", target_os = "macos"))]
+            Self::MlxCompressed { cache, .. } => cache.v(),
         }
     }
 
@@ -180,6 +206,8 @@ impl KvCache {
             Self::Shared { .. } => Ok(None),
             #[cfg(feature = "kvcache-compression")]
             Self::Compressed { .. } => self.k(),
+            #[cfg(all(feature = "mlx", target_os = "macos"))]
+            Self::MlxCompressed { .. } => self.k(),
         }
     }
 
@@ -191,12 +219,26 @@ impl KvCache {
             Self::Shared { .. } => Ok(None),
             #[cfg(feature = "kvcache-compression")]
             Self::Compressed { .. } => self.v(),
+            #[cfg(all(feature = "mlx", target_os = "macos"))]
+            Self::MlxCompressed { .. } => self.v(),
         }
     }
 
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
         let k = k.contiguous()?;
         let v = v.contiguous()?;
+        #[cfg(all(feature = "mlx", target_os = "macos"))]
+        if let Self::MlxCompressed { cache, dim } = self {
+            cache.append(&k, &v)?;
+            // Return the full decompressed KV for attention
+            let out_k = cache.k()?.unwrap_or_else(|| {
+                Tensor::zeros(k.dims(), k.dtype(), k.device()).unwrap()
+            });
+            let out_v = cache.v()?.unwrap_or_else(|| {
+                Tensor::zeros(v.dims(), v.dtype(), v.device()).unwrap()
+            });
+            return Ok((out_k, out_v));
+        }
         #[cfg(feature = "kvcache-compression")]
         if let Self::Compressed {
             history, tail_k, tail_v, total_seq_len, dim, config, layer_idx, device,
@@ -289,6 +331,8 @@ impl KvCache {
             }
             #[cfg(feature = "kvcache-compression")]
             Self::Compressed { .. } => unreachable!("handled above"),
+            #[cfg(all(feature = "mlx", target_os = "macos"))]
+            Self::MlxCompressed { .. } => unreachable!("handled above"),
         };
         let k = match out_k {
             None => {
@@ -299,6 +343,8 @@ impl KvCache {
                     Self::Shared { .. } => unreachable!(),
                     #[cfg(feature = "kvcache-compression")]
                     Self::Compressed { dim, .. } => shape[*dim] = 0,
+                    #[cfg(all(feature = "mlx", target_os = "macos"))]
+                    Self::MlxCompressed { dim, .. } => shape[*dim] = 0,
                 }
                 Tensor::zeros(shape, k.dtype(), k.device())?
             }
@@ -313,6 +359,8 @@ impl KvCache {
                     Self::Shared { .. } => unreachable!(),
                     #[cfg(feature = "kvcache-compression")]
                     Self::Compressed { dim, .. } => shape[*dim] = 0,
+                    #[cfg(all(feature = "mlx", target_os = "macos"))]
+                    Self::MlxCompressed { dim, .. } => shape[*dim] = 0,
                 }
                 Tensor::zeros(shape, v.dtype(), v.device())?
             }
@@ -328,6 +376,8 @@ impl KvCache {
             Self::Shared { .. } => 0,
             #[cfg(feature = "kvcache-compression")]
             Self::Compressed { total_seq_len, .. } => *total_seq_len,
+            #[cfg(all(feature = "mlx", target_os = "macos"))]
+            Self::MlxCompressed { cache, .. } => cache.current_seq_len(),
         }
     }
 
@@ -351,6 +401,8 @@ impl KvCache {
                 *tail_v = None;
                 *total_seq_len = 0;
             }
+            #[cfg(all(feature = "mlx", target_os = "macos"))]
+            Self::MlxCompressed { cache, .. } => cache.reset(),
         }
     }
 
@@ -396,6 +448,8 @@ impl KvCache {
                 *total_seq_len = len;
                 Ok(())
             }
+            #[cfg(all(feature = "mlx", target_os = "macos"))]
+            Self::MlxCompressed { cache, .. } => cache.set_len(len),
         }
     }
 
@@ -422,6 +476,16 @@ impl KvCache {
                 }
                 Ok(())
             }
+            #[cfg(all(feature = "mlx", target_os = "macos"))]
+            Self::MlxCompressed { cache, .. } => {
+                if len > cache.current_seq_len() {
+                    candle_core::bail!(
+                        "mlx compressed kv-cache: cannot extend len {} beyond current {}",
+                        len, cache.current_seq_len()
+                    );
+                }
+                Ok(())
+            }
         }
     }
 
@@ -440,6 +504,18 @@ impl KvCache {
             matches!(self, Self::Compressed { .. })
         }
         #[cfg(not(feature = "kvcache-compression"))]
+        {
+            false
+        }
+    }
+
+    /// Returns `true` if this cache uses MLX-accelerated TurboQuant compression.
+    pub fn is_mlx_compressed(&self) -> bool {
+        #[cfg(all(feature = "mlx", target_os = "macos"))]
+        {
+            matches!(self, Self::MlxCompressed { .. })
+        }
+        #[cfg(not(all(feature = "mlx", target_os = "macos")))]
         {
             false
         }
@@ -511,6 +587,35 @@ impl NormalCache {
         }
     }
 
+    /// Create an MLX-accelerated compressed-KV cache with `len` layers.
+    /// Routes TurboQuant operations through MLX Metal kernels on macOS.
+    #[cfg(all(feature = "mlx", target_os = "macos"))]
+    pub fn new_with_mlx_compression(
+        len: usize,
+        head_dim: usize,
+        config: &KvCompressionConfig,
+    ) -> candle_core::Result<Arc<Mutex<Self>>> {
+        let caches: candle_core::Result<Vec<_>> = (0..len)
+            .map(|_| KvCache::new_mlx_compressed(2, head_dim, config))
+            .collect();
+        Ok(Arc::new(Mutex::new(Self(caches?))))
+    }
+
+    /// Convert all `Normal` KvCache layers to MLX-compressed in-place.
+    #[cfg(all(feature = "mlx", target_os = "macos"))]
+    pub fn apply_mlx_compression(
+        &mut self,
+        head_dim: usize,
+        config: &KvCompressionConfig,
+    ) -> candle_core::Result<()> {
+        for kvc in self.0.iter_mut() {
+            if matches!(kvc, KvCache::Normal { .. }) {
+                *kvc = KvCache::new_mlx_compressed(2, head_dim, config)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn from_types(types: Vec<NormalCacheType>) -> Arc<Mutex<Self>> {
         let mut caches = Vec::new();
         for ty in types {
@@ -573,6 +678,10 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     KvCache::Compressed { .. } => {
                         (cache.k().unwrap().unwrap(), cache.v().unwrap().unwrap())
                     }
+                    #[cfg(all(feature = "mlx", target_os = "macos"))]
+                    KvCache::MlxCompressed { .. } => {
+                        (cache.k().unwrap().unwrap(), cache.v().unwrap().unwrap())
+                    }
                 }
             };
             // Build dims for batched cache
@@ -602,6 +711,10 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     KvCache::Shared { .. } => continue,
                     #[cfg(feature = "kvcache-compression")]
                     KvCache::Compressed { .. } => {
+                        (cache.k().unwrap().unwrap(), cache.v().unwrap().unwrap())
+                    }
+                    #[cfg(all(feature = "mlx", target_os = "macos"))]
+                    KvCache::MlxCompressed { .. } => {
                         (cache.k().unwrap().unwrap(), cache.v().unwrap().unwrap())
                     }
                 };
@@ -719,6 +832,10 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 KvCache::Shared { .. } => unreachable!(),
                 #[cfg(feature = "kvcache-compression")]
                 KvCache::Compressed { .. } => {
+                    (cache.k().unwrap().unwrap(), cache.v().unwrap().unwrap())
+                }
+                #[cfg(all(feature = "mlx", target_os = "macos"))]
+                KvCache::MlxCompressed { .. } => {
                     (cache.k().unwrap().unwrap(), cache.v().unwrap().unwrap())
                 }
             };
@@ -895,6 +1012,18 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     continue;
                 }
                 KvCache::Normal { .. } => {}
+                #[cfg(feature = "kvcache-compression")]
+                KvCache::Compressed { .. } => {
+                    // Compressed caches don't support preallocated cache restore,
+                    // just reset and continue
+                    layer.reset();
+                    continue;
+                }
+                #[cfg(all(feature = "mlx", target_os = "macos"))]
+                KvCache::MlxCompressed { .. } => {
+                    layer.reset();
+                    continue;
+                }
             }
 
             let mut k_caches = Vec::new();

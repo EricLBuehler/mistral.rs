@@ -15,6 +15,7 @@ This document provides a complete reference for all cargo features available in 
 | `mkl` | Intel MKL acceleration | Linux, Windows | Intel MKL |
 | `nccl` | Multi-GPU (NVIDIA NCCL) | Linux | `cuda`, NCCL |
 | `ring` | Multi-GPU/node (TCP ring) | All | - |
+| `mlx` | MLX KV cache acceleration | macOS | Apple Silicon, cmake |
 
 ## GPU Acceleration Features
 
@@ -246,7 +247,7 @@ See [Ring documentation](DISTRIBUTED/RING.md) for detailed setup instructions.
 | NVIDIA Ampere+ (RTX 30/40, A100) | `cuda cudnn flash-attn` |
 | NVIDIA Hopper (H100) | `cuda cudnn flash-attn-v3` |
 | NVIDIA older GPUs | `cuda cudnn` |
-| Apple Silicon | `metal accelerate` |
+| Apple Silicon | `metal accelerate` or `metal accelerate mlx` |
 | Intel CPU | `mkl` |
 | Generic CPU | (no features needed) |
 | Multi-GPU NVIDIA | `cuda cudnn flash-attn nccl` |
@@ -340,6 +341,8 @@ This command checks:
 - `flash-attn` and `flash-attn-v3` are mutually exclusive
 - `metal` is macOS-only; don't use with `cuda`
 - `nccl` requires `cuda`
+- `mlx` is macOS-only; no conflicts with `metal` or `cuda` (they use independent Metal bindings)
+- `mlx` implies `kvcache-compression` (automatically enabled)
 
 ### Build errors
 

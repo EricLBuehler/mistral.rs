@@ -81,6 +81,8 @@
 - [Flash Attention](FLASH_ATTENTION.md)
 - [MLA (Multi-head Latent Attention)](MLA.md)
 - [Speculative Decoding](SPECULATIVE_DECODING.md)
+- [MLX Apple Silicon Assessment](MLX_APPLE_SILICON_GEMMA4.md)
+- [MLX Backend Design](mlx-mistralrs-design.md)
 - [Device Mapping](DEVICE_MAPPING.md)
 - [Distributed Inference](DISTRIBUTED/DISTRIBUTED.md)
   - [NCCL Backend](DISTRIBUTED/NCCL.md)

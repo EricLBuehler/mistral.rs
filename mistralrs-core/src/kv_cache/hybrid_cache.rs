@@ -478,6 +478,24 @@ impl HybridCache {
         }
     }
 
+    /// Convert all `Attention(Normal)` KV-cache layers to `Attention(MlxCompressed)`
+    /// in-place. Recurrent layers are left unchanged.
+    #[cfg(all(feature = "mlx", target_os = "macos"))]
+    pub fn apply_mlx_compression(
+        &mut self,
+        head_dim: usize,
+        config: &super::KvCompressionConfig,
+    ) -> candle_core::Result<()> {
+        for kvc in self.caches.iter_mut() {
+            if let HybridLayerCache::Attention(kv) = kvc {
+                if matches!(kv, super::KvCache::Normal { .. }) {
+                    *kv = super::KvCache::new_mlx_compressed(2, head_dim, config)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn num_layers(&self) -> usize {
         self.caches.len()
     }

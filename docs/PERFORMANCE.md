@@ -10,7 +10,7 @@ This guide helps you choose the right performance settings for your hardware and
 |---|---|
 | NVIDIA GPU (16+ GB VRAM) | `mistralrs serve --isq 4 -m <model>` |
 | NVIDIA GPU (8 GB VRAM) | `mistralrs serve --isq 4 -m <7B-model>` |
-| Apple Silicon (16+ GB RAM) | `mistralrs serve --isq 4 -m <model>` |
+| Apple Silicon (16+ GB RAM) | `mistralrs serve --isq 4 -m <model>` (build with `mlx` feature for KV cache acceleration) |
 | CPU only | `mistralrs serve --isq 4 --cpu -m <small-model>` |
 | Multi-GPU NVIDIA | `mistralrs serve -m <model>` (auto tensor parallelism) |
 
@@ -49,7 +49,7 @@ Quantization reduces model size by using lower-precision weights. mistral.rs off
 | `--isq 3` (Q3K/AFQ3) | Degraded | Tight VRAM budget |
 | `--isq 2` (Q2K/AFQ2) | Significantly degraded | Extreme constraint |
 
-On **Metal**, ISQ will prefer using AFQ (optimized for Apple Silicon). On **CUDA/CPU**, it uses Q/K quantization.
+On **Metal**, ISQ will prefer using AFQ (optimized for Apple Silicon). On **CUDA/CPU**, it uses Q/K quantization. Build with the `mlx` feature to additionally enable MLX-accelerated KV cache compression for 15-22% faster long-context inference on Apple Silicon. See the [MLX Apple Silicon assessment](MLX_APPLE_SILICON_GEMMA4.md) for details.
 
 To improve ISQ accuracy, use an importance matrix: `--calibration-file calibration_data/calibration_datav3_small.txt`. See [Importance Matrix](IMATRIX.md).
 

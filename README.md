@@ -25,6 +25,7 @@ Fast, flexible LLM inference.
 
 ## Latest
 
+- **MLX KV cache acceleration**: TurboQuant compression via Apple MLX for 15-22% faster long-context inference on Apple Silicon. [Assessment](docs/MLX_APPLE_SILICON_GEMMA4.md) | [Design](docs/mlx-mistralrs-design.md)
 - **Gemma 4**: Full multimodal: text, image, video, and audio input. [Guide](https://ericlbuehler.github.io/mistral.rs/GEMMA4.html) | [Video setup](https://ericlbuehler.github.io/mistral.rs/VIDEO.html)
 - **MXFP4 ISQ quantization**: MXFP4 with optimized decode kernels for faster, smaller models. [Quantization docs](https://ericlbuehler.github.io/mistral.rs/QUANTS.html)
 - **Qwen 3.5 model family**: Support for the Qwen 3.5 series including vision. [Guide](https://ericlbuehler.github.io/mistral.rs/QWEN3_5.html)
@@ -107,6 +108,7 @@ mistralrs doctor
 - Continuous batching support by default on all devices.
 - CUDA with [FlashAttention](https://ericlbuehler.github.io/mistral.rs/FLASH_ATTENTION.html) V2/V3, Metal, [multi-GPU tensor parallelism](https://ericlbuehler.github.io/mistral.rs/DISTRIBUTED/DISTRIBUTED.html)
 - [PagedAttention](https://ericlbuehler.github.io/mistral.rs/PAGED_ATTENTION.html) for high throughput continuous batching on CUDA or Apple Silicon, prefix caching (including multimodal)
+- ⭐ [MLX KV cache acceleration](docs/MLX_APPLE_SILICON_GEMMA4.md): TurboQuant compression via Apple MLX for 15-22% faster long-context inference on Apple Silicon
 
 **Quantization** ([full docs](https://ericlbuehler.github.io/mistral.rs/QUANTS.html))
 - [In-situ quantization (ISQ)](https://ericlbuehler.github.io/mistral.rs/ISQ.html) of any Hugging Face model
@@ -160,6 +162,7 @@ mistralrs doctor
 <details>
 <summary><b>Multimodal Models</b></summary>
 
+- Gemma 4
 - Qwen 3.5
 - Qwen 3.5 MoE
 - Qwen 3-VL
@@ -205,7 +208,7 @@ mistralrs doctor
 ## Python SDK
 
 ```bash
-pip install mistralrs  # or mistralrs-cuda, mistralrs-metal, mistralrs-mkl, mistralrs-accelerate
+pip install mistralrs  # or mistralrs-cuda, mistralrs-metal, mistralrs-mkl
 ```
 
 ```python

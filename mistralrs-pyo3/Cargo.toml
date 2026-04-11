@@ -51,6 +51,7 @@ mkl = ["mistralrs-core/mkl"]
 nccl = ["mistralrs-core/nccl"]
 ring = ["mistralrs-core/ring"]
 kvcache-compression = ["mistralrs-core/kvcache-compression"]
+mlx = ["mistralrs-core/mlx"]
 
 [package.metadata.maturin]
 include = ["mistralrs.pyi", "py.typed"]

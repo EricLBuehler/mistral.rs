@@ -10,7 +10,7 @@ It has grown beyon simply quantization and is used by `mistral.rs` to power:
 - cuBLASlt integration
 
 Currently supported:
-- AFQ: `GgufMatMul` (2-8 bit quantization optimized for Metal and compatible with MLX)
+- AFQ: `GgufMatMul` (2-8 bit quantization optimized for Metal and compatible with MLX prequantized models)
 - GGUF: `GgufMatMul` (2-8 bit quantization, with imatrix)
 - Gptq/Awq: `GptqAwqLayer` (with CUDA marlin kernel)
 - Hqq: `HqqLayer` (4, 8 bit quantization)

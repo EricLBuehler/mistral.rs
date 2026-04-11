@@ -6,6 +6,8 @@ Pre-quantized UQFF models are available in the [mistralrs-community Gemma 4 coll
 
 > **Video support**: Non-GIF video formats (mp4, avi, mov, etc.) require FFmpeg to be installed. See [VIDEO.md](VIDEO.md) for installation instructions and details.
 
+> **Apple Silicon**: Build with `--features "metal accelerate mlx"` for MLX-accelerated KV cache compression, providing 15-22% faster long-context inference. See [MLX Apple Silicon Assessment](MLX_APPLE_SILICON_GEMMA4.md) for per-chip performance estimates and model fitment guide.
+
 ## Quick Start
 
 ```bash

@@ -263,3 +263,5 @@ nccl = ["mistralrs-core/nccl"]
 ring = ["mistralrs-core/ring"]
 # TurboQuant KV-cache compression support
 kvcache-compression = ["mistralrs-core/kvcache-compression"]
+# MLX-accelerated KV cache compression (macOS Apple Silicon)
+mlx = ["mistralrs-core/mlx"]

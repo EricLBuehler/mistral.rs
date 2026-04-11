@@ -116,6 +116,7 @@ openai-harmony = "0.0.8"
 objc = { workspace = true, optional = true }
 objc2-metal = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
+mlx-rs = { workspace = true, optional = true }
 
 [features]
 pyo3_macros = ["pyo3", "mistralrs-mcp/pyo3_macros"]
@@ -147,6 +148,8 @@ utoipa = ["dep:utoipa"]
 ring = ["mistralrs-quant/ring"]
 parking-lot-scheduler = []
 kvcache-compression = ["dep:mistralrs-kvcache-compression"]
+# MLX-accelerated KV cache compression for macOS Apple Silicon
+mlx = ["dep:mlx-rs", "kvcache-compression"]
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }
