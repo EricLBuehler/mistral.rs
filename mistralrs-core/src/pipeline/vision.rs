@@ -400,8 +400,12 @@ impl Loader for VisionLoader {
                         non_mapped_size_in_bytes,
                         layer_sizes_sum + non_mapped_size_in_bytes,
                     )
-                } else if let Some(isq) = in_situ_quant {
-                    let weight_pack_factor = isq.pack_factor(dtype);
+                } else if let Some(_isq) = in_situ_quant {
+                    // ISQ loads weights in the original dtype (e.g. BF16) first, then quantizes
+                    // in-place on the target device. During quantization both the original and
+                    // quantized tensors coexist, so the device mapper must plan for the
+                    // *unquantized* size to avoid OOM during the ISQ pass.
+                    let weight_pack_factor = 1;
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,

@@ -169,7 +169,29 @@
       "Bash(./target/release/mistralrs run:*)",
       "Bash(./target/release/mistralrs bench:*)",
       "Bash(./target/release/mistralrs cache:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(netstat -tlnp)",
+      "Bash(journalctl --user -u mistralrs --no-pager -n 50)",
+      "Bash(journalctl -u mistralrs --no-pager -n 50)",
+      "Bash(nvidia-smi)",
+      "Bash(systemctl --user stop mistralrs)",
+      "Bash(systemctl --user list-units --type=service)",
+      "Bash(kill 1675:*)",
+      "Bash(/usr/local/bin/mistralrs serve:*)",
+      "Bash(pkill -f \"mistralrs serve\")",
+      "Bash(find:*)",
+      "Bash(target/release/mistralrs --help)",
+      "Bash(systemctl list-units:*)",
+      "Bash(journalctl:*)",
+      "Bash(sudo sed:*)",
+      "Bash(huggingface-cli download:*)",
+      "Bash(pip show:*)",
+      "Bash(python3 -c \"from huggingface_hub import hf_hub_download; print\\('available'\\)\")",
+      "Bash(pip install:*)",
+      "Bash(python3:*)",
+      "Bash(python3.13:*)",
+      "Bash(pip3 show:*)",
+      "Bash(~/.local/bin/huggingface-cli download:*)"
     ]
   }
 }
