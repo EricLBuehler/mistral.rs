@@ -4,7 +4,7 @@
 //! It is intended for scripts, CLI tools, and non-async applications.
 //!
 //! **Important:** `BlockingModel` must NOT be used from within an existing
-//! tokio runtime — calling `block_on` inside an async context will panic.
+//! tokio runtime, calling `block_on` inside an async context will panic.
 //!
 //! # Example
 //! ```no_run

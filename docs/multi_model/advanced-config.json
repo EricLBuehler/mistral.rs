@@ -6,10 +6,10 @@
     },
     "in_situ_quant": "8"
   },
-  "gemma3-4b-vision": {
-    "alias": "gemma3-4b-vision",
-    "VisionPlain": {
-      "model_id": "google/gemma-3-4b-it"
+  "gemma4-E4B-multimodal": {
+    "alias": "gemma4-E4B-multimodal",
+    "MultimodalPlain": {
+      "model_id": "google/gemma-4-E4B-it"
     },
     "in_situ_quant": "4"
   },

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use candle_core::Result;
 use image::imageops::FilterType;
 use serde::Deserialize;
+use serde_json::{Map, Value};
 
 #[derive(Deserialize, Debug, Clone, Default)]
 #[allow(dead_code)]
@@ -80,6 +81,39 @@ pub struct PreProcessorConfig {
     pub(crate) sampling_rate: Option<usize>,
 }
 
+impl PreProcessorConfig {
+    pub fn from_processor_config_json(json: &str) -> serde_json::Result<Self> {
+        let value: Value = serde_json::from_str(json)?;
+        let mut merged = Map::new();
+
+        if let Some(obj) = value.as_object() {
+            for (key, value) in obj {
+                if key != "image_processor" && key != "feature_extractor" && !value.is_null() {
+                    merged.insert(key.clone(), value.clone());
+                }
+            }
+
+            if let Some(image_processor) = obj.get("image_processor").and_then(Value::as_object) {
+                Self::merge_processor_section(&mut merged, image_processor);
+            }
+            if let Some(feature_extractor) = obj.get("feature_extractor").and_then(Value::as_object)
+            {
+                Self::merge_processor_section(&mut merged, feature_extractor);
+            }
+        }
+
+        serde_json::from_value(Value::Object(merged))
+    }
+
+    fn merge_processor_section(target: &mut Map<String, Value>, source: &Map<String, Value>) {
+        for (key, value) in source {
+            if !value.is_null() {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub(crate) trait ToFilter {
     fn to_filter(self) -> Result<FilterType>;
@@ -97,5 +131,67 @@ impl ToFilter for Option<usize> {
             Some(4) => Ok(FilterType::Nearest),
             Some(x) => candle_core::bail!("Filter number {x} not supported"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PreProcessorConfig;
+
+    #[test]
+    fn parses_nested_processor_config_sections() {
+        let json = r#"
+        {
+            "audio_seq_length": 750,
+            "image_processor": {
+                "do_convert_rgb": true,
+                "do_resize": true,
+                "resample": 3,
+                "size": { "height": 224, "width": 224 }
+            },
+            "feature_extractor": {
+                "feature_size": 128,
+                "fft_overdrive": false,
+                "frame_length": 320,
+                "hop_length": 160,
+                "min_frequency": 0.0,
+                "max_frequency": 8000.0,
+                "preemphasis": 0.0,
+                "mel_floor": 0.001,
+                "sampling_rate": 16000
+            }
+        }
+        "#;
+
+        let config = PreProcessorConfig::from_processor_config_json(json).unwrap();
+
+        assert_eq!(config.do_convert_rgb, Some(true));
+        assert_eq!(config.do_resize, Some(true));
+        assert_eq!(config.resampling, Some(3));
+        assert_eq!(config.feature_size, Some(128));
+        assert_eq!(config.fft_overdrive, Some(false));
+        assert_eq!(config.frame_length, Some(320));
+        assert_eq!(config.hop_length, Some(160));
+        assert_eq!(config.min_frequency, Some(0.0));
+        assert_eq!(config.max_frequency, Some(8000.0));
+        assert_eq!(config.preemphasis, Some(0.0));
+        assert_eq!(config.mel_floor, Some(0.001));
+        assert_eq!(config.sampling_rate, Some(16000));
+        assert_eq!(
+            config
+                .size
+                .as_ref()
+                .and_then(|size| size.get("height"))
+                .copied(),
+            Some(224)
+        );
+        assert_eq!(
+            config
+                .size
+                .as_ref()
+                .and_then(|size| size.get("width"))
+                .copied(),
+            Some(224)
+        );
     }
 }

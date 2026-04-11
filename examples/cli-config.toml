@@ -14,16 +14,23 @@ mode = "auto"
 
 [[models]]
 kind = "auto"
+model_id = "google/gemma-4-E4B-it"
+
+[models.quantization]
+in_situ_quant = "4"
+
+[[models]]
+kind = "auto"
 model_id = "meta-llama/Llama-3.2-3B-Instruct"
 
 [models.quantization]
 in_situ_quant = "4"
 
 [[models]]
-kind = "vision"
+kind = "multimodal"
 model_id = "Qwen/Qwen2-VL-2B-Instruct"
 
-[models.vision]
+[models.multimodal]
 max_num_images = 4
 
 [[models]]

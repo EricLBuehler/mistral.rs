@@ -44,6 +44,7 @@ async fn main() -> Result<()> {
             description: Some("Get the weather for a certain city.".to_string()),
             name: "get_weather".to_string(),
             parameters: Some(parameters),
+            strict: Some(true),
         },
     }];
 

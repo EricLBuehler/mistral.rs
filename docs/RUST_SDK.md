@@ -31,8 +31,8 @@ mistralrs = "0.7"
 
 For GPU acceleration, enable the appropriate feature:
 ```toml
-mistralrs = { version = "0.7", features = ["metal"] }     # macOS
-mistralrs = { version = "0.7", features = ["cuda"] }       # NVIDIA
+mistralrs = { version = "0.8", features = ["metal"] }     # macOS
+mistralrs = { version = "0.8", features = ["cuda"] }       # NVIDIA
 ```
 
 ## Quick Start
@@ -59,9 +59,9 @@ All models are created through builder structs. Use `ModelBuilder` for auto-dete
 
 | Builder | Use Case |
 |---|---|
-| `ModelBuilder` | Auto-detects model type (text, vision, embedding) |
+| `ModelBuilder` | Auto-detects model type (text, multimodal, embedding) |
 | `TextModelBuilder` | Text generation models |
-| `VisionModelBuilder` | Vision + text models (image/audio input) |
+| `MultimodalModelBuilder` | Multimodal models (image/audio input) |
 | `GgufModelBuilder` | GGUF quantized model files |
 | `EmbeddingModelBuilder` | Text embedding models |
 | `DiffusionModelBuilder` | Image generation (e.g., FLUX) |
@@ -91,10 +91,10 @@ Key builder methods include `with_isq()`, `with_auto_isq()`, `with_dtype()`, `wi
 | Type | Use When | Sampling |
 |---|---|---|
 | `TextMessages` | Simple text-only chat | Deterministic |
-| `VisionMessages` | Prompt includes images or audio | Deterministic |
+| `MultimodalMessages` | Prompt includes images or audio | Deterministic |
 | `RequestBuilder` | Tools, logprobs, custom sampling, constraints, or web search | Configurable |
 
-`TextMessages` and `VisionMessages` convert into `RequestBuilder` via `Into<RequestBuilder>` if you start simple and later need more control.
+`TextMessages` and `MultimodalMessages` convert into `RequestBuilder` via `Into<RequestBuilder>` if you start simple and later need more control.
 
 ```rust
 // Simple
@@ -240,7 +240,7 @@ fn main() -> mistralrs::error::Result<()> {
 | `accelerate` | Apple Accelerate framework |
 | `mkl` | Intel MKL acceleration |
 
-The default feature set (no flags) builds with pure Rust — no C compiler or system libraries required.
+The default feature set (no flags) builds with pure Rust. No C compiler or system libraries required.
 
 ## Examples
 
@@ -248,8 +248,8 @@ The crate includes 48 runnable examples organized by topic:
 
 | Category | Examples |
 |---|---|
-| **Getting Started** | `text_generation`, `streaming`, `vision`, `gguf`, `gguf_locally`, `embedding` |
-| **Models** | `text_models`, `vision_models`, `audio`, `diffusion`, `speech`, `multimodal` |
+| **Getting Started** | `text_generation`, `streaming`, `multimodal_basic`, `gguf`, `gguf_locally`, `embedding` |
+| **Models** | `text_models`, `multimodal_models`, `audio`, `diffusion`, `speech`, `multimodal` |
 | **Quantization** | `isq`, `imatrix`, `uqff`, `topology`, `mixture_of_quant_experts` |
 | **Advanced** | `tools`, `agent`, `grammar`, `json_schema`, `web_search`, `mcp_client`, `batching`, `paged_attn`, `speculative`, `lora`, `error_handling`, and more |
 | **Cookbook** | `cookbook_rag`, `cookbook_structured`, `cookbook_multiturn`, `cookbook_agent` |
@@ -260,3 +260,11 @@ cargo run --release --features <features> --example <name>
 ```
 
 Browse all examples: [`mistralrs/examples/`](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples)
+
+## See Also
+
+- [Getting Started](GETTING_STARTED.md): Quick tutorial
+- [Agentic Features Guide](AGENTS.md): Agent builder, tool callbacks, web search
+- [Tool Calling](TOOL_CALLING.md): Tool calling reference
+- [Performance Guide](PERFORMANCE.md): Optimization options
+- [API Docs (docs.rs)](https://docs.rs/mistralrs): Full API reference

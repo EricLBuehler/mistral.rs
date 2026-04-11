@@ -4,7 +4,7 @@ use core::ffi::c_char;
 use interprocess::local_socket::traits::{Listener, Stream};
 use interprocess::local_socket::{GenericNamespaced, Name, ToNsName};
 use interprocess::local_socket::{ListenerOptions, Stream as LocalStream};
-pub use mistralrs_quant::distributed::use_nccl;
+pub use mistralrs_quant::distributed::{use_nccl, use_ring};
 use mistralrs_quant::{RingConfig, ShardedVarBuilder};
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
@@ -28,7 +28,7 @@ pub(crate) const IS_DAEMON_FLAG: &str = "__MISTRALRS_DAEMON_INTERNAL";
 pub fn is_daemon() -> bool {
     if cfg!(feature = "cuda") && !cfg!(feature = "ring") {
         std::env::var(IS_DAEMON_FLAG).is_ok()
-    } else if cfg!(feature = "ring") {
+    } else if use_ring() {
         !RingConfig::load().is_master_rank()
     } else {
         false

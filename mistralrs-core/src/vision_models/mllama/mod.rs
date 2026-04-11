@@ -21,6 +21,7 @@ use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
 use mistralrs_quant::{CollectedImatrixData, QuantMethod, ShardedVarBuilder};
 
+use crate::attention::AttentionMask;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
@@ -32,7 +33,7 @@ use crate::{
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -216,10 +217,14 @@ impl MLlamaModel {
                 (None, None)
             };
 
+        let cross_attn_mask_enum = match &cross_attn_mask {
+            Some(t) => AttentionMask::Custom(t.clone()),
+            None => AttentionMask::None,
+        };
         self.language_model.forward(
             input_ids,
             cross_attn_states.as_ref(),
-            cross_attn_mask.as_ref(),
+            &cross_attn_mask_enum,
             full_text_row_masked_out_mask.as_ref(),
             seqlen_offsets,
             context_lens,
@@ -235,7 +240,7 @@ pub(crate) struct MLlamaSpecificArgs {
     pub image_hashes: Vec<u64>,
 }
 
-impl VisionModel for MLlamaModel {
+impl MultimodalModel for MLlamaModel {
     fn cache(&self) -> &EitherCache {
         &self.language_model.cache
     }

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use tracing::info;
 
-use crate::{MessageContent, Tool};
+use crate::{MessageContent, ModelGenerationDefaults, Tool};
 
 const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
     "<|im_end|>",      // Handle ChatML case
@@ -22,6 +22,9 @@ const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
     "<|start|>",       // Harmony
     "<|channel|>",     // Harmony
 ];
+
+/// Repository default for templates that support an explicit thinking toggle.
+const DEFAULT_ENABLE_THINKING: bool = true;
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
@@ -96,7 +99,7 @@ impl ChatTemplate {
     pub fn is_harmony_format(&self) -> bool {
         self.get_template_contents()
             .iter()
-            .any(|t| crate::harmony::is_harmony_template(t))
+            .any(|t| crate::reasoning_parsers::harmony::is_harmony_template(t))
     }
 
     /// Check if this chat template uses `<think>...</think>` tags for reasoning.
@@ -111,7 +114,14 @@ impl ChatTemplate {
 
         self.get_template_contents()
             .iter()
-            .any(|t| crate::think_tags::is_think_tag_template(t))
+            .any(|t| crate::reasoning_parsers::tag_based::is_think_tag_template(t))
+    }
+
+    /// Check if the template uses Gemma 4 channel-based reasoning tags.
+    pub fn uses_channel_tags(&self) -> bool {
+        self.get_template_contents()
+            .iter()
+            .any(|t| crate::reasoning_parsers::tag_based::is_channel_tag_template(t))
     }
 
     pub fn eos_tok(&self) -> Option<String> {
@@ -138,7 +148,7 @@ impl ChatTemplate {
 
 pub fn calculate_eos_tokens(
     chat_template: &ChatTemplate,
-    gen_conf: Option<GenerationConfig>,
+    gen_conf: Option<&GenerationConfig>,
     tokenizer: &Tokenizer,
 ) -> Vec<u32> {
     let mut eos_tok_ids = chat_template.eos_tok().map(|x| vec![x]).unwrap_or_default();
@@ -155,10 +165,10 @@ pub fn calculate_eos_tokens(
     }
 
     if let Some(gen_conf) = gen_conf {
-        if let Some(eos_field) = gen_conf.eos_token_id {
+        if let Some(eos_field) = gen_conf.eos_token_id.as_ref() {
             let ids = match eos_field {
-                Either::Left(id) => vec![id],
-                Either::Right(ids) => ids,
+                Either::Left(id) => vec![*id],
+                Either::Right(ids) => ids.clone(),
             };
             for id in ids {
                 let s = tokenizer
@@ -170,10 +180,10 @@ pub fn calculate_eos_tokens(
             }
         }
 
-        if let Some(bos_field) = gen_conf.bos_token_id {
+        if let Some(bos_field) = gen_conf.bos_token_id.as_ref() {
             let ids = match bos_field {
-                Either::Left(id) => vec![id],
-                Either::Right(ids) => ids,
+                Either::Left(id) => vec![*id],
+                Either::Right(ids) => ids.clone(),
             };
             for id in ids {
                 let s = tokenizer
@@ -219,7 +229,7 @@ pub fn calculate_eos_tokens(
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct GenerationConfig {
     #[serde(default)]
     #[serde(with = "either::serde_untagged_optional")]
@@ -227,6 +237,43 @@ pub struct GenerationConfig {
     #[serde(default)]
     #[serde(with = "either::serde_untagged_optional")]
     eos_token_id: Option<Either<u32, Vec<u32>>>,
+    #[serde(default)]
+    do_sample: Option<bool>,
+    #[serde(default)]
+    temperature: Option<f64>,
+    #[serde(default)]
+    top_k: Option<usize>,
+    #[serde(default)]
+    top_p: Option<f64>,
+    #[serde(default)]
+    min_p: Option<f64>,
+    #[serde(default)]
+    repetition_penalty: Option<f32>,
+    #[serde(default)]
+    max_new_tokens: Option<usize>,
+    #[serde(default)]
+    max_length: Option<usize>,
+}
+
+impl GenerationConfig {
+    pub fn generation_defaults(&self) -> Option<ModelGenerationDefaults> {
+        let defaults = ModelGenerationDefaults {
+            do_sample: self.do_sample,
+            temperature: self.temperature,
+            top_k: self.top_k,
+            top_p: self.top_p,
+            min_p: self.min_p,
+            repetition_penalty: self.repetition_penalty,
+            max_new_tokens: self.max_new_tokens,
+            max_length: self.max_length,
+        };
+
+        if defaults.is_empty() {
+            None
+        } else {
+            Some(defaults)
+        }
+    }
 }
 
 fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
@@ -271,9 +318,151 @@ fn strftime_now(fmt: String) -> Result<String, minijinja::Error> {
 
 use crate::request::ReasoningEffort;
 
+/// Check if a chat template uses Gemma 4 tool call tokens.
+fn is_gemma4_tool_template(template: &str) -> bool {
+    template.contains("<|tool_call>") && template.contains("<tool_call|>")
+}
+
+/// Parse tool_call `arguments` fields from JSON strings into objects.
+///
+/// The OpenAI API returns `tool_calls[i].function.arguments` as a JSON string,
+/// but the Gemma 4 chat template's `format_argument` macro only emits the
+/// correct `<|"|>` delimited format when `arguments` is a mapping (object).
+/// When it's a string, the raw JSON is rendered verbatim, producing a format
+/// mismatch that confuses the model in multi-turn tool-calling conversations.
+fn parse_gemma4_tool_call_arguments(messages: &mut [IndexMap<String, MessageContent>]) {
+    for message in messages.iter_mut() {
+        let is_assistant = message
+            .get("role")
+            .and_then(|v| match v {
+                Either::Left(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .is_some_and(|r| r == "assistant");
+        if !is_assistant {
+            continue;
+        }
+
+        let Some(Either::Right(tool_calls)) = message.get_mut("tool_calls") else {
+            continue;
+        };
+        for tc in tool_calls.iter_mut() {
+            // tool_calls[i].function.arguments
+            let Some(serde_json::Value::Object(func)) = tc.get_mut("function") else {
+                continue;
+            };
+            if let Some(serde_json::Value::String(json_str)) = func.get("arguments") {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+                    if parsed.is_object() {
+                        func.insert("arguments".to_string(), parsed);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Pre-process messages for Gemma 4 tool templates.
+///
+/// The Gemma 4 chat template expects `tool_responses` as a field on a
+/// **user** message, but the OpenAI API sends `role: "tool"` as separate
+/// messages. This function replaces consecutive `role: "tool"` messages
+/// with a single `role: "user"` message carrying the `tool_responses`
+/// field, matching the format used by the reference implementations
+/// (llama.cpp `convert_tool_responses_gemma4`, HF transformers).
+///
+/// Additionally, when the preceding assistant message has structured
+/// `tool_calls`, its raw-JSON `content` is cleared so the template only
+/// renders the `<|tool_call>` tags.
+fn preprocess_gemma4_tool_messages(messages: &mut Vec<IndexMap<String, MessageContent>>) {
+    let mut result: Vec<IndexMap<String, MessageContent>> = Vec::with_capacity(messages.len());
+    let mut i = 0;
+
+    while i < messages.len() {
+        let is_tool = messages[i]
+            .get("role")
+            .and_then(|v| match v {
+                Either::Left(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .is_some_and(|r| r == "tool");
+
+        if !is_tool {
+            let mut msg = std::mem::take(&mut messages[i]);
+
+            // When an assistant message has structured tool_calls, clear the
+            // raw-JSON content so the template only renders <|tool_call> tags.
+            let is_assistant = msg
+                .get("role")
+                .and_then(|v| match v {
+                    Either::Left(s) => Some(s.as_str()),
+                    _ => None,
+                })
+                .is_some_and(|r| r == "assistant");
+            if is_assistant && (msg.contains_key("tool_calls") || !msg.contains_key("content")) {
+                msg.insert("content".to_string(), Either::Left(String::new()));
+            }
+
+            result.push(msg);
+            i += 1;
+            continue;
+        }
+
+        // Collect consecutive tool messages into a single tool_responses list.
+        let mut tool_responses: Vec<IndexMap<String, serde_json::Value>> = Vec::new();
+        while i < messages.len() {
+            let is_tool = messages[i]
+                .get("role")
+                .and_then(|v| match v {
+                    Either::Left(s) => Some(s.as_str()),
+                    _ => None,
+                })
+                .is_some_and(|r| r == "tool");
+            if !is_tool {
+                break;
+            }
+
+            let tool_msg = &messages[i];
+
+            let name = tool_msg
+                .get("name")
+                .and_then(|v| match v {
+                    Either::Left(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "unknown".to_string());
+
+            let content = tool_msg
+                .get("content")
+                .and_then(|v| match v {
+                    Either::Left(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            let response_value: serde_json::Value =
+                serde_json::from_str(&content).unwrap_or(serde_json::Value::String(content));
+
+            let mut entry = IndexMap::new();
+            entry.insert("name".to_string(), serde_json::Value::String(name));
+            entry.insert("response".to_string(), response_value);
+            tool_responses.push(entry);
+
+            i += 1;
+        }
+
+        // Create a user message with the collected tool_responses.
+        let mut user_msg: IndexMap<String, MessageContent> = IndexMap::new();
+        user_msg.insert("role".to_string(), Either::Left("user".to_string()));
+        user_msg.insert("tool_responses".to_string(), Either::Right(tool_responses));
+        result.push(user_msg);
+    }
+
+    *messages = result;
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn apply_chat_template_to(
-    messages: Vec<IndexMap<String, MessageContent>>,
+    mut messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
     enable_thinking: Option<bool>,
     reasoning_effort: Option<ReasoningEffort>,
@@ -294,19 +483,11 @@ pub fn apply_chat_template_to(
 
     #[derive(Serialize, Deserialize)]
     struct UntaggedContent(#[serde(with = "either::serde_untagged")] MessageContent);
-    let mut new_messages = Vec::new();
-    for message in messages {
-        let mut new_message = IndexMap::new();
-        for (k, v) in message {
-            new_message.insert(k, UntaggedContent(v));
-        }
-        new_messages.push(new_message);
-    }
 
-    let template = match &template.0 {
+    // Resolve template string early so we can check for Gemma 4 format
+    let resolved_template = match &template.0 {
         Either::Left(x) => x.clone(),
         Either::Right(map) => {
-            let mut template = None;
             let has_tool_use = map.iter().any(|t| {
                 t.get("name").is_some_and(|name| name == "tool_use") || t.contains_key("tool_use")
             });
@@ -318,10 +499,11 @@ pub fn apply_chat_template_to(
                 );
             }
 
+            let mut found_template = None;
             for t in map {
                 let name = t.get("name");
                 if let Some(name) = name {
-                    template = Some(t["template"].clone());
+                    found_template = Some(t["template"].clone());
                     #[allow(clippy::if_same_then_else)]
                     if name == "tool_use" && !tools.is_empty() {
                         break;
@@ -329,21 +511,38 @@ pub fn apply_chat_template_to(
                         break;
                     }
                 } else if t.contains_key("tool_use") && !tools.is_empty() {
-                    template = Some(t["tool_use"].clone());
+                    found_template = Some(t["tool_use"].clone());
                     break;
                 } else if t.contains_key("default") && !must_use_tool_template {
-                    template = Some(t["default"].clone());
+                    found_template = Some(t["default"].clone());
                     break;
                 }
             }
 
-            let Some(template) = template else {
-                anyhow::bail!("Chat template does not contain a `tool_use` or `default` key. Please ensure it contains at least a `default` key, although `tool_use` should be specified for using tools.");
-            };
-            template
+            found_template.ok_or_else(|| anyhow::anyhow!("Chat template does not contain a `tool_use` or `default` key. Please ensure it contains at least a `default` key, although `tool_use` should be specified for using tools."))?
         }
     };
-    let mut template = template.replace("[::-1]", "|reverse");
+
+    // Pre-process messages for Gemma 4 tool templates: parse JSON-string
+    // tool_call arguments into objects (so the template renders them in
+    // <|"|> format), and merge role:"tool" messages into tool_responses on
+    // the preceding assistant message.
+    if is_gemma4_tool_template(&resolved_template) {
+        parse_gemma4_tool_call_arguments(&mut messages);
+        preprocess_gemma4_tool_messages(&mut messages);
+    }
+
+    let mut new_messages = Vec::new();
+    for message in messages {
+        let mut new_message = IndexMap::new();
+        for (k, v) in message {
+            new_message.insert(k, UntaggedContent(v));
+        }
+        new_messages.push(new_message);
+    }
+
+    // Use the already-resolved template string
+    let mut template = resolved_template.replace("[::-1]", "|reverse");
     // Convert Python‑style descending ranges `range(..., -1, -1)` to a forward
     // range followed by Jinja’s `|reverse` filter so it works even when
     // negative‑step ranges aren’t supported.
@@ -400,19 +599,21 @@ pub fn apply_chat_template_to(
         })
         .collect();
 
-    if tools.is_empty() {
-        Ok(tmpl.render(context! {
+    let is_gemma4 = is_gemma4_tool_template(&resolved_template);
+
+    let mut rendered = if tools.is_empty() {
+        tmpl.render(context! {
             messages => new_messages,
             add_generation_prompt => add_generation_prompt,
             bos_token => bos_tok,
             eos_token => eos_tok,
             unk_token => unk_tok,
             date_string => date_string,
-            enable_thinking => enable_thinking.unwrap_or(true),
+            enable_thinking => enable_thinking.unwrap_or(DEFAULT_ENABLE_THINKING),
             reasoning_effort => reasoning_effort_str,
-        })?)
+        })?
     } else {
-        Ok(tmpl.render(context! {
+        tmpl.render(context! {
             messages => new_messages,
             add_generation_prompt => add_generation_prompt,
             bos_token => bos_tok,
@@ -422,8 +623,282 @@ pub fn apply_chat_template_to(
             tools => tools,
             builtin_tools => builtin_tools,
             date_string => date_string,
-            enable_thinking => enable_thinking.unwrap_or(true),
+            enable_thinking => enable_thinking.unwrap_or(DEFAULT_ENABLE_THINKING),
             reasoning_effort => reasoning_effort_str,
-        })?)
+        })?
+    };
+
+    // Gemma 4 fix: when tool_responses are in a user turn (the correct
+    // format), the template's generation-prompt logic skips `<|turn>model\n`
+    // because it checks `prev_message_type != 'tool_response'`.  But the
+    // training data ALWAYS has `<|turn>model\n` before the model generates.
+    // Append it when the template left it out.
+    if is_gemma4 && add_generation_prompt && rendered.ends_with("<tool_response|>") {
+        rendered.push_str("<|turn>model\n");
+    }
+
+    Ok(rendered)
+}
+
+#[cfg(test)]
+mod tests {
+    use either::Either;
+    use indexmap::IndexMap;
+    use serde_json::Value;
+
+    use super::{
+        apply_chat_template_to, preprocess_gemma4_tool_messages, ChatTemplateValue,
+        GenerationConfig, DEFAULT_ENABLE_THINKING,
+    };
+    use crate::MessageContent;
+
+    fn user_text_message(text: &str) -> IndexMap<String, MessageContent> {
+        IndexMap::from([
+            ("role".to_string(), Either::Left("user".to_string())),
+            ("content".to_string(), Either::Left(text.to_string())),
+        ])
+    }
+
+    #[test]
+    fn unspecified_thinking_enables_template_thinking() {
+        let template = ChatTemplateValue(Either::Left(
+            "{% if enable_thinking is defined and enable_thinking %}<|think|>{% endif %}{{ bos_token }}{{ messages[0]['content'] }}".to_string(),
+        ));
+        let messages = vec![user_text_message("hello")];
+
+        let rendered = apply_chat_template_to(
+            messages,
+            false,
+            None,
+            None,
+            &template,
+            Some("<bos>".to_string()),
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+        let enabled = apply_chat_template_to(
+            vec![user_text_message("hello")],
+            false,
+            Some(true),
+            None,
+            &template,
+            Some("<bos>".to_string()),
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        const { assert!(DEFAULT_ENABLE_THINKING) };
+        assert_eq!(rendered, "<|think|><bos>hello");
+        assert_eq!(rendered, enabled);
+    }
+
+    #[test]
+    fn generation_config_exposes_sampling_defaults() {
+        let config: GenerationConfig = serde_json::from_str(
+            r#"{
+                "do_sample": true,
+                "temperature": 1.0,
+                "top_k": 32,
+                "top_p": 0.9,
+                "min_p": 0.05,
+                "repetition_penalty": 1.1,
+                "max_new_tokens": 512
+            }"#,
+        )
+        .unwrap();
+
+        let defaults = config.generation_defaults().unwrap();
+        assert_eq!(defaults.do_sample, Some(true));
+        assert_eq!(defaults.temperature, Some(1.0));
+        assert_eq!(defaults.top_k, Some(32));
+        assert_eq!(defaults.top_p, Some(0.9));
+        assert_eq!(defaults.min_p, Some(0.05));
+        assert_eq!(defaults.repetition_penalty, Some(1.1));
+        assert_eq!(defaults.max_new_tokens, Some(512));
+    }
+
+    fn assistant_message_with_tool_calls() -> IndexMap<String, MessageContent> {
+        let mut tc_map = IndexMap::new();
+        tc_map.insert("id".to_string(), Value::String("call-1".to_string()));
+        tc_map.insert("type".to_string(), Value::String("function".to_string()));
+        let mut func = serde_json::Map::new();
+        func.insert("name".to_string(), Value::String("get_weather".to_string()));
+        func.insert(
+            "arguments".to_string(),
+            Value::String(r#"{"city":"Boston"}"#.to_string()),
+        );
+        tc_map.insert("function".to_string(), Value::Object(func));
+
+        IndexMap::from([
+            ("role".to_string(), Either::Left("assistant".to_string())),
+            (
+                "content".to_string(),
+                Either::Left(
+                    r#"{"name":"get_weather","arguments":"{\"city\":\"Boston\"}"}"#.to_string(),
+                ),
+            ),
+            ("tool_calls".to_string(), Either::Right(vec![tc_map])),
+        ])
+    }
+
+    fn tool_result_message(name: &str, content: &str) -> IndexMap<String, MessageContent> {
+        IndexMap::from([
+            ("role".to_string(), Either::Left("tool".to_string())),
+            ("name".to_string(), Either::Left(name.to_string())),
+            ("content".to_string(), Either::Left(content.to_string())),
+        ])
+    }
+
+    #[test]
+    fn gemma4_preprocess_creates_user_msg_for_tool_responses() {
+        let mut messages = vec![
+            user_text_message("What's the weather?"),
+            assistant_message_with_tool_calls(),
+            tool_result_message("get_weather", r#"{"temp":72}"#),
+        ];
+
+        preprocess_gemma4_tool_messages(&mut messages);
+
+        // Tool message replaced by a user message with tool_responses
+        assert_eq!(messages.len(), 3);
+        // Assistant message should NOT have tool_responses
+        assert!(!messages[1].contains_key("tool_responses"));
+        // Content should be cleared (had tool_calls)
+        let content = messages[1].get("content").unwrap();
+        assert_eq!(content, &Either::Left(String::new()));
+        // New user message should have tool_responses
+        let role = messages[2].get("role").unwrap();
+        assert_eq!(role, &Either::Left("user".to_string()));
+        assert!(messages[2].contains_key("tool_responses"));
+    }
+
+    #[test]
+    fn gemma4_preprocess_tool_response_has_correct_structure() {
+        let mut messages = vec![
+            user_text_message("hi"),
+            assistant_message_with_tool_calls(),
+            tool_result_message("get_weather", r#"{"temp":72}"#),
+        ];
+
+        preprocess_gemma4_tool_messages(&mut messages);
+
+        let tool_responses = match messages[2].get("tool_responses").unwrap() {
+            Either::Right(v) => v,
+            _ => panic!("Expected Either::Right"),
+        };
+        assert_eq!(tool_responses.len(), 1);
+        assert_eq!(tool_responses[0]["name"], "get_weather");
+        // Content was valid JSON → parsed into a Value, not a string
+        assert_eq!(tool_responses[0]["response"]["temp"], 72);
+    }
+
+    #[test]
+    fn gemma4_parse_tool_call_arguments_converts_json_string_to_object() {
+        let mut messages = vec![
+            user_text_message("call something"),
+            assistant_message_with_tool_calls(),
+        ];
+        // Before: arguments is a JSON string
+        if let Some(Either::Right(ref tcs)) = messages[1].get("tool_calls") {
+            let func = tcs[0].get("function").unwrap();
+            assert!(func.get("arguments").unwrap().is_string());
+        }
+
+        super::parse_gemma4_tool_call_arguments(&mut messages);
+
+        // After: arguments should be a parsed object
+        if let Some(Either::Right(ref tcs)) = messages[1].get("tool_calls") {
+            let func = tcs[0].get("function").unwrap();
+            let args = func.get("arguments").unwrap();
+            assert!(args.is_object(), "arguments should be parsed to object");
+            assert_eq!(args.get("city").unwrap(), "Boston");
+        } else {
+            panic!("expected tool_calls");
+        }
+    }
+
+    #[test]
+    fn gemma4_preprocess_multiple_tool_messages() {
+        let mut messages = vec![
+            user_text_message("hi"),
+            assistant_message_with_tool_calls(),
+            tool_result_message("get_weather", r#"{"temp":72}"#),
+            tool_result_message("get_forecast", "sunny"),
+        ];
+
+        preprocess_gemma4_tool_messages(&mut messages);
+
+        // assistant + one user msg replaces the two tool msgs
+        assert_eq!(messages.len(), 3);
+        let tool_responses = match messages[2].get("tool_responses").unwrap() {
+            Either::Right(v) => v,
+            _ => panic!("Expected Either::Right"),
+        };
+        assert_eq!(tool_responses.len(), 2);
+        assert_eq!(tool_responses[0]["name"], "get_weather");
+        assert_eq!(tool_responses[1]["name"], "get_forecast");
+        // Non-JSON content falls back to string
+        assert_eq!(tool_responses[1]["response"], "sunny");
+    }
+
+    #[test]
+    fn gemma4_preprocess_no_tool_messages_is_noop() {
+        let mut messages = vec![
+            user_text_message("hello"),
+            IndexMap::from([
+                ("role".to_string(), Either::Left("assistant".to_string())),
+                ("content".to_string(), Either::Left("hi there".to_string())),
+            ]),
+        ];
+        let original_len = messages.len();
+
+        preprocess_gemma4_tool_messages(&mut messages);
+
+        assert_eq!(messages.len(), original_len);
+    }
+
+    #[test]
+    fn gemma4_preprocess_tool_without_name_defaults_to_unknown() {
+        let mut messages = vec![
+            user_text_message("hi"),
+            assistant_message_with_tool_calls(),
+            // Tool message without "name" field
+            IndexMap::from([
+                ("role".to_string(), Either::Left("tool".to_string())),
+                ("content".to_string(), Either::Left("result".to_string())),
+            ]),
+        ];
+
+        preprocess_gemma4_tool_messages(&mut messages);
+
+        let tool_responses = match messages[2].get("tool_responses").unwrap() {
+            Either::Right(v) => v,
+            _ => panic!("Expected Either::Right"),
+        };
+        assert_eq!(tool_responses[0]["name"], "unknown");
+    }
+
+    #[test]
+    fn generation_config_keeps_omitted_sampling_fields_unset() {
+        let config: GenerationConfig = serde_json::from_str(
+            r#"{
+                "do_sample": true,
+                "temperature": 1.0
+            }"#,
+        )
+        .unwrap();
+
+        let defaults = config.generation_defaults().unwrap();
+        assert_eq!(defaults.do_sample, Some(true));
+        assert_eq!(defaults.temperature, Some(1.0));
+        assert_eq!(defaults.top_k, None);
+        assert_eq!(defaults.top_p, None);
+        assert_eq!(defaults.repetition_penalty, None);
+        assert_eq!(defaults.max_new_tokens, None);
+        assert_eq!(defaults.max_length, None);
     }
 }

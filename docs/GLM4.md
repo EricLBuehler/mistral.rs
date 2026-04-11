@@ -1,37 +1,36 @@
-# GLM4 Model
-
-**[See the GLM4 model Collection](https://huggingface.co/collections/THUDM/glm-4-0414-67f3cbcb34dd9d252707cb2e)**
+# GLM4: [`collection`](https://huggingface.co/collections/THUDM/glm-4-0414-67f3cbcb34dd9d252707cb2e)
 
 GLM4 is a series of open, multilingual, and multimodal large language models. The text-to-text LLM backbones in GLM4 are supported by mistral.rs.
 
+## Quick Start
+
+```bash
+mistralrs run --isq 4 -m THUDM/GLM-4-9B-0414
+```
+
 ## HTTP API
 
+```bash
+mistralrs serve --isq 4 -p 1234 -m THUDM/GLM-4-9B-0414
+```
+
 ```py
-import openai
+from openai import OpenAI
 
-messages = []
-prompt = input("Enter system prompt >>> ")
-if len(prompt) > 0:
-    messages.append({"role": "system", "content": prompt})
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
-
-while True:
-    prompt = input(">>> ")
-    messages.append({"role": "user", "content": prompt})
-    completion = client.chat.completions.create(
-        model="default",
-        messages=messages,
-        max_tokens=256,
-        frequency_penalty=1.0,
-        top_p=0.1,
-        temperature=0,
-    )
-    resp = completion.choices[0].message.content
-    print(resp)
-    messages.append({"role": "assistant", "content": resp})
+completion = client.chat.completions.create(
+    model="default",
+    messages=[
+        {"role": "user", "content": "Tell me a story about the Rust type system."}
+    ],
+    max_tokens=256,
+)
+print(completion.choices[0].message.content)
 ```
 
 ## Python SDK
+
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 
@@ -56,4 +55,31 @@ res = runner.send_chat_completion_request(
 )
 print(res.choices[0].message.content)
 print(res.usage)
+```
+
+## Rust SDK
+
+```rust
+use anyhow::Result;
+use mistralrs::{
+    IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
+};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model = TextModelBuilder::new("THUDM/GLM-4-9B-0414")
+        .with_isq(IsqType::Q4K)
+        .with_logging()
+        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+        .build()
+        .await?;
+
+    let messages = TextMessages::new()
+        .add_message(TextMessageRole::User, "Hello!");
+
+    let response = model.send_chat_request(messages).await?;
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+
+    Ok(())
+}
 ```

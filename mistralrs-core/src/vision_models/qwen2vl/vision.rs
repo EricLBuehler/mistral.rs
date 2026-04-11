@@ -1,3 +1,4 @@
+use crate::attention::AttentionMask;
 use std::sync::Arc;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
@@ -117,7 +118,7 @@ impl VisionAttention {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         rotary_pos_emb: &Tensor,
     ) -> Result<Tensor> {
         let seq_len = xs.dim(0)?;
@@ -146,8 +147,8 @@ impl VisionAttention {
             let mut att =
                 (MatMul.matmul(&q, &k.transpose(1, 2)?)? / (self.head_dim as f64).sqrt())?;
             att = match attention_mask {
-                Some(m) => att.broadcast_add(m)?,
-                None => att,
+                AttentionMask::Custom(m) => att.broadcast_add(m)?,
+                _ => att,
             };
             att = candle_nn::ops::softmax_last_dim(&att)?;
             MatMul
@@ -199,7 +200,7 @@ impl VisionBlock {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         rotary_pos_emb: &Tensor,
     ) -> Result<Tensor> {
         let xs = (xs
@@ -392,7 +393,14 @@ impl Qwen2VLVisionModel {
         };
 
         for blk in &self.blocks {
-            xs = blk.forward(&xs, attention_mask.as_ref(), &rotary_pos_emb)?;
+            xs = blk.forward(
+                &xs,
+                &match &attention_mask {
+                    Some(t) => AttentionMask::Custom(t.clone()),
+                    None => AttentionMask::None,
+                },
+                &rotary_pos_emb,
+            )?;
         }
 
         self.patch_merger.forward(&xs)

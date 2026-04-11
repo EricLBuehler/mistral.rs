@@ -147,6 +147,6 @@ print(response.choices[0].message.content)
 
 ## Next Steps
 
-- [SDK Documentation](PYTHON_SDK.md) - Full SDK reference
-- [Examples](https://github.com/EricLBuehler/mistral.rs/tree/master/examples/python) - Python examples
-- [Cookbook](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/cookbook.ipynb) - Interactive tutorial
+- [SDK Documentation](PYTHON_SDK.md): Full SDK reference
+- [Examples](https://github.com/EricLBuehler/mistral.rs/tree/master/examples/python): Python examples
+- [Cookbook](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python/cookbook.ipynb): Interactive tutorial

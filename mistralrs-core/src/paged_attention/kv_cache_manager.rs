@@ -34,7 +34,7 @@ struct RequestBlocks {
     num_cached_blocks: usize,
 }
 
-/// KV Cache Manager — manages block allocation and prefix caching.
+/// KV Cache Manager, manages block allocation and prefix caching.
 ///
 /// Each instance handles one "type" of KV cache layer (e.g., full attention).
 /// For models with alternating sliding window layers (Gemma2, GPT-OSS),
@@ -156,7 +156,7 @@ impl KVCacheManager {
                 );
                 cached_block_ids.push(ids[0]);
             } else {
-                // Chain is broken — no further blocks can match
+                // Chain is broken, no further blocks can match
                 break;
             }
         }
@@ -190,7 +190,7 @@ impl KVCacheManager {
         let num_required_blocks = num_tokens.div_ceil(self.block_size);
 
         if let Some(req) = self.req_to_blocks.get(&request_id) {
-            // Running request — just need to allocate additional blocks
+            // Running request, just need to allocate additional blocks
             let num_existing = req.block_ids.len();
             let num_new_blocks = num_required_blocks.saturating_sub(num_existing);
 
@@ -207,12 +207,12 @@ impl KVCacheManager {
             return Some(new_block_ids);
         }
 
-        // New request — incorporate computed blocks + allocate new ones
+        // New request, incorporate computed blocks + allocate new ones
         let num_computed = computed_blocks.len();
         let num_new_blocks = num_required_blocks.saturating_sub(num_computed);
 
         // Count evictable blocks among computed blocks (blocks with ref_cnt == 0
-        // that are in the free list — touching them will remove them from the
+        // that are in the free list, touching them will remove them from the
         // free list, so we need to account for this in the capacity check).
         let num_evictable = if self.enable_caching {
             computed_blocks

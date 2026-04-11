@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::attention::AttentionMask;
 use std::sync::{Arc, Mutex};
 
 use candle_core::{Context, DType, Device, Result, Tensor, D};
@@ -17,7 +18,7 @@ use crate::{
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
@@ -138,7 +139,7 @@ impl Gemma3Model {
                 &pixel_values.to_dtype(dtype)?,
                 &self.encoder_cache,
                 |pv| {
-                    let vision_outputs = vision_tower.forward(pv, None, None)?;
+                    let vision_outputs = vision_tower.forward(pv, &AttentionMask::None, None)?;
                     Ok(vec![multi_modal_projector.forward(&vision_outputs)?])
                 },
             )?[0]
@@ -206,7 +207,7 @@ pub struct Gemma3SpecificArgs {
     pub image_hashes: Vec<u64>,
 }
 
-impl VisionModel for Gemma3Model {
+impl MultimodalModel for Gemma3Model {
     fn forward(
         &self,
         input_ids: &Tensor,

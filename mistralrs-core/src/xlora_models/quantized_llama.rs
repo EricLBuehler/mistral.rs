@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::attention::SdpaParams;
+use crate::attention::{AttentionMask, SdpaParams};
 use crate::gguf::Content;
 use crate::lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
 use crate::pipeline::text_models_inputs_processor::FlashParams;
@@ -17,7 +17,7 @@ use tqdm::Iter;
 use tracing::info;
 
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
-use crate::layers::{CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa};
+use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa};
 use crate::pipeline::{extract_logits, Cache, EitherCache};
 
 use super::classifier::XLoraClassifier;
@@ -188,7 +188,7 @@ impl LayerWeights {
     fn forward_attn(
         &self,
         x: &Tensor,
-        mask: &Option<Tensor>,
+        mask: &AttentionMask,
         start_offsets: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Option<Tensor>,
@@ -232,14 +232,7 @@ impl LayerWeights {
 
         let (k, v) = Cache::update_kv_cache(kv_cache, k, v)?;
 
-        let y = Sdpa.run_attention(
-            &q,
-            &k,
-            &v,
-            mask.as_ref(),
-            Some(flash_params),
-            &self.sdpa_params,
-        )?;
+        let y = Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?;
 
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attention_wo.lora_forward(
@@ -792,7 +785,7 @@ impl ModelWeights {
             self.cache.full().lock()
         };
         let mask =
-            CausalMasker.make_causal_mask_matrix(x, &*cache, self.dtype, self.layers[0].n_head)?;
+            CausalMasker.make_causal_mask(x, &*cache, self.dtype, &CausalMaskConfig::default())?;
         let mask = match self.mapper {
             Some(ref mapper) => DeviceMappedMask::new(mask, &**mapper)?,
             None => DeviceMappedMask::from_single(mask),
@@ -806,7 +799,7 @@ impl ModelWeights {
             let x = layer.attention_norm.forward(&x)?;
             let attn = layer.forward_attn(
                 &x,
-                &mask.as_ref().map(|m| m.get(x.device()).clone()),
+                &mask.get(x.device()),
                 start_offsets,
                 &mut cache[i],
                 scalings.clone(),

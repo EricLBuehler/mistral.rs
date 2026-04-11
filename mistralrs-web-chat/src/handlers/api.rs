@@ -349,7 +349,7 @@ pub async fn list_models(State(app): State<Arc<AppState>>) -> impl IntoResponse 
         .map(|(n, m)| {
             let kind = match m {
                 LoadedModel::Text(_) => "text",
-                LoadedModel::Vision(_) => "vision",
+                LoadedModel::Multimodal(_) => "multimodal",
                 LoadedModel::Speech(_) => "speech",
             };
             json!({ "name": n, "kind": kind })
@@ -375,7 +375,7 @@ pub async fn select_model(
                     chat.model = req.name.clone();
                     chat.kind = match model_loaded {
                         LoadedModel::Text(_) => "text".into(),
-                        LoadedModel::Vision(_) => "vision".into(),
+                        LoadedModel::Multimodal(_) => "multimodal".into(),
                         LoadedModel::Speech(_) => "speech".into(),
                     };
                     // ignore write errors; not fatal for select_model
@@ -427,7 +427,7 @@ pub async fn new_chat(
     let kind = if let Some(m) = app.models.get(&req.model) {
         match m {
             LoadedModel::Text(_) => "text",
-            LoadedModel::Vision(_) => "vision",
+            LoadedModel::Multimodal(_) => "multimodal",
             LoadedModel::Speech(_) => "speech",
         }
     } else {

@@ -11,7 +11,7 @@ use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = ModelBuilder::new("google/gemma-3-4b-it")
+    let model = ModelBuilder::new("google/gemma-4-E4B-it")
         .with_auto_isq(IsqBits::Four)
         .with_logging()
         .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)

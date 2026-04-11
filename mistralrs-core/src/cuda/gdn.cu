@@ -232,7 +232,8 @@ extern "C" void gated_delta_rule_recurrence(const float *q, const float *k,
 //
 // Processes prefill tokens in BT-token chunks instead of one at a time.
 // Within each chunk: parallel prefix sum of g, cooperative kk_dot computation,
-// forward substitution (triangular solve), output computation, and state update.
+// forward substitution (triangular solve), output computation, and state
+// update.
 //
 // Same thread model as Kernel 1: one block per (v_tile, batch*head),
 // one thread per V-column. Each thread owns BK registers of state.
@@ -249,15 +250,15 @@ extern "C" void gated_delta_rule_recurrence(const float *q, const float *k,
 // ============================================================================
 
 template <int BT, int BK, int BV>
-__global__ void chunked_gated_delta_rule_kernel(
-    const float *__restrict__ q,    // [BH, S, K]
-    const float *__restrict__ k,    // [BH, S, K]
-    const float *__restrict__ v,    // [BH, S, V]
-    const float *__restrict__ g,    // [BH, S]
-    const float *__restrict__ beta, // [BH, S]
-    float *__restrict__ state,      // [BH, K, V]
-    float *__restrict__ output,     // [BH, S, V]
-    int seq_len, int v_dim) {
+__global__ void
+chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
+                                const float *__restrict__ k,    // [BH, S, K]
+                                const float *__restrict__ v,    // [BH, S, V]
+                                const float *__restrict__ g,    // [BH, S]
+                                const float *__restrict__ beta, // [BH, S]
+                                float *__restrict__ state,      // [BH, K, V]
+                                float *__restrict__ output,     // [BH, S, V]
+                                int seq_len, int v_dim) {
 
   const int v_tile = blockIdx.x;
   const int bh = blockIdx.y;
@@ -280,11 +281,11 @@ __global__ void chunked_gated_delta_rule_kernel(
 
   // Dynamic shared memory layout
   extern __shared__ float smem[];
-  float *k_chunk = smem;                     // [BT * BK]
-  float *kk_dot = smem + BT * BK;            // [BT * BT]
-  float *gcum = smem + BT * BK + BT * BT;    // [BT]
-  float *beta_s = gcum + BT;                  // [BT]
-  float *q_buf = beta_s + BT;                 // [BK]
+  float *k_chunk = smem;                  // [BT * BK]
+  float *kk_dot = smem + BT * BK;         // [BT * BT]
+  float *gcum = smem + BT * BK + BT * BT; // [BT]
+  float *beta_s = gcum + BT;              // [BT]
+  float *q_buf = beta_s + BT;             // [BK]
 
   // Load state column into registers
   float s[BK];
@@ -356,8 +357,7 @@ __global__ void chunked_gated_delta_rule_kernel(
 
       // Subtract lower-triangular contributions (intra-chunk)
       for (int j = 0; j < i; j++) {
-        float a_ij =
-            beta_i * kk_dot[i * BT + j] * expf(gcum[i] - gcum[j]);
+        float a_ij = beta_i * kk_dot[i * BT + j] * expf(gcum[i] - gcum[j]);
         rhs -= a_ij * delta[j];
       }
       delta[i] = rhs;
@@ -431,8 +431,8 @@ extern "C" void chunked_gated_delta_rule_recurrence(
 
     // Request extended shared memory
     auto kernel = chunked_gated_delta_rule_kernel<BT, BK, BV>;
-    cudaFuncSetAttribute(kernel,
-                         cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
+    cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
+                         smem);
 
     dim3 grid((v_dim + BV - 1) / BV, bh);
     dim3 block(BV);
@@ -445,8 +445,8 @@ extern "C" void chunked_gated_delta_rule_recurrence(
     size_t smem = (BT * BK + BT * BT + 2 * BT + BK) * sizeof(float);
 
     auto kernel = chunked_gated_delta_rule_kernel<BT, BK, BV>;
-    cudaFuncSetAttribute(kernel,
-                         cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
+    cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
+                         smem);
 
     dim3 grid((v_dim + BV - 1) / BV, bh);
     dim3 block(BV);

@@ -49,7 +49,7 @@ pub enum AutoDeviceMapParams {
         max_seq_len: usize,
         max_batch_size: usize,
     },
-    Vision {
+    Multimodal {
         max_seq_len: usize,
         max_batch_size: usize,
         max_image_shape: (usize, usize),
@@ -58,12 +58,12 @@ pub enum AutoDeviceMapParams {
 }
 
 impl AutoDeviceMapParams {
-    pub fn maybe_promote_to_vision(&self) -> Self {
+    pub fn maybe_promote_to_multimodal(&self) -> Self {
         match *self {
             Self::Text {
                 max_seq_len,
                 max_batch_size,
-            } => Self::Vision {
+            } => Self::Multimodal {
                 max_seq_len,
                 max_batch_size,
                 max_image_shape: (
@@ -72,12 +72,12 @@ impl AutoDeviceMapParams {
                 ),
                 max_num_images: Self::DEFAULT_MAX_NUM_IMAGES,
             },
-            Self::Vision {
+            Self::Multimodal {
                 max_seq_len,
                 max_batch_size,
                 max_image_shape,
                 max_num_images,
-            } => Self::Vision {
+            } => Self::Multimodal {
                 max_seq_len,
                 max_batch_size,
                 max_image_shape,
@@ -88,13 +88,13 @@ impl AutoDeviceMapParams {
 
     pub fn max_seq_len(&self) -> usize {
         match self {
-            Self::Text { max_seq_len, .. } | Self::Vision { max_seq_len, .. } => *max_seq_len,
+            Self::Text { max_seq_len, .. } | Self::Multimodal { max_seq_len, .. } => *max_seq_len,
         }
     }
 
     pub fn max_batch_size(&self) -> usize {
         match self {
-            Self::Text { max_batch_size, .. } | Self::Vision { max_batch_size, .. } => {
+            Self::Text { max_batch_size, .. } | Self::Multimodal { max_batch_size, .. } => {
                 *max_batch_size
             }
         }
@@ -111,14 +111,14 @@ impl Display for AutoDeviceMapParams {
                 f,
                 "text[max_seq_len: {max_seq_len}, max_batch_size: {max_batch_size}]"
             ),
-            Self::Vision {
+            Self::Multimodal {
                 max_seq_len,
                 max_batch_size,
                 max_image_shape,
                 max_num_images,
             } => write!(
                 f,
-                "vision[max_seq_len: {max_seq_len}, max_batch_size: {max_batch_size}, max_image_shape: {max_image_shape:?}, max_num_images: {max_num_images}]"
+                "multimodal[max_seq_len: {max_seq_len}, max_batch_size: {max_batch_size}, max_image_shape: {max_image_shape:?}, max_num_images: {max_num_images}]"
             ),
         }
     }
@@ -138,8 +138,8 @@ impl AutoDeviceMapParams {
         }
     }
 
-    pub fn default_vision() -> Self {
-        Self::Vision {
+    pub fn default_multimodal() -> Self {
+        Self::Multimodal {
             max_seq_len: Self::DEFAULT_MAX_SEQ_LEN,
             max_batch_size: Self::DEFAULT_MAX_BATCH_SIZE,
             max_num_images: Self::DEFAULT_MAX_NUM_IMAGES,
@@ -214,11 +214,11 @@ pub fn get_device_layers(
     let mut remaining = total_model_size_in_bytes;
     let max_seq_len = match params {
         AutoDeviceMapParams::Text { max_seq_len, .. }
-        | AutoDeviceMapParams::Vision { max_seq_len, .. } => *max_seq_len,
+        | AutoDeviceMapParams::Multimodal { max_seq_len, .. } => *max_seq_len,
     };
     let max_batch_size = match params {
         AutoDeviceMapParams::Text { max_batch_size, .. }
-        | AutoDeviceMapParams::Vision { max_batch_size, .. } => *max_batch_size,
+        | AutoDeviceMapParams::Multimodal { max_batch_size, .. } => *max_batch_size,
     };
 
     let model_cfg = loader.model_config(config)?;

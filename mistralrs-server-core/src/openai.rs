@@ -601,6 +601,9 @@ pub struct ChatCompletionRequest {
     /// Controls the depth of reasoning/analysis: "low", "medium", or "high".
     #[schema(example = json!(Option::None::<String>))]
     pub reasoning_effort: Option<String>,
+    /// Maximum number of tool-call rounds the server will auto-execute.
+    #[schema(example = json!(Option::None::<usize>))]
+    pub max_tool_rounds: Option<usize>,
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,

@@ -19,9 +19,9 @@ pub struct Cli {
     #[arg(long = "text-model")]
     pub text_models: Vec<String>,
 
-    /// Repeated flag for vision models (HuggingFace model ID or local path)
-    #[arg(long = "vision-model")]
-    pub vision_models: Vec<String>,
+    /// Repeated flag for multimodal models (HuggingFace model ID or local path)
+    #[arg(long = "multimodal-model")]
+    pub multimodal_models: Vec<String>,
 
     /// Repeated flag for speech models (HuggingFace model ID or local path)
     #[arg(long = "speech-model")]

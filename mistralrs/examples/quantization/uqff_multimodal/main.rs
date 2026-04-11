@@ -1,13 +1,13 @@
-//! Load a pre-quantized UQFF vision model.
+//! Load a pre-quantized UQFF multimodal model.
 //!
-//! Run with: `cargo run --release --example uqff_vision -p mistralrs`
+//! Run with: `cargo run --release --example uqff_multimodal -p mistralrs`
 
 use anyhow::Result;
-use mistralrs::{IsqBits, TextMessageRole, UqffVisionModelBuilder, VisionMessages};
+use mistralrs::{IsqBits, MultimodalMessages, TextMessageRole, UqffMultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = UqffVisionModelBuilder::new(
+    let model = UqffMultimodalModelBuilder::new(
         "EricB/Phi-3.5-vision-instruct-UQFF",
         vec!["phi3.5-vision-instruct-q8_0.uqff".into()],
     )
@@ -25,7 +25,7 @@ async fn main() -> Result<()> {
     };
     let image = image::load_from_memory(&bytes)?;
 
-    let messages = VisionMessages::new().add_image_message(
+    let messages = MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         vec![image],

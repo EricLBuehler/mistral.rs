@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{collections::HashMap, ops::Mul, sync::Arc};
+use std::{ops::Mul, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, LayerNormConfig, Module};
@@ -9,7 +9,7 @@ use mistralrs_quant::{
 };
 
 use crate::{
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     layers::{conv2d_no_bias, embedding, layer_norm, GetFloatInfo, Sdpa},
     pipeline::{text_models_inputs_processor::FlashParams, IsqModel},
     utils::unvarbuilder::UnVarBuilder,
@@ -192,7 +192,7 @@ impl MLlamaVisionAttention {
     }
 
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L243
-    fn forward(&self, hidden_state: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&self, hidden_state: &Tensor, attention_mask: &AttentionMask) -> Result<Tensor> {
         let mut hidden_state = hidden_state.clone();
         let original_dtype = hidden_state.dtype();
         if let Some(t) = self.q_proj.quantized_act_type() {
@@ -221,13 +221,7 @@ impl MLlamaVisionAttention {
             .reshape((bs, k_sq, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let flash_params = FlashParams {
-            max_q: 0,
-            max_k: 0,
-            cumulative_seqlens_q: HashMap::new(),
-            cumulative_seqlens_k: HashMap::new(),
-            causal: false,
-        };
+        let flash_params = FlashParams::empty(false);
 
         let mut attn_output = Sdpa
             .run_attention(
@@ -357,7 +351,7 @@ impl MLlamaVisionEncoderLayer {
     }
 
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L348
-    fn forward(&self, hidden_state: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&self, hidden_state: &Tensor, attention_mask: &AttentionMask) -> Result<Tensor> {
         // Self attn
         let residual = hidden_state;
         let mut hidden_state = self.input_layernorm.forward(hidden_state)?;
@@ -412,7 +406,7 @@ impl MLlamaVisionEncoder {
     fn forward_with_states(
         &self,
         hidden_state: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         intermediate_layers_indices: Option<&[usize]>,
     ) -> Result<(Tensor, Vec<Tensor>)> {
         let mut hidden_state = hidden_state.clone();
@@ -666,7 +660,7 @@ impl MLlamaVisionModel {
         let (mut hidden_state, all_intermediate_hidden_states) =
             self.transformer.forward_with_states(
                 &hidden_state,
-                Some(&attention_mask),
+                &AttentionMask::Custom(attention_mask.clone()),
                 Some(&self.intermediate_layers_indices),
             )?;
 
@@ -694,7 +688,7 @@ impl MLlamaVisionModel {
         ))?;
         (hidden_state, _) = self.global_transformer.forward_with_states(
             &hidden_state,
-            Some(&attention_mask),
+            &AttentionMask::Custom(attention_mask.clone()),
             None,
         )?;
 

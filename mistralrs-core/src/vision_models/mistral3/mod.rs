@@ -13,7 +13,7 @@ use crate::{
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
+        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata, NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
@@ -349,7 +349,7 @@ pub struct Mistral3SpecificArgs {
     pub image_hashes: Vec<u64>,
 }
 
-impl VisionModel for Mistral3Model {
+impl MultimodalModel for Mistral3Model {
     fn forward(
         &self,
         input_ids: &Tensor,

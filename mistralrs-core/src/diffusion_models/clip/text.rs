@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::attention::AttentionMask;
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn as nn;
 use candle_nn::Module;
@@ -120,7 +121,7 @@ impl ClipAttention {
             .contiguous()
     }
 
-    fn forward(&self, xs: &Tensor, causal_attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, causal_attention_mask: &AttentionMask) -> Result<Tensor> {
         let in_dtype = xs.dtype();
         let (bsz, seq_len, projection_dim) = xs.dims3()?;
 
@@ -142,14 +143,15 @@ impl ClipAttention {
 
         let src_len = key_states.dim(1)?;
 
-        let attn_weights = if let Some(causal_attention_mask) = causal_attention_mask {
-            attn_weights
-                .reshape((bsz, self.num_attention_heads, seq_len, src_len))?
-                .broadcast_add(causal_attention_mask)?
-                .reshape((bsz * self.num_attention_heads, seq_len, src_len))?
-        } else {
-            attn_weights
-        };
+        let attn_weights =
+            if let AttentionMask::Custom(causal_attention_mask) = causal_attention_mask {
+                attn_weights
+                    .reshape((bsz, self.num_attention_heads, seq_len, src_len))?
+                    .broadcast_add(causal_attention_mask)?
+                    .reshape((bsz * self.num_attention_heads, seq_len, src_len))?
+            } else {
+                attn_weights
+            };
 
         let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?;
 
@@ -214,7 +216,7 @@ impl ClipEncoderLayer {
         })
     }
 
-    fn forward(&self, xs: &Tensor, causal_attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, causal_attention_mask: &AttentionMask) -> Result<Tensor> {
         let residual = xs;
         let xs = self.layer_norm1.forward(xs)?;
         let xs = self.self_attn.forward(&xs, causal_attention_mask)?;
@@ -243,7 +245,7 @@ impl ClipEncoder {
         Ok(ClipEncoder { layers })
     }
 
-    pub fn forward(&self, xs: &Tensor, causal_attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor, causal_attention_mask: &AttentionMask) -> Result<Tensor> {
         let mut xs = xs.clone();
         for layer in self.layers.iter() {
             xs = layer.forward(&xs, causal_attention_mask)?;
@@ -302,7 +304,7 @@ impl ClipTextTransformer {
             Self::build_causal_attention_mask(bsz, seq_len, mask_after, input_ids.device())?;
         let input_ids = self
             .encoder
-            .forward(&input_ids, Some(&causal_attention_mask))?;
+            .forward(&input_ids, &AttentionMask::Custom(causal_attention_mask))?;
         self.final_layer_norm.forward(&input_ids)
     }
 }

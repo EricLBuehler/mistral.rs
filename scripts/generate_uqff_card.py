@@ -12,7 +12,7 @@ model_id = input("Please enter the original model ID: ")
 display_model_id = input(
     "Please enter the model ID where this model card will be displayed: "
 )
-is_vision = input("Is this a vision model (yes/no): ").strip().lower() == "yes"
+is_multimodal = input("Is this a multimodal model (yes/no): ").strip().lower() == "yes"
 
 output = f"""---
 tags:
@@ -72,8 +72,8 @@ try:
         else:
             output += f"|{quants.strip().upper()}|"
 
-        if is_vision:
-            cmd = "vision-plain"
+        if is_multimodal:
+            cmd = "multimodal-plain"
         else:
             cmd = "plain"
 

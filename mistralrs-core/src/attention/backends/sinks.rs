@@ -30,8 +30,11 @@ pub(crate) fn sinks_attn(
 
     // Detect varlen: flash_params has cu_seqlens_k AND batch > 1
     let is_varlen = b_sz > 1
-        && flash_params
-            .is_some_and(|fp| fp.cumulative_seqlens_k.contains_key(&q.device().location()));
+        && flash_params.is_some_and(|fp| {
+            fp.k_meta(sdpa_params.sliding_window)
+                .cumulative_seqlens
+                .contains_key(&q.device().location())
+        });
 
     if is_varlen {
         return sinks_attn_varlen(
@@ -60,7 +63,7 @@ fn sinks_attn_regular(
     sdpa_params: &SdpaParams,
     window_size: usize,
 ) -> Result<Tensor> {
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     if q.device().is_cuda() {
         return mistralrs_paged_attn::flash_attn_sinks(
             q,
@@ -114,9 +117,11 @@ fn sinks_attn_varlen(
 
     // Get cu_seqlens from flash_params (already on GPU as U32, no conversion needed)
     let cu_seqlens_q = &flash_params.cumulative_seqlens_q[&device.location()];
-    let cu_seqlens_k = &flash_params.cumulative_seqlens_k[&device.location()];
+    let cu_seqlens_k = &flash_params
+        .k_meta(sdpa_params.sliding_window)
+        .cumulative_seqlens[&device.location()];
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     if device.is_cuda() {
         return mistralrs_paged_attn::flash_attn_sinks_varlen(
             q,

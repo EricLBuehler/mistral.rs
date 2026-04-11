@@ -507,12 +507,28 @@ static size_t wmma_smem_bytes() {
   return AB + pad + C;
 }
 
+// For small M (decode), delegate to the vecmat kernel in mxfp4_gemm.cu
+// which is optimized for the memory-bandwidth-bound M=1 case.
+extern "C" void launch_mxfp4_matmul_f16(const __half *, const uint8_t *,
+                                        const uint8_t *, const __half *,
+                                        __half *, int, int, int, bool,
+                                        cudaStream_t);
+extern "C" void launch_mxfp4_matmul_bf16(const __nv_bfloat16 *, const uint8_t *,
+                                         const uint8_t *, const __nv_bfloat16 *,
+                                         __nv_bfloat16 *, int, int, int, bool,
+                                         cudaStream_t);
+
 extern "C" void launch_mxfp4_matmul_wmma_f16(const __half *input,
                                              const uint8_t *weight,
                                              const uint8_t *weight_scale,
                                              const __half *bias, __half *output,
                                              int M, int N, int K, bool has_bias,
                                              cudaStream_t stream) {
+  if (M <= 4) {
+    launch_mxfp4_matmul_f16(input, weight, weight_scale, bias, output, M, N, K,
+                            has_bias, stream);
+    return;
+  }
   using namespace mxfp4_wmma;
 
   dim3 grid(CEILDIV(N, N_BLK), CEILDIV(M, M_BLK));
@@ -531,6 +547,11 @@ extern "C" void launch_mxfp4_matmul_wmma_bf16(const __nv_bfloat16 *input,
                                               __nv_bfloat16 *output, int M,
                                               int N, int K, bool has_bias,
                                               cudaStream_t stream) {
+  if (M <= 4) {
+    launch_mxfp4_matmul_bf16(input, weight, weight_scale, bias, output, M, N, K,
+                             has_bias, stream);
+    return;
+  }
   using namespace mxfp4_wmma;
 
   dim3 grid(CEILDIV(N, N_BLK), CEILDIV(M, M_BLK));

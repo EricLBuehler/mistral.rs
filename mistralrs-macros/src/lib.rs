@@ -299,6 +299,7 @@ fn generate_tool_impl(args: ToolArgs, input_fn: ItemFn) -> syn::Result<TokenStre
                         description: Some(#description.to_string()),
                         name: #tool_name.to_string(),
                         parameters: Some(parameters),
+                        strict: None,
                     },
                 }
             }
@@ -361,6 +362,7 @@ fn generate_tool_impl(args: ToolArgs, input_fn: ItemFn) -> syn::Result<TokenStre
                         description: Some(#description.to_string()),
                         name: #tool_name.to_string(),
                         parameters: Some(parameters),
+                        strict: None,
                     },
                 }
             }

@@ -49,6 +49,7 @@ async function selectModel(name, notify = true) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name })
   });
+  await loadSettings();
 }
 
 /**

@@ -42,6 +42,8 @@ mod tests {
             truncate_sequence: false,
             tools: None,
             tool_choice: None,
+            max_tool_rounds: None,
+            tool_dispatch_url: None,
         };
 
         assert_eq!(job.request_id, 123);
@@ -60,6 +62,8 @@ mod tests {
             truncate_sequence: false,
             tools: None,
             tool_choice: None,
+            max_tool_rounds: None,
+            tool_dispatch_url: None,
         };
 
         // Test serialization
@@ -152,15 +156,18 @@ mod tests {
     #[test]
     fn test_pool_stats() {
         let stats = PoolStats {
-            active_workers: 4,
+            worker_threads: 4,
+            active_tasks: 2,
             queued_tasks: 10,
-            available_capacity: 512,
-            total_capacity: 1024,
+            used_units: 512,
+            total_units: 1024,
+            completed_tasks: 0,
+            failed_tasks: 0,
         };
-        
-        assert_eq!(stats.active_workers, 4);
+
+        assert_eq!(stats.worker_threads, 4);
         assert_eq!(stats.queued_tasks, 10);
-        assert_eq!(stats.available_capacity, 512);
+        assert_eq!(stats.used_units, 512);
     }
 
     #[tokio::test]

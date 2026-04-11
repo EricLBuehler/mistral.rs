@@ -22,7 +22,7 @@ pub enum QuantizeModelType {
         output: QuantizeOutputOptions,
 
         #[command(flatten)]
-        vision: QuantizeVisionOptions,
+        multimodal: QuantizeMultimodalOptions,
     },
 
     /// Text generation model with explicit architecture
@@ -44,8 +44,8 @@ pub enum QuantizeModelType {
         output: QuantizeOutputOptions,
     },
 
-    /// Vision-language model
-    Vision {
+    /// Multimodal model
+    Multimodal {
         #[command(flatten)]
         model: QuantizeModelSourceOptions,
 
@@ -59,7 +59,7 @@ pub enum QuantizeModelType {
         output: QuantizeOutputOptions,
 
         #[command(flatten)]
-        vision: QuantizeVisionOptions,
+        multimodal: QuantizeMultimodalOptions,
     },
 
     /// Embedding model
@@ -164,9 +164,9 @@ pub struct QuantizeOutputOptions {
     pub uqff_repo_id: Option<String>,
 }
 
-/// Vision model options for quantization
+/// Multimodal model options for quantization
 #[derive(Args, Clone, Default)]
-pub struct QuantizeVisionOptions {
+pub struct QuantizeMultimodalOptions {
     /// Maximum edge length for image resizing (aspect ratio preserved)
     #[arg(long)]
     pub max_edge: Option<u32>,
@@ -306,7 +306,7 @@ impl QuantizeDefaultOptions {
                 uqff_base_model: self.uqff_base_model,
                 uqff_repo_id: self.uqff_repo_id,
             },
-            vision: QuantizeVisionOptions {
+            multimodal: QuantizeMultimodalOptions {
                 max_edge: self.max_edge,
                 max_num_images: self.max_num_images,
                 max_image_length: self.max_image_length,

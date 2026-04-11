@@ -48,6 +48,12 @@ pub struct InferenceJob {
     /// Tool choice
     #[serde(skip)]
     pub tool_choice: Option<ToolChoice>,
+
+    /// Agentic loop iteration cap (mirrors [`NormalRequest::max_tool_rounds`])
+    pub max_tool_rounds: Option<usize>,
+
+    /// Tool dispatch URL (mirrors [`NormalRequest::tool_dispatch_url`])
+    pub tool_dispatch_url: Option<String>,
 }
 
 impl std::fmt::Debug for InferenceJob {
@@ -75,6 +81,8 @@ impl InferenceJob {
             truncate_sequence: request.truncate_sequence,
             tools: request.tools.clone(),
             tool_choice: request.tool_choice.clone(),
+            max_tool_rounds: request.max_tool_rounds,
+            tool_dispatch_url: request.tool_dispatch_url.clone(),
         }
     }
 
@@ -100,6 +108,8 @@ impl InferenceJob {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            max_tool_rounds: self.max_tool_rounds,
+            tool_dispatch_url: self.tool_dispatch_url.clone(),
             model_id: None,
             truncate_sequence: self.truncate_sequence,
         }))

@@ -66,10 +66,7 @@ macro_rules! get_paths {
             info!("Loading `tokenizer.json` at `{}`", $this.model_id);
             $crate::api_get_file!(api, "tokenizer.json", model_id)
         };
-        let config_filename = if dir_list.contains(&"config.json".to_string()) {
-            info!("Loading `config.json` at `{}`", $this.model_id);
-            $crate::api_get_file!(api, "config.json", model_id)
-        } else if dir_list.contains(&"params.json".to_string()) {
+        let config_filename = if dir_list.contains(&"params.json".to_string()) {
             info!(
                 "Loading `params.json` (Mistral config) at `{}`",
                 $this.model_id
@@ -215,10 +212,7 @@ macro_rules! get_embedding_paths {
             info!("Loading `tokenizer.json` at `{}`", $this.model_id);
             $crate::api_get_file!(api, "tokenizer.json", model_id)
         };
-        let config_filename = if emb_dir_list.contains(&"config.json".to_string()) {
-            info!("Loading `config.json` at `{}`", $this.model_id);
-            $crate::api_get_file!(api, "config.json", model_id)
-        } else if emb_dir_list.contains(&"params.json".to_string()) {
+        let config_filename = if emb_dir_list.contains(&"params.json".to_string()) {
             info!(
                 "Loading `params.json` (Mistral config) at `{}`",
                 $this.model_id
@@ -348,9 +342,35 @@ macro_rules! get_uqff_paths {
         let input_files: Vec<String> = $from_uqff.iter().map(|f| f.display().to_string()).collect();
         let input_count = input_files.len();
 
+        // Resolve numeric/ISQ-name shorthands (e.g., "8" -> "q8_0-0.uqff")
+        let resolved_files: Vec<String> = input_files
+            .iter()
+            .map(|file_str| {
+                if let Some(resolved) =
+                    $crate::pipeline::isq::resolve_uqff_shorthand(file_str, &available_files)
+                {
+                    tracing::info!("Resolved UQFF shorthand `{}` to `{}`", file_str, resolved,);
+                    resolved
+                } else if file_str.parse::<u32>().is_ok() {
+                    let available_uqff: Vec<_> = available_files
+                        .iter()
+                        .filter(|f| f.ends_with(".uqff"))
+                        .collect();
+                    tracing::warn!(
+                        "No UQFF file found for shorthand `{}`. Available UQFF files: {:?}",
+                        file_str,
+                        available_uqff,
+                    );
+                    file_str.clone()
+                } else {
+                    file_str.clone()
+                }
+            })
+            .collect();
+
         let mut expanded_files: Vec<String> = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for file_str in &input_files {
+        for file_str in &resolved_files {
             let expanded = $crate::pipeline::isq::expand_uqff_shards(file_str, &available_files);
             for f in expanded {
                 if seen.insert(f.clone()) {
@@ -618,7 +638,7 @@ macro_rules! normal_model_loader_sharded {
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! vision_normal_model_loader {
+macro_rules! multimodal_normal_model_loader {
     (
         $paths:expr,
         $dtype:expr,
@@ -678,7 +698,7 @@ macro_rules! vision_normal_model_loader {
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! vision_normal_model_loader_sharded {
+macro_rules! multimodal_normal_model_loader_sharded {
     (
         $vb:expr,
         $config:expr,

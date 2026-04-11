@@ -78,8 +78,8 @@ During prompt processing (prefill phase):
 
 ## See Also
 
-- [PagedAttention](PAGED_ATTENTION.md) - Required for MLA optimization
-- [FlashAttention](FLASH_ATTENTION.md) - Accelerates prefill phase
-- [DeepSeek V2](DEEPSEEKV2.md) - Model documentation
-- [DeepSeek V3](DEEPSEEKV3.md) - Model documentation
-- [GLM-4.7-Flash](GLM4_MOE_LITE.md) - Model documentation
+- [PagedAttention](PAGED_ATTENTION.md): Required for MLA optimization
+- [FlashAttention](FLASH_ATTENTION.md): Accelerates prefill phase
+- [DeepSeek V2](DEEPSEEKV2.md): Model documentation
+- [DeepSeek V3](DEEPSEEKV3.md): Model documentation
+- [GLM-4.7-Flash](GLM4_MOE_LITE.md): Model documentation

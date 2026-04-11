@@ -6,7 +6,7 @@ use super::{
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
-use crate::distributed::{self, WorkerTransferData};
+use crate::distributed::{self, use_ring, WorkerTransferData};
 use crate::embedding_models::inputs_processor::{EmbeddingProcessor, ModelInputs};
 use crate::embedding_models::{Dense, DenseActivation, Normalize, Pooling};
 use crate::embedding_normal_model_loader;
@@ -74,7 +74,7 @@ pub struct EmbeddingPipeline {
     processor: Arc<dyn Processor + Send + Sync>,
 }
 
-/// A loader for a vision (non-quantized) model.
+/// A loader for an embedding (non-quantized) model.
 pub struct EmbeddingLoader {
     inner: Box<dyn EmbeddingModelLoader>,
     model_id: String,
@@ -89,7 +89,7 @@ pub struct EmbeddingLoader {
 }
 
 #[derive(Default)]
-/// A builder for a loader for a vision (non-quantized) model.
+/// A builder for a loader for an embedding (non-quantized) model.
 pub struct EmbeddingLoaderBuilder {
     model_id: Option<String>,
     config: EmbeddingSpecificConfig,
@@ -100,7 +100,7 @@ pub struct EmbeddingLoaderBuilder {
 }
 
 #[derive(Clone, Default)]
-/// Config specific to loading a vision model.
+/// Config specific to loading an embedding model.
 pub struct EmbeddingSpecificConfig {
     pub topology: Option<Topology>,
     pub write_uqff: Option<PathBuf>,
@@ -189,11 +189,11 @@ impl Loader for EmbeddingLoader {
             silent,
             self.config.from_uqff.is_some()
         );
+        *self.token_source.write() = Some(token_source);
+        *self.revision.write() = revision.clone();
         if let Some(from_uqff) = self.config.from_uqff.clone() {
             *self.from_uqff.write() = Some(get_uqff_paths!(&from_uqff, self, silent));
         }
-        *self.token_source.write() = Some(token_source);
-        *self.revision.write() = revision;
         self.load_model_from_path(
             &paths?,
             dtype,
@@ -232,7 +232,7 @@ impl Loader for EmbeddingLoader {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
             let WorkerTransferData::Init { id: _, worker_rank } = payload;
             vec![candle_core::Device::new_cuda_with_stream(worker_rank + 1)?]
-        } else if use_nccl {
+        } else if use_nccl || use_ring() {
             vec![candle_core::Device::new_cuda_with_stream(0)?]
         } else {
             device_map::get_all_similar_devices(device)?
@@ -243,14 +243,14 @@ impl Loader for EmbeddingLoader {
                 unsafe { dev.disable_event_tracking() };
             }
         }
-        let device = if use_nccl {
+        let device = if use_nccl || use_ring() {
             available_devices[0].clone()
         } else {
             device.clone()
         };
 
         // If auto, convert to Map if not using nccl
-        if use_nccl {
+        if use_nccl || use_ring() {
             mapper = DeviceMapSetting::DummyNccl {
                 nm_device: available_devices[0].clone(),
             };
@@ -289,6 +289,7 @@ impl Loader for EmbeddingLoader {
                                         .pack_factor(dtype)
                                 }
                                 QuantizedSerdeType::F8Q8 => IsqType::F8Q8.pack_factor(dtype),
+                                QuantizedSerdeType::Mxfp4 => IsqType::MXFP4.pack_factor(dtype),
                             };
                             total_pack_factors += pack_factor;
                         }
@@ -525,7 +526,7 @@ impl Loader for EmbeddingLoader {
         }
         let modules_ser = EmbeddingModulePaths::serialize_modules(&modules_config);
 
-        let mut model = if use_nccl {
+        let mut model = if use_nccl || use_ring() {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,

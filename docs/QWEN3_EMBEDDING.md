@@ -1,18 +1,24 @@
-# Qwen3 Embedding
+# Qwen3 Embedding: [`Qwen/Qwen3-Embedding-0.6B`](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B)
 
-The Qwen3 Embedding model series is the latest proprietary model of the Qwen family, specifically designed for text embedding and ranking tasks. 
+The Qwen3 Embedding model series is the latest proprietary model of the Qwen family, specifically designed for text embedding and ranking tasks.
 
 For a catalog of all embedding backends, see [EMBEDDINGS.md](EMBEDDINGS.md).
 
-## HTTP server
-
-Serve the model with the OpenAI-compatible endpoint enabled:
+## Quick Start
 
 ```bash
-mistralrs serve -p 1234 -m Qwen/Qwen3-Embedding-0.6B
+mistralrs serve embedding -m Qwen/Qwen3-Embedding-0.6B -p 1234
 ```
 
-Call the endpoint via `curl` or the OpenAI SDK:
+## HTTP API
+
+Start the server:
+
+```bash
+mistralrs serve embedding -m Qwen/Qwen3-Embedding-0.6B -p 1234
+```
+
+Send a request:
 
 ```bash
 curl http://localhost:1234/v1/embeddings \

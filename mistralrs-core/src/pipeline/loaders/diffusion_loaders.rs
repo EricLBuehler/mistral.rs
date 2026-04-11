@@ -59,7 +59,7 @@ pub trait DiffusionModelLoader: Send + Sync {
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
 #[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq)]
-/// The architecture to load the vision model as.
+/// The architecture to load the diffusion model as.
 pub enum DiffusionLoaderType {
     #[serde(rename = "flux")]
     Flux,

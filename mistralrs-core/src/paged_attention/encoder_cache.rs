@@ -45,7 +45,7 @@ impl EncoderCacheManager {
     /// Look up a cached encoder output by content hash.
     ///
     /// On hit the entry is moved to the back (most-recently-used position)
-    /// and the tensors are cloned (cheap — Candle tensors are `Arc`-backed).
+    /// and the tensors are cloned (cheap, Candle tensors are `Arc`-backed).
     pub fn get(&mut self, content_hash: u64) -> Option<Vec<Tensor>> {
         // `shift_remove` + re-insert moves the entry to the back.
         if let Some(entry) = self.cache.shift_remove(&content_hash) {
@@ -252,7 +252,7 @@ mod tests {
         cache.insert(2, vec![dummy_tensor(2.0)]);
         cache.insert(3, vec![dummy_tensor(3.0)]);
 
-        // Re-insert key=1 with new data — should bump it, not create duplicate.
+        // Re-insert key=1 with new data, should bump it, not create duplicate.
         cache.insert(1, vec![dummy_tensor(10.0)]);
 
         // key=2 is now oldest.

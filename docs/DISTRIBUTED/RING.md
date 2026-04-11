@@ -62,7 +62,7 @@ Example for two processes:
   }
   ```
 
-- [`ring_0.json`](https://github.com/EricLBuehler/mistral.rs/blob/master/ring_configs/ring_1.json):
+- [`ring_1.json`](https://github.com/EricLBuehler/mistral.rs/blob/master/ring_configs/ring_1.json):
   ```json
   {
     "master_ip": "0.0.0.0",

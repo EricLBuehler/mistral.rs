@@ -87,10 +87,11 @@ impl CacheEngine {
         let kv_cache_layout = model_config.kv_cache_layout();
         let mut gpu_cache = Vec::new();
 
-        for device in layer_devices
+        for (layer_idx, device) in layer_devices
             .iter()
             .take(model_config.num_layers())
             .map(|x| x.as_ref().unwrap_or(device))
+            .enumerate()
         {
             let (key_blocks, value_blocks) = match kv_cache_layout {
                 KvCacheLayout::Standard => {
@@ -98,9 +99,13 @@ impl CacheEngine {
                         model_config,
                         dtype,
                         cache_config.block_size,
+                        layer_idx,
                     );
-                    let value_block_shape =
-                        Self::calculate_value_block_shape(model_config, cache_config.block_size);
+                    let value_block_shape = Self::calculate_value_block_shape(
+                        model_config,
+                        cache_config.block_size,
+                        layer_idx,
+                    );
                     #[allow(unused)]
                     let key_blocks = if let Device::Metal(dev) = &device {
                         #[cfg(feature = "metal")]
@@ -300,12 +305,13 @@ impl CacheEngine {
         model_config: &dyn ModelConfigLike,
         dtype: DType,
         block_size: usize,
+        layer_idx: usize,
     ) -> (usize, usize, usize, usize) {
         let element_size = dtype.size_in_bytes();
         let x = 16 / element_size;
         (
-            model_config.num_kv_heads(),
-            model_config.k_head_dim() / x,
+            model_config.num_kv_heads_for_layer(layer_idx),
+            model_config.k_head_dim_for_layer(layer_idx) / x,
             block_size,
             x,
         )
@@ -314,10 +320,11 @@ impl CacheEngine {
     fn calculate_value_block_shape(
         model_config: &dyn ModelConfigLike,
         block_size: usize,
+        layer_idx: usize,
     ) -> (usize, usize, usize) {
         (
-            model_config.num_kv_heads(),
-            model_config.v_head_dim(),
+            model_config.num_kv_heads_for_layer(layer_idx),
+            model_config.v_head_dim_for_layer(layer_idx),
             block_size,
         )
     }

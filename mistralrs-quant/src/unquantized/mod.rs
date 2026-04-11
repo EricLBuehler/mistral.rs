@@ -13,7 +13,7 @@ use crate::{
     generate_isq, generate_isq_imatrix,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
-    AfqBits, AfqGroupSize, AfqLayer, FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, MatMul,
+    AfqBits, AfqGroupSize, AfqLayer, FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType,
     QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
 };
 
@@ -122,19 +122,39 @@ impl QuantMethod for UnquantLinear {
                     }
                 }
             }
-        } else if let (Device::Cuda(_), Some(cublaslt)) =
-            (a.device(), CUBLASLT_CONTROLLER.get_for_device(a.device()))
-        {
-            // cuBLAS batch_matmul requires 3D tensors, fall back to regular matmul for 2D
-            if a.rank() >= 3 && w.rank() >= 3 {
-                cublaslt
-                    .batch_matmul(a, &w, None, None, None, None, None)?
-                    .t()
-            } else {
-                MatMul.matmul(a, &w.t()?)
-            }
         } else {
-            MatMul.matmul(a, &w.t()?)
+            match a.device().location() {
+                DeviceLocation::Cuda { .. } => {
+                    if let (Device::Cuda(_), Some(cublaslt)) =
+                        (a.device(), CUBLASLT_CONTROLLER.get_for_device(a.device()))
+                    {
+                        // cuBLAS batch_matmul requires 3D tensors, fall back to regular matmul for 2D.
+                        if a.rank() >= 3 && w.rank() >= 3 {
+                            cublaslt
+                                .batch_matmul(a, &w, None, None, None, None, None)?
+                                .t()
+                        } else {
+                            a.matmul(&w.t()?)
+                        }
+                    } else {
+                        a.matmul(&w.t()?)
+                    }
+                }
+                DeviceLocation::Metal { .. } => a.matmul(&w.t()?),
+                DeviceLocation::Cpu => {
+                    #[cfg(feature = "accelerate")]
+                    {
+                        let original_dtype = a.dtype();
+                        a.to_dtype(DType::F32)?
+                            .matmul(&w.t()?.to_dtype(DType::F32)?)?
+                            .to_dtype(original_dtype)
+                    }
+                    #[cfg(not(feature = "accelerate"))]
+                    {
+                        a.matmul(&w.t()?)
+                    }
+                }
+            }
         }
     }
 
@@ -341,6 +361,17 @@ impl QuantMethod for UnquantLinear {
                     lin: Linear::new(w, b),
                     dtype: DType::F8E4M3,
                 })?))
+            }
+            Some(IsqType::MXFP4) => {
+                let _acquired_quantize_guard = guard.acquire(&device);
+                if imatrix_weight.is_some() {
+                    candle_core::bail!("MXFP4 does not support imatrix.");
+                }
+
+                n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let w = self.w.to_device(&device)?;
+                let b = self.b.as_ref().map(|b| b.to_device(&device)).transpose()?;
+                crate::MXFP4Layer::quantize(&w, b, &device)
             }
             Some(IsqType::F8Q8) => {
                 let _acquired_quantize_guard = guard.acquire(&device);

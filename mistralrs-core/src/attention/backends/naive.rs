@@ -45,7 +45,15 @@ pub(crate) fn naive_sdpa(
             att = att.broadcast_add(mask)?;
         }
 
+        // Compute softmax in F32 for precision (BF16 exp() loses information).
+        let att_dtype = att.dtype();
+        if att_dtype == candle_core::DType::BF16 || att_dtype == candle_core::DType::F16 {
+            att = att.to_dtype(candle_core::DType::F32)?;
+        }
         att = candle_nn::ops::softmax_last_dim(&att)?;
+        if att.dtype() != att_dtype {
+            att = att.to_dtype(att_dtype)?;
+        }
         MatMul.matmul(&att, v)
     })
 }

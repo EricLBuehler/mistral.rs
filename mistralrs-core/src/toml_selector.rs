@@ -8,9 +8,9 @@ use crate::{
     pipeline::{EmbeddingLoaderType, IsqOrganization},
     AnyMoeLoader, AutoDeviceMapParams, EmbeddingLoaderBuilder, EmbeddingSpecificConfig,
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
-    ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
-    SpeculativeLoader, Topology, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
-    GGUF_MULTI_FILE_DELIMITER, UQFF_MULTI_FILE_DELIMITER,
+    ModelDType, MultimodalLoaderBuilder, MultimodalLoaderType, MultimodalSpecificConfig,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
+    SpeculativeLoader, Topology, GGUF_MULTI_FILE_DELIMITER, UQFF_MULTI_FILE_DELIMITER,
 };
 
 fn default_one() -> usize {
@@ -404,13 +404,13 @@ pub enum TomlModelSelected {
         max_batch_size: usize,
     },
 
-    /// Select a vision plain model, without quantization or adapters
-    VisionPlain {
+    /// Select a multimodal plain model, without quantization or adapters
+    MultimodalPlain {
         /// Model ID to load from. This may be a HF hub repo or a local path.
         model_id: String,
 
         /// The architecture of the model.
-        arch: Option<VisionLoaderType>,
+        arch: Option<MultimodalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[serde(default = "default_dtype")]
@@ -559,7 +559,7 @@ pub fn get_toml_selected_model_dtype(model: &TomlSelector) -> ModelDType {
         TomlModelSelected::Plain { dtype, .. }
         | TomlModelSelected::Lora { dtype, .. }
         | TomlModelSelected::XLora { dtype, .. }
-        | TomlModelSelected::VisionPlain { dtype, .. }
+        | TomlModelSelected::MultimodalPlain { dtype, .. }
         | TomlModelSelected::GGUF { dtype, .. }
         | TomlModelSelected::GGML { dtype, .. }
         | TomlModelSelected::XLoraGGUF { dtype, .. }
@@ -623,13 +623,13 @@ pub fn get_toml_selected_model_device_map_params(
             max_batch_size,
         }),
         TomlModelSelected::Embedding { .. } => Ok(AutoDeviceMapParams::default_text()),
-        TomlModelSelected::VisionPlain {
+        TomlModelSelected::MultimodalPlain {
             max_seq_len,
             max_batch_size,
             max_image_length,
             max_num_images,
             ..
-        } => Ok(AutoDeviceMapParams::Vision {
+        } => Ok(AutoDeviceMapParams::Multimodal {
             max_seq_len,
             max_batch_size,
             max_image_shape: (max_image_length, max_image_length),
@@ -965,7 +965,7 @@ fn loader_from_selected(
             )?,
         )
         .build(),
-        TomlModelSelected::VisionPlain {
+        TomlModelSelected::MultimodalPlain {
             model_id,
             arch,
             dtype: _,
@@ -981,8 +981,8 @@ fn loader_from_selected(
             imatrix,
             hf_cache_path,
             organization,
-        } => VisionLoaderBuilder::new(
-            VisionSpecificConfig {
+        } => MultimodalLoaderBuilder::new(
+            MultimodalSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
                 from_uqff: from_uqff.map(|x| {

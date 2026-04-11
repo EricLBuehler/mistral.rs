@@ -15,7 +15,7 @@ use mistralrs_quant::{
 
 use super::config::{LayerType, TextConfig};
 use crate::{
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
@@ -165,7 +165,7 @@ impl FullAttention {
     fn forward(
         &self,
         x: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         cos_sin: &(Tensor, Tensor),
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -243,7 +243,7 @@ impl FullAttention {
                 )?,
                 None => {
                     let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                    assert!(attention_mask.is_some());
+                    assert!(!matches!(attention_mask, AttentionMask::None));
                     paged_attn.forward(
                         &q,
                         &k,
@@ -273,7 +273,7 @@ impl FullAttention {
         if let Some(t) = self.q_proj.quantized_act_type() {
             y = y.to_dtype(t)?;
         }
-        y = if attention_mask.is_some() {
+        y = if !matches!(attention_mask, AttentionMask::None) {
             y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
         } else {
             y.reshape((b_sz, seq_len, ()))?
@@ -498,7 +498,7 @@ impl DecoderLayer {
     fn forward_attention(
         &self,
         x: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         cos_sin: &(Tensor, Tensor),
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -784,7 +784,7 @@ impl Qwen3_5MoeTextModel {
     pub fn forward_embeds(
         &self,
         mut xs: Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         position_ids: &Tensor,
         _seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
@@ -821,7 +821,7 @@ impl Qwen3_5MoeTextModel {
             }
         };
 
-        let attention_mask = DeviceMappedMask::new(attention_mask.cloned(), &*self.mapper)?;
+        let attention_mask = DeviceMappedMask::new(attention_mask.clone(), &*self.mapper)?;
 
         // Precompute deepstack index tensors once to avoid repeated CPU-GPU syncs
         let deepstack_indices = if let Some(visual_pos_masks) = visual_pos_masks {
@@ -860,9 +860,10 @@ impl Qwen3_5MoeTextModel {
                         } else {
                             cos_sin.clone()
                         };
+                        let layer_attn_mask = attention_mask.get(xs.device());
                         xs = layer.forward_attention(
                             &xs,
-                            attention_mask.as_ref().map(|m| m.get(xs.device())),
+                            &layer_attn_mask,
                             &layer_cos_sin,
                             kv_cache,
                             metadata

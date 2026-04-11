@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use either::Either;
 use mistralrs_core::{
-    AutoDeviceMapParams, DiffusionLoaderType, EmbeddingLoaderType, ModelDType, NormalLoaderType,
-    VisionLoaderType,
+    AutoDeviceMapParams, DiffusionLoaderType, EmbeddingLoaderType, ModelDType,
+    MultimodalLoaderType, NormalLoaderType,
 };
 use pyo3::{pyclass, pymethods};
 
@@ -79,7 +79,7 @@ impl From<EmbeddingArchitecture> for EmbeddingLoaderType {
 
 #[pyclass(eq, eq_int)]
 #[derive(Debug, Clone, PartialEq)]
-pub enum VisionArchitecture {
+pub enum MultimodalArchitecture {
     Phi3V,
     Idefics2,
     LLaVANext,
@@ -99,30 +99,32 @@ pub enum VisionArchitecture {
     Qwen3_5,
     Qwen3_5Moe,
     Voxtral,
+    Gemma4,
 }
 
-impl From<VisionArchitecture> for VisionLoaderType {
-    fn from(value: VisionArchitecture) -> Self {
+impl From<MultimodalArchitecture> for MultimodalLoaderType {
+    fn from(value: MultimodalArchitecture) -> Self {
         match value {
-            VisionArchitecture::Phi3V => VisionLoaderType::Phi3V,
-            VisionArchitecture::Idefics2 => VisionLoaderType::Idefics2,
-            VisionArchitecture::LLaVANext => VisionLoaderType::LLaVANext,
-            VisionArchitecture::LLaVA => VisionLoaderType::LLaVA,
-            VisionArchitecture::VLlama => VisionLoaderType::VLlama,
-            VisionArchitecture::Qwen2VL => VisionLoaderType::Qwen2VL,
-            VisionArchitecture::Idefics3 => VisionLoaderType::Idefics3,
-            VisionArchitecture::MiniCpmO => VisionLoaderType::MiniCpmO,
-            VisionArchitecture::Phi4MM => VisionLoaderType::Phi4MM,
-            VisionArchitecture::Qwen2_5VL => VisionLoaderType::Qwen2_5VL,
-            VisionArchitecture::Gemma3 => VisionLoaderType::Gemma3,
-            VisionArchitecture::Mistral3 => VisionLoaderType::Mistral3,
-            VisionArchitecture::Llama4 => VisionLoaderType::Llama4,
-            VisionArchitecture::Gemma3n => VisionLoaderType::Gemma3n,
-            VisionArchitecture::Qwen3VL => VisionLoaderType::Qwen3VL,
-            VisionArchitecture::Qwen3VLMoE => VisionLoaderType::Qwen3VLMoE,
-            VisionArchitecture::Qwen3_5 => VisionLoaderType::Qwen3_5,
-            VisionArchitecture::Qwen3_5Moe => VisionLoaderType::Qwen3_5Moe,
-            VisionArchitecture::Voxtral => VisionLoaderType::Voxtral,
+            MultimodalArchitecture::Phi3V => MultimodalLoaderType::Phi3V,
+            MultimodalArchitecture::Idefics2 => MultimodalLoaderType::Idefics2,
+            MultimodalArchitecture::LLaVANext => MultimodalLoaderType::LLaVANext,
+            MultimodalArchitecture::LLaVA => MultimodalLoaderType::LLaVA,
+            MultimodalArchitecture::VLlama => MultimodalLoaderType::VLlama,
+            MultimodalArchitecture::Qwen2VL => MultimodalLoaderType::Qwen2VL,
+            MultimodalArchitecture::Idefics3 => MultimodalLoaderType::Idefics3,
+            MultimodalArchitecture::MiniCpmO => MultimodalLoaderType::MiniCpmO,
+            MultimodalArchitecture::Phi4MM => MultimodalLoaderType::Phi4MM,
+            MultimodalArchitecture::Qwen2_5VL => MultimodalLoaderType::Qwen2_5VL,
+            MultimodalArchitecture::Gemma3 => MultimodalLoaderType::Gemma3,
+            MultimodalArchitecture::Mistral3 => MultimodalLoaderType::Mistral3,
+            MultimodalArchitecture::Llama4 => MultimodalLoaderType::Llama4,
+            MultimodalArchitecture::Gemma3n => MultimodalLoaderType::Gemma3n,
+            MultimodalArchitecture::Qwen3VL => MultimodalLoaderType::Qwen3VL,
+            MultimodalArchitecture::Qwen3VLMoE => MultimodalLoaderType::Qwen3VLMoE,
+            MultimodalArchitecture::Qwen3_5 => MultimodalLoaderType::Qwen3_5,
+            MultimodalArchitecture::Qwen3_5Moe => MultimodalLoaderType::Qwen3_5Moe,
+            MultimodalArchitecture::Voxtral => MultimodalLoaderType::Voxtral,
+            MultimodalArchitecture::Gemma4 => MultimodalLoaderType::Gemma4,
         }
     }
 }
@@ -199,7 +201,7 @@ impl TextAutoMapParams {
 #[pyclass]
 #[pyo3(get_all)]
 #[derive(Debug, Clone, PartialEq)]
-pub struct VisionAutoMapParams {
+pub struct MultimodalAutoMapParams {
     pub max_seq_len: usize,
     pub max_batch_size: usize,
     pub max_num_images: usize,
@@ -207,7 +209,7 @@ pub struct VisionAutoMapParams {
 }
 
 #[pymethods]
-impl VisionAutoMapParams {
+impl MultimodalAutoMapParams {
     #[new]
     #[pyo3(signature = (
         max_seq_len = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
@@ -494,9 +496,9 @@ pub enum Which {
         matformer_slice_name = None,
         organization = None,
     ))]
-    VisionPlain {
+    MultimodalPlain {
         model_id: String,
-        arch: Option<VisionArchitecture>,
+        arch: Option<MultimodalArchitecture>,
         tokenizer_json: Option<String>,
         topology: Option<String>,
         write_uqff: Option<PathBuf>,
@@ -505,7 +507,7 @@ pub enum Which {
         max_edge: Option<u32>,
         calibration_file: Option<PathBuf>,
         imatrix: Option<PathBuf>,
-        auto_map_params: Option<VisionAutoMapParams>,
+        auto_map_params: Option<MultimodalAutoMapParams>,
         hf_cache_path: Option<PathBuf>,
         matformer_config_path: Option<PathBuf>,
         matformer_slice_name: Option<String>,

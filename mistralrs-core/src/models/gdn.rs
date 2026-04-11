@@ -2,7 +2,7 @@
 
 //! Shared Gated Delta Net (GDN) implementation for hybrid models.
 //!
-//! Used by both Qwen3 Next (text-only) and Qwen3.5 MoE (vision) models.
+//! Used by both Qwen3 Next (text-only) and Qwen3.5 MoE (multimodal) models.
 
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Linear;

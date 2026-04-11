@@ -26,7 +26,12 @@ irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1
    source $HOME/.cargo/env
    ```
 
-3. (Optional) Set up HuggingFace authentication:
+3. (Optional) Install [FFmpeg](https://ffmpeg.org/) for video input support:
+   - Linux: `sudo apt install ffmpeg` or `sudo dnf install ffmpeg`
+   - macOS: `brew install ffmpeg`
+   - See [Video Input](VIDEO.md) for details
+
+4. (Optional) Set up HuggingFace authentication:
    ```bash
    mistralrs login
    ```
@@ -161,7 +166,7 @@ mistralrs run --format gguf -m author/model-repo -f file.gguf -t author/official
 
 ## Next Steps
 
-- [CLI Reference](CLI.md) - All commands and options
-- [HTTP API](HTTP.md) - Run as an OpenAI-compatible server
-- [Python SDK](PYTHON_SDK.md) - Python package documentation
-- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and solutions
+- [CLI Reference](CLI.md): All commands and options
+- [HTTP API](HTTP.md): Run as an OpenAI-compatible server
+- [Python SDK](PYTHON_SDK.md): Python package documentation
+- [Troubleshooting](TROUBLESHOOTING.md): Common issues and solutions

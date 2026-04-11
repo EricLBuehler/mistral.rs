@@ -107,15 +107,16 @@ pub async fn send_request_with_model(
 }
 
 /// Generic function to process non-streaming responses.
-pub(crate) async fn base_process_non_streaming_response<R>(
+pub(crate) async fn base_process_non_streaming_response<R, M, E>(
     rx: &mut Receiver<Response>,
     state: SharedMistralRsState,
-    match_fn: fn(SharedMistralRsState, Response) -> R,
-    error_handler: fn(
-        SharedMistralRsState,
-        Box<dyn std::error::Error + Send + Sync + 'static>,
-    ) -> R,
-) -> R {
+    match_fn: M,
+    error_handler: E,
+) -> R
+where
+    M: FnOnce(SharedMistralRsState, Response) -> R,
+    E: FnOnce(SharedMistralRsState, Box<dyn std::error::Error + Send + Sync + 'static>) -> R,
+{
     match rx.recv().await {
         Some(response) => match_fn(state, response),
         None => {

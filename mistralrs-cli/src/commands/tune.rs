@@ -206,7 +206,7 @@ fn model_kind(model_type: &ModelType) -> &'static str {
     match model_type {
         ModelType::Auto { .. } => "auto",
         ModelType::Text { .. } => "text",
-        ModelType::Vision { .. } => "vision",
+        ModelType::Multimodal { .. } => "multimodal",
         ModelType::Diffusion { .. } => "diffusion",
         ModelType::Speech { .. } => "speech",
         ModelType::Embedding { .. } => "embedding",
@@ -225,7 +225,7 @@ fn model_dtype(model_selected: &ModelSelected) -> Option<&'static str> {
         | ModelSelected::XLoraGGUF { dtype, .. }
         | ModelSelected::LoraGGML { dtype, .. }
         | ModelSelected::XLoraGGML { dtype, .. }
-        | ModelSelected::VisionPlain { dtype, .. }
+        | ModelSelected::MultimodalPlain { dtype, .. }
         | ModelSelected::DiffusionPlain { dtype, .. }
         | ModelSelected::Run { dtype, .. }
         | ModelSelected::Speech { dtype, .. }

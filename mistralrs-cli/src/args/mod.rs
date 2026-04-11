@@ -50,7 +50,7 @@ pub enum Command {
         runtime: RuntimeOptions,
     },
 
-    /// Run model in interactive mode
+    /// Run model in interactive mode, or one-shot mode with `-i`
     Run {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -62,9 +62,32 @@ pub enum Command {
         #[command(flatten)]
         runtime: RuntimeOptions,
 
-        /// Enable thinking mode for models that support it
-        #[arg(long)]
-        enable_thinking: bool,
+        /// Control thinking mode for models that support it.
+        /// Use --thinking or --thinking true to force on, --thinking false to force off.
+        /// Omit to defer to the chat template default.
+        #[arg(long, num_args = 0..=1, default_missing_value = "true", value_parser = clap::value_parser!(bool))]
+        thinking: Option<bool>,
+
+        /// One-shot text prompt. When provided, sends a single request and exits
+        /// instead of entering interactive mode.
+        /// Combine with --image, --video, or --audio for multimodal requests.
+        #[arg(short = 'i', long)]
+        input: Option<String>,
+
+        /// Image URL(s) or file path(s) to include in the request (requires -i).
+        /// Can be specified multiple times: --image img1.jpg --image img2.png
+        #[arg(long, requires = "input")]
+        image: Vec<String>,
+
+        /// Video URL(s) or file path(s) to include in the request (requires -i).
+        /// Can be specified multiple times: --video vid1.mp4 --video vid2.webm
+        #[arg(long, requires = "input")]
+        video: Vec<String>,
+
+        /// Audio URL(s) or file path(s) to include in the request (requires -i).
+        /// Can be specified multiple times: --audio audio1.wav --audio audio2.mp3
+        #[arg(long, requires = "input")]
+        audio: Vec<String>,
     },
 
     /// Generate shell completions
@@ -214,7 +237,7 @@ pub struct DefaultModelOptions {
     pub cache: CacheOptions,
 
     #[command(flatten)]
-    pub vision: VisionOptions,
+    pub multimodal: MultimodalOptions,
 }
 
 impl DefaultModelOptions {
@@ -236,7 +259,7 @@ impl DefaultModelOptions {
             quantization: self.quantization,
             device: self.device,
             cache: self.cache,
-            vision: self.vision,
+            multimodal: self.multimodal,
         })
     }
 }
@@ -285,7 +308,7 @@ pub enum ModelType {
         cache: CacheOptions,
 
         #[command(flatten)]
-        vision: VisionOptions,
+        multimodal: MultimodalOptions,
     },
 
     /// Text generation model with explicit configuration
@@ -309,8 +332,8 @@ pub enum ModelType {
         cache: CacheOptions,
     },
 
-    /// Vision-language model
-    Vision {
+    /// Multimodal model
+    Multimodal {
         #[command(flatten)]
         model: ModelSourceOptions,
 
@@ -330,7 +353,7 @@ pub enum ModelType {
         cache: CacheOptions,
 
         #[command(flatten)]
-        vision: VisionOptions,
+        multimodal: MultimodalOptions,
     },
 
     /// Image generation model (diffusion)

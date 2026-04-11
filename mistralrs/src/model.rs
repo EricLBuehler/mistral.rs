@@ -32,7 +32,7 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
 /// and as such may be created with one of:
 /// - [`ModelBuilder`] (auto-detecting)
 /// - [`TextModelBuilder`]
-/// - [`VisionModelBuilder`]
+/// - [`MultimodalModelBuilder`]
 /// - [`GgufModelBuilder`]
 /// - [`EmbeddingModelBuilder`]
 /// - [`DiffusionModelBuilder`]
@@ -46,7 +46,7 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
 ///
 /// [`ModelBuilder`]: crate::ModelBuilder
 /// [`TextModelBuilder`]: crate::TextModelBuilder
-/// [`VisionModelBuilder`]: crate::VisionModelBuilder
+/// [`MultimodalModelBuilder`]: crate::MultimodalModelBuilder
 /// [`GgufModelBuilder`]: crate::GgufModelBuilder
 /// [`EmbeddingModelBuilder`]: crate::EmbeddingModelBuilder
 /// [`DiffusionModelBuilder`]: crate::DiffusionModelBuilder
@@ -142,6 +142,8 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
+            max_tool_rounds: request.max_tool_rounds(),
+            tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence,
         }));
@@ -193,6 +195,8 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
+            max_tool_rounds: request.max_tool_rounds(),
+            tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence,
         }));
@@ -253,6 +257,8 @@ impl Model {
             logits_processors: request.take_logits_processors(),
             return_raw_logits: true,
             web_search_options: request.take_web_search_options(),
+            max_tool_rounds: request.max_tool_rounds(),
+            tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence,
         }));
@@ -409,6 +415,8 @@ impl Model {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            max_tool_rounds: None,
+            tool_dispatch_url: None,
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence: false,
         }));
@@ -470,6 +478,8 @@ impl Model {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            max_tool_rounds: None,
+            tool_dispatch_url: None,
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence: false,
         }));
@@ -544,6 +554,8 @@ impl Model {
                     logits_processors: None,
                     return_raw_logits: false,
                     web_search_options: None,
+                    max_tool_rounds: None,
+                    tool_dispatch_url: None,
                     model_id: model_id_owned.clone(),
                     truncate_sequence,
                 }));

@@ -5,6 +5,8 @@ use mistralrs_quant::IsqType;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::VideoInput;
+
 use crate::{
     response::Response, sampler::SamplingParams, tools::ToolChoice, CustomLogitsProcessor,
     DiffusionGenerationParams, Tool,
@@ -77,11 +79,13 @@ pub enum RequestMessage {
         best_of: Option<usize>,
     },
     CompletionTokens(Vec<u32>),
-    VisionChat {
+    MultimodalChat {
         #[serde(skip)] // TODO
         images: Vec<image::DynamicImage>,
         #[serde(skip)] // TODO
         audios: Vec<AudioInput>,
+        #[serde(skip)]
+        videos: Vec<VideoInput>,
         messages: Vec<IndexMap<String, MessageContent>>,
         enable_thinking: Option<bool>,
         /// Reasoning effort level for Harmony-format models
@@ -191,6 +195,11 @@ pub struct NormalRequest {
     pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
     pub return_raw_logits: bool,
     pub web_search_options: Option<WebSearchOptions>,
+    pub max_tool_rounds: Option<usize>,
+    /// URL to POST tool calls to when no server-side callback is registered.
+    /// The server sends `{"name": "...", "arguments": {...}}` and expects
+    /// `{"content": "..."}` back.
+    pub tool_dispatch_url: Option<String>,
     pub model_id: Option<String>,
     #[serde(default)]
     pub truncate_sequence: bool,
@@ -219,6 +228,8 @@ impl NormalRequest {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            max_tool_rounds: None,
+            tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
         }

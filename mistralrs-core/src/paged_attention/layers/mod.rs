@@ -8,7 +8,10 @@ pub mod paged_attention {
     use candle_core::{Device, Result, Tensor};
 
     use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
-    use crate::{attention::SdpaParams, pipeline::text_models_inputs_processor::FlashParams};
+    use crate::{
+        attention::{AttentionMask, SdpaParams},
+        pipeline::text_models_inputs_processor::FlashParams,
+    };
 
     pub struct PagedAttention;
 
@@ -28,9 +31,24 @@ pub mod paged_attention {
             _query: &Tensor,
             _key: &Tensor,
             _value: &Tensor,
-            _attention_mask: Option<&Tensor>,
+            _attention_mask: &AttentionMask,
             _key_cache: Option<Tensor>,
             _value_cache: Option<Tensor>,
+            _input_metadata: &PagedAttentionInputMetadata,
+            _sdpa_params: &SdpaParams,
+            _flash_params: Option<&FlashParams>,
+        ) -> Result<Tensor> {
+            candle_core::bail!("Paged attention requires the CUDA or Metal feature flags.");
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        #[allow(unused_variables)]
+        pub fn forward_donor_cache(
+            &self,
+            _query: &Tensor,
+            _key_cache: &Tensor,
+            _value_cache: &Tensor,
+            _attention_mask: &AttentionMask,
             _input_metadata: &PagedAttentionInputMetadata,
             _sdpa_params: &SdpaParams,
             _flash_params: Option<&FlashParams>,

@@ -165,7 +165,7 @@ impl McpTool for ChatTool {
 
         // Execute the request using existing helper utilities.
         let (tx, mut rx) = create_response_channel(None);
-        let (request, _is_streaming) = parse_request(chat_req, state.clone(), tx)
+        let (request, _is_streaming) = parse_request(chat_req, state.clone(), tx, None)
             .await
             .map_err(|e| CallToolError::new(io::Error::other(e.to_string())))?;
 

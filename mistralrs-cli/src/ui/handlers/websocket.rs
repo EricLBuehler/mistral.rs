@@ -5,8 +5,8 @@ use axum::{
 };
 use futures_util::stream::StreamExt;
 use mistralrs::{
-    AudioInput, Model, RequestBuilder, TextMessageRole, TextMessages, VisionMessages,
-    WebSearchOptions,
+    AudioInput, Model, MultimodalMessages, RequestBuilder, SamplingParams, TextMessageRole,
+    TextMessages, WebSearchOptions,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -43,39 +43,43 @@ pub struct RestoreMessage {
 const CLEAR_CMD: &str = "__CLEAR__";
 
 fn apply_gen_params(
-    mut builder: RequestBuilder,
+    builder: RequestBuilder,
     params: &Option<MessageGenerationParams>,
     defaults: &GenerationParams,
 ) -> RequestBuilder {
     let temp = params
         .as_ref()
         .and_then(|p| p.temperature)
-        .unwrap_or(defaults.temperature);
-    let top_p = params
-        .as_ref()
-        .and_then(|p| p.top_p)
-        .unwrap_or(defaults.top_p);
-    let top_k = params
-        .as_ref()
-        .and_then(|p| p.top_k)
-        .unwrap_or(defaults.top_k);
+        .or(defaults.temperature);
+    let top_p = params.as_ref().and_then(|p| p.top_p).or(defaults.top_p);
+    let top_k = params.as_ref().and_then(|p| p.top_k).or(defaults.top_k);
     let max_tokens = params
         .as_ref()
         .and_then(|p| p.max_tokens)
-        .unwrap_or(defaults.max_tokens);
+        .or(defaults.max_tokens);
     let rep_penalty = params
         .as_ref()
         .and_then(|p| p.repetition_penalty)
-        .unwrap_or(defaults.repetition_penalty);
+        .or(defaults.repetition_penalty);
 
-    builder = builder
-        .set_sampler_temperature(temp)
-        .set_sampler_topp(top_p)
-        .set_sampler_topk(top_k)
-        .set_sampler_max_len(max_tokens)
-        .set_sampler_frequency_penalty(rep_penalty);
+    let mut sampling = SamplingParams::neutral();
+    if let Some(temp) = temp {
+        sampling.temperature = if temp == 0.0 { None } else { Some(temp) };
+    }
+    if let Some(top_p) = top_p {
+        sampling.top_p = Some(top_p);
+    }
+    if let Some(top_k) = top_k.filter(|top_k| *top_k > 0) {
+        sampling.top_k = Some(top_k);
+    }
+    if let Some(max_tokens) = max_tokens {
+        sampling.max_len = Some(max_tokens);
+    }
+    if let Some(rep_penalty) = rep_penalty {
+        sampling.repetition_penalty = Some(rep_penalty);
+    }
 
-    builder
+    builder.set_sampling(sampling)
 }
 
 pub async fn ws_handler(
@@ -209,7 +213,7 @@ fn resolve_restore_image(path_or_url: &str) -> Option<PathBuf> {
 
 pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
     let mut text_msgs = TextMessages::new();
-    let mut vision_msgs = VisionMessages::new();
+    let mut multimodal_msgs = MultimodalMessages::new();
     let mut image_buffer: Vec<image::DynamicImage> = Vec::new();
     let mut image_path_buffer: Vec<String> = Vec::new();
     let mut audio_buffer: Vec<AudioInput> = Vec::new();
@@ -223,7 +227,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                 if active_chat_id.as_deref() != Some(id) {
                     active_chat_id = Some(id.to_string());
                     text_msgs = TextMessages::new();
-                    vision_msgs = VisionMessages::new();
+                    multimodal_msgs = MultimodalMessages::new();
                     image_buffer.clear();
                     image_path_buffer.clear();
                     audio_buffer.clear();
@@ -248,7 +252,8 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                     if !system_prompt_added {
                         if let Some(prompt) = &system_prompt {
                             text_msgs = text_msgs.add_message(TextMessageRole::System, prompt);
-                            vision_msgs = vision_msgs.add_message(TextMessageRole::System, prompt);
+                            multimodal_msgs =
+                                multimodal_msgs.add_message(TextMessageRole::System, prompt);
                         }
                         system_prompt_added = true;
                     }
@@ -271,7 +276,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                         .map(|m| m.kind.as_str())
                         .unwrap_or("text");
 
-                    if model_kind == "vision" {
+                    if model_kind == "multimodal" {
                         if is_user && !msg.images.is_empty() {
                             let mut images = Vec::new();
                             for src in &msg.images {
@@ -284,18 +289,20 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
                                 }
                             }
                             if !images.is_empty() {
-                                vision_msgs = vision_msgs.clone().add_multimodal_message(
+                                multimodal_msgs = multimodal_msgs.clone().add_multimodal_message(
                                     role.clone(),
                                     msg.content.clone(),
                                     images,
                                     Vec::new(),
+                                    Vec::new(),
                                 );
                             } else {
-                                vision_msgs =
-                                    vision_msgs.add_message(role.clone(), msg.content.clone());
+                                multimodal_msgs =
+                                    multimodal_msgs.add_message(role.clone(), msg.content.clone());
                             }
                         } else {
-                            vision_msgs = vision_msgs.add_message(role, msg.content.clone());
+                            multimodal_msgs =
+                                multimodal_msgs.add_message(role, msg.content.clone());
                         }
                     }
                 }
@@ -305,7 +312,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
 
         if user_msg.trim() == CLEAR_CMD {
             text_msgs = TextMessages::new();
-            vision_msgs = VisionMessages::new();
+            multimodal_msgs = MultimodalMessages::new();
             image_buffer.clear();
             image_path_buffer.clear();
             audio_buffer.clear();
@@ -328,6 +335,11 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             .get(&model_id)
             .map(|m| m.kind.clone())
             .unwrap_or_else(|| "text".to_string());
+        let generation_defaults = app
+            .models
+            .get(&model_id)
+            .map(|m| m.generation_defaults.clone())
+            .unwrap_or_else(|| app.default_params.clone());
 
         let mut gen_params: Option<MessageGenerationParams> = None;
         let mut web_search_opts: Option<WebSearchOptions> = None;
@@ -400,26 +412,31 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
         if !system_prompt_added {
             if let Some(prompt) = &system_prompt {
                 text_msgs = text_msgs.add_message(TextMessageRole::System, prompt);
-                vision_msgs = vision_msgs.add_message(TextMessageRole::System, prompt);
+                multimodal_msgs = multimodal_msgs.add_message(TextMessageRole::System, prompt);
             }
             system_prompt_added = true;
         }
 
-        if model_kind == "vision" {
+        if model_kind == "multimodal" {
             if !image_buffer.is_empty() || !audio_buffer.is_empty() {
                 let images = mem::take(&mut image_buffer);
                 let audios = mem::take(&mut audio_buffer);
-                vision_msgs = vision_msgs.clone().add_multimodal_message(
+                multimodal_msgs = multimodal_msgs.clone().add_multimodal_message(
                     TextMessageRole::User,
                     content.clone(),
                     images,
                     audios,
+                    Vec::new(),
                 );
             } else {
-                vision_msgs = vision_msgs.add_message(TextMessageRole::User, content.clone());
+                multimodal_msgs =
+                    multimodal_msgs.add_message(TextMessageRole::User, content.clone());
             }
-            let mut builder =
-                apply_gen_params(vision_msgs.clone().into(), &gen_params, &app.default_params);
+            let mut builder = apply_gen_params(
+                multimodal_msgs.clone().into(),
+                &gen_params,
+                &generation_defaults,
+            );
             if app.search_enabled {
                 if let Some(opts) = web_search_opts {
                     builder = builder.with_web_search_options(opts);
@@ -430,8 +447,8 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             match reply {
                 Ok(text) => {
                     if !text.is_empty() {
-                        let cur = mem::take(&mut vision_msgs);
-                        vision_msgs = cur.add_message(TextMessageRole::Assistant, &text);
+                        let cur = mem::take(&mut multimodal_msgs);
+                        multimodal_msgs = cur.add_message(TextMessageRole::Assistant, &text);
                         if let Some(id) = &active_chat_id {
                             let _ = append_chat_message(&app, id, "assistant", &text, None).await;
                         }
@@ -446,7 +463,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<AppState>) {
             audio_buffer.clear();
             text_msgs = text_msgs.add_message(TextMessageRole::User, content.clone());
             let mut builder =
-                apply_gen_params(text_msgs.clone().into(), &gen_params, &app.default_params);
+                apply_gen_params(text_msgs.clone().into(), &gen_params, &generation_defaults);
             if app.search_enabled {
                 if let Some(opts) = web_search_opts {
                     builder = builder.with_web_search_options(opts);

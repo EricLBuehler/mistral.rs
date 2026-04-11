@@ -1,8 +1,9 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::layers_masker::CausalMaskConfig;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     layers::{Llama3RotaryEmbedding, Sdpa},
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
@@ -46,7 +47,7 @@ impl CausalSelfAttention {
     fn forward(
         &self,
         x: &Tensor,
-        mask: &Option<Tensor>,
+        mask: &AttentionMask,
         seqlen_offsets: &[usize],
         block_idx: usize,
         kv_cache: &mut LayerCaches,
@@ -108,14 +109,7 @@ impl CausalSelfAttention {
 
         let (k, v) = crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v)?;
 
-        let y = Sdpa.run_attention(
-            &q,
-            &k,
-            &v,
-            mask.clone().as_ref(),
-            Some(flash_params),
-            &self.sdpa_params,
-        )?;
+        let y = Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?;
 
         let mut y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
         if let Some(t) = self.q_proj.quantized_act_type() {
@@ -317,7 +311,7 @@ impl Block {
     fn forward(
         &self,
         x: &Tensor,
-        mask: &Option<Tensor>,
+        mask: &AttentionMask,
         seqlen_offsets: &[usize],
         block_idx: usize,
         kv_cache: &mut LayerCaches,
@@ -443,18 +437,18 @@ impl XLoraLlama {
         } else {
             self.kv_cache.full().lock()
         };
-        let mask = CausalMasker.make_causal_mask_matrix(
+        let mask = CausalMasker.make_causal_mask(
             input_ids,
             &*cache,
             x.dtype(),
-            self.cfg.num_attn_heads,
+            &CausalMaskConfig::default(),
         )?;
         let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
             x = block.forward(
                 &x,
-                &mask.as_ref().map(|m| m.get(x.device()).clone()),
+                &mask.get(x.device()),
                 seqlen_offsets,
                 block_idx,
                 &mut cache,

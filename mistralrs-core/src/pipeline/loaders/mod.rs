@@ -1,8 +1,8 @@
 pub(crate) mod auto_device_map;
 mod diffusion_loaders;
 mod embedding_loaders;
+mod multimodal_loaders;
 mod normal_loaders;
-mod vision_loaders;
 pub use auto_device_map::AutoDeviceMapParams;
 use auto_device_map::NonMappedSubModel;
 
@@ -28,11 +28,12 @@ pub use normal_loaders::{
     Qwen3MoELoader, Qwen3NextLoader, SmolLm3Loader, Starcoder2Loader,
 };
 
-pub use vision_loaders::{
-    AutoVisionLoader, Gemma3Loader, Gemma3nLoader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, MiniCpmOLoader, Mistral3Loader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader,
-    Qwen2_5VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader,
-    VLlama4Loader, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader, VoxtralLoader,
+pub use multimodal_loaders::{
+    AutoMultimodalLoader, Gemma3Loader, Gemma3nLoader, Gemma4Loader, Idefics2Loader,
+    Idefics3Loader, LLaVALoader, LLaVANextLoader, MiniCpmOLoader, Mistral3Loader,
+    MultimodalLoaderType, MultimodalModel, MultimodalModelLoader, Phi3VLoader, Phi4MMLoader,
+    Qwen2VLLoader, Qwen2_5VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader,
+    Qwen3_5MoeLoader, VLlama4Loader, VLlamaLoader, VoxtralLoader,
 };
 
 pub use embedding_loaders::{
@@ -77,10 +78,10 @@ pub trait ModelPaths: AsAny + Debug + Send + Sync {
     /// Filepath for general model configuration.
     fn get_gen_conf_filename(&self) -> Option<&PathBuf>;
 
-    /// Get the preprocessor config (for the vision models). This is used to pre process images.
+    /// Get the preprocessor config (for the multimodal models). This is used to pre process images.
     fn get_preprocessor_config(&self) -> &Option<PathBuf>;
 
-    /// Get the processor config (for the vision models). This is primarily used for the chat template.
+    /// Get the processor config (for the multimodal models). This is primarily used for the chat template.
     fn get_processor_config(&self) -> &Option<PathBuf>;
 
     /// Get the explicit chat template.
@@ -415,7 +416,7 @@ impl QuantizationConfigShim {
 
 pub trait DeviceMappedModelLoader {
     /// Maximum activation size of non-mapped parts of this model.
-    /// Useful for the vision models which may prefer to keep the vison components on the GPU.
+    /// Useful for the multimodal models which may prefer to keep the vison components on the GPU.
     fn non_mapped_max_act_size_elems(
         &self,
         config: &str,

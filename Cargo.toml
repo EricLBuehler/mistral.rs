@@ -19,7 +19,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.7.1-alpha.1"
+version = "0.8.1"
 edition = "2021"
 description = "Fast, flexible LLM inference."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -30,21 +30,12 @@ license = "MIT"
 rust-version = "1.88"
 
 [workspace.dependencies]
-# candle-core = { version = "0.9.2" }
-# candle-nn = { version = "0.9.2" }
-# candle-flash-attn-v3 = { version = "0.9.2" }
-# candle-flash-attn = { version = "0.9.2" }
-# candle-metal-kernels = { version = "0.9.2" }
-# candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.9.2", rev = "c3bb5bf" }
-# candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.9.2", rev = "c3bb5bf" }
-# candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", version = "0.9.2", rev = "c3bb5bf" }
-# candle-flash-attn = { git = "https://github.com/huggingface/candle.git", version = "0.9.2", rev = "c3bb5bf" }
-# candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.9.2", rev = "c3bb5bf" }
-candle-core = { path = "../../prometheus/candle/candle-core", version = "0.10.2" }
-candle-nn = { path = "../../prometheus/candle/candle-nn", version = "0.10.2" }
-candle-flash-attn-v3 = { path = "../../prometheus/candle/candle-flash-attn-v3", version = "0.10.2" }
-candle-flash-attn = { path = "../../prometheus/candle/candle-flash-attn", version = "0.10.2" }
-candle-metal-kernels = { path = "../../prometheus/candle/candle-metal-kernels", version = "0.10.2" }
+# Prometheus Candle fork (main) — keep all crates on the same git rev for ABI compatibility.
+candle-core = { git = "https://github.com/GQAdonis/candle.git", branch = "main", package = "candle-core" }
+candle-nn = { git = "https://github.com/GQAdonis/candle.git", branch = "main", package = "candle-nn" }
+candle-flash-attn-v3 = { git = "https://github.com/GQAdonis/candle.git", branch = "main", package = "candle-flash-attn-v3" }
+candle-flash-attn = { git = "https://github.com/GQAdonis/candle.git", branch = "main", package = "candle-flash-attn" }
+candle-metal-kernels = { git = "https://github.com/GQAdonis/candle.git", branch = "main", package = "candle-metal-kernels" }
 
 axum = "0.8.8"
 anyhow = "1.0.100"
@@ -189,17 +180,17 @@ hound = "3.5.1"
 apodize = "1.0.0"
 statrs = "0.18.0"
 
-mistralrs-core = { path = "mistralrs-core", version = "0.7.1-alpha.1" }
-mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.7.1-alpha.1" }
-mistralrs-quant = { path = "mistralrs-quant", version = "0.7.1-alpha.1" }
-mistralrs-vision = { path = "mistralrs-vision", version = "0.7.1-alpha.1" }
-mistralrs-server-core = { path = "mistralrs-server-core", version = "0.7.1-alpha.1" }
-mistralrs = { path = "mistralrs", version = "0.7.1-alpha.1" }
-mistralrs-audio = { path = "mistralrs-audio", version = "0.7.1-alpha.1" }
-mistralrs-mcp = { path = "mistralrs-mcp", version = "0.7.1-alpha.1" }
-mistralrs-macros = { path = "mistralrs-macros", version = "0.7.1-alpha.1" }
-mistralrs-kvcache-compression = { path = "mistralrs-kvcache-compression", version = "0.7.1-alpha.1" }
-turboquant = { path = "../../prometheus/turboquant-rs", features = ["simd"] }
+mistralrs-core = { path = "mistralrs-core", version = "0.8.1" }
+mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.8.1" }
+mistralrs-quant = { path = "mistralrs-quant", version = "0.8.1" }
+mistralrs-vision = { path = "mistralrs-vision", version = "0.8.1" }
+mistralrs-server-core = { path = "mistralrs-server-core", version = "0.8.1" }
+mistralrs = { path = "mistralrs", version = "0.8.1" }
+mistralrs-audio = { path = "mistralrs-audio", version = "0.8.1" }
+mistralrs-mcp = { path = "mistralrs-mcp", version = "0.8.1" }
+mistralrs-macros = { path = "mistralrs-macros", version = "0.8.1" }
+mistralrs-kvcache-compression = { path = "mistralrs-kvcache-compression", version = "0.8.1" }
+turboquant = { git = "https://github.com/GQAdonis/turboquant-rs.git", branch = "main", features = ["simd"] }
 
 [profile.release-with-debug]
 inherits = "release"

@@ -148,13 +148,18 @@ fn main() -> Result<(), String> {
         }
 
         fn metal_std(&self) -> &str {
-            // Use Metal 3.0 unified standard for all platforms.
-            // This fixes Xcode 26+ where the default Metal standard may be too low.
+            // Use Metal 3.1 unified standard for all platforms.
+            // This enables native bfloat16 support (__HAVE_BFLOAT__) which is
+            // required for PagedAttention kernels with bf16 models (e.g. Qwen3).
+            // Without Metal 3.1, the emulated _MLX_BFloat16 struct is used instead,
+            // which can fail on some Metal compiler/runtime combinations.
             // https://github.com/EricLBuehler/mistral.rs/issues/1844
             //
-            // Note: tvOS devices with A15+ (Apple TV 4K 3rd gen) support Metal 3.0+.
+            // Note: Metal 3.1 MSL compiles on all Apple Silicon. The native bfloat
+            // type is used on M3+ GPUs; older GPUs use the emulated fallback path
+            // in utils.metal, which is still correctly compiled with MSL 3.1.
             match self {
-                Platform::MacOS | Platform::Ios | Platform::TvOS => "metal3.0",
+                Platform::MacOS | Platform::Ios | Platform::TvOS => "metal3.1",
             }
         }
     }

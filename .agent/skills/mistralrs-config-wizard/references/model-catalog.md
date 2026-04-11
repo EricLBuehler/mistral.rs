@@ -10,6 +10,7 @@ Supported model architectures in mistral.rs with hardware fit guidance and Turbo
 
 | Model Family | Example IDs | Params | VRAM (Q4) | Context | Notes |
 |-------------|-------------|--------|-----------|---------|-------|
+| Gemma 4 | `google/gemma-4-E4B-it` | 4B | ~2.5 GB | 128K | Multimodal (text/image/video/audio); strong tools + agentic defaults |
 | Llama 3.x | `meta-llama/Llama-3.1-8B-Instruct` | 8B | ~5 GB | 128K | Recommended all-rounder |
 | Llama 3.x | `meta-llama/Llama-3.1-70B-Instruct` | 70B | ~40 GB | 128K | Needs multi-GPU or 80GB |
 | Qwen 3 | `Qwen/Qwen3-4B` | 4B | ~2.5 GB | 128K | Fast, low VRAM |
@@ -18,7 +19,7 @@ Supported model architectures in mistral.rs with hardware fit guidance and Turbo
 | Qwen 3 | `Qwen/Qwen3-30B-A3B` | 30B/3B active | ~18 GB | 128K | MoE — efficient |
 | Phi-4 | `microsoft/Phi-4` | 14B | ~8 GB | 16K | Strong at STEM |
 | Mistral | `mistralai/Mistral-7B-Instruct-v0.3` | 7B | ~4.5 GB | 32K | Classic baseline |
-| Gemma 3 | `google/gemma-3-4b-it` | 4B | ~2.5 GB | 128K | Multimodal-ready |
+| Gemma 3 | `google/gemma-3-4b-it` | 4B | ~2.5 GB | 128K | Multimodal-ready (prefer Gemma 4 for new projects) |
 | DeepSeek V3 | `deepseek-ai/DeepSeek-V3` | 671B | ~400 GB | 128K | Multi-node only |
 | DeepSeek R1 | `deepseek-ai/DeepSeek-R1-Distill-Llama-8B` | 8B | ~5 GB | 128K | Strong reasoning distill |
 | GLM-4 | `THUDM/glm-4-9b-chat` | 9B | ~5.5 GB | 128K | Chinese/English |
@@ -29,10 +30,11 @@ Supported model architectures in mistral.rs with hardware fit guidance and Turbo
 
 | Model Family | Example IDs | Params | VRAM (Q4) | Notes |
 |-------------|-------------|--------|-----------|-------|
+| Gemma 4 | `google/gemma-4-E4B-it` | 4B | ~2.5 GB | Image + video + audio; default multimodal pick in examples |
 | Qwen2-VL | `Qwen/Qwen2-VL-2B-Instruct` | 2B | ~2 GB | Efficient vision |
 | Qwen2-VL | `Qwen/Qwen2-VL-7B-Instruct` | 7B | ~5 GB | Strong vision |
 | Qwen3-VL | `Qwen/Qwen3-VL-7B-Instruct` | 7B | ~5 GB | Latest vision |
-| Gemma 3 | `google/gemma-3-4b-it` | 4B | ~2.5 GB | Auto-detected as vision |
+| Gemma 3 | `google/gemma-3-4b-it` | 4B | ~2.5 GB | Auto-detected as vision (use Gemma 4 when possible) |
 | Gemma 3 | `google/gemma-3-27b-it` | 27B | ~16 GB | High quality vision |
 | LLaVA | `llava-hf/llava-1.5-7b-hf` | 7B | ~5 GB | Classic multimodal |
 | Idefics 3 | `HuggingFaceM4/Idefics3-8B-Llama3` | 8B | ~5 GB | Document understanding |

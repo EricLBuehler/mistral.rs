@@ -377,10 +377,6 @@ impl CacheManagerMixin for SpeculativePipeline {
     fn cache(&self) -> &EitherCache {
         &self.target_cache
     }
-    fn do_preallocated_cache(&self) -> bool {
-        // KV cache size is not the same (necessarily)
-        false
-    }
 }
 
 impl MetadataMixin for SpeculativePipeline {
@@ -579,6 +575,7 @@ impl Pipeline for SpeculativePipeline {
                     no_kv_cache,
                     None,
                     false,
+                    get_mut_arcmutex!(self.draft).get_metadata().sliding_window,
                     None,
                     paged_attn_metadata.clone(),
                     get_mut_arcmutex!(self.draft).device_mapper(),
@@ -621,7 +618,7 @@ impl Pipeline for SpeculativePipeline {
             }
             draft_prefill_tokens.push(sample.sample.token);
         }
-        // Clone before move — needed for hybrid cache replay after rejection
+        // Clone before move, needed for hybrid cache replay after rejection
         let draft_prefill_tokens_clone = if draft_is_hybrid || target_is_hybrid {
             Some(draft_prefill_tokens.clone())
         } else {
@@ -674,6 +671,7 @@ impl Pipeline for SpeculativePipeline {
                 no_kv_cache,
                 Some((gamma, initial_cache_len)), // Get the last gamma, see above
                 false,
+                get_mut_arcmutex!(self.target).get_metadata().sliding_window,
                 None,
                 paged_attn_metadata.clone(),
                 get_mut_arcmutex!(self.target).device_mapper(),
@@ -753,6 +751,7 @@ impl Pipeline for SpeculativePipeline {
                             no_kv_cache,
                             Some((n_replay, initial_draft_cache_len)),
                             false,
+                            get_mut_arcmutex!(self.draft).get_metadata().sliding_window,
                             None,
                             paged_attn_metadata.clone(),
                             get_mut_arcmutex!(self.draft).device_mapper(),
@@ -835,6 +834,7 @@ impl Pipeline for SpeculativePipeline {
                             no_kv_cache,
                             Some((n_replay, initial_cache_len)),
                             false,
+                            get_mut_arcmutex!(self.target).get_metadata().sliding_window,
                             None,
                             paged_attn_metadata.clone(),
                             get_mut_arcmutex!(self.target).device_mapper(),

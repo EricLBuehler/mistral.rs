@@ -60,6 +60,7 @@ use crate::{
 mod add_request;
 mod logger;
 mod search_request;
+mod tool_dispatch;
 
 pub enum EngineInstruction {
     Terminate,
@@ -165,9 +166,7 @@ pub struct Engine {
     pipeline: Arc<Mutex<dyn Pipeline>>,
     search_pipeline: Arc<Mutex<Option<SearchPipeline>>>,
     search_callback: Option<Arc<search::SearchCallback>>,
-    tool_callbacks: tools::ToolCallbacks,
-    tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
-    
+    tool_callbacks: tools::ToolCallbacksWithTools,
     scheduler: Arc<Mutex<dyn Scheduler>>,
     
     #[cfg(feature = "parking-lot-scheduler")]
@@ -206,8 +205,7 @@ impl Engine {
         throughput_logging_enabled: bool,
         search_embedding_model: Option<SearchEmbeddingModel>,
         search_callback: Option<Arc<search::SearchCallback>>,
-        tool_callbacks: tools::ToolCallbacks,
-        tool_callbacks_with_tools: tools::ToolCallbacksWithTools,
+        tool_callbacks: tools::ToolCallbacksWithTools,
         logger: Arc<IntervalLogger>,
         #[cfg(feature = "parking-lot-scheduler")]
         scheduler_config: Option<crate::parking_lot::ParkingLotSchedulerConfig>,
@@ -287,7 +285,6 @@ impl Engine {
             search_pipeline: Arc::new(Mutex::new(search_pipeline)),
             search_callback,
             tool_callbacks,
-            tool_callbacks_with_tools,
             scheduler: scheduler.clone(),
             
             #[cfg(feature = "parking-lot-scheduler")]

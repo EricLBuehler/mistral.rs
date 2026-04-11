@@ -1,6 +1,6 @@
 /// Shared builder methods for model builders.
 ///
-/// All methods here are identical across ModelBuilder, TextModelBuilder, and VisionModelBuilder.
+/// All methods here are identical across ModelBuilder, TextModelBuilder, and MultimodalModelBuilder.
 /// Invoke via `common_builder_methods!();` inside an `impl` block.
 macro_rules! common_builder_methods {
     () => {
@@ -22,7 +22,22 @@ macro_rules! common_builder_methods {
             name: impl Into<String>,
             callback: Arc<ToolCallback>,
         ) -> Self {
-            self.tool_callbacks.insert(name.into(), callback);
+            let name = name.into();
+            self.tool_callbacks.insert(
+                name.clone(),
+                ToolCallbackWithTool {
+                    callback,
+                    tool: Tool {
+                        tp: ToolType::Function,
+                        function: Function {
+                            description: None,
+                            name,
+                            parameters: None,
+                            strict: None,
+                        },
+                    },
+                },
+            );
             self
         }
 
@@ -35,7 +50,7 @@ macro_rules! common_builder_methods {
             tool: Tool,
         ) -> Self {
             let name = name.into();
-            self.tool_callbacks_with_tools
+            self.tool_callbacks
                 .insert(name, ToolCallbackWithTool { callback, tool });
             self
         }

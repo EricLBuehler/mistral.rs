@@ -1,7 +1,7 @@
 # mistralrs — Blazing-Fast LLM Inference in Rust
 
 The Rust SDK for [mistral.rs](https://github.com/EricLBuehler/mistral.rs), a high-performance
-LLM inference engine supporting text, vision, speech, image generation, and embedding models.
+LLM inference engine supporting text, multimodal, speech, image generation, and embedding models.
 
 [API Docs](https://docs.rs/mistralrs) | [GitHub](https://github.com/EricLBuehler/mistral.rs) | [Examples](https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs/examples) | [Discord](https://discord.gg/SZrecqK8qw)
 
@@ -29,7 +29,7 @@ async fn main() -> mistralrs::error::Result<()> {
 |---|---|---|
 | Any model (auto-detect) | `ModelBuilder` | `examples/getting_started/text_generation/` |
 | Text generation | `TextModelBuilder` | `examples/getting_started/text_generation/` |
-| Vision (image+text) | `VisionModelBuilder` | `examples/getting_started/vision/` |
+| Multimodal (image+text) | `MultimodalModelBuilder` | `examples/getting_started/multimodal/` |
 | GGUF quantized models | `GgufModelBuilder` | `examples/getting_started/gguf/` |
 | Image generation | `DiffusionModelBuilder` | `examples/models/diffusion/` |
 | Speech synthesis | `SpeechModelBuilder` | `examples/models/speech/` |
@@ -46,10 +46,10 @@ async fn main() -> mistralrs::error::Result<()> {
 | Type | Use When | Sampling |
 |---|---|---|
 | `TextMessages` | Simple text-only chat | Deterministic |
-| `VisionMessages` | Prompt includes images or audio | Deterministic |
+| `MultimodalMessages` | Prompt includes images or audio | Deterministic |
 | `RequestBuilder` | Tools, logprobs, custom sampling, constraints, adapters, or web search | Configurable |
 
-`TextMessages` and `VisionMessages` convert into `RequestBuilder` via `Into<RequestBuilder>`.
+`TextMessages` and `MultimodalMessages` convert into `RequestBuilder` via `Into<RequestBuilder>`.
 
 ## Feature Flags
 

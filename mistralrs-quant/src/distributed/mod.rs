@@ -59,10 +59,8 @@ impl BarrierLike for Barrier {
 pub fn get_global_tp_size_from_devices() -> Result<usize> {
     #[cfg(all(feature = "cuda", feature = "ring"))]
     {
-        use candle_core::cuda::WrapErr;
-        candle_core::cuda::cudarc::driver::result::device::get_count()
-            .w()
-            .map(|x| x as usize)
+        let config = RingConfig::load();
+        Ok(config.world_size)
     }
     #[cfg(all(not(feature = "cuda"), feature = "ring"))]
     {
@@ -92,6 +90,10 @@ pub fn use_nccl() -> bool {
     (std::env::var("MISTRALRS_NO_NCCL").is_err()
         || std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1"))
         && (cfg!(feature = "nccl") && cfg!(feature = "cuda"))
+}
+
+pub fn use_ring() -> bool {
+    cfg!(feature = "ring") && std::env::var("RING_CONFIG").is_ok()
 }
 
 // Unified Comm enum

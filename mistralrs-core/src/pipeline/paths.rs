@@ -18,7 +18,7 @@ use crate::{
     api_dir_list, api_get_file,
     lora::LoraConfig,
     pipeline::{
-        chat_template::{ChatTemplate, ChatTemplateValue},
+        chat_template::{BeginEndUnkPadTok, ChatTemplate, ChatTemplateValue},
         isq::UQFF_RESIDUAL_SAFETENSORS,
     },
     utils::tokens::get_token,
@@ -458,7 +458,69 @@ pub(crate) fn get_chat_template(
                 if let Some(template_filename) = paths.get_template_filename() {
                     if template_filename.extension().map(|e| e.to_str()) == Some(Some("jinja")) {
                         info!("Using chat template from .jinja file.");
-                        let mut template = ChatTemplate::default();
+                        // Load special tokens (bos/eos/unk) from tokenizer_config.json
+                        // in the same directory, matching HF's behavior where
+                        // apply_chat_template passes self.special_tokens_map to the template.
+                        let mut template = template_filename
+                            .parent()
+                            .map(|dir| dir.join("tokenizer_config.json"))
+                            .filter(|p| p.exists())
+                            .and_then(|p| fs::read_to_string(p).ok())
+                            .and_then(|s| serde_json::from_str::<ChatTemplate>(&s).ok())
+                            .unwrap_or_else(|| {
+                                // Fallback: older UQFF repos may not have tokenizer_config.json.
+                                // Try to extract bos/eos tokens from the tokenizer.json's
+                                // added_tokens list to avoid rendering "none" in the template.
+                                let mut ct = ChatTemplate::default();
+                                if let Some(tok_path) = paths
+                                    .get_tokenizer_filename()
+                                    .parent()
+                                    .map(|d| d.join("tokenizer.json"))
+                                    .filter(|p| p.exists())
+                                    .or_else(|| {
+                                        template_filename
+                                            .parent()
+                                            .map(|d| d.join("tokenizer.json"))
+                                            .filter(|p| p.exists())
+                                    })
+                                {
+                                    if let Some(tok_json) =
+                                        fs::read_to_string(&tok_path).ok().and_then(|s| {
+                                            serde_json::from_str::<serde_json::Value>(&s).ok()
+                                        })
+                                    {
+                                        let added = tok_json
+                                            .get("added_tokens")
+                                            .and_then(serde_json::Value::as_array);
+                                        for token in added.into_iter().flatten() {
+                                            let content = token
+                                                .get("content")
+                                                .and_then(serde_json::Value::as_str)
+                                                .unwrap_or("");
+                                            let special = token
+                                                .get("special")
+                                                .and_then(serde_json::Value::as_bool)
+                                                .unwrap_or(false);
+                                            if special {
+                                                if content == "<bos>" {
+                                                    ct.bos_token = Some(BeginEndUnkPadTok(
+                                                        Either::Left(content.to_string()),
+                                                    ));
+                                                } else if content == "<eos>" {
+                                                    ct.eos_token = Some(BeginEndUnkPadTok(
+                                                        Either::Left(content.to_string()),
+                                                    ));
+                                                } else if content == "<unk>" {
+                                                    ct.unk_token = Some(BeginEndUnkPadTok(
+                                                        Either::Left(content.to_string()),
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                ct
+                            });
                         template.chat_template =
                             Some(ChatTemplateValue(Either::Left(content.clone())));
                         template

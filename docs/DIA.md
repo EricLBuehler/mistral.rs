@@ -1,6 +1,12 @@
-# Dia 1.6b Model: [`nari-labs/Dia-1.6B`](https://huggingface.co/nari-labs/Dia-1.6B)
+# Dia 1.6B: [`nari-labs/Dia-1.6B`](https://huggingface.co/nari-labs/Dia-1.6B)
 
 Dia is a 1.6B parameter text to speech model created by Nari Labs. You can condition the output on audio, enabling emotion and tone control. The model can also produce nonverbal communications like laughter, coughing, clearing throat, etc.
+
+## Quick Start
+
+```bash
+mistralrs run speech -m nari-labs/Dia-1.6B -a dia
+```
 
 - Generate dialogue via the [S1] and [S2] tags
 - Generate non-verbal like (laughs), (coughs), etc.
@@ -8,17 +14,18 @@ Dia is a 1.6B parameter text to speech model created by Nari Labs. You can condi
 
 > Note: voice cloning support is coming!
 
-## HTTP server
-
-The OpenAI HTTP server provides a drop-in compatible way to easily use Dia locally!
-
 > Note: we only support `pcm` and `wav` outputs.
 
+## HTTP API
+
+Start the server:
+
 ```
-mistralrs run speech -m nari-labs/Dia-1.6B -a dia
+mistralrs serve speech -m nari-labs/Dia-1.6B -a dia -p 1234
 ```
 
-After this, you can send requests via the HTTP server:
+Send a request:
+
 ```py
 from pathlib import Path
 from openai import OpenAI
@@ -26,7 +33,7 @@ from openai import OpenAI
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 # text_to_speak = "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face."
-text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and vision models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python SDK. [S2] Check it out on github."
+text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and multimodal models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python SDK. [S2] Check it out on github."
 
 response = client.audio.speech.create(
     model="default", voice="N/A", input=text_to_speak, response_format="wav"
@@ -37,7 +44,8 @@ output_path.write_bytes(response.read())
 print(f"WAV audio written to {output_path.resolve()}")
 ```
 
-## Rust example
+## Rust SDK
+
 ```rust
 use std::time::Instant;
 
@@ -54,7 +62,7 @@ async fn main() -> Result<()> {
     let start = Instant::now();
 
     // let text_to_speak = "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face.";
-    let text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and vision models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python SDK. [S2] Check it out on github.";
+    let text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and multimodal models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python SDK. [S2] Check it out on github.";
 
     let (pcm, rate, channels) = model.generate_speech(text_to_speak).await?;
 
@@ -72,7 +80,8 @@ async fn main() -> Result<()> {
 }
 ```
 
-## Python example
+## Python SDK
+
 ```py
 from mistralrs import (
     Runner,
@@ -83,7 +92,7 @@ from pathlib import Path
 import wave, struct
 
 # text_to_speak = "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face."
-text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and vision models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python SDK. [S2] Check it out on github."
+text_to_speak = "[S1] mistral r s is a local LLM inference engine. [S2] You can run text and multimodal models, and also image generation and speech generation. [S1] There is agentic web search, tool calling, and a convenient Python SDK. [S2] Check it out on github."
 
 runner = Runner(
     which=Which.Speech(

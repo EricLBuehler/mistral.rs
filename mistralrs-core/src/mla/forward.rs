@@ -3,7 +3,7 @@
 use candle_core::{Device, Result, Tensor};
 
 use crate::{
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
 };
 
@@ -39,14 +39,14 @@ fn is_mla_disabled() -> bool {
 /// - Paged KV indptr metadata is available
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 pub fn should_use_mla_decode(
-    attention_mask: Option<&Tensor>,
+    attention_mask: &AttentionMask,
     seq_len: usize,
     paged_attn_enabled: bool,
     device: &Device,
     metadata: &Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
 ) -> bool {
     !is_mla_disabled()
-        && attention_mask.is_none()
+        && matches!(attention_mask, AttentionMask::None)
         && seq_len == 1
         && paged_attn_enabled
         && matches!(device, Device::Cuda(_))
@@ -58,7 +58,7 @@ pub fn should_use_mla_decode(
 
 #[cfg(not(all(feature = "cuda", target_family = "unix")))]
 pub fn should_use_mla_decode(
-    _attention_mask: Option<&Tensor>,
+    _attention_mask: &AttentionMask,
     _seq_len: usize,
     _paged_attn_enabled: bool,
     _device: &Device,
@@ -275,7 +275,7 @@ pub fn mla_cache_forward(
     v: &Tensor,
     ckv: &Tensor,
     k_pe: &Tensor,
-    attention_mask: Option<&Tensor>,
+    attention_mask: &AttentionMask,
     seqlen_offsets: &[usize],
     metadata: &Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     flash_params: &FlashParams,
@@ -323,7 +323,7 @@ pub fn mla_cache_forward(
 
     let prefix_lens = seqlen_offsets;
     let needs_prefix = prefix_lens.iter().any(|&len| len > 0);
-    if !needs_prefix && attention_mask.is_some() {
+    if !needs_prefix && !matches!(attention_mask, AttentionMask::None) {
         Sdpa.run_attention(q, k, v, attention_mask, Some(flash_params), sdpa_params)
     } else {
         let ((key_cache, value_cache), input_metadata) =
@@ -550,7 +550,7 @@ pub fn mla_cache_forward(
     _v: &Tensor,
     _ckv: &Tensor,
     _k_pe: &Tensor,
-    _attention_mask: Option<&Tensor>,
+    _attention_mask: &AttentionMask,
     _seqlen_offsets: &[usize],
     _metadata: &Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     _flash_params: &FlashParams,

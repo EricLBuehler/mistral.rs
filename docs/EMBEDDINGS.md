@@ -1,6 +1,6 @@
 # Embeddings Overview
 
-Mistral.rs can load embedding models alongside chat, vision, diffusion, and speech workloads. Embedding models
+Mistral.rs can load embedding models alongside chat, multimodal, diffusion, and speech workloads. Embedding models
 produce dense vector representations that you can use for similarity search, clustering, reranking, and other
 semantic tasks.
 

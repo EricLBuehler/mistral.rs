@@ -1,22 +1,26 @@
-# Voxtral Model: [`mistralai/Voxtral-Mini-4B-Realtime-2602`](https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602)
+# Voxtral Mini 4B: [`mistralai/Voxtral-Mini-4B-Realtime-2602`](https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602)
 
 Voxtral Mini is a 4.4B parameter real-time automatic speech recognition (ASR) model created by Mistral AI. It features a causal Whisper-based audio encoder, a temporal adapter, and a Mistral decoder. The model accepts audio input and produces text output (speech-to-text).
+
+## Quick Start
+
+```bash
+mistralrs run multimodal -m mistralai/Voxtral-Mini-4B-Realtime-2602
+```
 
 The Voxtral Model has support in the Rust, Python, and HTTP APIs. Additionally, the Voxtral Model supports ISQ for increased performance.
 
 > Note: Voxtral uses Mistral's native format (`params.json`, `consolidated.safetensors`, `tekken.json`), which mistral.rs handles automatically.
 
-## HTTP server
+## HTTP API
 
-We support an OpenAI compatible HTTP API for audio models.
-
-1) Start the server
+Start the server:
 
 ```
-mistralrs serve vision -m mistralai/Voxtral-Mini-4B-Realtime-2602
+mistralrs serve multimodal -m mistralai/Voxtral-Mini-4B-Realtime-2602 -p 1234
 ```
 
-2) Send a request
+Send a request:
 
 ```py
 import base64
@@ -54,16 +58,17 @@ resp = completion.choices[0].message.content
 print(resp)
 ```
 
-## Rust
+## Rust SDK
+
 You can find this example [here](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples/models/asr/main.rs).
 
 ```rust
 use anyhow::Result;
-use mistralrs::{AudioInput, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{AudioInput, TextMessageRole, MultimodalMessages, MultimodalModelBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("mistralai/Voxtral-Mini-4B-Realtime-2602")
+    let model = MultimodalModelBuilder::new("mistralai/Voxtral-Mini-4B-Realtime-2602")
         .with_logging()
         .build()
         .await?;
@@ -71,11 +76,12 @@ async fn main() -> Result<()> {
     let audio_bytes = std::fs::read("sample_audio.wav")?;
     let audio = AudioInput::from_bytes(&audio_bytes)?;
 
-    let messages = VisionMessages::new().add_multimodal_message(
+    let messages = MultimodalMessages::new().add_multimodal_message(
         TextMessageRole::User,
         "Transcribe this audio.",
         vec![],
         vec![audio],
+        vec![],
     );
 
     let response = model.send_chat_request(messages).await?;
@@ -90,15 +96,15 @@ async fn main() -> Result<()> {
 }
 ```
 
-## Python
+## Python SDK
 
 ```py
-from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="mistralai/Voxtral-Mini-4B-Realtime-2602",
-        arch=VisionArchitecture.Voxtral,
+        arch=MultimodalArchitecture.Voxtral,
     ),
 )
 

@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, Module, Result, Tensor};
 use candle_nn::LayerNorm;
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
@@ -9,7 +10,7 @@ use tracing::info;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{self, layer_norm, Activation, CausalMasker, RotaryEmbedding, Sdpa},
     lora::{linear_b, linear_no_bias, LinearLayerLike, LoraConfig},
@@ -212,7 +213,7 @@ impl Attention {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Option<Tensor>,
@@ -278,12 +279,16 @@ impl Attention {
             attention_mask,
             self.sliding_window,
         )?;
+        let attn_mask = match attn_mask {
+            Some(t) => AttentionMask::Custom(t),
+            None => AttentionMask::None,
+        };
 
         let mut attn_output = Sdpa.run_attention(
             &q,
             &k,
             &v,
-            attn_mask.as_ref(),
+            &attn_mask,
             Some(flash_params),
             &self.sdpa_params,
         )?;
@@ -372,7 +377,7 @@ impl DecoderLayer {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Option<Tensor>,
@@ -589,12 +594,14 @@ impl Model {
         } else {
             self.cache.full().lock()
         };
-        let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+        let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &*cache,
-            self.sliding_window,
             xs.dtype(),
-            self.cfg.num_attn_heads,
+            &CausalMaskConfig {
+                sliding_window: self.sliding_window,
+                ..Default::default()
+            },
         )?;
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
 
@@ -602,7 +609,7 @@ impl Model {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                attention_mask.as_ref().map(|m| m.get(xs.device())),
+                &attention_mask.get(xs.device()),
                 seqlen_offsets,
                 &mut cache[i],
                 scalings.clone(),

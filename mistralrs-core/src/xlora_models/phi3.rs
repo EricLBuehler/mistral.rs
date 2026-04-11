@@ -2,9 +2,10 @@
 
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
+use crate::layers_masker::CausalMaskConfig;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    attention::SdpaParams,
+    attention::{AttentionMask, SdpaParams},
     layers::{self, Activation, Sdpa},
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
@@ -102,7 +103,7 @@ impl Attention {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
@@ -165,12 +166,16 @@ impl Attention {
             attention_mask,
             self.sliding_window,
         )?;
+        let attn_mask = match attn_mask {
+            Some(t) => AttentionMask::Custom(t),
+            None => AttentionMask::None,
+        };
 
         let mut attn_output = Sdpa.run_attention(
             &q,
             &k,
             &v,
-            attn_mask.as_ref(),
+            &attn_mask,
             Some(flash_params),
             &self.sdpa_params,
         )?;
@@ -342,7 +347,7 @@ impl DecoderLayer {
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        attention_mask: &AttentionMask,
         seqlen_offsets: &[usize],
         position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
@@ -550,12 +555,14 @@ impl Model {
         } else {
             self.cache.full().lock()
         };
-        let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+        let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &*cache,
-            self.sliding_window,
             xs.dtype(),
-            self.cfg.num_attn_heads,
+            &CausalMaskConfig {
+                sliding_window: self.sliding_window,
+                ..Default::default()
+            },
         )?;
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
 
@@ -563,7 +570,7 @@ impl Model {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                attention_mask.as_ref().map(|m| m.get(xs.device())),
+                &attention_mask.get(xs.device()),
                 seqlen_offsets,
                 position_ids,
                 &mut cache[i],

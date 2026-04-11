@@ -1,7 +1,7 @@
 #[cfg(not(feature = "cuda"))]
 mod cpu;
 #[cfg(feature = "cuda")]
-mod cuda;
+pub(crate) mod cuda;
 #[cfg(feature = "cuda")]
 mod ffi;
 
@@ -87,6 +87,14 @@ impl QuantMethod for GgufMatMul {
             res.broadcast_add(b)
         } else {
             Ok(res)
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+        match &self.w {
+            candle_core::quantized::QMatMul::QTensor(qt) => Some(qt),
+            _ => None,
         }
     }
 

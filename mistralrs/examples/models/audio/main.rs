@@ -3,11 +3,11 @@
 //! Run with: `cargo run --release --example audio -p mistralrs`
 
 use anyhow::Result;
-use mistralrs::{AudioInput, TextMessageRole, VisionMessages, VisionModelBuilder};
+use mistralrs::{AudioInput, MultimodalMessages, MultimodalModelBuilder, TextMessageRole};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("../hf_models/gemma3n_e4b")
+    let model = MultimodalModelBuilder::new("../hf_models/gemma3n_e4b")
         .with_logging()
         .build()
         .await?;
@@ -15,7 +15,7 @@ async fn main() -> Result<()> {
     let audio_bytes = std::fs::read("sample_speech.wav")?;
     let audio = AudioInput::from_bytes(&audio_bytes)?;
 
-    let messages = VisionMessages::new().add_audio_message(
+    let messages = MultimodalMessages::new().add_audio_message(
         TextMessageRole::User,
         "What is being said?",
         vec![audio],

@@ -125,7 +125,7 @@ class EmbeddingArchitecture(Enum):
     Qwen3Embedding = "qwen3embedding"
 
 @dataclass
-class VisionArchitecture(Enum):
+class MultimodalArchitecture(Enum):
     Phi3V = "phi3v"
     Idefics2 = "idefics2"
     LLaVANext = "llava-next"
@@ -141,6 +141,11 @@ class VisionArchitecture(Enum):
     Llama4 = "llama4"
     Gemma3n = "Gemma3n"
     Qwen3VL = "Qwen3VL"
+    Qwen3VLMoE = "Qwen3VLMoE"
+    Qwen3_5 = "Qwen3_5"
+    Qwen3_5Moe = "Qwen3_5Moe"
+    Voxtral = "Voxtral"
+    Gemma4 = "Gemma4"
 
 @dataclass
 class DiffusionArchitecture(Enum):
@@ -185,9 +190,9 @@ class TextAutoMapParams:
     max_batch_size: int = 1
 
 @dataclass
-class VisionAutoMapParams:
+class MultimodalAutoMapParams:
     """
-    Auto-mapping parameters for a vision model.
+    Auto-mapping parameters for a multimodal model.
     These affects automatic device mapping but are not a hard limit.
     """
 
@@ -329,16 +334,16 @@ class Which(Enum):
         auto_map_params: TextAutoMapParams | None = (None,)
 
     @dataclass
-    class VisionPlain:
+    class MultimodalPlain:
         model_id: str
-        arch: VisionArchitecture
+        arch: MultimodalArchitecture
         tokenizer_json: str | None = None
         topology: str | None = None
         from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         max_edge: int | None = None
-        auto_map_params: VisionAutoMapParams | None = (None,)
+        auto_map_params: MultimodalAutoMapParams | None = (None,)
         calibration_file: str | None = None
         imatrix: str | None = None
         hf_cache_path: str | None = None

@@ -91,6 +91,13 @@ pub fn mxfp4_matmul(
         scale.layout().start_offset() * scale_s.dtype().size_in_bytes(),
     );
 
+    // Select kernel: vecmat for small M (decode), tiled GEMM otherwise
+    let call_fn = if m <= 4 {
+        crate::metal_kernels::call_mxfp4_vecmat
+    } else {
+        crate::metal_kernels::call_mxfp4_matmul
+    };
+
     if let Some(bias) = &bias {
         let bias_s = bias.storage_and_layout().0;
         let Storage::Metal(bias_s) = &*bias_s else {
@@ -114,7 +121,7 @@ pub fn mxfp4_matmul(
             bias.layout().start_offset() * bias_s.dtype().size_in_bytes(),
         );
 
-        crate::metal_kernels::call_mxfp4_matmul(
+        call_fn(
             device.device(),
             &encoder,
             &crate::metal_kernels::Kernels::new(),
@@ -134,7 +141,7 @@ pub fn mxfp4_matmul(
         // Any valid buffer is fine as long as has_bias=false.
         let dummy_bias = (input_s.buffer(), 0usize);
 
-        crate::metal_kernels::call_mxfp4_matmul(
+        call_fn(
             device.device(),
             &encoder,
             &crate::metal_kernels::Kernels::new(),

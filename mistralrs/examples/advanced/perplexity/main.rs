@@ -17,7 +17,7 @@ use tokio::sync::mpsc::channel;
 #[derive(Parser)]
 struct Args {
     /// The model to run.
-    #[arg(short, long, default_value = "google/gemma-3-4b-it")]
+    #[arg(short, long, default_value = "google/gemma-4-E4B-it")]
     model_id: String,
 
     /// Filename to text to run the model on. This is recommended to be the Wikitext 2 dataset:
@@ -54,6 +54,8 @@ async fn process_chunk(runner: &MistralRs, chunk: Vec<u32>) -> anyhow::Result<(T
         logits_processors: None,
         return_raw_logits: true,
         web_search_options: None,
+        max_tool_rounds: None,
+        tool_dispatch_url: None,
         model_id: None,
         truncate_sequence: false,
     }));

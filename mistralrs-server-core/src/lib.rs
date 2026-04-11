@@ -238,3 +238,4 @@ pub mod speech_generation;
 pub mod streaming;
 pub mod types;
 pub mod util;
+pub mod video;

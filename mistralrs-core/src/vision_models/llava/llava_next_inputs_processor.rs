@@ -90,6 +90,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
+        sliding_window: Option<usize>,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta>,
         mapper: Option<&dyn DeviceMapper>,
@@ -184,6 +185,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                     no_kv_cache,
                     last_n_context_len,
                     return_raw_logits,
+                    sliding_window,
                     other_config,
                     paged_attn_metadata,
                     mapper,
@@ -341,6 +343,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 mapper,
+                sliding_window,
             )
         } else {
             get_completion_input(
@@ -352,6 +355,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 mapper,
+                sliding_window,
             )
         };
 

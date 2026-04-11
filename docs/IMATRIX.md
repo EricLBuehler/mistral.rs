@@ -1,6 +1,6 @@
 # Enhancing ISQ with an imatrix
 
-Mistral.rs supports enhancing the performance of models quantized with ISQ by collecting an imatix from [calibration data](https://github.com/EricLBuehler/mistral.rs/tree/master/calibration_data/). The following quantizations are supported with an imatrix:
+Mistral.rs supports enhancing the performance of models quantized with ISQ by collecting an imatrix from [calibration data](https://github.com/EricLBuehler/mistral.rs/tree/master/calibration_data/). The following quantizations are supported with an imatrix:
 
 - `Q2K`
 - `Q3K`

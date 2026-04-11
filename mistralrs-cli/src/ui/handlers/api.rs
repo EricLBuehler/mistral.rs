@@ -440,15 +440,23 @@ pub struct GenerateSpeechRequest {
 }
 
 pub async fn get_settings(Extension(app): Extension<Arc<AppState>>) -> impl IntoResponse {
+    let current_model = app.current.read().await.clone();
+    let defaults = current_model
+        .as_ref()
+        .and_then(|model_id| app.models.get(model_id))
+        .map(|model| model.generation_defaults.clone())
+        .unwrap_or_else(|| app.default_params.clone());
+
     Json(json!({
         "defaults": {
-            "temperature": app.default_params.temperature,
-            "top_p": app.default_params.top_p,
-            "top_k": app.default_params.top_k,
-            "max_tokens": app.default_params.max_tokens,
-            "repetition_penalty": app.default_params.repetition_penalty,
-            "system_prompt": app.default_params.system_prompt,
+            "temperature": defaults.temperature,
+            "top_p": defaults.top_p,
+            "top_k": defaults.top_k,
+            "max_tokens": defaults.max_tokens,
+            "repetition_penalty": defaults.repetition_penalty,
+            "system_prompt": defaults.system_prompt,
         },
+        "model": current_model,
         "search_enabled": app.search_enabled,
         "search_embedding_model": app.search_embedding_model.map(|m| m.to_string()),
     }))

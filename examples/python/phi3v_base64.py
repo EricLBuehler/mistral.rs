@@ -1,10 +1,10 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 import base64
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id="microsoft/Phi-3.5-vision-instruct",
-        arch=VisionArchitecture.Phi3V,
+        arch=MultimodalArchitecture.Phi3V,
     ),
 )
 

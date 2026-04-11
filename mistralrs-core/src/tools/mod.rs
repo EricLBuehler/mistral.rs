@@ -1,21 +1,20 @@
+pub(crate) mod grammar;
+pub(crate) mod parsers;
 mod request;
 mod response;
 
 use candle_core::Result;
-use regex::Regex;
 pub use request::*;
 pub use response::*;
 use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::Pipeline;
 use mistralrs_mcp::CalledFunction;
 
-// Re-export the types so they're accessible as tools::Type
 pub use mistralrs_mcp::{ToolCallback, ToolCallbackWithTool};
 
 /// Collection of callbacks keyed by tool name.
@@ -25,71 +24,17 @@ pub type ToolCallbacks = HashMap<String, Arc<ToolCallback>>;
 pub type ToolCallbacksWithTools = HashMap<String, ToolCallbackWithTool>;
 
 fn contains_tool_call_prefix(prefix: &str) -> bool {
-    prefix.contains("<tool_call>")
-        || prefix.contains("<｜tool▁call▁begin｜>")
-        || prefix.contains("<|python_tag|>")
-        || prefix.contains("[TOOL_CALLS]")
+    parsers::contains_tool_call_prefix(prefix)
 }
 
 fn process_model_specific_message(message: &str) -> Result<String> {
-    static DEEPSEEK_REGEX: OnceLock<Regex> = OnceLock::new();
-    static QWEN_REGEX: OnceLock<Regex> = OnceLock::new();
-
-    // These are reasoning models so we need a regex.
-    let deepseek_regex = DEEPSEEK_REGEX.get_or_init(|| Regex::new(
-        r"(?s)<｜tool▁call▁begin｜>function<｜tool▁sep｜>(?P<name>[^\n]+)\n```json\n(?P<json>.+?)\n```<｜tool▁call▁end｜>",
-    ).unwrap());
-    let qwen_regex = QWEN_REGEX
-        .get_or_init(|| Regex::new(r"(?s)<tool_call>(?P<inner>.*?)</tool_call>").unwrap());
-
-    if let Some(message) = message.strip_prefix("<|python_tag|>") {
-        // Llama case
-        Ok(message.to_string())
-    } else if qwen_regex.is_match(message) {
-        if let Some(caps) = qwen_regex.captures(message) {
-            let inner = caps.name("inner").unwrap().as_str();
-            return Ok(inner.trim().to_string());
-        }
-        Ok(message.to_string())
-    } else if let Some(message) = message
-        .strip_prefix("[TOOL_CALLS][")
-        .and_then(|s| s.strip_suffix("]"))
-    {
-        // Mistral Nemo case
-        Ok(message.to_string())
-    } else if deepseek_regex.find(message).is_some() {
-        #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-        struct ToolCall {
-            name: String,
-            arguments: Value,
-        }
-        let mut calls = Vec::new();
-        for caps in deepseek_regex.captures_iter(message) {
-            let name = caps
-                .name("name")
-                .ok_or("Could not capture function name")
-                .map_err(candle_core::Error::msg)?
-                .as_str()
-                .trim()
-                .to_string();
-            let json_str = caps
-                .name("json")
-                .ok_or("Could not capture JSON arguments")
-                .map_err(candle_core::Error::msg)?
-                .as_str()
-                .trim();
-            let arguments: Value =
-                serde_json::from_str(json_str).map_err(candle_core::Error::msg)?;
-            calls.push(ToolCall { name, arguments });
-        }
-        Ok(serde_json::to_string(&calls).map_err(candle_core::Error::msg)?)
-    } else {
-        Ok(message.to_string())
-    }
+    parsers::process_model_specific_message(message)
 }
 
 pub struct ToolCallingMatcher {
     tool_choice: ToolChoice,
+    known_tool_names: Option<std::collections::HashSet<String>>,
+    tools: Option<Arc<Vec<crate::Tool>>>,
 }
 
 // Same as CalledFunction, but has different cases for variations on the names
@@ -156,8 +101,48 @@ fn fix_broken_json(raw: &str) -> anyhow::Result<String> {
 }
 
 impl ToolCallingMatcher {
-    pub fn new(tool_choice: ToolChoice) -> anyhow::Result<Self> {
-        Ok(Self { tool_choice })
+    pub fn new(tool_choice: ToolChoice, tools: Option<&[crate::Tool]>) -> anyhow::Result<Self> {
+        let known_tool_names = tools.map(|t| {
+            t.iter()
+                .map(|tool| tool.function.name.clone())
+                .collect::<std::collections::HashSet<_>>()
+        });
+        let tools_arc = tools.map(|t| Arc::new(t.to_vec()));
+        Ok(Self {
+            tool_choice,
+            known_tool_names,
+            tools: tools_arc,
+        })
+    }
+
+    /// Build a tool call grammar if a known format prefix is detected in
+    /// `text` and tools are available.  Returns `None` when tool choice is
+    /// `None`, no format matches, or the format is not yet ready (e.g.
+    /// DeepSeek before the JSON fence).
+    pub fn build_tool_call_grammar(&self, text: &str) -> Option<llguidance::api::TopLevelGrammar> {
+        if matches!(self.tool_choice, ToolChoice::None) {
+            return None;
+        }
+        let tools = self.tools.as_ref()?;
+        parsers::build_tool_call_grammar(text, tools)
+    }
+
+    /// Build a pure JSON object grammar for Harmony tool call arguments.
+    /// When `tool_name` identifies a tool with `strict: true`, its
+    /// parameters schema is used for constrained decoding.
+    /// Returns `None` when tool choice is `None` or no tools are defined.
+    pub fn build_harmony_tool_grammar(
+        &self,
+        tool_name: Option<&str>,
+    ) -> Option<llguidance::api::TopLevelGrammar> {
+        if matches!(self.tool_choice, ToolChoice::None) {
+            return None;
+        }
+        let tools = self.tools.as_ref()?;
+        Some(parsers::harmony::tool_call_grammar_for_tool(
+            tool_name,
+            Some(tools),
+        ))
     }
 
     // Checks if the `message_prefix` could be a tool call. If false, either
@@ -166,16 +151,12 @@ impl ToolCallingMatcher {
     // If the start of a message could be a tool call, then it looks like an incomplete JSON of a given structure, e.g. `{"name": "foo", "param`.
     //
     // Returns a tuple of `(could_be_tool, is_complete_tool)`.
-    pub fn prefix_could_be_tool(
-        &self,
-        _pipeline: &dyn Pipeline,
-        message_prefix: &str,
-    ) -> Result<(bool, bool)> {
+    pub fn prefix_could_be_tool(&self, message_prefix: &str) -> Result<(bool, bool)> {
         if matches!(self.tool_choice, ToolChoice::None) {
             return Ok((false, false));
         }
         let message_prefix = process_model_specific_message(message_prefix)?;
-        let message_prefix = fix_broken_json(&message_prefix).unwrap();
+        let message_prefix = fix_broken_json(&message_prefix).map_err(candle_core::Error::msg)?;
 
         // Check if the prefix could be a JSON serialization of any of the following types.
         Ok([
@@ -194,20 +175,18 @@ impl ToolCallingMatcher {
         .unwrap_or((contains_tool_call_prefix(&message_prefix), false)))
     }
 
-    pub fn get_call(
-        &self,
-        _pipeline: &dyn Pipeline,
-        message: &str,
-    ) -> anyhow::Result<Vec<ToolCallResponse>> {
+    pub fn get_call(&self, message: &str) -> anyhow::Result<Vec<ToolCallResponse>> {
         if matches!(self.tool_choice, ToolChoice::None) {
             return Ok(Vec::new());
         }
         let message = process_model_specific_message(message)?;
-        let message = fix_broken_json(&message).unwrap();
+        let message = fix_broken_json(&message)?;
 
-        if let Ok(deser) = serde_json::from_str::<CalledFunctionParameters>(&message) {
+        let mut calls = if let Ok(deser) =
+            serde_json::from_str::<CalledFunctionParameters>(&message)
+        {
             let id = format!("call-{}", Uuid::new_v4());
-            Ok(vec![ToolCallResponse {
+            vec![ToolCallResponse {
                 index: 0,
                 id,
                 tp: ToolCallType::Function,
@@ -215,9 +194,9 @@ impl ToolCallingMatcher {
                     name: deser.name,
                     arguments: serde_json::to_string(&deser.parameters)?,
                 },
-            }])
+            }]
         } else if let Ok(deser) = serde_json::from_str::<Vec<CalledFunctionParameters>>(&message) {
-            Ok(deser
+            deser
                 .into_iter()
                 .enumerate()
                 .map(|(idx, deser)| {
@@ -232,13 +211,34 @@ impl ToolCallingMatcher {
                         },
                     })
                 })
-                .collect::<anyhow::Result<Vec<_>>>()?)
+                .collect::<anyhow::Result<Vec<_>>>()?
         } else {
             if matches!(self.tool_choice, ToolChoice::Tool(_)) {
                 anyhow::bail!("Tool choice was required but no tools were called.")
             }
-            Ok(Vec::new())
+            return Ok(Vec::new());
+        };
+
+        // Filter out hallucinated tool names.
+        if let Some(ref known) = self.known_tool_names {
+            let before = calls.len();
+            calls.retain(|tc| {
+                let valid = known.contains(&tc.function.name);
+                if !valid {
+                    tracing::warn!(
+                        "Dropping hallucinated tool call `{}` (not in defined tools: {:?})",
+                        tc.function.name,
+                        known
+                    );
+                }
+                valid
+            });
+            if calls.is_empty() && before > 0 && matches!(self.tool_choice, ToolChoice::Tool(_)) {
+                anyhow::bail!("Tool choice was required but model called unknown tools.");
+            }
         }
+
+        Ok(calls)
     }
 }
 
@@ -261,17 +261,16 @@ where
 }
 
 /// Takes raw UTf8 text and parses any possible tool calls from it.
-pub fn parse_text_tools<'a>(
-    pipeline: &dyn Pipeline,
-    raw_text: &'a str,
+pub fn parse_text_tools(
+    raw_text: &str,
     matcher: Option<Arc<ToolCallingMatcher>>,
-) -> anyhow::Result<(Option<&'a str>, Vec<ToolCallResponse>)> {
+) -> anyhow::Result<(Option<&str>, Vec<ToolCallResponse>)> {
     let mut tool_calls = Vec::new();
     let mut text_new = Some(raw_text);
 
     if let Some(ref matcher) = matcher {
         let calls = matcher
-            .get_call(pipeline, raw_text)
+            .get_call(raw_text)
             .map_err(candle_core::Error::msg)?;
         if !calls.is_empty() {
             text_new = None;

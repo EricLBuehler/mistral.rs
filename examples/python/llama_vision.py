@@ -1,12 +1,12 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 # MODEL_ID = "meta-llama/Llama-3.2-11B-Vision-Instruct"
 MODEL_ID = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k"
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id=MODEL_ID,
-        arch=VisionArchitecture.VLlama,
+        arch=MultimodalArchitecture.VLlama,
     ),
 )
 

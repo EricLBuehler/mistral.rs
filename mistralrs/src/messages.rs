@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 /// A type which can be used as a chat request.
 ///
-/// Implemented by [`TextMessages`], [`VisionMessages`], and [`RequestBuilder`].
+/// Implemented by [`TextMessages`], [`MultimodalMessages`], and [`RequestBuilder`].
 pub trait RequestLike {
     /// Borrow the current list of chat messages.
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>];
@@ -32,6 +32,14 @@ pub trait RequestLike {
     fn take_sampling_params(&mut self) -> SamplingParams;
     /// Take web search options, if configured.
     fn take_web_search_options(&mut self) -> Option<WebSearchOptions>;
+    /// Maximum tool-call rounds for the agentic loop.
+    fn max_tool_rounds(&self) -> Option<usize> {
+        None
+    }
+    /// URL to POST tool calls to for server-side execution.
+    fn tool_dispatch_url(&self) -> Option<&str> {
+        None
+    }
     /// Whether to silently truncate prompts that exceed the model's context length.
     fn truncate_sequence(&self) -> bool {
         false
@@ -166,12 +174,13 @@ impl RequestLike for TextMessages {
     }
 }
 
-impl From<TextMessages> for VisionMessages {
+impl From<TextMessages> for MultimodalMessages {
     fn from(text: TextMessages) -> Self {
         Self {
             messages: text.messages,
             images: Vec::new(),
             audios: Vec::new(),
+            videos: Vec::new(),
             enable_thinking: text.enable_thinking,
             pending_prefixes: Vec::new(),
         }
@@ -188,6 +197,8 @@ struct PendingMediaPrefix {
     image_indices: Vec<usize>,
     /// Global audio indices that belong to this message.
     audio_indices: Vec<usize>,
+    /// Global video indices that belong to this message.
+    video_indices: Vec<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -196,27 +207,29 @@ struct PendingMediaPrefix {
 /// No constraints, logits processors, logprobs, tools, or adapters.
 ///
 /// Sampling is deterministic.
-pub struct VisionMessages {
+pub struct MultimodalMessages {
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,
     audios: Vec<AudioInput>,
+    videos: Vec<VideoInput>,
     enable_thinking: Option<bool>,
     pending_prefixes: Vec<PendingMediaPrefix>,
 }
 
-impl Default for VisionMessages {
+impl Default for MultimodalMessages {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl VisionMessages {
-    /// Create an empty vision message list.
+impl MultimodalMessages {
+    /// Create an empty multimodal message list.
     pub fn new() -> Self {
         Self {
             images: Vec::new(),
             messages: Vec::new(),
             audios: Vec::new(),
+            videos: Vec::new(),
             enable_thinking: None,
             pending_prefixes: Vec::new(),
         }
@@ -242,7 +255,7 @@ impl VisionMessages {
         text: impl ToString,
         images: Vec<DynamicImage>,
     ) -> Self {
-        self.add_multimodal_message(role, text, images, vec![])
+        self.add_multimodal_message(role, text, images, vec![], vec![])
     }
 
     /// Append a message containing audio.
@@ -256,10 +269,24 @@ impl VisionMessages {
         text: impl ToString,
         audios: Vec<AudioInput>,
     ) -> Self {
-        self.add_multimodal_message(role, text, vec![], audios)
+        self.add_multimodal_message(role, text, vec![], audios, vec![])
     }
 
-    /// Append a message containing a mix of text, images, and/or audio.
+    /// Append a message containing video.
+    ///
+    /// Model-specific prefix tokens are applied automatically when the
+    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
+    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
+    pub fn add_video_message(
+        self,
+        role: TextMessageRole,
+        text: impl ToString,
+        videos: Vec<VideoInput>,
+    ) -> Self {
+        self.add_multimodal_message(role, text, vec![], vec![], videos)
+    }
+
+    /// Append a message containing a mix of text, images, audio, and/or video.
     ///
     /// Model-specific prefix tokens are applied automatically when the
     /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
@@ -270,6 +297,7 @@ impl VisionMessages {
         text: impl ToString,
         images: Vec<DynamicImage>,
         audios: Vec<AudioInput>,
+        videos: Vec<VideoInput>,
     ) -> Self {
         // Images
         let n_added_images = images.len();
@@ -283,7 +311,13 @@ impl VisionMessages {
             (self.audios.len()..self.audios.len() + n_added_audios).collect();
         self.audios.extend(audios);
 
-        if n_added_images > 0 || n_added_audios > 0 {
+        // Videos
+        let n_added_videos = videos.len();
+        let video_indices: Vec<usize> =
+            (self.videos.len()..self.videos.len() + n_added_videos).collect();
+        self.videos.extend(videos);
+
+        if n_added_images > 0 || n_added_audios > 0 || n_added_videos > 0 {
             let mut content_vec: Vec<IndexMap<String, Value>> = Vec::new();
             for _ in 0..n_added_images {
                 content_vec.push(IndexMap::from([(
@@ -297,7 +331,13 @@ impl VisionMessages {
                     Value::String("audio".to_string()),
                 )]));
             }
-            // Store raw (unprefixed) text — prefixing happens at send-time
+            for _ in 0..n_added_videos {
+                content_vec.push(IndexMap::from([(
+                    "type".to_string(),
+                    Value::String("video".to_string()),
+                )]));
+            }
+            // Store raw (unprefixed) text, prefixing happens at send-time
             content_vec.push(IndexMap::from([
                 ("type".to_string(), Value::String("text".to_string())),
                 ("text".to_string(), Value::String(text.to_string())),
@@ -313,6 +353,7 @@ impl VisionMessages {
                 message_index,
                 image_indices,
                 audio_indices,
+                video_indices,
             });
         } else {
             self.messages.push(IndexMap::from([
@@ -323,11 +364,12 @@ impl VisionMessages {
         self
     }
 
-    /// Remove all messages, images, and audio.
+    /// Remove all messages, images, audio, and video.
     pub fn clear(mut self) -> Self {
         self.messages.clear();
         self.images.clear();
         self.audios.clear();
+        self.videos.clear();
         self.pending_prefixes.clear();
         self
     }
@@ -339,7 +381,7 @@ impl VisionMessages {
     }
 }
 
-impl RequestLike for VisionMessages {
+impl RequestLike for MultimodalMessages {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>] {
         &self.messages
     }
@@ -356,10 +398,13 @@ impl RequestLike for VisionMessages {
         std::mem::swap(&mut other_images, &mut self.images);
         let mut other_audios = Vec::new();
         std::mem::swap(&mut other_audios, &mut self.audios);
-        RequestMessage::VisionChat {
+        let mut other_videos = Vec::new();
+        std::mem::swap(&mut other_videos, &mut self.videos);
+        RequestMessage::MultimodalChat {
             images: other_images,
             messages: other_messages,
             audios: other_audios,
+            videos: other_videos,
             enable_thinking: self.enable_thinking,
             reasoning_effort: None,
         }
@@ -404,6 +449,7 @@ pub struct RequestBuilder {
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,
     audios: Vec<AudioInput>,
+    videos: Vec<VideoInput>,
     logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
     adapters: Vec<String>,
     return_logprobs: bool,
@@ -412,6 +458,8 @@ pub struct RequestBuilder {
     tool_choice: ToolChoice,
     sampling_params: SamplingParams,
     web_search_options: Option<WebSearchOptions>,
+    max_tool_rounds: Option<usize>,
+    tool_dispatch_url: Option<String>,
     enable_thinking: Option<bool>,
     truncate_sequence: bool,
     pending_prefixes: Vec<PendingMediaPrefix>,
@@ -429,6 +477,7 @@ impl From<TextMessages> for RequestBuilder {
             messages: value.messages,
             images: Vec::new(),
             audios: Vec::new(),
+            videos: Vec::new(),
             logits_processors: Vec::new(),
             adapters: Vec::new(),
             return_logprobs: false,
@@ -437,6 +486,8 @@ impl From<TextMessages> for RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
+            max_tool_rounds: None,
+            tool_dispatch_url: None,
             enable_thinking: None,
             truncate_sequence: false,
             pending_prefixes: Vec::new(),
@@ -444,12 +495,13 @@ impl From<TextMessages> for RequestBuilder {
     }
 }
 
-impl From<VisionMessages> for RequestBuilder {
-    fn from(value: VisionMessages) -> Self {
+impl From<MultimodalMessages> for RequestBuilder {
+    fn from(value: MultimodalMessages) -> Self {
         Self {
             messages: value.messages,
             images: value.images,
             audios: value.audios,
+            videos: value.videos,
             logits_processors: Vec::new(),
             adapters: Vec::new(),
             return_logprobs: false,
@@ -458,6 +510,8 @@ impl From<VisionMessages> for RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
+            max_tool_rounds: None,
+            tool_dispatch_url: None,
             enable_thinking: None,
             truncate_sequence: false,
             pending_prefixes: value.pending_prefixes,
@@ -472,6 +526,7 @@ impl RequestBuilder {
             messages: Vec::new(),
             images: Vec::new(),
             audios: Vec::new(),
+            videos: Vec::new(),
             logits_processors: Vec::new(),
             adapters: Vec::new(),
             return_logprobs: false,
@@ -480,6 +535,8 @@ impl RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
+            max_tool_rounds: None,
+            tool_dispatch_url: None,
             enable_thinking: None,
             truncate_sequence: false,
             pending_prefixes: Vec::new(),
@@ -565,7 +622,7 @@ impl RequestBuilder {
         text: impl ToString,
         images: Vec<DynamicImage>,
     ) -> Self {
-        self.add_multimodal_message(role, text, images, vec![])
+        self.add_multimodal_message(role, text, images, vec![], vec![])
     }
 
     /// Append a message containing audio.
@@ -579,10 +636,24 @@ impl RequestBuilder {
         text: impl ToString,
         audios: Vec<AudioInput>,
     ) -> Self {
-        self.add_multimodal_message(role, text, vec![], audios)
+        self.add_multimodal_message(role, text, vec![], audios, vec![])
     }
 
-    /// Append a message containing a mix of text, images, and/or audio.
+    /// Append a message containing video.
+    ///
+    /// Model-specific prefix tokens are applied automatically when the
+    /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
+    /// or [`Model::stream_chat_request`](crate::Model::stream_chat_request).
+    pub fn add_video_message(
+        self,
+        role: TextMessageRole,
+        text: impl ToString,
+        videos: Vec<VideoInput>,
+    ) -> Self {
+        self.add_multimodal_message(role, text, vec![], vec![], videos)
+    }
+
+    /// Append a message containing a mix of text, images, audio, and/or video.
     ///
     /// Model-specific prefix tokens are applied automatically when the
     /// request is sent via [`Model::send_chat_request`](crate::Model::send_chat_request)
@@ -593,6 +664,7 @@ impl RequestBuilder {
         text: impl ToString,
         images: Vec<DynamicImage>,
         audios: Vec<AudioInput>,
+        videos: Vec<VideoInput>,
     ) -> Self {
         // Images
         let n_added_images = images.len();
@@ -606,7 +678,13 @@ impl RequestBuilder {
             (self.audios.len()..self.audios.len() + n_added_audios).collect();
         self.audios.extend(audios);
 
-        if n_added_images > 0 || n_added_audios > 0 {
+        // Videos
+        let n_added_videos = videos.len();
+        let video_indices: Vec<usize> =
+            (self.videos.len()..self.videos.len() + n_added_videos).collect();
+        self.videos.extend(videos);
+
+        if n_added_images > 0 || n_added_audios > 0 || n_added_videos > 0 {
             let mut content_vec: Vec<IndexMap<String, Value>> = Vec::new();
             for _ in 0..n_added_images {
                 content_vec.push(IndexMap::from([(
@@ -620,7 +698,13 @@ impl RequestBuilder {
                     Value::String("audio".to_string()),
                 )]));
             }
-            // Store raw (unprefixed) text — prefixing happens at send-time
+            for _ in 0..n_added_videos {
+                content_vec.push(IndexMap::from([(
+                    "type".to_string(),
+                    Value::String("video".to_string()),
+                )]));
+            }
+            // Store raw (unprefixed) text, prefixing happens at send-time
             content_vec.push(IndexMap::from([
                 ("type".to_string(), Value::String("text".to_string())),
                 ("text".to_string(), Value::String(text.to_string())),
@@ -636,6 +720,7 @@ impl RequestBuilder {
                 message_index,
                 image_indices,
                 audio_indices,
+                video_indices,
             });
         } else {
             self.messages.push(IndexMap::from([
@@ -667,6 +752,23 @@ impl RequestBuilder {
     /// Control how the model selects tools (auto, required, none, or a specific tool).
     pub fn set_tool_choice(mut self, tool_choice: ToolChoice) -> Self {
         self.tool_choice = tool_choice;
+        self
+    }
+
+    /// Set the maximum number of agentic tool-call rounds.
+    /// When set, the engine auto-executes tools via registered callbacks
+    /// and feeds results back to the model, repeating until the model
+    /// stops calling tools or this limit is reached.
+    pub fn set_max_tool_rounds(mut self, n: usize) -> Self {
+        self.max_tool_rounds = Some(n);
+        self
+    }
+
+    /// Set the URL to POST tool calls to for server-side execution.
+    /// When set and the model calls a tool with no registered callback,
+    /// the server POSTs `{"name": "...", "arguments": {...}}` to this URL.
+    pub fn set_tool_dispatch_url(mut self, url: impl Into<String>) -> Self {
+        self.tool_dispatch_url = Some(url.into());
         self
     }
 
@@ -797,7 +899,7 @@ impl RequestLike for RequestBuilder {
     }
 
     fn take_messages(&mut self) -> RequestMessage {
-        if self.images.is_empty() && self.audios.is_empty() {
+        if self.images.is_empty() && self.audios.is_empty() && self.videos.is_empty() {
             let mut other = Vec::new();
             std::mem::swap(&mut other, &mut self.messages);
             RequestMessage::Chat {
@@ -812,10 +914,13 @@ impl RequestLike for RequestBuilder {
             std::mem::swap(&mut other_images, &mut self.images);
             let mut other_audios = Vec::new();
             std::mem::swap(&mut other_audios, &mut self.audios);
-            RequestMessage::VisionChat {
+            let mut other_videos = Vec::new();
+            std::mem::swap(&mut other_videos, &mut self.videos);
+            RequestMessage::MultimodalChat {
                 images: other_images,
                 messages: other_messages,
                 audios: other_audios,
+                videos: other_videos,
                 enable_thinking: self.enable_thinking,
                 reasoning_effort: None,
             }
@@ -880,6 +985,14 @@ impl RequestLike for RequestBuilder {
         other
     }
 
+    fn max_tool_rounds(&self) -> Option<usize> {
+        self.max_tool_rounds
+    }
+
+    fn tool_dispatch_url(&self) -> Option<&str> {
+        self.tool_dispatch_url.as_deref()
+    }
+
     fn truncate_sequence(&self) -> bool {
         self.truncate_sequence
     }
@@ -892,9 +1005,9 @@ fn resolve_pending(
     pending: &mut Vec<PendingMediaPrefix>,
 ) {
     let prefixer = match category {
-        ModelCategory::Vision { prefixer } => prefixer,
+        ModelCategory::Multimodal { prefixer } => prefixer,
         _ => {
-            // Not a vision model — nothing to prefix.
+            // Not a multimodal model, nothing to prefix.
             pending.clear();
             return;
         }
@@ -921,6 +1034,9 @@ fn resolve_pending(
                 }
                 if !entry.audio_indices.is_empty() {
                     *text = prefixer.prefix_audio(entry.audio_indices.clone(), text);
+                }
+                if !entry.video_indices.is_empty() {
+                    *text = prefixer.prefix_video(entry.video_indices.clone(), text);
                 }
             }
             break;

@@ -5,7 +5,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub enum LoadedModel {
     Text(Arc<Model>),
-    Vision(Arc<Model>),
+    Multimodal(Arc<Model>),
     /// Speech models for text-to-speech generation
     Speech(Arc<Model>),
 }

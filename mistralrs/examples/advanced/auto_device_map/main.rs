@@ -1,7 +1,7 @@
-/// Automatic device mapping for text and vision models.
+/// Automatic device mapping for text and multimodal models.
 ///
 /// Device mapping distributes model layers across available GPUs automatically.
-/// This example shows both text and vision model usage with auto device mapping.
+/// This example shows both text and multimodal model usage with auto device mapping.
 ///
 /// Run with: `cargo run --release --example auto_device_map -p mistralrs`
 use anyhow::Result;
@@ -41,11 +41,11 @@ async fn main() -> Result<()> {
         response.usage.avg_compl_tok_per_sec
     );
 
-    // For vision models, use VisionModelBuilder with the same DeviceMapSetting:
+    // For multimodal models, use MultimodalModelBuilder with the same DeviceMapSetting:
     //
-    // use mistralrs::{VisionModelBuilder, VisionMessages};
+    // use mistralrs::{MultimodalModelBuilder, MultimodalMessages};
     //
-    // let model = VisionModelBuilder::new("lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k")
+    // let model = MultimodalModelBuilder::new("lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k")
     //     .with_auto_isq(IsqBits::Four)
     //     .with_device_mapping(DeviceMapSetting::Auto(AutoDeviceMapParams::Text {
     //         max_seq_len: 4096,

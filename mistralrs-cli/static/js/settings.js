@@ -1,12 +1,22 @@
 // Settings management functionality
 
-// Default settings (will be updated from server)
-let serverDefaults = {
+// Default settings shown in the UI when the server/model does not specify a value.
+const displayFallbacks = {
   temperature: 0.7,
   top_p: 0.9,
   top_k: 40,
   max_tokens: 2048,
   repetition_penalty: 1.1,
+  system_prompt: null
+};
+
+// Model defaults returned by the server for the currently selected model.
+let serverDefaults = {
+  temperature: null,
+  top_p: null,
+  top_k: null,
+  max_tokens: null,
+  repetition_penalty: null,
   system_prompt: null
 };
 
@@ -67,13 +77,24 @@ function saveSettings() {
 }
 
 /**
- * Get effective value for a setting (user override or server default)
+ * Get the effective transmitted value for a setting.
  */
-function getSetting(key) {
+function getEffectiveSetting(key) {
   if (userSettings[key] !== null && userSettings[key] !== undefined) {
     return userSettings[key];
   }
   return serverDefaults[key];
+}
+
+/**
+ * Get the value shown in the settings UI.
+ */
+function getDisplaySetting(key) {
+  const effective = getEffectiveSetting(key);
+  if (effective !== null && effective !== undefined) {
+    return effective;
+  }
+  return displayFallbacks[key];
 }
 
 /**
@@ -127,42 +148,45 @@ function updateSettingsUI() {
   const tempInput = document.getElementById('settingTemperature');
   const tempValue = document.getElementById('temperatureValue');
   if (tempInput && tempValue) {
-    tempInput.value = getSetting('temperature');
-    tempValue.textContent = getSetting('temperature').toFixed(2);
+    const value = getDisplaySetting('temperature');
+    tempInput.value = value;
+    tempValue.textContent = value.toFixed(2);
   }
 
   // Top P
   const topPInput = document.getElementById('settingTopP');
   const topPValue = document.getElementById('topPValue');
   if (topPInput && topPValue) {
-    topPInput.value = getSetting('top_p');
-    topPValue.textContent = getSetting('top_p').toFixed(2);
+    const value = getDisplaySetting('top_p');
+    topPInput.value = value;
+    topPValue.textContent = value.toFixed(2);
   }
 
   // Top K
   const topKInput = document.getElementById('settingTopK');
   if (topKInput) {
-    topKInput.value = getSetting('top_k');
+    topKInput.value = getDisplaySetting('top_k');
   }
 
   // Max Tokens
   const maxTokensInput = document.getElementById('settingMaxTokens');
   if (maxTokensInput) {
-    maxTokensInput.value = getSetting('max_tokens');
+    maxTokensInput.value = getDisplaySetting('max_tokens');
   }
 
   // Repetition Penalty
   const repPenInput = document.getElementById('settingRepetitionPenalty');
   const repPenValue = document.getElementById('repetitionPenaltyValue');
   if (repPenInput && repPenValue) {
-    repPenInput.value = getSetting('repetition_penalty');
-    repPenValue.textContent = getSetting('repetition_penalty').toFixed(2);
+    const value = getDisplaySetting('repetition_penalty');
+    repPenInput.value = value;
+    repPenValue.textContent = value.toFixed(2);
   }
 
   // System Prompt
   const sysPromptInput = document.getElementById('settingSystemPrompt');
   if (sysPromptInput) {
-    sysPromptInput.value = getSetting('system_prompt') || '';
+    sysPromptInput.value = getDisplaySetting('system_prompt') || '';
   }
 }
 
@@ -170,13 +194,22 @@ function updateSettingsUI() {
  * Get generation params object for sending with messages
  */
 function getGenerationParams() {
-  return {
-    temperature: getSetting('temperature'),
-    top_p: getSetting('top_p'),
-    top_k: getSetting('top_k'),
-    max_tokens: getSetting('max_tokens'),
-    repetition_penalty: getSetting('repetition_penalty')
-  };
+  const params = {};
+  const temperature = getEffectiveSetting('temperature');
+  const topP = getEffectiveSetting('top_p');
+  const topK = getEffectiveSetting('top_k');
+  const maxTokens = getEffectiveSetting('max_tokens');
+  const repetitionPenalty = getEffectiveSetting('repetition_penalty');
+
+  if (temperature !== null && temperature !== undefined) params.temperature = temperature;
+  if (topP !== null && topP !== undefined) params.top_p = topP;
+  if (topK !== null && topK !== undefined) params.top_k = topK;
+  if (maxTokens !== null && maxTokens !== undefined) params.max_tokens = maxTokens;
+  if (repetitionPenalty !== null && repetitionPenalty !== undefined) {
+    params.repetition_penalty = repetitionPenalty;
+  }
+
+  return params;
 }
 
 /**

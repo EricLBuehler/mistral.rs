@@ -24,7 +24,7 @@ The key parameter is `gamma` - the number of draft tokens to generate per specul
 ## Requirements
 
 - **Same tokenizer:** Both target and draft models must share the same tokenizer vocabulary
-- **Same model category:** Both must be the same type (e.g., both text models or both vision models)
+- **Same model category:** Both must be the same type (e.g., both text models or both multimodal models)
 - **KV cache enabled:** Both models must have KV caching enabled (default behavior)
 
 ## Compatibility
@@ -206,3 +206,9 @@ Speculative decoding can be combined with:
 - **Device mapping** - Distribute models across multiple GPUs
 
 See `examples/python/speculative_xlora.py` for an example combining speculative decoding with X-LoRA.
+
+## See Also
+
+- [Performance Guide](PERFORMANCE.md): When speculative decoding helps
+- [CLI Reference](CLI.md): TOML configuration for speculative decoding
+- [ISQ](ISQ.md): Quantize draft or target models

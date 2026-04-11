@@ -1,8 +1,9 @@
 # SmolLM3: [`HuggingFaceTB/SmolLM3-3B`](https://huggingface.co/HuggingFaceTB/SmolLM3-3B)
 
-SmolLM3 is a 3B parameter long-context hybrid reasoning language model. It supports 6 languages, advanced reasoning and long context. SmolLM3 is a fully open model that offers strong performance at the 3B–4B scale.
+SmolLM3 is a 3B parameter long-context hybrid reasoning language model. It supports 6 languages, advanced reasoning and long context. SmolLM3 is a fully open model that offers strong performance at the 3B-4B scale.
 
-**Default, easiest:**
+## Quick Start
+
 ```bash
 mistralrs run --isq 8 -m HuggingFaceTB/SmolLM3-3B
 ```
@@ -27,29 +28,18 @@ mistralrs serve --isq 8 -p 1234 -m HuggingFaceTB/SmolLM3-3B
 ```
 
 ```py
-import openai
+from openai import OpenAI
 
-messages = []
-prompt = input("Enter system prompt >>> ")
-if len(prompt) > 0:
-    messages.append({"role": "system", "content": prompt})
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
-
-while True:
-    prompt = input(">>> ")
-    messages.append({"role": "user", "content": prompt})
-    completion = client.chat.completions.create(
-        model="default",
-        messages=messages,
-        max_tokens=256,
-        frequency_penalty=1.0,
-        top_p=0.1,
-        temperature=0,
-        # enable_thinking=False,
-    )
-    resp = completion.choices[0].message.content
-    print(resp)
-    messages.append({"role": "assistant", "content": resp})
+completion = client.chat.completions.create(
+    model="default",
+    messages=[
+        {"role": "user", "content": "Tell me a story about the Rust type system."}
+    ],
+    max_tokens=256,
+)
+print(completion.choices[0].message.content)
 ```
 
 ## Python SDK
@@ -102,22 +92,10 @@ async fn main() -> Result<()> {
 
     let messages = TextMessages::new()
         // .enable_thinking(false)
-        .add_message(
-            TextMessageRole::System,
-            "You are an AI agent with a specialty in programming.",
-        )
-        .add_message(
-            TextMessageRole::User,
-            "Hello! How are you? Please write generic binary search function in Rust.",
-        );
+        .add_message(TextMessageRole::User, "Hello!");
 
     let response = model.send_chat_request(messages).await?;
-
     println!("{}", response.choices[0].message.content.as_ref().unwrap());
-    dbg!(
-        response.usage.avg_prompt_tok_per_sec,
-        response.usage.avg_compl_tok_per_sec
-    );
 
     Ok(())
 }

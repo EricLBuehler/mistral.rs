@@ -45,7 +45,7 @@ pub enum ExtraHashKey {
     /// Content hash of a multimodal input (image, audio, video).
     /// The identifier is a content-based hash of the raw media data.
     MultiModalHash(String),
-    /// LoRA adapter name — different adapters produce different KV values.
+    /// LoRA adapter name, different adapters produce different KV values.
     #[allow(dead_code)]
     LoraName(String),
     /// User-provided cache salt for per-request isolation.
@@ -66,7 +66,7 @@ pub struct MultiModalFeature {
 }
 
 /// The seed hash used as the parent hash for the first block in a sequence.
-/// This is a fixed value (0) — consistent across all requests so that
+/// This is a fixed value (0), consistent across all requests so that
 /// identical first blocks always produce the same hash.
 const NONE_HASH_SEED: u64 = 0;
 

@@ -33,7 +33,7 @@ fn get_model_id(model_type: &ModelType) -> String {
     match model_type {
         ModelType::Auto { model, .. }
         | ModelType::Text { model, .. }
-        | ModelType::Vision { model, .. }
+        | ModelType::Multimodal { model, .. }
         | ModelType::Diffusion { model, .. }
         | ModelType::Speech { model, .. }
         | ModelType::Embedding { model, .. } => model.model_id.clone(),
@@ -229,6 +229,8 @@ async fn run_single_bench(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: None,
+        max_tool_rounds: None,
+        tool_dispatch_url: None,
         model_id: None,
         truncate_sequence: false,
     }));

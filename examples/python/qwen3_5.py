@@ -1,21 +1,21 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
+from mistralrs import Runner, Which, ChatCompletionRequest, MultimodalArchitecture
 
 # Dense variant
 MODEL_ID = "Qwen/Qwen3.5-27B"
 
 runner = Runner(
-    which=Which.VisionPlain(
+    which=Which.MultimodalPlain(
         model_id=MODEL_ID,
-        arch=VisionArchitecture.Qwen3_5,
+        arch=MultimodalArchitecture.Qwen3_5,
     ),
 )
 
 # For MoE variant, use:
 # MODEL_ID = "Qwen/Qwen3.5-35B-A3B"
 # runner = Runner(
-#     which=Which.VisionPlain(
+#     which=Which.MultimodalPlain(
 #         model_id=MODEL_ID,
-#         arch=VisionArchitecture.Qwen3_5Moe,
+#         arch=MultimodalArchitecture.Qwen3_5Moe,
 #     ),
 # )
 

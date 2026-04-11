@@ -2,12 +2,12 @@
 
 use std::collections::HashMap;
 
-use crate::attention::SdpaParams;
+use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
-use crate::layers::CausalMasker;
 use crate::layers::RmsNorm;
 use crate::layers::Sdpa;
+use crate::layers::{CausalMaskConfig, CausalMasker};
 use crate::lora::get_lora_cfg;
 use crate::lora::LinearLayerLike;
 use crate::lora::LoraConfig;
@@ -115,7 +115,7 @@ impl LayerWeights {
     fn forward_attn(
         &self,
         x: &Tensor,
-        mask: Option<&Tensor>,
+        mask: &AttentionMask,
         seqlen_offsets: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Option<Tensor>,
@@ -161,12 +161,16 @@ impl LayerWeights {
 
         let (k, v, attn_mask) =
             Cache::update_kv_cache_sliding_window(kv_cache, k, v, mask, Some(self.sliding_window))?;
+        let attn_mask = match attn_mask {
+            Some(t) => AttentionMask::Custom(t),
+            None => AttentionMask::None,
+        };
 
         let y = Sdpa.run_attention(
             &q,
             &k,
             &v,
-            attn_mask.as_ref(),
+            &attn_mask,
             Some(flash_params),
             &self.sdpa_params,
         )?;
@@ -412,12 +416,14 @@ impl ModelWeights {
         } else {
             self.cache.full().lock()
         };
-        let mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+        let mask = CausalMasker.make_causal_mask(
             input_ids,
             &*cache,
-            Some(self.max_seq_len),
             self.dtype,
-            self.layers[0].n_head,
+            &CausalMaskConfig {
+                sliding_window: Some(self.max_seq_len),
+                ..Default::default()
+            },
         )?;
         let mask = match self.mapper {
             Some(ref mapper) => DeviceMappedMask::new(mask, &**mapper)?,
@@ -431,7 +437,7 @@ impl ModelWeights {
             let ys = xs.apply(&layer.attn_norm)?;
             let ys = layer.forward_attn(
                 &ys,
-                mask.as_ref().map(|m| m.get(xs.device())),
+                &mask.get(xs.device()),
                 seqlen_offsets,
                 &mut cache[i],
                 scalings.clone(),

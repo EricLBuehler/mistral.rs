@@ -108,8 +108,14 @@ impl SearchPipeline {
                     .iter()
                     .map(|(_, ids)| ids.as_slice())
                     .collect();
-                let chunk =
-                    make_prompt_chunk(0, slices, &self.device, None, self.has_causal_attention)?;
+                let chunk = make_prompt_chunk(
+                    0,
+                    slices,
+                    &self.device,
+                    None,
+                    self.has_causal_attention,
+                    None,
+                )?;
                 let inputs = Box::new(ModelInputs {
                     input_ids: chunk.input,
                     flash_meta: chunk.flash_meta,
