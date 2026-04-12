@@ -15,7 +15,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    layers::{self, embedding, Activation, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{self, embedding, Activation, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -196,20 +196,11 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut q = MatMul.qmethod_matmul(&xs, &*self.q_proj)?;
-        let mut k = MatMul.qmethod_matmul(&xs, &*self.k_proj)?;
-        let mut v = MatMul.qmethod_matmul(&xs, &*self.v_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
+        let _original_dtype = xs.dtype();
+        let xs = xs.clone();
+        let mut q = self.q_proj.forward(&xs)?;
+        let mut k = self.k_proj.forward(&xs)?;
+        let mut v = self.v_proj.forward(&xs)?;
         (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -279,18 +270,12 @@ impl Attention {
             }
         };
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
         attn_output = if !matches!(attention_mask, AttentionMask::None) {
             attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
         };
-        let mut res = MatMul.qmethod_matmul(&attn_output, &*self.o_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
     }
 }
@@ -346,18 +331,12 @@ impl Mlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let gate_out = MatMul.qmethod_matmul(&xs, &*self.gate_proj)?;
-        let up_out = MatMul.qmethod_matmul(&xs, &*self.up_proj)?;
+        let _original_dtype = xs.dtype();
+        let xs = xs.clone();
+        let gate_out = self.gate_proj.forward(&xs)?;
+        let up_out = self.up_proj.forward(&xs)?;
         let current_hidden_states = crate::ops::mul_and_act(&gate_out, &up_out, self.act_fn)?;
-        let mut res = MatMul.qmethod_matmul(&current_hidden_states, &*self.down_proj)?;
-        if self.gate_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.down_proj.forward(&current_hidden_states)?;
         Ok(res)
     }
 }
@@ -796,11 +775,8 @@ impl Model {
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let mut xs = extract_logits(&xs, context_lens)?;
-        if let Some(t) = self.lm_head.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        MatMul.qmethod_matmul(&xs, &*self.lm_head)
+        let xs = extract_logits(&xs, context_lens)?;
+        self.lm_head.forward(&xs)
     }
 }
 

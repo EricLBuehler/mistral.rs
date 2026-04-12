@@ -13,7 +13,6 @@ use mistralrs_quant::QuantMethodConfig;
 use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
-use crate::layers::MatMul;
 use crate::layers::Sdpa;
 use crate::layers::{CausalMaskConfig, CausalMasker, QLinear};
 use crate::layers_masker::PastKvLenCache;
@@ -38,7 +37,7 @@ struct Mlp {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        MatMul.qmethod_matmul(&MatMul.qmethod_matmul(xs, &*self.ffn_up)?, &*self.ffn_down)
+        self.ffn_down.forward(&self.ffn_up.forward(xs)?)
     }
 }
 

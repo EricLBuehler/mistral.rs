@@ -2897,16 +2897,10 @@ impl Mlp {
     }
 
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut res =
+        let _original_dtype = xs.dtype();
+        let xs = xs.clone();
+        let res =
             crate::ops::quantized_ffn(&xs, &*self.gate, &*self.up, &*self.down, self.act)?;
-        if self.gate.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
 }
@@ -2915,16 +2909,10 @@ impl AnyMoeTrainableLayer for Mlp {}
 
 impl MlpLayer for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut res =
+        let _original_dtype = xs.dtype();
+        let xs = xs.clone();
+        let res =
             crate::ops::quantized_ffn(&xs, &*self.gate, &*self.up, &*self.down, self.act)?;
-        if self.gate.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
     fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {

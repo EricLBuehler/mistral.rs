@@ -64,20 +64,11 @@ impl CausalSelfAttention {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
-        let original_dtype = x.dtype();
-        let mut x = x.clone();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
-        let mut q = MatMul.qmethod_matmul(&x, &*self.q_proj)?;
-        let mut k = MatMul.qmethod_matmul(&x, &*self.k_proj)?;
-        let mut v = MatMul.qmethod_matmul(&x, &*self.v_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
+        let _original_dtype = x.dtype();
+        let x = x.clone();
+        let q = self.q_proj.forward(&x)?;
+        let k = self.k_proj.forward(&x)?;
+        let v = self.v_proj.forward(&x)?;
         let mut q = q
             .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
             .transpose(1, 2)?
@@ -139,18 +130,12 @@ impl CausalSelfAttention {
             }
         };
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            y = y.to_dtype(t)?;
-        }
         y = if !matches!(attention_mask, AttentionMask::None) {
             y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
         } else {
             y.reshape((b_sz, seq_len, ()))?
         };
-        let mut res = MatMul.qmethod_matmul(&y, &*self.o_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.o_proj.forward(&y)?;
         Ok(res)
     }
 
@@ -279,17 +264,11 @@ impl AnyMoeTrainableLayer for Mlp {}
 
 impl MlpLayer for Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let original_dtype = x.dtype();
-        let mut x = x.clone();
-        if let Some(t) = self.c_fc1.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
-        let x = (candle_nn::ops::silu(&MatMul.qmethod_matmul(&x, &*self.c_fc1)?)?
-            * MatMul.qmethod_matmul(&x, &*self.c_fc2)?)?;
-        let mut res = MatMul.qmethod_matmul(&x, &*self.c_proj)?;
-        if self.c_fc1.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let _original_dtype = x.dtype();
+        let x = x.clone();
+        let x = (candle_nn::ops::silu(&self.c_fc1.forward(&x)?)?
+            * self.c_fc2.forward(&x)?)?;
+        let res = self.c_proj.forward(&x)?;
         Ok(res)
     }
     fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
@@ -621,11 +600,8 @@ impl LLaVALLM for Llama {
         }
         let x = x.to_device(&self.device)?;
         let x = self.ln_f.forward(&x)?;
-        let mut x = extract_logits(&x, context_lens)?;
-        if let Some(t) = self.lm_head.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
-        MatMul.qmethod_matmul(&x, &*self.lm_head)
+        let x = extract_logits(&x, context_lens)?;
+        self.lm_head.forward(&x)
     }
 }
 

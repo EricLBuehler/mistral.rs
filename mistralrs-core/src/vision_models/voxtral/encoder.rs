@@ -9,7 +9,7 @@ use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
     attention::{AttentionMask, SdpaParams},
-    layers::{CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     pipeline::{KvCache, NormalCache},
 };
@@ -79,9 +79,9 @@ impl EncoderAttention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let q = MatMul.qmethod_matmul(xs, &*self.wq)?;
-        let k = MatMul.qmethod_matmul(xs, &*self.wk)?;
-        let v = MatMul.qmethod_matmul(xs, &*self.wv)?;
+        let q = self.wq.forward(xs)?;
+        let k = self.wk.forward(xs)?;
+        let v = self.wv.forward(xs)?;
 
         let (q, k, v) = if q_len != 1 {
             let q = q
@@ -119,7 +119,7 @@ impl EncoderAttention {
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
         };
-        MatMul.qmethod_matmul(&attn_output, &*self.wo)
+        self.wo.forward(&attn_output)
     }
 }
 
@@ -145,11 +145,11 @@ impl EncoderMlp {
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         // SwiGLU: silu(w1(x)) * w3(x), then w2
-        let gate = MatMul.qmethod_matmul(xs, &*self.w1)?;
+        let gate = self.w1.forward(xs)?;
         let gate = candle_nn::ops::silu(&gate)?;
-        let up = MatMul.qmethod_matmul(xs, &*self.w3)?;
+        let up = self.w3.forward(xs)?;
         let xs = (gate * up)?;
-        MatMul.qmethod_matmul(&xs, &*self.w2)
+        self.w2.forward(&xs)
     }
 }
 

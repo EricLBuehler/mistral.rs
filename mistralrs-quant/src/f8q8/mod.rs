@@ -209,7 +209,7 @@ impl QuantMethod for F8Q8Linear {
         self.dequantize(DType::F32)
     }
 
-    fn forward(&self, a: &Tensor) -> Result<Tensor> {
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
         let dequant_w = self.dequantize(a.dtype())?;
         let lin = Linear::new(dequant_w, self.bias.clone());
         lin.forward(a)

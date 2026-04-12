@@ -109,18 +109,9 @@ impl AnyMoeTrainableLayer for MLP {}
 
 impl MlpLayer for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.fc1.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut res = MatMul.qmethod_matmul(
-            &MatMul.qmethod_matmul(&xs, &*self.fc1)?.apply(&self.act)?,
-            &*self.fc2,
-        )?;
-        if self.fc1.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let _original_dtype = xs.dtype();
+        let xs = xs.clone();
+        let res = self.fc2.forward(&self.fc1.forward(&xs)?.apply(&self.act)?)?;
         Ok(res)
     }
     fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
@@ -271,20 +262,11 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
 
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut q = MatMul.qmethod_matmul(&xs, &*self.q_proj)?;
-        let mut k = MatMul.qmethod_matmul(&xs, &*self.k_proj)?;
-        let mut v = MatMul.qmethod_matmul(&xs, &*self.v_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
+        let _original_dtype = xs.dtype();
+        let xs = xs.clone();
+        let q = self.q_proj.forward(&xs)?;
+        let k = self.k_proj.forward(&xs)?;
+        let v = self.v_proj.forward(&xs)?;
         let q = match &self.q_layernorm {
             None => q,
             Some(ln) => q.apply(ln)?,
@@ -353,9 +335,6 @@ impl Attention {
             }
         };
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
         attn_output = if mask.is_custom() {
             attn_output
                 .transpose(1, 2)?
@@ -363,10 +342,7 @@ impl Attention {
         } else {
             attn_output.reshape((b_size, seq_len, ()))?
         };
-        let mut res = MatMul.qmethod_matmul(&attn_output, &*self.dense)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.dense.forward(&attn_output)?;
         Ok(res)
     }
 }
@@ -607,11 +583,8 @@ impl Model {
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.final_layernorm)?;
-        let mut xs = extract_logits(&xs, context_lens)?;
-        if let Some(t) = self.lm_head.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        MatMul.qmethod_matmul(&xs, &*self.lm_head)
+        let xs = extract_logits(&xs, context_lens)?;
+        self.lm_head.forward(&xs)
     }
 }
 

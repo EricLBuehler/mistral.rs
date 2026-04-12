@@ -123,9 +123,9 @@ impl Attention {
         attention_mask: &AttentionMask,
     ) -> Result<Tensor> {
         let (b, patches, _) = xs.dims3()?;
-        let query_states = self.q_proj.forward_autocast(xs)?;
-        let key_states = self.k_proj.forward_autocast(xs)?;
-        let value_states = self.v_proj.forward_autocast(xs)?;
+        let query_states = self.q_proj.forward(xs)?;
+        let key_states = self.k_proj.forward(xs)?;
+        let value_states = self.v_proj.forward(xs)?;
 
         let shape = (b, patches, self.num_heads, self.head_dim);
         let query_states = query_states.reshape(shape)?.transpose(1, 2)?.contiguous()?;
@@ -143,7 +143,7 @@ impl Attention {
 
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
 
-        self.o_proj.forward_autocast(
+        self.o_proj.forward(
             &attn_weights
                 .matmul(&value_states)?
                 .transpose(1, 2)?
@@ -177,9 +177,9 @@ impl Mlp {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        self.down_proj.forward_autocast(
-            &(self.gate_proj.forward_autocast(xs)?.apply(&self.act_fn)?
-                * self.up_proj.forward_autocast(xs)?)?,
+        self.down_proj.forward(
+            &(self.gate_proj.forward(xs)?.apply(&self.act_fn)?
+                * self.up_proj.forward(xs)?)?,
         )
     }
 }

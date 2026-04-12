@@ -780,10 +780,10 @@ pub(crate) fn quantized_ffn(
     down: &dyn mistralrs_quant::QuantMethod,
     act: Activation,
 ) -> Result<Tensor> {
-    let lhs = mistralrs_quant::MatMul.qmethod_matmul(xs, gate)?;
-    let rhs = mistralrs_quant::MatMul.qmethod_matmul(xs, up)?;
+    let lhs = gate.forward(xs)?;
+    let rhs = up.forward(xs)?;
     let inter = mul_and_act(&lhs, &rhs, act)?;
-    mistralrs_quant::MatMul.qmethod_matmul(&inter, down)
+    down.forward(&inter)
 }
 
 mod tests {

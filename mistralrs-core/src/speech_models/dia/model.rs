@@ -124,7 +124,7 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
 
         let mut xq =
             self.q_proj
-                .forward_autocast(xq)?
+                .forward(xq)?
                 .reshape((b, t, self.num_q_heads, self.head_dim))?;
         xq = self.rope.forward(&xq, q_positions)?;
         xq = xq.transpose(1, 2)?;
@@ -137,13 +137,13 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
                 .k_v()
         } else {
             // Compute fresh K and V for self‑attention.
-            let mut k = self.k_proj.forward_autocast(xkv)?.reshape((
+            let mut k = self.k_proj.forward(xkv)?.reshape((
                 b,
                 t,
                 self.num_kv_heads,
                 self.head_dim,
             ))?;
-            let mut v = self.v_proj.forward_autocast(xkv)?.reshape((
+            let mut v = self.v_proj.forward(xkv)?.reshape((
                 b,
                 t,
                 self.num_kv_heads,
@@ -182,7 +182,7 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
 
         attn_output = attn_output.transpose(1, 2)?.reshape((b, t, ()))?;
 
-        self.o_proj.forward_autocast(&attn_output)
+        self.o_proj.forward(&attn_output)
     }
 }
 
@@ -208,11 +208,11 @@ impl DiaMlp {
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (bs, seqlen, _dim) = xs.dims3()?;
-        let fused_x = self.wi.forward_autocast(xs)?.reshape((bs, seqlen, 2, ()))?;
+        let fused_x = self.wi.forward(xs)?.reshape((bs, seqlen, 2, ()))?;
         let gate = fused_x.i((.., .., 0, ..))?;
         let up = fused_x.i((.., .., 1, ..))?;
         let hidden = (gate.silu()? * up)?;
-        self.wo.forward_autocast(&hidden)
+        self.wo.forward(&hidden)
     }
 }
 
@@ -545,7 +545,7 @@ impl DiaDecoder {
         for layer in &self.layers {
             let ca = &layer.cross_attn;
 
-            let mut k_proj = ca.k_proj.forward_autocast(encoder_out)?.reshape((
+            let mut k_proj = ca.k_proj.forward(encoder_out)?.reshape((
                 b,
                 t,
                 ca.num_kv_heads,
@@ -554,7 +554,7 @@ impl DiaDecoder {
             k_proj = ca.rope.forward(&k_proj, encoder_positions)?;
             k_proj = k_proj.transpose(1, 2)?;
 
-            let mut v_proj = ca.v_proj.forward_autocast(encoder_out)?.reshape((
+            let mut v_proj = ca.v_proj.forward(encoder_out)?.reshape((
                 b,
                 t,
                 ca.num_kv_heads,

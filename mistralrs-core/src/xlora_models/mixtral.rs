@@ -136,35 +136,26 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut q = self.q_proj.lora_forward(
+        let _original_dtype = xs.dtype();
+        let xs = xs.clone();
+        let q = self.q_proj.lora_forward(
             &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let mut k = self.k_proj.lora_forward(
+        let k = self.k_proj.lora_forward(
             &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let mut v = self.v_proj.lora_forward(
+        let v = self.v_proj.lora_forward(
             &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
         let (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -197,7 +188,7 @@ impl Attention {
             None => AttentionMask::None,
         };
 
-        let mut attn_output = Sdpa.run_attention(
+        let attn_output = Sdpa.run_attention(
             &q,
             &k,
             &v,
@@ -206,18 +197,12 @@ impl Attention {
             &self.sdpa_params,
         )?;
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
-        let mut res = self.o_proj.lora_forward(
+        let res = self.o_proj.lora_forward(
             &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
 }
@@ -290,11 +275,8 @@ impl BlockSparseTop2MLP {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.w1.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
+        let _original_dtype = xs.dtype();
+        let xs = xs.clone();
         let lhs = self
             .w1
             .lora_forward(
@@ -310,15 +292,12 @@ impl BlockSparseTop2MLP {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let mut res = self.w2.lora_forward(
+        let res = self.w2.lora_forward(
             &(lhs * rhs)?,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.w1.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
 }
@@ -386,21 +365,14 @@ impl SparseMoeBlock {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs = xs.reshape(((), hidden_dim))?;
 
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut router_logits = self.gate.lora_forward(
+        let _original_dtype = xs.dtype();
+        let xs = xs.clone();
+        let router_logits = self.gate.lora_forward(
             &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.gate.quantized_act_type().is_some() {
-            router_logits = router_logits.to_dtype(original_dtype)?;
-        }
-
         let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
 
         // In order to extract topk, we extract the data from the tensor and manipulate it
@@ -819,10 +791,7 @@ impl XLoraModel {
                         flash_params_full,
                     )?
                     .contiguous()?;
-                let mut res = extract_logits(&res, context_lens)?;
-                if let Some(t) = self.lm_head.quantized_act_type() {
-                    res = res.to_dtype(t)?;
-                }
+                let res = extract_logits(&res, context_lens)?;
                 self.lm_head.lora_forward(&res, None, 1.0, None)
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
@@ -837,10 +806,7 @@ impl XLoraModel {
                         flash_params,
                     )?
                     .contiguous()?;
-                let mut res = extract_logits(&res, context_lens)?;
-                if let Some(t) = self.lm_head.quantized_act_type() {
-                    res = res.to_dtype(t)?;
-                }
+                let res = extract_logits(&res, context_lens)?;
                 self.lm_head.lora_forward(&res, None, 1.0, None)
             }
         } else {
@@ -855,10 +821,7 @@ impl XLoraModel {
                     flash_params,
                 )?
                 .contiguous()?;
-            let mut res = extract_logits(&res, context_lens)?;
-            if let Some(t) = self.lm_head.quantized_act_type() {
-                res = res.to_dtype(t)?;
-            }
+            let res = extract_logits(&res, context_lens)?;
             self.lm_head.lora_forward(&res, None, 1.0, None)
         }
     }

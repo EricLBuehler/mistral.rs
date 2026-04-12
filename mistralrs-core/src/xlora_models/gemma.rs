@@ -105,11 +105,8 @@ impl MLP {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
+        let _original_dtype = xs.dtype();
+        let xs = xs.clone();
         let lhs = self
             .gate_proj
             .lora_forward(
@@ -125,15 +122,12 @@ impl MLP {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let mut res = self.down_proj.lora_forward(
+        let res = self.down_proj.lora_forward(
             &(lhs * rhs)?,
             scalings,
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.gate_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
 }
@@ -246,35 +240,26 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut q = self.q_proj.lora_forward(
+        let _original_dtype = xs.dtype();
+        let xs = xs.clone();
+        let q = self.q_proj.lora_forward(
             &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let mut k = self.k_proj.lora_forward(
+        let k = self.k_proj.lora_forward(
             &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let mut v = self.v_proj.lora_forward(
+        let v = self.v_proj.lora_forward(
             &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
         let (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -297,7 +282,7 @@ impl Attention {
 
         let (k, v) = Cache::update_kv_cache(kv_cache, k, v)?;
 
-        let mut attn_output = Sdpa.run_attention(
+        let attn_output = Sdpa.run_attention(
             &q,
             &k,
             &v,
@@ -306,18 +291,12 @@ impl Attention {
             &self.sdpa_params,
         )?;
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
-        let mut res = self.o_proj.lora_forward(
+        let res = self.o_proj.lora_forward(
             &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
 }
@@ -678,10 +657,7 @@ impl XLoraModel {
                         flash_params_full,
                     )?
                     .contiguous()?;
-                let mut res = extract_logits(&res, context_lens)?;
-                if let Some(t) = self.lm_head.quantized_act_type() {
-                    res = res.to_dtype(t)?;
-                }
+                let res = extract_logits(&res, context_lens)?;
                 self.lm_head.lora_forward(&res, None, 1.0, None)
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
@@ -696,10 +672,7 @@ impl XLoraModel {
                         flash_params,
                     )?
                     .contiguous()?;
-                let mut res = extract_logits(&res, context_lens)?;
-                if let Some(t) = self.lm_head.quantized_act_type() {
-                    res = res.to_dtype(t)?;
-                }
+                let res = extract_logits(&res, context_lens)?;
                 self.lm_head.lora_forward(&res, None, 1.0, None)
             }
         } else {
@@ -714,10 +687,7 @@ impl XLoraModel {
                     flash_params,
                 )?
                 .contiguous()?;
-            let mut res = extract_logits(&res, context_lens)?;
-            if let Some(t) = self.lm_head.quantized_act_type() {
-                res = res.to_dtype(t)?;
-            }
+            let res = extract_logits(&res, context_lens)?;
             self.lm_head.lora_forward(&res, None, 1.0, None)
         }
     }

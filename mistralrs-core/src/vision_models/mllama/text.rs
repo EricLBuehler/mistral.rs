@@ -66,20 +66,14 @@ impl MLlamaTextMlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut res = self.down_proj.forward(
+        let _original_dtype = xs.dtype();
+        let xs = xs.clone();
+        let res = self.down_proj.forward(
             &self
                 .act
                 .forward(&self.gate_proj.forward(&xs)?)?
                 .broadcast_mul(&self.up_proj.forward(&xs)?)?,
         )?;
-        if self.gate_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
 }
@@ -161,20 +155,11 @@ impl MLlamaTextSelfAttention {
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
-        let mut hidden_states = hidden_states.clone();
-        let original_dtype = hidden_states.dtype();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            hidden_states = hidden_states.to_dtype(t)?;
-        }
-        let mut q = self.q_proj.forward(&hidden_states)?;
-        let mut k = self.k_proj.forward(&hidden_states)?;
-        let mut v = self.v_proj.forward(&hidden_states)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
+        let hidden_states = hidden_states.clone();
+        let _original_dtype = hidden_states.dtype();
+        let q = self.q_proj.forward(&hidden_states)?;
+        let k = self.k_proj.forward(&hidden_states)?;
+        let v = self.v_proj.forward(&hidden_states)?;
         let (q, k, mut v) = if q_len != 1 {
             let q = q
                 .reshape((bs, q_len, self.num_heads, self.head_dim))?
@@ -197,7 +182,7 @@ impl MLlamaTextSelfAttention {
 
         (k, v) = kv_cache.append(&k, &v)?;
 
-        let mut attn_output = Sdpa
+        let attn_output = Sdpa
             .run_attention(
                 &q.contiguous()?,
                 &k.contiguous()?,
@@ -211,13 +196,7 @@ impl MLlamaTextSelfAttention {
             .reshape((bs, q_len, ()))?
             .to_dtype(q.dtype())?;
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
-        let mut res = self.o_proj.forward(&attn_output)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
     }
 }
@@ -378,39 +357,24 @@ impl MLlamaTextCrossAttention {
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
-        let mut hidden_states = hidden_states.clone();
-        let original_dtype = hidden_states.dtype();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            hidden_states = hidden_states.to_dtype(t)?;
-        }
+        let hidden_states = hidden_states.clone();
+        let _original_dtype = hidden_states.dtype();
         let mut q = self.q_proj.forward(&hidden_states)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-        }
         q = q
             .reshape((bs, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
         q = self.q_norm.forward(&q)?;
 
         let (k, v) = if let Some(cross_attn_states) = cross_attn_states {
-            let mut cross_attn_states = cross_attn_states.clone();
-            let original_dtype = cross_attn_states.dtype();
-            if let Some(t) = self.k_proj.quantized_act_type() {
-                cross_attn_states = cross_attn_states.to_dtype(t)?;
-            }
+            let cross_attn_states = cross_attn_states.clone();
+            let _original_dtype = cross_attn_states.dtype();
             let mut k = self.k_proj.forward(&cross_attn_states)?;
             k = k
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;
-            if self.q_proj.quantized_act_type().is_some() {
-                k = k.to_dtype(original_dtype)?;
-            }
             k = self.k_norm.forward(&k)?;
 
             let mut v = self.v_proj.forward(&cross_attn_states)?;
-            if self.q_proj.quantized_act_type().is_some() {
-                v = v.to_dtype(original_dtype)?;
-            }
             v = v
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;
@@ -426,7 +390,7 @@ impl MLlamaTextCrossAttention {
             }
             other => other.clone(),
         };
-        let mut attn_output = Sdpa
+        let attn_output = Sdpa
             .run_attention(
                 &q.contiguous()?,
                 &k.contiguous()?,
@@ -440,13 +404,7 @@ impl MLlamaTextCrossAttention {
             .reshape((bs, q_len, ()))?
             .to_dtype(q.dtype())?;
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
-        let mut res = self.o_proj.forward(&attn_output)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
     }
 }

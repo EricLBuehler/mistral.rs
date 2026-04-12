@@ -9,7 +9,7 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    apply_immediate_isq, should_apply_immediate_isq, DummyLayer, FusedExperts, MatMul,
+    apply_immediate_isq, should_apply_immediate_isq, DummyLayer, FusedExperts,
     PackedExperts, QuantMethod, QuantMethodConfig, QuantizedConfig, ShardedVarBuilder,
     SumAllReduce, UnquantLinear,
 };
@@ -820,12 +820,11 @@ impl MoEExperts {
         let original_dtype = xs.dtype();
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let num_tokens = b_size * seq_len;
-        let is_prefill = seq_len > 1;
-
         let xs_flat = xs.reshape((num_tokens, hidden_dim))?;
 
         #[cfg(feature = "cuda")]
         if xs.device().is_cuda() {
+            let is_prefill = seq_len > 1;
             // Try fused decode path for single-token decode (most impactful)
             if !is_prefill {
                 if let Some(result) = self.forward_fast_decode(
@@ -861,26 +860,26 @@ impl MoEExperts {
             let xs = xs_flat.reshape((num_tokens, 1, hidden_dim))?;
             let gate = weights
                 .fused_gate_proj
-                .gather_forward_autocast(&xs, topk_ids)?;
+                .gather_forward(&xs, topk_ids)?;
             let up = weights
                 .fused_up_proj
-                .gather_forward_autocast(&xs, topk_ids)?;
+                .gather_forward(&xs, topk_ids)?;
             weights
                 .fused_down_proj
-                .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, topk_ids)?
+                .gather_forward(&(up * gate.apply(&self.act)?)?, topk_ids)?
         } else {
             // Metal path: use broadcast gather shapes
             let xs = xs.reshape((b_size, seq_len, 1, 1, hidden_dim))?;
             let indices = topk_ids.reshape((b_size, seq_len, self.num_experts_per_tok))?;
             let gate = weights
                 .fused_gate_proj
-                .gather_forward_autocast(&xs, &indices)?;
+                .gather_forward(&xs, &indices)?;
             let up = weights
                 .fused_up_proj
-                .gather_forward_autocast(&xs, &indices)?;
+                .gather_forward(&xs, &indices)?;
             let xs = weights
                 .fused_down_proj
-                .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, &indices)?;
+                .gather_forward(&(up * gate.apply(&self.act)?)?, &indices)?;
             xs.squeeze(D::Minus2)?
                 .reshape((num_tokens, self.num_experts_per_tok, hidden_dim))?
         };
@@ -1153,26 +1152,13 @@ impl MoEExperts {
                 .reshape(((), hidden_dim))?;
 
             // Forward through expert MLP
-            let original_dtype = current_state.dtype();
-            let mut expert_input = current_state.clone();
-            if let Some(t) = weights.experts.gate_proj[expert_idx].quantized_act_type() {
-                expert_input = expert_input.to_dtype(t)?;
-            }
-            let gate_out = MatMul
-                .qmethod_matmul(&expert_input, &*weights.experts.gate_proj[expert_idx])?
+            let expert_input = current_state.clone();
+            let gate_out = weights.experts.gate_proj[expert_idx].forward(&expert_input)?
                 .apply(&self.act)?;
             let up_out =
-                MatMul.qmethod_matmul(&expert_input, &*weights.experts.up_proj[expert_idx])?;
-            let mut current_hidden_states = MatMul.qmethod_matmul(
-                &(gate_out * up_out)?,
-                &*weights.experts.down_proj[expert_idx],
-            )?;
-            if weights.experts.gate_proj[expert_idx]
-                .quantized_act_type()
-                .is_some()
-            {
-                current_hidden_states = current_hidden_states.to_dtype(original_dtype)?;
-            }
+                weights.experts.up_proj[expert_idx].forward(&expert_input)?;
+            let current_hidden_states =
+                weights.experts.down_proj[expert_idx].forward(&(gate_out * up_out)?)?;
 
             let current_hidden_states =
                 current_hidden_states.broadcast_mul(&selected_experts_tensor)?;

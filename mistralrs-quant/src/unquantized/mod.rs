@@ -52,7 +52,7 @@ impl QuantMethod for UnquantLinear {
         Ok(self.w.clone())
     }
 
-    fn forward(&self, a: &Tensor) -> Result<Tensor> {
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(a.device().clone());
 
@@ -158,7 +158,7 @@ impl QuantMethod for UnquantLinear {
         }
     }
 
-    fn gather_forward(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+    fn gather_forward_raw(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
         // Weights are [num_experts, out_features, in_features]
         // For Metal path:
         //   - a: (b_size, seq_len, 1, 1, hidden_dim) - 5D

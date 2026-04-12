@@ -533,10 +533,6 @@ impl MatMul {
         matmul.forward(x)
     }
 
-    /// Compute quantized matrix-matrix product.
-    pub fn qmethod_matmul(&self, x: &Tensor, matmul: &dyn QuantMethod) -> Result<Tensor> {
-        matmul.forward(x)
-    }
 }
 
 /// Device/configurable intelligent convolution
@@ -976,40 +972,38 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     fn dequantize_w(&self) -> Result<Tensor>;
 
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    /// Automatically cast to required quantization activation type and back
-    fn forward_autocast(&self, a: &Tensor) -> Result<Tensor> {
-        let original_ty = a.dtype();
-        let a = if let Some(t) = self.quantized_act_type() {
-            a.to_dtype(t)?
+    /// Automatically casts to the required quantization activation type and back.
+    fn forward(&self, a: &Tensor) -> Result<Tensor> {
+        if let Some(t) = self.quantized_act_type() {
+            let original_ty = a.dtype();
+            self.forward_raw(&a.to_dtype(t)?)?.to_dtype(original_ty)
         } else {
-            a.clone()
-        };
-        self.forward(&a)?.to_dtype(original_ty)
+            self.forward_raw(a)
+        }
     }
 
-    /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    fn forward(&self, a: &Tensor) -> Result<Tensor>;
+    /// Raw matmul without dtype casting. Implementors override this.
+    /// Callers should use `forward` instead.
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor>;
 
-    /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    /// Automatically cast to required quantization activation type and back.
+    /// Compute gather matmul of `self` and `a`. `self` should contain the weights.
+    /// Automatically casts to the required quantization activation type and back.
     ///
     /// If `a` is (n_tokens, n_experts, cols), `self` weights are (n_experts, rows, cols),
     /// then the indices are (n_tokens, n_experts).
-    fn gather_forward_autocast(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        let original_ty = a.dtype();
-        let a = if let Some(t) = self.quantized_act_type() {
-            a.to_dtype(t)?
+    fn gather_forward(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        if let Some(t) = self.quantized_act_type() {
+            let original_ty = a.dtype();
+            self.gather_forward_raw(&a.to_dtype(t)?, indices)?
+                .to_dtype(original_ty)
         } else {
-            a.clone()
-        };
-        self.gather_forward(&a, indices)?.to_dtype(original_ty)
+            self.gather_forward_raw(a, indices)
+        }
     }
 
-    /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    ///
-    /// If `a` is (n_tokens, n_experts, cols), `self` weights are (n_experts, rows, cols),
-    /// then the indices are (n_tokens, n_experts).
-    fn gather_forward(&self, _a: &Tensor, _indices: &Tensor) -> Result<Tensor> {
+    /// Raw gather matmul without dtype casting. Implementors override this.
+    /// Callers should use `gather_forward` instead.
+    fn gather_forward_raw(&self, _a: &Tensor, _indices: &Tensor) -> Result<Tensor> {
         candle_core::bail!(
             "{} does not support `gather_forward`. Please raise an issue.",
             self.name()
@@ -1063,7 +1057,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
 
 impl Module for dyn QuantMethod {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        Self::forward(self, xs)
+        QuantMethod::forward(self, xs)
     }
 }
 

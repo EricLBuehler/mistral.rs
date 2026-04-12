@@ -13,7 +13,7 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, MatMul, RmsNorm,
+        self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, RmsNorm,
         RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
     matformer::MatformerSliceConfig,
@@ -164,11 +164,8 @@ impl Mlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
+        let _original_dtype = xs.dtype();
+        let xs = xs.clone();
         let mut gate = self.gate.forward(&xs)?;
         if self.activation_sparsity > 0. {
             gate = self.gaussian_topk(&gate)?;
@@ -179,10 +176,7 @@ impl Mlp {
         //     &up,
         //     self.act.try_into()?,
         // )?)?;
-        let mut res = self.down.forward(&(&gate.apply(&self.act)? * &up)?)?;
-        if self.gate.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.down.forward(&(&gate.apply(&self.act)? * &up)?)?;
         Ok(res)
     }
 }
@@ -395,7 +389,7 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let mut q = self.q_proj.forward_autocast(xs)?;
+        let mut q = self.q_proj.forward(xs)?;
         q = q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?;
         q = q.apply(&self.q_norm)?;
         q = self.apply_rope(&q, seqlen_offsets, q_len)?;
@@ -414,13 +408,13 @@ impl Attention {
                 true,
             )
         } else {
-            let mut k = self.k_proj.forward_autocast(xs)?;
+            let mut k = self.k_proj.forward(xs)?;
             k = k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
             k = k.apply(&self.k_norm)?;
             k = self.apply_rope(&k, seqlen_offsets, q_len)?;
             k = k.transpose(1, 2)?;
 
-            let mut v = self.v_proj.forward_autocast(xs)?;
+            let mut v = self.v_proj.forward(xs)?;
             v = v.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
             v = v.apply(&self.v_norm)?;
             v = v.transpose(1, 2)?;
@@ -480,7 +474,7 @@ impl Attention {
             Sdpa.run_attention(&q, &k, &v, &mask, Some(flash_params), &self.sdpa_params)?;
 
         attn_output = attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?;
-        self.o_proj.forward_autocast(&attn_output)
+        self.o_proj.forward(&attn_output)
     }
 }
 
@@ -1286,7 +1280,7 @@ impl TextModel {
         per_layer_inputs: Option<Tensor>,
     ) -> Result<Tensor> {
         // Cast to float32 for per-layer projection scaling
-        let mut per_layer_projection = self.per_layer_model_projection.forward_autocast(xs)?;
+        let mut per_layer_projection = self.per_layer_model_projection.forward(xs)?;
         let original_dtype = per_layer_projection.dtype();
         let per_layer_projection_f32 = per_layer_projection.to_dtype(DType::F32)?;
         per_layer_projection = (per_layer_projection_f32 * self.per_layer_projection_scale)?;
@@ -1358,7 +1352,7 @@ impl TextModel {
 
         let mut temp_hidden_states = vec![xs.clone()];
         for altup_proj in &self.altup_projections {
-            let altup_proj = altup_proj.forward_autocast(&xs)?;
+            let altup_proj = altup_proj.forward(&xs)?;
             let new_magnitude = altup_proj
                 .to_dtype(DType::F32)?
                 .sqr()?
@@ -1401,7 +1395,7 @@ impl TextModel {
 
         let mut temp_hidden_states = vec![xs.i(0)?];
         for (i, altup_proj) in self.altup_unembed_projections.iter().enumerate() {
-            let altup_proj = altup_proj.forward_autocast(&xs.i(i + 1)?)?;
+            let altup_proj = altup_proj.forward(&xs.i(i + 1)?)?;
             let new_magnitude = altup_proj
                 .to_dtype(DType::F32)?
                 .sqr()?
@@ -1423,11 +1417,7 @@ impl TextModel {
 
         xs = xs.apply(&self.norm)?;
         let mut xs = extract_logits(&xs, context_lens)?;
-        if let Some(t) = self.lm_head.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-
-        xs = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
+        xs = self.lm_head.forward(&xs)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
             // Perform logit softcapping in float32 for precision

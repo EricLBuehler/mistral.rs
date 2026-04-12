@@ -111,7 +111,7 @@ impl QuantMethod for GgufMatMul {
         self.w.dequantize_f16()?.to_dtype(DType::F32)
     }
 
-    fn forward(&self, a: &Tensor) -> Result<Tensor> {
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         {
             if let Some(out) = self.try_fast_forward(a)? {
@@ -126,7 +126,7 @@ impl QuantMethod for GgufMatMul {
     ///
     /// If `a` is (n_tokens, 1, cols), `self` weights are (n_experts, rows, cols),
     /// then the indices are (n_tokens, n_experts_per_tok).
-    fn gather_forward(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+    fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
         // Use indexed_moe_forward for efficient indexed matmul
         // Expected shapes:
         // - x: (n_tokens, 1, hidden_dim) or (n_tokens, n_experts_per_tok, hidden_dim)

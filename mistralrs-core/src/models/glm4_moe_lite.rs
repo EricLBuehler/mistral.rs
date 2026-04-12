@@ -105,7 +105,7 @@ impl QProj {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::Lora { a, norm, b } => {
-                b.forward_autocast(&norm.forward(&a.forward_autocast(xs)?)?)
+                b.forward(&norm.forward(&a.forward(xs)?)?)
             }
         }
     }
@@ -244,7 +244,7 @@ impl Attention {
         let q_nope = q_split[0].clone();
         let mut q_pe = q_split[1].clone();
 
-        let mut compressed_kv = self.kv_a_proj_with_mqa.forward_autocast(xs)?;
+        let mut compressed_kv = self.kv_a_proj_with_mqa.forward(xs)?;
         let ckv_split = compressed_kv.split(
             &[self.cfg.kv_lora_rank, self.cfg.qk_rope_head_dim],
             D::Minus1,
@@ -286,7 +286,7 @@ impl Attention {
                 seq_len,
             )?
         } else {
-            let mut kv = self.kv_b_proj.forward_autocast(&ckv)?;
+            let mut kv = self.kv_b_proj.forward(&ckv)?;
             kv = kv
                 .reshape((
                     bs,
@@ -406,7 +406,7 @@ impl Attention {
             attn_out.reshape((bs, seq_len, ()))?
         };
 
-        self.o_proj.forward_autocast(&attn_out)
+        self.o_proj.forward(&attn_out)
     }
 }
 
@@ -454,19 +454,13 @@ impl Expert {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
+        let _original_dtype = xs.dtype();
+        let xs = xs.clone();
         let lhs = self.gate.forward(&xs)?;
         let rhs = self.up.forward(&xs)?;
-        let mut res = self
+        let res = self
             .down
             .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?)?;
-        if self.gate.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
 }
@@ -982,7 +976,7 @@ impl Glm4MoeLite {
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
         let xs = extract_logits(&xs, context_lens)?;
-        self.lm_head.forward_autocast(&xs)
+        self.lm_head.forward(&xs)
     }
 }
 

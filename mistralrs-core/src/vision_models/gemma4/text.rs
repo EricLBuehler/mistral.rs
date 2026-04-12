@@ -15,7 +15,7 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, RotaryEmbedding,
+        embedding, Activation, CausalMasker, Mlp, RmsNorm, RotaryEmbedding,
         ScaledEmbedding, Sdpa,
     },
     layers_masker::PastKvLenCache,
@@ -412,17 +412,10 @@ impl Attention {
         let (b_sz, q_len, _) = xs.dims3()?;
         let is_shared = self.kv_shared_layer_index.is_some();
 
-        let original_dtype = xs.dtype();
-        let mut xs_proj = xs.clone();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            xs_proj = xs_proj.to_dtype(t)?;
-        }
-
+        let _original_dtype = xs.dtype();
+        let xs_proj = xs.clone();
         // Q projection (always needed)
-        let mut q = MatMul.qmethod_matmul(&xs_proj, &*self.q_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-        }
+        let mut q = self.q_proj.forward(&xs_proj)?;
         q = if q_len != 1 {
             q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?
                 .transpose(1, 2)?
@@ -433,16 +426,12 @@ impl Attention {
 
         // K/V projection, reshape, norms (skip for shared layers that reuse donor KV)
         let (mut k, v) = if !is_shared {
-            let mut k = MatMul.qmethod_matmul(&xs_proj, &*self.k_proj)?;
-            let mut v = if let Some(ref v_proj) = self.v_proj {
-                MatMul.qmethod_matmul(&xs_proj, &**v_proj)?
+            let k = self.k_proj.forward(&xs_proj)?;
+            let v = if let Some(ref v_proj) = self.v_proj {
+                v_proj.forward(&xs_proj)?
             } else {
                 k.clone()
             };
-            if self.q_proj.quantized_act_type().is_some() {
-                k = k.to_dtype(original_dtype)?;
-                v = v.to_dtype(original_dtype)?;
-            }
             let (k, v) = if q_len != 1 {
                 (
                     k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
@@ -635,9 +624,6 @@ impl Attention {
             }
         };
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
         let has_mask = !matches!(attention_mask, AttentionMask::None)
             || !matches!(sliding_attention_mask, AttentionMask::None);
         attn_output = if has_mask {
@@ -645,10 +631,7 @@ impl Attention {
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
         };
-        let mut res = MatMul.qmethod_matmul(&attn_output, &*self.o_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
     }
 }
@@ -971,27 +954,15 @@ impl DecoderLayer {
         ) {
             if let Some(pli) = per_layer_input {
                 let residual_ple = xs.clone();
-                let original_dtype = xs.dtype();
+                let _original_dtype = xs.dtype();
                 // gate: Linear(hidden_size -> ple_dim)
-                let mut gate_in = xs;
-                if let Some(t) = gate.quantized_act_type() {
-                    gate_in = gate_in.to_dtype(t)?;
-                }
-                let mut gated = MatMul.qmethod_matmul(&gate_in, &**gate)?;
-                if gate.quantized_act_type().is_some() {
-                    gated = gated.to_dtype(original_dtype)?;
-                }
+                let gate_in = xs;
+                let mut gated = gate.forward(&gate_in)?;
                 // activation + elementwise multiply with per_layer_input
                 gated = gated.apply(&self.act)?;
                 gated = (gated * pli)?;
                 // projection: Linear(ple_dim -> hidden_size)
-                if let Some(t) = proj.quantized_act_type() {
-                    gated = gated.to_dtype(t)?;
-                }
-                let mut projected = MatMul.qmethod_matmul(&gated, &**proj)?;
-                if proj.quantized_act_type().is_some() {
-                    projected = projected.to_dtype(original_dtype)?;
-                }
+                let projected = proj.forward(&gated)?;
                 // post-norm + residual
                 let normed = norm.forward(&projected)?;
                 xs = (residual_ple + normed)?;
@@ -1472,15 +1443,9 @@ impl TextModel {
         let embedded = embedded.reshape((b, seq, self.num_hidden_layers, ple_dim))?;
 
         // 2. Project input embeddings: Linear(hidden_size -> num_layers * ple_dim)
-        let original_dtype = inputs_embeds.dtype();
-        let mut proj_input = inputs_embeds.clone();
-        if let Some(t) = ple_proj.quantized_act_type() {
-            proj_input = proj_input.to_dtype(t)?;
-        }
-        let mut projected = MatMul.qmethod_matmul(&proj_input, &**ple_proj)?;
-        if ple_proj.quantized_act_type().is_some() {
-            projected = projected.to_dtype(original_dtype)?;
-        }
+        let _original_dtype = inputs_embeds.dtype();
+        let proj_input = inputs_embeds.clone();
+        let projected = ple_proj.forward(&proj_input)?;
         // Apply scalar: hidden_size^-0.5
         let projected = (projected * self.per_layer_projection_scalar)?;
         // Reshape to [b, seq, num_layers, ple_dim]
@@ -1661,12 +1626,8 @@ impl TextModel {
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let mut xs = extract_logits(&xs, context_lens)?;
-        if let Some(t) = self.lm_head.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-
-        let mut xs = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
+        let xs = extract_logits(&xs, context_lens)?;
+        let mut xs = self.lm_head.forward(&xs)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
             let original_dtype = xs.dtype();

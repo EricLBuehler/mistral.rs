@@ -921,7 +921,7 @@ impl QuantMethod for HqqLayer {
         self.dequantize()
     }
 
-    fn forward(&self, a: &Tensor) -> Result<Tensor> {
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
         /*
         if self.cfg.force_dequantize {
             self.dequantize_matmul(a)
