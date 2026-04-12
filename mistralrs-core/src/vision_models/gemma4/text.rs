@@ -152,6 +152,30 @@ impl ProportionalRotaryEmbedding {
             Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
         }
     }
+
+    /// Apply RoPE to Q only (skip K rotation for shared KV layers).
+    fn forward_q(&self, q: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
+        let (_b_sz, _qh, seq_len, _n_embd) = q.dims4()?;
+        let rope = if self.is_gpt_neox {
+            candle_nn::rotary_emb::rope
+        } else {
+            candle_nn::rotary_emb::rope_i
+        };
+        if seqlen_offsets.len() == 1 {
+            let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
+            let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
+            rope(&q.contiguous()?, &cos, &sin)
+        } else {
+            let mut q_embeds = Vec::new();
+            for (seq_idx, offset) in seqlen_offsets.iter().enumerate() {
+                let cos = self.cos.narrow(0, *offset, seq_len)?;
+                let sin = self.sin.narrow(0, *offset, seq_len)?;
+                let q_s = q.i(seq_idx)?;
+                q_embeds.push(rope(&q_s.unsqueeze(0)?.contiguous()?, &cos, &sin)?);
+            }
+            Tensor::cat(&q_embeds, 0)
+        }
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -386,60 +410,77 @@ impl Attention {
         flash_params: Option<&FlashParams>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
+        let is_shared = self.kv_shared_layer_index.is_some();
 
         let original_dtype = xs.dtype();
         let mut xs_proj = xs.clone();
         if let Some(t) = self.q_proj.quantized_act_type() {
             xs_proj = xs_proj.to_dtype(t)?;
         }
+
+        // Q projection (always needed)
         let mut q = MatMul.qmethod_matmul(&xs_proj, &*self.q_proj)?;
-        let mut k = MatMul.qmethod_matmul(&xs_proj, &*self.k_proj)?;
-        let mut v = if let Some(ref v_proj) = self.v_proj {
-            MatMul.qmethod_matmul(&xs_proj, &**v_proj)?
-        } else {
-            // K=V: clone k before norms/RoPE
-            k.clone()
-        };
         if self.q_proj.quantized_act_type().is_some() {
             q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
         }
-
-        (q, k, v) = if q_len != 1 {
-            let q = q
-                .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            let k = k
-                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            let v = v
-                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            (q, k, v)
+        q = if q_len != 1 {
+            q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?
+                .transpose(1, 2)?
         } else {
-            let q = q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?;
-            let k = k.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
-            let v = v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
-            (q, k, v)
+            q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?
         };
-
-        // Apply Q/K/V norms
         q = q.apply(&self.q_norm)?;
-        k = k.apply(&self.k_norm)?;
-        v = v.apply(&self.v_norm_rms)?;
+
+        // K/V projection, reshape, norms (skip for shared layers that reuse donor KV)
+        let (mut k, v) = if !is_shared {
+            let mut k = MatMul.qmethod_matmul(&xs_proj, &*self.k_proj)?;
+            let mut v = if let Some(ref v_proj) = self.v_proj {
+                MatMul.qmethod_matmul(&xs_proj, &**v_proj)?
+            } else {
+                k.clone()
+            };
+            if self.q_proj.quantized_act_type().is_some() {
+                k = k.to_dtype(original_dtype)?;
+                v = v.to_dtype(original_dtype)?;
+            }
+            let (k, v) = if q_len != 1 {
+                (
+                    k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+                        .transpose(1, 2)?,
+                    v.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+                        .transpose(1, 2)?,
+                )
+            } else {
+                (
+                    k.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?,
+                    v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?,
+                )
+            };
+            (
+                Some(k.apply(&self.k_norm)?),
+                Some(v.apply(&self.v_norm_rms)?),
+            )
+        } else {
+            (None, None)
+        };
 
         // Apply RoPE
         if self.is_sliding {
-            let (q_rot, k_rot) = self.rotary_emb_local.forward(&q, &k, seqlen_offsets)?;
-            q = q_rot;
-            k = k_rot;
+            if let Some(k_val) = k.take() {
+                let (q_rot, k_rot) = self.rotary_emb_local.forward(&q, &k_val, seqlen_offsets)?;
+                q = q_rot;
+                k = Some(k_rot);
+            } else {
+                q = self.rotary_emb_local.forward_q(&q, seqlen_offsets)?;
+            }
         } else {
-            // ProportionalRotaryEmbedding handles the full head_dim with zero-padded
-            // inv_freq, cos=1, sin=0 for non-rotated positions, so identity.
-            let (q_rot, k_rot) = self.rotary_emb_global.forward(&q, &k, seqlen_offsets)?;
-            q = q_rot;
-            k = k_rot;
+            if let Some(k_val) = k.take() {
+                let (q_rot, k_rot) = self.rotary_emb_global.forward(&q, &k_val, seqlen_offsets)?;
+                q = q_rot;
+                k = Some(k_rot);
+            } else {
+                q = self.rotary_emb_global.forward_q(&q, seqlen_offsets)?;
+            }
         }
 
         let mut attn_output = match &self.paged_attn {
@@ -456,8 +497,6 @@ impl Attention {
                     attention_mask
                 };
                 let paged_mask = mask;
-
-                let is_shared = self.kv_shared_layer_index.is_some();
 
                 match metadata {
                     Some(((key_cache, value_cache), input_metadata)) => {
@@ -477,8 +516,8 @@ impl Attention {
                             // Non-shared: standard paged attention with raw k,v.
                             paged_attn.forward(
                                 &q,
-                                &k,
-                                &v,
+                                k.as_ref().unwrap(),
+                                v.as_ref().unwrap(),
                                 paged_mask,
                                 Some(key_cache),
                                 Some(value_cache),
@@ -493,8 +532,8 @@ impl Attention {
                         assert!(!matches!(paged_mask, AttentionMask::None));
                         paged_attn.forward(
                             &q,
-                            &k,
-                            &v,
+                            k.as_ref().unwrap(),
+                            v.as_ref().unwrap(),
                             paged_mask,
                             None,
                             None,
@@ -533,7 +572,7 @@ impl Attention {
                         (dk, dv)
                     }
                 } else {
-                    kv_caches[self.layer_idx].append(&k, &v)?
+                    kv_caches[self.layer_idx].append(k.as_ref().unwrap(), v.as_ref().unwrap())?
                 };
 
                 let mask = if self.is_sliding {
