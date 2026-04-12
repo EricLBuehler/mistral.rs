@@ -100,10 +100,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-// Lightweight per-phase decode-step profiler.
-// Enabled at runtime by setting MISTRALRS_PROFILE_DECODE=1. Accumulates
-// nanoseconds into static atomics for four phases and emits a summary line
-// every N decode steps (default 32, overridable via MISTRALRS_PROFILE_EVERY).
+// Per-phase decode-step profiler controlled by MISTRALRS_PROFILE_DECODE.
 static PROFILE_FORWARD_NS: AtomicU64 = AtomicU64::new(0);
 static PROFILE_GPU_SYNC_NS: AtomicU64 = AtomicU64::new(0);
 static PROFILE_SAMPLE_NS: AtomicU64 = AtomicU64::new(0);
@@ -111,17 +108,58 @@ static PROFILE_LOGITS_CPU_NS: AtomicU64 = AtomicU64::new(0);
 static PROFILE_STEP_COUNT: AtomicU64 = AtomicU64::new(0);
 static PROFILE_DECODE_COUNT: AtomicU64 = AtomicU64::new(0);
 
-fn profile_enabled() -> bool {
+#[derive(Default)]
+struct DecodeProfileSample {
+    forward: Duration,
+    gpu_sync: Duration,
+    sample: Duration,
+    logits_cpu: Duration,
+}
+
+fn decode_profile_enabled() -> bool {
     std::env::var("MISTRALRS_PROFILE_DECODE")
         .map(|v| v != "0" && !v.is_empty())
         .unwrap_or(false)
 }
 
-fn profile_every() -> u64 {
+fn decode_profile_every() -> u64 {
     std::env::var("MISTRALRS_PROFILE_EVERY")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(32)
+}
+
+fn record_decode_profile(sample: &DecodeProfileSample, is_prompt: bool) {
+    PROFILE_FORWARD_NS.fetch_add(sample.forward.as_nanos() as u64, AtomicOrdering::Relaxed);
+    PROFILE_GPU_SYNC_NS.fetch_add(sample.gpu_sync.as_nanos() as u64, AtomicOrdering::Relaxed);
+    PROFILE_LOGITS_CPU_NS.fetch_add(sample.logits_cpu.as_nanos() as u64, AtomicOrdering::Relaxed);
+    PROFILE_SAMPLE_NS.fetch_add(sample.sample.as_nanos() as u64, AtomicOrdering::Relaxed);
+
+    let step = PROFILE_STEP_COUNT.fetch_add(1, AtomicOrdering::Relaxed) + 1;
+    if !is_prompt {
+        PROFILE_DECODE_COUNT.fetch_add(1, AtomicOrdering::Relaxed);
+    }
+
+    let every = decode_profile_every();
+    if every > 0 && step % every == 0 {
+        let fwd = PROFILE_FORWARD_NS.load(AtomicOrdering::Relaxed);
+        let sync = PROFILE_GPU_SYNC_NS.load(AtomicOrdering::Relaxed);
+        let lcpu = PROFILE_LOGITS_CPU_NS.load(AtomicOrdering::Relaxed);
+        let smp = PROFILE_SAMPLE_NS.load(AtomicOrdering::Relaxed);
+        let dcount = PROFILE_DECODE_COUNT.load(AtomicOrdering::Relaxed);
+        let denom = step as f64;
+        eprintln!(
+            "[PROFILE] steps={step} decode_steps={dcount} \
+             avg_fwd={:.3}ms avg_gpu_sync={:.3}ms \
+             avg_logits_cpu={:.3}ms avg_sample={:.3}ms \
+             accounted={:.3}ms",
+            (fwd as f64 / denom) / 1e6,
+            (sync as f64 / denom) / 1e6,
+            (lcpu as f64 / denom) / 1e6,
+            (smp as f64 / denom) / 1e6,
+            ((fwd + sync + lcpu + smp) as f64 / denom) / 1e6,
+        );
+    }
 }
 use tokenizers::Tokenizer;
 
@@ -601,7 +639,7 @@ pub trait Pipeline:
                 let logits = logits
                     .into_iter()
                     .map(|l| {
-                        let l = l.expect("Did not get any inputs. This is shocking.");
+                        let l = l.expect("missing forward result");
                         if logits_on_cpu {
                             l.to_device(&Device::Cpu)
                         } else {
@@ -756,12 +794,8 @@ pub trait Pipeline:
                 let mut embedding_logits = vec![None; input_seqs.len()];
 
                 let mut exec_duration = Duration::ZERO;
-                // Per-phase timers for the profiler.
-                let mut profile_forward = Duration::ZERO;
-                let mut profile_gpu_sync = Duration::ZERO;
-                let mut profile_logits_cpu = Duration::ZERO;
-                let mut profile_sample = Duration::ZERO;
-                let profile_on = profile_enabled();
+                let mut decode_profile = DecodeProfileSample::default();
+                let profile_on = decode_profile_enabled();
                 for (i, inputs) in inputs_iter.into_iter().enumerate() {
                     let InputProcessorOutput {
                         inputs,
@@ -772,15 +806,14 @@ pub trait Pipeline:
                     let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
                     let end = Instant::now();
                     exec_duration += end.duration_since(start);
-                    profile_forward += end.duration_since(start);
+                    if profile_on {
+                        decode_profile.forward += end.duration_since(start);
+                    }
 
-                    // Optional GPU sync so the profiler can separate CPU-side
-                    // forward dispatch (above) from GPU catch-up wait (here)
-                    // from CPU sampler work (later).
                     if profile_on {
                         let sync_start = Instant::now();
                         let _ = self.device().synchronize();
-                        profile_gpu_sync += sync_start.elapsed();
+                        decode_profile.gpu_sync += sync_start.elapsed();
                     }
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
@@ -839,7 +872,7 @@ pub trait Pipeline:
                 let logits = logits
                     .into_iter()
                     .map(|l| {
-                        let l = l.expect("Did not get any inputs. This is shocking.");
+                        let l = l.expect("missing forward result");
                         if logits_on_cpu {
                             l.to_device(&Device::Cpu)
                         } else {
@@ -847,7 +880,9 @@ pub trait Pipeline:
                         }
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
-                profile_logits_cpu += logits_cpu_start.elapsed();
+                if profile_on {
+                    decode_profile.logits_cpu += logits_cpu_start.elapsed();
+                }
 
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. }
@@ -872,7 +907,9 @@ pub trait Pipeline:
                             rng,
                         )
                         .await?;
-                        profile_sample += sample_start.elapsed();
+                        if profile_on {
+                            decode_profile.sample += sample_start.elapsed();
+                        }
                     }
                     ForwardInputsResult::Image { .. } => {
                         response::send_image_responses(
@@ -943,46 +980,7 @@ pub trait Pipeline:
                 exec_duration += end.duration_since(start);
 
                 if profile_on {
-                    PROFILE_FORWARD_NS.fetch_add(
-                        profile_forward.as_nanos() as u64,
-                        AtomicOrdering::Relaxed,
-                    );
-                    PROFILE_GPU_SYNC_NS.fetch_add(
-                        profile_gpu_sync.as_nanos() as u64,
-                        AtomicOrdering::Relaxed,
-                    );
-                    PROFILE_LOGITS_CPU_NS.fetch_add(
-                        profile_logits_cpu.as_nanos() as u64,
-                        AtomicOrdering::Relaxed,
-                    );
-                    PROFILE_SAMPLE_NS.fetch_add(
-                        profile_sample.as_nanos() as u64,
-                        AtomicOrdering::Relaxed,
-                    );
-                    let step = PROFILE_STEP_COUNT.fetch_add(1, AtomicOrdering::Relaxed) + 1;
-                    if !is_prompt {
-                        PROFILE_DECODE_COUNT.fetch_add(1, AtomicOrdering::Relaxed);
-                    }
-                    let every = profile_every();
-                    if every > 0 && step % every == 0 {
-                        let fwd = PROFILE_FORWARD_NS.load(AtomicOrdering::Relaxed);
-                        let sync = PROFILE_GPU_SYNC_NS.load(AtomicOrdering::Relaxed);
-                        let lcpu = PROFILE_LOGITS_CPU_NS.load(AtomicOrdering::Relaxed);
-                        let smp = PROFILE_SAMPLE_NS.load(AtomicOrdering::Relaxed);
-                        let dcount = PROFILE_DECODE_COUNT.load(AtomicOrdering::Relaxed);
-                        let denom = step as f64;
-                        eprintln!(
-                            "[PROFILE] steps={step} decode_steps={dcount} \
-                             avg_fwd={:.3}ms avg_gpu_sync={:.3}ms \
-                             avg_logits_cpu={:.3}ms avg_sample={:.3}ms \
-                             accounted={:.3}ms",
-                            (fwd as f64 / denom) / 1e6,
-                            (sync as f64 / denom) / 1e6,
-                            (lcpu as f64 / denom) / 1e6,
-                            (smp as f64 / denom) / 1e6,
-                            ((fwd + sync + lcpu + smp) as f64 / denom) / 1e6,
-                        );
-                    }
+                    record_decode_profile(&decode_profile, is_prompt);
                 }
 
                 Ok(exec_duration)

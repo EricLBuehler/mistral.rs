@@ -1,25 +1,11 @@
-// mmvq_gguf.cu — Q8_1-intermediate matvec-q kernels for GGUF/UQFF quantization.
-//
-// Ported from llama.cpp's current ggml-cuda/mmvq.cu (the `mul_mat_vec_q`
-// template with its `has_fusion` path for fused gate+up+GLU) but stripped
-// to the 10 quant types mistral.rs loads from UQFF:
-//     Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K
-// plus a padding-aware BF16→Q8_1 quantize kernel.
-//
-// All block structs, vec_dot helpers, and activation/GLU helpers are
-// inlined in this translation unit so it doesn't need any cross-directory
-// includes. Because every helper is `static __device__`, its linkage is
-// local to this TU and does not conflict with the identically-named
-// definitions in `kernels/indexed_moe/indexed_moe.cu`.
+// GGUF matvec kernels with Q8_1-quantized activations.
+// Adapted from llama.cpp's CUDA mmvq path for the GGUF types used here.
 
 #include "cuda_bf16.h"
 #include "cuda_fp16.h"
 #include <stdint.h>
 
-// ---------------------------------------------------------------------------
-// Constants, types, and low-level helpers (copied verbatim from indexed_moe.cu
-// so this file stays self-contained).
-// ---------------------------------------------------------------------------
+// Constants, types, and helpers shared with the indexed MoE kernels.
 
 #define WARP_SIZE 32
 #define CUDA_QUANTIZE_BLOCK_SIZE 256
@@ -27,8 +13,7 @@
 #define QK_K 256
 #define K_SCALE_SIZE 12
 
-// Padding used when sizing the Q8_1 activation scratch buffer. Matches
-// candle's MATRIX_ROW_PADDING so layouts agree end-to-end.
+// Matches candle's MATRIX_ROW_PADDING.
 #define MATRIX_ROW_PADDING 512
 
 typedef uint16_t ggml_fp16_t;
@@ -412,13 +397,7 @@ vec_dot_q6_K_q8_1_impl_mmvq(const int &vl, const int &vh,
   return d * sumf;
 }
 
-// ---------------------------------------------------------------------------
-// vec_dot wrapper functions (per-quant-type)
-//
-// Signature matches llama.cpp's current (kbx, iqs) form. `vbq` points at the
-// beginning of the weight buffer; each wrapper offsets by `kbx` and reads
-// one block's worth of data.
-// ---------------------------------------------------------------------------
+// vec_dot wrappers for each quant type.
 
 typedef float (*vec_dot_q_cuda_t)(const void *__restrict__ vbq,
                                   const block_q8_1 *__restrict__ bq8_1,
@@ -652,15 +631,7 @@ vec_dot_q6_K_q8_1(const void *__restrict__ vbq,
   return vec_dot_q6_K_q8_1_impl_mmvq(vl, vh, u, scales, bq6_K->d, d8);
 }
 
-// ---------------------------------------------------------------------------
-// Core mat-vec-q template
-//
-// Ports the NVIDIA-generic branch of llama.cpp's `mul_mat_vec_q` with:
-//   - `dst_t` template parameter for F32 or BF16 output
-//   - No AMD/RDNA paths (those stay in llama.cpp proper)
-//   - Q8_0 / non-K-quant types get `rows_per_cuda_block=1` and `nwarps=4`
-//     when ncols_dst=1, matching the generic GENERIC table in llama.cpp.
-// ---------------------------------------------------------------------------
+// Core mat-vec-q template.
 
 static constexpr __device__ int mmvq_nwarps_for(int ncols_dst) {
   return (ncols_dst <= 4) ? 4 : 2;
@@ -819,12 +790,7 @@ MMVQ_PLAIN_BATCH_SET(q5_k, block_q5_K, QK_K, QI5_K, VDR_Q5_K_Q8_1_MMVQ,
 MMVQ_PLAIN_BATCH_SET(q6_k, block_q6_K, QK_K, QI6_K, VDR_Q6_K_Q8_1_MMVQ,
                      vec_dot_q6_K_q8_1)
 
-// ---------------------------------------------------------------------------
-// BF16 → Q8_1 quantize kernel (padding-aware).
-//
-// Writes zero-valued Q8_1 blocks for the padding region (ix >= kx && ix <
-// kx_padded) so callers can use a non-zeroing `alloc` for the Q8_1 scratch.
-// ---------------------------------------------------------------------------
+// Padding-aware BF16/F16/F32 -> Q8_1 quantize kernels.
 
 extern "C" __global__ void
 mmvq_gguf_quantize_q8_1_bf16(const __nv_bfloat16 *__restrict__ x,
@@ -928,13 +894,7 @@ mmvq_gguf_quantize_q8_1_f32(const float *__restrict__ x,
   reinterpret_cast<half &>(y[ib].ds.y) = (half)sum;
 }
 
-// ---------------------------------------------------------------------------
-// Host-side launchers
-//
-// mistralrs-quant calls these via the FFI bindings in
-// `mistralrs-quant/src/gguf/ffi.rs`. Grid/block shape matches the generic
-// NVIDIA path in llama.cpp's `calc_launch_params`.
-// ---------------------------------------------------------------------------
+// Host-side launchers used by `mistralrs-quant/src/gguf/ffi.rs`.
 
 #define MMVQ_LAUNCHER_PLAIN(tag, dst_tag, dst_c_type)                          \
   extern "C" void launch_mmvq_gguf_##tag##_##dst_tag##_plain(                  \

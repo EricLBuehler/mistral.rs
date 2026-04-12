@@ -522,10 +522,7 @@ impl Attention {
                             let kv_len = dk.dim(2)?;
                             if kv_len > window {
                                 let start = kv_len - window;
-                                (
-                                    dk.narrow(2, start, window)?,
-                                    dv.narrow(2, start, window)?,
-                                )
+                                (dk.narrow(2, start, window)?, dv.narrow(2, start, window)?)
                             } else {
                                 (dk, dv)
                             }
@@ -581,7 +578,6 @@ impl Attention {
                     None => AttentionMask::None,
                 };
 
-
                 // Gemma 4 attention scores reach magnitude 15-20 with
                 // softmax_scale=1. At that range BF16 precision is ~0.15,
                 // so the Metal SDPA vector kernel (F32 internally) resolves
@@ -592,10 +588,8 @@ impl Attention {
                     let q32 = q.to_dtype(candle_core::DType::F32)?;
                     let k32 = k.to_dtype(candle_core::DType::F32)?;
                     let v32 = v.to_dtype(candle_core::DType::F32)?;
-                    Sdpa.run_attention(
-                        &q32, &k32, &v32, &mask, flash_params, &self.sdpa_params,
-                    )?
-                    .to_dtype(q.dtype())?
+                    Sdpa.run_attention(&q32, &k32, &v32, &mask, flash_params, &self.sdpa_params)?
+                        .to_dtype(q.dtype())?
                 } else {
                     Sdpa.run_attention(&q, &k, &v, &mask, flash_params, &self.sdpa_params)?
                 }
@@ -1227,14 +1221,10 @@ impl TextModel {
                 mapper.set_nm_device(vb_m.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            // Fix #7: keep the lm_head as Q8_0 on CUDA so the output
-            // projection flows through the fast BF16-native mmvq kernel
-            // instead of a BF16 GEMV that costs ~5.8 ms/token. The
-            // underlying ScaledEmbedding is untouched — token-lookup
-            // continues to use the dequantized BF16 tensor.
+            // Keep the tied lm head quantized on CUDA so it can use the
+            // GGUF matmul fast path without changing token embeddings.
             let embed_weight = mapper.cast_nm_device(embed_tokens.embeddings(), false)?;
-            let embed_dev = embed_weight.device().clone();
-            if embed_dev.is_cuda() {
+            if embed_weight.device().is_cuda() {
                 let w_f32 = embed_weight.to_dtype(DType::F32)?;
                 let q_weight = candle_core::quantized::QTensor::quantize(
                     &w_f32,

@@ -714,18 +714,7 @@ extern "C" {
         stream: *mut c_void,
     );
 
-    // ============== mmvq_gguf: generic Q8_1-intermediate matvec ==============
-    //
-    // Bindings for `kernels/mmvq_gguf/mmvq_gguf.cu` — the llama.cpp-ported
-    // mul_mat_vec_q template for dense (non-MoE) decode. One plain launcher
-    // per (dtype, output-dtype) pair; one fused gate+up launcher per (dtype,
-    // output-dtype) pair; plus the BF16/F16/F32 → Q8_1 quantize launchers.
-    //
-    // All plain launchers share the signature
-    //   (vx, vy, dst, ncols_x, nrows_x, stride_col_y, stride_col_dst, b_size, stream)
-    // where vx is the raw quantized weight buffer, vy is the Q8_1 activation
-    // scratch, b_size is the number of output tokens (1..=8 supported), and
-    // stride_col_y is counted in Q8_1 blocks (padded_k / QK8_1).
+    // Launchers for the dense GGUF mmvq kernels used by `fast_mmvq`.
 
     pub fn launch_mmvq_gguf_q4_0_bf16_plain(
         vx: *const c_void,
@@ -949,7 +938,7 @@ extern "C" {
         stream: *mut c_void,
     );
 
-    /// BF16 → Q8_1 padding-aware quantize
+    /// BF16 -> Q8_1 quantize
     pub fn launch_mmvq_gguf_quantize_q8_1_bf16(
         x: *const c_void,
         vy: *mut c_void,
@@ -959,7 +948,7 @@ extern "C" {
         stream: *mut c_void,
     );
 
-    /// F16 → Q8_1 padding-aware quantize
+    /// F16 -> Q8_1 quantize
     pub fn launch_mmvq_gguf_quantize_q8_1_f16(
         x: *const c_void,
         vy: *mut c_void,
@@ -969,7 +958,7 @@ extern "C" {
         stream: *mut c_void,
     );
 
-    /// F32 → Q8_1 padding-aware quantize
+    /// F32 -> Q8_1 quantize
     pub fn launch_mmvq_gguf_quantize_q8_1_f32(
         x: *const c_void,
         vy: *mut c_void,

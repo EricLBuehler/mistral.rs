@@ -2879,13 +2879,8 @@ impl Mlp {
         if let Some(t) = self.gate.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        let mut res = crate::ops::fused_ffn_q8_bf16(
-            &xs,
-            &self.gate,
-            &self.up,
-            &self.down,
-            self.act,
-        )?;
+        let mut res =
+            crate::ops::quantized_ffn(&xs, &*self.gate, &*self.up, &*self.down, self.act)?;
         if self.gate.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
@@ -2902,13 +2897,8 @@ impl MlpLayer for Mlp {
         if let Some(t) = self.gate.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        let mut res = crate::ops::fused_ffn_q8_bf16(
-            &xs,
-            &self.gate,
-            &self.up,
-            &self.down,
-            self.act,
-        )?;
+        let mut res =
+            crate::ops::quantized_ffn(&xs, &*self.gate, &*self.up, &*self.down, self.act)?;
         if self.gate.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }

@@ -1,22 +1,4 @@
-//! Fast mat-vec-q path for GGUF quantized weights on CUDA.
-//!
-//! This module is the Rust-side entry point for
-//! `kernels/mmvq_gguf/mmvq_gguf.cu`: a port of llama.cpp's current
-//! `mul_mat_vec_q` kernel template covering all 10 GGUF quant types
-//! (Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K) with BF16
-//! and F32 output.
-//!
-//! Unlike the legacy candle-core quantized matmul path this function:
-//!
-//! - Accepts BF16 (or F32) input end-to-end — no BF16↔F32 cast pair around
-//!   each linear layer.
-//! - Runs a padding-aware BF16 → Q8_1 quantize kernel so the scratch
-//!   allocation doesn't need to be zeroed.
-//! - Reuses a persistent per-device Q8_1 scratch buffer instead of an
-//!   alloc/alloc_zeros/free churn on every call.
-//! - Reads the weight data directly via `candle_core::quantized::QTensor::
-//!   device_ptr()` — zero copy, zero duplication. candle keeps owning the
-//!   allocation.
+//! CUDA fast path for GGUF matmul with BF16/F32 activations.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -35,18 +17,18 @@ const Q8_1_TYPE_SIZE: usize = 36; // 2 halves (4 bytes) + QK8_1 int8 = 4 + 32 = 
 const MATRIX_ROW_PADDING: usize = 512;
 
 #[inline]
-fn ceil_div(p: usize, q: usize) -> usize {
-    p.div_ceil(q)
-}
-
-#[inline]
 fn pad(p: usize, q: usize) -> usize {
-    ceil_div(p, q) * q
+    p.div_ceil(q) * q
 }
 
-/// Quant types whose weights can flow through this fast path.
-///
-/// Exactly the 10 types the `mmvq_gguf.cu` kernel compiles for.
+fn output_shape(xs: &Tensor, nrows: usize) -> Shape {
+    let mut out_dims = xs.dims().to_vec();
+    let last = out_dims.len() - 1;
+    out_dims[last] = nrows;
+    Shape::from(out_dims)
+}
+
+/// Quant types supported by `mmvq_gguf.cu`.
 pub fn supports(dtype: GgmlDType) -> bool {
     matches!(
         dtype,
@@ -63,17 +45,10 @@ pub fn supports(dtype: GgmlDType) -> bool {
     )
 }
 
-/// Maximum batch size supported by the mmvq kernel family (one extern `cuda1`
-/// through `cuda8` per (dtype, output-dtype)).
+/// Maximum flattened batch handled by the CUDA launcher table.
 pub const MMVQ_MAX_BATCH: usize = 8;
 
-// ---------------------------------------------------------------------------
-// Per-device Q8_1 scratch workspace
-//
-// One shared buffer per CUDA device, protected by a mutex. Grows monotonically
-// via a watermark: if a caller requests more bytes than the current capacity,
-// we replace the allocation with a larger one. No shrinking.
-// ---------------------------------------------------------------------------
+// Shared Q8_1 scratch space per CUDA device.
 
 struct WorkspaceSlot {
     slice: CudaSlice<u8>,
@@ -108,13 +83,7 @@ fn workspace_ensure(dev: &CudaDevice, bytes: usize) -> Result<CudaSlice<u8>> {
     Ok(slot.slice.clone())
 }
 
-// ---------------------------------------------------------------------------
-// Per-(weight-dtype, output-dtype) launcher dispatch
-//
-// Two `extern "C" fn` function pointer types matching the launcher
-// signatures in `ffi.rs`, plus small tables that map a `GgmlDType` to the
-// right launcher for each output dtype.
-// ---------------------------------------------------------------------------
+// Launcher dispatch by weight and output dtype.
 
 type PlainLauncher = unsafe extern "C" fn(
     vx: *const std::ffi::c_void,
@@ -162,10 +131,6 @@ fn plain_launcher_f32(dtype: GgmlDType) -> Option<PlainLauncher> {
     Some(f)
 }
 
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
-
 /// Compute `w @ xs^T` where `w` is a Q8_1-quantizable GGUF weight tensor and
 /// `xs` is a contiguous BF16 / F32 activation on the same CUDA device.
 ///
@@ -212,9 +177,7 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     let Storage::Cuda(xs_cuda) = &*xs_storage else {
         candle_core::bail!("fast_mmvq: input must live on CUDA");
     };
-    // `contiguous()` may return `self` for already-contiguous inputs, so
-    // the layout can still carry a non-zero start offset. Respect it by
-    // passing it through to `slice_ptr` when taking device pointers.
+    // `contiguous()` can preserve a non-zero start offset.
     let xs_offset = xs_layout.start_offset();
 
     let stream_ptr = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
@@ -223,24 +186,16 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     let dst_row_bytes = num_blocks_per_row * Q8_1_TYPE_SIZE;
     let scratch_bytes = b_size * dst_row_bytes;
 
-    // Grab the persistent Q8_1 scratch buffer — may grow it if the caller
-    // exceeds the current watermark.
     let scratch = workspace_ensure(&dev, scratch_bytes)?;
     let stride_col_y = (k_padded / Q8_1_BLOCK_SIZE) as i32;
     let stride_col_dst = nrows as i32;
     let weight_ptr = w.device_ptr()? as *const std::ffi::c_void;
 
-    // The borrow/move dance: each kernel launch needs raw device pointers
-    // that hold guards for the duration of the launch. We have to drop all
-    // guards explicitly before moving the output `CudaSlice` into a
-    // `CudaStorage` wrapper (since `wrap_cuda_slice` takes by value).
     match input_ty {
         DType::BF16 => {
             let slice = xs_cuda.as_cuda_slice::<half::bf16>()?;
             let out = unsafe { dev.alloc::<half::bf16>(nrows * b_size)? };
 
-            // Quantize xs → scratch, then launch the matmul. Drop guards
-            // before moving `out`.
             {
                 let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
                 let (scratch_ptr, _scratch_guard) = slice_ptr(&scratch, 0);
@@ -255,8 +210,7 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
                         b_size as i32,
                         stream_ptr,
                     );
-                    let launcher =
-                        plain_launcher_bf16(dtype).expect("supports() checked");
+                    let launcher = plain_launcher_bf16(dtype).expect("supports() checked");
                     launcher(
                         weight_ptr,
                         scratch_ptr as *const std::ffi::c_void,
@@ -269,20 +223,15 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
                         stream_ptr,
                     );
                 }
-                // Explicit drops (would also happen at end of scope, but make
-                // the ordering obvious).
                 drop(_xs_guard);
                 drop(_scratch_guard);
                 drop(_out_guard);
             }
 
             let out_storage = CudaStorage::wrap_cuda_slice(out, dev.clone());
-            let mut out_dims = xs.dims().to_vec();
-            let last = out_dims.len() - 1;
-            out_dims[last] = nrows;
             return Ok(Tensor::from((
                 Storage::Cuda(out_storage),
-                Shape::from(out_dims),
+                output_shape(&xs, nrows),
             )));
         }
         DType::F32 => {
@@ -303,8 +252,7 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
                         b_size as i32,
                         stream_ptr,
                     );
-                    let launcher =
-                        plain_launcher_f32(dtype).expect("supports() checked");
+                    let launcher = plain_launcher_f32(dtype).expect("supports() checked");
                     launcher(
                         weight_ptr,
                         scratch_ptr as *const std::ffi::c_void,
@@ -323,12 +271,9 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
             }
 
             let out_storage = CudaStorage::wrap_cuda_slice(out, dev.clone());
-            let mut out_dims = xs.dims().to_vec();
-            let last = out_dims.len() - 1;
-            out_dims[last] = nrows;
             return Ok(Tensor::from((
                 Storage::Cuda(out_storage),
-                Shape::from(out_dims),
+                output_shape(&xs, nrows),
             )));
         }
         _ => unreachable!(),

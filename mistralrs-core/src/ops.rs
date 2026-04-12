@@ -772,33 +772,18 @@ pub fn mul_and_act(a: &Tensor, b: &Tensor, act: Activation) -> Result<Tensor> {
     a.apply(&act)? * b
 }
 
-/// Three-matmul FFN for dense models with quantized weights.
-///
-/// Each `qmethod_matmul` call goes through `GgufMatMul::forward`, which on
-/// CUDA with a supported GGUF quant dtype + BF16/F32 input hits the
-/// `mistralrs_quant::gguf::fast_mmvq::plain` fast path — one BF16-native Q8_1
-/// quantize + one llama.cpp-style mmvq kernel per matmul, with a persistent
-/// per-device Q8_1 scratch buffer shared across all calls. For every other
-/// configuration (CPU, Metal, unsupported dtype, large batch, etc.) it
-/// transparently falls back to candle's legacy QMatMul path.
-///
-/// No separate fused gate+up kernel — on GB10 with large gemma-4-style FFN
-/// dims the plain per-linear path already pipelines well enough that the
-/// fused variant was net-neutral in measurement, so it's not worth the
-/// kernel bloat. See the benchmark notes in
-/// `llama_cpp_vs_mistralrs_nsys_comparison.md`.
-#[allow(clippy::borrowed_box)]
-pub fn fused_ffn_q8_bf16(
+/// Feed-forward path for quantized gate/up/down projections.
+pub(crate) fn quantized_ffn(
     xs: &Tensor,
-    gate: &std::sync::Arc<dyn mistralrs_quant::QuantMethod>,
-    up: &std::sync::Arc<dyn mistralrs_quant::QuantMethod>,
-    down: &std::sync::Arc<dyn mistralrs_quant::QuantMethod>,
+    gate: &dyn mistralrs_quant::QuantMethod,
+    up: &dyn mistralrs_quant::QuantMethod,
+    down: &dyn mistralrs_quant::QuantMethod,
     act: Activation,
 ) -> Result<Tensor> {
-    let lhs = mistralrs_quant::MatMul.qmethod_matmul(xs, &**gate)?;
-    let rhs = mistralrs_quant::MatMul.qmethod_matmul(xs, &**up)?;
+    let lhs = mistralrs_quant::MatMul.qmethod_matmul(xs, gate)?;
+    let rhs = mistralrs_quant::MatMul.qmethod_matmul(xs, up)?;
     let inter = mul_and_act(&lhs, &rhs, act)?;
-    mistralrs_quant::MatMul.qmethod_matmul(&inter, &**down)
+    mistralrs_quant::MatMul.qmethod_matmul(&inter, down)
 }
 
 mod tests {

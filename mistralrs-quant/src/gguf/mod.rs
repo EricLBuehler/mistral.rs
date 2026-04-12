@@ -32,6 +32,58 @@ pub struct GgufMatMul {
     pub(crate) b: Option<Tensor>,
 }
 
+impl GgufMatMul {
+    fn add_bias(&self, x: Tensor) -> Result<Tensor> {
+        if let Some(ref b) = self.b {
+            x.broadcast_add(b)
+        } else {
+            Ok(x)
+        }
+    }
+
+    fn forward_fallback(&self, a: &Tensor) -> Result<Tensor> {
+        let original_dtype = a.dtype();
+        let a_cast = if original_dtype == DType::F32 {
+            a.clone()
+        } else {
+            a.to_dtype(DType::F32)?
+        };
+        let x = self.w.forward(&a_cast)?;
+        if original_dtype == DType::F32 {
+            Ok(x)
+        } else {
+            x.to_dtype(original_dtype)
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn uses_fast_mmvq(&self) -> bool {
+        matches!(
+            &self.w,
+            QMatMul::QTensor(q) if q.device().is_cuda() && fast_mmvq::supports(q.dtype())
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    fn try_fast_forward(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        if !self.uses_fast_mmvq() || !matches!(a.dtype(), DType::BF16 | DType::F32) {
+            return Ok(None);
+        }
+
+        let flat_batch = a.dims()[..a.dims().len().saturating_sub(1)]
+            .iter()
+            .product::<usize>();
+        if !(1..=fast_mmvq::MMVQ_MAX_BATCH).contains(&flat_batch) {
+            return Ok(None);
+        }
+
+        let QMatMul::QTensor(q) = &self.w else {
+            unreachable!("uses_fast_mmvq() requires QTensor weights")
+        };
+        Ok(Some(fast_mmvq::plain(q, a)?))
+    }
+}
+
 impl QuantMethod for GgufMatMul {
     fn new(method: QuantMethodConfig) -> Result<Self>
     where
@@ -60,58 +112,14 @@ impl QuantMethod for GgufMatMul {
     }
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        // Fast path: raw llama.cpp-style mmvq kernel living in
-        // `mistralrs-quant/kernels/mmvq_gguf/mmvq_gguf.cu`. Triggers for
-        // every CUDA-resident GGUF quant weight + BF16/F32 input + small
-        // batch (≤ 8 flat rows). Falls through to candle's legacy path for
-        // everything else (CPU, Metal, unsupported dtypes, b_size > 8,
-        // non-contiguous input, etc.).
         #[cfg(feature = "cuda")]
         {
-            if let QMatMul::QTensor(ref q) = self.w {
-                if q.device().is_cuda() && fast_mmvq::supports(q.dtype()) {
-                    let input_ok = matches!(a.dtype(), DType::BF16 | DType::F32);
-                    let flat_batch: usize = a.dims()[..a.dims().len().saturating_sub(1)]
-                        .iter()
-                        .product();
-                    if input_ok
-                        && flat_batch >= 1
-                        && flat_batch <= fast_mmvq::MMVQ_MAX_BATCH
-                    {
-                        let out = fast_mmvq::plain(q, a)?;
-                        return if let Some(ref b) = self.b {
-                            out.broadcast_add(b)
-                        } else {
-                            Ok(out)
-                        };
-                    }
-                }
+            if let Some(out) = self.try_fast_forward(a)? {
+                return self.add_bias(out);
             }
         }
 
-        // Fallback: candle's legacy batched quantized matmul only handles
-        // F32 input — so if we're here with a BF16/F16 tensor we have to
-        // cast into and out of F32 for it. This matches the old behaviour
-        // `quantized_act_type = Some(F32)` used to provide at the caller
-        // level. Without this the prefill path (batch > 8) would panic
-        // with "unexpected dtype, expected: F32, got: BF16".
-        let original_dtype = a.dtype();
-        let a_cast = if original_dtype == DType::F32 {
-            a.clone()
-        } else {
-            a.to_dtype(DType::F32)?
-        };
-        let x = self.w.forward(&a_cast)?;
-        let x = if original_dtype == DType::F32 {
-            x
-        } else {
-            x.to_dtype(original_dtype)?
-        };
-        if let Some(ref b) = self.b {
-            x.broadcast_add(b)
-        } else {
-            Ok(x)
-        }
+        self.add_bias(self.forward_fallback(a)?)
     }
 
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
@@ -147,18 +155,10 @@ impl QuantMethod for GgufMatMul {
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
-        // Every GGUF quant dtype our `fast_mmvq::plain` kernel supports
-        // accepts BF16 input directly. Returning None here tells the
-        // upstream caller (e.g. Mlp::forward) to skip the BF16↔F32 cast
-        // pair that the legacy candle path used to require. For any other
-        // dtype / non-CUDA config we still cast to F32 so candle's legacy
-        // mmvq path keeps working.
         #[cfg(feature = "cuda")]
         {
-            if let QMatMul::QTensor(ref q) = self.w {
-                if q.device().is_cuda() && fast_mmvq::supports(q.dtype()) {
-                    return None;
-                }
+            if self.uses_fast_mmvq() {
+                return None;
             }
         }
         Some(DType::F32)
