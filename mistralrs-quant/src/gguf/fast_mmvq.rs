@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use candle_core::cuda::cudarc::driver::CudaSlice;
+use candle_core::cuda::cudarc::driver::{CudaSlice, DevicePtr};
 use candle_core::{
     quantized::{GgmlDType, QTensor},
     CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
@@ -58,7 +58,15 @@ struct WorkspaceSlot {
 static WORKSPACE: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, WorkspaceSlot>>> =
     OnceLock::new();
 
-fn workspace_ensure(dev: &CudaDevice, bytes: usize) -> Result<CudaSlice<u8>> {
+/// Returns a device pointer to the scratch workspace, growing it if needed.
+/// The returned `MutexGuard` must be held alive until the kernel using
+/// this pointer has been launched (all launches are on the device's
+/// default stream, so they are serialised).
+fn workspace_ensure(
+    dev: &CudaDevice,
+    bytes: usize,
+) -> Result<(u64, std::sync::MutexGuard<'static, HashMap<candle_core::cuda::DeviceId, WorkspaceSlot>>)>
+{
     let map = WORKSPACE.get_or_init(|| Mutex::new(HashMap::new()));
     let device_key = dev.id();
     let mut guard = map.lock().unwrap();
@@ -80,7 +88,8 @@ fn workspace_ensure(dev: &CudaDevice, bytes: usize) -> Result<CudaSlice<u8>> {
         slot.slice = unsafe { dev.alloc::<u8>(bytes)? };
         slot.cap = bytes;
     }
-    Ok(slot.slice.clone())
+    let ptr = slot.slice.device_ptr(slot.slice.stream()).0;
+    Ok((ptr, guard))
 }
 
 // Launcher dispatch by weight and output dtype.
@@ -186,7 +195,8 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     let dst_row_bytes = num_blocks_per_row * Q8_1_TYPE_SIZE;
     let scratch_bytes = b_size * dst_row_bytes;
 
-    let scratch = workspace_ensure(&dev, scratch_bytes)?;
+    let (scratch_ptr, _workspace_guard) = workspace_ensure(&dev, scratch_bytes)?;
+    let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
     let stride_col_y = (k_padded / Q8_1_BLOCK_SIZE) as i32;
     let stride_col_dst = nrows as i32;
     let weight_ptr = w.device_ptr()? as *const std::ffi::c_void;
@@ -198,13 +208,12 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
 
             {
                 let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
-                let (scratch_ptr, _scratch_guard) = slice_ptr(&scratch, 0);
                 let (out_ptr, _out_guard) = slice_ptr(&out, 0);
 
                 unsafe {
                     ffi::launch_mmvq_gguf_quantize_q8_1_bf16(
                         xs_ptr as *const std::ffi::c_void,
-                        scratch_ptr as *mut std::ffi::c_void,
+                        scratch_ptr,
                         k as i32,
                         k_padded as i32,
                         b_size as i32,
@@ -223,9 +232,6 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
                         stream_ptr,
                     );
                 }
-                drop(_xs_guard);
-                drop(_scratch_guard);
-                drop(_out_guard);
             }
 
             let out_storage = CudaStorage::wrap_cuda_slice(out, dev.clone());
@@ -240,13 +246,12 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
 
             {
                 let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
-                let (scratch_ptr, _scratch_guard) = slice_ptr(&scratch, 0);
                 let (out_ptr, _out_guard) = slice_ptr(&out, 0);
 
                 unsafe {
                     ffi::launch_mmvq_gguf_quantize_q8_1_f32(
                         xs_ptr as *const std::ffi::c_void,
-                        scratch_ptr as *mut std::ffi::c_void,
+                        scratch_ptr,
                         k as i32,
                         k_padded as i32,
                         b_size as i32,
@@ -265,9 +270,6 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
                         stream_ptr,
                     );
                 }
-                drop(_xs_guard);
-                drop(_scratch_guard);
-                drop(_out_guard);
             }
 
             let out_storage = CudaStorage::wrap_cuda_slice(out, dev.clone());
