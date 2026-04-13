@@ -95,7 +95,7 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
 
     // K must be even for vectorized loads
     let k = x.dim(x.rank() - 1).unwrap_or(0);
-    if k % 2 != 0 {
+    if !k.is_multiple_of(2) {
         return false;
     }
 

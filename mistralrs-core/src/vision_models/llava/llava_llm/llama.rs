@@ -266,8 +266,7 @@ impl MlpLayer for Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _original_dtype = x.dtype();
         let x = x.clone();
-        let x = (candle_nn::ops::silu(&self.c_fc1.forward(&x)?)?
-            * self.c_fc2.forward(&x)?)?;
+        let x = (candle_nn::ops::silu(&self.c_fc1.forward(&x)?)? * self.c_fc2.forward(&x)?)?;
         let res = self.c_proj.forward(&x)?;
         Ok(res)
     }

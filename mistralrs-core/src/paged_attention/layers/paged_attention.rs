@@ -318,7 +318,7 @@ impl PagedAttention {
                     query,
                     &k_4d,
                     &v_4d,
-                    &attention_mask,
+                    attention_mask,
                     Some(&prefix_flash_params),
                     sdpa_params,
                 );

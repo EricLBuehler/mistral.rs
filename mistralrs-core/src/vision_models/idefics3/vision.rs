@@ -296,12 +296,11 @@ impl Attention {
             &self.sdpa_params,
         )?;
 
-        self.o_proj
-            .forward(&attn_output.transpose(1, 2)?.reshape((
-                b_sz,
-                q_len,
-                self.embed_dim,
-            ))?)
+        self.o_proj.forward(
+            &attn_output
+                .transpose(1, 2)?
+                .reshape((b_sz, q_len, self.embed_dim))?,
+        )
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {

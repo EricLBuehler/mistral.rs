@@ -21,9 +21,7 @@ use crate::{
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
-    layers::{
-        embedding, linear_no_bias, CausalMasker, GemmaRmsNorm, RotaryEmbedding, Sdpa,
-    },
+    layers::{embedding, linear_no_bias, CausalMasker, GemmaRmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},

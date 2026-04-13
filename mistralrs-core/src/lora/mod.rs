@@ -94,6 +94,7 @@ fn make_adapter(
 
 /// Any layer that is linear-like.
 pub trait LinearLayerLike: Merge {
+    #[allow(dead_code)]
     fn quantized_act_type(&self) -> Option<DType>;
     fn quant_inner(&mut self) -> &mut Arc<dyn QuantMethod>;
     fn is_lora(&self) -> bool;

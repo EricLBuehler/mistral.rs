@@ -111,7 +111,9 @@ impl MlpLayer for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let _original_dtype = xs.dtype();
         let xs = xs.clone();
-        let res = self.fc2.forward(&self.fc1.forward(&xs)?.apply(&self.act)?)?;
+        let res = self
+            .fc2
+            .forward(&self.fc1.forward(&xs)?.apply(&self.act)?)?;
         Ok(res)
     }
     fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {

@@ -9,9 +9,9 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    apply_immediate_isq, should_apply_immediate_isq, DummyLayer, FusedExperts,
-    PackedExperts, QuantMethod, QuantMethodConfig, QuantizedConfig, ShardedVarBuilder,
-    SumAllReduce, UnquantLinear,
+    apply_immediate_isq, should_apply_immediate_isq, DummyLayer, FusedExperts, PackedExperts,
+    QuantMethod, QuantMethodConfig, QuantizedConfig, ShardedVarBuilder, SumAllReduce,
+    UnquantLinear,
 };
 use std::sync::Arc;
 
@@ -858,12 +858,8 @@ impl MoEExperts {
         let ys = if xs.device().is_cuda() {
             // CUDA path: use indexed_moe_forward compatible shapes
             let xs = xs_flat.reshape((num_tokens, 1, hidden_dim))?;
-            let gate = weights
-                .fused_gate_proj
-                .gather_forward(&xs, topk_ids)?;
-            let up = weights
-                .fused_up_proj
-                .gather_forward(&xs, topk_ids)?;
+            let gate = weights.fused_gate_proj.gather_forward(&xs, topk_ids)?;
+            let up = weights.fused_up_proj.gather_forward(&xs, topk_ids)?;
             weights
                 .fused_down_proj
                 .gather_forward(&(up * gate.apply(&self.act)?)?, topk_ids)?
@@ -871,12 +867,8 @@ impl MoEExperts {
             // Metal path: use broadcast gather shapes
             let xs = xs.reshape((b_size, seq_len, 1, 1, hidden_dim))?;
             let indices = topk_ids.reshape((b_size, seq_len, self.num_experts_per_tok))?;
-            let gate = weights
-                .fused_gate_proj
-                .gather_forward(&xs, &indices)?;
-            let up = weights
-                .fused_up_proj
-                .gather_forward(&xs, &indices)?;
+            let gate = weights.fused_gate_proj.gather_forward(&xs, &indices)?;
+            let up = weights.fused_up_proj.gather_forward(&xs, &indices)?;
             let xs = weights
                 .fused_down_proj
                 .gather_forward(&(up * gate.apply(&self.act)?)?, &indices)?;
@@ -959,18 +951,21 @@ impl MoEExperts {
             _ => return Ok(None), // Fall back for unsupported activations
         };
 
-        let result = mistralrs_quant::indexed_moe_fused_decode(
-            gate_qt,
-            up_qt,
-            down_qt,
-            xs_flat,
-            ti_u32_slice,
-            tw_ptr,
-            num_tokens,
-            self.num_experts_per_tok,
-            act_type,
-            dev,
-        )?;
+        // SAFETY: tw_ptr is a valid device pointer obtained from the topk_weights tensor above.
+        let result = unsafe {
+            mistralrs_quant::indexed_moe_fused_decode(
+                gate_qt,
+                up_qt,
+                down_qt,
+                xs_flat,
+                ti_u32_slice,
+                tw_ptr,
+                num_tokens,
+                self.num_experts_per_tok,
+                act_type,
+                dev,
+            )?
+        };
 
         Ok(Some(result.to_dtype(original_dtype)?))
     }
@@ -1153,10 +1148,10 @@ impl MoEExperts {
 
             // Forward through expert MLP
             let expert_input = current_state.clone();
-            let gate_out = weights.experts.gate_proj[expert_idx].forward(&expert_input)?
+            let gate_out = weights.experts.gate_proj[expert_idx]
+                .forward(&expert_input)?
                 .apply(&self.act)?;
-            let up_out =
-                weights.experts.up_proj[expert_idx].forward(&expert_input)?;
+            let up_out = weights.experts.up_proj[expert_idx].forward(&expert_input)?;
             let current_hidden_states =
                 weights.experts.down_proj[expert_idx].forward(&(gate_out * up_out)?)?;
 

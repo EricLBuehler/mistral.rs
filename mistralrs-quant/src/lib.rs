@@ -532,7 +532,6 @@ impl MatMul {
     pub fn qmatmul(&self, x: &Tensor, matmul: &QMatMul) -> Result<Tensor> {
         matmul.forward(x)
     }
-
 }
 
 /// Device/configurable intelligent convolution

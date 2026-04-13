@@ -526,7 +526,7 @@ pub fn quantize_input_q8_1(xs: &Tensor, dev: &CudaDevice) -> Result<(CudaSlice<u
         };
         let xs_slice = xs_cuda.as_cuda_slice::<f32>()?;
         assert!(xs_layout.start_offset() == 0);
-        quantize_q8_1(&xs_slice, &mut input_quant, k, num_rows, dev)?;
+        quantize_q8_1(xs_slice, &mut input_quant, k, num_rows, dev)?;
     }
 
     Ok((input_quant, k, k_padded))
@@ -629,7 +629,9 @@ pub const ACT_SILU: i32 = 1;
 ///
 /// Returns the aggregated output tensor of shape [batch, hidden_size].
 #[allow(clippy::too_many_arguments)]
-pub fn indexed_moe_fused_decode(
+/// # Safety
+/// `topk_weights_ptr` must be a valid device pointer to `batch * topk` f32 values.
+pub unsafe fn indexed_moe_fused_decode(
     gate_qt: &QTensor,
     up_qt: &QTensor,
     down_qt: &QTensor,

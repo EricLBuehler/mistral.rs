@@ -5,7 +5,6 @@ use std::sync::Arc;
 use candle_core::{Result, Tensor};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
-
 /// Temporal adapter that performs 4x downsampling via reshape + MLP.
 ///
 /// Input: [B, T, encoder_dim] (e.g., [B, T, 1280])

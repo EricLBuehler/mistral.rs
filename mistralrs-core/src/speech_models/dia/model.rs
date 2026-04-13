@@ -122,10 +122,10 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
     ) -> Result<Tensor> {
         let (b, t, _d) = xq.dims3()?;
 
-        let mut xq =
-            self.q_proj
-                .forward(xq)?
-                .reshape((b, t, self.num_q_heads, self.head_dim))?;
+        let mut xq = self
+            .q_proj
+            .forward(xq)?
+            .reshape((b, t, self.num_q_heads, self.head_dim))?;
         xq = self.rope.forward(&xq, q_positions)?;
         xq = xq.transpose(1, 2)?;
 
@@ -137,18 +137,14 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
                 .k_v()
         } else {
             // Compute fresh K and V for self‑attention.
-            let mut k = self.k_proj.forward(xkv)?.reshape((
-                b,
-                t,
-                self.num_kv_heads,
-                self.head_dim,
-            ))?;
-            let mut v = self.v_proj.forward(xkv)?.reshape((
-                b,
-                t,
-                self.num_kv_heads,
-                self.head_dim,
-            ))?;
+            let mut k =
+                self.k_proj
+                    .forward(xkv)?
+                    .reshape((b, t, self.num_kv_heads, self.head_dim))?;
+            let mut v =
+                self.v_proj
+                    .forward(xkv)?
+                    .reshape((b, t, self.num_kv_heads, self.head_dim))?;
 
             // Apply RoPE to K and put heads first.
             k = self.rope.forward(&k, kv_positions)?;
@@ -545,21 +541,17 @@ impl DiaDecoder {
         for layer in &self.layers {
             let ca = &layer.cross_attn;
 
-            let mut k_proj = ca.k_proj.forward(encoder_out)?.reshape((
-                b,
-                t,
-                ca.num_kv_heads,
-                ca.head_dim,
-            ))?;
+            let mut k_proj =
+                ca.k_proj
+                    .forward(encoder_out)?
+                    .reshape((b, t, ca.num_kv_heads, ca.head_dim))?;
             k_proj = ca.rope.forward(&k_proj, encoder_positions)?;
             k_proj = k_proj.transpose(1, 2)?;
 
-            let mut v_proj = ca.v_proj.forward(encoder_out)?.reshape((
-                b,
-                t,
-                ca.num_kv_heads,
-                ca.head_dim,
-            ))?;
+            let mut v_proj =
+                ca.v_proj
+                    .forward(encoder_out)?
+                    .reshape((b, t, ca.num_kv_heads, ca.head_dim))?;
             v_proj = v_proj.transpose(1, 2)?;
 
             per_layer_kv_cache.push(Some(DiaKvCache::from_kv(k_proj, v_proj)));

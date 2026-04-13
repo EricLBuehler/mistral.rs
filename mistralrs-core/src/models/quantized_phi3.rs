@@ -84,8 +84,7 @@ impl LayerWeights {
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
-        let qkv = self.attn_qkv.forward(x)?
-            .to_dtype(self.dtype)?;
+        let qkv = self.attn_qkv.forward(x)?.to_dtype(self.dtype)?;
         let query_pos = self.n_head * self.head_dim;
         let q = qkv.narrow(D::Minus1, 0, query_pos)?;
         let k = qkv.narrow(D::Minus1, query_pos, self.n_kv_head * self.head_dim)?;

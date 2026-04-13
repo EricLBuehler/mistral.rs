@@ -148,12 +148,9 @@ impl LayerWeights {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
-        let q = self.attention_wq.forward(x)?
-            .to_dtype(self.dtype)?;
-        let k = self.attention_wk.forward(x)?
-            .to_dtype(self.dtype)?;
-        let v = self.attention_wv.forward(x)?
-            .to_dtype(self.dtype)?;
+        let q = self.attention_wq.forward(x)?.to_dtype(self.dtype)?;
+        let k = self.attention_wk.forward(x)?.to_dtype(self.dtype)?;
+        let v = self.attention_wv.forward(x)?.to_dtype(self.dtype)?;
 
         let (q, k, v) = if seq_len != 1 {
             let q = q

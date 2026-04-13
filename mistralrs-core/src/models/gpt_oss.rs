@@ -15,8 +15,7 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        self, embedding, CausalMasker, GptOssRotaryEmbedding, RmsNorm, RotaryEmbedding,
-        Sdpa,
+        self, embedding, CausalMasker, GptOssRotaryEmbedding, RmsNorm, RotaryEmbedding, Sdpa,
     },
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},

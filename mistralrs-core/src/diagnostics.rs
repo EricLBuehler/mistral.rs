@@ -142,41 +142,36 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
     #[cfg(feature = "cuda")]
     {
         let mut ord = 0;
-        loop {
-            match Device::new_cuda(ord) {
-                Ok(dev) => {
-                    let total = MemoryUsage.get_total_memory(&dev).ok().map(|v| v as u64);
-                    let avail = MemoryUsage
-                        .get_memory_available(&dev)
-                        .ok()
-                        .map(|v| v as u64);
+        while let Ok(dev) = Device::new_cuda(ord) {
+            let total = MemoryUsage.get_total_memory(&dev).ok().map(|v| v as u64);
+            let avail = MemoryUsage
+                .get_memory_available(&dev)
+                .ok()
+                .map(|v| v as u64);
 
-                    // Get compute capability
-                    let compute_cap = get_cuda_compute_capability(ord);
-                    let flash_attn_v2_ok = compute_cap.map(|(major, _minor)| {
-                        // Flash Attention v2 requires compute capability >= 8.0 (Ampere+)
-                        major >= 8
-                    });
-                    let flash_attn_v3_ok = compute_cap.map(|(major, minor)| {
-                        // Flash Attention v3 requires compute capability == 9.0 (Hopper only)
-                        major == 9 && minor == 0
-                    });
+            // Get compute capability
+            let compute_cap = get_cuda_compute_capability(ord);
+            let flash_attn_v2_ok = compute_cap.map(|(major, _minor)| {
+                // Flash Attention v2 requires compute capability >= 8.0 (Ampere+)
+                major >= 8
+            });
+            let flash_attn_v3_ok = compute_cap.map(|(major, minor)| {
+                // Flash Attention v3 requires compute capability == 9.0 (Hopper only)
+                major == 9 && minor == 0
+            });
 
-                    devices.push(DeviceInfo {
-                        kind: "cuda".to_string(),
-                        ordinal: Some(ord),
-                        name: None,
-                        total_memory_bytes: total,
-                        available_memory_bytes: avail,
-                        compute_capability: compute_cap,
-                        flash_attn_compatible: flash_attn_v2_ok,
-                        flash_attn_v3_compatible: flash_attn_v3_ok,
-                        unified_memory: Some(crate::utils::normal::is_integrated_gpu(&dev)),
-                    });
-                    ord += 1;
-                }
-                Err(_) => break,
-            }
+            devices.push(DeviceInfo {
+                kind: "cuda".to_string(),
+                ordinal: Some(ord),
+                name: None,
+                total_memory_bytes: total,
+                available_memory_bytes: avail,
+                compute_capability: compute_cap,
+                flash_attn_compatible: flash_attn_v2_ok,
+                flash_attn_v3_compatible: flash_attn_v3_ok,
+                unified_memory: Some(crate::utils::normal::is_integrated_gpu(&dev)),
+            });
+            ord += 1;
         }
     }
 

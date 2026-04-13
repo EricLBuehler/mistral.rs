@@ -10,8 +10,7 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::DeviceMapper,
     layers::{
-        embedding, Gemma3RotaryEmbedding, GemmaRmsNorm, Mlp, RotaryEmbedding,
-        ScaledEmbedding, Sdpa,
+        embedding, Gemma3RotaryEmbedding, GemmaRmsNorm, Mlp, RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
     layers_masker::BidirectionalMasker,
     paged_attention::AttentionImplementation,

@@ -133,9 +133,7 @@ enum QProj {
 impl QProj {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
-            Self::Lora { a, norm, b } => {
-                b.forward(&norm.forward(&a.forward(xs)?)?)
-            }
+            Self::Lora { a, norm, b } => b.forward(&norm.forward(&a.forward(xs)?)?),
             Self::Plain(lin) => lin.forward(xs),
         }
     }

@@ -18,6 +18,7 @@
 /// Returns:
 /// - `y`:       (batch, seq_len, n_heads, head_dim) - output, f32
 #[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
 pub fn selective_scan_cuda(
     x: &candle_core::Tensor,
     dt: &candle_core::Tensor,

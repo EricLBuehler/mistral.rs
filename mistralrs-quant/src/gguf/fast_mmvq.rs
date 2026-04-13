@@ -65,8 +65,10 @@ static WORKSPACE: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, WorkspaceS
 fn workspace_ensure(
     dev: &CudaDevice,
     bytes: usize,
-) -> Result<(u64, std::sync::MutexGuard<'static, HashMap<candle_core::cuda::DeviceId, WorkspaceSlot>>)>
-{
+) -> Result<(
+    u64,
+    std::sync::MutexGuard<'static, HashMap<candle_core::cuda::DeviceId, WorkspaceSlot>>,
+)> {
     let map = WORKSPACE.get_or_init(|| Mutex::new(HashMap::new()));
     let device_key = dev.id();
     let mut guard = map.lock().unwrap();
@@ -235,10 +237,10 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
             }
 
             let out_storage = CudaStorage::wrap_cuda_slice(out, dev.clone());
-            return Ok(Tensor::from((
+            Ok(Tensor::from((
                 Storage::Cuda(out_storage),
                 output_shape(&xs, nrows),
-            )));
+            )))
         }
         DType::F32 => {
             let slice = xs_cuda.as_cuda_slice::<f32>()?;
@@ -273,10 +275,10 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
             }
 
             let out_storage = CudaStorage::wrap_cuda_slice(out, dev.clone());
-            return Ok(Tensor::from((
+            Ok(Tensor::from((
                 Storage::Cuda(out_storage),
                 output_shape(&xs, nrows),
-            )));
+            )))
         }
         _ => unreachable!(),
     }
