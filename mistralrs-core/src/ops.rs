@@ -772,6 +772,20 @@ pub fn mul_and_act(a: &Tensor, b: &Tensor, act: Activation) -> Result<Tensor> {
     a.apply(&act)? * b
 }
 
+/// Feed-forward path for quantized gate/up/down projections.
+pub(crate) fn quantized_ffn(
+    xs: &Tensor,
+    gate: &dyn mistralrs_quant::QuantMethod,
+    up: &dyn mistralrs_quant::QuantMethod,
+    down: &dyn mistralrs_quant::QuantMethod,
+    act: Activation,
+) -> Result<Tensor> {
+    let lhs = gate.forward(xs)?;
+    let rhs = up.forward(xs)?;
+    let inter = mul_and_act(&lhs, &rhs, act)?;
+    down.forward(&inter)
+}
+
 mod tests {
     #[test]
     fn test_topk() {

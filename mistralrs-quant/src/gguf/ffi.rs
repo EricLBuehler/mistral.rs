@@ -713,4 +713,369 @@ extern "C" {
         k_padded: i32,
         stream: *mut c_void,
     );
+
+    // Launchers for the dense GGUF mmvq kernels used by `fast_mmvq`.
+
+    pub fn launch_mmvq_gguf_q4_0_bf16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q4_1_bf16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q5_0_bf16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q5_1_bf16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q8_0_bf16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q2_k_bf16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q3_k_bf16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q4_k_bf16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q5_k_bf16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q6_k_bf16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+
+    pub fn launch_mmvq_gguf_q4_0_f32_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q4_1_f32_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q5_0_f32_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q5_1_f32_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q8_0_f32_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q2_k_f32_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q3_k_f32_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q4_k_f32_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q5_k_f32_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q6_k_f32_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+
+    pub fn launch_mmvq_gguf_q4_0_f16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q4_1_f16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q5_0_f16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q5_1_f16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q8_0_f16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q2_k_f16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q3_k_f16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q4_k_f16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q5_k_f16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q6_k_f16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+
+    /// BF16 -> Q8_1 quantize
+    pub fn launch_mmvq_gguf_quantize_q8_1_bf16(
+        x: *const c_void,
+        vy: *mut c_void,
+        kx: i32,
+        kx_padded: i32,
+        num_rows: i32,
+        stream: *mut c_void,
+    );
+
+    /// F16 -> Q8_1 quantize
+    pub fn launch_mmvq_gguf_quantize_q8_1_f16(
+        x: *const c_void,
+        vy: *mut c_void,
+        kx: i32,
+        kx_padded: i32,
+        num_rows: i32,
+        stream: *mut c_void,
+    );
+
+    /// F32 -> Q8_1 quantize
+    pub fn launch_mmvq_gguf_quantize_q8_1_f32(
+        x: *const c_void,
+        vy: *mut c_void,
+        kx: i32,
+        kx_padded: i32,
+        num_rows: i32,
+        stream: *mut c_void,
+    );
 }

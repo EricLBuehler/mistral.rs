@@ -89,7 +89,7 @@ impl ClippableLinear {
         if let (Some(lo), Some(hi)) = (self.input_min, self.input_max) {
             x = x.clamp(lo, hi)?;
         }
-        let mut out = self.inner.forward_autocast(&x)?;
+        let mut out = self.inner.forward(&x)?;
         if let (Some(lo), Some(hi)) = (self.output_min, self.output_max) {
             out = out.clamp(lo, hi)?;
         }

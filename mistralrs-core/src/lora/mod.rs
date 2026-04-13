@@ -2,7 +2,7 @@
 
 use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
-use candle_core::{quantized::QTensor, DType, IndexOp, Result, Tensor, D};
+use candle_core::{quantized::QTensor, IndexOp, Result, Tensor, D};
 use candle_nn::{Linear, Module};
 use loralinear::LoraLinear;
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
@@ -94,7 +94,6 @@ fn make_adapter(
 
 /// Any layer that is linear-like.
 pub trait LinearLayerLike: Merge {
-    fn quantized_act_type(&self) -> Option<DType>;
     fn quant_inner(&mut self) -> &mut Arc<dyn QuantMethod>;
     fn is_lora(&self) -> bool;
     fn weight(&self) -> &Tensor;
@@ -142,9 +141,6 @@ impl LinearLayerLike for Linear {
         _is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         self.forward(x)
-    }
-    fn quantized_act_type(&self) -> Option<DType> {
-        None
     }
     fn is_lora(&self) -> bool {
         false

@@ -144,15 +144,7 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.qkv_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut qkv = MatMul.qmethod_matmul(&xs, &*self.qkv_proj)?;
-        if self.qkv_proj.quantized_act_type().is_some() {
-            qkv = qkv.to_dtype(original_dtype)?;
-        }
+        let qkv = self.qkv_proj.forward(xs)?;
         let query_pos = self.num_heads * self.head_dim;
         let q = qkv.narrow(D::Minus1, 0, query_pos)?;
         let k = qkv.narrow(D::Minus1, query_pos, self.num_kv_heads * self.head_dim)?;
@@ -230,18 +222,12 @@ impl Attention {
             }
         };
 
-        if let Some(t) = self.qkv_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
         attn_output = if !matches!(attention_mask, AttentionMask::None) {
             attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
         };
-        let mut res = MatMul.qmethod_matmul(&attn_output, &*self.o_proj)?;
-        if self.qkv_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
     }
 }
@@ -289,19 +275,11 @@ impl AnyMoeTrainableLayer for Mlp {}
 
 impl MlpLayer for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate_up_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let up_states = MatMul.qmethod_matmul(&xs, &*self.gate_up_proj)?;
+        let up_states = self.gate_up_proj.forward(xs)?;
         let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
         let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
         let up_states = crate::ops::mul_and_act(&gate, &up_states, self.act_fn)?;
-        let mut res = MatMul.qmethod_matmul(&up_states, &*self.down_proj)?;
-        if self.gate_up_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.down_proj.forward(&up_states)?;
         Ok(res)
     }
     fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
@@ -594,11 +572,8 @@ impl Model {
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let mut xs = extract_logits(&xs, context_lens)?;
-        if let Some(t) = self.lm_head.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        MatMul.qmethod_matmul(&xs, &*self.lm_head)
+        let xs = extract_logits(&xs, context_lens)?;
+        self.lm_head.forward(&xs)
     }
 }
 

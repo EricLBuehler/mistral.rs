@@ -15,8 +15,7 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        self, embedding, CausalMasker, GptOssRotaryEmbedding, MatMul, RmsNorm, RotaryEmbedding,
-        Sdpa,
+        self, embedding, CausalMasker, GptOssRotaryEmbedding, RmsNorm, RotaryEmbedding, Sdpa,
     },
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -257,20 +256,9 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut q = MatMul.qmethod_matmul(&xs, &*self.q_proj)?;
-        let mut k = MatMul.qmethod_matmul(&xs, &*self.k_proj)?;
-        let mut v = MatMul.qmethod_matmul(&xs, &*self.v_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
+        let mut q = self.q_proj.forward(xs)?;
+        let mut k = self.k_proj.forward(xs)?;
+        let mut v = self.v_proj.forward(xs)?;
         (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -333,18 +321,12 @@ impl Attention {
             }
         };
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
         attn_output = if !matches!(attention_mask, AttentionMask::None) {
             attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
         };
-        let mut res = MatMul.qmethod_matmul(&attn_output, &*self.o_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
     }
 }
@@ -815,12 +797,9 @@ impl Model {
 
         xs = xs.to_device(&self.device)?;
         xs = self.norm.forward(&xs)?;
-        let mut xs = extract_logits(&xs, context_lens)?;
+        let xs = extract_logits(&xs, context_lens)?;
 
-        if let Some(t) = self.lm_head.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        MatMul.qmethod_matmul(&xs, &*self.lm_head)
+        self.lm_head.forward(&xs)
     }
 }
 

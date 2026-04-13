@@ -212,8 +212,8 @@ impl QuantMethod for RowParallelLayer {
         candle_core::bail!("RowParallelLayer should not be constructed with `QuantMethod::new`")
     }
 
-    fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        let mut xs = self.weight.forward(a)?;
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
+        let mut xs = self.weight.forward_raw(a)?;
         xs = self.all_reduce.sum_all_reduce(&xs.contiguous()?)?;
         if let Some(bias) = &self.bias {
             xs = xs.broadcast_add(bias)?;
@@ -254,6 +254,11 @@ impl QuantMethod for RowParallelLayer {
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         self.weight.unquant_weight_bias()
+    }
+
+    #[cfg(feature = "cuda")]
+    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+        self.weight.get_qtensor()
     }
 
     fn apply_isq(
@@ -546,8 +551,8 @@ impl QuantMethod for ColumnParallelLayer {
         candle_core::bail!("ColumnParallelLayer should not be constructed with `QuantMethod::new`")
     }
 
-    fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        let mut xs = self.weight.forward(a)?;
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
+        let mut xs = self.weight.forward_raw(a)?;
         if let Some(bias) = &self.bias {
             xs = xs.broadcast_add(bias)?;
         }
@@ -586,6 +591,11 @@ impl QuantMethod for ColumnParallelLayer {
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         self.weight.unquant_weight_bias()
+    }
+
+    #[cfg(feature = "cuda")]
+    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+        self.weight.get_qtensor()
     }
 
     fn apply_isq(
@@ -893,8 +903,8 @@ impl QuantMethod for ReplicatedLayer {
         candle_core::bail!("ReplicatedLayer should not be constructed with `QuantMethod::new`")
     }
 
-    fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        self.0.forward(a)
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
+        self.0.forward_raw(a)
     }
 
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
@@ -925,6 +935,11 @@ impl QuantMethod for ReplicatedLayer {
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         self.0.unquant_weight_bias()
+    }
+
+    #[cfg(feature = "cuda")]
+    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+        self.0.get_qtensor()
     }
 
     fn apply_isq(

@@ -271,9 +271,9 @@ impl Attention {
     fn forward(&self, xs: &Tensor, attention_mask: &AttentionMask) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let mut q = self.q_proj.forward_autocast(xs)?;
-        let mut k = self.k_proj.forward_autocast(xs)?;
-        let mut v = self.v_proj.forward_autocast(xs)?;
+        let mut q = self.q_proj.forward(xs)?;
+        let mut k = self.k_proj.forward(xs)?;
+        let mut v = self.v_proj.forward(xs)?;
 
         q = q
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -296,12 +296,11 @@ impl Attention {
             &self.sdpa_params,
         )?;
 
-        self.o_proj
-            .forward_autocast(&attn_output.transpose(1, 2)?.reshape((
-                b_sz,
-                q_len,
-                self.embed_dim,
-            ))?)
+        self.o_proj.forward(
+            &attn_output
+                .transpose(1, 2)?
+                .reshape((b_sz, q_len, self.embed_dim))?,
+        )
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
@@ -344,9 +343,9 @@ impl VisionMLP {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let mut x = self.fc1.forward_autocast(x)?;
+        let mut x = self.fc1.forward(x)?;
         x = self.activation.forward(&x)?;
-        self.fc2.forward_autocast(&x)
+        self.fc2.forward(&x)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {

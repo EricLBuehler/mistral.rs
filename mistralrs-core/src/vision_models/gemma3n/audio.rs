@@ -325,7 +325,7 @@ impl Gemma3nAudioRelativePositionEmbedding {
             self.get_timing_signal_1d_pos(&pos_indices, &inv_timescales, queries.dtype())?;
 
         // Project sinusoidal embeddings
-        let projected_sin_emb = self.pos_proj.forward_autocast(&sin_emb_timing_signal)?;
+        let projected_sin_emb = self.pos_proj.forward(&sin_emb_timing_signal)?;
         let sin_emb = projected_sin_emb
             .reshape((1, max_span_plus_1, self.num_heads, self.head_dim))?
             .squeeze(0)?;
@@ -585,9 +585,9 @@ impl Gemma3nAudioAttention {
     }
 
     pub fn forward(&self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
-        let query_states = self.q_proj.forward_autocast(x)?;
-        let key_states = self.k_proj.forward_autocast(x)?;
-        let value_states = self.v_proj.forward_autocast(x)?;
+        let query_states = self.q_proj.forward(x)?;
+        let key_states = self.k_proj.forward(x)?;
+        let value_states = self.v_proj.forward(x)?;
 
         let (b, t) = match x.dims() {
             &[b, t, _] => (b, t),
@@ -1018,7 +1018,7 @@ impl Gemma3nAudioSubSampleConvProjection {
         let x_transposed = x.transpose(1, 2)?.transpose(2, 3)?;
         let output_flattened = x_transposed.reshape((b, t_out, f_out * c_out))?;
 
-        self.input_proj_linear.forward_autocast(&output_flattened)
+        self.input_proj_linear.forward(&output_flattened)
     }
 }
 
@@ -1074,7 +1074,7 @@ impl Gemma3nAudioConformerAttention {
         let audio_encodings_reshaped =
             audio_encodings_attn_out.reshape((b, t, self.hidden_size))?;
 
-        let x = self.post.forward_autocast(&audio_encodings_reshaped)?;
+        let x = self.post.forward(&audio_encodings_reshaped)?;
 
         audio_encodings_input_to_attn.broadcast_add(&self.post_norm.forward(&x)?)
     }
@@ -1128,9 +1128,9 @@ impl Gemma3nAudioConformerFeedForward {
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let residual = x;
         let x = self.pre_layer_norm.forward(x)?;
-        let x = self.ffw_layer_1.forward_autocast(&x)?;
+        let x = self.ffw_layer_1.forward(&x)?;
         let x = candle_nn::ops::silu(&x)?;
-        let x = self.ffw_layer_2.forward_autocast(&x)?;
+        let x = self.ffw_layer_2.forward(&x)?;
         let x = self.post_layer_norm.forward(&x)?;
 
         residual.broadcast_add(&(x * self.scale)?)
@@ -1204,7 +1204,7 @@ impl Gemma3nAudioConformerLightConv1d {
         let audio_encodings_residual = audio_encodings;
 
         let audio_encodings = self.pre_layer_norm.forward(audio_encodings)?;
-        let audio_encodings = self.linear_start.forward_autocast(&audio_encodings)?;
+        let audio_encodings = self.linear_start.forward(&audio_encodings)?;
         // Implement GLU manually: split tensor in half and apply gating
         let chunks = audio_encodings.chunk(2, D::Minus1)?;
         let audio_encodings = chunks[0].broadcast_mul(&candle_nn::ops::sigmoid(&chunks[1])?)?;
@@ -1227,7 +1227,7 @@ impl Gemma3nAudioConformerLightConv1d {
 
         let audio_encodings = self.conv_norm.forward(&audio_encodings)?;
         let audio_encodings = candle_nn::ops::silu(&audio_encodings)?;
-        let audio_encodings = self.linear_end.forward_autocast(&audio_encodings)?;
+        let audio_encodings = self.linear_end.forward(&audio_encodings)?;
 
         audio_encodings_residual.broadcast_add(&audio_encodings)
     }

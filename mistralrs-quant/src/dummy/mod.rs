@@ -35,7 +35,7 @@ impl QuantMethod for DummyLayer {
     fn dtype_and_device(&self) -> (candle_core::DType, candle_core::Device) {
         (candle_core::DType::F32, candle_core::Device::Cpu)
     }
-    fn forward(&self, _a: &candle_core::Tensor) -> candle_core::Result<candle_core::Tensor> {
+    fn forward_raw(&self, _a: &candle_core::Tensor) -> candle_core::Result<candle_core::Tensor> {
         candle_core::bail!("DummyLayer should not ever be present in forward pass!")
     }
     fn quantized_act_type(&self) -> Option<candle_core::DType> {

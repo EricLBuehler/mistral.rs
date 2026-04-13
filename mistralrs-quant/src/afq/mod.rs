@@ -138,7 +138,7 @@ impl QuantMethod for AfqLayer {
         )
     }
 
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
         ops::afq_mm_op(
             x,
             &self.w_q,
@@ -152,7 +152,7 @@ impl QuantMethod for AfqLayer {
         )
     }
 
-    fn gather_forward(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+    fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
         ops::afq_mm_op(
             x,
             &self.w_q,

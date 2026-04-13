@@ -3,6 +3,8 @@ mod cpu;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda;
 #[cfg(feature = "cuda")]
+pub mod fast_mmvq;
+#[cfg(feature = "cuda")]
 mod ffi;
 
 use std::{
@@ -28,6 +30,43 @@ use crate::{
 pub struct GgufMatMul {
     pub(crate) w: QMatMul,
     pub(crate) b: Option<Tensor>,
+}
+
+impl GgufMatMul {
+    fn add_bias(&self, x: Tensor) -> Result<Tensor> {
+        if let Some(ref b) = self.b {
+            x.broadcast_add(b)
+        } else {
+            Ok(x)
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn uses_fast_mmvq(&self) -> bool {
+        matches!(
+            &self.w,
+            QMatMul::QTensor(q) if q.device().is_cuda() && fast_mmvq::supports(q.dtype())
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    fn try_fast_forward(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        if !self.uses_fast_mmvq() || !matches!(a.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+            return Ok(None);
+        }
+
+        let flat_batch = a.dims()[..a.dims().len().saturating_sub(1)]
+            .iter()
+            .product::<usize>();
+        if !(1..=fast_mmvq::MMVQ_MAX_BATCH).contains(&flat_batch) {
+            return Ok(None);
+        }
+
+        let QMatMul::QTensor(q) = &self.w else {
+            unreachable!("uses_fast_mmvq() requires QTensor weights")
+        };
+        Ok(Some(fast_mmvq::plain(q, a)?))
+    }
 }
 
 impl QuantMethod for GgufMatMul {
@@ -57,20 +96,35 @@ impl QuantMethod for GgufMatMul {
         self.w.dequantize_f16()?.to_dtype(DType::F32)
     }
 
-    fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        let x = self.w.forward(a)?;
-        if let Some(ref b) = self.b {
-            x.broadcast_add(b)
-        } else {
-            Ok(x)
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
+        #[cfg(feature = "cuda")]
+        {
+            if let Some(out) = self.try_fast_forward(a)? {
+                return self.add_bias(out);
+            }
         }
+
+        // Fallback: Candle QMatMul requires F32
+        let original_dtype = a.dtype();
+        let a_f32 = if original_dtype == DType::F32 {
+            a.clone()
+        } else {
+            a.to_dtype(DType::F32)?
+        };
+        let x = self.w.forward(&a_f32)?;
+        let x = if original_dtype == DType::F32 {
+            x
+        } else {
+            x.to_dtype(original_dtype)?
+        };
+        self.add_bias(x)
     }
 
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
     ///
     /// If `a` is (n_tokens, 1, cols), `self` weights are (n_experts, rows, cols),
     /// then the indices are (n_tokens, n_experts_per_tok).
-    fn gather_forward(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+    fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
         // Use indexed_moe_forward for efficient indexed matmul
         // Expected shapes:
         // - x: (n_tokens, 1, hidden_dim) or (n_tokens, n_experts_per_tok, hidden_dim)
@@ -99,6 +153,12 @@ impl QuantMethod for GgufMatMul {
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
+        #[cfg(feature = "cuda")]
+        {
+            if self.uses_fast_mmvq() {
+                return None;
+            }
+        }
         Some(DType::F32)
     }
 

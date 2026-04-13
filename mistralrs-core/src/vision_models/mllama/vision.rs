@@ -193,20 +193,9 @@ impl MLlamaVisionAttention {
 
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L243
     fn forward(&self, hidden_state: &Tensor, attention_mask: &AttentionMask) -> Result<Tensor> {
-        let mut hidden_state = hidden_state.clone();
-        let original_dtype = hidden_state.dtype();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            hidden_state = hidden_state.to_dtype(t)?;
-        }
-        let mut q = self.q_proj.forward(&hidden_state)?;
-        let mut k = self.k_proj.forward(&hidden_state)?;
-        let mut v = self.v_proj.forward(&hidden_state)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
+        let mut q = self.q_proj.forward(hidden_state)?;
+        let mut k = self.k_proj.forward(hidden_state)?;
+        let mut v = self.v_proj.forward(hidden_state)?;
         // Should be same, no caching...
         let (bs, q_sq, _) = q.dims3()?;
         let (_, k_sq, _) = k.dims3()?;
@@ -223,7 +212,7 @@ impl MLlamaVisionAttention {
 
         let flash_params = FlashParams::empty(false);
 
-        let mut attn_output = Sdpa
+        let attn_output = Sdpa
             .run_attention(
                 &q.contiguous()?,
                 &k.contiguous()?,
@@ -237,13 +226,7 @@ impl MLlamaVisionAttention {
             .reshape((bs, q_sq, ()))?
             .to_dtype(q.dtype())?;
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
-        let mut res = self.o_proj.forward(&attn_output)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
     }
 }
@@ -283,17 +266,9 @@ impl MLlamaMlp {
 
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L223
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        let original_dtype = hidden_states.dtype();
-        let mut hidden_states = hidden_states.clone();
-        if let Some(t) = self.fc1.quantized_act_type() {
-            hidden_states = hidden_states.to_dtype(t)?;
-        }
-        hidden_states = self
+        let hidden_states = self
             .fc2
-            .forward(&self.act.forward(&self.fc1.forward(&hidden_states)?)?)?;
-        if self.fc1.quantized_act_type().is_some() {
-            hidden_states = hidden_states.to_dtype(original_dtype)?;
-        }
+            .forward(&self.act.forward(&self.fc1.forward(hidden_states)?)?)?;
         Ok(hidden_states)
     }
 }

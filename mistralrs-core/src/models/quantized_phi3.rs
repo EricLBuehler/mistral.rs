@@ -28,12 +28,12 @@ struct Mlp {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let up_states = MatMul.qmethod_matmul(xs, &*self.ffn_up)?;
+        let up_states = self.ffn_up.forward(xs)?;
         let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
         let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
         let up_states =
             crate::ops::mul_and_act(&gate, &up_states, crate::layers::Activation::Silu)?;
-        MatMul.qmethod_matmul(&up_states, &*self.ffn_down)
+        self.ffn_down.forward(&up_states)
     }
 }
 
@@ -84,9 +84,7 @@ impl LayerWeights {
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
-        let qkv = MatMul
-            .qmethod_matmul(x, &*self.attn_qkv)?
-            .to_dtype(self.dtype)?;
+        let qkv = self.attn_qkv.forward(x)?.to_dtype(self.dtype)?;
         let query_pos = self.n_head * self.head_dim;
         let q = qkv.narrow(D::Minus1, 0, query_pos)?;
         let k = qkv.narrow(D::Minus1, query_pos, self.n_kv_head * self.head_dim)?;
@@ -143,7 +141,7 @@ impl LayerWeights {
         } else {
             y.reshape((b_sz, seq_len, ()))?
         };
-        let y = MatMul.qmethod_matmul(&y.to_dtype(x.dtype())?, &*self.attn_output)?;
+        let y = self.attn_output.forward(&y.to_dtype(x.dtype())?)?;
         Ok(y)
     }
 }

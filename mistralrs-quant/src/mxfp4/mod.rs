@@ -85,7 +85,7 @@ impl QuantMethod for MXFP4Layer {
     }
 
     #[allow(unused_variables)]
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         if matches!(x.device(), Device::Cuda(_)) && ffi::HAVE_MXFP4_GEMM_KERNELS {
             let orig_dims = x.dims().to_vec();
@@ -135,7 +135,7 @@ impl QuantMethod for MXFP4Layer {
     }
 
     #[allow(unused_variables)]
-    fn gather_forward(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+    fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         if matches!(x.device(), Device::Cuda(_)) && ffi::HAVE_MXFP4_GEMM_KERNELS {
             return ops::mxfp4_indexed_moe_gemm(

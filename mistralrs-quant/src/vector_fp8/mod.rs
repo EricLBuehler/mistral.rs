@@ -51,7 +51,7 @@ impl QuantMethod for VectorFP8Linear {
         ops::fp8_vector_dequantize(&self.weight, &self.weight_scale_inv, self.dequant_dtype)
     }
 
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
         // Dequantize matmul always.
         let weight = self.dequantize_w()?;
         // Dispatch to unquant. This uses some cublaslt for bias & on cuda always, so it is better

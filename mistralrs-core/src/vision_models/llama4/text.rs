@@ -156,9 +156,9 @@ impl CausalSelfAttention {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
-        let mut q = self.q_proj.forward_autocast(x)?;
-        let mut k = self.k_proj.forward_autocast(x)?;
-        let mut v = self.v_proj.forward_autocast(x)?;
+        let mut q = self.q_proj.forward(x)?;
+        let mut k = self.k_proj.forward(x)?;
+        let mut v = self.v_proj.forward(x)?;
 
         q = q
             .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
@@ -242,7 +242,7 @@ impl CausalSelfAttention {
         } else {
             y.reshape((b_sz, seq_len, ()))?
         };
-        self.o_proj.forward_autocast(&y)
+        self.o_proj.forward(&y)
     }
 }
 
@@ -292,11 +292,11 @@ impl Mlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let lhs = self.gate.forward_autocast(xs)?;
-        let rhs = self.up.forward_autocast(xs)?;
+        let lhs = self.gate.forward(xs)?;
+        let rhs = self.up.forward(xs)?;
 
         self.down
-            .forward_autocast(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?)
+            .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?)
     }
 }
 
@@ -361,7 +361,7 @@ impl TextMoe {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (bs, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
-        let router_logits = self.router.forward_autocast(&xs_flat)?;
+        let router_logits = self.router.forward(&xs_flat)?;
 
         let TopKOutput {
             values: router_top_value,
@@ -745,7 +745,7 @@ impl TextModel {
         let x = x.to_device(&self.device)?;
         let x = self.ln_f.forward(&x)?;
         let x = extract_logits(&x, context_lens)?;
-        self.lm_head.forward_autocast(&x)
+        self.lm_head.forward(&x)
     }
 
     pub fn residual_tensors_m(&self, uvb_m: UnVarBuilder) -> Vec<(String, Tensor)> {

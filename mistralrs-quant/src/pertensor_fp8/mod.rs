@@ -69,7 +69,7 @@ impl QuantMethod for PerTensorFP8Linear {
         Ok(self.weight.clone())
     }
 
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
         // Weight is already dequantized, use standard matmul
         let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
             self.weight.clone(),
