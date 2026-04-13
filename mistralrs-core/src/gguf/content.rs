@@ -148,7 +148,7 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
                     .to_string()
                     .context("Model metadata should have declared an architecture")
                     .and_then(GGUFArchitecture::from_value)
-                    .unwrap(),
+                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?,
             );
         }
         let arch = arch.expect("GGUF files must specify `general.architecture`");
