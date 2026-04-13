@@ -101,12 +101,7 @@ impl MLP {
     ) -> Result<Tensor> {
         let lhs = self
             .gate_proj
-            .lora_forward(
-                xs,
-                scalings.clone(),
-                global_scaling_weight,
-                is_scaling_pass,
-            )?
+            .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)?
             .apply(&self.act_fn)?;
         let rhs = self.up_proj.lora_forward(
             xs,

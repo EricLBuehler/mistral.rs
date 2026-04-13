@@ -95,12 +95,7 @@ impl MLP {
         let res = self.fc2.lora_forward(
             &self
                 .fc1
-                .lora_forward(
-                    xs,
-                    scalings.clone(),
-                    global_scaling_weight,
-                    is_scaling_pass,
-                )?
+                .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)?
                 .apply(&self.act)?,
             scalings,
             global_scaling_weight,

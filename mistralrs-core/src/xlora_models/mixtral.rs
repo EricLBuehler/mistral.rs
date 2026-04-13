@@ -275,19 +275,11 @@ impl BlockSparseTop2MLP {
     ) -> Result<Tensor> {
         let lhs = self
             .w1
-            .lora_forward(
-                xs,
-                scalings.clone(),
-                global_scaling_weight,
-                is_scaling_pass,
-            )?
+            .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)?
             .apply(&self.act_fn)?;
-        let rhs = self.w3.lora_forward(
-            xs,
-            scalings.clone(),
-            global_scaling_weight,
-            is_scaling_pass,
-        )?;
+        let rhs =
+            self.w3
+                .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)?;
         let res = self.w2.lora_forward(
             &(lhs * rhs)?,
             scalings.clone(),

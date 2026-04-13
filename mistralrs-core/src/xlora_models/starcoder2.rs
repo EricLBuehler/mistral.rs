@@ -88,12 +88,7 @@ impl MLP {
         let res = self.c_proj.lora_forward(
             &self
                 .c_fc
-                .lora_forward(
-                    xs,
-                    scalings.clone(),
-                    global_scaling_weight,
-                    is_scaling_pass,
-                )?
+                .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)?
                 .apply(&self.act)?,
             scalings,
             global_scaling_weight,
