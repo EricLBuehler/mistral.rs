@@ -118,16 +118,10 @@ extern "C" void launch_mmq_gguf_q4_k(
     void *tmp_fixup_ptr,
     const void *x, const void *y_q8_1_mmq, void *dst,
     int64_t ncols_x, int64_t nrows_x, int64_t ncols_y,
-    int64_t stride_row_x, int64_t stride_col_dst, void *stream) {
+    int64_t stride_row_x, int64_t stride_col_dst,
+    int cc, int nsm, int64_t smpbo, int warp_size_host,
+    void *stream) {
 
-    int device;
-    cudaGetDevice(&device);
-    cudaDeviceProp prop;
-    cudaGetDeviceProperties(&prop, device);
-    const int cc = prop.major * 100 + prop.minor * 10;
-    const int nsm = prop.multiProcessorCount;
-    const size_t smpbo = prop.sharedMemPerBlockOptin;
-    const int warp_size_host = prop.warpSize;
     const bool use_stream_k = (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA);
 
     const mmq_args args = {

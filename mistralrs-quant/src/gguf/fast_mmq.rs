@@ -111,6 +111,10 @@ type MmqLauncher = unsafe extern "C" fn(
     ncols_y: i64,
     stride_row_x: i64,
     stride_col_dst: i64,
+    cc: i32,
+    nsm: i32,
+    smpbo: i64,
+    warp_size: i32,
     stream: *mut std::ffi::c_void,
 );
 
@@ -131,52 +135,90 @@ fn mmq_launcher(dtype: GgmlDType) -> Option<MmqLauncher> {
     Some(f)
 }
 
-// Workspaces for MMQ scratch buffers (per-device, grow-only).
-
 struct WorkspaceSlot {
     slice: CudaSlice<u8>,
     cap: usize,
 }
 
-/// Workspace for block_q8_1_mmq quantized activations.
-static MMQ_WORKSPACE: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, WorkspaceSlot>>> =
+type WsMap = Mutex<HashMap<candle_core::cuda::DeviceId, &'static Mutex<WorkspaceSlot>>>;
+
+static MMQ_WORKSPACE: OnceLock<WsMap> = OnceLock::new();
+static FIXUP_WORKSPACE: OnceLock<WsMap> = OnceLock::new();
+
+#[derive(Clone, Copy)]
+struct DeviceInfo {
+    cc: i32,
+    nsm: i32,
+    smpbo: i64,
+    warp_size: i32,
+}
+
+static DEVICE_INFO: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, DeviceInfo>>> =
     OnceLock::new();
 
-/// Workspace for stream-k fixup buffer (reused across launches).
-static FIXUP_WORKSPACE: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, WorkspaceSlot>>> =
-    OnceLock::new();
+fn get_device_info(dev: &CudaDevice) -> DeviceInfo {
+    use candle_core::cuda::cudarc::driver::{result, sys};
+    let map = DEVICE_INFO.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = dev.id();
+    let mut guard = map.lock().unwrap();
+    if let Some(info) = guard.get(&key) {
+        return *info;
+    }
+    let cu_device = dev.cuda_stream().context().cu_device();
+    let major = unsafe {
+        result::device::get_attribute(cu_device, sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)
+    }.unwrap_or(8);
+    let minor = unsafe {
+        result::device::get_attribute(cu_device, sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)
+    }.unwrap_or(0);
+    let nsm = unsafe {
+        result::device::get_attribute(cu_device, sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
+    }.unwrap_or(1);
+    let smpbo = unsafe {
+        result::device::get_attribute(cu_device, sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN)
+    }.unwrap_or(49152);
+    let warp_size = unsafe {
+        result::device::get_attribute(cu_device, sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_WARP_SIZE)
+    }.unwrap_or(32);
+    let info = DeviceInfo {
+        cc: major * 100 + minor * 10,
+        nsm,
+        smpbo: smpbo as i64,
+        warp_size,
+    };
+    guard.insert(key, info);
+    info
+}
 
 fn workspace_ensure(
-    ws: &'static OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, WorkspaceSlot>>>,
+    ws: &'static OnceLock<WsMap>,
     dev: &CudaDevice,
     bytes: usize,
-) -> Result<(
-    u64,
-    std::sync::MutexGuard<'static, HashMap<candle_core::cuda::DeviceId, WorkspaceSlot>>,
-)> {
+) -> Result<(u64, std::sync::MutexGuard<'static, WorkspaceSlot>)> {
     let map = ws.get_or_init(|| Mutex::new(HashMap::new()));
     let device_key = dev.id();
-    let mut guard = map.lock().unwrap();
-    let slot = match guard.get_mut(&device_key) {
-        Some(slot) => slot,
-        None => {
-            let slice = unsafe { dev.alloc::<u8>(bytes.max(1))? };
-            guard.insert(
-                device_key,
-                WorkspaceSlot {
+    let device_mtx: &'static Mutex<WorkspaceSlot> = {
+        let mut guard = map.lock().unwrap();
+        match guard.get(&device_key).copied() {
+            Some(mtx) => mtx,
+            None => {
+                let slice = unsafe { dev.alloc::<u8>(bytes.max(1))? };
+                let leaked = Box::leak(Box::new(Mutex::new(WorkspaceSlot {
                     slice,
                     cap: bytes.max(1),
-                },
-            );
-            guard.get_mut(&device_key).unwrap()
+                })));
+                guard.insert(device_key, leaked);
+                leaked
+            }
         }
     };
+    let mut slot = device_mtx.lock().unwrap();
     if slot.cap < bytes {
         slot.slice = unsafe { dev.alloc::<u8>(bytes)? };
         slot.cap = bytes;
     }
     let ptr = slot.slice.device_ptr(slot.slice.stream()).0;
-    Ok((ptr, guard))
+    Ok((ptr, slot))
 }
 
 /// Compute `w @ xs^T` where `w` is a GGUF-quantized weight tensor and
@@ -262,8 +304,8 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
 
     let weight_ptr = w.device_ptr()? as *const std::ffi::c_void;
     let stride_row_x = (k / qk) as i64;
+    let di = get_device_info(&dev);
 
-    // Allocate f32 output
     let out = unsafe { dev.alloc::<f32>(nrows * b_size)? };
     let stride_col_dst = nrows as i64;
 
@@ -273,25 +315,23 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
         let (out_ptr, _out_guard) = slice_ptr(&out, 0);
 
         unsafe {
-            // Quantize f32 activations to block_q8_1_mmq
             let quantize = quantize_launcher(ds_layout_for(dtype));
             quantize(
                 xs_ptr as *const std::ffi::c_void,
-                std::ptr::null(), // no ids (not MoE)
+                std::ptr::null(),
                 scratch_ptr,
-                0, // type_x (unused in our launcher)
-                k as i64,         // ne00 = actual cols
-                k as i64,         // s01 = stride between rows (contiguous)
-                0,                // s02
-                0,                // s03
-                k_padded as i64,  // ne0 = padded cols
-                b_size as i64,    // ne1 = number of rows (batch)
-                1,                // ne2
-                1,                // ne3
+                0,
+                k as i64,
+                k as i64,
+                0,
+                0,
+                k_padded as i64,
+                b_size as i64,
+                1,
+                1,
                 stream_ptr,
             );
 
-            // Launch MMQ matmul
             let launcher = mmq_launcher(dtype).expect("supports() checked");
             launcher(
                 fixup_ptr,
@@ -303,6 +343,10 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
                 b_size as i64,
                 stride_row_x,
                 stride_col_dst,
+                di.cc,
+                di.nsm,
+                di.smpbo,
+                di.warp_size,
                 stream_ptr,
             );
         }
@@ -311,7 +355,6 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     let out_storage = CudaStorage::wrap_cuda_slice(out, dev.clone());
     let out_tensor = Tensor::from((Storage::Cuda(out_storage), output_shape(&xs_f32, nrows)));
 
-    // Convert back to original dtype if needed
     if input_ty == DType::F32 {
         Ok(out_tensor)
     } else {

@@ -48,50 +48,43 @@ pub fn supports(dtype: GgmlDType) -> bool {
 /// Maximum flattened batch handled by the CUDA launcher table.
 pub const MMVQ_MAX_BATCH: usize = 8;
 
-// Shared Q8_1 scratch space per CUDA device.
-
 struct WorkspaceSlot {
     slice: CudaSlice<u8>,
     cap: usize,
 }
 
-static WORKSPACE: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, WorkspaceSlot>>> =
-    OnceLock::new();
+type WsMap = Mutex<HashMap<candle_core::cuda::DeviceId, &'static Mutex<WorkspaceSlot>>>;
 
-/// Returns a device pointer to the scratch workspace, growing it if needed.
-/// The returned `MutexGuard` must be held alive until the kernel using
-/// this pointer has been launched (all launches are on the device's
-/// default stream, so they are serialised).
+static WORKSPACE: OnceLock<WsMap> = OnceLock::new();
+
 fn workspace_ensure(
     dev: &CudaDevice,
     bytes: usize,
-) -> Result<(
-    u64,
-    std::sync::MutexGuard<'static, HashMap<candle_core::cuda::DeviceId, WorkspaceSlot>>,
-)> {
+) -> Result<(u64, std::sync::MutexGuard<'static, WorkspaceSlot>)> {
     let map = WORKSPACE.get_or_init(|| Mutex::new(HashMap::new()));
     let device_key = dev.id();
-    let mut guard = map.lock().unwrap();
-    let slot = match guard.get_mut(&device_key) {
-        Some(slot) => slot,
-        None => {
-            let slice = unsafe { dev.alloc::<u8>(bytes.max(1))? };
-            guard.insert(
-                device_key,
-                WorkspaceSlot {
+    let device_mtx: &'static Mutex<WorkspaceSlot> = {
+        let mut guard = map.lock().unwrap();
+        match guard.get(&device_key).copied() {
+            Some(mtx) => mtx,
+            None => {
+                let slice = unsafe { dev.alloc::<u8>(bytes.max(1))? };
+                let leaked = Box::leak(Box::new(Mutex::new(WorkspaceSlot {
                     slice,
                     cap: bytes.max(1),
-                },
-            );
-            guard.get_mut(&device_key).unwrap()
+                })));
+                guard.insert(device_key, leaked);
+                leaked
+            }
         }
     };
+    let mut slot = device_mtx.lock().unwrap();
     if slot.cap < bytes {
         slot.slice = unsafe { dev.alloc::<u8>(bytes)? };
         slot.cap = bytes;
     }
     let ptr = slot.slice.device_ptr(slot.slice.stream()).0;
-    Ok((ptr, guard))
+    Ok((ptr, slot))
 }
 
 // Launcher dispatch by weight and output dtype.

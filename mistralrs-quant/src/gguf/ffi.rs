@@ -1099,55 +1099,74 @@ extern "C" {
     );
 
     // MMQ matmul launchers (one per quant type)
-    // tmp_fixup: pre-allocated workspace for stream-k fixup (or null if not needed)
     pub fn launch_mmq_gguf_q4_0(
         tmp_fixup: *mut c_void, x: *const c_void, y: *const c_void, dst: *mut c_void,
         ncols_x: i64, nrows_x: i64, ncols_y: i64,
-        stride_row_x: i64, stride_col_dst: i64, stream: *mut c_void,
+        stride_row_x: i64, stride_col_dst: i64,
+        cc: i32, nsm: i32, smpbo: i64, warp_size: i32,
+        stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q4_1(
         tmp_fixup: *mut c_void, x: *const c_void, y: *const c_void, dst: *mut c_void,
         ncols_x: i64, nrows_x: i64, ncols_y: i64,
-        stride_row_x: i64, stride_col_dst: i64, stream: *mut c_void,
+        stride_row_x: i64, stride_col_dst: i64,
+        cc: i32, nsm: i32, smpbo: i64, warp_size: i32,
+        stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q5_0(
         tmp_fixup: *mut c_void, x: *const c_void, y: *const c_void, dst: *mut c_void,
         ncols_x: i64, nrows_x: i64, ncols_y: i64,
-        stride_row_x: i64, stride_col_dst: i64, stream: *mut c_void,
+        stride_row_x: i64, stride_col_dst: i64,
+        cc: i32, nsm: i32, smpbo: i64, warp_size: i32,
+        stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q5_1(
         tmp_fixup: *mut c_void, x: *const c_void, y: *const c_void, dst: *mut c_void,
         ncols_x: i64, nrows_x: i64, ncols_y: i64,
-        stride_row_x: i64, stride_col_dst: i64, stream: *mut c_void,
+        stride_row_x: i64, stride_col_dst: i64,
+        cc: i32, nsm: i32, smpbo: i64, warp_size: i32,
+        stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q8_0(
         tmp_fixup: *mut c_void, x: *const c_void, y: *const c_void, dst: *mut c_void,
         ncols_x: i64, nrows_x: i64, ncols_y: i64,
-        stride_row_x: i64, stride_col_dst: i64, stream: *mut c_void,
+        stride_row_x: i64, stride_col_dst: i64,
+        cc: i32, nsm: i32, smpbo: i64, warp_size: i32,
+        stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q2_k(
         tmp_fixup: *mut c_void, x: *const c_void, y: *const c_void, dst: *mut c_void,
         ncols_x: i64, nrows_x: i64, ncols_y: i64,
-        stride_row_x: i64, stride_col_dst: i64, stream: *mut c_void,
+        stride_row_x: i64, stride_col_dst: i64,
+        cc: i32, nsm: i32, smpbo: i64, warp_size: i32,
+        stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q3_k(
         tmp_fixup: *mut c_void, x: *const c_void, y: *const c_void, dst: *mut c_void,
         ncols_x: i64, nrows_x: i64, ncols_y: i64,
-        stride_row_x: i64, stride_col_dst: i64, stream: *mut c_void,
+        stride_row_x: i64, stride_col_dst: i64,
+        cc: i32, nsm: i32, smpbo: i64, warp_size: i32,
+        stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q4_k(
         tmp_fixup: *mut c_void, x: *const c_void, y: *const c_void, dst: *mut c_void,
         ncols_x: i64, nrows_x: i64, ncols_y: i64,
-        stride_row_x: i64, stride_col_dst: i64, stream: *mut c_void,
+        stride_row_x: i64, stride_col_dst: i64,
+        cc: i32, nsm: i32, smpbo: i64, warp_size: i32,
+        stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q5_k(
         tmp_fixup: *mut c_void, x: *const c_void, y: *const c_void, dst: *mut c_void,
         ncols_x: i64, nrows_x: i64, ncols_y: i64,
-        stride_row_x: i64, stride_col_dst: i64, stream: *mut c_void,
+        stride_row_x: i64, stride_col_dst: i64,
+        cc: i32, nsm: i32, smpbo: i64, warp_size: i32,
+        stream: *mut c_void,
     );
     pub fn launch_mmq_gguf_q6_k(
         tmp_fixup: *mut c_void, x: *const c_void, y: *const c_void, dst: *mut c_void,
         ncols_x: i64, nrows_x: i64, ncols_y: i64,
-        stride_row_x: i64, stride_col_dst: i64, stream: *mut c_void,
+        stride_row_x: i64, stride_col_dst: i64,
+        cc: i32, nsm: i32, smpbo: i64, warp_size: i32,
+        stream: *mut c_void,
     );
 }
