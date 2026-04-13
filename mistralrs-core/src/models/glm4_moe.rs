@@ -265,11 +265,9 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
-        let mut q = self.q_proj.forward(&xs)?;
-        let mut k = self.k_proj.forward(&xs)?;
-        let mut v = self.v_proj.forward(&xs)?;
+        let mut q = self.q_proj.forward(xs)?;
+        let mut k = self.k_proj.forward(xs)?;
+        let mut v = self.v_proj.forward(xs)?;
         (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -395,10 +393,8 @@ impl Expert {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
-        let lhs = self.gate.forward(&xs)?;
-        let rhs = self.up.forward(&xs)?;
+        let lhs = self.gate.forward(xs)?;
+        let rhs = self.up.forward(xs)?;
         let res = self
             .down
             .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?)?;

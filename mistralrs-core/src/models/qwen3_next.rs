@@ -263,11 +263,9 @@ impl FullAttention {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
-        let _original_dtype = x.dtype();
-        let x = x.clone();
-        let q_gate = self.q_proj.forward(&x)?;
-        let k = self.k_proj.forward(&x)?;
-        let v = self.v_proj.forward(&x)?;
+        let q_gate = self.q_proj.forward(x)?;
+        let k = self.k_proj.forward(x)?;
+        let v = self.v_proj.forward(x)?;
         // Split q_gate into q and gate: first reshape to per-head (head_dim*2), then chunk
         // Reference: view(*input_shape, -1, head_dim*2), chunk(2, dim=-1)
         let q_gate = q_gate.reshape((b_sz, seq_len, self.num_heads, self.head_dim * 2))?;
@@ -424,10 +422,8 @@ impl Mlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
-        let gate = self.gate_proj.forward(&xs)?;
-        let up = self.up_proj.forward(&xs)?;
+        let gate = self.gate_proj.forward(xs)?;
+        let up = self.up_proj.forward(xs)?;
         let activated = crate::ops::mul_and_act(&gate, &up, self.act_fn)?;
         let res = self.down_proj.forward(&activated)?;
         Ok(res)

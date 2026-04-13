@@ -41,21 +41,6 @@ impl GgufMatMul {
         }
     }
 
-    fn forward_fallback(&self, a: &Tensor) -> Result<Tensor> {
-        let original_dtype = a.dtype();
-        let a_cast = if original_dtype == DType::F32 {
-            a.clone()
-        } else {
-            a.to_dtype(DType::F32)?
-        };
-        let x = self.w.forward(&a_cast)?;
-        if original_dtype == DType::F32 {
-            Ok(x)
-        } else {
-            x.to_dtype(original_dtype)
-        }
-    }
-
     #[cfg(feature = "cuda")]
     fn uses_fast_mmvq(&self) -> bool {
         matches!(
@@ -66,7 +51,7 @@ impl GgufMatMul {
 
     #[cfg(feature = "cuda")]
     fn try_fast_forward(&self, a: &Tensor) -> Result<Option<Tensor>> {
-        if !self.uses_fast_mmvq() || !matches!(a.dtype(), DType::BF16 | DType::F32) {
+        if !self.uses_fast_mmvq() || !matches!(a.dtype(), DType::BF16 | DType::F16 | DType::F32) {
             return Ok(None);
         }
 
@@ -119,7 +104,20 @@ impl QuantMethod for GgufMatMul {
             }
         }
 
-        self.add_bias(self.forward_fallback(a)?)
+        // Fallback: Candle QMatMul requires F32
+        let original_dtype = a.dtype();
+        let a_f32 = if original_dtype == DType::F32 {
+            a.clone()
+        } else {
+            a.to_dtype(DType::F32)?
+        };
+        let x = self.w.forward(&a_f32)?;
+        let x = if original_dtype == DType::F32 {
+            x
+        } else {
+            x.to_dtype(original_dtype)?
+        };
+        self.add_bias(x)
     }
 
     /// Compute matmul of `self` and `a`. `self` should contain the weights.

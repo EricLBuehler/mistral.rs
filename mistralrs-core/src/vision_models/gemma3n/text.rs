@@ -164,13 +164,11 @@ impl Mlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
-        let mut gate = self.gate.forward(&xs)?;
+        let mut gate = self.gate.forward(xs)?;
         if self.activation_sparsity > 0. {
             gate = self.gaussian_topk(&gate)?;
         }
-        let up = self.up.forward(&xs)?;
+        let up = self.up.forward(xs)?;
         // let mut res = self.down.forward(&crate::ops::mul_and_act(
         //     &gate,
         //     &up,

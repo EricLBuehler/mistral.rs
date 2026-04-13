@@ -136,22 +136,20 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
         let q = self.q_proj.lora_forward(
-            &xs,
+            xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
         let k = self.k_proj.lora_forward(
-            &xs,
+            xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
         let v = self.v_proj.lora_forward(
-            &xs,
+            xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
@@ -275,19 +273,17 @@ impl BlockSparseTop2MLP {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
         let lhs = self
             .w1
             .lora_forward(
-                &xs,
+                xs,
                 scalings.clone(),
                 global_scaling_weight,
                 is_scaling_pass,
             )?
             .apply(&self.act_fn)?;
         let rhs = self.w3.lora_forward(
-            &xs,
+            xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
@@ -365,8 +361,6 @@ impl SparseMoeBlock {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs = xs.reshape(((), hidden_dim))?;
 
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
         let router_logits = self.gate.lora_forward(
             &xs,
             scalings.clone(),

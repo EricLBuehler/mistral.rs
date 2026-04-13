@@ -233,9 +233,7 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
-        let qkv = self.qkv_proj.forward(&xs)?;
+        let qkv = self.qkv_proj.forward(xs)?;
         let query_pos = self.num_heads * self.head_dim;
         let q = qkv.narrow(D::Minus1, 0, query_pos)?;
         let k = qkv.narrow(D::Minus1, query_pos, self.num_kv_heads * self.head_dim)?;
@@ -366,9 +364,7 @@ impl AnyMoeTrainableLayer for Mlp {}
 
 impl MlpLayer for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
-        let up_states = self.gate_up_proj.forward(&xs)?;
+        let up_states = self.gate_up_proj.forward(xs)?;
         let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
         let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
         let up_states = (up_states * gate.apply(&self.act_fn))?;

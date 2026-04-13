@@ -120,11 +120,9 @@ impl DecoderAttention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
-        let q = self.wq.forward(&xs)?;
-        let k = self.wk.forward(&xs)?;
-        let v = self.wv.forward(&xs)?;
+        let q = self.wq.forward(xs)?;
+        let k = self.wk.forward(xs)?;
+        let v = self.wv.forward(xs)?;
         let (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?

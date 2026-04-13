@@ -109,11 +109,9 @@ impl AnyMoeTrainableLayer for MLP {}
 
 impl MlpLayer for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
         let res = self
             .fc2
-            .forward(&self.fc1.forward(&xs)?.apply(&self.act)?)?;
+            .forward(&self.fc1.forward(xs)?.apply(&self.act)?)?;
         Ok(res)
     }
     fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
@@ -264,11 +262,9 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
 
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
-        let q = self.q_proj.forward(&xs)?;
-        let k = self.k_proj.forward(&xs)?;
-        let v = self.v_proj.forward(&xs)?;
+        let q = self.q_proj.forward(xs)?;
+        let k = self.k_proj.forward(xs)?;
+        let v = self.v_proj.forward(xs)?;
         let q = match &self.q_layernorm {
             None => q,
             Some(ln) => q.apply(ln)?,

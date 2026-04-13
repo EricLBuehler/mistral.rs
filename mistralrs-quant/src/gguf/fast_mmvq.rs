@@ -125,6 +125,23 @@ fn plain_launcher_bf16(dtype: GgmlDType) -> Option<PlainLauncher> {
     Some(f)
 }
 
+fn plain_launcher_f16(dtype: GgmlDType) -> Option<PlainLauncher> {
+    let f: PlainLauncher = match dtype {
+        GgmlDType::Q4_0 => ffi::launch_mmvq_gguf_q4_0_f16_plain,
+        GgmlDType::Q4_1 => ffi::launch_mmvq_gguf_q4_1_f16_plain,
+        GgmlDType::Q5_0 => ffi::launch_mmvq_gguf_q5_0_f16_plain,
+        GgmlDType::Q5_1 => ffi::launch_mmvq_gguf_q5_1_f16_plain,
+        GgmlDType::Q8_0 => ffi::launch_mmvq_gguf_q8_0_f16_plain,
+        GgmlDType::Q2K => ffi::launch_mmvq_gguf_q2_k_f16_plain,
+        GgmlDType::Q3K => ffi::launch_mmvq_gguf_q3_k_f16_plain,
+        GgmlDType::Q4K => ffi::launch_mmvq_gguf_q4_k_f16_plain,
+        GgmlDType::Q5K => ffi::launch_mmvq_gguf_q5_k_f16_plain,
+        GgmlDType::Q6K => ffi::launch_mmvq_gguf_q6_k_f16_plain,
+        _ => return None,
+    };
+    Some(f)
+}
+
 fn plain_launcher_f32(dtype: GgmlDType) -> Option<PlainLauncher> {
     let f: PlainLauncher = match dtype {
         GgmlDType::Q4_0 => ffi::launch_mmvq_gguf_q4_0_f32_plain,
@@ -143,7 +160,7 @@ fn plain_launcher_f32(dtype: GgmlDType) -> Option<PlainLauncher> {
 }
 
 /// Compute `w @ xs^T` where `w` is a Q8_1-quantizable GGUF weight tensor and
-/// `xs` is a contiguous BF16 / F32 activation on the same CUDA device.
+/// `xs` is a contiguous BF16 / F16 / F32 activation on the same CUDA device.
 ///
 /// Supported input shapes:
 /// * `[b, k]`     with b in `1..=8`
@@ -152,7 +169,7 @@ fn plain_launcher_f32(dtype: GgmlDType) -> Option<PlainLauncher> {
 /// Output has the same leading dimensions as `xs` with the last axis replaced
 /// by `w.shape().dims2()?.0` (nrows of the weight).
 ///
-/// The output dtype matches the input dtype (BF16 → BF16, F32 → F32).
+/// The output dtype matches the input dtype (BF16 → BF16, F16 → F16, F32 → F32).
 pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     let dtype = w.dtype();
     if !supports(dtype) {
@@ -179,8 +196,8 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
         );
     }
     let input_ty = xs.dtype();
-    if !matches!(input_ty, DType::BF16 | DType::F32) {
-        candle_core::bail!("fast_mmvq: input dtype must be BF16 or F32, got {input_ty:?}");
+    if !matches!(input_ty, DType::BF16 | DType::F16 | DType::F32) {
+        candle_core::bail!("fast_mmvq: input dtype must be BF16, F16, or F32, got {input_ty:?}");
     }
 
     let xs = xs.contiguous()?;
@@ -222,6 +239,44 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
                         stream_ptr,
                     );
                     let launcher = plain_launcher_bf16(dtype).expect("supports() checked");
+                    launcher(
+                        weight_ptr,
+                        scratch_ptr as *const std::ffi::c_void,
+                        out_ptr as *mut std::ffi::c_void,
+                        k as i32,
+                        nrows as i32,
+                        stride_col_y,
+                        stride_col_dst,
+                        b_size as i32,
+                        stream_ptr,
+                    );
+                }
+            }
+
+            let out_storage = CudaStorage::wrap_cuda_slice(out, dev.clone());
+            Ok(Tensor::from((
+                Storage::Cuda(out_storage),
+                output_shape(&xs, nrows),
+            )))
+        }
+        DType::F16 => {
+            let slice = xs_cuda.as_cuda_slice::<half::f16>()?;
+            let out = unsafe { dev.alloc::<half::f16>(nrows * b_size)? };
+
+            {
+                let (xs_ptr, _xs_guard) = slice_ptr(slice, xs_offset);
+                let (out_ptr, _out_guard) = slice_ptr(&out, 0);
+
+                unsafe {
+                    ffi::launch_mmvq_gguf_quantize_q8_1_f16(
+                        xs_ptr as *const std::ffi::c_void,
+                        scratch_ptr,
+                        k as i32,
+                        k_padded as i32,
+                        b_size as i32,
+                        stream_ptr,
+                    );
+                    let launcher = plain_launcher_f16(dtype).expect("supports() checked");
                     launcher(
                         weight_ptr,
                         scratch_ptr as *const std::ffi::c_void,

@@ -411,10 +411,8 @@ impl Attention {
         let (b_sz, q_len, _) = xs.dims3()?;
         let is_shared = self.kv_shared_layer_index.is_some();
 
-        let _original_dtype = xs.dtype();
-        let xs_proj = xs.clone();
         // Q projection (always needed)
-        let mut q = self.q_proj.forward(&xs_proj)?;
+        let mut q = self.q_proj.forward(xs)?;
         q = if q_len != 1 {
             q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?
                 .transpose(1, 2)?
@@ -425,9 +423,9 @@ impl Attention {
 
         // K/V projection, reshape, norms (skip for shared layers that reuse donor KV)
         let (mut k, v) = if !is_shared {
-            let k = self.k_proj.forward(&xs_proj)?;
+            let k = self.k_proj.forward(xs)?;
             let v = if let Some(ref v_proj) = self.v_proj {
-                v_proj.forward(&xs_proj)?
+                v_proj.forward(xs)?
             } else {
                 k.clone()
             };
@@ -953,7 +951,6 @@ impl DecoderLayer {
         ) {
             if let Some(pli) = per_layer_input {
                 let residual_ple = xs.clone();
-                let _original_dtype = xs.dtype();
                 // gate: Linear(hidden_size -> ple_dim)
                 let gate_in = xs;
                 let mut gated = gate.forward(&gate_in)?;
@@ -1442,9 +1439,7 @@ impl TextModel {
         let embedded = embedded.reshape((b, seq, self.num_hidden_layers, ple_dim))?;
 
         // 2. Project input embeddings: Linear(hidden_size -> num_layers * ple_dim)
-        let _original_dtype = inputs_embeds.dtype();
-        let proj_input = inputs_embeds.clone();
-        let projected = ple_proj.forward(&proj_input)?;
+        let projected = ple_proj.forward(inputs_embeds)?;
         // Apply scalar: hidden_size^-0.5
         let projected = (projected * self.per_layer_projection_scalar)?;
         // Reshape to [b, seq, num_layers, ple_dim]

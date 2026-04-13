@@ -452,10 +452,8 @@ impl Expert {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
-        let lhs = self.gate.forward(&xs)?;
-        let rhs = self.up.forward(&xs)?;
+        let lhs = self.gate.forward(xs)?;
+        let rhs = self.up.forward(xs)?;
         let res = self
             .down
             .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?)?;

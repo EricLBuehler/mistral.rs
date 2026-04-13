@@ -64,11 +64,9 @@ impl CausalSelfAttention {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
-        let _original_dtype = x.dtype();
-        let x = x.clone();
-        let q = self.q_proj.forward(&x)?;
-        let k = self.k_proj.forward(&x)?;
-        let v = self.v_proj.forward(&x)?;
+        let q = self.q_proj.forward(x)?;
+        let k = self.k_proj.forward(x)?;
+        let v = self.v_proj.forward(x)?;
         let mut q = q
             .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
             .transpose(1, 2)?
@@ -264,9 +262,7 @@ impl AnyMoeTrainableLayer for Mlp {}
 
 impl MlpLayer for Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _original_dtype = x.dtype();
-        let x = x.clone();
-        let x = (candle_nn::ops::silu(&self.c_fc1.forward(&x)?)? * self.c_fc2.forward(&x)?)?;
+        let x = (candle_nn::ops::silu(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
         let res = self.c_proj.forward(&x)?;
         Ok(res)
     }

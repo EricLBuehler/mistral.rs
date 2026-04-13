@@ -58,22 +58,20 @@ impl CausalSelfAttention {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
 
-        let _original_dtype = x.dtype();
-        let x = x.clone();
         let q = self.q_proj.lora_forward(
-            &x,
+            x,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
         let k = self.k_proj.lora_forward(
-            &x,
+            x,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
         let v = self.v_proj.lora_forward(
-            &x,
+            x,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
@@ -204,15 +202,13 @@ impl Mlp {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let _original_dtype = x.dtype();
-        let x = x.clone();
         let x = (candle_nn::ops::silu(&self.c_fc1.lora_forward(
-            &x,
+            x,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?)? * self.c_fc2.lora_forward(
-            &x,
+            x,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,

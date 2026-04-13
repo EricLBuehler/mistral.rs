@@ -526,7 +526,6 @@ impl GatedDeltaNet {
         let y = y.reshape((batch_size, seq_len, self.value_dim))?;
 
         // 11. Output projection
-        let _original_dtype = x.dtype();
         let y_proj = y;
         let res = self.out_proj.forward(&y_proj)?;
         Ok(res)

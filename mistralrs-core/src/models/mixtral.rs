@@ -151,11 +151,9 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
-        let q = self.q_proj.forward(&xs)?;
-        let k = self.k_proj.forward(&xs)?;
-        let v = self.v_proj.forward(&xs)?;
+        let q = self.q_proj.forward(xs)?;
+        let k = self.k_proj.forward(xs)?;
+        let v = self.v_proj.forward(xs)?;
         let (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -279,10 +277,8 @@ impl BlockSparseTop2MLP {
 
 impl Module for BlockSparseTop2MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
-        let w1_out = self.w1.forward(&xs)?;
-        let w3_out = self.w3.forward(&xs)?;
+        let w1_out = self.w1.forward(xs)?;
+        let w3_out = self.w3.forward(xs)?;
         let activated = crate::ops::mul_and_act(&w1_out, &w3_out, self.act_fn)?;
         let res = self.w2.forward(&activated)?;
         Ok(res)
@@ -323,8 +319,6 @@ impl Module for SparseMoeBlock {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs = xs.reshape(((), hidden_dim))?;
 
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
         let router_logits = self.gate.forward(&xs)?;
         let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
 

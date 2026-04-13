@@ -92,13 +92,11 @@ impl MLP {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
         let res = self.fc2.lora_forward(
             &self
                 .fc1
                 .lora_forward(
-                    &xs,
+                    xs,
                     scalings.clone(),
                     global_scaling_weight,
                     is_scaling_pass,
@@ -224,22 +222,20 @@ impl Attention {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
         let q = self.q_proj.lora_forward(
-            &xs,
+            xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
         let k = self.k_proj.lora_forward(
-            &xs,
+            xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
         let v = self.v_proj.lora_forward(
-            &xs,
+            xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,

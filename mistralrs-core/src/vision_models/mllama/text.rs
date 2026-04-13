@@ -66,13 +66,11 @@ impl MLlamaTextMlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
         let res = self.down_proj.forward(
             &self
                 .act
-                .forward(&self.gate_proj.forward(&xs)?)?
-                .broadcast_mul(&self.up_proj.forward(&xs)?)?,
+                .forward(&self.gate_proj.forward(xs)?)?
+                .broadcast_mul(&self.up_proj.forward(xs)?)?,
         )?;
         Ok(res)
     }
@@ -155,11 +153,9 @@ impl MLlamaTextSelfAttention {
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
-        let hidden_states = hidden_states.clone();
-        let _original_dtype = hidden_states.dtype();
-        let q = self.q_proj.forward(&hidden_states)?;
-        let k = self.k_proj.forward(&hidden_states)?;
-        let v = self.v_proj.forward(&hidden_states)?;
+        let q = self.q_proj.forward(hidden_states)?;
+        let k = self.k_proj.forward(hidden_states)?;
+        let v = self.v_proj.forward(hidden_states)?;
         let (q, k, mut v) = if q_len != 1 {
             let q = q
                 .reshape((bs, q_len, self.num_heads, self.head_dim))?
@@ -357,24 +353,20 @@ impl MLlamaTextCrossAttention {
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
-        let hidden_states = hidden_states.clone();
-        let _original_dtype = hidden_states.dtype();
-        let mut q = self.q_proj.forward(&hidden_states)?;
+        let mut q = self.q_proj.forward(hidden_states)?;
         q = q
             .reshape((bs, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
         q = self.q_norm.forward(&q)?;
 
         let (k, v) = if let Some(cross_attn_states) = cross_attn_states {
-            let cross_attn_states = cross_attn_states.clone();
-            let _original_dtype = cross_attn_states.dtype();
-            let mut k = self.k_proj.forward(&cross_attn_states)?;
+            let mut k = self.k_proj.forward(cross_attn_states)?;
             k = k
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;
             k = self.k_norm.forward(&k)?;
 
-            let mut v = self.v_proj.forward(&cross_attn_states)?;
+            let mut v = self.v_proj.forward(cross_attn_states)?;
             v = v
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;

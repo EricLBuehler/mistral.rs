@@ -170,11 +170,9 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
-        let q = self.q_proj.forward(&xs)?;
-        let k = self.k_proj.forward(&xs)?;
-        let v = self.v_proj.forward(&xs)?;
+        let q = self.q_proj.forward(xs)?;
+        let k = self.k_proj.forward(xs)?;
+        let v = self.v_proj.forward(xs)?;
         let (mut q, mut k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?

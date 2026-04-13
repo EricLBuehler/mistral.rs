@@ -161,11 +161,9 @@ impl Llama4VisionAttention {
     }
 
     fn forward(&self, hidden_state: &Tensor, attention_mask: &AttentionMask) -> Result<Tensor> {
-        let hidden_state = hidden_state.clone();
-        let _original_dtype = hidden_state.dtype();
-        let mut q = self.q_proj.forward(&hidden_state)?;
-        let mut k = self.k_proj.forward(&hidden_state)?;
-        let mut v = self.v_proj.forward(&hidden_state)?;
+        let mut q = self.q_proj.forward(hidden_state)?;
+        let mut k = self.k_proj.forward(hidden_state)?;
+        let mut v = self.v_proj.forward(hidden_state)?;
         // Should be same, no caching...
         let (bs, q_sq, _) = q.dims3()?;
         let (_, k_sq, _) = k.dims3()?;
@@ -244,11 +242,9 @@ impl Llama4Mlp {
     }
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        let _original_dtype = hidden_states.dtype();
-        let mut hidden_states = hidden_states.clone();
-        hidden_states = self.fc1.forward(&hidden_states)?;
-        hidden_states = self.act.forward(&hidden_states)?;
-        hidden_states = self.fc2.forward(&hidden_states)?;
+        let hidden_states = self.fc1.forward(hidden_states)?;
+        let hidden_states = self.act.forward(&hidden_states)?;
+        let hidden_states = self.fc2.forward(&hidden_states)?;
         Ok(hidden_states)
     }
 }
@@ -395,12 +391,10 @@ impl Llama4VisionPixelShuffleMLP {
     }
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        let _original_dtype = hidden_states.dtype();
-        let mut hidden_states = hidden_states.clone();
-        hidden_states = self.act.forward(
+        let hidden_states = self.act.forward(
             &self
                 .fc2
-                .forward(&self.act.forward(&self.fc1.forward(&hidden_states)?)?)?,
+                .forward(&self.act.forward(&self.fc1.forward(hidden_states)?)?)?,
         )?;
         Ok(hidden_states)
     }

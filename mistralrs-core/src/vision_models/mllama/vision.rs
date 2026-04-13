@@ -193,11 +193,9 @@ impl MLlamaVisionAttention {
 
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L243
     fn forward(&self, hidden_state: &Tensor, attention_mask: &AttentionMask) -> Result<Tensor> {
-        let hidden_state = hidden_state.clone();
-        let _original_dtype = hidden_state.dtype();
-        let mut q = self.q_proj.forward(&hidden_state)?;
-        let mut k = self.k_proj.forward(&hidden_state)?;
-        let mut v = self.v_proj.forward(&hidden_state)?;
+        let mut q = self.q_proj.forward(hidden_state)?;
+        let mut k = self.k_proj.forward(hidden_state)?;
+        let mut v = self.v_proj.forward(hidden_state)?;
         // Should be same, no caching...
         let (bs, q_sq, _) = q.dims3()?;
         let (_, k_sq, _) = k.dims3()?;
@@ -268,11 +266,9 @@ impl MLlamaMlp {
 
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L223
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        let _original_dtype = hidden_states.dtype();
-        let mut hidden_states = hidden_states.clone();
-        hidden_states = self
+        let hidden_states = self
             .fc2
-            .forward(&self.act.forward(&self.fc1.forward(&hidden_states)?)?)?;
+            .forward(&self.act.forward(&self.fc1.forward(hidden_states)?)?)?;
         Ok(hidden_states)
     }
 }

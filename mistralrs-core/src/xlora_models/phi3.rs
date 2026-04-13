@@ -114,10 +114,8 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
         let qkv = self.qkv_proj.lora_forward(
-            &xs,
+            xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
@@ -242,10 +240,8 @@ impl Mlp {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let _original_dtype = xs.dtype();
-        let xs = xs.clone();
         let up_states = self.gate_up_proj.lora_forward(
-            &xs,
+            xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
