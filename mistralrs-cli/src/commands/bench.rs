@@ -102,6 +102,10 @@ pub async fn run_bench(
         }
         info!("Warmup complete.");
 
+        // Clear any residual KV cache from warmup
+        let sender = mistralrs.get_sender(None).unwrap();
+        let _ = sender.send(mistralrs_core::Request::TerminateAllSeqsNextStep).await;
+
         // Reset logger counters so benchmark stats are clean
         if let Ok(logger) = mistralrs.get_logger(None) {
             logger.reset();
@@ -142,6 +146,10 @@ pub async fn run_bench(
             let ms_per_tok = 1000.0 / tok_per_sec;
             decode_results.push((tok_per_sec, ms_per_tok));
         }
+
+        // Extremely aggressive cache sweep. Flush the sequences out of the engine.
+        let sender = mistralrs.get_sender(None).unwrap();
+        let _ = sender.send(mistralrs_core::Request::TerminateAllSeqsNextStep).await;
     }
 
     // Calculate statistics
