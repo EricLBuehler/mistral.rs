@@ -18,7 +18,7 @@ use crate::{
 
 use super::SearchResult;
 
-const EMBEDDING_BATCH: usize = 8;
+const EMBEDDING_BATCH: usize = 64;
 
 pub struct SearchPipeline {
     model: Arc<TokioMutex<dyn Pipeline + Send + Sync>>,
@@ -90,50 +90,51 @@ impl SearchPipeline {
             return Ok(Vec::new());
         }
 
-        use std::collections::BTreeMap;
-        let mut by_len: BTreeMap<usize, Vec<(usize, Vec<u32>)>> = BTreeMap::new();
-        for (idx, prompt) in prompts.iter().enumerate() {
-            let encoding = self
-                .tokenizer
-                .encode(prompt.as_str(), true)
-                .map_err(E::msg)?;
-            let ids = encoding.get_ids().to_vec();
-            by_len.entry(ids.len()).or_default().push((idx, ids));
-        }
+        let encoded: Vec<(usize, Vec<u32>)> = prompts
+            .iter()
+            .enumerate()
+            .map(|(idx, prompt)| {
+                let encoding = self
+                    .tokenizer
+                    .encode(prompt.as_str(), true)
+                    .map_err(E::msg)?;
+                Ok((idx, encoding.get_ids().to_vec()))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
         let mut outputs = vec![Vec::new(); prompts.len()];
-        for (_, sequences) in by_len {
-            for chunk_entries in sequences.chunks(EMBEDDING_BATCH) {
-                let slices: Vec<&[u32]> = chunk_entries
-                    .iter()
-                    .map(|(_, ids)| ids.as_slice())
-                    .collect();
-                let chunk = make_prompt_chunk(
-                    0,
-                    slices,
-                    &self.device,
-                    None,
-                    self.has_causal_attention,
-                    None,
-                )?;
-                let inputs = Box::new(ModelInputs {
-                    input_ids: chunk.input,
-                    flash_meta: chunk.flash_meta,
-                });
-                let mut pipeline = get_mut_arcmutex!(self.model);
-                let ForwardInputsResult::Embeddings { embeddings } =
-                    pipeline.forward_inputs(inputs, false)?
-                else {
-                    anyhow::bail!("Embedding pipeline returned non-embedding output");
-                };
-                drop(pipeline);
-                let vecs = embeddings
-                    .to_dtype(DType::F32)?
-                    .to_device(&Device::Cpu)?
-                    .to_vec2::<f32>()?;
-                for ((idx, _), embedding) in chunk_entries.iter().zip(vecs.into_iter()) {
-                    outputs[*idx] = embedding;
-                }
+        // Batch all prompts together — make_prompt_chunk handles variable-length
+        // sequences via flash attention cumulative sequence lengths.
+        for chunk_entries in encoded.chunks(EMBEDDING_BATCH) {
+            let slices: Vec<&[u32]> = chunk_entries
+                .iter()
+                .map(|(_, ids)| ids.as_slice())
+                .collect();
+            let chunk = make_prompt_chunk(
+                0,
+                slices,
+                &self.device,
+                None,
+                self.has_causal_attention,
+                None,
+            )?;
+            let inputs = Box::new(ModelInputs {
+                input_ids: chunk.input,
+                flash_meta: chunk.flash_meta,
+            });
+            let mut pipeline = get_mut_arcmutex!(self.model);
+            let ForwardInputsResult::Embeddings { embeddings } =
+                pipeline.forward_inputs(inputs, false)?
+            else {
+                anyhow::bail!("Embedding pipeline returned non-embedding output");
+            };
+            drop(pipeline);
+            let vecs = embeddings
+                .to_dtype(DType::F32)?
+                .to_device(&Device::Cpu)?
+                .to_vec2::<f32>()?;
+            for ((idx, _), embedding) in chunk_entries.iter().zip(vecs.into_iter()) {
+                outputs[*idx] = embedding;
             }
         }
 
@@ -291,6 +292,11 @@ pub fn rank_document_chunks(
         .iter()
         .map(|(_, chunk)| chunk.prompt.clone())
         .collect();
+    tracing::info!(
+        "Search: ranking {} chunks from {} results",
+        prompts.len(),
+        results.len()
+    );
 
     let chunk_embeddings = pipeline.embed(&prompts)?;
     let mut scored = Vec::with_capacity(bindings.len());
