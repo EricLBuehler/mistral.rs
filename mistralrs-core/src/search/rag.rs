@@ -3,6 +3,7 @@
 use std::{cmp::Ordering, sync::Arc};
 
 use anyhow::{Context, Result};
+use bm25::{Embedder as Bm25Embedder, EmbedderBuilder, Language, Scorer};
 use candle_core::{DType, Device, Error as E};
 use mistralrs_quant::log::once_log_info;
 use tokenizers::Tokenizer;
@@ -19,6 +20,11 @@ use crate::{
 use super::SearchResult;
 
 const EMBEDDING_BATCH: usize = 64;
+/// Target chunk size in tokens. Smaller chunks give better granularity and
+/// reduce total tokens sent to the embedding model.
+const CHUNK_TARGET_TOKENS: usize = 500;
+/// Number of top BM25-scored chunks to pass to the neural re-ranker.
+const BM25_TOP_K: usize = 20;
 
 pub struct SearchPipeline {
     model: Arc<TokioMutex<dyn Pipeline + Send + Sync>>,
@@ -163,7 +169,9 @@ impl SearchPipeline {
             }]);
         }
 
-        let budget = (self.max_seq_len - prefix_tokens).max(1);
+        let budget = CHUNK_TARGET_TOKENS
+            .min(self.max_seq_len - prefix_tokens)
+            .max(1);
         let encoding = self.tokenizer.encode(trimmed, false).map_err(E::msg)?;
         let token_count = encoding.len();
         if token_count == 0 {
@@ -267,12 +275,7 @@ pub fn rank_document_chunks(
         return Ok(Vec::new());
     }
 
-    let query_embedding = pipeline
-        .embed(&[format_query_prompt(query)])?
-        .into_iter()
-        .next()
-        .context("Failed to generate embedding for search query")?;
-
+    // 1. Chunk all documents.
     let mut bindings: Vec<(usize, DocumentChunk)> = Vec::new();
     for (result_index, result) in results.iter().enumerate() {
         let title = sanitize_title(&result.title);
@@ -288,28 +291,66 @@ pub fn rank_document_chunks(
         return Ok(Vec::new());
     }
 
-    let prompts: Vec<String> = bindings
-        .iter()
-        .map(|(_, chunk)| chunk.prompt.clone())
+    // 2. BM25 pre-filter: score all chunks by keyword overlap (CPU, instant), keep only top-K for the expensive neural re-ranking step.
+    let chunk_texts: Vec<&str> = bindings.iter().map(|(_, c)| c.content.as_str()).collect();
+    let bm25_embedder: Bm25Embedder =
+        EmbedderBuilder::with_fit_to_corpus(Language::English, &chunk_texts).build();
+
+    let mut bm25_scorer = Scorer::<usize>::new();
+    for (i, text) in chunk_texts.iter().enumerate() {
+        bm25_scorer.upsert(&i, bm25_embedder.embed(text));
+    }
+
+    let bm25_query = bm25_embedder.embed(query);
+    let mut bm25_scores: Vec<(usize, f32)> = (0..chunk_texts.len())
+        .filter_map(|i| bm25_scorer.score(&i, &bm25_query).map(|s| (i, s)))
         .collect();
+    bm25_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+
+    let top_indices: Vec<usize> = bm25_scores
+        .iter()
+        .take(BM25_TOP_K)
+        .map(|(i, _)| *i)
+        .collect();
+
     tracing::info!(
-        "Search: ranking {} chunks from {} results",
-        prompts.len(),
-        results.len()
+        "Search: {} chunks from {} results, BM25 selected top {}",
+        bindings.len(),
+        results.len(),
+        top_indices.len()
     );
 
-    let chunk_embeddings = pipeline.embed(&prompts)?;
-    let mut scored = Vec::with_capacity(bindings.len());
-    for ((result_index, chunk), embedding) in bindings.into_iter().zip(chunk_embeddings.into_iter())
-    {
-        let score = cosine_similarity(&query_embedding, &embedding);
-        scored.push(ScoredChunk {
-            result_index,
-            content: chunk.content,
-            token_len: chunk.token_len,
-            score,
-        });
+    if top_indices.is_empty() {
+        return Ok(Vec::new());
     }
+
+    // 3. Neural re-ranking: embed query + only the BM25 top-K chunks.
+    let query_embedding = pipeline
+        .embed(&[format_query_prompt(query)])?
+        .into_iter()
+        .next()
+        .context("Failed to generate embedding for search query")?;
+
+    let top_prompts: Vec<String> = top_indices
+        .iter()
+        .map(|&i| bindings[i].1.prompt.clone())
+        .collect();
+    let top_embeddings = pipeline.embed(&top_prompts)?;
+
+    let mut scored: Vec<ScoredChunk> = top_indices
+        .iter()
+        .zip(top_embeddings.into_iter())
+        .map(|(&i, embedding)| {
+            let (result_index, ref chunk) = bindings[i];
+            let score = cosine_similarity(&query_embedding, &embedding);
+            ScoredChunk {
+                result_index,
+                content: chunk.content.clone(),
+                token_len: chunk.token_len,
+                score,
+            }
+        })
+        .collect();
 
     scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Less));
     Ok(scored)

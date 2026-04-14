@@ -49,7 +49,9 @@ pub fn supports(dtype: GgmlDType) -> bool {
 /// qk (block quantization size) per dtype.
 fn qk_for(dtype: GgmlDType) -> usize {
     match dtype {
-        GgmlDType::Q4_0 | GgmlDType::Q4_1 | GgmlDType::Q5_0 | GgmlDType::Q5_1 | GgmlDType::Q8_0 => 32,
+        GgmlDType::Q4_0 | GgmlDType::Q4_1 | GgmlDType::Q5_0 | GgmlDType::Q5_1 | GgmlDType::Q8_0 => {
+            32
+        }
         GgmlDType::Q2K | GgmlDType::Q3K | GgmlDType::Q4K | GgmlDType::Q5K | GgmlDType::Q6K => 256,
         _ => unreachable!(),
     }
@@ -166,20 +168,40 @@ fn get_device_info(dev: &CudaDevice) -> DeviceInfo {
     }
     let cu_device = dev.cuda_stream().context().cu_device();
     let major = unsafe {
-        result::device::get_attribute(cu_device, sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)
-    }.unwrap_or(8);
+        result::device::get_attribute(
+            cu_device,
+            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+        )
+    }
+    .unwrap_or(8);
     let minor = unsafe {
-        result::device::get_attribute(cu_device, sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)
-    }.unwrap_or(0);
+        result::device::get_attribute(
+            cu_device,
+            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
+        )
+    }
+    .unwrap_or(0);
     let nsm = unsafe {
-        result::device::get_attribute(cu_device, sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
-    }.unwrap_or(1);
+        result::device::get_attribute(
+            cu_device,
+            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
+        )
+    }
+    .unwrap_or(1);
     let smpbo = unsafe {
-        result::device::get_attribute(cu_device, sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN)
-    }.unwrap_or(49152);
+        result::device::get_attribute(
+            cu_device,
+            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
+        )
+    }
+    .unwrap_or(49152);
     let warp_size = unsafe {
-        result::device::get_attribute(cu_device, sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_WARP_SIZE)
-    }.unwrap_or(32);
+        result::device::get_attribute(
+            cu_device,
+            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_WARP_SIZE,
+        )
+    }
+    .unwrap_or(32);
     let info = DeviceInfo {
         cc: major * 100 + minor * 10,
         nsm,
