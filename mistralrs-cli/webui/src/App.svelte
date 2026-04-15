@@ -55,7 +55,7 @@
   <ModelBar />
 
   <div class="flex min-h-0 flex-1">
-    <!-- Sidebar overlay for mobile -->
+    <!-- Sidebar overlay (dims background when sidebar is open on mobile) -->
     {#if settingsStore.sidebarOpen}
       <button
         class="fixed inset-0 z-30 bg-black/30 md:hidden"
@@ -64,13 +64,21 @@
       ></button>
     {/if}
 
-    <!-- Sidebar -->
-    <div
-      class="fixed z-40 flex h-[calc(100vh-3rem)] w-72 flex-col border-r border-gray-200 bg-gray-50 transition-transform duration-200 md:relative md:z-auto md:translate-x-0 dark:border-gray-800 dark:bg-gray-900
-      {settingsStore.sidebarOpen ? 'translate-x-0' : '-translate-x-full'}"
-    >
-      <Sidebar />
-    </div>
+    <!-- Sidebar: fixed overlay on mobile, in-flow on desktop -->
+    {#if settingsStore.sidebarOpen}
+      <!-- Mobile: fixed overlay -->
+      <div
+        class="fixed z-40 flex h-[calc(100vh-3rem)] w-72 flex-col border-r border-gray-200 bg-gray-50 md:hidden dark:border-gray-800 dark:bg-gray-900"
+      >
+        <Sidebar />
+      </div>
+      <!-- Desktop: in-flow so chat area reflows -->
+      <div
+        class="hidden w-72 shrink-0 flex-col border-r border-gray-200 bg-gray-50 md:flex dark:border-gray-800 dark:bg-gray-900"
+      >
+        <Sidebar />
+      </div>
+    {/if}
 
     <!-- Main chat area -->
     <div class="flex min-w-0 flex-1 flex-col">

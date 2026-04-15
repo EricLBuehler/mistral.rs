@@ -43,7 +43,7 @@ class SettingsStore {
   enableSearch = $state(stored.enableSearch ?? false);
   enableCodeExecution = $state(stored.enableCodeExecution ?? false);
   enableThinking = $state(stored.enableThinking ?? true);
-  sidebarOpen = $state(false);
+  sidebarOpen = $state(window.innerWidth >= 768);
   settingsOpen = $state(false);
 
   persist() {
