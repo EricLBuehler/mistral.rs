@@ -161,13 +161,18 @@ fn escape_json_string_controls(s: &str) -> String {
         if c == '\\' && in_string {
             if let Some(&next) = chars.peek() {
                 match next {
-                    // Valid JSON escape sequences — preserve as-is.
-                    '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u' => {
+                    // `\"` is a real JSON escape (inserted by escape_inner_quotes
+                    // for literal quote characters) — preserve it.
+                    '"' => {
                         out.push('\\');
                         out.push(next);
                         chars.next();
                     }
-                    // Invalid JSON escape — escape the backslash itself.
+                    // Everything else (including `n`, `t`, `r`, etc.) is a
+                    // literal backslash from the code (e.g. Python's `\n`).
+                    // Gemma 4's <|"|> format uses literal characters, not
+                    // JSON encoding, so escape the `\` to preserve it
+                    // through JSON parsing.
                     _ => {
                         out.push_str("\\\\");
                     }

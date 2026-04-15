@@ -18,8 +18,8 @@ r#"Execute Python code in a persistent interactive session.
 
 ## Session
 - This is a **persistent session**: variables, imports, and state are preserved across calls within this conversation.
-- Each conversation gets a unique persistent working directory. The absolute path is returned in the `working_directory` field of each execution result. Files saved there remain accessible after the conversation ends.
-- When the user asks where a file is saved, ALWAYS give them the FULL absolute path (combine `working_directory` with the filename). The user cannot see the working directory themselves.
+- Your code runs inside a unique persistent working directory. You can use `os.getcwd()` or `os.path.abspath(filename)` in your code to get the full path. The path is also returned in the `working_directory` field of each execution result. Files saved there remain accessible after the conversation ends.
+- When the user asks where a file is saved, ALWAYS give them the FULL absolute path.
 - To reset the session (clear all variables and imports), use the `{reset}` tool.
 
 ## Capabilities
@@ -33,10 +33,13 @@ r#"Execute Python code in a persistent interactive session.
 - Code execution has a **{timeout}s timeout**. If exceeded, the execution is interrupted (KeyboardInterrupt). If the process is unresponsive, it is forcibly killed.
 - Break long computations into smaller steps to avoid timeouts.
 
+## Important Notes
+- The user CANNOT see stdout/stderr from your code. You must relay any important information (file paths, results, errors) in your response text.
+- The code must be pure Python. Do NOT use LaTeX syntax like `\le`, `\ge`, `\ne`, `\times` — use Python operators `<=`, `>=`, `!=`, `*` instead.
+
 ## Restrictions
 - Package installation (pip install) is **disabled**.
 - Network access and filesystem access **are available** and cannot be restricted.
-- IMPORTANT: The code must be pure Python. Do NOT use LaTeX syntax like `\le`, `\ge`, `\ne`, `\times` — use Python operators `<=`, `>=`, `!=`, `*` instead.
 
 ## Installed Packages
 The following packages are available:
