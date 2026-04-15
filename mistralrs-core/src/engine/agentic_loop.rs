@@ -544,12 +544,8 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
                 // No tool call, or max rounds reached? We are finished.
                 if tc_opt.is_none() || round >= max_rounds {
                     let mut final_resp = done.clone();
-                    final_resp.code_execution_session_id =
-                        code_exec_session_id.clone();
-                    user_sender
-                        .send(Response::Done(final_resp))
-                        .await
-                        .unwrap();
+                    final_resp.code_execution_session_id = code_exec_session_id.clone();
+                    user_sender.send(Response::Done(final_resp)).await.unwrap();
                     return;
                 }
 
@@ -576,18 +572,21 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
                         do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
                     }
                 } else if this_clone.tool_callbacks.contains_key(&tc.function.name) {
-                    do_custom_tool(this_clone.clone(), visible_req, tc, supports_vision, &tool_call_ctx).await
+                    do_custom_tool(
+                        this_clone.clone(),
+                        visible_req,
+                        tc,
+                        supports_vision,
+                        &tool_call_ctx,
+                    )
+                    .await
                 } else if let Some(ref url) = dispatch_url {
                     do_http_tool(visible_req, tc, url)
                 } else {
                     // No way to execute — return to client.
                     let mut final_resp = done.clone();
-                    final_resp.code_execution_session_id =
-                        code_exec_session_id.clone();
-                    user_sender
-                        .send(Response::Done(final_resp))
-                        .await
-                        .unwrap();
+                    final_resp.code_execution_session_id = code_exec_session_id.clone();
+                    user_sender.send(Response::Done(final_resp)).await.unwrap();
                     return;
                 };
 
@@ -685,7 +684,14 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
                         do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
                     }
                 } else if this_clone.tool_callbacks.contains_key(&tc.function.name) {
-                    do_custom_tool(this_clone.clone(), visible_req, tc, supports_vision, &tool_call_ctx).await
+                    do_custom_tool(
+                        this_clone.clone(),
+                        visible_req,
+                        tc,
+                        supports_vision,
+                        &tool_call_ctx,
+                    )
+                    .await
                 } else if let Some(ref url) = dispatch_url {
                     do_http_tool(visible_req, tc, url)
                 } else {

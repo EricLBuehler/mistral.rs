@@ -322,7 +322,10 @@ pub async fn list_chats(Extension(app): Extension<Arc<AppState>>) -> impl IntoRe
     if let Ok(mut entries) = fs::read_dir(dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let filename = entry.file_name().to_string_lossy().to_string();
-            let id = filename.strip_suffix(".json").unwrap_or(&filename).to_string();
+            let id = filename
+                .strip_suffix(".json")
+                .unwrap_or(&filename)
+                .to_string();
             if let Ok(bytes) = fs::read(entry.path()).await {
                 if let Ok(chat) = serde_json::from_slice::<ChatFile>(&bytes) {
                     let mut value = serde_json::to_value(&chat).unwrap();

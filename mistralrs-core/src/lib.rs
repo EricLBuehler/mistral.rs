@@ -99,7 +99,7 @@ pub use device_map::{
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
 pub use mistralrs_audio::AudioInput;
 pub use mistralrs_mcp::{
-    CalledFunction, Function, MultimodalToolCallback, Tool, ToolCallback, ToolCallContext,
+    CalledFunction, Function, MultimodalToolCallback, Tool, ToolCallContext, ToolCallback,
     ToolCallbackKind, ToolCallbackWithTool, ToolOutput, ToolType,
 };
 pub use mistralrs_mcp::{

@@ -183,8 +183,8 @@ impl CodeExecutionManager {
         let timeout = Duration::from_secs(self.config.timeout_secs);
         let working_directory = self.config.working_directory.clone();
 
-        let execute_callback: Arc<mistralrs_mcp::MultimodalToolCallback> =
-            Arc::new(move |func: &CalledFunction, ctx: &mistralrs_mcp::ToolCallContext| {
+        let execute_callback: Arc<mistralrs_mcp::MultimodalToolCallback> = Arc::new(
+            move |func: &CalledFunction, ctx: &mistralrs_mcp::ToolCallContext| {
                 let sessions = Arc::clone(&sessions);
                 let python_path = python_path.clone();
                 let executor_script = executor_script.clone();
@@ -231,7 +231,8 @@ impl CodeExecutionManager {
                         })
                     })
                 })
-            });
+            },
+        );
 
         callbacks.insert(
             EXECUTE_PYTHON_TOOL_NAME.to_string(),

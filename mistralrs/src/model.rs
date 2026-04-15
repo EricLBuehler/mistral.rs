@@ -575,7 +575,7 @@ impl Model {
                     tool_dispatch_url: None,
                     model_id: model_id_owned.clone(),
                     truncate_sequence,
-            code_execution_session_id: None,
+                    code_execution_session_id: None,
                 }));
 
                 runner

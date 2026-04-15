@@ -1282,7 +1282,7 @@ impl Runner {
                 tool_dispatch_url: request.tool_dispatch_url.clone(),
                 model_id: model_id.clone(),
                 truncate_sequence: request.truncate_sequence,
-            code_execution_session_id: None,
+                code_execution_session_id: None,
             }));
 
             let is_streaming = request.stream;
@@ -1324,7 +1324,6 @@ impl Runner {
                 (
                     request_ref.inputs.clone(),
                     request_ref.truncate_sequence,
-            code_execution_session_id: None,
                     format!("{:?}", &*request_ref),
                 )
             };
@@ -1366,7 +1365,7 @@ impl Runner {
                         tool_dispatch_url: None,
                         model_id: model_id.clone(),
                         truncate_sequence,
-            code_execution_session_id: None,
+                        code_execution_session_id: None,
                     }));
 
                     sender
@@ -1485,7 +1484,7 @@ impl Runner {
                 tool_dispatch_url: None,
                 model_id: model_id.clone(),
                 truncate_sequence: request.truncate_sequence,
-            code_execution_session_id: None,
+                code_execution_session_id: None,
             }));
 
             let debug_repr = format!("{request:?}");
@@ -1548,7 +1547,6 @@ impl Runner {
             model_id: model_id.clone(),
             truncate_sequence: false,
             code_execution_session_id: None,
-            code_execution_session_id: None,
         }));
 
         let runner = self.runner.clone();
@@ -1602,7 +1600,6 @@ impl Runner {
             tool_dispatch_url: None,
             model_id: model_id.clone(),
             truncate_sequence: false,
-            code_execution_session_id: None,
             code_execution_session_id: None,
         }));
 
@@ -2079,7 +2076,7 @@ impl Runner {
                 tool_dispatch_url: request.tool_dispatch_url.clone(),
                 model_id: Some(model_id.clone()),
                 truncate_sequence: request.truncate_sequence,
-            code_execution_session_id: None,
+                code_execution_session_id: None,
             }));
 
             let is_streaming = request.stream;
@@ -2186,7 +2183,7 @@ impl Runner {
                 tool_dispatch_url: None,
                 model_id: Some(model_id.clone()),
                 truncate_sequence: request.truncate_sequence,
-            code_execution_session_id: None,
+                code_execution_session_id: None,
             }));
 
             let debug_repr = format!("{request:?}");
