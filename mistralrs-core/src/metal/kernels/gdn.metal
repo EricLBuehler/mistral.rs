@@ -413,7 +413,7 @@ template <typename T>
       constant int &, constant int &, constant int &, uint2);
 
 instantiate_conv1d_update(half);
-instantiate_conv1d_update(bfloat16_t);
+instantiate_conv1d_update(bfloat);
 
 // ============================================================================
 // Kernel 2b: causal_conv1d_full (prefill path)
@@ -488,7 +488,7 @@ template <typename T>
                                     constant int &, constant int &, uint2);
 
 instantiate_conv1d_full(half);
-instantiate_conv1d_full(bfloat16_t);
+instantiate_conv1d_full(bfloat);
 
 // ============================================================================
 // Kernel 3: fused_gdn_gating
@@ -535,4 +535,4 @@ template <typename T>
       constant int &, uint);
 
 instantiate_gdn_gating(half);
-instantiate_gdn_gating(bfloat16_t);
+instantiate_gdn_gating(bfloat);

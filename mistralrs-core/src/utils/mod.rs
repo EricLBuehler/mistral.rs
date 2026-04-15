@@ -174,13 +174,13 @@ macro_rules! handle_pipeline_forward_error {
                             usage: group.get_usage(),
                         };
 
-                        seq.responder()
+                        // Don't panic if the client already disconnected
+                        let _ = seq.responder()
                             .send(Response::ModelError(
                                 e.to_string(),
                                 partial_completion_response
                             ))
-                            .await
-                            .unwrap();
+                            .await;
                     } else {
                         let partial_completion_response = CompletionResponse {
                             id: seq.id().to_string(),
@@ -192,13 +192,12 @@ macro_rules! handle_pipeline_forward_error {
                             usage: group.get_usage(),
                         };
 
-                        seq.responder()
+                        let _ = seq.responder()
                             .send(Response::CompletionModelError(
                                 e.to_string(),
                                 partial_completion_response
                             ))
-                            .await
-                            .unwrap();
+                            .await;
                     }
                 }
                 for seq in $seq_slice.iter_mut() {
