@@ -4,10 +4,20 @@
 
   let { data, phase }: { data: CodeExecutionData; phase: "calling" | "complete" } = $props();
 
-  let highlightedCode = $derived(
-    data.code
-      ? hljs.highlight(data.code, { language: "python" }).value
-      : ""
+  const PREVIEW_LINES = 10;
+
+  let codeLines = $derived(data.code?.split("\n") ?? []);
+  let totalLines = $derived(codeLines.length);
+  let needsExpand = $derived(totalLines > PREVIEW_LINES);
+  let previewCode = $derived(
+    needsExpand ? codeLines.slice(0, PREVIEW_LINES).join("\n") : (data.code ?? "")
+  );
+
+  let highlightedPreview = $derived(
+    previewCode ? hljs.highlight(previewCode, { language: "python" }).value : ""
+  );
+  let highlightedFull = $derived(
+    data.code ? hljs.highlight(data.code, { language: "python" }).value : ""
   );
 
   let executionTimeFormatted = $derived(() => {
@@ -16,6 +26,7 @@
     return `${(data.execution_time_ms / 1000).toFixed(2)}s`;
   });
 
+  let codeExpanded = $state(false);
   let expandedImage = $state<string | null>(null);
 </script>
 
@@ -33,14 +44,6 @@
       </span>
     {:else}
       <div class="ml-auto flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">
-        {#if data.images_base64?.length}
-          <span class="flex items-center gap-1">
-            <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-            {data.images_base64.length}
-          </span>
-        {/if}
         {#if executionTimeFormatted()}
           <span>{executionTimeFormatted()}</span>
         {/if}
@@ -48,19 +51,30 @@
     {/if}
   </div>
 
-  <!-- Code (collapsed by default) -->
+  <!-- Code section -->
   {#if data.code}
-    <details class="group border-t border-purple-200 dark:border-purple-800/50">
-      <summary class="flex cursor-pointer items-center gap-1.5 bg-gray-900 px-3 py-1 text-xs text-gray-400 select-none hover:text-gray-300">
-        <svg class="h-3 w-3 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-        </svg>
-        Code
-      </summary>
-      <div class="overflow-x-auto bg-gray-950 p-3">
-        <pre class="text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedCode}</code></pre>
+    <div class="border-t border-gray-700">
+      <div class="flex items-center gap-1.5 bg-gray-900 px-3 py-1">
+        <span class="text-xs font-medium text-gray-400">Code</span>
+        <span class="text-xs text-gray-500">({totalLines} lines)</span>
       </div>
-    </details>
+      <div class="overflow-x-auto bg-gray-950 px-3 py-2">
+        {#if codeExpanded || !needsExpand}
+          <pre class="text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedFull}</code></pre>
+        {:else}
+          <pre class="text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedPreview}</code></pre>
+          <button
+            class="mt-1 flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300"
+            onclick={() => codeExpanded = true}
+          >
+            <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+            Show all {totalLines} lines
+          </button>
+        {/if}
+      </div>
+    </div>
   {/if}
 
   <!-- stdout -->
@@ -104,26 +118,36 @@
 
   <!-- Images -->
   {#if data.images_base64?.length}
-    <div class="border-t border-purple-200 bg-gray-50 p-3 dark:border-purple-800/50 dark:bg-gray-900/50">
-      <div class="flex flex-wrap justify-center gap-3">
-        {#each data.images_base64 as img, i}
-          <button
-            class="group relative overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm transition-shadow hover:shadow-md dark:border-gray-700 dark:bg-gray-800"
-            onclick={() => expandedImage = `data:image/png;base64,${img}`}
-            title="Click to expand"
-          >
-            <img
-              src="data:image/png;base64,{img}"
-              alt="Output {i + 1}"
-              class="max-h-64 max-w-xs object-contain"
-            />
-            <div class="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all group-hover:bg-black/10 group-hover:opacity-100">
-              <svg class="h-6 w-6 text-white drop-shadow-md" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" />
-              </svg>
-            </div>
-          </button>
-        {/each}
+    <div class="border-t border-gray-200 dark:border-gray-700">
+      <div class="flex items-center gap-1.5 bg-gray-100 px-3 py-1 dark:bg-gray-800/80">
+        <svg class="h-3.5 w-3.5 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+        <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
+          Images ({data.images_base64.length})
+        </span>
+      </div>
+      <div class="bg-gray-50 p-3 dark:bg-gray-900/50">
+        <div class="flex flex-wrap justify-center gap-3">
+          {#each data.images_base64 as img, i}
+            <button
+              class="group relative overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm transition-shadow hover:shadow-md dark:border-gray-700 dark:bg-gray-800"
+              onclick={() => expandedImage = `data:image/png;base64,${img}`}
+              title="Click to expand"
+            >
+              <img
+                src="data:image/png;base64,{img}"
+                alt="Output {i + 1}"
+                class="max-h-64 max-w-xs object-contain"
+              />
+              <div class="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all group-hover:bg-black/10 group-hover:opacity-100">
+                <svg class="h-6 w-6 text-white drop-shadow-md" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" />
+                </svg>
+              </div>
+            </button>
+          {/each}
+        </div>
       </div>
     </div>
   {/if}
