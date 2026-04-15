@@ -43,8 +43,17 @@ The following packages are available:
 {packages}
 ```
 
-## Output
-The result includes: stdout, stderr, exceptions (with traceback), last expression value, and any captured images."#,
+## Output Format
+The result is a JSON object with these fields:
+- `status`: "success" or "error"
+- `working_directory`: The absolute path to the session's working directory. ALL files are saved here. When reporting file paths to the user, ALWAYS use this value combined with the filename.
+- `stdout`: Captured standard output (if any)
+- `stderr`: Captured standard error (if any)
+- `result`: The repr of the last expression value (if any)
+- `result_type`: The type name of the last expression (if any)
+- `exception`: Full traceback (if an error occurred)
+- `execution_time_ms`: How long execution took in milliseconds
+- `images_generated`: Number of matplotlib/PIL images captured (if any). These images are automatically provided to you for visual inspection."#,
         reset = RESET_SESSION_TOOL_NAME,
         timeout = timeout_secs,
         packages = installed_packages.trim(),
