@@ -21,6 +21,7 @@ response = client.chat.completions.create(
 | I want to... | Use... | Section |
 |---|---|---|
 | Add search to any model, zero code | Web Search | [Jump](#web-search) |
+| Let the model run Python code | Code Execution | [Jump](#code-execution) |
 | Run my own functions server-side | Tool Callbacks | [Jump](#tool-callbacks) |
 | Build a full agent in Rust | Agent Builder | [Jump](#agent-builder-rust-sdk) |
 | Connect to external tool servers | MCP Client | [Jump](#mcp-client) |
@@ -34,7 +35,8 @@ response = client.chat.completions.create(
    - [Dispatch order](#dispatch-order)
    - [Supported models](#supported-models)
 2. [Build a Full Agent in 5 Minutes](#build-a-full-agent-in-5-minutes)
-3. [Web Search](#web-search)
+3. [Code Execution](#code-execution)
+4. [Web Search](#web-search)
    - [Enabling web search](#enabling-web-search)
    - [Custom search callbacks](#custom-search-callbacks)
 4. [Tool Callbacks](#tool-callbacks)
@@ -86,14 +88,91 @@ For basic tool calling details, see [TOOL_CALLING.md](TOOL_CALLING.md).
 
 When the model calls a tool, the server tries these handlers in order:
 
-1. **Built-in search tools**: `search_the_web` and `website_content_extractor` (if web search is enabled)
-2. **Registered callbacks**: tool callbacks from the Python/Rust SDK or auto-registered MCP tools
-3. **Tool dispatch URL**: POSTs the tool call to your HTTP endpoint
-4. **No handler found**: the loop stops and the un-executed tool call is returned to the client
+1. **Built-in search tools**: `mistralrs_search_the_web` and `mistralrs_website_content_extractor` (if web search is enabled)
+2. **Built-in code execution**: `mistralrs_execute_python` and `mistralrs_reset_python_session` (if code execution is enabled)
+3. **Registered callbacks**: tool callbacks from the Python/Rust SDK or auto-registered MCP tools
+4. **Tool dispatch URL**: POSTs the tool call to your HTTP endpoint
+5. **No handler found**: the loop stops and the un-executed tool call is returned to the client
+
+> **Note**: Internal tools are prefixed with `mistralrs_` to prevent name collisions. If a user-provided tool has the same name as a registered internal tool, the request will be rejected with a validation error.
 
 ### Supported models
 
 Agentic features work with any model that supports tool calling. See [TOOL_CALLING.md](TOOL_CALLING.md#supported-models) for the full list.
+
+---
+
+## Code Execution
+
+Enable Python code execution and the model can write and run Python code to answer questions, perform calculations, create visualizations, and analyze data. Think ChatGPT's Code Interpreter, but running locally.
+
+### Quick start
+
+```bash
+mistralrs run --enable-code-execution -m google/gemma-4-E4B-it
+```
+
+The model gets two tools automatically:
+- **`mistralrs_execute_python`** — execute Python in a persistent session (variables, imports survive across calls)
+- **`mistralrs_reset_python_session`** — clear the session state
+
+### What the model can do
+
+- Write and run arbitrary Python code
+- Generate matplotlib plots (automatically captured and sent back as images for vision models)
+- Work with pandas DataFrames, numpy arrays, PIL images
+- Save files to a persistent working directory
+- Use any packages installed in the Python environment
+
+### CLI output
+
+When a tool is called, the CLI shows a box-drawn display:
+
+```
+╭─ tool call: mistralrs_execute_python ────────
+│ import numpy as np
+│ fibs = [0, 1]
+│ for i in range(8):
+│     fibs.append(fibs[-1] + fibs[-2])
+│ fibs
+├─ result (127ms) ─────────────────────────────
+│ [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
+╰──────────────────────────────────────────────
+```
+
+### HTTP API
+
+For streaming, tool progress arrives as SSE events with typed data:
+
+```json
+event: agentic_tool_call_progress
+data: {"type":"agentic_tool_call_progress","round":0,"tool_name":"mistralrs_execute_python","phase":"calling","data":{"tool_type":"code_execution","code":"print('hello')"}}
+
+event: agentic_tool_call_progress
+data: {"type":"agentic_tool_call_progress","round":0,"tool_name":"mistralrs_execute_python","phase":"complete","data":{"tool_type":"code_execution","stdout":"hello\n","execution_time_ms":42}}
+```
+
+For non-streaming, the final response includes `agentic_tool_calls` metadata with the full history.
+
+### Rust SDK
+
+```rust
+use mistralrs::{ModelBuilder, CodeExecutionConfig, RequestBuilder, TextMessages, TextMessageRole};
+
+let model = ModelBuilder::new("google/gemma-4-E4B-it")
+    .with_code_execution(CodeExecutionConfig::default())
+    .build()
+    .await?;
+
+let messages = TextMessages::new()
+    .add_message(TextMessageRole::User, "Plot the Mandelbrot set and save it.");
+let request = RequestBuilder::from(messages).with_code_execution();
+let response = model.send_chat_request(request).await?;
+```
+
+### Security
+
+Code execution runs arbitrary Python with full filesystem and network access. See [Code Execution - Security](CODE_EXECUTION.md#security-considerations) for details.
 
 ---
 
@@ -764,7 +843,13 @@ For stricter argument validation, set `"strict": true` on the function definitio
 
 ### Streaming support
 
-All agentic features (web search, callbacks, MCP, dispatch URLs) support streaming. Tool call chunks are forwarded to the client during the loop so you can observe which tools are being called in real time.
+All agentic features (web search, code execution, callbacks, MCP, dispatch URLs) support streaming. During the agentic loop, `AgenticToolCallProgress` events are sent as SSE events (type `agentic_tool_call_progress`) so clients can display tool activity in real time. Each event includes:
+
+- **`phase: "calling"`** — the tool call has been parsed, contains the arguments (code, search query, etc.)
+- **`phase: "complete"`** — execution finished, contains results (stdout, images, search results, etc.)
+- **`data`** — typed per tool: `code_execution`, `web_search`, or `custom`
+
+For non-streaming requests, the same information is collected into the `agentic_tool_calls` field on the final `ChatCompletionResponse`.
 
 ---
 
@@ -777,6 +862,7 @@ You can enable multiple agentic features on the same model. The [dispatch order]
 let model = ModelBuilder::new("google/gemma-4-E4B-it")
     .with_auto_isq(IsqBits::Four)
     .with_search(SearchEmbeddingModel::default())      // Built-in web search
+    .with_code_execution(CodeExecutionConfig::default()) // Python code execution
     .with_tool_callback("local_db", Arc::new(db_cb))   // Custom callback
     .with_mcp_client(mcp_config)                        // MCP servers
     .build()
@@ -787,6 +873,7 @@ let model = ModelBuilder::new("google/gemma-4-E4B-it")
 ```bash
 mistralrs serve -p 1234 \
     --enable-search \
+    --enable-code-execution \
     --mcp-config mcp-config.json \
     --tool-dispatch-url http://localhost:8787/tools \
     --max-tool-rounds 10 \
@@ -800,6 +887,7 @@ mistralrs serve -p 1234 \
 | Topic | Link |
 |-------|------|
 | Tool calling reference | [TOOL_CALLING.md](TOOL_CALLING.md) |
+| Code execution reference | [CODE_EXECUTION.md](CODE_EXECUTION.md) |
 | Web search reference | [WEB_SEARCH.md](WEB_SEARCH.md) |
 | MCP client reference | [MCP/client.md](MCP/client.md) |
 | MCP configuration | [MCP/configuration.md](MCP/configuration.md) |
