@@ -400,16 +400,9 @@ async fn text_interactive_mode(
                     break 'outer;
                 }
                 Response::AgenticToolCallProgress {
-                    name, call, result, ..
+                    tool_name, phase, ..
                 } => {
-                    if let Some(args) = call {
-                        eprintln!("\n--- {name} ---");
-                        eprintln!("{args}");
-                        eprintln!("--- running... ---");
-                    }
-                    if let Some(result) = result {
-                        eprintln!("--- {name} complete ({} image(s)) ---", result.images.len());
-                    }
+                    eprintln!("[tool: {tool_name}] {phase:?}");
                 }
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
@@ -761,16 +754,9 @@ async fn multimodal_interactive_mode(
                     break 'outer;
                 }
                 Response::AgenticToolCallProgress {
-                    name, call, result, ..
+                    tool_name, phase, ..
                 } => {
-                    if let Some(args) = call {
-                        eprintln!("\n--- {name} ---");
-                        eprintln!("{args}");
-                        eprintln!("--- running... ---");
-                    }
-                    if let Some(result) = result {
-                        eprintln!("--- {name} complete ({} image(s)) ---", result.images.len());
-                    }
+                    eprintln!("[tool: {tool_name}] {phase:?}");
                 }
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),

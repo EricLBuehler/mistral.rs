@@ -1,8 +1,10 @@
 # Code Execution
 
 mistral.rs supports Python code execution as a built-in tool. When enabled, the model is given two tools:
-- **`execute_python`** -- Execute Python code in a persistent session
-- **`reset_python_session`** -- Reset the session, clearing all variables and imports
+- **`mistralrs_execute_python`** -- Execute Python code in a persistent session
+- **`mistralrs_reset_python_session`** -- Reset the session, clearing all variables and imports
+
+Internal tools are prefixed with `mistralrs_` to prevent name collisions with user-provided tools.
 
 This feature is similar to code interpreters in ChatGPT and other AI assistants. The model can write and run Python code to answer questions, perform calculations, create visualizations, and more.
 
@@ -115,6 +117,50 @@ For other crates (`mistralrs`, `mistralrs-server-core`, `mistralrs-pyo3`), the f
 ```bash
 cargo build --release -p mistralrs --features code-execution
 ```
+
+## Tool Call Progress Events
+
+When tools are called during the agentic loop, mistral.rs emits structured `AgenticToolCallProgress` events. These allow clients to display tool activity in real time.
+
+### Streaming (SSE)
+
+For streaming chat completions, progress events are sent as SSE events with `event: agentic_tool_call_progress`:
+
+```json
+{"type":"agentic_tool_call_progress","round":0,"tool_name":"mistralrs_execute_python","phase":"calling","data":{"tool_type":"code_execution","code":"print('hello')"}}
+{"type":"agentic_tool_call_progress","round":0,"tool_name":"mistralrs_execute_python","phase":"complete","data":{"tool_type":"code_execution","stdout":"hello\n","execution_time_ms":42}}
+```
+
+### Non-Streaming
+
+For non-streaming chat completions, the final `ChatCompletionResponse` includes an `agentic_tool_calls` field with the full history:
+
+```json
+{
+  "choices": [...],
+  "agentic_tool_calls": [
+    {
+      "round": 0,
+      "name": "mistralrs_execute_python",
+      "arguments": "{\"code\":\"print('hello')\"}",
+      "result_content": "stdout: hello",
+      "result_images_base64": []
+    }
+  ]
+}
+```
+
+### Tool-Specific Data
+
+Progress events carry typed data depending on the tool:
+
+- **`code_execution`**: `code`, `stdout`, `stderr`, `exception`, `images`, `working_directory`, `execution_time_ms`
+- **`web_search`**: `query`, `results_count`
+- **`custom`**: `arguments`, `content` (opaque strings)
+
+### Tool Name Conflicts
+
+Internal tools are prefixed with `mistralrs_` (e.g., `mistralrs_execute_python`). If a user-provided tool has the same name as a registered internal tool, the request will be rejected with a validation error.
 
 ## Security Considerations
 

@@ -205,13 +205,19 @@ impl Model {
 
         self.runner.get_sender(model_id)?.send(request).await?;
 
-        let ResponseOk::Done(response) = rx
-            .recv()
-            .await
-            .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
-            .as_result()?
-        else {
-            return Err(SdkError::UnexpectedResponse { expected: "Done" });
+        // The agentic loop may send AgenticToolCallProgress events before
+        // the final Done response. Skip them.
+        let response = loop {
+            let resp = rx
+                .recv()
+                .await
+                .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
+                .as_result()?;
+            match resp {
+                ResponseOk::AgenticToolCallProgress { .. } => continue,
+                ResponseOk::Done(response) => break response,
+                _ => return Err(SdkError::UnexpectedResponse { expected: "Done" }),
+            }
         };
 
         Ok(response)
