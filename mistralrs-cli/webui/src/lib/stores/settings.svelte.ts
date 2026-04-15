@@ -10,6 +10,7 @@ interface StoredSettings {
   enableSearch: boolean;
   enableCodeExecution: boolean;
   enableThinking: boolean;
+  toolDispatchUrl: string;
 }
 
 function loadStored(): Partial<StoredSettings> {
@@ -41,7 +42,7 @@ class SettingsStore {
   systemPrompt = $state(stored.systemPrompt ?? "");
   enableSearch = $state(stored.enableSearch ?? false);
   enableCodeExecution = $state(stored.enableCodeExecution ?? false);
-  enableThinking = $state(stored.enableThinking ?? false);
+  enableThinking = $state(stored.enableThinking ?? true);
   sidebarOpen = $state(false);
   settingsOpen = $state(false);
 

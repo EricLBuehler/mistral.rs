@@ -1,5 +1,6 @@
 import { Marked } from "marked";
 import { markedHighlight } from "marked-highlight";
+import markedKatex from "marked-katex-extension";
 import hljs from "highlight.js";
 
 const marked = new Marked(
@@ -11,6 +12,14 @@ const marked = new Marked(
       }
       return hljs.highlightAuto(code).value;
     },
+  }),
+);
+
+// KaTeX for LaTeX math rendering
+marked.use(
+  markedKatex({
+    throwOnError: false,
+    displayMode: false,
   }),
 );
 

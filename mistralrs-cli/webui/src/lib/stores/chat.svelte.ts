@@ -3,6 +3,8 @@ import type {
   AgenticToolCallProgress,
   ChatCompletionMessage,
   StreamOptions,
+  StreamBlock,
+  CodeExecutionData,
 } from "../types";
 import { streamChatCompletion } from "../services/streaming";
 import * as api from "../services/api";
@@ -16,8 +18,7 @@ class ChatStore {
 
   // Accumulated streaming state
   streamingContent = $state("");
-  streamingReasoning = $state("");
-  streamingToolCalls = $state<AgenticToolCallProgress[]>([]);
+  streamingBlocks = $state<StreamBlock[]>([]);
 
   private abortController: AbortController | null = null;
 
@@ -47,13 +48,10 @@ class ChatStore {
     };
     this.messages.push(userMsg);
 
-    // Persist user message (fire-and-forget, don't block streaming)
-    api.appendMessage(
-      this.currentChatId,
-      "user",
-      content,
-      imageUrls,
-    ).catch((e) => console.error("Failed to persist user message:", e));
+    // Persist user message (fire-and-forget)
+    api
+      .appendMessage(this.currentChatId, "user", content, imageUrls)
+      .catch((e) => console.error("Failed to persist user message:", e));
 
     // Build the messages array for the API
     const apiMessages: ChatCompletionMessage[] = [];
@@ -88,8 +86,7 @@ class ChatStore {
     // Start streaming
     this.isStreaming = true;
     this.streamingContent = "";
-    this.streamingReasoning = "";
-    this.streamingToolCalls = [];
+    this.streamingBlocks = [];
     this.abortController = new AbortController();
 
     const options: StreamOptions = {
@@ -118,21 +115,52 @@ class ChatStore {
         this.streamingContent += text;
       },
       onReasoning: (text) => {
-        this.streamingReasoning += text;
+        // Append to last reasoning block, or start a new one
+        const last = this.streamingBlocks[this.streamingBlocks.length - 1];
+        if (last?.type === "reasoning") {
+          last.content += text;
+          // Trigger reactivity
+          this.streamingBlocks = [...this.streamingBlocks];
+        } else {
+          this.streamingBlocks = [
+            ...this.streamingBlocks,
+            { type: "reasoning", content: text },
+          ];
+        }
       },
       onToolCallProgress: (event) => {
-        // Merge with existing by round+tool_name, or append
-        const idx = this.streamingToolCalls.findIndex(
-          (tc) =>
-            tc.round === event.round && tc.tool_name === event.tool_name,
+        // Find existing tool call block for same round+tool_name
+        const idx = this.streamingBlocks.findIndex(
+          (b) =>
+            b.type === "tool_call" &&
+            b.data.round === event.round &&
+            b.data.tool_name === event.tool_name,
         );
         if (idx >= 0) {
-          this.streamingToolCalls[idx] = event;
+          const existing = this.streamingBlocks[idx] as {
+            type: "tool_call";
+            data: AgenticToolCallProgress;
+          };
+          // Merge: keep code from calling phase if complete phase doesn't have it
+          if (
+            event.phase === "complete" &&
+            event.data.tool_type === "code_execution"
+          ) {
+            const existingData = existing.data
+              .data as CodeExecutionData;
+            const newData = event.data as CodeExecutionData;
+            if (!newData.code && existingData.code) {
+              newData.code = existingData.code;
+            }
+          }
+          existing.data = event;
+          this.streamingBlocks = [...this.streamingBlocks];
         } else {
-          this.streamingToolCalls.push(event);
+          this.streamingBlocks = [
+            ...this.streamingBlocks,
+            { type: "tool_call", data: event },
+          ];
         }
-        // Trigger reactivity
-        this.streamingToolCalls = [...this.streamingToolCalls];
       },
       onDone: () => {
         this.finalizeStreaming();
@@ -149,30 +177,32 @@ class ChatStore {
   }
 
   private async finalizeStreaming() {
-    if (this.streamingContent || this.streamingReasoning) {
+    if (this.streamingContent || this.streamingBlocks.length) {
       const assistantMsg: DisplayMessage = {
         role: "assistant",
         content: this.streamingContent,
-        reasoning: this.streamingReasoning || undefined,
-        toolCalls: this.streamingToolCalls.length
-          ? [...this.streamingToolCalls]
+        blocks: this.streamingBlocks.length
+          ? [...this.streamingBlocks]
           : undefined,
       };
       this.messages.push(assistantMsg);
 
       // Persist
       if (this.currentChatId) {
-        await api.appendMessage(
-          this.currentChatId,
-          "assistant",
-          this.streamingContent,
-        );
+        api
+          .appendMessage(
+            this.currentChatId,
+            "assistant",
+            this.streamingContent,
+          )
+          .catch((e) =>
+            console.error("Failed to persist assistant message:", e),
+          );
       }
     }
 
     this.streamingContent = "";
-    this.streamingReasoning = "";
-    this.streamingToolCalls = [];
+    this.streamingBlocks = [];
     this.isStreaming = false;
     this.abortController = null;
   }
@@ -195,8 +225,7 @@ class ChatStore {
     this.currentChatId = null;
     this.messages = [];
     this.streamingContent = "";
-    this.streamingReasoning = "";
-    this.streamingToolCalls = [];
+    this.streamingBlocks = [];
     this.isStreaming = false;
   }
 

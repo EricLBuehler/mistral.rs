@@ -28,40 +28,44 @@
     <h3 class="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Tools</h3>
 
     <!-- Web Search toggle -->
-    {#if modelStore.capabilities.search_enabled}
-      <label class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <svg class="h-4 w-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-          <span class="text-sm text-gray-700 dark:text-gray-300">Web Search</span>
-        </div>
-        <input
-          type="checkbox"
-          class="h-4 w-4 rounded border-gray-300 text-blue-600 accent-blue-600"
-          bind:checked={settingsStore.enableSearch}
-          onchange={handleChange}
-        />
-      </label>
-    {/if}
+    <label class="flex items-center justify-between {modelStore.capabilities.search_enabled ? '' : 'opacity-50'}">
+      <div class="flex items-center gap-2">
+        <svg class="h-4 w-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        <span class="text-sm text-gray-700 dark:text-gray-300">Web Search</span>
+        {#if !modelStore.capabilities.search_enabled}
+          <span class="text-xs text-gray-400">(--enable-search)</span>
+        {/if}
+      </div>
+      <input
+        type="checkbox"
+        class="h-4 w-4 rounded border-gray-300 text-blue-600 accent-blue-600"
+        bind:checked={settingsStore.enableSearch}
+        onchange={handleChange}
+        disabled={!modelStore.capabilities.search_enabled}
+      />
+    </label>
 
     <!-- Code Execution toggle -->
-    {#if modelStore.capabilities.code_execution_enabled}
-      <label class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <svg class="h-4 w-4 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-          </svg>
-          <span class="text-sm text-gray-700 dark:text-gray-300">Code Execution</span>
-        </div>
-        <input
-          type="checkbox"
-          class="h-4 w-4 rounded border-gray-300 text-blue-600 accent-blue-600"
-          bind:checked={settingsStore.enableCodeExecution}
-          onchange={handleChange}
-        />
-      </label>
-    {/if}
+    <label class="flex items-center justify-between {modelStore.capabilities.code_execution_enabled ? '' : 'opacity-50'}">
+      <div class="flex items-center gap-2">
+        <svg class="h-4 w-4 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+        </svg>
+        <span class="text-sm text-gray-700 dark:text-gray-300">Code Execution</span>
+        {#if !modelStore.capabilities.code_execution_enabled}
+          <span class="text-xs text-gray-400">(--enable-code-execution)</span>
+        {/if}
+      </div>
+      <input
+        type="checkbox"
+        class="h-4 w-4 rounded border-gray-300 text-blue-600 accent-blue-600"
+        bind:checked={settingsStore.enableCodeExecution}
+        onchange={handleChange}
+        disabled={!modelStore.capabilities.code_execution_enabled}
+      />
+    </label>
 
     <!-- Thinking toggle -->
     <label class="flex items-center justify-between">

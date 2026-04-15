@@ -130,11 +130,14 @@ export interface Settings {
 
 // === Display message (enriched for UI rendering) ===
 
+export type StreamBlock =
+  | { type: "reasoning"; content: string }
+  | { type: "tool_call"; data: AgenticToolCallProgress };
+
 export interface DisplayMessage {
   role: "user" | "assistant" | "system";
   content: string;
-  reasoning?: string;
-  toolCalls?: AgenticToolCallProgress[];
+  blocks?: StreamBlock[];
   images?: string[];
 }
 

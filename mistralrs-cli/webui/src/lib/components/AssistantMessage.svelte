@@ -11,20 +11,19 @@
 
 <div class="flex justify-start">
   <div class="max-w-[85%] space-y-2">
-    <!-- Thinking/Reasoning block -->
-    {#if message.reasoning}
-      <ThinkingBlock reasoning={message.reasoning} {streaming} />
-    {/if}
-
-    <!-- Tool call blocks -->
-    {#if message.toolCalls?.length}
-      {#each message.toolCalls as toolCall}
-        {#if toolCall.data.tool_type === "code_execution"}
-          <CodeExecution data={toolCall.data} phase={toolCall.phase} />
-        {:else if toolCall.data.tool_type === "web_search"}
-          <SearchResult data={toolCall.data} phase={toolCall.phase} />
-        {:else if toolCall.data.tool_type === "custom"}
-          <CustomTool data={toolCall.data} phase={toolCall.phase} toolName={toolCall.tool_name} />
+    <!-- Ordered blocks: reasoning and tool calls in sequence -->
+    {#if message.blocks?.length}
+      {#each message.blocks as block}
+        {#if block.type === "reasoning"}
+          <ThinkingBlock reasoning={block.content} streaming={streaming && block === message.blocks![message.blocks!.length - 1]} />
+        {:else if block.type === "tool_call"}
+          {#if block.data.data.tool_type === "code_execution"}
+            <CodeExecution data={block.data.data} phase={block.data.phase} />
+          {:else if block.data.data.tool_type === "web_search"}
+            <SearchResult data={block.data.data} phase={block.data.phase} />
+          {:else if block.data.data.tool_type === "custom"}
+            <CustomTool data={block.data.data} phase={block.data.phase} toolName={block.data.tool_name} />
+          {/if}
         {/if}
       {/each}
     {/if}
@@ -38,8 +37,8 @@
       </div>
     {/if}
 
-    <!-- Streaming cursor -->
-    {#if streaming && !message.content && !message.reasoning && !message.toolCalls?.length}
+    <!-- Streaming cursor when nothing has appeared yet -->
+    {#if streaming && !message.content && !message.blocks?.length}
       <div class="rounded-2xl rounded-bl-md bg-gray-100 px-4 py-3 dark:bg-gray-800">
         <div class="flex items-center gap-1.5">
           <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.3s]"></span>

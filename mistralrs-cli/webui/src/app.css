@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "highlight.js/styles/github-dark.css";
+@import "katex/dist/katex.min.css";
 
 @theme {
   --font-sans: "Inter", "system-ui", "-apple-system", "Segoe UI", "Roboto",

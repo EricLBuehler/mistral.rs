@@ -17,7 +17,7 @@
     // Trigger on any message or streaming content change
     void chatStore.messages.length;
     void chatStore.streamingContent;
-    void chatStore.streamingReasoning;
+    void chatStore.streamingBlocks.length;
 
     if (shouldAutoScroll && container) {
       requestAnimationFrame(() => {
@@ -60,9 +60,8 @@
             message={{
               role: "assistant",
               content: chatStore.streamingContent,
-              reasoning: chatStore.streamingReasoning || undefined,
-              toolCalls: chatStore.streamingToolCalls.length
-                ? chatStore.streamingToolCalls
+              blocks: chatStore.streamingBlocks.length
+                ? chatStore.streamingBlocks
                 : undefined,
             }}
             streaming={true}
