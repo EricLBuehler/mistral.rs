@@ -290,12 +290,16 @@ for line in iter(sys.stdin.readline, ""):
                 "last_expr_type": None,
                 "images": [],
             }
+        # Mask SIGINT while building and sending the response so a
+        # late-arriving signal cannot corrupt the protocol write.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         elapsed_ms = int((time.time() - start) * 1000)
         response = {
             **result,
             "execution_time_ms": elapsed_ms,
         }
         send(response)
+        signal.signal(signal.SIGINT, signal.default_int_handler)
 
     elif msg_type == "reset":
         namespace.clear()
