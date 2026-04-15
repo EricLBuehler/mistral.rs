@@ -270,10 +270,7 @@ pub enum AgenticToolCallData {
         results_count: Option<usize>,
     },
     /// User-provided callback, MCP, or HTTP dispatch tool — opaque.
-    Custom {
-        arguments: String,
-        content: String,
-    },
+    Custom { arguments: String, content: String },
 }
 
 /// Phase of an agentic tool call.

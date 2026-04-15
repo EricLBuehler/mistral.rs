@@ -23,9 +23,18 @@ impl PythonSession {
         python_path: &Path,
         executor_script: &Path,
         timeout: Duration,
+        working_directory: Option<&Path>,
     ) -> anyhow::Result<Self> {
-        #[allow(deprecated)]
-        let work_dir = tempfile::tempdir()?.into_path();
+        let work_dir = if let Some(dir) = working_directory {
+            std::fs::create_dir_all(dir)?;
+            dir.to_path_buf()
+        } else {
+            let dir = tempfile::Builder::new()
+                .prefix("mistralrs-code-")
+                .tempdir()?;
+            #[allow(deprecated)]
+            dir.into_path()
+        };
         let python_path = python_path.to_path_buf();
         let executor_script = executor_script.to_path_buf();
 

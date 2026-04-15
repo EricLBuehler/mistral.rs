@@ -468,6 +468,13 @@ pub struct RuntimeOptions {
     #[arg(long, requires = "enable_code_execution")]
     #[serde(default)]
     pub code_exec_timeout: Option<u64>,
+
+    /// Working directory for code execution (default: temporary directory).
+    /// Use "." for the current directory.
+    #[cfg(feature = "code-execution")]
+    #[arg(long, requires = "enable_code_execution")]
+    #[serde(default)]
+    pub code_exec_workdir: Option<PathBuf>,
 }
 
 /// Search embedding model options
@@ -531,6 +538,8 @@ impl Default for RuntimeOptions {
             code_exec_python: None,
             #[cfg(feature = "code-execution")]
             code_exec_timeout: None,
+            #[cfg(feature = "code-execution")]
+            code_exec_workdir: None,
         }
     }
 }

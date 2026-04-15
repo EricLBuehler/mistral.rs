@@ -217,7 +217,11 @@ fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
     if search::search_tool_called(&tc.function.name) {
         let query = serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
             .ok()
-            .and_then(|v| v.get("query").and_then(|q| q.as_str()).map(|s| s.to_string()));
+            .and_then(|v| {
+                v.get("query")
+                    .and_then(|q| q.as_str())
+                    .map(|s| s.to_string())
+            });
         AgenticToolCallData::WebSearch {
             query,
             results_count: None,
@@ -225,7 +229,11 @@ fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
     } else if is_code_exec_tool(&tc.function.name) {
         let code = serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
             .ok()
-            .and_then(|v| v.get("code").and_then(|c| c.as_str()).map(|s| s.to_string()));
+            .and_then(|v| {
+                v.get("code")
+                    .and_then(|c| c.as_str())
+                    .map(|s| s.to_string())
+            });
         AgenticToolCallData::CodeExecution {
             code,
             stdout: None,
@@ -538,8 +546,8 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
 
                 // Resolve how to execute this tool: built-in search,
                 // registered callback, dispatch URL, or bail.
-                let (next_visible, complete_data) =
-                    if search::search_tool_called(&tc.function.name) {
+                let (next_visible, complete_data) = if search::search_tool_called(&tc.function.name)
+                {
                     let web_search_options = web_search_options.as_ref().unwrap();
                     if tc.function.name == search::SEARCH_TOOL_NAME {
                         do_search(this_clone.clone(), visible_req, tc, web_search_options).await
@@ -644,27 +652,21 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
                     })
                     .await;
 
-                let (next_visible, complete_data) =
-                    if search::search_tool_called(&tc.function.name) {
-                        let web_search_options = web_search_options.as_ref().unwrap();
-                        if tc.function.name == search::SEARCH_TOOL_NAME {
-                            do_search(this_clone.clone(), visible_req, tc, web_search_options).await
-                        } else {
-                            do_extraction(
-                                this_clone.clone(),
-                                visible_req,
-                                tc,
-                                web_search_options,
-                            )
-                            .await
-                        }
-                    } else if this_clone.tool_callbacks.contains_key(&tc.function.name) {
-                        do_custom_tool(this_clone.clone(), visible_req, tc, supports_vision).await
-                    } else if let Some(ref url) = dispatch_url {
-                        do_http_tool(visible_req, tc, url)
+                let (next_visible, complete_data) = if search::search_tool_called(&tc.function.name)
+                {
+                    let web_search_options = web_search_options.as_ref().unwrap();
+                    if tc.function.name == search::SEARCH_TOOL_NAME {
+                        do_search(this_clone.clone(), visible_req, tc, web_search_options).await
                     } else {
-                        break; // No way to execute — client handles it.
-                    };
+                        do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
+                    }
+                } else if this_clone.tool_callbacks.contains_key(&tc.function.name) {
+                    do_custom_tool(this_clone.clone(), visible_req, tc, supports_vision).await
+                } else if let Some(ref url) = dispatch_url {
+                    do_http_tool(visible_req, tc, url)
+                } else {
+                    break; // No way to execute — client handles it.
+                };
 
                 // Notify client that the tool call completed.
                 let _ = user_sender

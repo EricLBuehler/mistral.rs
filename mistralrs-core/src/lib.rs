@@ -116,10 +116,18 @@ pub struct CodeExecutionConfig {
     /// Execution timeout in seconds. Default: 30.
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
+    /// Working directory for code execution. If `None`, a temporary directory is created.
+    /// If set (e.g. to `.`), the model's code runs in this directory.
+    #[serde(default)]
+    pub working_directory: Option<std::path::PathBuf>,
 }
 
 fn default_python_path() -> std::path::PathBuf {
-    std::path::PathBuf::from("python3")
+    if cfg!(windows) {
+        std::path::PathBuf::from("python")
+    } else {
+        std::path::PathBuf::from("python3")
+    }
 }
 fn default_timeout_secs() -> u64 {
     30
@@ -130,6 +138,7 @@ impl Default for CodeExecutionConfig {
         Self {
             python_path: default_python_path(),
             timeout_secs: default_timeout_secs(),
+            working_directory: None,
         }
     }
 }
@@ -768,6 +777,7 @@ impl MistralRs {
             let exec_config = mistralrs_code_exec::CodeExecutionConfig {
                 python_path: code_exec_cfg.python_path.clone(),
                 timeout_secs: code_exec_cfg.timeout_secs,
+                working_directory: code_exec_cfg.working_directory.clone(),
             };
             match mistralrs_code_exec::CodeExecutionManager::new(exec_config).await {
                 Ok(manager) => {

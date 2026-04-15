@@ -29,10 +29,19 @@ pub struct CodeExecutionConfig {
     /// Execution timeout in seconds. Default: 30.
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
+    /// Working directory for code execution. If `None`, a temporary directory
+    /// is created (with prefix `mistralrs-code-`). If set, the model's code
+    /// runs in this directory and files are saved there.
+    #[serde(default)]
+    pub working_directory: Option<PathBuf>,
 }
 
 fn default_python_path() -> PathBuf {
-    PathBuf::from("python3")
+    if cfg!(windows) {
+        PathBuf::from("python")
+    } else {
+        PathBuf::from("python3")
+    }
 }
 
 fn default_timeout_secs() -> u64 {
@@ -44,6 +53,7 @@ impl Default for CodeExecutionConfig {
         Self {
             python_path: default_python_path(),
             timeout_secs: default_timeout_secs(),
+            working_directory: None,
         }
     }
 }
@@ -120,11 +130,14 @@ impl CodeExecutionManager {
         python_path: &Path,
         executor_script: &Path,
         timeout: Duration,
+        working_directory: Option<&Path>,
     ) -> anyhow::Result<()> {
         let tid = std::thread::current().id();
         let mut map = sessions.lock().await;
         if !map.contains_key(&tid) {
-            let session = PythonSession::new(python_path, executor_script, timeout).await?;
+            let session =
+                PythonSession::new(python_path, executor_script, timeout, working_directory)
+                    .await?;
             map.insert(tid, session);
         }
         Ok(())
@@ -144,12 +157,14 @@ impl CodeExecutionManager {
         let python_path = self.config.python_path.clone();
         let executor_script = self.executor_script_path.clone();
         let timeout = Duration::from_secs(self.config.timeout_secs);
+        let working_directory = self.config.working_directory.clone();
 
         let execute_callback: Arc<mistralrs_mcp::MultimodalToolCallback> =
             Arc::new(move |func: &CalledFunction| {
                 let sessions = Arc::clone(&sessions);
                 let python_path = python_path.clone();
                 let executor_script = executor_script.clone();
+                let working_directory = working_directory.clone();
 
                 // Parse the code argument.
                 let args: serde_json::Value = serde_json::from_str(&func.arguments)?;
@@ -171,6 +186,7 @@ impl CodeExecutionManager {
                             &python_path,
                             &executor_script,
                             timeout,
+                            working_directory.as_deref(),
                         )
                         .await?;
 
@@ -199,12 +215,14 @@ impl CodeExecutionManager {
         let sessions = Arc::clone(&self.sessions);
         let python_path_reset = self.config.python_path.clone();
         let executor_script_reset = self.executor_script_path.clone();
+        let working_directory_reset = self.config.working_directory.clone();
 
         let reset_callback: Arc<mistralrs_mcp::ToolCallback> = Arc::new(
             move |_func: &CalledFunction| {
                 let sessions = Arc::clone(&sessions);
                 let python_path = python_path_reset.clone();
                 let executor_script = executor_script_reset.clone();
+                let working_directory = working_directory_reset.clone();
 
                 let handle = tokio::runtime::Handle::current();
                 tokio::task::block_in_place(|| {
@@ -214,6 +232,7 @@ impl CodeExecutionManager {
                             &python_path,
                             &executor_script,
                             timeout,
+                            working_directory.as_deref(),
                         )
                         .await?;
 

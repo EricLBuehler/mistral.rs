@@ -18,9 +18,9 @@ use image::DynamicImage;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use mistralrs_core::{
-    AgenticToolCallData, AgenticToolCallPhase, AgenticToolCallRecord,
-    ChatCompletionChunkResponse, ChatCompletionResponse, Constraint, MistralRs, ModelCategory,
-    NormalRequest, ReasoningEffort, Request, RequestMessage, Response, SamplingParams,
+    AgenticToolCallData, AgenticToolCallPhase, AgenticToolCallRecord, ChatCompletionChunkResponse,
+    ChatCompletionResponse, Constraint, MistralRs, ModelCategory, NormalRequest, ReasoningEffort,
+    Request, RequestMessage, Response, SamplingParams,
 };
 use serde_json::{json, Value};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -104,7 +104,11 @@ fn encode_agentic_tool_images(images: &[DynamicImage]) -> Vec<String> {
         .collect()
 }
 
-fn serialize_agentic_progress(round: usize, tool_name: &str, phase: &AgenticToolCallPhase) -> Value {
+fn serialize_agentic_progress(
+    round: usize,
+    tool_name: &str,
+    phase: &AgenticToolCallPhase,
+) -> Value {
     let (phase_str, data) = match phase {
         AgenticToolCallPhase::Calling(data) => ("calling", serialize_agentic_data(data)),
         AgenticToolCallPhase::Complete(data) => ("complete", serialize_agentic_data(data)),
@@ -121,28 +125,59 @@ fn serialize_agentic_progress(round: usize, tool_name: &str, phase: &AgenticTool
 fn serialize_agentic_data(data: &AgenticToolCallData) -> Value {
     match data {
         AgenticToolCallData::CodeExecution {
-            code, stdout, stderr, exception, images, working_directory, execution_time_ms,
+            code,
+            stdout,
+            stderr,
+            exception,
+            images,
+            working_directory,
+            execution_time_ms,
         } => {
             let mut v = json!({"tool_type": "code_execution"});
-            if let Some(c) = code { v["code"] = json!(c); }
-            if let Some(s) = stdout { v["stdout"] = json!(s); }
-            if let Some(s) = stderr { v["stderr"] = json!(s); }
-            if let Some(e) = exception { v["exception"] = json!(e); }
-            if !images.is_empty() { v["images_base64"] = json!(encode_agentic_tool_images(images)); }
-            if let Some(d) = working_directory { v["working_directory"] = json!(d); }
-            if let Some(ms) = execution_time_ms { v["execution_time_ms"] = json!(ms); }
+            if let Some(c) = code {
+                v["code"] = json!(c);
+            }
+            if let Some(s) = stdout {
+                v["stdout"] = json!(s);
+            }
+            if let Some(s) = stderr {
+                v["stderr"] = json!(s);
+            }
+            if let Some(e) = exception {
+                v["exception"] = json!(e);
+            }
+            if !images.is_empty() {
+                v["images_base64"] = json!(encode_agentic_tool_images(images));
+            }
+            if let Some(d) = working_directory {
+                v["working_directory"] = json!(d);
+            }
+            if let Some(ms) = execution_time_ms {
+                v["execution_time_ms"] = json!(ms);
+            }
             v
         }
-        AgenticToolCallData::WebSearch { query, results_count } => {
+        AgenticToolCallData::WebSearch {
+            query,
+            results_count,
+        } => {
             let mut v = json!({"tool_type": "web_search"});
-            if let Some(q) = query { v["query"] = json!(q); }
-            if let Some(n) = results_count { v["results_count"] = json!(n); }
+            if let Some(q) = query {
+                v["query"] = json!(q);
+            }
+            if let Some(n) = results_count {
+                v["results_count"] = json!(n);
+            }
             v
         }
         AgenticToolCallData::Custom { arguments, content } => {
             let mut v = json!({"tool_type": "custom"});
-            if !arguments.is_empty() { v["arguments"] = json!(arguments); }
-            if !content.is_empty() { v["content"] = json!(content); }
+            if !arguments.is_empty() {
+                v["arguments"] = json!(arguments);
+            }
+            if !content.is_empty() {
+                v["content"] = json!(content);
+            }
             v
         }
     }
@@ -151,12 +186,12 @@ fn serialize_agentic_data(data: &AgenticToolCallData) -> Value {
 /// Extract the arguments string from a Calling-phase `AgenticToolCallData`.
 fn extract_arguments(data: &AgenticToolCallData) -> String {
     match data {
-        AgenticToolCallData::CodeExecution { code: Some(code), .. } => {
-            serde_json::json!({"code": code}).to_string()
-        }
-        AgenticToolCallData::WebSearch { query: Some(query), .. } => {
-            serde_json::json!({"query": query}).to_string()
-        }
+        AgenticToolCallData::CodeExecution {
+            code: Some(code), ..
+        } => serde_json::json!({"code": code}).to_string(),
+        AgenticToolCallData::WebSearch {
+            query: Some(query), ..
+        } => serde_json::json!({"query": query}).to_string(),
         AgenticToolCallData::Custom { arguments, .. } => arguments.clone(),
         _ => String::new(),
     }
@@ -173,10 +208,7 @@ fn record_agentic_progress(
 ) {
     match phase {
         AgenticToolCallPhase::Calling(data) => {
-            pending_args.insert(
-                (round, tool_name.to_string()),
-                extract_arguments(data),
-            );
+            pending_args.insert((round, tool_name.to_string()), extract_arguments(data));
         }
         AgenticToolCallPhase::Complete(data) => {
             let arguments = pending_args
@@ -184,20 +216,32 @@ fn record_agentic_progress(
                 .unwrap_or_default();
 
             let (result_content, result_images_base64) = match data {
-                AgenticToolCallData::CodeExecution { stdout, stderr, exception, images, .. } => {
+                AgenticToolCallData::CodeExecution {
+                    stdout,
+                    stderr,
+                    exception,
+                    images,
+                    ..
+                } => {
                     let mut content_parts = Vec::new();
-                    if let Some(s) = stdout { content_parts.push(format!("stdout: {s}")); }
-                    if let Some(s) = stderr { content_parts.push(format!("stderr: {s}")); }
-                    if let Some(e) = exception { content_parts.push(format!("exception: {e}")); }
+                    if let Some(s) = stdout {
+                        content_parts.push(format!("stdout: {s}"));
+                    }
+                    if let Some(s) = stderr {
+                        content_parts.push(format!("stderr: {s}"));
+                    }
+                    if let Some(e) = exception {
+                        content_parts.push(format!("exception: {e}"));
+                    }
                     (content_parts.join("\n"), encode_agentic_tool_images(images))
                 }
                 AgenticToolCallData::WebSearch { results_count, .. } => {
-                    let msg = results_count.map(|n| format!("{n} results")).unwrap_or_default();
+                    let msg = results_count
+                        .map(|n| format!("{n} results"))
+                        .unwrap_or_default();
                     (msg, vec![])
                 }
-                AgenticToolCallData::Custom { content, .. } => {
-                    (content.clone(), vec![])
-                }
+                AgenticToolCallData::Custom { content, .. } => (content.clone(), vec![]),
             };
             records.push(AgenticToolCallRecord {
                 round,
@@ -888,7 +932,13 @@ pub async fn process_non_streaming_response(
                 round,
                 tool_name,
                 phase,
-            }) => record_agentic_progress(&mut tool_call_records, &mut pending_args, round, &tool_name, &phase),
+            }) => record_agentic_progress(
+                &mut tool_call_records,
+                &mut pending_args,
+                round,
+                &tool_name,
+                &phase,
+            ),
             Some(Response::Done(response)) => {
                 return match_responses(
                     state,

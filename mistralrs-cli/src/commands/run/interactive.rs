@@ -72,8 +72,23 @@ fn format_sampling_params(params: &SamplingParams) -> String {
     parts.join(", ")
 }
 
-fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>) -> String {
-    let r = editor.readline("> ");
+fn build_prompt(do_search: bool, do_code_exec: bool) -> String {
+    let mut tags = Vec::new();
+    if do_code_exec {
+        tags.push("code");
+    }
+    if do_search {
+        tags.push("search");
+    }
+    if tags.is_empty() {
+        "> ".to_string()
+    } else {
+        format!("[{}] > ", tags.join(","))
+    }
+}
+
+fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>, prompt: &str) -> String {
+    let r = editor.readline(prompt);
     match r {
         Err(ReadlineError::Interrupted) => {
             editor.save_history(&history_file_path()).unwrap();
@@ -607,7 +622,7 @@ async fn text_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl);
+        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec));
 
         let prompt_trimmed = prompt.as_str().trim();
         if prompt_trimmed.is_empty() {
@@ -767,12 +782,16 @@ fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCa
             let pad = HEADER_WIDTH.saturating_sub(header.len());
             println!("\n{header}{}", "─".repeat(pad));
             match data {
-                AgenticToolCallData::CodeExecution { code: Some(code), .. } => {
+                AgenticToolCallData::CodeExecution {
+                    code: Some(code), ..
+                } => {
                     for line in code.lines() {
                         println!("│ {line}");
                     }
                 }
-                AgenticToolCallData::WebSearch { query: Some(query), .. } => {
+                AgenticToolCallData::WebSearch {
+                    query: Some(query), ..
+                } => {
                     println!("│ query: {query}");
                 }
                 AgenticToolCallData::Custom { arguments, .. } if !arguments.is_empty() => {
@@ -784,10 +803,21 @@ fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCa
         AgenticToolCallPhase::Complete(data) => {
             match data {
                 AgenticToolCallData::CodeExecution {
-                    stdout, stderr, exception, images, execution_time_ms, ..
+                    stdout,
+                    stderr,
+                    exception,
+                    images,
+                    execution_time_ms,
+                    ..
                 } => {
-                    let timing = execution_time_ms.map(|ms| format!(" ({ms}ms)")).unwrap_or_default();
-                    let status = if exception.is_some() { "error" } else { "result" };
+                    let timing = execution_time_ms
+                        .map(|ms| format!(" ({ms}ms)"))
+                        .unwrap_or_default();
+                    let status = if exception.is_some() {
+                        "error"
+                    } else {
+                        "result"
+                    };
                     let divider = format!("├─ {status}{timing} ");
                     let pad = HEADER_WIDTH.saturating_sub(divider.len());
                     println!("{divider}{}", "─".repeat(pad));
@@ -958,7 +988,7 @@ async fn multimodal_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl);
+        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec));
 
         let prompt_trimmed = prompt.as_str().trim();
         if prompt_trimmed.is_empty() {
@@ -1240,7 +1270,7 @@ async fn diffusion_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl);
+        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec));
 
         let prompt = match prompt.as_str().trim() {
             "" => continue,
@@ -1335,7 +1365,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool, do_
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl);
+        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec));
 
         let prompt = match prompt.as_str().trim() {
             "" => continue,

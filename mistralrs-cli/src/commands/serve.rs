@@ -84,13 +84,14 @@ pub async fn run_server(
 
     #[cfg(feature = "code-execution")]
     if runtime.enable_code_execution {
-        let code_exec_config = mistralrs_core::CodeExecutionConfig {
-            python_path: runtime
-                .code_exec_python
-                .clone()
-                .unwrap_or_else(|| "python3".into()),
-            timeout_secs: runtime.code_exec_timeout.unwrap_or(30),
-        };
+        let mut code_exec_config = mistralrs_core::CodeExecutionConfig::default();
+        if let Some(python) = runtime.code_exec_python.clone() {
+            code_exec_config.python_path = python;
+        }
+        if let Some(timeout) = runtime.code_exec_timeout {
+            code_exec_config.timeout_secs = timeout;
+        }
+        code_exec_config.working_directory = runtime.code_exec_workdir.clone();
         builder = builder.with_code_exec_config(code_exec_config);
     }
 
