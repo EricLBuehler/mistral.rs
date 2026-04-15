@@ -29,9 +29,14 @@ class ChatStore {
     if (!model) return;
 
     // Create chat if needed
-    if (!this.currentChatId) {
-      const { id } = await api.newChat(model);
-      this.currentChatId = id;
+    try {
+      if (!this.currentChatId) {
+        const { id } = await api.newChat(model);
+        this.currentChatId = id;
+      }
+    } catch (e) {
+      console.error("Failed to create chat:", e);
+      return;
     }
 
     // Add user message
@@ -42,13 +47,13 @@ class ChatStore {
     };
     this.messages.push(userMsg);
 
-    // Persist user message
-    await api.appendMessage(
+    // Persist user message (fire-and-forget, don't block streaming)
+    api.appendMessage(
       this.currentChatId,
       "user",
       content,
       imageUrls,
-    );
+    ).catch((e) => console.error("Failed to persist user message:", e));
 
     // Build the messages array for the API
     const apiMessages: ChatCompletionMessage[] = [];

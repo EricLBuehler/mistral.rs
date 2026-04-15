@@ -29,6 +29,15 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
   return res.json();
 }
 
+async function postVoid(path: string, body?: unknown): Promise<void> {
+  const res = await fetch(apiUrl(path), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: body != null ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error(`POST ${path}: ${res.statusText}`);
+}
+
 // === Model endpoints ===
 
 export async function listModels(): Promise<{
@@ -38,7 +47,7 @@ export async function listModels(): Promise<{
 }
 
 export async function selectModel(name: string): Promise<void> {
-  await post("select_model", { name });
+  await postVoid("select_model", { name });
 }
 
 // === Chat endpoints ===
@@ -52,7 +61,7 @@ export async function newChat(model: string): Promise<{ id: string }> {
 }
 
 export async function deleteChat(id: string): Promise<void> {
-  await post("delete_chat", { id });
+  await postVoid("delete_chat", { id });
 }
 
 export async function loadChat(id: string): Promise<ChatFile> {
@@ -63,7 +72,7 @@ export async function renameChat(
   id: string,
   title: string,
 ): Promise<void> {
-  await post("rename_chat", { id, title });
+  await postVoid("rename_chat", { id, title });
 }
 
 export async function appendMessage(
@@ -72,7 +81,7 @@ export async function appendMessage(
   content: string,
   images?: string[],
 ): Promise<void> {
-  await post("append_message", { id, role, content, images });
+  await postVoid("append_message", { id, role, content, images });
 }
 
 // === Settings & Capabilities ===
