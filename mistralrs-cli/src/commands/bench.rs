@@ -102,9 +102,10 @@ pub async fn run_bench(
         }
         info!("Warmup complete.");
 
-        // Flush any residual KV state left over from warmup, then yield to the
-        // engine's scheduler loop so the termination is processed before we start
-        // timing. Without the sleep the next request can race ahead in the channel.
+        // Flush KV state from warmup. TerminateAllSeqsNextStep sets a global
+        // AtomicBool; the engine reads and acts on it at the top of its next
+        // scheduler iteration. The sleep yields to allow that iteration to
+        // complete before the next benchmark request enters the channel.
         let sender = mistralrs.get_sender(None).unwrap();
         let _ = sender.send(mistralrs_core::Request::TerminateAllSeqsNextStep).await;
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -150,9 +151,9 @@ pub async fn run_bench(
             decode_results.push((tok_per_sec, ms_per_tok));
         }
 
-        // Flush state between iterations. Yield after sending so the engine
-        // scheduler has a chance to process the termination before the next
-        // iteration's request enters the channel.
+        // Flush KV state between iterations. Same mechanism as the post-warmup
+        // flush above: set the flag then sleep so the engine gets one full loop
+        // iteration to process the termination before the next run begins.
         let sender = mistralrs.get_sender(None).unwrap();
         let _ = sender.send(mistralrs_core::Request::TerminateAllSeqsNextStep).await;
         tokio::time::sleep(Duration::from_millis(50)).await;
