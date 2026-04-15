@@ -32,6 +32,28 @@ import signal
 # Keep a reference to the real stdout before user code can redirect it.
 _real_stdout = sys.stdout
 
+
+class _BlockedStdin:
+    """Stub that raises an error if user code tries to read from stdin."""
+
+    def read(self, *a, **kw):
+        raise RuntimeError("input() / stdin.read() is not supported in code execution")
+
+    def readline(self, *a, **kw):
+        raise RuntimeError("input() / stdin.read() is not supported in code execution")
+
+    def readlines(self, *a, **kw):
+        raise RuntimeError("input() / stdin.read() is not supported in code execution")
+
+    def __iter__(self):
+        raise RuntimeError("iterating stdin is not supported in code execution")
+
+    def __next__(self):
+        raise RuntimeError("iterating stdin is not supported in code execution")
+
+
+_blocked_stdin = _BlockedStdin()
+
 work_dir = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
 os.chdir(work_dir)
 
@@ -139,7 +161,7 @@ def execute_code(code):
     """Execute code with last-expression capture (Jupyter-style)."""
     stdout_capture = io.StringIO()
     stderr_capture = io.StringIO()
-    old_stdout, old_stderr = sys.stdout, sys.stderr
+    old_stdout, old_stderr, old_stdin = sys.stdout, sys.stderr, sys.stdin
 
     exception = None
     last_expr_repr = None
@@ -149,6 +171,7 @@ def execute_code(code):
     try:
         sys.stdout = stdout_capture
         sys.stderr = stderr_capture
+        sys.stdin = _blocked_stdin
 
         # Parse the code into an AST.
         tree = ast.parse(code)
@@ -198,6 +221,7 @@ def execute_code(code):
     finally:
         sys.stdout = old_stdout
         sys.stderr = old_stderr
+        sys.stdin = old_stdin
 
     # Capture matplotlib figures (runs after user code, even if it raised).
     images.extend(capture_matplotlib_figures())
@@ -277,6 +301,7 @@ for line in iter(sys.stdin.readline, ""):
         namespace.clear()
         namespace["__builtins__"] = __builtins__
         namespace["__name__"] = "__main__"
+        _captured_figures.clear()
         send({"success": True})
 
     elif msg_type == "shutdown":

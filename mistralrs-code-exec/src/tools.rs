@@ -37,6 +37,7 @@ pub fn build_execute_python_tool(timeout_secs: u64, installed_packages: &str) ->
 ## Restrictions
 - Package installation (pip install) is **disabled**.
 - Network access and filesystem access **are available** and cannot be restricted.
+- `input()` and reading from `stdin` are **not supported** and will raise an error.
 
 ## Installed Packages
 The following packages are available:
