@@ -161,6 +161,8 @@ impl CodeExecutionManager {
                     .ok_or_else(|| anyhow::anyhow!("Missing 'code' argument"))?
                     .to_string();
 
+                tracing::info!("Executing Python code:\n{code}");
+
                 // Run async code execution in the current runtime.
                 let handle = tokio::runtime::Handle::current();
                 tokio::task::block_in_place(|| {
@@ -177,6 +179,8 @@ impl CodeExecutionManager {
                         let mut map = sessions.lock().await;
                         let session = map.get_mut(&tid).unwrap();
                         let result = session.execute(&code).await;
+
+                        log_exec_result(&result);
 
                         Ok(ToolOutput::Multimodal {
                             text: result.text,
@@ -205,6 +209,8 @@ impl CodeExecutionManager {
                 let python_path = python_path_reset.clone();
                 let executor_script = executor_script_reset.clone();
 
+                tracing::info!("Resetting Python session.");
+
                 let handle = tokio::runtime::Handle::current();
                 tokio::task::block_in_place(|| {
                     handle.block_on(async {
@@ -221,6 +227,8 @@ impl CodeExecutionManager {
                         let session = map.get_mut(&tid).unwrap();
                         session.reset().await?;
 
+                        tracing::info!("Python session reset successfully.");
+
                         Ok(serde_json::json!({"status": "success", "message": "Session reset. All variables and imports have been cleared."}).to_string())
                     })
                 })
@@ -235,5 +243,40 @@ impl CodeExecutionManager {
         );
 
         callbacks
+    }
+}
+
+fn log_exec_result(result: &output::CodeExecResult) {
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&result.text) {
+        let status = val.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+        let time_ms = val
+            .get("execution_time_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let images = result.images.len();
+
+        let mut parts = Vec::new();
+        if let Some(stdout) = val.get("stdout").and_then(|v| v.as_str()) {
+            if !stdout.is_empty() {
+                parts.push(format!("stdout: {}", stdout.trim()));
+            }
+        }
+        if let Some(expr) = val.get("result").and_then(|v| v.as_str()) {
+            parts.push(format!("result: {expr}"));
+        }
+        if let Some(exc) = val.get("exception").and_then(|v| v.as_str()) {
+            parts.push(format!("exception: {exc}"));
+        }
+        if images > 0 {
+            parts.push(format!("{images} image(s) captured"));
+        }
+
+        let detail = if parts.is_empty() {
+            "(no output)".to_string()
+        } else {
+            parts.join(", ")
+        };
+
+        tracing::info!("Python execution {status} ({time_ms}ms): {detail}");
     }
 }

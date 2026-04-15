@@ -239,22 +239,10 @@ async fn do_custom_tool(
     tc: &ToolCallResponse,
     supports_vision: bool,
 ) -> NormalRequest {
-    tracing::info!(
-        "Tool `{}` called with arguments: {}",
-        tc.function.name,
-        tc.function.arguments
-    );
-
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
     let result = tool_dispatch::execute_custom_tool(&engine, tc);
-    tracing::info!(
-        "Tool `{}` returned ({} image(s)): {}",
-        tc.function.name,
-        result.images.len(),
-        &result.content[..result.content.len().min(500)]
-    );
 
     if result.images.is_empty() {
         let messages = get_messages_mut(&mut request);
