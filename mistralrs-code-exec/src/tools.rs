@@ -36,6 +36,7 @@ r#"Execute Python code in a persistent interactive session.
 ## Restrictions
 - Package installation (pip install) is **disabled**.
 - Network access and filesystem access **are available** and cannot be restricted.
+- IMPORTANT: The code must be pure Python. Do NOT use LaTeX syntax like `\le`, `\ge`, `\ne`, `\times` — use Python operators `<=`, `>=`, `!=`, `*` instead.
 
 ## Installed Packages
 The following packages are available:

@@ -159,11 +159,21 @@ fn escape_json_string_controls(s: &str) -> String {
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\\' && in_string {
-            // Preserve existing escape sequences.
-            out.push(c);
             if let Some(&next) = chars.peek() {
-                out.push(next);
-                chars.next();
+                match next {
+                    // Valid JSON escape sequences — preserve as-is.
+                    '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u' => {
+                        out.push('\\');
+                        out.push(next);
+                        chars.next();
+                    }
+                    // Invalid JSON escape — escape the backslash itself.
+                    _ => {
+                        out.push_str("\\\\");
+                    }
+                }
+            } else {
+                out.push_str("\\\\");
             }
             continue;
         }

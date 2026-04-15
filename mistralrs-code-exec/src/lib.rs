@@ -161,6 +161,9 @@ impl CodeExecutionManager {
                     .ok_or_else(|| anyhow::anyhow!("Missing 'code' argument"))?
                     .to_string();
 
+                // Models sometimes emit LaTeX operators instead of Python ones.
+                let code = sanitize_latex_operators(&code);
+
                 tracing::info!("Executing Python code:\n{code}");
 
                 // Run async code execution in the current runtime.
@@ -279,4 +282,17 @@ fn log_exec_result(result: &output::CodeExecResult) {
 
         tracing::info!("Python execution {status} ({time_ms}ms): {detail}");
     }
+}
+
+/// Replace common LaTeX math operators that models sometimes emit with
+/// their Python equivalents so the code actually runs.
+fn sanitize_latex_operators(code: &str) -> String {
+    code.replace("\\le", "<=")
+        .replace("\\le", "<=")
+        .replace("\\ge ", ">=")
+        .replace("\\ge", ">=")
+        .replace("\\ne ", "!=")
+        .replace("\\ne", "!=")
+        .replace("\\times ", "* ")
+        .replace("\\cdot ", "* ")
 }
