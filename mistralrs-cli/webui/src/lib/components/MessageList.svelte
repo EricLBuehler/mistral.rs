@@ -4,25 +4,44 @@
   import AssistantMessage from "./AssistantMessage.svelte";
 
   let container: HTMLDivElement;
-  let shouldAutoScroll = $state(true);
+  let userScrolledAway = $state(false);
+  let lastScrollTop = 0;
 
   function handleScroll() {
     if (!container) return;
     const { scrollTop, scrollHeight, clientHeight } = container;
-    // Auto-scroll if user is near the bottom (within 100px)
-    shouldAutoScroll = scrollHeight - scrollTop - clientHeight < 100;
+    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+
+    // If user scrolled UP at all while not near the bottom, detach
+    if (scrollTop < lastScrollTop && distanceFromBottom > 80) {
+      userScrolledAway = true;
+    }
+
+    // If user scrolled back near the bottom, re-attach
+    if (distanceFromBottom < 30) {
+      userScrolledAway = false;
+    }
+
+    lastScrollTop = scrollTop;
   }
 
   $effect(() => {
-    // Trigger on any message or streaming content change
+    // Trigger on content changes
     void chatStore.messages.length;
     void chatStore.streamingContent;
     void chatStore.streamingBlocks.length;
 
-    if (shouldAutoScroll && container) {
+    if (!userScrolledAway && container) {
       requestAnimationFrame(() => {
         container.scrollTop = container.scrollHeight;
       });
+    }
+  });
+
+  // When a new message is sent, always scroll to bottom
+  $effect(() => {
+    if (chatStore.isStreaming) {
+      userScrolledAway = false;
     }
   });
 </script>
@@ -70,4 +89,20 @@
       </div>
     {/if}
   </div>
+
+  <!-- Scroll-to-bottom button when detached -->
+  {#if userScrolledAway && chatStore.isStreaming}
+    <button
+      class="fixed bottom-28 left-1/2 z-20 -translate-x-1/2 rounded-full bg-gray-800 px-3 py-1.5 text-xs text-white shadow-lg transition-colors hover:bg-gray-700 dark:bg-gray-600 dark:hover:bg-gray-500"
+      onclick={() => {
+        userScrolledAway = false;
+        if (container) container.scrollTop = container.scrollHeight;
+      }}
+    >
+      <svg class="mr-1 inline h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+      </svg>
+      Scroll to bottom
+    </button>
+  {/if}
 </div>

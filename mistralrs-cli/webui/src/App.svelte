@@ -39,11 +39,9 @@
       try {
         const caps = await api.getCapabilities();
         modelStore.capabilities = caps;
-        // If features are enabled server-side, default the toggles on
-        if (!localStorage.getItem("mistralrs_settings")) {
-          if (caps.search_enabled) settingsStore.enableSearch = true;
-          if (caps.code_execution_enabled) settingsStore.enableCodeExecution = true;
-        }
+        // If features are enabled server-side, turn on the toggles
+        if (caps.search_enabled) settingsStore.enableSearch = true;
+        if (caps.code_execution_enabled) settingsStore.enableCodeExecution = true;
       } catch {
         // Capabilities endpoint might not exist on older servers
       }
