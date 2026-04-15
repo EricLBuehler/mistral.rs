@@ -54,26 +54,30 @@
   <!-- Code section -->
   {#if data.code}
     <div class="border-t border-gray-700">
-      <div class="flex items-center gap-1.5 bg-gray-900 px-3 py-1">
+      <button
+        class="flex w-full cursor-pointer items-center gap-1.5 bg-gray-900 px-3 py-1 text-left"
+        onclick={() => codeExpanded = !codeExpanded}
+      >
+        <svg class="h-3 w-3 text-gray-400 transition-transform {codeExpanded ? 'rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+        </svg>
         <span class="text-xs font-medium text-gray-400">Code</span>
         <span class="text-xs text-gray-500">({totalLines} lines)</span>
-      </div>
-      <div class="overflow-x-auto bg-gray-950 px-3 py-2">
-        {#if codeExpanded || !needsExpand}
+      </button>
+      {#if codeExpanded}
+        <div class="overflow-x-auto bg-gray-950 px-3 py-2">
           <pre class="text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedFull}</code></pre>
-        {:else}
+        </div>
+      {:else if needsExpand}
+        <div class="relative overflow-x-auto bg-gray-950 px-3 py-2">
           <pre class="text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedPreview}</code></pre>
-          <button
-            class="mt-1 flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300"
-            onclick={() => codeExpanded = true}
-          >
-            <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-            </svg>
-            Show all {totalLines} lines
-          </button>
-        {/if}
-      </div>
+          <div class="pointer-events-none absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-gray-950 to-transparent"></div>
+        </div>
+      {:else}
+        <div class="overflow-x-auto bg-gray-950 px-3 py-2">
+          <pre class="text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedFull}</code></pre>
+        </div>
+      {/if}
     </div>
   {/if}
 
