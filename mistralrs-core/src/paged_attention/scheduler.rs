@@ -198,8 +198,6 @@ impl PagedAttentionScheduler {
             let tokens = seq_guard.get_toks().to_vec();
             let num_tokens = tokens.len();
             let mm_features = seq_guard.mm_features().to_vec();
-            let num_new_tokens = num_tokens.saturating_sub(seq_guard.prefix_cache_len());
-            let _ = num_new_tokens; // used by prefix cache lookup below
             drop(seq_guard);
 
             // Compute block hashes for prefix cache lookup
