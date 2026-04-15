@@ -8,7 +8,7 @@ use mistralrs_core::{
 };
 use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::channel;
 use tracing::info;
 
@@ -102,9 +102,12 @@ pub async fn run_bench(
         }
         info!("Warmup complete.");
 
-        // Clear any residual KV cache from warmup
+        // Flush any residual KV state left over from warmup, then yield to the
+        // engine's scheduler loop so the termination is processed before we start
+        // timing. Without the sleep the next request can race ahead in the channel.
         let sender = mistralrs.get_sender(None).unwrap();
         let _ = sender.send(mistralrs_core::Request::TerminateAllSeqsNextStep).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Reset logger counters so benchmark stats are clean
         if let Ok(logger) = mistralrs.get_logger(None) {
@@ -147,9 +150,12 @@ pub async fn run_bench(
             decode_results.push((tok_per_sec, ms_per_tok));
         }
 
-        // Extremely aggressive cache sweep. Flush the sequences out of the engine.
+        // Flush state between iterations. Yield after sending so the engine
+        // scheduler has a chance to process the termination before the next
+        // iteration's request enters the channel.
         let sender = mistralrs.get_sender(None).unwrap();
         let _ = sender.send(mistralrs_core::Request::TerminateAllSeqsNextStep).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
     // Calculate statistics
