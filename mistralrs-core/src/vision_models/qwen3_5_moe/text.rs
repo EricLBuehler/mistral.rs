@@ -699,14 +699,21 @@ impl Qwen3_5MoeTextModel {
             })
             .collect();
 
+        let tp_world_size = mapper.get_comm_for(0)?.world_size();
+        let local_num_v_heads = cfg.linear_num_value_heads / tp_world_size;
+        let local_num_k_heads = cfg.linear_num_key_heads / tp_world_size;
+        let local_key_dim = local_num_k_heads * cfg.linear_key_head_dim;
+        let local_value_dim = local_num_v_heads * cfg.linear_value_head_dim;
+        let local_conv_dim = local_key_dim * 2 + local_value_dim;
+
         let hybrid_cache_config = HybridCacheConfig {
             layer_types: pipeline_layer_types,
             max_seq_len: cfg.max_position_embeddings,
             recurrent: RecurrentLayerConfig {
-                conv_dim: cfg.linear_conv_dim(),
+                conv_dim: local_conv_dim,
                 conv_width: cfg.linear_conv_kernel_dim,
                 state_dims: vec![
-                    cfg.linear_num_value_heads,
+                    local_num_v_heads,
                     cfg.linear_key_head_dim,
                     cfg.linear_value_head_dim,
                 ],
