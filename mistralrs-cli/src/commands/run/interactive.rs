@@ -775,6 +775,8 @@ fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCa
     use mistralrs_core::{AgenticToolCallData, AgenticToolCallPhase};
 
     const HEADER_WIDTH: usize = 50;
+    const GRAY: &str = "\x1b[90m";
+    const RESET: &str = "\x1b[0m";
 
     match phase {
         AgenticToolCallPhase::Calling(data) => {
@@ -821,14 +823,26 @@ fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCa
                     let divider = format!("├─ {status}{timing} ");
                     let pad = HEADER_WIDTH.saturating_sub(divider.len());
                     println!("{divider}{}", "─".repeat(pad));
-                    if let Some(stdout) = stdout {
-                        for line in stdout.trim().lines() {
-                            println!("│ {line}");
+                    println!("│ stdout:");
+                    match stdout {
+                        Some(s) if !s.trim().is_empty() => {
+                            for line in s.trim().lines() {
+                                println!("│   {line}");
+                            }
+                        }
+                        _ => {
+                            println!("│   {GRAY}<none>{RESET}");
                         }
                     }
-                    if let Some(stderr) = stderr {
-                        for line in stderr.trim().lines() {
-                            println!("│ stderr: {line}");
+                    println!("│ stderr:");
+                    match stderr {
+                        Some(s) if !s.trim().is_empty() => {
+                            for line in s.trim().lines() {
+                                println!("│   {line}");
+                            }
+                        }
+                        _ => {
+                            println!("│   {GRAY}<none>{RESET}");
                         }
                     }
                     if let Some(exc) = exception {
