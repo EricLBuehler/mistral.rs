@@ -167,6 +167,10 @@ pub struct ChatCompletionResponse {
     /// Ordered record of all tool calls made during the agentic loop.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agentic_tool_calls: Option<Vec<AgenticToolCallRecord>>,
+    /// The code execution session ID for this request. Can be reused in
+    /// subsequent requests to maintain Python state across messages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_execution_session_id: Option<String>,
 }
 
 generate_repr!(ChatCompletionResponse);

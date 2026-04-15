@@ -207,6 +207,10 @@ pub struct NormalRequest {
     pub model_id: Option<String>,
     #[serde(default)]
     pub truncate_sequence: bool,
+    /// Session ID for persistent code execution. If `None`, a new session is
+    /// created. The assigned/reused ID is returned in the response.
+    #[serde(default)]
+    pub code_execution_session_id: Option<String>,
 }
 
 impl NormalRequest {
