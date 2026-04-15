@@ -145,7 +145,7 @@
     {/if}
 
     <!-- Input area -->
-    <div class="flex items-end gap-2">
+    <div class="flex items-start gap-2">
       <!-- File upload button -->
       {#if modelStore.isMultimodal}
         <label class="shrink-0 cursor-pointer rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300">

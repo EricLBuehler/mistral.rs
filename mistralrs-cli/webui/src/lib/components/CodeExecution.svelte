@@ -48,11 +48,19 @@
     {/if}
   </div>
 
-  <!-- Code -->
+  <!-- Code (collapsed by default) -->
   {#if data.code}
-    <div class="overflow-x-auto bg-gray-950 p-3">
-      <pre class="text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedCode}</code></pre>
-    </div>
+    <details class="group border-t border-purple-200 dark:border-purple-800/50">
+      <summary class="flex cursor-pointer items-center gap-1.5 bg-gray-900 px-3 py-1 text-xs text-gray-400 select-none hover:text-gray-300">
+        <svg class="h-3 w-3 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+        </svg>
+        Code
+      </summary>
+      <div class="overflow-x-auto bg-gray-950 p-3">
+        <pre class="text-xs leading-relaxed"><code class="hljs language-python">{@html highlightedCode}</code></pre>
+      </div>
+    </details>
   {/if}
 
   <!-- stdout -->
