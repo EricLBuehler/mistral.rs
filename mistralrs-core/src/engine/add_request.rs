@@ -33,12 +33,21 @@ impl Engine {
                     &request.messages,
                     RequestMessage::Chat { .. } | RequestMessage::MultimodalChat { .. }
                 );
-                let has_tooling = !self.tool_callbacks.is_empty();
+                // max_tool_rounds == Some(0) is a sentinel set by the agentic
+                // loop on dispatched probes to prevent re-entry.
+                let in_agentic_loop = request.max_tool_rounds == Some(0);
+                let has_tooling = !self.tool_callbacks.is_empty()
+                    && request.tools.as_ref().is_some_and(|t| !t.is_empty());
                 let has_search = request.web_search_options.is_some();
+                let has_code_exec =
+                    request.enable_code_execution && !self.tool_callbacks.is_empty();
                 let has_agentic =
                     request.max_tool_rounds.is_some() || request.tool_dispatch_url.is_some();
 
-                if is_chat && (has_search || has_tooling || has_agentic) {
+                if is_chat
+                    && !in_agentic_loop
+                    && (has_search || has_tooling || has_code_exec || has_agentic)
+                {
                     agentic_loop::agentic_loop(self.clone(), *request).await;
                 } else {
                     self.add_request(*request).await;

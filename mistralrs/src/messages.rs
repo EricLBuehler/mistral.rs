@@ -40,6 +40,10 @@ pub trait RequestLike {
     fn tool_dispatch_url(&self) -> Option<&str> {
         None
     }
+    /// Whether code execution tools should be active for this request.
+    fn enable_code_execution(&self) -> bool {
+        false
+    }
     /// Whether to silently truncate prompts that exceed the model's context length.
     fn truncate_sequence(&self) -> bool {
         false
@@ -458,6 +462,7 @@ pub struct RequestBuilder {
     tool_choice: ToolChoice,
     sampling_params: SamplingParams,
     web_search_options: Option<WebSearchOptions>,
+    enable_code_execution: bool,
     max_tool_rounds: Option<usize>,
     tool_dispatch_url: Option<String>,
     enable_thinking: Option<bool>,
@@ -486,6 +491,7 @@ impl From<TextMessages> for RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
+            enable_code_execution: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             enable_thinking: None,
@@ -510,6 +516,7 @@ impl From<MultimodalMessages> for RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
+            enable_code_execution: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             enable_thinking: None,
@@ -535,6 +542,7 @@ impl RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
+            enable_code_execution: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             enable_thinking: None,
@@ -546,6 +554,12 @@ impl RequestBuilder {
     /// Enable web search with the given options.
     pub fn with_web_search_options(mut self, web_search_options: WebSearchOptions) -> Self {
         self.web_search_options = Some(web_search_options);
+        self
+    }
+
+    /// Enable Python code execution tools for this request.
+    pub fn with_code_execution(mut self) -> Self {
+        self.enable_code_execution = true;
         self
     }
 
@@ -991,6 +1005,10 @@ impl RequestLike for RequestBuilder {
 
     fn tool_dispatch_url(&self) -> Option<&str> {
         self.tool_dispatch_url.as_deref()
+    }
+
+    fn enable_code_execution(&self) -> bool {
+        self.enable_code_execution
     }
 
     fn truncate_sequence(&self) -> bool {

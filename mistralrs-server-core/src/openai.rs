@@ -579,6 +579,9 @@ pub struct ChatCompletionRequest {
     pub response_format: Option<ResponseFormat>,
     #[schema(example = json!(Option::None::<WebSearchOptions>))]
     pub web_search_options: Option<WebSearchOptions>,
+    /// Enable Python code execution tools for this request.
+    #[serde(default)]
+    pub enable_code_execution: bool,
 
     // mistral.rs additional
     #[schema(example = json!(Option::None::<usize>))]

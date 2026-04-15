@@ -111,7 +111,7 @@ pub struct OneshotInput {
 
 pub async fn oneshot_mode(
     mistralrs: Arc<MistralRs>,
-    do_search: bool,
+    do_search: bool, do_code_exec: bool,
     enable_thinking: Option<bool>,
     input: OneshotInput,
 ) {
@@ -119,15 +119,15 @@ pub async fn oneshot_mode(
         !input.images.is_empty() || !input.videos.is_empty() || !input.audios.is_empty();
 
     if has_media {
-        oneshot_multimodal(mistralrs, do_search, enable_thinking, input).await;
+        oneshot_multimodal(mistralrs, do_search, do_code_exec, enable_thinking, input).await;
     } else {
-        oneshot_text(mistralrs, do_search, enable_thinking, input.text).await;
+        oneshot_text(mistralrs, do_search, do_code_exec, enable_thinking, input.text).await;
     }
 }
 
 async fn oneshot_text(
     mistralrs: Arc<MistralRs>,
-    do_search: bool,
+    do_search: bool, do_code_exec: bool,
     enable_thinking: Option<bool>,
     text: String,
 ) {
@@ -160,6 +160,7 @@ async fn oneshot_text(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: do_search.then(WebSearchOptions::default),
+        enable_code_execution: do_code_exec,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
@@ -185,7 +186,7 @@ async fn oneshot_text(
 
 async fn oneshot_multimodal(
     mistralrs: Arc<MistralRs>,
-    do_search: bool,
+    do_search: bool, do_code_exec: bool,
     enable_thinking: Option<bool>,
     input: OneshotInput,
 ) {
@@ -319,6 +320,7 @@ async fn oneshot_multimodal(
         logits_processors: None,
         return_raw_logits: false,
         web_search_options: do_search.then(WebSearchOptions::default),
+        enable_code_execution: do_code_exec,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
@@ -383,21 +385,21 @@ fn print_stats(
 
 pub async fn interactive_mode(
     mistralrs: Arc<MistralRs>,
-    do_search: bool,
+    do_search: bool, do_code_exec: bool,
     enable_thinking: Option<bool>,
 ) {
     match mistralrs.get_model_category(None) {
         Ok(ModelCategory::Text) => {
-            text_interactive_mode(mistralrs, do_search, enable_thinking).await
+            text_interactive_mode(mistralrs, do_search, do_code_exec, enable_thinking).await
         }
         Ok(ModelCategory::Multimodal { .. }) => {
-            multimodal_interactive_mode(mistralrs, do_search, enable_thinking).await
+            multimodal_interactive_mode(mistralrs, do_search, do_code_exec, enable_thinking).await
         }
-        Ok(ModelCategory::Diffusion) => diffusion_interactive_mode(mistralrs, do_search).await,
+        Ok(ModelCategory::Diffusion) => diffusion_interactive_mode(mistralrs, do_search, do_code_exec).await,
         Ok(ModelCategory::Audio) => {
-            audio_interactive_mode(mistralrs, do_search, enable_thinking).await
+            audio_interactive_mode(mistralrs, do_search, do_code_exec, enable_thinking).await
         }
-        Ok(ModelCategory::Speech) => speech_interactive_mode(mistralrs, do_search).await,
+        Ok(ModelCategory::Speech) => speech_interactive_mode(mistralrs, do_search, do_code_exec).await,
         Ok(ModelCategory::Embedding) => error!(
             "Embedding models do not support interactive mode. Use the server or Python/Rust APIs."
         ),
@@ -561,7 +563,7 @@ fn handle_sampling_command(prompt: &str, sampling_params: &mut SamplingParams) -
 
 async fn text_interactive_mode(
     mistralrs: Arc<MistralRs>,
-    do_search: bool,
+    do_search: bool, do_code_exec: bool,
     enable_thinking: Option<bool>,
 ) {
     let sender = mistralrs.get_sender(None).unwrap();
@@ -662,6 +664,7 @@ async fn text_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+        enable_code_execution: do_code_exec,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
@@ -808,7 +811,7 @@ async fn stream_assistant_response(
 
 async fn multimodal_interactive_mode(
     mistralrs: Arc<MistralRs>,
-    do_search: bool,
+    do_search: bool, do_code_exec: bool,
     enable_thinking: Option<bool>,
 ) {
     // Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
@@ -1036,6 +1039,7 @@ async fn multimodal_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+        enable_code_execution: do_code_exec,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
@@ -1100,13 +1104,13 @@ async fn multimodal_interactive_mode(
 
 async fn audio_interactive_mode(
     _mistralrs: Arc<MistralRs>,
-    _do_search: bool,
+    _do_search: bool, _do_code_exec: bool,
     _enable_thinking: Option<bool>,
 ) {
     unimplemented!("Using audio models isn't supported yet")
 }
 
-async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
+async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool, do_code_exec: bool) {
     let sender = mistralrs.get_sender(None).unwrap();
 
     let diffusion_params = DiffusionGenerationParams::default();
@@ -1171,6 +1175,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+        enable_code_execution: do_code_exec,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
@@ -1200,7 +1205,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
     rl.save_history(&history_file_path()).unwrap();
 }
 
-async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
+async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool, do_code_exec: bool) {
     let sender = mistralrs.get_sender(None).unwrap();
 
     info!("Starting interactive loop for speech");
@@ -1262,6 +1267,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+        enable_code_execution: do_code_exec,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,

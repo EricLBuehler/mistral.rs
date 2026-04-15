@@ -239,10 +239,22 @@ async fn do_custom_tool(
     tc: &ToolCallResponse,
     supports_vision: bool,
 ) -> NormalRequest {
+    tracing::info!(
+        "Tool `{}` called with arguments: {}",
+        tc.function.name,
+        tc.function.arguments
+    );
+
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
     let result = tool_dispatch::execute_custom_tool(&engine, tc);
+    tracing::info!(
+        "Tool `{}` returned ({} image(s)): {}",
+        tc.function.name,
+        result.images.len(),
+        &result.content[..result.content.len().min(500)]
+    );
 
     if result.images.is_empty() {
         let messages = get_messages_mut(&mut request);
@@ -349,9 +361,13 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
 
             // Kick the request into the engine via the channel.
             // Clear fields that would cause the engine to re-enter the
-            // search flow — this loop already manages tool orchestration.
+            // agentic loop — this loop already manages tool orchestration.
+            // Clear fields that would cause re-entry into the agentic loop.
+            // max_tool_rounds = Some(0) is a sentinel recognized by
+            // add_request to skip the agentic loop check.
             current.web_search_options = None;
-            current.max_tool_rounds = None;
+            current.enable_code_execution = false;
+            current.max_tool_rounds = Some(0);
             current.tool_dispatch_url = None;
             let _ = this_clone
                 .tx

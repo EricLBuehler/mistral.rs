@@ -55,13 +55,16 @@ impl Default for CodeExecutionConfig {
 pub struct CodeExecutionManager {
     config: CodeExecutionConfig,
     sessions: Arc<Mutex<HashMap<ThreadId, PythonSession>>>,
-    executor_script_path: tempfile::NamedTempFile,
+    /// Path to the persisted executor script. Kept as PathBuf after
+    /// `NamedTempFile::keep()` so the file survives the manager's lifetime.
+    executor_script_path: std::path::PathBuf,
     installed_packages: String,
 }
 
 impl CodeExecutionManager {
     pub async fn new(config: CodeExecutionConfig) -> anyhow::Result<Self> {
-        // Write executor.py to a temp file.
+        // Write executor.py to a temp file and persist it (so it survives
+        // after the manager is dropped — callbacks hold the path).
         let executor_script_path = {
             use std::io::Write;
             let mut f = tempfile::Builder::new()
@@ -69,7 +72,8 @@ impl CodeExecutionManager {
                 .tempfile()?;
             f.write_all(EXECUTOR_PY.as_bytes())?;
             f.flush()?;
-            f
+            let (_, path) = f.keep().map_err(|e| anyhow::anyhow!("Failed to persist executor script: {e}"))?;
+            path
         };
 
         // Validate python path.
@@ -140,7 +144,7 @@ impl CodeExecutionManager {
         // execute_python callback
         let sessions = Arc::clone(&self.sessions);
         let python_path = self.config.python_path.clone();
-        let executor_script = self.executor_script_path.path().to_path_buf();
+        let executor_script = self.executor_script_path.clone();
         let timeout = Duration::from_secs(self.config.timeout_secs);
 
         let execute_callback: Arc<mistralrs_mcp::MultimodalToolCallback> =
@@ -193,7 +197,7 @@ impl CodeExecutionManager {
         // reset_python_session callback
         let sessions = Arc::clone(&self.sessions);
         let python_path_reset = self.config.python_path.clone();
-        let executor_script_reset = self.executor_script_path.path().to_path_buf();
+        let executor_script_reset = self.executor_script_path.clone();
 
         let reset_callback: Arc<mistralrs_mcp::ToolCallback> =
             Arc::new(move |_func: &CalledFunction| {

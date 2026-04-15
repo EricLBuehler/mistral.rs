@@ -195,6 +195,10 @@ pub struct NormalRequest {
     pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
     pub return_raw_logits: bool,
     pub web_search_options: Option<WebSearchOptions>,
+    /// When true, the engine's registered code-execution tools are injected
+    /// and the agentic loop is activated for this request.
+    #[serde(default)]
+    pub enable_code_execution: bool,
     pub max_tool_rounds: Option<usize>,
     /// URL to POST tool calls to when no server-side callback is registered.
     /// The server sends `{"name": "...", "arguments": {...}}` and expects
@@ -228,6 +232,7 @@ impl NormalRequest {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
+            enable_code_execution: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,

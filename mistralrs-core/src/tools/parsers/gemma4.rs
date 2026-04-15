@@ -137,12 +137,57 @@ pub(crate) fn gemma4_args_to_json(raw: &str) -> std::result::Result<Value, candl
     let with_braces = escape_inner_quotes(&with_braces);
     let with_quotes = with_braces.replace(GEMMA4_STR_DELIM, "\"");
     let json_str = quote_unquoted_keys(&with_quotes);
+    // Escape control characters (newlines, tabs, etc.) inside JSON string
+    // values. Gemma 4 emits literal newlines inside `<|"|>` delimited
+    // strings (e.g. multiline Python code), but JSON requires them escaped.
+    let json_str = escape_json_string_controls(&json_str);
 
     serde_json::from_str(&json_str).map_err(|e| {
         candle_core::Error::Msg(format!(
             "Failed to parse Gemma 4 tool call arguments: {e}\nConverted JSON: {json_str}"
         ))
     })
+}
+
+/// Escape control characters inside JSON string values.
+///
+/// Walks the string tracking whether we are inside a quoted region and
+/// replaces literal control characters with their JSON escape sequences.
+fn escape_json_string_controls(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_string = false;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' && in_string {
+            // Preserve existing escape sequences.
+            out.push(c);
+            if let Some(&next) = chars.peek() {
+                out.push(next);
+                chars.next();
+            }
+            continue;
+        }
+        if c == '"' {
+            in_string = !in_string;
+            out.push(c);
+            continue;
+        }
+        if in_string {
+            match c {
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if c.is_control() => {
+                    // Generic \uXXXX escape for other control chars.
+                    out.push_str(&format!("\\u{:04x}", c as u32));
+                }
+                _ => out.push(c),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Extract content between matched braces, respecting `<|"|>` delimiters.

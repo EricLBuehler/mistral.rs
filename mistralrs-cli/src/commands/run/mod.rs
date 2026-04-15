@@ -99,9 +99,15 @@ pub async fn run_interactive(
 
     if let Some(text) = input {
         info!("Model loaded, running one-shot mode...");
+        #[cfg(feature = "code-execution")]
+        let do_code_exec = runtime.enable_code_execution;
+        #[cfg(not(feature = "code-execution"))]
+        let do_code_exec = false;
+
         interactive::oneshot_mode(
             mistralrs.clone(),
             runtime.enable_search,
+            do_code_exec,
             thinking,
             OneshotInput {
                 text,
@@ -112,8 +118,13 @@ pub async fn run_interactive(
         )
         .await;
     } else {
+        #[cfg(feature = "code-execution")]
+        let do_code_exec = runtime.enable_code_execution;
+        #[cfg(not(feature = "code-execution"))]
+        let do_code_exec = false;
+
         info!("Model loaded, starting interactive mode...");
-        interactive::interactive_mode(mistralrs.clone(), runtime.enable_search, thinking).await;
+        interactive::interactive_mode(mistralrs.clone(), runtime.enable_search, do_code_exec, thinking).await;
     }
 
     Ok(())

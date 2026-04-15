@@ -25,25 +25,33 @@ impl PythonSession {
         timeout: Duration,
     ) -> anyhow::Result<Self> {
         let work_dir = tempfile::tempdir()?;
-        let mut session = Self {
-            child: Command::new("true").spawn()?, // placeholder, replaced by spawn()
-            stdin: BufWriter::new(Command::new("true").spawn()?.stdin.take().unwrap()),
-            stdout: BufReader::new(Command::new("true").spawn()?.stdout.take().unwrap()),
+        let python_path = python_path.to_path_buf();
+        let executor_script = executor_script.to_path_buf();
+
+        let (child, stdin, stdout) =
+            Self::spawn_process(&python_path, &executor_script, work_dir.path()).await?;
+
+        Ok(Self {
+            child,
+            stdin,
+            stdout,
             work_dir,
             timeout,
-            alive: false,
-            python_path: python_path.to_path_buf(),
-            executor_script: executor_script.to_path_buf(),
-        };
-        session.spawn().await?;
-        Ok(session)
+            alive: true,
+            python_path,
+            executor_script,
+        })
     }
 
-    async fn spawn(&mut self) -> anyhow::Result<()> {
-        let mut child = Command::new(&self.python_path)
+    async fn spawn_process(
+        python_path: &Path,
+        executor_script: &Path,
+        work_dir: &Path,
+    ) -> anyhow::Result<(Child, BufWriter<ChildStdin>, BufReader<ChildStdout>)> {
+        let mut child = Command::new(python_path)
             .arg("-u")
-            .arg(&self.executor_script)
-            .arg(self.work_dir.path())
+            .arg(executor_script)
+            .arg(work_dir)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -59,9 +67,16 @@ impl PythonSession {
             .take()
             .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout"))?;
 
+        Ok((child, BufWriter::new(stdin), BufReader::new(stdout)))
+    }
+
+    async fn respawn(&mut self) -> anyhow::Result<()> {
+        let (child, stdin, stdout) =
+            Self::spawn_process(&self.python_path, &self.executor_script, self.work_dir.path())
+                .await?;
         self.child = child;
-        self.stdin = BufWriter::new(stdin);
-        self.stdout = BufReader::new(stdout);
+        self.stdin = stdin;
+        self.stdout = stdout;
         self.alive = true;
         Ok(())
     }
@@ -72,7 +87,7 @@ impl PythonSession {
 
     pub async fn execute(&mut self, code: &str) -> CodeExecResult {
         if !self.alive {
-            if let Err(e) = self.spawn().await {
+            if let Err(e) = self.respawn().await {
                 return CodeExecResult::error(&format!("Failed to respawn Python session: {e}"));
             }
         }
@@ -106,7 +121,7 @@ impl PythonSession {
 
     pub async fn reset(&mut self) -> anyhow::Result<()> {
         if !self.alive {
-            self.spawn().await?;
+            self.respawn().await?;
             return Ok(());
         }
 
