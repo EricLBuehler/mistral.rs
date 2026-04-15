@@ -15,6 +15,8 @@
     if (data.execution_time_ms < 1000) return `${data.execution_time_ms}ms`;
     return `${(data.execution_time_ms / 1000).toFixed(2)}s`;
   });
+
+  let expandedImage = $state<string | null>(null);
 </script>
 
 <div class="overflow-hidden rounded-xl border border-purple-200 dark:border-purple-800/50">
@@ -30,10 +32,14 @@
         Running...
       </span>
     {:else}
-      <!-- Stats bar like CLI output -->
-      <div class="ml-auto flex items-center gap-3 text-xs text-gray-400 dark:text-gray-500">
+      <div class="ml-auto flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">
         {#if data.images_base64?.length}
-          <span>{data.images_base64.length} image{data.images_base64.length !== 1 ? "s" : ""}</span>
+          <span class="flex items-center gap-1">
+            <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            {data.images_base64.length}
+          </span>
         {/if}
         {#if executionTimeFormatted()}
           <span>{executionTimeFormatted()}</span>
@@ -90,16 +96,47 @@
 
   <!-- Images -->
   {#if data.images_base64?.length}
-    <div class="border-t border-purple-200 bg-white p-3 dark:border-purple-800/50 dark:bg-gray-900">
-      <div class="grid gap-2" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+    <div class="border-t border-purple-200 bg-gray-50 p-3 dark:border-purple-800/50 dark:bg-gray-900/50">
+      <div class="flex flex-wrap justify-center gap-3">
         {#each data.images_base64 as img, i}
-          <img
-            src="data:image/png;base64,{img}"
-            alt="Output image {i + 1}"
-            class="w-full rounded-lg border border-gray-200 dark:border-gray-700"
-          />
+          <button
+            class="group relative overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm transition-shadow hover:shadow-md dark:border-gray-700 dark:bg-gray-800"
+            onclick={() => expandedImage = `data:image/png;base64,${img}`}
+            title="Click to expand"
+          >
+            <img
+              src="data:image/png;base64,{img}"
+              alt="Output {i + 1}"
+              class="max-h-64 max-w-xs object-contain"
+            />
+            <div class="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all group-hover:bg-black/10 group-hover:opacity-100">
+              <svg class="h-6 w-6 text-white drop-shadow-md" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" />
+              </svg>
+            </div>
+          </button>
         {/each}
       </div>
     </div>
   {/if}
 </div>
+
+<!-- Expanded image overlay -->
+{#if expandedImage}
+  <button
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-8 backdrop-blur-sm"
+    onclick={() => expandedImage = null}
+    aria-label="Close expanded image"
+  >
+    <img
+      src={expandedImage}
+      alt="Expanded output"
+      class="max-h-full max-w-full rounded-lg shadow-2xl"
+    />
+    <div class="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white">
+      <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+      </svg>
+    </div>
+  </button>
+{/if}
