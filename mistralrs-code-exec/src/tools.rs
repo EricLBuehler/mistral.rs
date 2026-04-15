@@ -24,8 +24,8 @@ r#"Execute Python code in a persistent interactive session.
 
 ## Capabilities
 - **Last-expression capture**: If the final statement is an expression (not an assignment), its repr is returned as the result (like Jupyter/IPython). The last result is also stored in the `_` variable.
-- **Matplotlib**: Figures are automatically captured as PNG images. You do NOT need to do anything special — figures are captured when you call `plt.savefig()`, `plt.show()`, or simply leave them open. Even `plt.savefig()` followed by `plt.close()` will capture the image.
-- **PIL Images**: If the last expression is a PIL Image, it is captured as a PNG image.
+- **Matplotlib**: Figures are automatically captured as PNG images and sent to you as visible images that you can see and describe. You do NOT need to do anything special — figures are captured when you call `plt.savefig()`, `plt.show()`, or simply leave them open. Even `plt.savefig()` followed by `plt.close()` will capture the image. After execution, you will be able to SEE the generated plot and describe its visual contents.
+- **PIL Images**: If the last expression is a PIL Image, it is captured as a PNG image and sent to you as a visible image.
 - **Pandas DataFrames**: If the last expression is a DataFrame or Series, its formatted repr is returned.
 - **File I/O**: You can read and write files in the working directory.
 

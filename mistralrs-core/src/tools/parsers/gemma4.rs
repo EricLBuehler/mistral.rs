@@ -193,25 +193,27 @@ fn escape_json_string_controls(s: &str) -> String {
 /// Extract content between matched braces, respecting `<|"|>` delimiters.
 pub(crate) fn extract_matched_braces(s: &str, start: usize) -> Option<(&str, usize)> {
     let bytes = s.as_bytes();
+    let delim_bytes = GEMMA4_STR_DELIM.as_bytes();
     if bytes.get(start) != Some(&b'{') {
         return None;
     }
     let mut depth: usize = 0;
     let mut in_string = false;
     let mut i = start;
-    while i < s.len() {
+    while i < bytes.len() {
         if in_string {
-            if s[i..].starts_with(GEMMA4_STR_DELIM) {
+            if bytes[i..].starts_with(delim_bytes) {
                 in_string = false;
-                i += GEMMA4_STR_DELIM.len();
+                i += delim_bytes.len();
                 continue;
             }
-            i += 1;
+            // Advance by the UTF-8 byte length of the current character.
+            i += utf8_char_len(bytes[i]);
             continue;
         }
-        if s[i..].starts_with(GEMMA4_STR_DELIM) {
+        if bytes[i..].starts_with(delim_bytes) {
             in_string = true;
-            i += GEMMA4_STR_DELIM.len();
+            i += delim_bytes.len();
             continue;
         }
         match bytes[i] {
@@ -227,6 +229,17 @@ pub(crate) fn extract_matched_braces(s: &str, start: usize) -> Option<(&str, usi
         i += 1;
     }
     None
+}
+
+/// Return the byte length of a UTF-8 character from its leading byte.
+fn utf8_char_len(b: u8) -> usize {
+    match b {
+        0..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        _ => 1, // continuation byte; shouldn't happen at a start position
+    }
 }
 
 /// Escape literal `"` inside `<|"|>…<|"|>` delimited strings.
