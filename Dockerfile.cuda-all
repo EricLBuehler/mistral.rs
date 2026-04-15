@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Stage 1: Build environment
-FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04 AS builder
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -11,33 +11,41 @@ RUN <<HEREDOC
         curl \
         git \
         libssl-dev \
-        pkg-config
+        pkg-config && \
 
     rm -rf /var/lib/apt/lists/*
 HEREDOC
 
-RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
+RUN curl https://sh.rustup.rs -sSf | bash -s -- -y && test -f /root/.cargo/bin/rustup
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN rustup update nightly && rustup default nightly
+
+# MKL build dependencies
+RUN curl -s https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
+    | gpg --dearmor | tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null \
+    && echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | \
+    tee /etc/apt/sources.list.d/oneAPI.list \
+    && apt-get update \
+    && apt-get install -y libomp-dev intel-oneapi-mkl-devel
 
 WORKDIR /mistralrs
 COPY . .
 
 # Rayon threads are limited to minimize memory requirements in CI, avoiding OOM
 # Rust threads are increased with a nightly feature for faster compilation (single-threaded by default)
-ARG CUDA_COMPUTE_CAP=80
+ARG CUDA_COMPUTE_CAP=70
 ARG RAYON_NUM_THREADS=4
 ARG RUST_NUM_THREADS=4
 ARG RUSTFLAGS="-Z threads=${RUST_NUM_THREADS}"
-ARG WITH_FEATURES="cuda,cudnn"
+ARG WITH_FEATURES="cuda,cudnn,nccl,mkl"
 RUN cargo build --release --workspace --exclude mistralrs-pyo3 --features "${WITH_FEATURES}"
 
-
 # Stage 2: Minimal runtime environment
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS runtime
+FROM nvidia/cuda:12.9.1-cudnn-runtime-ubuntu22.04 AS runtime
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
 ARG DEBIAN_FRONTEND=noninteractive
+
 RUN <<HEREDOC
     apt-get update
     apt-get install -y --no-install-recommends \
@@ -45,16 +53,28 @@ RUN <<HEREDOC
         ca-certificates \
         libssl-dev \
         curl \
-        pkg-config
+        pkg-config \
+        openmpi-bin && \
 
     rm -rf /var/lib/apt/lists/*
 HEREDOC
 
+# MKL Runtime
+RUN curl -s https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
+    | gpg --dearmor | tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null \
+    && echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | \
+    tee /etc/apt/sources.list.d/oneAPI.list
+    && apt-get update \
+    && apt-get install -y intel-oneapi-hpc-toolkit
+
 COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-bench /usr/local/bin/mistralrs-bench
 COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-server /usr/local/bin/mistralrs-server
 COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-web-chat /usr/local/bin/mistralrs-web-chat
+
 # Copy chat templates for users running models which may not include them
 COPY --from=builder /mistralrs/chat_templates /chat_templates
 
 ENV HUGGINGFACE_HUB_CACHE=/data \
     PORT=80
+# Only the `devel` builder image provides symlinks, restore the `libnccl.so` symlink:
+RUN ln -s libnccl.so.2 /usr/lib/x86_64-linux-gnu/libnccl.so
