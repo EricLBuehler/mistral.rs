@@ -265,6 +265,7 @@ async fn fetch_embedding(
         tool_dispatch_url: None,
         model_id: model_id.map(|m| m.to_string()),
         truncate_sequence,
+        code_execution_session_id: None,
     }));
 
     send_request_with_model(&state, request, model_id)
@@ -301,6 +302,7 @@ async fn fetch_embedding_tokens(
         tool_dispatch_url: None,
         model_id: model_id.map(|m| m.to_string()),
         truncate_sequence,
+        code_execution_session_id: None,
     }));
 
     send_request_with_model(&state, request, model_id)

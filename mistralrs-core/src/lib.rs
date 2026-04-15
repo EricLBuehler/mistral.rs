@@ -99,8 +99,8 @@ pub use device_map::{
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
 pub use mistralrs_audio::AudioInput;
 pub use mistralrs_mcp::{
-    CalledFunction, Function, MultimodalToolCallback, Tool, ToolCallback, ToolCallbackKind,
-    ToolCallbackWithTool, ToolOutput, ToolType,
+    CalledFunction, Function, MultimodalToolCallback, Tool, ToolCallback, ToolCallContext,
+    ToolCallbackKind, ToolCallbackWithTool, ToolOutput, ToolType,
 };
 pub use mistralrs_mcp::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
@@ -902,6 +902,7 @@ impl MistralRs {
                     tool_dispatch_url: None,
                     model_id: None,
                     truncate_sequence: false,
+                    code_execution_session_id: None,
                 }));
                 info!("Beginning dummy run.");
                 let start = Instant::now();

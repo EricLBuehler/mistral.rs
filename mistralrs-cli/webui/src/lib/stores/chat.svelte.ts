@@ -141,16 +141,19 @@ class ChatStore {
             type: "tool_call";
             data: AgenticToolCallProgress;
           };
-          // Merge: keep code from calling phase if complete phase doesn't have it
-          if (
-            event.phase === "complete" &&
-            event.data.tool_type === "code_execution"
-          ) {
-            const existingData = existing.data
-              .data as CodeExecutionData;
-            const newData = event.data as CodeExecutionData;
-            if (!newData.code && existingData.code) {
-              newData.code = existingData.code;
+          // Merge: preserve fields from calling phase that complete phase may lack
+          if (event.phase === "complete") {
+            const existingData = existing.data.data;
+            const newData = event.data;
+            if (newData.tool_type === "code_execution" && existingData.tool_type === "code_execution") {
+              if (!newData.code && existingData.code) {
+                newData.code = existingData.code;
+              }
+            }
+            if (newData.tool_type === "web_search" && existingData.tool_type === "web_search") {
+              if (!newData.query && existingData.query) {
+                newData.query = existingData.query;
+              }
             }
           }
           existing.data = event;

@@ -154,8 +154,8 @@ pub mod types;
 
 pub use client::{McpClient, McpServerConnection};
 pub use tools::{
-    CalledFunction, Function, MultimodalToolCallback, Tool, ToolCallback, ToolCallbackKind,
-    ToolCallbackWithTool, ToolCallbacksWithTools, ToolOutput, ToolType,
+    CalledFunction, Function, MultimodalToolCallback, Tool, ToolCallback, ToolCallContext,
+    ToolCallbackKind, ToolCallbackWithTool, ToolCallbacksWithTools, ToolOutput, ToolType,
 };
 pub use types::McpToolResult;
 

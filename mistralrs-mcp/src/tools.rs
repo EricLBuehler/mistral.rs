@@ -4,13 +4,22 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Context provided to tool callbacks by the agentic loop.
+#[derive(Debug, Clone, Default)]
+pub struct ToolCallContext {
+    /// Session ID for persistent code execution. Callbacks can use this to
+    /// key session state across multiple invocations.
+    pub session_id: Option<String>,
+}
+
 /// Callback used for custom tool functions. Receives the called function
 /// (name and JSON arguments) and returns the tool output as a string.
-pub type ToolCallback = dyn Fn(&CalledFunction) -> anyhow::Result<String> + Send + Sync;
+pub type ToolCallback =
+    dyn Fn(&CalledFunction, &ToolCallContext) -> anyhow::Result<String> + Send + Sync;
 
 /// Callback that can return multimodal output (text + images).
 pub type MultimodalToolCallback =
-    dyn Fn(&CalledFunction) -> anyhow::Result<ToolOutput> + Send + Sync;
+    dyn Fn(&CalledFunction, &ToolCallContext) -> anyhow::Result<ToolOutput> + Send + Sync;
 
 /// Output from a tool execution, supporting text-only or multimodal results.
 pub enum ToolOutput {

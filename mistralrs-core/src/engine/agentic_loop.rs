@@ -302,11 +302,12 @@ async fn do_custom_tool(
     mut request: NormalRequest,
     tc: &ToolCallResponse,
     supports_vision: bool,
+    ctx: &mistralrs_mcp::ToolCallContext,
 ) -> (NormalRequest, AgenticToolCallData) {
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
-    let result = tool_dispatch::execute_custom_tool(&engine, tc);
+    let result = tool_dispatch::execute_custom_tool(&engine, tc, ctx);
 
     // Build tool-specific result data.
     let is_code_exec = is_code_exec_tool(&tc.function.name);
@@ -400,6 +401,18 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
     let web_search_options = request.web_search_options.clone();
     let dispatch_url = request.tool_dispatch_url.clone();
 
+    // Only resolve a session ID when code execution is enabled for this request.
+    let code_exec_session_id: Option<String> = if request.enable_code_execution {
+        Some(
+            request
+                .code_execution_session_id
+                .clone()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        )
+    } else {
+        None
+    };
+
     // Cache model modality support for multimodal tool results.
     let modalities = {
         let pipeline = get_mut_arcmutex!(this.pipeline);
@@ -468,6 +481,11 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
     // We'll drive everything inside a single spawned task.
     let this_clone = this.clone();
     let handle = tokio::spawn(async move {
+        // Build tool call context with session ID for code execution callbacks.
+        let tool_call_ctx = mistralrs_mcp::ToolCallContext {
+            session_id: code_exec_session_id.clone(),
+        };
+
         // `current` is what we actually dispatch each loop.
         // The very first time that is the hidden probe.
         let mut current = probe;
@@ -525,8 +543,11 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
 
                 // No tool call, or max rounds reached? We are finished.
                 if tc_opt.is_none() || round >= max_rounds {
+                    let mut final_resp = done.clone();
+                    final_resp.code_execution_session_id =
+                        code_exec_session_id.clone();
                     user_sender
-                        .send(Response::Done(done.clone()))
+                        .send(Response::Done(final_resp))
                         .await
                         .unwrap();
                     return;
@@ -555,13 +576,16 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
                         do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
                     }
                 } else if this_clone.tool_callbacks.contains_key(&tc.function.name) {
-                    do_custom_tool(this_clone.clone(), visible_req, tc, supports_vision).await
+                    do_custom_tool(this_clone.clone(), visible_req, tc, supports_vision, &tool_call_ctx).await
                 } else if let Some(ref url) = dispatch_url {
                     do_http_tool(visible_req, tc, url)
                 } else {
                     // No way to execute — return to client.
+                    let mut final_resp = done.clone();
+                    final_resp.code_execution_session_id =
+                        code_exec_session_id.clone();
                     user_sender
-                        .send(Response::Done(done.clone()))
+                        .send(Response::Done(final_resp))
                         .await
                         .unwrap();
                     return;
@@ -661,7 +685,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
                         do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
                     }
                 } else if this_clone.tool_callbacks.contains_key(&tc.function.name) {
-                    do_custom_tool(this_clone.clone(), visible_req, tc, supports_vision).await
+                    do_custom_tool(this_clone.clone(), visible_req, tc, supports_vision, &tool_call_ctx).await
                 } else if let Some(ref url) = dispatch_url {
                     do_http_tool(visible_req, tc, url)
                 } else {

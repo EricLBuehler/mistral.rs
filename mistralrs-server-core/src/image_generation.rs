@@ -94,6 +94,7 @@ pub fn parse_request(
             Some(oairequest.model.clone())
         },
         truncate_sequence: false,
+            code_execution_session_id: None,
     })))
 }
 

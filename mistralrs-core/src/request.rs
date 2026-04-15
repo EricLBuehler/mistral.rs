@@ -241,6 +241,7 @@ impl NormalRequest {
             tool_dispatch_url: None,
             model_id: None,
             truncate_sequence: false,
+            code_execution_session_id: None,
         }
     }
 }

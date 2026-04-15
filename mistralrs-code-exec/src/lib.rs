@@ -6,7 +6,6 @@ pub mod tools;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::thread::ThreadId;
 use std::time::Duration;
 
 use mistralrs_mcp::{
@@ -60,11 +59,13 @@ impl Default for CodeExecutionConfig {
 
 /// Manages Python code execution sessions.
 ///
-/// Sessions are created per-request (keyed by thread ID) and persist across
-/// multiple tool calls within the same agentic loop iteration.
+/// Sessions are keyed by a client-provided session ID (set via the
+/// `CURRENT_SESSION_ID` thread-local). When the same session ID is reused
+/// across requests, the Python subprocess and its state persist.
+/// Sessions idle for >10 minutes are automatically reaped.
 pub struct CodeExecutionManager {
     config: CodeExecutionConfig,
-    sessions: Arc<Mutex<HashMap<ThreadId, PythonSession>>>,
+    sessions: Arc<Mutex<HashMap<String, PythonSession>>>,
     /// Path to the persisted executor script. Kept as PathBuf after
     /// `NamedTempFile::keep()` so the file survives the manager's lifetime.
     executor_script_path: std::path::PathBuf,
@@ -116,29 +117,52 @@ impl CodeExecutionManager {
             }
         };
 
+        let sessions: Arc<Mutex<HashMap<String, PythonSession>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        // Reap sessions idle for >1 hour. Runs every 5 minutes.
+        let sessions_for_reaper = Arc::clone(&sessions);
+        tokio::spawn(async move {
+            const REAP_INTERVAL_SECS: u64 = 300;
+            const SESSION_TTL_SECS: u64 = 3600;
+            loop {
+                tokio::time::sleep(Duration::from_secs(REAP_INTERVAL_SECS)).await;
+                let mut map = sessions_for_reaper.lock().await;
+                let before = map.len();
+                map.retain(|_id, session| session.seconds_since_last_active() < SESSION_TTL_SECS);
+                let reaped = before - map.len();
+                if reaped > 0 {
+                    tracing::info!(
+                        "Reaped {reaped} idle code execution session(s) ({} remaining)",
+                        map.len()
+                    );
+                }
+            }
+        });
+
         Ok(Self {
             config,
-            sessions: Arc::new(Mutex::new(HashMap::new())),
+            sessions,
             executor_script_path,
             installed_packages,
         })
     }
 
-    /// Get or create a session for the current thread.
+    /// Get or create a session for the given session ID.
     async fn get_or_create_session(
-        sessions: &Mutex<HashMap<ThreadId, PythonSession>>,
+        sessions: &Mutex<HashMap<String, PythonSession>>,
+        session_id: &str,
         python_path: &Path,
         executor_script: &Path,
         timeout: Duration,
         working_directory: Option<&Path>,
     ) -> anyhow::Result<()> {
-        let tid = std::thread::current().id();
         let mut map = sessions.lock().await;
-        if !map.contains_key(&tid) {
+        if !map.contains_key(session_id) {
             let session =
                 PythonSession::new(python_path, executor_script, timeout, working_directory)
                     .await?;
-            map.insert(tid, session);
+            map.insert(session_id.to_string(), session);
         }
         Ok(())
     }
@@ -160,11 +184,17 @@ impl CodeExecutionManager {
         let working_directory = self.config.working_directory.clone();
 
         let execute_callback: Arc<mistralrs_mcp::MultimodalToolCallback> =
-            Arc::new(move |func: &CalledFunction| {
+            Arc::new(move |func: &CalledFunction, ctx: &mistralrs_mcp::ToolCallContext| {
                 let sessions = Arc::clone(&sessions);
                 let python_path = python_path.clone();
                 let executor_script = executor_script.clone();
                 let working_directory = working_directory.clone();
+
+                // Get session ID from context.
+                let session_id = ctx
+                    .session_id
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
                 // Parse the code argument.
                 let args: serde_json::Value = serde_json::from_str(&func.arguments)?;
@@ -183,6 +213,7 @@ impl CodeExecutionManager {
                     handle.block_on(async {
                         Self::get_or_create_session(
                             &sessions,
+                            &session_id,
                             &python_path,
                             &executor_script,
                             timeout,
@@ -190,9 +221,8 @@ impl CodeExecutionManager {
                         )
                         .await?;
 
-                        let tid = std::thread::current().id();
                         let mut map = sessions.lock().await;
-                        let session = map.get_mut(&tid).unwrap();
+                        let session = map.get_mut(&session_id).unwrap();
                         let result = session.execute(&code).await;
 
                         Ok(ToolOutput::Multimodal {
@@ -218,17 +248,23 @@ impl CodeExecutionManager {
         let working_directory_reset = self.config.working_directory.clone();
 
         let reset_callback: Arc<mistralrs_mcp::ToolCallback> = Arc::new(
-            move |_func: &CalledFunction| {
+            move |_func: &CalledFunction, ctx: &mistralrs_mcp::ToolCallContext| {
                 let sessions = Arc::clone(&sessions);
                 let python_path = python_path_reset.clone();
                 let executor_script = executor_script_reset.clone();
                 let working_directory = working_directory_reset.clone();
+
+                let session_id = ctx
+                    .session_id
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
                 let handle = tokio::runtime::Handle::current();
                 tokio::task::block_in_place(|| {
                     handle.block_on(async {
                         Self::get_or_create_session(
                             &sessions,
+                            &session_id,
                             &python_path,
                             &executor_script,
                             timeout,
@@ -236,11 +272,9 @@ impl CodeExecutionManager {
                         )
                         .await?;
 
-                        let tid = std::thread::current().id();
                         let mut map = sessions.lock().await;
-                        let session = map.get_mut(&tid).unwrap();
+                        let session = map.get_mut(&session_id).unwrap();
                         session.reset().await?;
-
 
                         Ok(serde_json::json!({"status": "success", "message": "Session reset. All variables and imports have been cleared."}).to_string())
                     })

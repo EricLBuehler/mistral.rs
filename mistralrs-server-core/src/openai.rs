@@ -582,6 +582,10 @@ pub struct ChatCompletionRequest {
     /// Enable Python code execution tools for this request.
     #[serde(default)]
     pub enable_code_execution: bool,
+    /// Session ID for persistent code execution. If not provided, a new session
+    /// is created. Reuse the same ID across requests to maintain Python state.
+    #[serde(default)]
+    pub code_execution_session_id: Option<String>,
 
     // mistral.rs additional
     #[schema(example = json!(Option::None::<usize>))]

@@ -284,7 +284,11 @@ pub(super) async fn execute_extraction(
 
 // ── Custom tool callbacks ──────────────────────────────────────────────────
 
-pub(super) fn execute_custom_tool(engine: &Engine, tc: &ToolCallResponse) -> ToolResult {
+pub(super) fn execute_custom_tool(
+    engine: &Engine,
+    tc: &ToolCallResponse,
+    ctx: &mistralrs_mcp::ToolCallContext,
+) -> ToolResult {
     let name = &tc.function.name;
 
     let Some(cb_with_tool) = engine.tool_callbacks.get(name) else {
@@ -314,14 +318,14 @@ pub(super) fn execute_custom_tool(engine: &Engine, tc: &ToolCallResponse) -> Too
     };
 
     match &cb_with_tool.callback {
-        ToolCallbackKind::Text(callback) => match callback(&tc.function) {
+        ToolCallbackKind::Text(callback) => match callback(&tc.function, ctx) {
             Ok(content) => ToolResult {
                 content,
                 images: vec![],
             },
             Err(e) => error_result(e),
         },
-        ToolCallbackKind::Multimodal(callback) => match callback(&tc.function) {
+        ToolCallbackKind::Multimodal(callback) => match callback(&tc.function, ctx) {
             Ok(output) => ToolResult {
                 content: output.text().to_string(),
                 images: output.images().to_vec(),

@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -16,6 +16,7 @@ pub struct PythonSession {
     alive: bool,
     python_path: PathBuf,
     executor_script: PathBuf,
+    last_active: Instant,
 }
 
 impl PythonSession {
@@ -50,6 +51,7 @@ impl PythonSession {
             alive: true,
             python_path,
             executor_script,
+            last_active: Instant::now(),
         })
     }
 
@@ -90,11 +92,16 @@ impl PythonSession {
         Ok(())
     }
 
+    pub fn seconds_since_last_active(&self) -> u64 {
+        self.last_active.elapsed().as_secs()
+    }
+
     pub fn work_dir_str(&self) -> String {
         self.work_dir.display().to_string()
     }
 
     pub async fn execute(&mut self, code: &str) -> CodeExecResult {
+        self.last_active = Instant::now();
         if !self.alive {
             if let Err(e) = self.respawn().await {
                 return CodeExecResult::error(&format!("Failed to respawn Python session: {e}"));
@@ -129,6 +136,7 @@ impl PythonSession {
     }
 
     pub async fn reset(&mut self) -> anyhow::Result<()> {
+        self.last_active = Instant::now();
         if !self.alive {
             self.respawn().await?;
             return Ok(());

@@ -832,6 +832,7 @@ pub async fn parse_request(
             return_raw_logits: false,
             web_search_options: oairequest.web_search_options,
             enable_code_execution: oairequest.enable_code_execution,
+            code_execution_session_id: oairequest.code_execution_session_id,
             max_tool_rounds: oairequest.max_tool_rounds,
             tool_dispatch_url,
             model_id: if oairequest.model == "default" {

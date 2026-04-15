@@ -289,6 +289,7 @@ impl<'a> AgentStream<'a> {
                                                         total_completion_time_sec: 0.0,
                                                     },
                                                     agentic_tool_calls: None,
+                                                    code_execution_session_id: None,
                                                 };
 
                                                 self.state = AgentStreamState::ExecutingTools {
@@ -647,7 +648,7 @@ impl Agent {
                 // Run sync callback in spawn_blocking to not block async runtime
                 let callback = Arc::clone(callback);
                 let function = tool_call.function.clone();
-                tokio::task::spawn_blocking(move || callback(&function))
+                tokio::task::spawn_blocking(move || callback(&function, &Default::default()))
                     .await
                     .map_err(|e| anyhow::anyhow!("Task join error: {}", e))
                     .and_then(|r| r)
