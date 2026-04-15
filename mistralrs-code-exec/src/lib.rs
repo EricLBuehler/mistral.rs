@@ -297,13 +297,36 @@ impl CodeExecutionManager {
 
 /// Replace common LaTeX math operators that models sometimes emit with
 /// their Python equivalents so the code actually runs.
+///
+/// Only replaces when the LaTeX command is NOT followed by an ASCII letter,
+/// so `\left` / `\length` / `\next` etc. are left intact.
 fn sanitize_latex_operators(code: &str) -> String {
-    code.replace("\\le", "<=")
-        .replace("\\le", "<=")
-        .replace("\\ge ", ">=")
-        .replace("\\ge", ">=")
-        .replace("\\ne ", "!=")
-        .replace("\\ne", "!=")
-        .replace("\\times ", "* ")
-        .replace("\\cdot ", "* ")
+    let mut result = code.to_string();
+    result = replace_latex_op(&result, "\\le", "<=");
+    result = replace_latex_op(&result, "\\ge", ">=");
+    result = replace_latex_op(&result, "\\ne", "!=");
+    result = replace_latex_op(&result, "\\times", "*");
+    result = replace_latex_op(&result, "\\cdot", "*");
+    result
+}
+
+/// Replace `pattern` with `replacement` only when the character immediately
+/// after `pattern` is not an ASCII letter (i.e. the command is complete).
+fn replace_latex_op(haystack: &str, pattern: &str, replacement: &str) -> String {
+    let mut result = String::with_capacity(haystack.len());
+    let mut remaining = haystack;
+    while let Some(pos) = remaining.find(pattern) {
+        result.push_str(&remaining[..pos]);
+        let after = pos + pattern.len();
+        let next_char = remaining[after..].chars().next();
+        if next_char.is_some_and(|c| c.is_ascii_alphabetic()) {
+            // Part of a longer word like \left, \length — keep as-is.
+            result.push_str(pattern);
+        } else {
+            result.push_str(replacement);
+        }
+        remaining = &remaining[after..];
+    }
+    result.push_str(remaining);
+    result
 }

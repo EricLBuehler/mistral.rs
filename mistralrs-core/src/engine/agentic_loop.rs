@@ -610,7 +610,10 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
             // ------------------------- STREAMING -------------------------
             else {
                 // We need the *last* chunk to see whether a tool was called.
+                // The finish-reason chunk is held back so we can stamp the
+                // session ID on it if this turns out to be the final round.
                 let mut last_choice = None;
+                let mut held_final_chunk: Option<crate::ChatCompletionChunkResponse> = None;
 
                 while let Some(resp) = receiver.recv().await {
                     let Some(resp) = forward_passthrough(resp, &user_sender).await else {
@@ -623,16 +626,19 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
                             // to see a premature finish_reason before the tool loop
                             // has a chance to execute the tool and continue.
                             let first_choice = &chunk.choices[0];
+                            let is_final = first_choice.finish_reason.is_some();
                             if first_choice.delta.tool_calls.is_none() {
-                                let _ = user_sender.send(Response::Chunk(chunk.clone())).await;
+                                if is_final {
+                                    // Hold back — we may need to stamp the session ID.
+                                    held_final_chunk = Some(chunk.clone());
+                                } else {
+                                    let _ =
+                                        user_sender.send(Response::Chunk(chunk.clone())).await;
+                                }
                             }
                             last_choice = Some(first_choice.clone());
 
-                            if last_choice
-                                .as_ref()
-                                .and_then(|c| c.finish_reason.as_ref())
-                                .is_some()
-                            {
+                            if is_final {
                                 break;
                             }
                         }
@@ -661,6 +667,12 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
 
                 // No tool call or max rounds reached -> done.
                 if tc_opt.is_none() || round >= max_rounds {
+                    // Stamp the session ID on the held final chunk and send it.
+                    if let Some(mut final_chunk) = held_final_chunk {
+                        final_chunk.code_execution_session_id =
+                            code_exec_session_id.clone();
+                        let _ = user_sender.send(Response::Chunk(final_chunk)).await;
+                    }
                     break;
                 }
 

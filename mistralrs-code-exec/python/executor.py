@@ -29,6 +29,9 @@ import signal
 
 # ── Setup ──────────────────────────────────────────────────────────────────
 
+# Keep a reference to the real stdout before user code can redirect it.
+_real_stdout = sys.stdout
+
 work_dir = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
 os.chdir(work_dir)
 
@@ -86,15 +89,16 @@ def capture_matplotlib_figures():
     try:
         import matplotlib.pyplot as plt
 
-        seen = {id(img) for img in images}
+        seen = {img["data_base64"] for img in images}
         for fig_num in plt.get_fignums():
             fig = plt.figure(fig_num)
             buf = io.BytesIO()
             _orig_savefig(fig, buf, format="png", bbox_inches="tight", dpi=150)
             buf.seek(0)
-            img = {"format": "png", "data_base64": base64.b64encode(buf.read()).decode()}
-            if id(img) not in seen:
-                images.append(img)
+            data = base64.b64encode(buf.read()).decode()
+            if data not in seen:
+                images.append({"format": "png", "data_base64": data})
+                seen.add(data)
         plt.close("all")
     except Exception:
         pass
@@ -209,9 +213,9 @@ def execute_code(code):
 
 
 def send(obj):
-    """Write a JSON line to stdout and flush."""
-    sys.stdout.write(json.dumps(obj) + "\n")
-    sys.stdout.flush()
+    """Write a JSON line to the real stdout and flush."""
+    _real_stdout.write(json.dumps(obj) + "\n")
+    _real_stdout.flush()
 
 
 def send_error(msg):

@@ -159,7 +159,14 @@ impl PythonSession {
             }
         }
 
+        #[cfg(not(unix))]
+        {
+            // No SIGINT equivalent on this platform — skip the wait.
+            return false;
+        }
+
         // Wait briefly for the interrupted execution to return a result.
+        #[cfg(unix)]
         match tokio::time::timeout(
             Duration::from_secs(3),
             self.read_response::<ExecuteResponse>(),

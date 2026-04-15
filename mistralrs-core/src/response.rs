@@ -187,6 +187,10 @@ pub struct ChatCompletionChunkResponse {
     pub system_fingerprint: String,
     pub object: String,
     pub usage: Option<Usage>,
+    /// The code execution session ID, included on the final chunk so
+    /// streaming clients can retrieve it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_execution_session_id: Option<String>,
 }
 
 generate_repr!(ChatCompletionChunkResponse);
