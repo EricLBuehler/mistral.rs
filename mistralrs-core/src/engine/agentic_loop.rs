@@ -129,13 +129,19 @@ fn append_multimodal_tool_response(
         return;
     }
 
+    let num_images = images.len();
     upgrade_to_multimodal(request);
 
     let mut parts: Vec<IndexMap<String, Value>> = Vec::new();
 
     let req_images = get_images_mut(request);
-    for img in images {
-        req_images.push(img);
+    for img in &images {
+        tracing::info!(
+            "Injecting tool image ({}x{}) into multimodal request",
+            img.width(),
+            img.height()
+        );
+        req_images.push(img.clone());
         let mut part = IndexMap::new();
         part.insert("type".to_string(), Value::String("image".to_string()));
         parts.push(part);
@@ -153,6 +159,10 @@ fn append_multimodal_tool_response(
     message.insert("name".to_string(), Either::Left(tool_name.to_string()));
     message.insert("content".to_string(), Either::Right(parts));
     messages.push(message);
+
+    tracing::info!(
+        "Multimodal tool response: {num_images} image(s) injected for model to see"
+    );
 }
 
 /// Ensure a system message exists at the start of the conversation.

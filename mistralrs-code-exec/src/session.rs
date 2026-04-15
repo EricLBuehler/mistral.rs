@@ -11,7 +11,7 @@ pub struct PythonSession {
     child: Child,
     stdin: BufWriter<ChildStdin>,
     stdout: BufReader<ChildStdout>,
-    work_dir: tempfile::TempDir,
+    work_dir: PathBuf,
     timeout: Duration,
     alive: bool,
     python_path: PathBuf,
@@ -24,12 +24,13 @@ impl PythonSession {
         executor_script: &Path,
         timeout: Duration,
     ) -> anyhow::Result<Self> {
-        let work_dir = tempfile::tempdir()?;
+        #[allow(deprecated)]
+        let work_dir = tempfile::tempdir()?.into_path();
         let python_path = python_path.to_path_buf();
         let executor_script = executor_script.to_path_buf();
 
         let (child, stdin, stdout) =
-            Self::spawn_process(&python_path, &executor_script, work_dir.path()).await?;
+            Self::spawn_process(&python_path, &executor_script, &work_dir).await?;
 
         Ok(Self {
             child,
@@ -72,7 +73,7 @@ impl PythonSession {
 
     async fn respawn(&mut self) -> anyhow::Result<()> {
         let (child, stdin, stdout) =
-            Self::spawn_process(&self.python_path, &self.executor_script, self.work_dir.path())
+            Self::spawn_process(&self.python_path, &self.executor_script, &self.work_dir)
                 .await?;
         self.child = child;
         self.stdin = stdin;
@@ -82,7 +83,7 @@ impl PythonSession {
     }
 
     pub fn work_dir_str(&self) -> String {
-        self.work_dir.path().display().to_string()
+        self.work_dir.display().to_string()
     }
 
     pub async fn execute(&mut self, code: &str) -> CodeExecResult {

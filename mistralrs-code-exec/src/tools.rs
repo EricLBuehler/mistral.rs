@@ -18,12 +18,13 @@ r#"Execute Python code in a persistent interactive session.
 
 ## Session
 - This is a **persistent session**: variables, imports, and state are preserved across calls within this conversation.
-- Each conversation gets a unique temporary working directory.
+- Each conversation gets a unique persistent working directory. The absolute path is returned in the `working_directory` field of each execution result. Files saved there remain accessible after the conversation ends.
+- When the user asks where a file is saved, ALWAYS give them the FULL absolute path (combine `working_directory` with the filename). The user cannot see the working directory themselves.
 - To reset the session (clear all variables and imports), use the `{reset}` tool.
 
 ## Capabilities
 - **Last-expression capture**: If the final statement is an expression (not an assignment), its repr is returned as the result (like Jupyter/IPython). The last result is also stored in the `_` variable.
-- **Matplotlib**: Figures are automatically captured as PNG images. Call `plt.show()` or leave figures open — they are captured after execution.
+- **Matplotlib**: Figures are automatically captured as PNG images. You do NOT need to do anything special — figures are captured when you call `plt.savefig()`, `plt.show()`, or simply leave them open. Even `plt.savefig()` followed by `plt.close()` will capture the image.
 - **PIL Images**: If the last expression is a PIL Image, it is captured as a PNG image.
 - **Pandas DataFrames**: If the last expression is a DataFrame or Series, its formatted repr is returned.
 - **File I/O**: You can read and write files in the working directory.
