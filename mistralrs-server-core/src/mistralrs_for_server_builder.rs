@@ -237,6 +237,9 @@ pub struct MistralRsForServerBuilder {
 
     /// PagedAttention KV cache type
     paged_cache_type: PagedCacheType,
+
+    /// Disable EOS token stopping (generate until max_len regardless of EOS)
+    disable_eos_stop: bool,
 }
 
 impl Default for MistralRsForServerBuilder {
@@ -269,6 +272,7 @@ impl Default for MistralRsForServerBuilder {
             search_callback: defaults::SEARCH_CALLBACK,
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
+            disable_eos_stop: false,
         }
     }
 }
@@ -531,6 +535,12 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Disable EOS token stopping (generate until max_len regardless of EOS).
+    pub fn with_disable_eos_stop(mut self, disable: bool) -> Self {
+        self.disable_eos_stop = disable;
+        self
+    }
+
     /// Sets the block size for PagedAttention if provided.
     pub fn with_paged_attn_block_size_optional(
         mut self,
@@ -699,6 +709,7 @@ impl MistralRsForServerBuilder {
         .with_opt_log(self.log)
         .with_no_kv_cache(self.no_kv_cache)
         .with_prefix_cache_n(self.prefix_cache_n)
+        .with_disable_eos_stop(self.disable_eos_stop)
         .with_loader_config(loader_config);
 
         // Add MCP client configuration if provided
@@ -832,7 +843,8 @@ impl MistralRsForServerBuilder {
         )
         .with_opt_log(self.log.clone())
         .with_no_kv_cache(self.no_kv_cache)
-        .with_prefix_cache_n(self.prefix_cache_n);
+        .with_prefix_cache_n(self.prefix_cache_n)
+        .with_disable_eos_stop(self.disable_eos_stop);
         if first_primary_id != first_pipeline_name {
             builder = builder.with_model_id(first_primary_id.clone());
         }
@@ -925,7 +937,7 @@ impl MistralRsForServerBuilder {
                 no_kv_cache: self.no_kv_cache,
                 no_prefix_cache: false,
                 prefix_cache_n: self.prefix_cache_n,
-                disable_eos_stop: false,
+                disable_eos_stop: self.disable_eos_stop,
                 throughput_logging_enabled: !self.interactive_mode,
                 search_embedding_model,
                 search_callback: self.search_callback.clone(),

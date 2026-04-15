@@ -3,6 +3,8 @@ mod cpu;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda;
 #[cfg(feature = "cuda")]
+pub mod fast_mmq;
+#[cfg(feature = "cuda")]
 pub mod fast_mmvq;
 #[cfg(feature = "cuda")]
 mod ffi;
@@ -58,14 +60,22 @@ impl GgufMatMul {
         let flat_batch = a.dims()[..a.dims().len().saturating_sub(1)]
             .iter()
             .product::<usize>();
-        if !(1..=fast_mmvq::MMVQ_MAX_BATCH).contains(&flat_batch) {
-            return Ok(None);
-        }
 
         let QMatMul::QTensor(q) = &self.w else {
             unreachable!("uses_fast_mmvq() requires QTensor weights")
         };
-        Ok(Some(fast_mmvq::plain(q, a)?))
+
+        // Batch 1-8: use MMVQ (decode kernel)
+        if (1..=fast_mmvq::MMVQ_MAX_BATCH).contains(&flat_batch) {
+            return Ok(Some(fast_mmvq::plain(q, a)?));
+        }
+
+        // Batch > 8: use MMQ (prompt kernel)
+        if flat_batch > fast_mmvq::MMVQ_MAX_BATCH {
+            return Ok(Some(fast_mmq::plain(q, a)?));
+        }
+
+        Ok(None)
     }
 }
 

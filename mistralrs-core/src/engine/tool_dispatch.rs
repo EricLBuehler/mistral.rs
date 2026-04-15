@@ -10,7 +10,6 @@ use std::{borrow::Cow, sync::Arc, time::Instant};
 
 use bm25::{Embedder, EmbedderBuilder, Language, ScoredDocument, Scorer};
 use tokenizers::InputSequence;
-use tracing::{level_filters::LevelFilter, Dispatch};
 
 use crate::{
     get_mut_arcmutex,
@@ -33,15 +32,6 @@ fn token_budget(opts: &WebSearchOptions) -> usize {
         SearchContextSize::Medium => 8192,
         SearchContextSize::Low => 4096,
     }
-}
-
-/// Create a tracing dispatcher that allows `info` and below but suppresses
-/// `warn` (the HTTP scraping crates are chatty).
-fn quiet_dispatch() -> Dispatch {
-    let subscriber = tracing_subscriber::fmt::Subscriber::builder()
-        .with_max_level(LevelFilter::INFO)
-        .finish();
-    Dispatch::new(subscriber)
 }
 
 // ── Search ─────────────────────────────────────────────────────────────────
@@ -67,39 +57,49 @@ pub(super) async fn execute_search(
     let tokenizer = get_mut_arcmutex!(engine.pipeline)
         .tokenizer()
         .expect("A tokenizer is expected for non-diffusion models.");
-    let dispatch = quiet_dispatch();
     let max_toks = token_budget(opts);
 
-    // Fetch and cap results.
+    // Fetch results: async path (default) or sync callback path.
+    let base: Vec<SearchResult> = if let Some(cb) = &engine.search_callback {
+        match tokio::task::block_in_place(|| cb(&params)) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("Search tool execution failed: {e}");
+                Vec::new()
+            }
+        }
+    } else {
+        match search::run_search_tool(&params).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("Search tool execution failed: {e}");
+                Vec::new()
+            }
+        }
+    };
+
+    // Cap content length and tokenize (CPU-bound, fast).
+    let t_cap = Instant::now();
     let (results, result_token_lens): (Vec<SearchResult>, Vec<usize>) =
         tokio::task::block_in_place(|| {
-            tracing::dispatcher::with_default(&dispatch, || {
-                let base = match if let Some(cb) = &engine.search_callback {
-                    cb(&params)
-                } else {
-                    search::run_search_tool(&params)
-                } {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::error!("Search tool execution failed: {e}");
-                        return (Vec::new(), Vec::new());
-                    }
-                };
-                base.into_iter()
-                    .map(|mut r| {
-                        r = r.cap_content_len(&tokenizer, max_toks).unwrap();
-                        let len = {
-                            let inp = InputSequence::Raw(Cow::from(&r.content));
-                            tokenizer
-                                .encode_fast(inp, false)
-                                .map(|x| x.len())
-                                .unwrap_or(usize::MAX)
-                        };
-                        (r, len)
-                    })
-                    .unzip()
-            })
+            base.into_iter()
+                .map(|mut r| {
+                    r = r.cap_content_len(&tokenizer, max_toks).unwrap();
+                    let len = {
+                        let inp = InputSequence::Raw(Cow::from(&r.content));
+                        tokenizer
+                            .encode_fast(inp, false)
+                            .map(|x| x.len())
+                            .unwrap_or(usize::MAX)
+                    };
+                    (r, len)
+                })
+                .unzip()
         });
+    tracing::info!(
+        "Search: content capping/tokenization took {:.2}s",
+        t_cap.elapsed().as_secs_f32()
+    );
 
     // Sort by token length (shortest first).
     let mut combined: Vec<(SearchResult, usize)> = results
@@ -111,6 +111,7 @@ pub(super) async fn execute_search(
         combined.into_iter().unzip();
 
     // Rank and select results within the token budget.
+    let t_rank = Instant::now();
     let mut used_results = Vec::new();
     let mut used_len = 0;
 
@@ -182,6 +183,11 @@ pub(super) async fn execute_search(
         }
     }
 
+    tracing::info!(
+        "Search: ranking took {:.2}s",
+        t_rank.elapsed().as_secs_f32()
+    );
+
     let content = serde_json::to_string(&serde_json::json!({ "output": used_results })).unwrap();
     tracing::info!(
         "Web search executed in {:.2}s, using {used_len} tokens of {} search results.",
@@ -215,21 +221,16 @@ pub(super) async fn execute_extraction(
     let tokenizer = get_mut_arcmutex!(engine.pipeline)
         .tokenizer()
         .expect("A tokenizer is expected for non-diffusion models.");
-    let dispatch = quiet_dispatch();
     let max_toks = token_budget(opts);
 
     let res = {
-        let raw = tokio::task::block_in_place(|| {
-            tracing::dispatcher::with_default(&dispatch, || {
-                match search::run_extract_tool(&params) {
-                    Ok(r) => Some(r),
-                    Err(e) => {
-                        tracing::error!("Extraction tool failed: {e}");
-                        None
-                    }
-                }
-            })
-        });
+        let raw = match search::run_extract_tool(&params).await {
+            Ok(r) => Some(r),
+            Err(e) => {
+                tracing::error!("Extraction tool failed: {e}");
+                None
+            }
+        };
         let Some(raw) = raw else {
             return ToolResult {
                 content: serde_json::json!({"error": "Content extraction failed"}).to_string(),
