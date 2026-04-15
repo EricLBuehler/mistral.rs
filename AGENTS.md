@@ -13,7 +13,6 @@ This file provides instructions for AI agents to understand the layout of the `m
 - `/mistralrs-pyo3/`      : Python bindings (PyO3)
 - `/mistralrs-cli/`       : Unified CLI binary (commands: run, serve, bench, from-config)
 - `/mistralrs-server-core/`: Shared server core logic
-- `/mistralrs-web-chat/`  : (Deprecated) Use `mistralrs serve --ui` instead
 - `/mistralrs-bench/`     : (Deprecated) Use `mistralrs bench` instead
 - `/docs/`                : Markdown documentation for models, features, and guides
 - `/examples/`            : Usage examples (Rust, Python, server samples, notebooks)

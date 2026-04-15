@@ -10,7 +10,7 @@ members = [
     "mistralrs-vision",
     "mistralrs-quant",
     "mistralrs-paged-attn",
-    "mistralrs-web-chat",
+
     "mistralrs-audio",
     "mistralrs-mcp",
     "mistralrs-macros",

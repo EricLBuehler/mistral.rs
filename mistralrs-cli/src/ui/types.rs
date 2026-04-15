@@ -113,6 +113,10 @@ pub struct AppState {
     pub search_enabled: bool,
     /// Search embedding model to use (if enabled)
     pub search_embedding_model: Option<SearchEmbeddingModel>,
+    /// Whether code execution is enabled
+    pub code_execution_enabled: bool,
+    /// Tool dispatch URL (if configured)
+    pub tool_dispatch_url: Option<String>,
 }
 
 // Request/Response types

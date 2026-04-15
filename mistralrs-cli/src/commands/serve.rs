@@ -107,10 +107,22 @@ pub async fn run_server(
         .await?;
 
     if server.ui {
+        let enable_code_execution = {
+            #[cfg(feature = "code-execution")]
+            {
+                runtime.enable_code_execution
+            }
+            #[cfg(not(feature = "code-execution"))]
+            {
+                false
+            }
+        };
         let ui_router = build_ui_router(
             mistralrs_for_ui,
             runtime.enable_search,
             runtime.search_embedding_model.map(|m| m.into()),
+            enable_code_execution,
+            server.tool_dispatch_url.clone(),
         )
         .await?;
         app = app.nest("/ui", ui_router);

@@ -321,14 +321,22 @@ pub async fn list_chats(Extension(app): Extension<Arc<AppState>>) -> impl IntoRe
 
     if let Ok(mut entries) = fs::read_dir(dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
+            let filename = entry.file_name().to_string_lossy().to_string();
+            let id = filename.strip_suffix(".json").unwrap_or(&filename).to_string();
             if let Ok(bytes) = fs::read(entry.path()).await {
                 if let Ok(chat) = serde_json::from_slice::<ChatFile>(&bytes) {
-                    chats.push(chat);
+                    let mut value = serde_json::to_value(&chat).unwrap();
+                    value["id"] = serde_json::Value::String(id);
+                    chats.push(value);
                 }
             }
         }
     }
-    chats.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    chats.sort_by(|a, b| {
+        let a_date = a["created_at"].as_str().unwrap_or("");
+        let b_date = b["created_at"].as_str().unwrap_or("");
+        b_date.cmp(a_date)
+    });
     Json(json!({ "chats": chats }))
 }
 
@@ -519,4 +527,12 @@ pub async fn generate_speech(
 
     let url = format!("speech/{filename}");
     (StatusCode::OK, Json(json!({ "url": url }))).into_response()
+}
+
+pub async fn get_capabilities(Extension(app): Extension<Arc<AppState>>) -> impl IntoResponse {
+    Json(json!({
+        "search_enabled": app.search_enabled,
+        "code_execution_enabled": app.code_execution_enabled,
+        "tool_dispatch_url": app.tool_dispatch_url,
+    }))
 }

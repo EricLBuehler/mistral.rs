@@ -56,6 +56,10 @@ let model = ModelBuilder::new("model-id")
 
 Code execution is enabled server-side. Once enabled, the `execute_python` and `reset_python_session` tools are automatically available to the model. No additional API parameters are needed -- the model decides when to use code execution based on the conversation.
 
+### Web UI
+
+When using the built-in web UI (`--ui`), code execution results are displayed inline with syntax-highlighted Python code blocks, stdout output, stderr/exceptions in red, and matplotlib/PIL images rendered directly in the chat. Enable code execution via the settings panel or the `--enable-code-execution` CLI flag.
+
 ## Session Management
 
 ### Persistence

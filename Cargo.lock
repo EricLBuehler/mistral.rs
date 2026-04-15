@@ -387,16 +387,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "axum_static"
-version = "1.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcd9feb3575a097fe5555079114df3058557d0516f050ba7c6ad392577dc784d"
-dependencies = [
- "axum",
- "tower-http",
-]
-
-[[package]]
 name = "backtrace"
 version = "0.3.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3787,33 +3777,6 @@ dependencies = [
  "candle-core",
  "image",
  "rayon",
-]
-
-[[package]]
-name = "mistralrs-web-chat"
-version = "0.8.1"
-dependencies = [
- "anyhow",
- "axum",
- "axum_static",
- "base64 0.22.1",
- "chrono",
- "clap",
- "futures-util",
- "http",
- "hyper",
- "image",
- "include_dir",
- "indexmap 2.13.0",
- "mime_guess",
- "mistralrs",
- "serde",
- "serde_json",
- "tokio",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid 1.19.0",
 ]
 
 [[package]]

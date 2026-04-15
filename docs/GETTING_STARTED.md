@@ -80,12 +80,20 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-Add `--ui` to get a built-in web chat interface:
+Add `--ui` to get a built-in web chat interface with markdown rendering, collapsible reasoning/thinking blocks, code execution visualization, and web search result display:
 
 ```bash
 mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
 # Visit http://localhost:1234/ui
 ```
+
+Enable agentic features in the UI with `--enable-search` and `--enable-code-execution`:
+
+```bash
+mistralrs serve --ui --enable-search --enable-code-execution -m Qwen/Qwen3-4B
+```
+
+The web UI settings panel lets you toggle these features on and off, configure sampling parameters, and set system prompts.
 
 ## Step 5: Use the Python SDK
 

@@ -103,6 +103,8 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
             mistralrs_for_ui,
             runtime.enable_search,
             runtime.search_embedding_model.map(|m| m.into()),
+            false,
+            None,
         )
         .await?;
         app = app.nest("/ui", ui_router);

@@ -34,7 +34,7 @@ Fast, flexible LLM inference.
 - **Any Hugging Face model, zero config**: Just `mistralrs run -m user/model`.
 - **True multimodality**: Text, vision, video, and audio, speech generation, image generation, and embeddings in one engine.
 - **Full quantization control**: Choose the precise quantization you want to use, or make your own UQFF with `mistralrs quantize`.
-- **Built-in web UI**: `mistralrs serve --ui` gives you a web interface instantly.
+- **Built-in web UI**: `mistralrs serve --ui` gives you a modern chat interface with reasoning visualization, code execution, and web search display.
 - **Hardware-aware**: `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
 - **[Agentic features](https://ericlbuehler.github.io/mistral.rs/AGENTS.html)** — server-side tool loop, [Python code execution](https://ericlbuehler.github.io/mistral.rs/CODE_EXECUTION.html), web search, MCP client, and HTTP tool dispatch

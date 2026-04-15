@@ -42,7 +42,7 @@ mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
 - **Auto-tuning**: `mistralrs tune` benchmarks your hardware and recommends optimal settings
 - **Agentic**: Server-side tool calling loop, web search, MCP client, HTTP tool dispatch
 - **Multi-GPU**: Automatic tensor parallelism via NCCL, or cross-machine via Ring backend
-- **Web UI**: `--ui` flag for instant browser-based chat
+- **Web UI**: `--ui` flag for instant browser-based chat with reasoning blocks, code execution, and search visualization
 
 ## Community
 

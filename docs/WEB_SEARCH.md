@@ -52,6 +52,10 @@ runner = Runner(
 )
 ```
 
+## Web UI
+
+When using the built-in web UI (`mistralrs serve --ui --enable-search`), search results are displayed as collapsible blocks in the chat showing the search query and result count. Toggle search on and off via the settings panel.
+
 ## HTTP server
 **Be sure to add `--enable-search`!**
 

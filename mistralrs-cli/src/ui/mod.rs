@@ -13,7 +13,7 @@ use mistralrs_core::{MistralRs, ModelCategory};
 use tokio::fs;
 use tower_http::services::ServeDir;
 
-use crate::ui::handlers::{api::*, websocket::ws_handler};
+use crate::ui::handlers::api::*;
 use crate::ui::types::{AppState, GenerationParams, UiModelInfo};
 use crate::ui::utils::get_cache_dir;
 
@@ -35,10 +35,20 @@ async fn static_handler(uri: axum::http::Uri) -> Response<Body> {
             .body(Body::from(file.contents()))
             .unwrap()
     } else {
-        Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("Not Found"))
-            .unwrap()
+        // SPA fallback: serve index.html for unrecognized paths
+        if let Some(file) = STATIC_DIR.get_file("index.html") {
+            let mime = mime_guess::from_path("index.html").first_or_octet_stream();
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(axum::http::header::CONTENT_TYPE, mime.as_ref())
+                .body(Body::from(file.contents()))
+                .unwrap()
+        } else {
+            Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("Not Found"))
+                .unwrap()
+        }
     }
 }
 
@@ -81,6 +91,8 @@ pub async fn build_ui_router(
     mistralrs: Arc<MistralRs>,
     enable_search: bool,
     search_embedding_model: Option<SearchEmbeddingModel>,
+    enable_code_execution: bool,
+    tool_dispatch_url: Option<String>,
 ) -> Result<Router> {
     let models = build_model_list(&mistralrs);
     let model_wrapper = Model::new(mistralrs.clone());
@@ -126,10 +138,11 @@ pub async fn build_ui_router(
         default_params: GenerationParams::default(),
         search_enabled: enable_search,
         search_embedding_model,
+        code_execution_enabled: enable_code_execution,
+        tool_dispatch_url,
     });
 
     let router = Router::new()
-        .route("/ws", get(ws_handler))
         .route("/api/upload_image", post(upload_image))
         .route("/api/upload_text", post(upload_text))
         .route("/api/upload_audio", post(upload_audio))
@@ -142,6 +155,7 @@ pub async fn build_ui_router(
         .route("/api/rename_chat", post(rename_chat))
         .route("/api/append_message", post(append_message))
         .route("/api/settings", get(get_settings))
+        .route("/api/capabilities", get(get_capabilities))
         .route("/api/generate_speech", post(generate_speech))
         .nest_service("/speech", get_service(ServeDir::new(speech_dir.clone())))
         .nest_service("/uploads", get_service(ServeDir::new(uploads_dir.clone())))

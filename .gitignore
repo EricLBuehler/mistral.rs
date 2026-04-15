@@ -5,7 +5,8 @@
 .DS_Store
 .idea
 mistral.rs/
-mistralrs-web-chat/cache
+
+mistralrs-cli/webui/node_modules/
 
 # mdbook output
 docs/book/
