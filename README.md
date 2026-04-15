@@ -37,7 +37,7 @@ Fast, flexible LLM inference.
 - **Built-in web UI**: `mistralrs serve --ui` gives you a web interface instantly.
 - **Hardware-aware**: `mistralrs tune` benchmarks your system and picks optimal quantization + device mapping.
 - **Flexible SDKs**: Python package and Rust crate to build your projects.
-- **[Agentic features](https://ericlbuehler.github.io/mistral.rs/AGENTS.html)** — server-side tool loop, web search, MCP client, and HTTP tool dispatch
+- **[Agentic features](https://ericlbuehler.github.io/mistral.rs/AGENTS.html)** — server-side tool loop, [Python code execution](https://ericlbuehler.github.io/mistral.rs/CODE_EXECUTION.html), web search, MCP client, and HTTP tool dispatch
 
 ## Quick Start
 
@@ -122,8 +122,9 @@ mistralrs doctor
 **Agentic Features**
 - Integrated [tool calling](https://ericlbuehler.github.io/mistral.rs/TOOL_CALLING.html) with grammar enforcement and strict schema mode
 - ⭐ Server-side [agentic loop](https://ericlbuehler.github.io/mistral.rs/TOOL_CALLING.html#agentic-loop): auto-execute tools and feed results back
-- ⭐ [Tool dispatch URL](https://ericlbuehler.github.io/mistral.rs/TOOL_CALLING.html#tool-dispatch-url): POST tool calls to your own endpoint
+- ⭐ [Python code execution](https://ericlbuehler.github.io/mistral.rs/CODE_EXECUTION.html): persistent Jupyter-like sessions with matplotlib capture and multimodal feedback
 - ⭐ [Web search integration](https://ericlbuehler.github.io/mistral.rs/WEB_SEARCH.html) with embedding-based ranking
+- ⭐ [Tool dispatch URL](https://ericlbuehler.github.io/mistral.rs/TOOL_CALLING.html#tool-dispatch-url): POST tool calls to your own endpoint
 - ⭐ [MCP client](https://ericlbuehler.github.io/mistral.rs/MCP/client.html): Connect to external tools via Process, HTTP, or WebSocket
 - Python/Rust [tool callbacks](https://ericlbuehler.github.io/mistral.rs/TOOL_CALLING.html#tool-callbacks) for custom execution
 
