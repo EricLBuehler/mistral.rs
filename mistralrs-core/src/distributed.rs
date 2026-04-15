@@ -189,8 +189,16 @@ pub fn ring_daemon_replicator(request_sender: Sender<Request>) {
                             let req = Request::Normal(x);
 
                             request_sender.send(req).await.unwrap();
-                            let resp = receiver.recv().await.unwrap();
-                            resp.as_result().unwrap();
+                            loop {
+                                let resp = receiver.recv().await.unwrap();
+                                match resp {
+                                    crate::Response::AgenticToolCallProgress { .. } => continue,
+                                    other => {
+                                        other.as_result().unwrap();
+                                        break;
+                                    }
+                                }
+                            }
                             continue;
                         }
                         Request::TerminateAllSeqsNextStep => Request::TerminateAllSeqsNextStep,

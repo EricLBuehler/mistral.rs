@@ -1,4 +1,6 @@
-use crate::tools::{Function, Tool, ToolCallback, ToolCallbackKind, ToolCallbackWithTool, ToolType};
+use crate::tools::{
+    Function, Tool, ToolCallback, ToolCallbackKind, ToolCallbackWithTool, ToolType,
+};
 use crate::transport::{HttpTransport, McpTransport, ProcessTransport, WebSocketTransport};
 use crate::types::McpToolResult;
 use crate::{McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo};

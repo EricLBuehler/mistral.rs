@@ -288,6 +288,7 @@ impl<'a> AgentStream<'a> {
                                                         total_prompt_time_sec: 0.0,
                                                         total_completion_time_sec: 0.0,
                                                     },
+                                                    agentic_tool_calls: None,
                                                 };
 
                                                 self.state = AgentStreamState::ExecutingTools {

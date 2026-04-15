@@ -52,8 +52,8 @@ use crate::{
 };
 
 mod add_request;
-mod logger;
 mod agentic_loop;
+mod logger;
 mod tool_dispatch;
 
 pub enum EngineInstruction {

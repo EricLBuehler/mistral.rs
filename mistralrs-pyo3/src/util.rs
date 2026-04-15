@@ -119,9 +119,13 @@ pub(crate) fn send_request_with_optional_stream(
     if is_streaming {
         Ok(Either::Right(rx))
     } else {
-        rx.blocking_recv()
-            .ok_or_else(|| "Response channel closed unexpectedly".to_string())
-            .map(Either::Left)
+        loop {
+            match rx.blocking_recv() {
+                Some(Response::AgenticToolCallProgress { .. }) => continue,
+                Some(response) => return Ok(Either::Left(response)),
+                None => return Err("Response channel closed unexpectedly".to_string()),
+            }
+        }
     }
 }
 
@@ -153,6 +157,7 @@ pub(crate) fn parse_chat_response(response: Response) -> PyApiResult<ChatComplet
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
+        Response::AgenticToolCallProgress { .. } => unreachable!(),
     }
 }
 
@@ -171,6 +176,7 @@ pub(crate) fn parse_completion_response(response: Response) -> PyApiResult<Compl
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
+        Response::AgenticToolCallProgress { .. } => unreachable!(),
     }
 }
 

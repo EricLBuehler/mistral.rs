@@ -254,7 +254,7 @@ pub(super) async fn execute_extraction(
                         serde_json::json!({"error": format!("Extraction processing failed: {e}")})
                             .to_string(),
                     images: vec![],
-                            };
+                };
             }
         }
     };
@@ -297,7 +297,7 @@ pub(super) fn execute_custom_tool(engine: &Engine, tc: &ToolCallResponse) -> Too
             })
             .to_string(),
             images: vec![],
-            };
+        };
     };
 
     let error_result = |e: anyhow::Error| -> ToolResult {
@@ -310,7 +310,7 @@ pub(super) fn execute_custom_tool(engine: &Engine, tc: &ToolCallResponse) -> Too
             })
             .to_string(),
             images: vec![],
-            }
+        }
     };
 
     match &cb_with_tool.callback {

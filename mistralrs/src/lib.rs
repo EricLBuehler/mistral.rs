@@ -243,10 +243,10 @@ pub use messages::{
     EmbeddingRequest, EmbeddingRequestBuilder, EmbeddingRequestInput, MultimodalMessages,
     RequestBuilder, RequestLike, TextMessageRole, TextMessages,
 };
+pub use mistralrs_core::CodeExecutionConfig;
 pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
-pub use mistralrs_core::CodeExecutionConfig;
 pub use mistralrs_core::{
     MultimodalToolCallback, SearchCallback, SearchResult, ToolCallback, ToolCallbackKind,
     ToolOutput,

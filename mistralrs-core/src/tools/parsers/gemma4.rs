@@ -222,8 +222,12 @@ fn parse_gemma4_object(s: &str) -> std::result::Result<Value, String> {
             continue;
         }
         // Find the first `:` that's not inside <|"|> delimiters
-        let colon = find_colon_outside_strings(token)
-            .ok_or_else(|| format!("Missing ':' in key-value pair: {}", &token[..token.len().min(80)]))?;
+        let colon = find_colon_outside_strings(token).ok_or_else(|| {
+            format!(
+                "Missing ':' in key-value pair: {}",
+                &token[..token.len().min(80)]
+            )
+        })?;
 
         let key = token[..colon].trim();
         // Strip <|"|> from key if present
@@ -394,7 +398,6 @@ fn utf8_char_len(b: u8) -> usize {
         _ => 1, // continuation byte; shouldn't happen at a start position
     }
 }
-
 
 #[cfg(test)]
 mod tests {

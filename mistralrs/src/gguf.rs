@@ -121,8 +121,13 @@ impl GgufModelBuilder {
         tool: Tool,
     ) -> Self {
         let name = name.into();
-        self.tool_callbacks
-            .insert(name, ToolCallbackWithTool { callback: ToolCallbackKind::Text(callback), tool });
+        self.tool_callbacks.insert(
+            name,
+            ToolCallbackWithTool {
+                callback: ToolCallbackKind::Text(callback),
+                tool,
+            },
+        );
         self
     }
 

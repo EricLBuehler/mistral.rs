@@ -50,8 +50,13 @@ macro_rules! common_builder_methods {
             tool: Tool,
         ) -> Self {
             let name = name.into();
-            self.tool_callbacks
-                .insert(name, ToolCallbackWithTool { callback: ToolCallbackKind::Text(callback), tool });
+            self.tool_callbacks.insert(
+                name,
+                ToolCallbackWithTool {
+                    callback: ToolCallbackKind::Text(callback),
+                    tool,
+                },
+            );
             self
         }
 

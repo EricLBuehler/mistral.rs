@@ -1150,6 +1150,10 @@ impl futures::Stream for OpenResponsesStreamer {
                             .json_data(event),
                     ))
                 }
+                Response::AgenticToolCallProgress { .. } => {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
                 _ => Poll::Pending,
             },
             Poll::Ready(None) => Poll::Ready(None),
@@ -1560,7 +1564,14 @@ pub async fn create_response(
             }
 
             // Wait for response
-            match bg_rx.recv().await {
+            let response = loop {
+                match bg_rx.recv().await {
+                    Some(Response::AgenticToolCallProgress { .. }) => continue,
+                    other => break other,
+                }
+            };
+
+            match response {
                 Some(Response::Done(chat_resp)) => {
                     let response = chat_response_to_response_resource(
                         &chat_resp,
@@ -1650,7 +1661,14 @@ pub async fn create_response(
     } else {
         // Non-streaming response
         let mut rx = rx;
-        match rx.recv().await {
+        let response = loop {
+            match rx.recv().await {
+                Some(Response::AgenticToolCallProgress { .. }) => continue,
+                other => break other,
+            }
+        };
+
+        match response {
             Some(Response::Done(chat_resp)) => {
                 let response = chat_response_to_response_resource(
                     &chat_resp,

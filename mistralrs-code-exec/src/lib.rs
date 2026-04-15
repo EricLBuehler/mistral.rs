@@ -67,12 +67,12 @@ impl CodeExecutionManager {
         // after the manager is dropped — callbacks hold the path).
         let executor_script_path = {
             use std::io::Write;
-            let mut f = tempfile::Builder::new()
-                .suffix(".py")
-                .tempfile()?;
+            let mut f = tempfile::Builder::new().suffix(".py").tempfile()?;
             f.write_all(EXECUTOR_PY.as_bytes())?;
             f.flush()?;
-            let (_, path) = f.keep().map_err(|e| anyhow::anyhow!("Failed to persist executor script: {e}"))?;
+            let (_, path) = f
+                .keep()
+                .map_err(|e| anyhow::anyhow!("Failed to persist executor script: {e}"))?;
             path
         };
 
@@ -101,9 +101,7 @@ impl CodeExecutionManager {
                 .output()
                 .await;
             match output {
-                Ok(o) if o.status.success() => {
-                    String::from_utf8_lossy(&o.stdout).to_string()
-                }
+                Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
                 _ => "(pip list unavailable)".to_string(),
             }
         };
@@ -164,8 +162,6 @@ impl CodeExecutionManager {
                 // Models sometimes emit LaTeX operators instead of Python ones.
                 let code = sanitize_latex_operators(&code);
 
-                tracing::info!("Executing Python code:\n{code}");
-
                 // Run async code execution in the current runtime.
                 let handle = tokio::runtime::Handle::current();
                 tokio::task::block_in_place(|| {
@@ -182,8 +178,6 @@ impl CodeExecutionManager {
                         let mut map = sessions.lock().await;
                         let session = map.get_mut(&tid).unwrap();
                         let result = session.execute(&code).await;
-
-                        log_exec_result(&result);
 
                         Ok(ToolOutput::Multimodal {
                             text: result.text,
@@ -206,13 +200,11 @@ impl CodeExecutionManager {
         let python_path_reset = self.config.python_path.clone();
         let executor_script_reset = self.executor_script_path.clone();
 
-        let reset_callback: Arc<mistralrs_mcp::ToolCallback> =
-            Arc::new(move |_func: &CalledFunction| {
+        let reset_callback: Arc<mistralrs_mcp::ToolCallback> = Arc::new(
+            move |_func: &CalledFunction| {
                 let sessions = Arc::clone(&sessions);
                 let python_path = python_path_reset.clone();
                 let executor_script = executor_script_reset.clone();
-
-                tracing::info!("Resetting Python session.");
 
                 let handle = tokio::runtime::Handle::current();
                 tokio::task::block_in_place(|| {
@@ -230,12 +222,12 @@ impl CodeExecutionManager {
                         let session = map.get_mut(&tid).unwrap();
                         session.reset().await?;
 
-                        tracing::info!("Python session reset successfully.");
 
                         Ok(serde_json::json!({"status": "success", "message": "Session reset. All variables and imports have been cleared."}).to_string())
                     })
                 })
-            });
+            },
+        );
 
         callbacks.insert(
             RESET_SESSION_TOOL_NAME.to_string(),
@@ -246,41 +238,6 @@ impl CodeExecutionManager {
         );
 
         callbacks
-    }
-}
-
-fn log_exec_result(result: &output::CodeExecResult) {
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&result.text) {
-        let status = val.get("status").and_then(|v| v.as_str()).unwrap_or("?");
-        let time_ms = val
-            .get("execution_time_ms")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let images = result.images.len();
-
-        let mut parts = Vec::new();
-        if let Some(stdout) = val.get("stdout").and_then(|v| v.as_str()) {
-            if !stdout.is_empty() {
-                parts.push(format!("stdout: {}", stdout.trim()));
-            }
-        }
-        if let Some(expr) = val.get("result").and_then(|v| v.as_str()) {
-            parts.push(format!("result: {expr}"));
-        }
-        if let Some(exc) = val.get("exception").and_then(|v| v.as_str()) {
-            parts.push(format!("exception: {exc}"));
-        }
-        if images > 0 {
-            parts.push(format!("{images} image(s) captured"));
-        }
-
-        let detail = if parts.is_empty() {
-            "(no output)".to_string()
-        } else {
-            parts.join(", ")
-        };
-
-        tracing::info!("Python execution {status} ({time_ms}ms): {detail}");
     }
 }
 

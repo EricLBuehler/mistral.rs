@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::{
     get_mut_arcmutex,
     pipeline::SupportedModality,
+    response::{AgenticToolCallData, AgenticToolCallPhase},
     search, MessageContent, NormalRequest, RequestMessage, Response, ToolCallResponse, ToolChoice,
     WebSearchOptions,
 };
@@ -129,18 +130,12 @@ fn append_multimodal_tool_response(
         return;
     }
 
-    let num_images = images.len();
     upgrade_to_multimodal(request);
 
     let mut parts: Vec<IndexMap<String, Value>> = Vec::new();
 
     let req_images = get_images_mut(request);
     for img in &images {
-        tracing::info!(
-            "Injecting tool image ({}x{}) into multimodal request",
-            img.width(),
-            img.height()
-        );
         req_images.push(img.clone());
         let mut part = IndexMap::new();
         part.insert("type".to_string(), Value::String("image".to_string()));
@@ -159,10 +154,6 @@ fn append_multimodal_tool_response(
     message.insert("name".to_string(), Either::Left(tool_name.to_string()));
     message.insert("content".to_string(), Either::Right(parts));
     messages.push(message);
-
-    tracing::info!(
-        "Multimodal tool response: {num_images} image(s) injected for model to see"
-    );
 }
 
 /// Ensure a system message exists at the start of the conversation.
@@ -211,20 +202,71 @@ async fn forward_passthrough(
 
 use super::tool_dispatch;
 
+#[cfg(feature = "code-execution")]
+fn is_code_exec_tool(name: &str) -> bool {
+    mistralrs_code_exec::code_exec_tool_called(name)
+}
+
+#[cfg(not(feature = "code-execution"))]
+fn is_code_exec_tool(_name: &str) -> bool {
+    false
+}
+
+/// Build `AgenticToolCallData` for the Calling phase from a tool call.
+fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
+    if search::search_tool_called(&tc.function.name) {
+        let query = serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
+            .ok()
+            .and_then(|v| v.get("query").and_then(|q| q.as_str()).map(|s| s.to_string()));
+        AgenticToolCallData::WebSearch {
+            query,
+            results_count: None,
+        }
+    } else if is_code_exec_tool(&tc.function.name) {
+        let code = serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
+            .ok()
+            .and_then(|v| v.get("code").and_then(|c| c.as_str()).map(|s| s.to_string()));
+        AgenticToolCallData::CodeExecution {
+            code,
+            stdout: None,
+            stderr: None,
+            exception: None,
+            images: vec![],
+            working_directory: None,
+            execution_time_ms: None,
+        }
+    } else {
+        AgenticToolCallData::Custom {
+            arguments: tc.function.arguments.clone(),
+            content: String::new(),
+        }
+    }
+}
+
 async fn do_search(
     engine: Arc<Engine>,
     mut request: NormalRequest,
     tc: &ToolCallResponse,
     opts: &WebSearchOptions,
-) -> NormalRequest {
+) -> (NormalRequest, AgenticToolCallData) {
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
     let result = tool_dispatch::execute_search(&engine, tc, opts).await;
+
+    // Count results for the progress data.
+    let results_count = serde_json::from_str::<serde_json::Value>(&result.content)
+        .ok()
+        .and_then(|v| v.get("output")?.as_array().map(|a| a.len()));
+
+    let data = AgenticToolCallData::WebSearch {
+        query: None, // already sent in Calling phase
+        results_count,
+    };
     append_tool_response(messages, &tc.function.name, result.content);
 
     request.tool_choice = Some(ToolChoice::Auto);
-    request
+    (request, data)
 }
 
 async fn do_extraction(
@@ -232,15 +274,19 @@ async fn do_extraction(
     mut request: NormalRequest,
     tc: &ToolCallResponse,
     opts: &WebSearchOptions,
-) -> NormalRequest {
+) -> (NormalRequest, AgenticToolCallData) {
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
     let result = tool_dispatch::execute_extraction(&engine, tc, opts).await;
+    let data = AgenticToolCallData::WebSearch {
+        query: None,
+        results_count: Some(1),
+    };
     append_tool_response(messages, &tc.function.name, result.content);
 
     request.tool_choice = Some(ToolChoice::Auto);
-    request
+    (request, data)
 }
 
 async fn do_custom_tool(
@@ -248,11 +294,53 @@ async fn do_custom_tool(
     mut request: NormalRequest,
     tc: &ToolCallResponse,
     supports_vision: bool,
-) -> NormalRequest {
+) -> (NormalRequest, AgenticToolCallData) {
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
     let result = tool_dispatch::execute_custom_tool(&engine, tc);
+
+    // Build tool-specific result data.
+    let is_code_exec = is_code_exec_tool(&tc.function.name);
+    let data = if is_code_exec {
+        // Parse the code-exec result JSON for structured fields.
+        let val = serde_json::from_str::<serde_json::Value>(&result.content).ok();
+        AgenticToolCallData::CodeExecution {
+            code: None, // already sent in Calling phase
+            stdout: val
+                .as_ref()
+                .and_then(|v| v.get("stdout"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string()),
+            stderr: val
+                .as_ref()
+                .and_then(|v| v.get("stderr"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string()),
+            exception: val
+                .as_ref()
+                .and_then(|v| v.get("exception"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            images: result.images.clone(),
+            working_directory: val
+                .as_ref()
+                .and_then(|v| v.get("working_directory"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            execution_time_ms: val
+                .as_ref()
+                .and_then(|v| v.get("execution_time_ms"))
+                .and_then(|v| v.as_u64()),
+        }
+    } else {
+        AgenticToolCallData::Custom {
+            arguments: String::new(), // already sent in Calling phase
+            content: result.content.clone(),
+        }
+    };
 
     if result.images.is_empty() {
         let messages = get_messages_mut(&mut request);
@@ -268,18 +356,26 @@ async fn do_custom_tool(
     }
 
     request.tool_choice = Some(ToolChoice::Auto);
-    request
+    (request, data)
 }
 
-fn do_http_tool(mut request: NormalRequest, tc: &ToolCallResponse, url: &str) -> NormalRequest {
+fn do_http_tool(
+    mut request: NormalRequest,
+    tc: &ToolCallResponse,
+    url: &str,
+) -> (NormalRequest, AgenticToolCallData) {
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
     let result = tool_dispatch::execute_http_tool(tc, url);
+    let data = AgenticToolCallData::Custom {
+        arguments: String::new(),
+        content: result.content.clone(),
+    };
     append_tool_response(messages, &tc.function.name, result.content);
 
     request.tool_choice = Some(ToolChoice::Auto);
-    request
+    (request, data)
 }
 
 /// Drive one or more tool-use rounds (web-search, code execution, custom
@@ -316,6 +412,25 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
             .tools
             .get_or_insert_with(Vec::new)
             .extend(search::get_search_tools(opts).unwrap());
+    }
+
+    // Validate: reject user tools that conflict with registered internal tools.
+    if let Some(user_tools) = &probe.tools {
+        for t in user_tools {
+            if this.tool_callbacks.contains_key(&t.function.name) {
+                let _ = user_sender
+                    .send(Response::ValidationError(
+                        format!(
+                            "Tool '{}' conflicts with a registered internal tool. \
+                             Internal tool names cannot be overridden.",
+                            t.function.name
+                        )
+                        .into(),
+                    ))
+                    .await;
+                return;
+            }
+        }
     }
 
     // Add Tool definitions from registered tool callbacks
@@ -412,9 +527,19 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
                 // Tool requested -> build the next turn.
                 let tc = tc_opt.unwrap();
 
+                // Notify client that a tool call is starting.
+                let _ = user_sender
+                    .send(Response::AgenticToolCallProgress {
+                        round,
+                        tool_name: tc.function.name.clone(),
+                        phase: AgenticToolCallPhase::Calling(calling_data_for_tool(tc)),
+                    })
+                    .await;
+
                 // Resolve how to execute this tool: built-in search,
                 // registered callback, dispatch URL, or bail.
-                let next_visible = if search::search_tool_called(&tc.function.name) {
+                let (next_visible, complete_data) =
+                    if search::search_tool_called(&tc.function.name) {
                     let web_search_options = web_search_options.as_ref().unwrap();
                     if tc.function.name == search::SEARCH_TOOL_NAME {
                         do_search(this_clone.clone(), visible_req, tc, web_search_options).await
@@ -433,6 +558,16 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
                         .unwrap();
                     return;
                 };
+
+                // Notify client that the tool call completed.
+                let _ = user_sender
+                    .send(Response::AgenticToolCallProgress {
+                        round,
+                        tool_name: tc.function.name.clone(),
+                        phase: AgenticToolCallPhase::Complete(complete_data),
+                    })
+                    .await;
+
                 round += 1;
 
                 // The fresh request becomes both the user-visible context and
@@ -500,20 +635,46 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
 
                 let tc = tc_opt.unwrap();
 
-                let next_visible = if search::search_tool_called(&tc.function.name) {
-                    let web_search_options = web_search_options.as_ref().unwrap();
-                    if tc.function.name == search::SEARCH_TOOL_NAME {
-                        do_search(this_clone.clone(), visible_req, tc, web_search_options).await
+                // Notify client that a tool call is starting.
+                let _ = user_sender
+                    .send(Response::AgenticToolCallProgress {
+                        round,
+                        tool_name: tc.function.name.clone(),
+                        phase: AgenticToolCallPhase::Calling(calling_data_for_tool(tc)),
+                    })
+                    .await;
+
+                let (next_visible, complete_data) =
+                    if search::search_tool_called(&tc.function.name) {
+                        let web_search_options = web_search_options.as_ref().unwrap();
+                        if tc.function.name == search::SEARCH_TOOL_NAME {
+                            do_search(this_clone.clone(), visible_req, tc, web_search_options).await
+                        } else {
+                            do_extraction(
+                                this_clone.clone(),
+                                visible_req,
+                                tc,
+                                web_search_options,
+                            )
+                            .await
+                        }
+                    } else if this_clone.tool_callbacks.contains_key(&tc.function.name) {
+                        do_custom_tool(this_clone.clone(), visible_req, tc, supports_vision).await
+                    } else if let Some(ref url) = dispatch_url {
+                        do_http_tool(visible_req, tc, url)
                     } else {
-                        do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
-                    }
-                } else if this_clone.tool_callbacks.contains_key(&tc.function.name) {
-                    do_custom_tool(this_clone.clone(), visible_req, tc, supports_vision).await
-                } else if let Some(ref url) = dispatch_url {
-                    do_http_tool(visible_req, tc, url)
-                } else {
-                    break; // No way to execute — client handles it.
-                };
+                        break; // No way to execute — client handles it.
+                    };
+
+                // Notify client that the tool call completed.
+                let _ = user_sender
+                    .send(Response::AgenticToolCallProgress {
+                        round,
+                        tool_name: tc.function.name.clone(),
+                        phase: AgenticToolCallPhase::Complete(complete_data),
+                    })
+                    .await;
+
                 round += 1;
 
                 visible_req = next_visible.clone();

@@ -111,7 +111,8 @@ pub struct OneshotInput {
 
 pub async fn oneshot_mode(
     mistralrs: Arc<MistralRs>,
-    do_search: bool, do_code_exec: bool,
+    do_search: bool,
+    do_code_exec: bool,
     enable_thinking: Option<bool>,
     input: OneshotInput,
 ) {
@@ -121,13 +122,21 @@ pub async fn oneshot_mode(
     if has_media {
         oneshot_multimodal(mistralrs, do_search, do_code_exec, enable_thinking, input).await;
     } else {
-        oneshot_text(mistralrs, do_search, do_code_exec, enable_thinking, input.text).await;
+        oneshot_text(
+            mistralrs,
+            do_search,
+            do_code_exec,
+            enable_thinking,
+            input.text,
+        )
+        .await;
     }
 }
 
 async fn oneshot_text(
     mistralrs: Arc<MistralRs>,
-    do_search: bool, do_code_exec: bool,
+    do_search: bool,
+    do_code_exec: bool,
     enable_thinking: Option<bool>,
     text: String,
 ) {
@@ -186,7 +195,8 @@ async fn oneshot_text(
 
 async fn oneshot_multimodal(
     mistralrs: Arc<MistralRs>,
-    do_search: bool, do_code_exec: bool,
+    do_search: bool,
+    do_code_exec: bool,
     enable_thinking: Option<bool>,
     input: OneshotInput,
 ) {
@@ -385,7 +395,8 @@ fn print_stats(
 
 pub async fn interactive_mode(
     mistralrs: Arc<MistralRs>,
-    do_search: bool, do_code_exec: bool,
+    do_search: bool,
+    do_code_exec: bool,
     enable_thinking: Option<bool>,
 ) {
     match mistralrs.get_model_category(None) {
@@ -395,11 +406,15 @@ pub async fn interactive_mode(
         Ok(ModelCategory::Multimodal { .. }) => {
             multimodal_interactive_mode(mistralrs, do_search, do_code_exec, enable_thinking).await
         }
-        Ok(ModelCategory::Diffusion) => diffusion_interactive_mode(mistralrs, do_search, do_code_exec).await,
+        Ok(ModelCategory::Diffusion) => {
+            diffusion_interactive_mode(mistralrs, do_search, do_code_exec).await
+        }
         Ok(ModelCategory::Audio) => {
             audio_interactive_mode(mistralrs, do_search, do_code_exec, enable_thinking).await
         }
-        Ok(ModelCategory::Speech) => speech_interactive_mode(mistralrs, do_search, do_code_exec).await,
+        Ok(ModelCategory::Speech) => {
+            speech_interactive_mode(mistralrs, do_search, do_code_exec).await
+        }
         Ok(ModelCategory::Embedding) => error!(
             "Embedding models do not support interactive mode. Use the server or Python/Rust APIs."
         ),
@@ -563,7 +578,8 @@ fn handle_sampling_command(prompt: &str, sampling_params: &mut SamplingParams) -
 
 async fn text_interactive_mode(
     mistralrs: Arc<MistralRs>,
-    do_search: bool, do_code_exec: bool,
+    do_search: bool,
+    do_code_exec: bool,
     enable_thinking: Option<bool>,
 ) {
     let sender = mistralrs.get_sender(None).unwrap();
@@ -664,7 +680,7 @@ async fn text_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
-        enable_code_execution: do_code_exec,
+            enable_code_execution: do_code_exec,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
@@ -740,6 +756,79 @@ fn parse_files_and_message(input: &str, regex: &Regex) -> (Vec<String>, String) 
     (urls, text)
 }
 
+fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCallPhase) {
+    use mistralrs_core::{AgenticToolCallData, AgenticToolCallPhase};
+
+    const HEADER_WIDTH: usize = 50;
+
+    match phase {
+        AgenticToolCallPhase::Calling(data) => {
+            let header = format!("╭─ {} ", tool_name);
+            let pad = HEADER_WIDTH.saturating_sub(header.len());
+            println!("\n{header}{}", "─".repeat(pad));
+            match data {
+                AgenticToolCallData::CodeExecution { code: Some(code), .. } => {
+                    for line in code.lines() {
+                        println!("│ {line}");
+                    }
+                }
+                AgenticToolCallData::WebSearch { query: Some(query), .. } => {
+                    println!("│ query: {query}");
+                }
+                AgenticToolCallData::Custom { arguments, .. } if !arguments.is_empty() => {
+                    println!("│ {arguments}");
+                }
+                _ => {}
+            }
+        }
+        AgenticToolCallPhase::Complete(data) => {
+            match data {
+                AgenticToolCallData::CodeExecution {
+                    stdout, stderr, exception, images, execution_time_ms, ..
+                } => {
+                    let timing = execution_time_ms.map(|ms| format!(" ({ms}ms)")).unwrap_or_default();
+                    let status = if exception.is_some() { "error" } else { "result" };
+                    let divider = format!("├─ {status}{timing} ");
+                    let pad = HEADER_WIDTH.saturating_sub(divider.len());
+                    println!("{divider}{}", "─".repeat(pad));
+                    if let Some(stdout) = stdout {
+                        println!("│ stdout: {}", stdout.trim());
+                    }
+                    if let Some(stderr) = stderr {
+                        println!("│ stderr: {}", stderr.trim());
+                    }
+                    if let Some(exc) = exception {
+                        for line in exc.lines() {
+                            println!("│ {line}");
+                        }
+                    }
+                    if !images.is_empty() {
+                        println!("│ {} image(s) captured", images.len());
+                    }
+                }
+                AgenticToolCallData::WebSearch { results_count, .. } => {
+                    let divider = format!("├─ result ");
+                    let pad = HEADER_WIDTH.saturating_sub(divider.len());
+                    println!("{divider}{}", "─".repeat(pad));
+                    if let Some(n) = results_count {
+                        println!("│ {n} results found");
+                    }
+                }
+                AgenticToolCallData::Custom { content, .. } if !content.is_empty() => {
+                    let divider = format!("├─ result ");
+                    let pad = HEADER_WIDTH.saturating_sub(divider.len());
+                    println!("{divider}{}", "─".repeat(pad));
+                    for line in content.lines().take(5) {
+                        println!("│ {line}");
+                    }
+                }
+                _ => {}
+            }
+            println!("{}", "╰".to_string() + &"─".repeat(HEADER_WIDTH));
+        }
+    }
+}
+
 async fn stream_assistant_response(
     rx: &mut Receiver<Response>,
     start_ttft: Instant,
@@ -790,6 +879,13 @@ async fn stream_assistant_response(
                     break;
                 }
             }
+            Response::AgenticToolCallProgress {
+                round: _,
+                tool_name,
+                phase,
+            } => {
+                print_agentic_progress(&tool_name, &phase);
+            }
             Response::InternalError(e) => return Err(format!("Got an internal error: {e:?}")),
             Response::ModelError(e, resp) => {
                 return Err(format!("Got a model error: {e:?}, response: {resp:?}"));
@@ -811,7 +907,8 @@ async fn stream_assistant_response(
 
 async fn multimodal_interactive_mode(
     mistralrs: Arc<MistralRs>,
-    do_search: bool, do_code_exec: bool,
+    do_search: bool,
+    do_code_exec: bool,
     enable_thinking: Option<bool>,
 ) {
     // Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
@@ -1039,7 +1136,7 @@ async fn multimodal_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
-        enable_code_execution: do_code_exec,
+            enable_code_execution: do_code_exec,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
@@ -1104,13 +1201,18 @@ async fn multimodal_interactive_mode(
 
 async fn audio_interactive_mode(
     _mistralrs: Arc<MistralRs>,
-    _do_search: bool, _do_code_exec: bool,
+    _do_search: bool,
+    _do_code_exec: bool,
     _enable_thinking: Option<bool>,
 ) {
     unimplemented!("Using audio models isn't supported yet")
 }
 
-async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool, do_code_exec: bool) {
+async fn diffusion_interactive_mode(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    do_code_exec: bool,
+) {
     let sender = mistralrs.get_sender(None).unwrap();
 
     let diffusion_params = DiffusionGenerationParams::default();
@@ -1175,7 +1277,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool, 
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
-        enable_code_execution: do_code_exec,
+            enable_code_execution: do_code_exec,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
@@ -1267,7 +1369,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool, do_
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
-        enable_code_execution: do_code_exec,
+            enable_code_execution: do_code_exec,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,

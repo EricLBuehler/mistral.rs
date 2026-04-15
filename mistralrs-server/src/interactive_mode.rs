@@ -336,6 +336,7 @@ async fn text_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            enable_code_execution: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
@@ -397,6 +398,18 @@ async fn text_interactive_mode(
                 Response::ValidationError(e) => {
                     error!("Got a validation error: {e:?}");
                     break 'outer;
+                }
+                Response::AgenticToolCallProgress {
+                    name, call, result, ..
+                } => {
+                    if let Some(args) = call {
+                        eprintln!("\n--- {name} ---");
+                        eprintln!("{args}");
+                        eprintln!("--- running... ---");
+                    }
+                    if let Some(result) = result {
+                        eprintln!("--- {name} complete ({} image(s)) ---", result.images.len());
+                    }
                 }
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
@@ -684,6 +697,7 @@ async fn multimodal_interactive_mode(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            enable_code_execution: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
@@ -745,6 +759,18 @@ async fn multimodal_interactive_mode(
                 Response::ValidationError(e) => {
                     error!("Got a validation error: {e:?}");
                     break 'outer;
+                }
+                Response::AgenticToolCallProgress {
+                    name, call, result, ..
+                } => {
+                    if let Some(args) = call {
+                        eprintln!("\n--- {name} ---");
+                        eprintln!("{args}");
+                        eprintln!("--- running... ---");
+                    }
+                    if let Some(result) = result {
+                        eprintln!("--- {name} complete ({} image(s)) ---", result.images.len());
+                    }
                 }
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
@@ -857,6 +883,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            enable_code_execution: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
@@ -948,6 +975,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
+            enable_code_execution: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,

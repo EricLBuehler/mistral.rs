@@ -73,8 +73,7 @@ impl PythonSession {
 
     async fn respawn(&mut self) -> anyhow::Result<()> {
         let (child, stdin, stdout) =
-            Self::spawn_process(&self.python_path, &self.executor_script, &self.work_dir)
-                .await?;
+            Self::spawn_process(&self.python_path, &self.executor_script, &self.work_dir).await?;
         self.child = child;
         self.stdin = stdin;
         self.stdout = stdout;
@@ -144,8 +143,11 @@ impl PythonSession {
         }
 
         // Wait briefly for the interrupted execution to return a result.
-        match tokio::time::timeout(Duration::from_secs(3), self.read_response::<ExecuteResponse>())
-            .await
+        match tokio::time::timeout(
+            Duration::from_secs(3),
+            self.read_response::<ExecuteResponse>(),
+        )
+        .await
         {
             Ok(Ok(_)) => true,
             _ => false,
@@ -154,9 +156,7 @@ impl PythonSession {
 
     async fn send(&mut self, request: &ExecutorRequest) -> anyhow::Result<()> {
         let json = serde_json::to_string(request)?;
-        self.stdin
-            .write_all(format!("{json}\n").as_bytes())
-            .await?;
+        self.stdin.write_all(format!("{json}\n").as_bytes()).await?;
         self.stdin.flush().await?;
         Ok(())
     }

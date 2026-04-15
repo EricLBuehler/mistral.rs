@@ -189,10 +189,8 @@ impl MultiModelBuilder {
         }
 
         for (name, callback_with_tool) in &add_model_config.engine_config.tool_callbacks {
-            runner_builder = runner_builder.with_tool_callback_with_tool(
-                name.clone(),
-                callback_with_tool.clone(),
-            );
+            runner_builder = runner_builder
+                .with_tool_callback_with_tool(name.clone(), callback_with_tool.clone());
         }
 
         if let Some(mcp_config) = add_model_config.mcp_client_config.clone() {
@@ -461,10 +459,8 @@ pub async fn build_model_from_pipeline(
     }
 
     for (name, callback_with_tool) in &add_model_config.engine_config.tool_callbacks {
-        runner_builder = runner_builder.with_tool_callback_with_tool(
-            name.clone(),
-            callback_with_tool.clone(),
-        );
+        runner_builder =
+            runner_builder.with_tool_callback_with_tool(name.clone(), callback_with_tool.clone());
     }
 
     if let Some(mcp_config) = add_model_config.mcp_client_config.clone() {

@@ -559,7 +559,7 @@ impl Model {
                     logits_processors: None,
                     return_raw_logits: false,
                     web_search_options: None,
-            enable_code_execution: false,
+                    enable_code_execution: false,
                     max_tool_rounds: None,
                     tool_dispatch_url: None,
                     model_id: model_id_owned.clone(),

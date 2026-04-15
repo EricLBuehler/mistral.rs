@@ -234,13 +234,16 @@ async fn run_single_bench(
 
     sender.send(req).await?;
 
-    match rx.recv().await {
-        Some(Response::CompletionDone(_)) | Some(Response::Done(_)) => Ok(()),
-        Some(Response::InternalError(e)) => anyhow::bail!("Internal error: {e:?}"),
-        Some(Response::ModelError(e, _)) => anyhow::bail!("Model error: {e}"),
-        Some(Response::ValidationError(e)) => anyhow::bail!("Validation error: {e:?}"),
-        Some(_) => anyhow::bail!("Unexpected response type"),
-        None => anyhow::bail!("No response received"),
+    loop {
+        match rx.recv().await {
+            Some(Response::AgenticToolCallProgress { .. }) => continue,
+            Some(Response::CompletionDone(_)) | Some(Response::Done(_)) => return Ok(()),
+            Some(Response::InternalError(e)) => anyhow::bail!("Internal error: {e:?}"),
+            Some(Response::ModelError(e, _)) => anyhow::bail!("Model error: {e}"),
+            Some(Response::ValidationError(e)) => anyhow::bail!("Validation error: {e:?}"),
+            Some(_) => anyhow::bail!("Unexpected response type"),
+            None => anyhow::bail!("No response received"),
+        }
     }
 }
 

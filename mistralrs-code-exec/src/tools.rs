@@ -2,19 +2,16 @@ use mistralrs_mcp::{Function, Tool, ToolType};
 use serde_json::json;
 use std::collections::HashMap;
 
-pub const EXECUTE_PYTHON_TOOL_NAME: &str = "execute_python";
-pub const RESET_SESSION_TOOL_NAME: &str = "reset_python_session";
+pub const EXECUTE_PYTHON_TOOL_NAME: &str = "mistralrs_execute_python";
+pub const RESET_SESSION_TOOL_NAME: &str = "mistralrs_reset_python_session";
 
 pub fn code_exec_tool_called(name: &str) -> bool {
     name == EXECUTE_PYTHON_TOOL_NAME || name == RESET_SESSION_TOOL_NAME
 }
 
-pub fn build_execute_python_tool(
-    timeout_secs: u64,
-    installed_packages: &str,
-) -> Tool {
+pub fn build_execute_python_tool(timeout_secs: u64, installed_packages: &str) -> Tool {
     let description = format!(
-r#"Execute Python code in a persistent interactive session.
+        r#"Execute Python code in a persistent interactive session.
 
 ## Session
 - This is a **persistent session**: variables, imports, and state are preserved across calls within this conversation.

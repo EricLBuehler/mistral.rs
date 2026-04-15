@@ -155,6 +155,7 @@ impl futures::Stream for CompletionStreamer {
                 Response::Speech { .. } => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
                 Response::Embeddings { .. } => unreachable!(),
+                Response::AgenticToolCallProgress { .. } => unreachable!(),
             },
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
@@ -255,7 +256,7 @@ pub fn parse_request(
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
-        enable_code_execution: false,
+            enable_code_execution: false,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: if oairequest.model == "default" {
@@ -354,5 +355,6 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> Compl
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
+        Response::AgenticToolCallProgress { .. } => unreachable!(),
     }
 }

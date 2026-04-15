@@ -1,6 +1,6 @@
 //! ## Chat Completions functionality and route handler.
 
-use std::{ops::Deref, pin::Pin, task::Poll, time::Duration};
+use std::{collections::HashMap, io::Cursor, ops::Deref, pin::Pin, task::Poll, time::Duration};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -12,14 +12,17 @@ use axum::{
     },
     Extension,
 };
+use base64::{engine::general_purpose::STANDARD, Engine};
 use either::Either;
+use image::DynamicImage;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use mistralrs_core::{
+    AgenticToolCallData, AgenticToolCallPhase, AgenticToolCallRecord,
     ChatCompletionChunkResponse, ChatCompletionResponse, Constraint, MistralRs, ModelCategory,
     NormalRequest, ReasoningEffort, Request, RequestMessage, Response, SamplingParams,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
@@ -28,8 +31,8 @@ use crate::{
         BaseCompletionResponder,
     },
     handler_core::{
-        base_process_non_streaming_response, create_response_channel, send_request_with_model,
-        BaseJsonModelError, ErrorToResponse, JsonError, ModelErrorMessage,
+        create_response_channel, send_request_with_model, BaseJsonModelError, ErrorToResponse,
+        JsonError, ModelErrorMessage,
     },
     mistralrs_server_router_builder::AgenticDefaults,
     openai::{
@@ -87,6 +90,135 @@ pub type ChatCompletionStreamer = BaseStreamer<
     ChatCompletionOnChunkCallback,
     ChatCompletionOnDoneCallback,
 >;
+
+fn encode_agentic_tool_images(images: &[DynamicImage]) -> Vec<String> {
+    images
+        .iter()
+        .map(|image| {
+            let mut buffer = Vec::new();
+            image
+                .write_to(&mut Cursor::new(&mut buffer), image::ImageFormat::Png)
+                .expect("Failed to encode agentic tool image");
+            STANDARD.encode(buffer)
+        })
+        .collect()
+}
+
+fn serialize_agentic_progress(round: usize, tool_name: &str, phase: &AgenticToolCallPhase) -> Value {
+    let (phase_str, data) = match phase {
+        AgenticToolCallPhase::Calling(data) => ("calling", serialize_agentic_data(data)),
+        AgenticToolCallPhase::Complete(data) => ("complete", serialize_agentic_data(data)),
+    };
+    json!({
+        "type": "agentic_tool_call_progress",
+        "round": round,
+        "tool_name": tool_name,
+        "phase": phase_str,
+        "data": data,
+    })
+}
+
+fn serialize_agentic_data(data: &AgenticToolCallData) -> Value {
+    match data {
+        AgenticToolCallData::CodeExecution {
+            code, stdout, stderr, exception, images, working_directory, execution_time_ms,
+        } => {
+            let mut v = json!({"tool_type": "code_execution"});
+            if let Some(c) = code { v["code"] = json!(c); }
+            if let Some(s) = stdout { v["stdout"] = json!(s); }
+            if let Some(s) = stderr { v["stderr"] = json!(s); }
+            if let Some(e) = exception { v["exception"] = json!(e); }
+            if !images.is_empty() { v["images_base64"] = json!(encode_agentic_tool_images(images)); }
+            if let Some(d) = working_directory { v["working_directory"] = json!(d); }
+            if let Some(ms) = execution_time_ms { v["execution_time_ms"] = json!(ms); }
+            v
+        }
+        AgenticToolCallData::WebSearch { query, results_count } => {
+            let mut v = json!({"tool_type": "web_search"});
+            if let Some(q) = query { v["query"] = json!(q); }
+            if let Some(n) = results_count { v["results_count"] = json!(n); }
+            v
+        }
+        AgenticToolCallData::Custom { arguments, content } => {
+            let mut v = json!({"tool_type": "custom"});
+            if !arguments.is_empty() { v["arguments"] = json!(arguments); }
+            if !content.is_empty() { v["content"] = json!(content); }
+            v
+        }
+    }
+}
+
+/// Extract the arguments string from a Calling-phase `AgenticToolCallData`.
+fn extract_arguments(data: &AgenticToolCallData) -> String {
+    match data {
+        AgenticToolCallData::CodeExecution { code: Some(code), .. } => {
+            serde_json::json!({"code": code}).to_string()
+        }
+        AgenticToolCallData::WebSearch { query: Some(query), .. } => {
+            serde_json::json!({"query": query}).to_string()
+        }
+        AgenticToolCallData::Custom { arguments, .. } => arguments.clone(),
+        _ => String::new(),
+    }
+}
+
+/// Collect progress events into `AgenticToolCallRecord` for non-streaming responses.
+/// `pending_args` holds the arguments from the Calling phase keyed by (round, tool_name).
+fn record_agentic_progress(
+    records: &mut Vec<AgenticToolCallRecord>,
+    pending_args: &mut HashMap<(usize, String), String>,
+    round: usize,
+    tool_name: &str,
+    phase: &AgenticToolCallPhase,
+) {
+    match phase {
+        AgenticToolCallPhase::Calling(data) => {
+            pending_args.insert(
+                (round, tool_name.to_string()),
+                extract_arguments(data),
+            );
+        }
+        AgenticToolCallPhase::Complete(data) => {
+            let arguments = pending_args
+                .remove(&(round, tool_name.to_string()))
+                .unwrap_or_default();
+
+            let (result_content, result_images_base64) = match data {
+                AgenticToolCallData::CodeExecution { stdout, stderr, exception, images, .. } => {
+                    let mut content_parts = Vec::new();
+                    if let Some(s) = stdout { content_parts.push(format!("stdout: {s}")); }
+                    if let Some(s) = stderr { content_parts.push(format!("stderr: {s}")); }
+                    if let Some(e) = exception { content_parts.push(format!("exception: {e}")); }
+                    (content_parts.join("\n"), encode_agentic_tool_images(images))
+                }
+                AgenticToolCallData::WebSearch { results_count, .. } => {
+                    let msg = results_count.map(|n| format!("{n} results")).unwrap_or_default();
+                    (msg, vec![])
+                }
+                AgenticToolCallData::Custom { content, .. } => {
+                    (content.clone(), vec![])
+                }
+            };
+            records.push(AgenticToolCallRecord {
+                round,
+                name: tool_name.to_string(),
+                arguments,
+                result_content,
+                result_images_base64,
+            });
+        }
+    }
+}
+
+fn attach_agentic_tool_calls(
+    mut response: ChatCompletionResponse,
+    records: Vec<AgenticToolCallRecord>,
+) -> ChatCompletionResponse {
+    if !records.is_empty() {
+        response.agentic_tool_calls = Some(records);
+    }
+    response
+}
 
 impl futures::Stream for ChatCompletionStreamer {
     type Item = Result<Event, axum::Error>;
@@ -158,6 +290,18 @@ impl futures::Stream for ChatCompletionStreamer {
                     }
 
                     Poll::Ready(Some(Event::default().json_data(response)))
+                }
+                Response::AgenticToolCallProgress {
+                    round,
+                    tool_name,
+                    phase,
+                } => {
+                    let payload = serialize_agentic_progress(round, &tool_name, &phase);
+                    Poll::Ready(Some(
+                        Event::default()
+                            .event("agentic_tool_call_progress")
+                            .json_data(payload),
+                    ))
                 }
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
@@ -735,7 +879,38 @@ pub async fn process_non_streaming_response(
     rx: &mut Receiver<Response>,
     state: SharedMistralRsState,
 ) -> ChatCompletionResponder {
-    base_process_non_streaming_response(rx, state, match_responses, handle_error).await
+    let mut tool_call_records = Vec::new();
+    let mut pending_args = std::collections::HashMap::new();
+
+    loop {
+        match rx.recv().await {
+            Some(Response::AgenticToolCallProgress {
+                round,
+                tool_name,
+                phase,
+            }) => record_agentic_progress(&mut tool_call_records, &mut pending_args, round, &tool_name, &phase),
+            Some(Response::Done(response)) => {
+                return match_responses(
+                    state,
+                    Response::Done(attach_agentic_tool_calls(response, tool_call_records)),
+                );
+            }
+            Some(Response::ModelError(msg, response)) => {
+                return match_responses(
+                    state,
+                    Response::ModelError(
+                        msg,
+                        attach_agentic_tool_calls(response, tool_call_records),
+                    ),
+                );
+            }
+            Some(response) => return match_responses(state, response),
+            None => {
+                let error = anyhow::Error::msg("No response received from the model.");
+                return handle_error(state, error.into());
+            }
+        }
+    }
 }
 
 /// Matches and processes different types of model responses into appropriate chat completion responses.
@@ -763,5 +938,6 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> ChatC
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
+        Response::AgenticToolCallProgress { .. } => unreachable!(),
     }
 }

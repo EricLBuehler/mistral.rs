@@ -124,7 +124,13 @@ pub async fn run_interactive(
         let do_code_exec = false;
 
         info!("Model loaded, starting interactive mode...");
-        interactive::interactive_mode(mistralrs.clone(), runtime.enable_search, do_code_exec, thinking).await;
+        interactive::interactive_mode(
+            mistralrs.clone(),
+            runtime.enable_search,
+            do_code_exec,
+            thinking,
+        )
+        .await;
     }
 
     Ok(())
