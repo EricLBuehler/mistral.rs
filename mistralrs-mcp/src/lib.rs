@@ -153,7 +153,10 @@ pub mod transport;
 pub mod types;
 
 pub use client::{McpClient, McpServerConnection};
-pub use tools::{CalledFunction, Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType};
+pub use tools::{
+    CalledFunction, Function, MultimodalToolCallback, Tool, ToolCallback, ToolCallbackKind,
+    ToolCallbackWithTool, ToolCallbacksWithTools, ToolOutput, ToolType,
+};
 pub use types::McpToolResult;
 
 pub use rust_mcp_schema;

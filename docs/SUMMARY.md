@@ -99,6 +99,7 @@
 - [Agentic Features](AGENTS.md)
 - [Tool Calling](TOOL_CALLING.md)
 - [Web Search](WEB_SEARCH.md)
+- [Code Execution](CODE_EXECUTION.md)
 - [Chat Templates](CHAT_TOK.md)
 - [Sampling Options](SAMPLING.md)
 - [TOML Selector](TOML_SELECTOR.md)

@@ -1,6 +1,6 @@
 use candle_core::Device;
 use mistralrs_core::*;
-use mistralrs_core::{SearchCallback, Tool, ToolCallback};
+use mistralrs_core::{SearchCallback, Tool, ToolCallback, ToolCallbackKind};
 
 use crate::{IsqBits, IsqSetting};
 use std::collections::HashMap;

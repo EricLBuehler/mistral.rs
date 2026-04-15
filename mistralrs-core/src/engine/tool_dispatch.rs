@@ -1,28 +1,31 @@
 //! Tool execution dispatch.
 //!
 //! Centralises the logic for executing a tool call (web search, content
-//! extraction, or user-registered callback) and returning the result as a
-//! string.  The orchestration loop in `search_request.rs` is responsible
-//! for message construction and request mutation; this module only runs
-//! the tool and returns its output.
+//! extraction, or user-registered callback) and returning the result.
+//! The orchestration loop in `agentic_loop.rs` is responsible for message
+//! construction and request mutation; this module only runs the tool and
+//! returns its output.
 
 use std::{borrow::Cow, sync::Arc, time::Instant};
 
 use bm25::{Embedder, EmbedderBuilder, Language, ScoredDocument, Scorer};
 use tokenizers::InputSequence;
 
+use image::DynamicImage;
+
 use crate::{
     get_mut_arcmutex,
     request::SearchContextSize,
     search::{self, ExtractFunctionParameters, SearchFunctionParameters, SearchResult},
-    ToolCallResponse, WebSearchOptions,
+    ToolCallResponse, ToolCallbackKind, WebSearchOptions,
 };
 
 use super::Engine;
 
-/// The result of executing a tool call.
+/// The result of executing a tool call, potentially including multimodal data.
 pub(super) struct ToolResult {
     pub content: String,
+    pub images: Vec<DynamicImage>,
 }
 
 /// Resolve the token budget from [`SearchContextSize`].
@@ -48,6 +51,7 @@ pub(super) async fn execute_search(
             return ToolResult {
                 content: serde_json::json!({"error": format!("Invalid search arguments: {e}")})
                     .to_string(),
+                images: vec![],
             };
         }
     };
@@ -195,7 +199,10 @@ pub(super) async fn execute_search(
         used_results.len()
     );
 
-    ToolResult { content }
+    ToolResult {
+        content,
+        images: vec![],
+    }
 }
 
 // ── Extraction ─────────────────────────────────────────────────────────────
@@ -212,6 +219,7 @@ pub(super) async fn execute_extraction(
             return ToolResult {
                 content: serde_json::json!({"error": format!("Invalid extraction arguments: {e}")})
                     .to_string(),
+                images: vec![],
             };
         }
     };
@@ -234,6 +242,7 @@ pub(super) async fn execute_extraction(
         let Some(raw) = raw else {
             return ToolResult {
                 content: serde_json::json!({"error": "Content extraction failed"}).to_string(),
+                images: vec![],
             };
         };
         match raw.cap_content_len(&tokenizer, max_toks) {
@@ -244,7 +253,8 @@ pub(super) async fn execute_extraction(
                     content:
                         serde_json::json!({"error": format!("Extraction processing failed: {e}")})
                             .to_string(),
-                };
+                    images: vec![],
+                            };
             }
         }
     };
@@ -268,6 +278,7 @@ pub(super) async fn execute_extraction(
 
     ToolResult {
         content: format!("{{\"output\": \"{content}\"}}"),
+        images: vec![],
     }
 }
 
@@ -276,30 +287,48 @@ pub(super) async fn execute_extraction(
 pub(super) fn execute_custom_tool(engine: &Engine, tc: &ToolCallResponse) -> ToolResult {
     let name = &tc.function.name;
 
-    let content = if let Some(cb_with_tool) = engine.tool_callbacks.get(name) {
-        match (cb_with_tool.callback)(&tc.function) {
-            Ok(result) => result,
-            Err(e) => {
-                tracing::error!("Tool `{name}` execution failed: {e}");
-                serde_json::json!({
-                    "error": format!("{e}"),
-                    "tool": name,
-                    "status": "failed"
-                })
-                .to_string()
-            }
-        }
-    } else {
+    let Some(cb_with_tool) = engine.tool_callbacks.get(name) else {
         tracing::error!("Tool `{name}` not found in registered callbacks.");
-        serde_json::json!({
-            "error": format!("Tool `{name}` is not registered."),
-            "tool": name,
-            "status": "not_found"
-        })
-        .to_string()
+        return ToolResult {
+            content: serde_json::json!({
+                "error": format!("Tool `{name}` is not registered."),
+                "tool": name,
+                "status": "not_found"
+            })
+            .to_string(),
+            images: vec![],
+            };
     };
 
-    ToolResult { content }
+    let error_result = |e: anyhow::Error| -> ToolResult {
+        tracing::error!("Tool `{name}` execution failed: {e}");
+        ToolResult {
+            content: serde_json::json!({
+                "error": format!("{e}"),
+                "tool": name,
+                "status": "failed"
+            })
+            .to_string(),
+            images: vec![],
+            }
+    };
+
+    match &cb_with_tool.callback {
+        ToolCallbackKind::Text(callback) => match callback(&tc.function) {
+            Ok(content) => ToolResult {
+                content,
+                images: vec![],
+            },
+            Err(e) => error_result(e),
+        },
+        ToolCallbackKind::Multimodal(callback) => match callback(&tc.function) {
+            Ok(output) => ToolResult {
+                content: output.text().to_string(),
+                images: output.images().to_vec(),
+            },
+            Err(e) => error_result(e),
+        },
+    }
 }
 
 // ── HTTP callback tools ──────────────────────────────────────────────────
@@ -339,7 +368,10 @@ pub(super) fn execute_http_tool(tc: &ToolCallResponse, url: &str) -> ToolResult 
         }
     });
 
-    ToolResult { content }
+    ToolResult {
+        content,
+        images: vec![],
+    }
 }
 
 fn _http_post(url: &str, payload: &serde_json::Value) -> anyhow::Result<String> {

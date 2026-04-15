@@ -23,7 +23,7 @@ use crate::{
     StopTokens,
 };
 
-use super::{search_request, Engine, TERMINATE_ALL_NEXT_STEP};
+use super::{agentic_loop, Engine, TERMINATE_ALL_NEXT_STEP};
 
 impl Engine {
     pub async fn handle_request(self: Arc<Self>, request: Request) {
@@ -33,14 +33,13 @@ impl Engine {
                     &request.messages,
                     RequestMessage::Chat { .. } | RequestMessage::MultimodalChat { .. }
                 );
-                let has_tooling = !self.tool_callbacks.is_empty()
-                    && request.tools.as_ref().is_some_and(|t| !t.is_empty());
+                let has_tooling = !self.tool_callbacks.is_empty();
                 let has_search = request.web_search_options.is_some();
                 let has_agentic =
                     request.max_tool_rounds.is_some() || request.tool_dispatch_url.is_some();
 
                 if is_chat && (has_search || has_tooling || has_agentic) {
-                    search_request::search_request(self.clone(), *request).await;
+                    agentic_loop::agentic_loop(self.clone(), *request).await;
                 } else {
                     self.add_request(*request).await;
                 }

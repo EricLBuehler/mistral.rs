@@ -99,12 +99,40 @@ pub use device_map::{
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
 pub use mistralrs_audio::AudioInput;
 pub use mistralrs_mcp::{
-    CalledFunction, Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType,
+    CalledFunction, Function, MultimodalToolCallback, Tool, ToolCallback, ToolCallbackKind,
+    ToolCallbackWithTool, ToolOutput, ToolType,
 };
 pub use mistralrs_mcp::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
 pub use mistralrs_quant::{IsqBits, IsqType, MULTI_LORA_DELIMITER};
+
+/// Configuration for Python code execution.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct CodeExecutionConfig {
+    /// Path to the Python interpreter. Defaults to `"python3"`.
+    #[serde(default = "default_python_path")]
+    pub python_path: std::path::PathBuf,
+    /// Execution timeout in seconds. Default: 30.
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+fn default_python_path() -> std::path::PathBuf {
+    std::path::PathBuf::from("python3")
+}
+fn default_timeout_secs() -> u64 {
+    30
+}
+
+impl Default for CodeExecutionConfig {
+    fn default() -> Self {
+        Self {
+            python_path: default_python_path(),
+            timeout_secs: default_timeout_secs(),
+        }
+    }
+}
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
 pub use pipeline::hf::{hf_home_dir, hf_hub_cache_dir, hf_token_path};
 pub use pipeline::{
@@ -188,6 +216,7 @@ pub struct AddModelConfig {
     /// Optional loader config for enabling model unload/reload support.
     /// Without this, models cannot be unloaded and reloaded.
     pub loader_config: Option<ModelLoaderConfig>,
+    pub code_exec_config: Option<CodeExecutionConfig>,
 }
 
 impl AddModelConfig {
@@ -196,11 +225,17 @@ impl AddModelConfig {
             engine_config,
             mcp_client_config: None,
             loader_config: None,
+            code_exec_config: None,
         }
     }
 
     pub fn with_mcp_config(mut self, mcp_config: McpClientConfig) -> Self {
         self.mcp_client_config = Some(mcp_config);
+        self
+    }
+
+    pub fn with_code_execution(mut self, config: CodeExecutionConfig) -> Self {
+        self.code_exec_config = Some(config);
         self
     }
 
@@ -395,6 +430,7 @@ pub struct MistralRsBuilder {
     tool_callbacks: tools::ToolCallbacksWithTools,
     mcp_client_config: Option<McpClientConfig>,
     loader_config: Option<ModelLoaderConfig>,
+    code_exec_config: Option<CodeExecutionConfig>,
 }
 
 impl MistralRsBuilder {
@@ -422,6 +458,7 @@ impl MistralRsBuilder {
             tool_callbacks: HashMap::new(),
             mcp_client_config: None,
             loader_config: None,
+            code_exec_config: None,
         }
     }
 
@@ -479,7 +516,7 @@ impl MistralRsBuilder {
         self.tool_callbacks.insert(
             name.clone(),
             ToolCallbackWithTool {
-                callback: tool_callback,
+                callback: ToolCallbackKind::Text(tool_callback),
                 tool: Tool {
                     tp: ToolType::Function,
                     function: Function {
@@ -506,16 +543,36 @@ impl MistralRsBuilder {
         self.tool_callbacks.insert(
             name,
             ToolCallbackWithTool {
-                callback: tool_callback,
+                callback: ToolCallbackKind::Text(tool_callback),
                 tool,
             },
         );
         self
     }
 
+    /// Register a pre-built tool callback with its Tool definition.
+    pub fn with_tool_callback_with_tool(
+        mut self,
+        name: impl Into<String>,
+        callback_with_tool: ToolCallbackWithTool,
+    ) -> Self {
+        self.tool_callbacks.insert(name.into(), callback_with_tool);
+        self
+    }
+
     /// Configure MCP client to connect to external MCP servers.
     pub fn with_mcp_client(mut self, config: McpClientConfig) -> Self {
         self.mcp_client_config = Some(config);
+        self
+    }
+
+    /// Enable Python code execution. The model will be given `execute_python`
+    /// and `reset_python_session` tools.
+    ///
+    /// **Security warning**: this allows the model to run arbitrary Python code
+    /// on the host machine with full network and filesystem access.
+    pub fn with_code_execution(mut self, config: CodeExecutionConfig) -> Self {
+        self.code_exec_config = Some(config);
         self
     }
 
@@ -656,6 +713,7 @@ impl MistralRs {
             mut tool_callbacks,
             mcp_client_config,
             loader_config,
+            code_exec_config,
         } = config;
 
         mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
@@ -700,6 +758,36 @@ impl MistralRs {
                         total_servers, e
                     );
                     warn!("Continuing without MCP functionality. Check your MCP configuration and server availability.");
+                }
+            }
+        }
+
+        // Initialize code execution if configured
+        #[cfg(feature = "code-execution")]
+        if let Some(code_exec_cfg) = &code_exec_config {
+            let exec_config = mistralrs_code_exec::CodeExecutionConfig {
+                python_path: code_exec_cfg.python_path.clone(),
+                timeout_secs: code_exec_cfg.timeout_secs,
+            };
+            match mistralrs_code_exec::CodeExecutionManager::new(exec_config).await {
+                Ok(manager) => {
+                    let callbacks = manager.get_tool_callbacks();
+                    let count = callbacks.len();
+                    for (name, cb) in callbacks {
+                        tool_callbacks.insert(name, cb);
+                    }
+                    warn!("============================================================");
+                    warn!("  CODE EXECUTION IS ENABLED");
+                    warn!("  The model can execute ARBITRARY Python code on this machine.");
+                    warn!("  Network access and filesystem access are NOT restricted.");
+                    warn!("  Only enable this in trusted environments.");
+                    warn!("  See: https://ericlbuehler.github.io/mistral.rs/code_execution.html");
+                    warn!("============================================================");
+                    info!("Code execution initialized with {count} tools");
+                }
+                Err(e) => {
+                    warn!("Failed to initialize code execution: {e}");
+                    warn!("Continuing without code execution functionality.");
                 }
             }
         }

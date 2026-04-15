@@ -240,6 +240,9 @@ pub struct MistralRsForServerBuilder {
 
     /// Disable EOS token stopping (generate until max_len regardless of EOS)
     disable_eos_stop: bool,
+
+    /// Python code execution configuration
+    code_exec_config: Option<mistralrs_core::CodeExecutionConfig>,
 }
 
 impl Default for MistralRsForServerBuilder {
@@ -273,6 +276,7 @@ impl Default for MistralRsForServerBuilder {
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
             disable_eos_stop: false,
+            code_exec_config: None,
         }
     }
 }
@@ -593,6 +597,21 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Sets the Python code execution configuration.
+    pub fn with_code_exec_config(mut self, config: mistralrs_core::CodeExecutionConfig) -> Self {
+        self.code_exec_config = Some(config);
+        self
+    }
+
+    /// Sets the Python code execution configuration if present.
+    pub fn with_code_exec_config_optional(
+        mut self,
+        config: Option<mistralrs_core::CodeExecutionConfig>,
+    ) -> Self {
+        self.code_exec_config = config;
+        self
+    }
+
     /// Builds the configured mistral.rs instance.
     ///
     /// ### Examples
@@ -715,6 +734,10 @@ impl MistralRsForServerBuilder {
         // Add MCP client configuration if provided
         if let Some(mcp_config) = self.mcp_client_config {
             builder = builder.with_mcp_client(mcp_config);
+        }
+
+        if let Some(code_exec_config) = self.code_exec_config {
+            builder = builder.with_code_execution(code_exec_config);
         }
 
         let mistralrs = builder.build().await;

@@ -53,7 +53,7 @@ use crate::{
 
 mod add_request;
 mod logger;
-mod search_request;
+mod agentic_loop;
 mod tool_dispatch;
 
 pub enum EngineInstruction {

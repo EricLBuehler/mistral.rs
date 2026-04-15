@@ -1,13 +1,16 @@
 use std::sync::Arc;
 
 use either::Either;
+use image::DynamicImage;
 use indexmap::IndexMap;
 
 use serde_json::Value;
 
 use crate::{
-    get_mut_arcmutex, search, MessageContent, NormalRequest, RequestMessage, Response,
-    ToolCallResponse, ToolChoice, WebSearchOptions,
+    get_mut_arcmutex,
+    pipeline::SupportedModality,
+    search, MessageContent, NormalRequest, RequestMessage, Response, ToolCallResponse, ToolChoice,
+    WebSearchOptions,
 };
 
 use super::Engine;
@@ -62,6 +65,93 @@ fn append_tool_response(
     message.insert("role".to_string(), Either::Left("tool".to_string()));
     message.insert("name".to_string(), Either::Left(tool_name.to_string()));
     message.insert("content".to_string(), Either::Left(content));
+    messages.push(message);
+}
+
+/// Upgrade a `Chat` request to `MultimodalChat` in-place. No-op if already multimodal.
+fn upgrade_to_multimodal(request: &mut NormalRequest) {
+    let dummy = RequestMessage::Chat {
+        messages: vec![],
+        enable_thinking: None,
+        reasoning_effort: None,
+    };
+    let old = std::mem::replace(&mut request.messages, dummy);
+    request.messages = match old {
+        RequestMessage::Chat {
+            messages,
+            enable_thinking,
+            reasoning_effort,
+        } => RequestMessage::MultimodalChat {
+            images: Vec::new(),
+            audios: Vec::new(),
+            videos: Vec::new(),
+            messages,
+            enable_thinking,
+            reasoning_effort,
+        },
+        other @ RequestMessage::MultimodalChat { .. } => other,
+        _ => unreachable!(),
+    };
+}
+
+fn get_images_mut(request: &mut NormalRequest) -> &mut Vec<DynamicImage> {
+    match &mut request.messages {
+        RequestMessage::MultimodalChat { images, .. } => images,
+        _ => unreachable!("must call upgrade_to_multimodal first"),
+    }
+}
+
+/// Append a tool response that may include images.
+///
+/// When images are present and the model supports vision, the content is
+/// built as an array of typed parts (image/text) and images are added to
+/// the request-level vec. If the model lacks vision, a textual note is
+/// appended instead.
+fn append_multimodal_tool_response(
+    request: &mut NormalRequest,
+    tool_name: &str,
+    mut content: String,
+    images: Vec<DynamicImage>,
+    supports_vision: bool,
+) {
+    let inject_images = !images.is_empty() && supports_vision;
+
+    if !images.is_empty() && !supports_vision {
+        content.push_str(&format!(
+            "\n[{} image(s) were generated but this model cannot process images.]",
+            images.len()
+        ));
+    }
+
+    if !inject_images {
+        let messages = get_messages_mut(request);
+        append_tool_response(messages, tool_name, content);
+        return;
+    }
+
+    upgrade_to_multimodal(request);
+
+    let mut parts: Vec<IndexMap<String, Value>> = Vec::new();
+
+    let req_images = get_images_mut(request);
+    for img in images {
+        req_images.push(img);
+        let mut part = IndexMap::new();
+        part.insert("type".to_string(), Value::String("image".to_string()));
+        parts.push(part);
+    }
+
+    // Text part.
+    let mut text_part = IndexMap::new();
+    text_part.insert("type".to_string(), Value::String("text".to_string()));
+    text_part.insert("text".to_string(), Value::String(content));
+    parts.push(text_part);
+
+    let messages = get_messages_mut(request);
+    let mut message: IndexMap<String, MessageContent> = IndexMap::new();
+    message.insert("role".to_string(), Either::Left("tool".to_string()));
+    message.insert("name".to_string(), Either::Left(tool_name.to_string()));
+    message.insert("content".to_string(), Either::Right(parts));
     messages.push(message);
 }
 
@@ -147,12 +237,25 @@ async fn do_custom_tool(
     engine: Arc<Engine>,
     mut request: NormalRequest,
     tc: &ToolCallResponse,
+    supports_vision: bool,
 ) -> NormalRequest {
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
     let result = tool_dispatch::execute_custom_tool(&engine, tc);
-    append_tool_response(messages, &tc.function.name, result.content);
+
+    if result.images.is_empty() {
+        let messages = get_messages_mut(&mut request);
+        append_tool_response(messages, &tc.function.name, result.content);
+    } else {
+        append_multimodal_tool_response(
+            &mut request,
+            &tc.function.name,
+            result.content,
+            result.images,
+            supports_vision,
+        );
+    }
 
     request.tool_choice = Some(ToolChoice::Auto);
     request
@@ -169,18 +272,26 @@ fn do_http_tool(mut request: NormalRequest, tc: &ToolCallResponse, url: &str) ->
     request
 }
 
-/// Drive one or more web-search / extraction rounds without recursion.
+/// Drive one or more tool-use rounds (web-search, code execution, custom
+/// tools, etc.) without recursion.
 ///
 /// Strategy:
-/// 1. Send a "probe" request that may call the search/extract tools.
-/// 2. If such a tool is called, run it (`do_search` / `do_extraction`) to
-///    mutate the conversational context and build the next request.
+/// 1. Send a "probe" request that may call available tools.
+/// 2. If a tool is called, run it to mutate the conversational context and
+///    build the next request.
 /// 3. Repeat until no further tool call is made.
 /// 4. Forward every user-visible reply **except** the first, which is just the
 ///    probe that discovers whether a tool call is needed.
-pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
+pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
     let web_search_options = request.web_search_options.clone();
     let dispatch_url = request.tool_dispatch_url.clone();
+
+    // Cache model modality support for multimodal tool results.
+    let modalities = {
+        let pipeline = get_mut_arcmutex!(this.pipeline);
+        pipeline.get_metadata().modalities.clone()
+    };
+    let supports_vision = modalities.input.contains(&SupportedModality::Vision);
 
     // The sender that ultimately delivers data back to the caller.
     let user_sender = request.response.clone();
@@ -297,7 +408,7 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                         do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
                     }
                 } else if this_clone.tool_callbacks.contains_key(&tc.function.name) {
-                    do_custom_tool(this_clone.clone(), visible_req, tc).await
+                    do_custom_tool(this_clone.clone(), visible_req, tc, supports_vision).await
                 } else if let Some(ref url) = dispatch_url {
                     do_http_tool(visible_req, tc, url)
                 } else {
@@ -383,7 +494,7 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                         do_extraction(this_clone.clone(), visible_req, tc, web_search_options).await
                     }
                 } else if this_clone.tool_callbacks.contains_key(&tc.function.name) {
-                    do_custom_tool(this_clone.clone(), visible_req, tc).await
+                    do_custom_tool(this_clone.clone(), visible_req, tc, supports_vision).await
                 } else if let Some(ref url) = dispatch_url {
                     do_http_tool(visible_req, tc, url)
                 } else {

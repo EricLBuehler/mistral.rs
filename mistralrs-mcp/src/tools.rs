@@ -1,3 +1,4 @@
+use image::DynamicImage;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -7,10 +8,71 @@ use std::sync::Arc;
 /// (name and JSON arguments) and returns the tool output as a string.
 pub type ToolCallback = dyn Fn(&CalledFunction) -> anyhow::Result<String> + Send + Sync;
 
+/// Callback that can return multimodal output (text + images).
+pub type MultimodalToolCallback =
+    dyn Fn(&CalledFunction) -> anyhow::Result<ToolOutput> + Send + Sync;
+
+/// Output from a tool execution, supporting text-only or multimodal results.
+pub enum ToolOutput {
+    /// Plain text result.
+    Text(String),
+    /// Text plus images.
+    Multimodal {
+        text: String,
+        images: Vec<DynamicImage>,
+    },
+}
+
+impl From<String> for ToolOutput {
+    fn from(s: String) -> Self {
+        ToolOutput::Text(s)
+    }
+}
+
+impl ToolOutput {
+    pub fn text(&self) -> &str {
+        match self {
+            ToolOutput::Text(s) => s,
+            ToolOutput::Multimodal { text, .. } => text,
+        }
+    }
+
+    pub fn images(&self) -> &[DynamicImage] {
+        match self {
+            ToolOutput::Text(_) => &[],
+            ToolOutput::Multimodal { images, .. } => images,
+        }
+    }
+
+    pub fn has_images(&self) -> bool {
+        match self {
+            ToolOutput::Text(_) => false,
+            ToolOutput::Multimodal { images, .. } => !images.is_empty(),
+        }
+    }
+}
+
+/// Wraps either a text-only or multimodal tool callback.
+pub enum ToolCallbackKind {
+    /// Legacy text-only callback returning a String.
+    Text(Arc<ToolCallback>),
+    /// Multimodal callback that may return images alongside text.
+    Multimodal(Arc<MultimodalToolCallback>),
+}
+
+impl Clone for ToolCallbackKind {
+    fn clone(&self) -> Self {
+        match self {
+            ToolCallbackKind::Text(cb) => ToolCallbackKind::Text(Arc::clone(cb)),
+            ToolCallbackKind::Multimodal(cb) => ToolCallbackKind::Multimodal(Arc::clone(cb)),
+        }
+    }
+}
+
 /// A tool callback with its associated Tool definition.
 #[derive(Clone)]
 pub struct ToolCallbackWithTool {
-    pub callback: Arc<ToolCallback>,
+    pub callback: ToolCallbackKind,
     pub tool: Tool,
 }
 

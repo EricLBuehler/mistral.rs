@@ -450,6 +450,24 @@ pub struct RuntimeOptions {
     #[arg(long, requires = "enable_search")]
     #[serde(default)]
     pub search_embedding_model: Option<SearchEmbeddingModelArg>,
+
+    /// Enable Python code execution tool (WARNING: allows arbitrary code execution)
+    #[cfg(feature = "code-execution")]
+    #[arg(long)]
+    #[serde(default)]
+    pub enable_code_execution: bool,
+
+    /// Python interpreter path for code execution (default: python3)
+    #[cfg(feature = "code-execution")]
+    #[arg(long, requires = "enable_code_execution")]
+    #[serde(default)]
+    pub code_exec_python: Option<PathBuf>,
+
+    /// Code execution timeout in seconds (default: 30)
+    #[cfg(feature = "code-execution")]
+    #[arg(long, requires = "enable_code_execution")]
+    #[serde(default)]
+    pub code_exec_timeout: Option<u64>,
 }
 
 /// Search embedding model options
@@ -507,6 +525,12 @@ impl Default for RuntimeOptions {
             jinja_explicit: None,
             enable_search: false,
             search_embedding_model: None,
+            #[cfg(feature = "code-execution")]
+            enable_code_execution: false,
+            #[cfg(feature = "code-execution")]
+            code_exec_python: None,
+            #[cfg(feature = "code-execution")]
+            code_exec_timeout: None,
         }
     }
 }

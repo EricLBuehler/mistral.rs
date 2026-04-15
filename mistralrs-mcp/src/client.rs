@@ -1,4 +1,4 @@
-use crate::tools::{Function, Tool, ToolCallback, ToolCallbackWithTool, ToolType};
+use crate::tools::{Function, Tool, ToolCallback, ToolCallbackKind, ToolCallbackWithTool, ToolType};
 use crate::transport::{HttpTransport, McpTransport, ProcessTransport, WebSocketTransport};
 use crate::types::McpToolResult;
 use crate::{McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo};
@@ -501,7 +501,7 @@ impl McpClient {
                 self.tool_callbacks_with_tools.insert(
                     tool_name.clone(),
                     ToolCallbackWithTool {
-                        callback,
+                        callback: ToolCallbackKind::Text(callback),
                         tool: tool_def,
                     },
                 );
@@ -656,7 +656,7 @@ impl McpClient {
             self.tool_callbacks_with_tools.insert(
                 tool_name.clone(),
                 ToolCallbackWithTool {
-                    callback,
+                    callback: ToolCallbackKind::Text(callback),
                     tool: tool_def,
                 },
             );

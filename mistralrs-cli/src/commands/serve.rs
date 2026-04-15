@@ -82,6 +82,18 @@ pub async fn run_server(
         builder = builder.with_search_embedding_model(model.into());
     }
 
+    #[cfg(feature = "code-execution")]
+    if runtime.enable_code_execution {
+        let code_exec_config = mistralrs_core::CodeExecutionConfig {
+            python_path: runtime
+                .code_exec_python
+                .clone()
+                .unwrap_or_else(|| "python3".into()),
+            timeout_secs: runtime.code_exec_timeout.unwrap_or(30),
+        };
+        builder = builder.with_code_exec_config(code_exec_config);
+    }
+
     let mistralrs = builder.build().await?;
     let mistralrs_for_ui = mistralrs.clone();
 

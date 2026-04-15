@@ -189,10 +189,9 @@ impl MultiModelBuilder {
         }
 
         for (name, callback_with_tool) in &add_model_config.engine_config.tool_callbacks {
-            runner_builder = runner_builder.with_tool_callback_and_tool(
+            runner_builder = runner_builder.with_tool_callback_with_tool(
                 name.clone(),
-                callback_with_tool.callback.clone(),
-                callback_with_tool.tool.clone(),
+                callback_with_tool.clone(),
             );
         }
 
@@ -202,6 +201,10 @@ impl MultiModelBuilder {
 
         if let Some(loader_config) = add_model_config.loader_config.clone() {
             runner_builder = runner_builder.with_loader_config(loader_config);
+        }
+
+        if let Some(code_exec_config) = add_model_config.code_exec_config.clone() {
+            runner_builder = runner_builder.with_code_execution(code_exec_config);
         }
 
         runner_builder = runner_builder
@@ -387,6 +390,7 @@ pub(crate) async fn build_pipeline_from_text_loader(
         engine_config,
         mcp_client_config,
         loader_config: None,
+        code_exec_config: builder.code_exec_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -432,6 +436,7 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         engine_config,
         mcp_client_config: None,
         loader_config: None,
+        code_exec_config: builder.code_exec_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -456,10 +461,9 @@ pub async fn build_model_from_pipeline(
     }
 
     for (name, callback_with_tool) in &add_model_config.engine_config.tool_callbacks {
-        runner_builder = runner_builder.with_tool_callback_and_tool(
+        runner_builder = runner_builder.with_tool_callback_with_tool(
             name.clone(),
-            callback_with_tool.callback.clone(),
-            callback_with_tool.tool.clone(),
+            callback_with_tool.clone(),
         );
     }
 
@@ -469,6 +473,10 @@ pub async fn build_model_from_pipeline(
 
     if let Some(loader_config) = add_model_config.loader_config.clone() {
         runner_builder = runner_builder.with_loader_config(loader_config);
+    }
+
+    if let Some(code_exec_config) = add_model_config.code_exec_config.clone() {
+        runner_builder = runner_builder.with_code_execution(code_exec_config);
     }
 
     runner_builder = runner_builder
@@ -586,6 +594,7 @@ pub async fn build_text_pipeline(
         engine_config,
         mcp_client_config: builder.mcp_client_config.clone(),
         loader_config: Some(loader_config),
+        code_exec_config: builder.code_exec_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -705,6 +714,7 @@ pub async fn build_multimodal_pipeline(
         engine_config,
         mcp_client_config: None,
         loader_config: Some(loader_config),
+        code_exec_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -797,6 +807,7 @@ pub async fn build_gguf_pipeline(
         engine_config,
         mcp_client_config: None,
         loader_config: Some(loader_config),
+        code_exec_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -854,6 +865,7 @@ pub async fn build_diffusion_pipeline(
         engine_config,
         mcp_client_config: None,
         loader_config: Some(loader_config),
+        code_exec_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -915,6 +927,7 @@ pub async fn build_speech_pipeline(
         engine_config,
         mcp_client_config: None,
         loader_config: Some(loader_config),
+        code_exec_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -1003,6 +1016,7 @@ pub async fn build_embedding_pipeline(
         engine_config,
         mcp_client_config: None,
         loader_config: Some(loader_config),
+        code_exec_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -1145,6 +1159,7 @@ pub async fn build_auto_pipeline(
         engine_config,
         mcp_client_config: builder.mcp_client_config.clone(),
         loader_config: Some(loader_config),
+        code_exec_config: builder.code_exec_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))

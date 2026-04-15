@@ -26,7 +26,7 @@ macro_rules! common_builder_methods {
             self.tool_callbacks.insert(
                 name.clone(),
                 ToolCallbackWithTool {
-                    callback,
+                    callback: ToolCallbackKind::Text(callback),
                     tool: Tool {
                         tp: ToolType::Function,
                         function: Function {
@@ -51,7 +51,7 @@ macro_rules! common_builder_methods {
         ) -> Self {
             let name = name.into();
             self.tool_callbacks
-                .insert(name, ToolCallbackWithTool { callback, tool });
+                .insert(name, ToolCallbackWithTool { callback: ToolCallbackKind::Text(callback), tool });
             self
         }
 
