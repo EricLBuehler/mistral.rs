@@ -792,10 +792,14 @@ fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCa
                     let pad = HEADER_WIDTH.saturating_sub(divider.len());
                     println!("{divider}{}", "─".repeat(pad));
                     if let Some(stdout) = stdout {
-                        println!("│ stdout: {}", stdout.trim());
+                        for line in stdout.trim().lines() {
+                            println!("│ {line}");
+                        }
                     }
                     if let Some(stderr) = stderr {
-                        println!("│ stderr: {}", stderr.trim());
+                        for line in stderr.trim().lines() {
+                            println!("│ stderr: {line}");
+                        }
                     }
                     if let Some(exc) = exception {
                         for line in exc.lines() {
