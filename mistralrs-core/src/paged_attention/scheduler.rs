@@ -185,8 +185,6 @@ impl PagedAttentionScheduler {
     pub fn schedule(&mut self, logger: &IntervalLogger) -> PagedAttentionSchedulerOutput {
         let mut scheduled: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
         let mut for_waiting_again: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
-        let mut batched_prompt_tokens = 0;
-        let mut batched_sequences = 0;
         while !self.waiting.is_empty() {
             let mut did_ignore = false;
             let seq = self.waiting.front().unwrap().clone();
@@ -201,14 +199,8 @@ impl PagedAttentionScheduler {
             let num_tokens = tokens.len();
             let mm_features = seq_guard.mm_features().to_vec();
             let num_new_tokens = num_tokens.saturating_sub(seq_guard.prefix_cache_len());
+            let _ = num_new_tokens; // used by prefix cache lookup below
             drop(seq_guard);
-
-            // Halt batch mapping if context size approaches CuBLAS engine crash arrays.
-            if (batched_prompt_tokens + num_new_tokens > 16384 || batched_sequences >= 10) && batched_sequences > 0 {
-                break;
-            }
-            batched_prompt_tokens += num_new_tokens;
-            batched_sequences += 1;
 
             // Compute block hashes for prefix cache lookup
             self.ensure_block_hashes(seq_id, &tokens, &mm_features);
