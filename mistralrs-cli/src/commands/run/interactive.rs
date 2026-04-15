@@ -763,7 +763,7 @@ fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCa
 
     match phase {
         AgenticToolCallPhase::Calling(data) => {
-            let header = format!("╭─ {} ", tool_name);
+            let header = format!("╭─ tool call: {} ", tool_name);
             let pad = HEADER_WIDTH.saturating_sub(header.len());
             println!("\n{header}{}", "─".repeat(pad));
             match data {
