@@ -18,8 +18,8 @@ use crate::{
     completions::completions,
     embeddings::embeddings,
     handlers::{
-        get_model_status, health, models, re_isq, reload_model, system_doctor, system_info,
-        tune_model, unload_model,
+        delete_session, get_model_status, get_session, health, models, put_session, re_isq,
+        reload_model, system_doctor, system_info, tune_model, unload_model,
     },
     image_generation::image_generation,
     responses::{cancel_response, create_response, delete_response, get_response},
@@ -252,7 +252,7 @@ fn init_router(
     let router_max_body_limit = max_body_limit.unwrap_or(DEFAULT_MAX_BODY_LIMIT);
 
     let cors_layer = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
         .allow_headers([http::header::CONTENT_TYPE, http::header::AUTHORIZATION])
         .allow_origin(allow_origin);
 
@@ -278,6 +278,10 @@ fn init_router(
             get(get_response).delete(delete_response),
         )
         .route("/v1/responses/{response_id}/cancel", post(cancel_response))
+        .route(
+            "/v1/sessions/{session_id}",
+            get(get_session).put(put_session).delete(delete_session),
+        )
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .layer(Extension(agentic_defaults))

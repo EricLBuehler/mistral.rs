@@ -1,9 +1,13 @@
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::time::{Duration, Instant};
 
+use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use either::Either;
-use image::DynamicImage;
+use image::{DynamicImage, ImageFormat};
 use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 
 use crate::{MessageContent, NormalRequest, RequestMessage, VideoInput};
 
@@ -87,6 +91,31 @@ impl AgenticSessionStore {
     pub fn save(&mut self, session_id: String, entry: AgenticSessionEntry) {
         self.evict();
         self.sessions.insert(session_id, entry);
+    }
+
+    /// Delete a session. Returns whether the session existed.
+    pub fn delete(&mut self, session_id: &str) -> bool {
+        self.sessions.remove(session_id).is_some()
+    }
+
+    /// Snapshot of all session IDs currently stored.
+    pub fn list_ids(&self) -> Vec<String> {
+        self.sessions.keys().cloned().collect()
+    }
+
+    /// Export a session to its serializable representation.
+    pub fn export(&mut self, session_id: &str) -> Result<Option<SerializedSession>> {
+        let Some(entry) = self.get(session_id) else {
+            return Ok(None);
+        };
+        Ok(Some(SerializedSession::from_entry(&entry)?))
+    }
+
+    /// Import a serialized session, replacing any existing entry with the same ID.
+    pub fn import(&mut self, session_id: String, serialized: SerializedSession) -> Result<()> {
+        let entry = serialized.into_entry()?;
+        self.save(session_id, entry);
+        Ok(())
     }
 
     /// Remove sessions that are expired or over the limit.
@@ -244,4 +273,115 @@ pub fn splice_session_into_request(request: &mut NormalRequest, entry: &AgenticS
             *req_videos = entry.videos.clone();
         }
     }
+}
+
+// ── Serialization ────────────────────────────────────────────────────────────
+
+/// Wire format for an agentic session. Images are encoded as base64 PNG.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct SerializedSession {
+    #[cfg_attr(feature = "utoipa", schema(value_type = Vec<serde_json::Value>))]
+    pub messages: Vec<IndexMap<String, MessageContent>>,
+    #[serde(default)]
+    pub images: Vec<String>,
+    #[serde(default)]
+    pub videos: Vec<SerializedVideo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct SerializedVideo {
+    pub fps: f64,
+    /// One base64 PNG per sampled frame.
+    pub frames: Vec<String>,
+    pub total_num_frames: usize,
+    pub sampled_indices: Vec<usize>,
+}
+
+impl SerializedSession {
+    /// Build a serializable view of an in-memory session.
+    pub fn from_entry(entry: &AgenticSessionEntry) -> Result<Self> {
+        let images = entry
+            .images
+            .iter()
+            .map(encode_png_base64)
+            .collect::<Result<Vec<_>>>()?;
+
+        let videos = entry
+            .videos
+            .iter()
+            .map(SerializedVideo::from_video)
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Self {
+            messages: entry.messages.clone(),
+            images,
+            videos,
+        })
+    }
+
+    /// Reconstruct an in-memory session entry.
+    pub fn into_entry(self) -> Result<AgenticSessionEntry> {
+        let images = self
+            .images
+            .iter()
+            .map(|s| decode_png_base64(s))
+            .collect::<Result<Vec<_>>>()?;
+
+        let videos = self
+            .videos
+            .into_iter()
+            .map(SerializedVideo::into_video)
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(AgenticSessionEntry {
+            messages: self.messages,
+            images,
+            videos,
+            last_accessed: Instant::now(),
+        })
+    }
+}
+
+impl SerializedVideo {
+    fn from_video(video: &VideoInput) -> Result<Self> {
+        let frames = video
+            .frames
+            .iter()
+            .map(encode_png_base64)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            fps: video.fps,
+            frames,
+            total_num_frames: video.total_num_frames,
+            sampled_indices: video.sampled_indices.clone(),
+        })
+    }
+
+    fn into_video(self) -> Result<VideoInput> {
+        let frames = self
+            .frames
+            .iter()
+            .map(|s| decode_png_base64(s))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(VideoInput {
+            frames,
+            fps: self.fps,
+            total_num_frames: self.total_num_frames,
+            sampled_indices: self.sampled_indices,
+        })
+    }
+}
+
+fn encode_png_base64(img: &DynamicImage) -> Result<String> {
+    let mut buf = Vec::new();
+    img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Png)
+        .context("encoding image as PNG")?;
+    Ok(BASE64.encode(&buf))
+}
+
+fn decode_png_base64(s: &str) -> Result<DynamicImage> {
+    let bytes = BASE64.decode(s).context("base64 decoding image")?;
+    image::load_from_memory(&bytes).context("loading image bytes")
 }

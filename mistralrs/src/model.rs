@@ -845,4 +845,41 @@ impl Model {
     pub fn inner(&self) -> &MistralRs {
         &self.runner
     }
+
+    /// Export an agentic session by ID. Returns `None` if the session
+    /// doesn't exist.
+    pub fn export_session(
+        &self,
+        model_id: Option<&str>,
+        session_id: &str,
+    ) -> crate::error::Result<Option<mistralrs_core::SerializedSession>> {
+        Ok(self.runner.export_session(model_id, session_id)?)
+    }
+
+    /// Import an agentic session, replacing any existing session with the
+    /// same ID.
+    pub fn import_session(
+        &self,
+        model_id: Option<&str>,
+        session_id: impl Into<String>,
+        session: mistralrs_core::SerializedSession,
+    ) -> crate::error::Result<()> {
+        Ok(self
+            .runner
+            .import_session(model_id, session_id.into(), session)?)
+    }
+
+    /// Delete an agentic session. Returns whether the session existed.
+    pub fn delete_session(
+        &self,
+        model_id: Option<&str>,
+        session_id: &str,
+    ) -> crate::error::Result<bool> {
+        Ok(self.runner.delete_session(model_id, session_id)?)
+    }
+
+    /// List the IDs of all stored agentic sessions for the model.
+    pub fn list_session_ids(&self, model_id: Option<&str>) -> crate::error::Result<Vec<String>> {
+        Ok(self.runner.list_session_ids(model_id)?)
+    }
 }

@@ -172,7 +172,7 @@ pub struct Engine {
     logger: Arc<IntervalLogger>,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
     pending_notify: Arc<Notify>,
-    session_store: Arc<std::sync::Mutex<agentic_session::AgenticSessionStore>>,
+    pub(crate) session_store: Arc<std::sync::Mutex<agentic_session::AgenticSessionStore>>,
 }
 
 impl Drop for Engine {
@@ -199,6 +199,7 @@ impl Engine {
         search_callback: Option<Arc<search::SearchCallback>>,
         tool_callbacks: tools::ToolCallbacksWithTools,
         logger: Arc<IntervalLogger>,
+        session_store: Arc<std::sync::Mutex<agentic_session::AgenticSessionStore>>,
     ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
@@ -244,9 +245,7 @@ impl Engine {
             logger,
             handles: Arc::new(Mutex::new(Vec::new())),
             pending_notify: Arc::new(Notify::new()),
-            session_store: Arc::new(std::sync::Mutex::new(
-                agentic_session::AgenticSessionStore::new(),
-            )),
+            session_store,
         })
     }
 

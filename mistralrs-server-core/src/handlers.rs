@@ -2,10 +2,12 @@
 
 use anyhow::Result;
 use axum::extract::{Json, State};
+use axum::extract::Path;
+use axum::http::StatusCode;
 use mistralrs_core::{
     auto_tune, collect_system_info, parse_isq_value, run_doctor, AutoDeviceMapParams,
     AutoTuneRequest, AutoTuneResult, MistralRs, MistralRsError, ModelDType, ModelSelected,
-    ModelStatus as CoreModelStatus, Request, TokenSource, TuneProfile,
+    ModelStatus as CoreModelStatus, Request, SerializedSession, TokenSource, TuneProfile,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -385,4 +387,73 @@ pub async fn tune_model(
     auto_tune(tune_request)
         .map(Json)
         .map_err(|err| err.to_string())
+}
+
+// ── Agentic session endpoints ───────────────────────────────────────────────
+
+/// GET `/v1/sessions/{session_id}` — export an agentic session.
+///
+/// Returns 404 if the session doesn't exist on the default model.
+#[utoipa::path(
+    get,
+    tag = "Mistral.rs",
+    path = "/v1/sessions/{session_id}",
+    params(("session_id" = String, Path, description = "Session ID to export")),
+    responses(
+        (status = 200, description = "Serialized agentic session", body = SerializedSession),
+        (status = 404, description = "Session not found"),
+    )
+)]
+pub async fn get_session(
+    State(state): ExtractedMistralRsState,
+    Path(session_id): Path<String>,
+) -> Result<Json<SerializedSession>, (StatusCode, String)> {
+    match state.export_session(None, &session_id) {
+        Ok(Some(session)) => Ok(Json(session)),
+        Ok(None) => Err((StatusCode::NOT_FOUND, format!("Session {session_id} not found"))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
+}
+
+/// PUT `/v1/sessions/{session_id}` — import (or replace) an agentic session.
+#[utoipa::path(
+    put,
+    tag = "Mistral.rs",
+    path = "/v1/sessions/{session_id}",
+    params(("session_id" = String, Path, description = "Session ID to import as")),
+    request_body = SerializedSession,
+    responses(
+        (status = 200, description = "Session imported"),
+        (status = 400, description = "Invalid session payload"),
+    )
+)]
+pub async fn put_session(
+    State(state): ExtractedMistralRsState,
+    Path(session_id): Path<String>,
+    Json(session): Json<SerializedSession>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .import_session(None, session_id, session)
+        .map(|()| StatusCode::OK)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
+}
+
+/// DELETE `/v1/sessions/{session_id}` — delete an agentic session.
+///
+/// Returns 200 whether or not the session existed (idempotent).
+#[utoipa::path(
+    delete,
+    tag = "Mistral.rs",
+    path = "/v1/sessions/{session_id}",
+    params(("session_id" = String, Path, description = "Session ID to delete")),
+    responses((status = 200, description = "Session deleted (or did not exist)"))
+)]
+pub async fn delete_session(
+    State(state): ExtractedMistralRsState,
+    Path(session_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .delete_session(None, &session_id)
+        .map(|_| StatusCode::OK)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }

@@ -2,6 +2,7 @@
 use candle_core::Device;
 use engine::Engine;
 pub use engine::{
+    agentic_session::{AgenticSessionStore, SerializedSession, SerializedVideo},
     get_engine_terminate_flag, reset_engine_terminate_flag, should_terminate_engine_sequences,
     EngineInstruction, IntervalLogger, SearchEmbeddingModel, ENGINE_INSTRUCTIONS,
     TERMINATE_ALL_NEXT_STEP,
@@ -320,6 +321,9 @@ struct EngineInstance {
     config: MistralRsConfig,
     category: ModelCategory,
     logger: Arc<IntervalLogger>,
+    /// Shared with the engine so the SDK/HTTP API can read/write sessions
+    /// without going through the request channel.
+    session_store: Arc<std::sync::Mutex<engine::agentic_session::AgenticSessionStore>>,
 }
 
 /// The MistralRs struct handles sending requests to multiple engines.
@@ -404,6 +408,8 @@ pub enum MistralRsError {
     ModelAlreadyLoaded(String),
     /// Model is already unloaded
     ModelAlreadyUnloaded(String),
+    /// Other error with a message.
+    Other(String),
 }
 
 impl std::fmt::Display for MistralRsError {
@@ -644,6 +650,13 @@ impl MistralRs {
             generation_defaults,
         };
 
+        // Build the session store once so the engine and the EngineInstance
+        // share the same store (so the SDK/HTTP API can access it).
+        let session_store = Arc::new(std::sync::Mutex::new(
+            engine::agentic_session::AgenticSessionStore::new(),
+        ));
+        let session_store_for_engine = Arc::clone(&session_store);
+
         let tx_for_engine = tx.clone();
         let engine_handler = thread::spawn(move || {
             #[cfg(feature = "metal")]
@@ -664,6 +677,7 @@ impl MistralRs {
                         config.search_callback.clone(),
                         config.tool_callbacks.clone(),
                         logger_for_engine,
+                        session_store_for_engine,
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -688,6 +702,7 @@ impl MistralRs {
                         config.search_callback.clone(),
                         config.tool_callbacks.clone(),
                         logger_for_engine,
+                        session_store_for_engine,
                     )
                     .expect("Engine creation failed.");
                     Arc::new(engine).run().await;
@@ -702,6 +717,7 @@ impl MistralRs {
             config: mistralrs_config,
             category,
             logger,
+            session_store,
         })
     }
 
@@ -1085,6 +1101,83 @@ impl MistralRs {
         }
 
         Err(MistralRsError::ModelNotFound(resolved_model_id))
+    }
+
+    /// Get the agentic session store for a specific model (or the default).
+    ///
+    /// Returns an `Arc` that can be locked to inspect/mutate sessions.
+    pub fn get_session_store(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<
+        Arc<std::sync::Mutex<engine::agentic_session::AgenticSessionStore>>,
+        MistralRsError,
+    > {
+        let resolved_model_id = self.resolve_alias_or_default(model_id)?;
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        engines
+            .get(&resolved_model_id)
+            .map(|e| Arc::clone(&e.session_store))
+            .ok_or(MistralRsError::ModelNotFound(resolved_model_id))
+    }
+
+    /// Export an agentic session by ID. Returns `None` if the session doesn't exist.
+    pub fn export_session(
+        &self,
+        model_id: Option<&str>,
+        session_id: &str,
+    ) -> Result<Option<engine::agentic_session::SerializedSession>, MistralRsError> {
+        let store = self.get_session_store(model_id)?;
+        let mut guard = store
+            .lock()
+            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        guard
+            .export(session_id)
+            .map_err(|e| MistralRsError::Other(e.to_string()))
+    }
+
+    /// Import an agentic session, replacing any existing session with the same ID.
+    pub fn import_session(
+        &self,
+        model_id: Option<&str>,
+        session_id: String,
+        session: engine::agentic_session::SerializedSession,
+    ) -> Result<(), MistralRsError> {
+        let store = self.get_session_store(model_id)?;
+        let mut guard = store
+            .lock()
+            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        guard
+            .import(session_id, session)
+            .map_err(|e| MistralRsError::Other(e.to_string()))
+    }
+
+    /// Delete an agentic session. Returns whether the session existed.
+    pub fn delete_session(
+        &self,
+        model_id: Option<&str>,
+        session_id: &str,
+    ) -> Result<bool, MistralRsError> {
+        let store = self.get_session_store(model_id)?;
+        let mut guard = store
+            .lock()
+            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        Ok(guard.delete(session_id))
+    }
+
+    /// List all session IDs currently stored. SDK-only — not exposed via HTTP.
+    pub fn list_session_ids(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<Vec<String>, MistralRsError> {
+        let store = self.get_session_store(model_id)?;
+        let guard = store
+            .lock()
+            .map_err(|_| MistralRsError::SenderPoisoned)?;
+        Ok(guard.list_ids())
     }
 
     pub fn get_id(&self) -> String {

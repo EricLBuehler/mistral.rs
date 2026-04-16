@@ -8,15 +8,7 @@
 
   let { message, streaming = false }: { message: DisplayMessage; streaming?: boolean } = $props();
 
-  // Backwards compatibility: if a message has no blocks but has content (old persisted format),
-  // synthesize a single content block from it.
-  let renderedBlocks = $derived(
-    message.blocks?.length
-      ? message.blocks
-      : message.content
-        ? [{ type: "content" as const, content: message.content }]
-        : []
-  );
+  let renderedBlocks = $derived(message.blocks ?? []);
 
   function finishReasonStyle(reason: string): { label: string; color: string } {
     switch (reason) {

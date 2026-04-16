@@ -1728,6 +1728,64 @@ impl Runner {
         self.runner.list_models().map_err(PyApiErr::from)
     }
 
+    /// Export an agentic session by ID as a JSON string.
+    ///
+    /// Returns `None` if the session doesn't exist.
+    #[pyo3(signature = (session_id, model_id = None))]
+    fn export_session(
+        &self,
+        session_id: String,
+        model_id: Option<String>,
+    ) -> PyApiResult<Option<String>> {
+        let session = self
+            .runner
+            .export_session(model_id.as_deref(), &session_id)
+            .map_err(PyApiErr::from)?;
+        match session {
+            Some(s) => serde_json::to_string(&s)
+                .map(Some)
+                .map_err(|e| PyApiErr::from(format!("Failed to serialize session: {e}"))),
+            None => Ok(None),
+        }
+    }
+
+    /// Import an agentic session from a JSON string.
+    ///
+    /// Replaces any existing session with the same ID.
+    #[pyo3(signature = (session_id, session_json, model_id = None))]
+    fn import_session(
+        &self,
+        session_id: String,
+        session_json: String,
+        model_id: Option<String>,
+    ) -> PyApiResult<()> {
+        let session: mistralrs_core::SerializedSession = serde_json::from_str(&session_json)
+            .map_err(|e| PyApiErr::from(format!("Failed to parse session JSON: {e}")))?;
+        self.runner
+            .import_session(model_id.as_deref(), session_id, session)
+            .map_err(PyApiErr::from)
+    }
+
+    /// Delete an agentic session. Returns whether the session existed.
+    #[pyo3(signature = (session_id, model_id = None))]
+    fn delete_session(
+        &self,
+        session_id: String,
+        model_id: Option<String>,
+    ) -> PyApiResult<bool> {
+        self.runner
+            .delete_session(model_id.as_deref(), &session_id)
+            .map_err(PyApiErr::from)
+    }
+
+    /// List all stored agentic session IDs.
+    #[pyo3(signature = (model_id = None))]
+    fn list_session_ids(&self, model_id: Option<String>) -> PyApiResult<Vec<String>> {
+        self.runner
+            .list_session_ids(model_id.as_deref())
+            .map_err(PyApiErr::from)
+    }
+
     /// Return the maximum supported sequence length for the requested model, if available.
     #[pyo3(signature = (model_id = None))]
     fn max_sequence_length(&self, model_id: Option<String>) -> PyApiResult<Option<usize>> {
