@@ -17,6 +17,15 @@ use tokio::sync::Mutex;
 
 pub use tools::{code_exec_tool_called, EXECUTE_PYTHON_TOOL_NAME, RESET_SESSION_TOOL_NAME};
 
+/// Input modalities the model supports, used to tailor the tool description.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputModality {
+    Text,
+    Vision,
+    Audio,
+    Video,
+}
+
 const EXECUTOR_PY: &str = include_str!("../python/executor.py");
 
 /// Configuration for Python code execution.
@@ -168,11 +177,21 @@ impl CodeExecutionManager {
     }
 
     /// Build tool callbacks for registration with the engine.
-    pub fn get_tool_callbacks(&self) -> ToolCallbacksWithTools {
+    ///
+    /// `input_modalities` controls which capabilities are advertised in the
+    /// tool description (e.g. image/video feedback is only mentioned when the
+    /// model supports the corresponding input modality).
+    pub fn get_tool_callbacks(
+        &self,
+        input_modalities: &[InputModality],
+    ) -> ToolCallbacksWithTools {
         let mut callbacks = ToolCallbacksWithTools::new();
 
-        let execute_tool =
-            tools::build_execute_python_tool(self.config.timeout_secs, &self.installed_packages);
+        let execute_tool = tools::build_execute_python_tool(
+            self.config.timeout_secs,
+            &self.installed_packages,
+            input_modalities,
+        );
 
         let reset_tool = tools::build_reset_session_tool();
 

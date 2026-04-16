@@ -781,7 +781,30 @@ impl MistralRs {
             };
             match mistralrs_code_exec::CodeExecutionManager::new(exec_config).await {
                 Ok(manager) => {
-                    let callbacks = manager.get_tool_callbacks();
+                    let input_modalities: Vec<mistralrs_code_exec::InputModality> = {
+                        let pipe = get_mut_arcmutex!(pipeline);
+                        pipe.get_metadata()
+                            .modalities
+                            .input
+                            .iter()
+                            .filter_map(|m| match m {
+                                pipeline::SupportedModality::Text => {
+                                    Some(mistralrs_code_exec::InputModality::Text)
+                                }
+                                pipeline::SupportedModality::Vision => {
+                                    Some(mistralrs_code_exec::InputModality::Vision)
+                                }
+                                pipeline::SupportedModality::Audio => {
+                                    Some(mistralrs_code_exec::InputModality::Audio)
+                                }
+                                pipeline::SupportedModality::Video => {
+                                    Some(mistralrs_code_exec::InputModality::Video)
+                                }
+                                _ => None,
+                            })
+                            .collect()
+                    };
+                    let callbacks = manager.get_tool_callbacks(&input_modalities);
                     let count = callbacks.len();
                     for (name, cb) in callbacks {
                         tool_callbacks.insert(name, cb);

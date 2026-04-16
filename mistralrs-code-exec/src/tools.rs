@@ -2,6 +2,8 @@ use mistralrs_mcp::{Function, Tool, ToolType};
 use serde_json::json;
 use std::collections::HashMap;
 
+use crate::InputModality;
+
 pub const EXECUTE_PYTHON_TOOL_NAME: &str = "mistralrs_execute_python";
 pub const RESET_SESSION_TOOL_NAME: &str = "mistralrs_reset_python_session";
 
@@ -9,7 +11,31 @@ pub fn code_exec_tool_called(name: &str) -> bool {
     name == EXECUTE_PYTHON_TOOL_NAME || name == RESET_SESSION_TOOL_NAME
 }
 
-pub fn build_execute_python_tool(timeout_secs: u64, installed_packages: &str) -> Tool {
+pub fn build_execute_python_tool(
+    timeout_secs: u64,
+    installed_packages: &str,
+    input_modalities: &[InputModality],
+) -> Tool {
+    let supports_vision = input_modalities.contains(&InputModality::Vision);
+
+    let matplotlib_desc = if supports_vision {
+        "- **Matplotlib**: Figures are automatically captured as PNG images and sent to you as visible images that you can see and describe. You do NOT need to do anything special — figures are captured when you call `plt.savefig()`, `plt.show()`, or simply leave them open. Even `plt.savefig()` followed by `plt.close()` will capture the image. After execution, you will be able to SEE the generated plot and describe its visual contents."
+    } else {
+        "- **Matplotlib**: Figures are automatically captured as PNG images and saved to the working directory. The user will be informed that images were generated. You will NOT be able to see the images yourself — describe them based on the code and data you used to generate them."
+    };
+
+    let pil_desc = if supports_vision {
+        "- **PIL Images**: If the last expression is a PIL Image, it is captured as a PNG image and sent to you as a visible image."
+    } else {
+        "- **PIL Images**: If the last expression is a PIL Image, it is captured as a PNG and saved to the working directory."
+    };
+
+    let images_output_desc = if supports_vision {
+        "- `images_generated`: Number of matplotlib/PIL images captured (if any). These images are automatically provided to you for visual inspection."
+    } else {
+        "- `images_generated`: Number of matplotlib/PIL images captured (if any). These are saved to the working directory but you cannot see them directly."
+    };
+
     let description = format!(
         r#"Execute Python code in a persistent interactive session.
 
@@ -21,8 +47,8 @@ pub fn build_execute_python_tool(timeout_secs: u64, installed_packages: &str) ->
 
 ## Capabilities
 - **Last-expression capture**: If the final statement is an expression (not an assignment), its repr is returned as the result (like Jupyter/IPython). The last result is also stored in the `_` variable.
-- **Matplotlib**: Figures are automatically captured as PNG images and sent to you as visible images that you can see and describe. You do NOT need to do anything special — figures are captured when you call `plt.savefig()`, `plt.show()`, or simply leave them open. Even `plt.savefig()` followed by `plt.close()` will capture the image. After execution, you will be able to SEE the generated plot and describe its visual contents.
-- **PIL Images**: If the last expression is a PIL Image, it is captured as a PNG image and sent to you as a visible image.
+{matplotlib}
+{pil}
 - **Pandas DataFrames**: If the last expression is a DataFrame or Series, its formatted repr is returned.
 - **File I/O**: You can read and write files in the working directory.
 
@@ -55,10 +81,13 @@ The result is a JSON object with these fields:
 - `result_type`: The type name of the last expression (if any)
 - `exception`: Full traceback (if an error occurred)
 - `execution_time_ms`: How long execution took in milliseconds
-- `images_generated`: Number of matplotlib/PIL images captured (if any). These images are automatically provided to you for visual inspection."#,
+{images_output}"#,
         reset = RESET_SESSION_TOOL_NAME,
         timeout = timeout_secs,
         packages = installed_packages.trim(),
+        matplotlib = matplotlib_desc,
+        pil = pil_desc,
+        images_output = images_output_desc,
     );
 
     let parameters: HashMap<String, serde_json::Value> = serde_json::from_value(json!({
