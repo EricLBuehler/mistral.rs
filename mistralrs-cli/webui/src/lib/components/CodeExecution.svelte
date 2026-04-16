@@ -180,20 +180,46 @@
 
 <!-- Expanded image overlay -->
 {#if expandedImage}
-  <button
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-8 backdrop-blur-sm"
-    onclick={() => expandedImage = null}
-    aria-label="Close expanded image"
-  >
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-8 backdrop-blur-sm">
+    <button
+      class="absolute inset-0"
+      onclick={() => expandedImage = null}
+      aria-label="Close expanded image"
+    ></button>
     <img
       src={expandedImage}
       alt="Expanded output"
-      class="max-h-full max-w-full rounded-lg shadow-2xl"
+      class="relative max-h-full max-w-full rounded-lg shadow-2xl"
     />
-    <div class="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white">
-      <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-      </svg>
+    <div class="absolute right-4 top-4 flex gap-2">
+      <button
+        class="rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
+        onclick={() => {
+          if (!expandedImage) return;
+          const a = document.createElement("a");
+          a.href = expandedImage;
+          a.download = "output.png";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }}
+        title="Download image"
+        aria-label="Download image"
+      >
+        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+        </svg>
+      </button>
+      <button
+        class="rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
+        onclick={() => expandedImage = null}
+        title="Close"
+        aria-label="Close"
+      >
+        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
     </div>
-  </button>
+  </div>
 {/if}
