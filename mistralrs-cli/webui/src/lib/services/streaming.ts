@@ -129,6 +129,9 @@ export async function streamChatCompletion(
                   callbacks.onReasoning(choice.delta.reasoning_content);
                 }
               }
+              if (choice?.finish_reason) {
+                callbacks.onFinishReason(choice.finish_reason);
+              }
             }
           } catch {
             // Skip malformed JSON

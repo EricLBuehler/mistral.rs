@@ -68,6 +68,7 @@ export interface CodeExecutionData {
   stderr?: string;
   exception?: string;
   images_base64?: string[];
+  video_frame_count?: number;
   working_directory?: string;
   execution_time_ms?: number;
 }
@@ -116,6 +117,7 @@ export interface ChatMessageRecord {
   images?: string[];
   videos?: string[];
   blocks?: StreamBlock[];
+  finish_reason?: string;
 }
 
 export interface Capabilities {
@@ -143,6 +145,7 @@ export interface DisplayMessage {
   blocks?: StreamBlock[];
   images?: string[];
   videos?: string[];
+  finishReason?: string | null;
 }
 
 // === Streaming options ===
@@ -168,6 +171,7 @@ export interface StreamCallbacks {
   onContent: (text: string) => void;
   onReasoning: (text: string) => void;
   onToolCallProgress: (event: AgenticToolCallProgress) => void;
+  onFinishReason: (reason: string) => void;
   onDone: () => void;
   onError: (error: string) => void;
 }

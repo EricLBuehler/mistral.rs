@@ -7,6 +7,21 @@
   import CustomTool from "./CustomTool.svelte";
 
   let { message, streaming = false }: { message: DisplayMessage; streaming?: boolean } = $props();
+
+  function finishReasonStyle(reason: string): { label: string; color: string } {
+    switch (reason) {
+      case "stop":
+        return { label: "stop", color: "text-gray-400 dark:text-gray-500" };
+      case "length":
+        return { label: "max tokens reached", color: "text-amber-500 dark:text-amber-400" };
+      case "tool_calls":
+        return { label: "tool call", color: "text-blue-500 dark:text-blue-400" };
+      case "content_filter":
+        return { label: "content filter", color: "text-red-500 dark:text-red-400" };
+      default:
+        return { label: reason, color: "text-gray-400 dark:text-gray-500" };
+    }
+  }
 </script>
 
 <div class="flex justify-start">
@@ -45,6 +60,17 @@
           <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.15s]"></span>
           <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400"></span>
         </div>
+      </div>
+    {/if}
+
+    <!-- Finish reason (only shown after streaming completes) -->
+    {#if !streaming && message.finishReason}
+      {@const style = finishReasonStyle(message.finishReason)}
+      <div class="flex items-center gap-1 px-1 text-xs {style.color}">
+        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <span>finished: {style.label}</span>
       </div>
     {/if}
   </div>

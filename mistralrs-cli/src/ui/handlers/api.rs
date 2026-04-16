@@ -511,6 +511,8 @@ pub struct AppendMessageRequest {
     pub videos: Option<Vec<String>>,
     #[serde(default)]
     pub blocks: Option<serde_json::Value>,
+    #[serde(default)]
+    pub finish_reason: Option<String>,
 }
 
 pub async fn append_message(
@@ -525,6 +527,7 @@ pub async fn append_message(
         req.images,
         req.videos,
         req.blocks,
+        req.finish_reason,
     )
     .await
     {

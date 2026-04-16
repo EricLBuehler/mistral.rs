@@ -37,7 +37,7 @@ class SettingsStore {
   temperature = $state(stored.temperature ?? 0.7);
   topP = $state(stored.topP ?? 0.9);
   topK = $state(stored.topK ?? 40);
-  maxTokens = $state(stored.maxTokens ?? 2048);
+  maxTokens = $state(stored.maxTokens ?? 8192);
   repetitionPenalty = $state(stored.repetitionPenalty ?? 1.1);
   systemPrompt = $state(stored.systemPrompt ?? "");
   enableSearch = $state(stored.enableSearch ?? false);

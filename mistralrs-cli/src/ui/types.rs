@@ -22,6 +22,9 @@ pub struct ChatMessage {
     /// Rich display blocks (reasoning, tool calls with results/images) for UI rendering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocks: Option<serde_json::Value>,
+    /// Finish reason from the model (stop, length, tool_calls, etc.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

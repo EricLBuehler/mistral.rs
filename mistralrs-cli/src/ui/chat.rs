@@ -5,6 +5,7 @@ use tokio::fs;
 use crate::ui::types::{AppState, ChatFile, ChatMessage};
 
 /// Append a chat message to the specified chat file.
+#[allow(clippy::too_many_arguments)]
 pub async fn append_chat_message(
     app: &Arc<AppState>,
     chat_id: &str,
@@ -13,6 +14,7 @@ pub async fn append_chat_message(
     images: Option<Vec<String>>,
     videos: Option<Vec<String>>,
     blocks: Option<serde_json::Value>,
+    finish_reason: Option<String>,
 ) -> Result<()> {
     if content.trim_start().starts_with("{\"restore\":") {
         return Ok(());
@@ -29,6 +31,7 @@ pub async fn append_chat_message(
         images,
         videos,
         blocks,
+        finish_reason,
     });
     fs::write(&path, serde_json::to_vec_pretty(&chat)?).await?;
     Ok(())

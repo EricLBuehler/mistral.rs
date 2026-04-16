@@ -82,8 +82,17 @@ export async function appendMessage(
   images?: string[],
   videos?: string[],
   blocks?: unknown[],
+  finishReason?: string,
 ): Promise<void> {
-  await postVoid("append_message", { id, role, content, images, videos, blocks });
+  await postVoid("append_message", {
+    id,
+    role,
+    content,
+    images,
+    videos,
+    blocks,
+    finish_reason: finishReason,
+  });
 }
 
 // === Settings & Capabilities ===

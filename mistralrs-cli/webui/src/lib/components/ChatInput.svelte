@@ -166,9 +166,14 @@
           </div>
         {/each}
         {#each pendingVideos as vid, i}
+          {@const isGif = vid.file.name.toLowerCase().endsWith(".gif")}
           <div class="relative h-16 w-24 overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
-            <video src={vid.url} class="h-full w-full object-cover" muted></video>
-            <div class="absolute bottom-0.5 left-0.5 rounded bg-black/60 px-1 py-0.5 text-[9px] text-white">Video</div>
+            {#if isGif}
+              <img src={vid.url} alt="GIF preview" class="h-full w-full object-cover" />
+            {:else}
+              <video src={vid.url} class="h-full w-full object-cover" muted></video>
+            {/if}
+            <div class="absolute bottom-0.5 left-0.5 rounded bg-black/60 px-1 py-0.5 text-[9px] text-white">{isGif ? "GIF" : "Video"}</div>
             <button
               class="absolute right-0 top-0 rounded-bl bg-black/60 p-0.5 text-white hover:bg-black/80"
               onclick={() => removeVideo(i)}

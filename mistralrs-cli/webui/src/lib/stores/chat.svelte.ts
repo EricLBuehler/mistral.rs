@@ -19,6 +19,7 @@ class ChatStore {
   // Accumulated streaming state
   streamingContent = $state("");
   streamingBlocks = $state<StreamBlock[]>([]);
+  streamingFinishReason = $state<string | null>(null);
 
   private abortController: AbortController | null = null;
 
@@ -99,6 +100,7 @@ class ChatStore {
     this.isStreaming = true;
     this.streamingContent = "";
     this.streamingBlocks = [];
+    this.streamingFinishReason = null;
     this.abortController = new AbortController();
 
     const options: StreamOptions = {
@@ -177,6 +179,9 @@ class ChatStore {
           ];
         }
       },
+      onFinishReason: (reason) => {
+        this.streamingFinishReason = reason;
+      },
       onDone: () => {
         this.finalizeStreaming();
       },
@@ -199,10 +204,11 @@ class ChatStore {
         blocks: this.streamingBlocks.length
           ? [...this.streamingBlocks]
           : undefined,
+        finishReason: this.streamingFinishReason ?? undefined,
       };
       this.messages.push(assistantMsg);
 
-      // Persist (including blocks for UI display on reload)
+      // Persist (including blocks and finish reason for UI display on reload)
       if (this.currentChatId) {
         api
           .appendMessage(
@@ -210,7 +216,9 @@ class ChatStore {
             "assistant",
             this.streamingContent,
             undefined,
+            undefined,
             assistantMsg.blocks,
+            assistantMsg.finishReason ?? undefined,
           )
           .catch((e) =>
             console.error("Failed to persist assistant message:", e),
@@ -220,6 +228,7 @@ class ChatStore {
 
     this.streamingContent = "";
     this.streamingBlocks = [];
+    this.streamingFinishReason = null;
     this.isStreaming = false;
     this.abortController = null;
   }
@@ -237,6 +246,7 @@ class ChatStore {
       images: m.images,
       videos: m.videos,
       blocks: m.blocks,
+      finishReason: m.finish_reason,
     }));
   }
 
