@@ -89,13 +89,17 @@ fn set_git_revision() {
         .unwrap_or_else(|| "unknown".to_string());
 
     println!("cargo:rustc-env=MISTRALRS_GIT_REVISION={commit}");
-    println!("cargo:rerun-if-changed=.git/HEAD");
-    if let Ok(head) = std::fs::read_to_string(".git/HEAD") {
-        if let Some(ref_path) = head.strip_prefix("ref:") {
-            let ref_path = ref_path.trim();
-            if !ref_path.is_empty() {
-                println!("cargo:rerun-if-changed=.git/{}", ref_path);
+    if let Ok(true) = std::fs::exists("../.git") {
+        println!("cargo:rerun-if-changed=../.git/HEAD");
+        if let Ok(head) = std::fs::read_to_string("../.git/HEAD") {
+            if let Some(ref_path) = head.strip_prefix("ref:") {
+                let ref_path = ref_path.trim();
+                if !ref_path.is_empty() {
+                    println!("cargo:rerun-if-changed=../.git/{}", ref_path);
+                }
             }
         }
+    } else {
+        println!("cargo:rerun-if-changed=build.rs");
     }
 }
