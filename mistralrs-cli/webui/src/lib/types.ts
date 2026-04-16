@@ -138,7 +138,8 @@ export interface Settings {
 
 export type StreamBlock =
   | { type: "reasoning"; content: string }
-  | { type: "tool_call"; data: AgenticToolCallProgress };
+  | { type: "tool_call"; data: AgenticToolCallProgress }
+  | { type: "content"; content: string };
 
 export interface DisplayMessage {
   role: "user" | "assistant" | "system";

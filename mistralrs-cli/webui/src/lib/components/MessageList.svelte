@@ -28,7 +28,7 @@
   $effect(() => {
     // Trigger on content changes
     void chatStore.messages.length;
-    void chatStore.streamingContent;
+    void chatStore.streamingBlocks;
     void chatStore.streamingBlocks.length;
 
     if (!userScrolledAway && container) {
@@ -78,7 +78,7 @@
           <AssistantMessage
             message={{
               role: "assistant",
-              content: chatStore.streamingContent,
+              content: "",
               blocks: chatStore.streamingBlocks.length
                 ? chatStore.streamingBlocks
                 : undefined,

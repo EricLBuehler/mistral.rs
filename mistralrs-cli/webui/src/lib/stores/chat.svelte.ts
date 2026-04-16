@@ -16,8 +16,8 @@ class ChatStore {
   currentChatId = $state<string | null>(null);
   isStreaming = $state(false);
 
-  // Accumulated streaming state
-  streamingContent = $state("");
+  // Accumulated streaming state. All output (content, reasoning, tool calls)
+  // is captured as ordered blocks so the model can interleave them.
   streamingBlocks = $state<StreamBlock[]>([]);
   streamingFinishReason = $state<string | null>(null);
 
@@ -98,7 +98,6 @@ class ChatStore {
 
     // Start streaming
     this.isStreaming = true;
-    this.streamingContent = "";
     this.streamingBlocks = [];
     this.streamingFinishReason = null;
     this.abortController = new AbortController();
@@ -126,7 +125,18 @@ class ChatStore {
 
     await streamChatCompletion(apiMessages, options, {
       onContent: (text) => {
-        this.streamingContent += text;
+        // Append to last content block, or start a new one. Content is a block
+        // so the model can interleave content with tool calls.
+        const last = this.streamingBlocks[this.streamingBlocks.length - 1];
+        if (last?.type === "content") {
+          last.content += text;
+          this.streamingBlocks = [...this.streamingBlocks];
+        } else {
+          this.streamingBlocks = [
+            ...this.streamingBlocks,
+            { type: "content", content: text },
+          ];
+        }
       },
       onReasoning: (text) => {
         // Append to last reasoning block, or start a new one
@@ -186,10 +196,17 @@ class ChatStore {
         this.finalizeStreaming();
       },
       onError: (error) => {
-        if (this.streamingContent) {
-          this.streamingContent += `\n\n**Error:** ${error}`;
+        // Add the error as a content block so it shows in the chat
+        const errorText = `**Error:** ${error}`;
+        const last = this.streamingBlocks[this.streamingBlocks.length - 1];
+        if (last?.type === "content") {
+          last.content += `\n\n${errorText}`;
+          this.streamingBlocks = [...this.streamingBlocks];
         } else {
-          this.streamingContent = `**Error:** ${error}`;
+          this.streamingBlocks = [
+            ...this.streamingBlocks,
+            { type: "content", content: errorText },
+          ];
         }
         this.finalizeStreaming();
       },
@@ -197,24 +214,29 @@ class ChatStore {
   }
 
   private async finalizeStreaming() {
-    if (this.streamingContent || this.streamingBlocks.length) {
+    if (this.streamingBlocks.length) {
+      // Concatenate content blocks for the API conversation history `content` field.
+      // (Blocks remain the source of truth for display.)
+      const fullContent = this.streamingBlocks
+        .filter((b): b is { type: "content"; content: string } => b.type === "content")
+        .map((b) => b.content)
+        .join("");
+
       const assistantMsg: DisplayMessage = {
         role: "assistant",
-        content: this.streamingContent,
-        blocks: this.streamingBlocks.length
-          ? [...this.streamingBlocks]
-          : undefined,
+        content: fullContent,
+        blocks: [...this.streamingBlocks],
         finishReason: this.streamingFinishReason ?? undefined,
       };
       this.messages.push(assistantMsg);
 
-      // Persist (including blocks and finish reason for UI display on reload)
+      // Persist (blocks are the source of truth; content is derived for API history)
       if (this.currentChatId) {
         api
           .appendMessage(
             this.currentChatId,
             "assistant",
-            this.streamingContent,
+            fullContent,
             undefined,
             undefined,
             assistantMsg.blocks,
@@ -226,7 +248,6 @@ class ChatStore {
       }
     }
 
-    this.streamingContent = "";
     this.streamingBlocks = [];
     this.streamingFinishReason = null;
     this.isStreaming = false;
@@ -253,7 +274,6 @@ class ChatStore {
   async newChat() {
     this.currentChatId = null;
     this.messages = [];
-    this.streamingContent = "";
     this.streamingBlocks = [];
     this.isStreaming = false;
   }

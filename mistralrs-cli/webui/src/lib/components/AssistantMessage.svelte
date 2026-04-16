@@ -8,6 +8,16 @@
 
   let { message, streaming = false }: { message: DisplayMessage; streaming?: boolean } = $props();
 
+  // Backwards compatibility: if a message has no blocks but has content (old persisted format),
+  // synthesize a single content block from it.
+  let renderedBlocks = $derived(
+    message.blocks?.length
+      ? message.blocks
+      : message.content
+        ? [{ type: "content" as const, content: message.content }]
+        : []
+  );
+
   function finishReasonStyle(reason: string): { label: string; color: string } {
     switch (reason) {
       case "stop":
@@ -26,35 +36,29 @@
 
 <div class="flex justify-start">
   <div class="max-w-[85%] space-y-2">
-    <!-- Ordered blocks: reasoning and tool calls in sequence -->
-    {#if message.blocks?.length}
-      {#each message.blocks as block}
-        {#if block.type === "reasoning"}
-          <ThinkingBlock reasoning={block.content} streaming={streaming && block === message.blocks![message.blocks!.length - 1]} />
-        {:else if block.type === "tool_call"}
-          {#if block.data.data.tool_type === "code_execution"}
-            <CodeExecution data={block.data.data} phase={block.data.phase} />
-          {:else if block.data.data.tool_type === "web_search"}
-            <SearchResult data={block.data.data} phase={block.data.phase} />
-          {:else if block.data.data.tool_type === "custom"}
-            <CustomTool data={block.data.data} phase={block.data.phase} toolName={block.data.tool_name} />
-          {/if}
+    <!-- Ordered blocks: content, reasoning, and tool calls in arrival sequence -->
+    {#each renderedBlocks as block, i (i)}
+      {#if block.type === "reasoning"}
+        <ThinkingBlock reasoning={block.content} streaming={streaming && block === renderedBlocks[renderedBlocks.length - 1]} />
+      {:else if block.type === "tool_call"}
+        {#if block.data.data.tool_type === "code_execution"}
+          <CodeExecution data={block.data.data} phase={block.data.phase} />
+        {:else if block.data.data.tool_type === "web_search"}
+          <SearchResult data={block.data.data} phase={block.data.phase} />
+        {:else if block.data.data.tool_type === "custom"}
+          <CustomTool data={block.data.data} phase={block.data.phase} toolName={block.data.tool_name} />
         {/if}
-      {/each}
-    {/if}
-
-    <!-- Main content -->
-    {#if message.content}
-      <div class="rounded-2xl rounded-bl-md bg-gray-100 px-4 py-2.5 shadow-sm dark:bg-gray-800">
-        <div class="markdown-content text-sm leading-relaxed text-gray-900 dark:text-gray-100">
-          {@html renderMarkdown(message.content)}
+      {:else if block.type === "content"}
+        <div class="rounded-2xl rounded-bl-md bg-gray-100 px-4 py-2.5 shadow-sm dark:bg-gray-800">
+          <div class="markdown-content text-sm leading-relaxed text-gray-900 dark:text-gray-100">
+            {@html renderMarkdown(block.content)}
+          </div>
         </div>
-      </div>
-    {/if}
+      {/if}
+    {/each}
 
-    <!-- "Working..." spinner shown only when there's no visible final content yet.
-         Once content streams in, the appearing text is its own activity signal. -->
-    {#if streaming && !message.content}
+    <!-- "Working..." spinner: shown until end/stop signal received -->
+    {#if streaming}
       <div class="flex items-center gap-2 px-1 text-xs text-gray-500 dark:text-gray-400">
         <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle>
