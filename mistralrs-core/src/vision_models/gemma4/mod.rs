@@ -394,7 +394,17 @@ impl Gemma4Model {
                 }
             };
 
-            let video_embeds = if !video_hashes.is_empty() && video_hashes.len() == n_frames {
+            // Video frames use a different patch budget than images, producing
+            // different token counts for the same pixel content. XOR video hashes
+            // with a constant so identical pixels encoded as image vs video get
+            // separate cache entries.
+            const VIDEO_HASH_SALT: u64 = 0x01DE0_F4A3E_CA5E0;
+            let salted_video_hashes: Vec<u64> =
+                video_hashes.iter().map(|h| h ^ VIDEO_HASH_SALT).collect();
+
+            let video_embeds = if !salted_video_hashes.is_empty()
+                && salted_video_hashes.len() == n_frames
+            {
                 let mut per_frame: Vec<Option<Tensor>> = vec![None; n_frames];
                 let mut miss_indices = Vec::new();
                 {
@@ -402,7 +412,7 @@ impl Gemma4Model {
                         .encoder_cache
                         .lock()
                         .expect("encoder cache lock poisoned");
-                    for (i, &hash) in video_hashes.iter().enumerate() {
+                    for (i, &hash) in salted_video_hashes.iter().enumerate() {
                         if let Some(cached) = guard.get(hash) {
                             per_frame[i] = Some(cached[0].clone());
                         } else {
@@ -426,7 +436,7 @@ impl Gemma4Model {
                                 .encoder_cache
                                 .lock()
                                 .expect("encoder cache lock poisoned");
-                            guard.insert(video_hashes[idx], vec![feats.clone()]);
+                            guard.insert(salted_video_hashes[idx], vec![feats.clone()]);
                         }
                         per_frame[idx] = Some(feats);
                     }
