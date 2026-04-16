@@ -52,7 +52,8 @@ use crate::{
 };
 
 mod add_request;
-mod agentic_loop;
+pub(crate) mod agentic_loop;
+pub(crate) mod agentic_session;
 mod logger;
 mod tool_dispatch;
 
@@ -171,6 +172,7 @@ pub struct Engine {
     logger: Arc<IntervalLogger>,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
     pending_notify: Arc<Notify>,
+    session_store: Arc<std::sync::Mutex<agentic_session::AgenticSessionStore>>,
 }
 
 impl Drop for Engine {
@@ -242,6 +244,9 @@ impl Engine {
             logger,
             handles: Arc::new(Mutex::new(Vec::new())),
             pending_notify: Arc::new(Notify::new()),
+            session_store: Arc::new(std::sync::Mutex::new(
+                agentic_session::AgenticSessionStore::new(),
+            )),
         })
     }
 

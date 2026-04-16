@@ -185,7 +185,7 @@ async fn oneshot_text(
         return_raw_logits: false,
         web_search_options: do_search.then(WebSearchOptions::default),
         enable_code_execution: do_code_exec,
-        code_execution_session_id: None,
+        session_id: None,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
@@ -347,7 +347,7 @@ async fn oneshot_multimodal(
         return_raw_logits: false,
         web_search_options: do_search.then(WebSearchOptions::default),
         enable_code_execution: do_code_exec,
-        code_execution_session_id: None,
+        session_id: None,
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
@@ -699,7 +699,7 @@ async fn text_interactive_mode(
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: do_code_exec,
-            code_execution_session_id: if do_code_exec {
+            session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
             } else {
                 None
@@ -1195,7 +1195,7 @@ async fn multimodal_interactive_mode(
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: do_code_exec,
-            code_execution_session_id: if do_code_exec {
+            session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
             } else {
                 None
@@ -1342,7 +1342,7 @@ async fn diffusion_interactive_mode(
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: do_code_exec,
-            code_execution_session_id: if do_code_exec {
+            session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
             } else {
                 None
@@ -1440,7 +1440,7 @@ async fn speech_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool, do_
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: do_code_exec,
-            code_execution_session_id: if do_code_exec {
+            session_id: if do_code_exec {
                 Some(code_exec_session_id.clone())
             } else {
                 None

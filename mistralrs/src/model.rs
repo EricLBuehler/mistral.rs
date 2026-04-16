@@ -147,7 +147,7 @@ impl Model {
             tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence,
-            code_execution_session_id: None,
+            session_id: request.session_id().map(|s| s.to_string()),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -202,7 +202,7 @@ impl Model {
             tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence,
-            code_execution_session_id: None,
+            session_id: request.session_id().map(|s| s.to_string()),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -272,7 +272,7 @@ impl Model {
             tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence,
-            code_execution_session_id: None,
+            session_id: request.session_id().map(|s| s.to_string()),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -432,7 +432,7 @@ impl Model {
             tool_dispatch_url: None,
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence: false,
-            code_execution_session_id: None,
+            session_id: None,
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -497,7 +497,7 @@ impl Model {
             tool_dispatch_url: None,
             model_id: model_id.map(|s| s.to_string()),
             truncate_sequence: false,
-            code_execution_session_id: None,
+            session_id: None,
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -575,7 +575,7 @@ impl Model {
                     tool_dispatch_url: None,
                     model_id: model_id_owned.clone(),
                     truncate_sequence,
-                    code_execution_session_id: None,
+                    session_id: None,
                 }));
 
                 runner

@@ -1469,7 +1469,7 @@ async fn parse_openresponses_request(
         response_format,
         web_search_options: oairequest.web_search_options,
         enable_code_execution: false,
-        code_execution_session_id: None,
+        session_id: None,
         max_tool_rounds: None,
         top_k: oairequest.top_k,
         grammar: oairequest.grammar,

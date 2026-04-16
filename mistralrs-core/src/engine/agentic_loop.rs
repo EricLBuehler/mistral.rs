@@ -18,6 +18,16 @@ use super::Engine;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+/// Get a reference to the messages vec inside a request.
+fn get_messages(request: &NormalRequest) -> &Vec<IndexMap<String, MessageContent>> {
+    match &request.messages {
+        RequestMessage::Chat { messages, .. } | RequestMessage::MultimodalChat { messages, .. } => {
+            messages
+        }
+        _ => unreachable!(),
+    }
+}
+
 /// Get a mutable reference to the messages vec inside a request.
 fn get_messages_mut(request: &mut NormalRequest) -> &mut Vec<IndexMap<String, MessageContent>> {
     match &mut request.messages {
@@ -70,7 +80,7 @@ fn append_tool_response(
 }
 
 /// Upgrade a `Chat` request to `MultimodalChat` in-place. No-op if already multimodal.
-fn upgrade_to_multimodal(request: &mut NormalRequest) {
+pub(super) fn upgrade_to_multimodal(request: &mut NormalRequest) {
     let dummy = RequestMessage::Chat {
         messages: vec![],
         enable_thinking: None,
@@ -95,7 +105,7 @@ fn upgrade_to_multimodal(request: &mut NormalRequest) {
     };
 }
 
-fn get_images_mut(request: &mut NormalRequest) -> &mut Vec<DynamicImage> {
+pub(super) fn get_images_mut(request: &mut NormalRequest) -> &mut Vec<DynamicImage> {
     match &mut request.messages {
         RequestMessage::MultimodalChat { images, .. } => images,
         _ => unreachable!("must call upgrade_to_multimodal first"),
@@ -192,6 +202,48 @@ async fn forward_passthrough(
             None
         }
     }
+}
+
+/// Save the current conversation state to the session store.
+///
+/// Strips a leading empty system message that `ensure_system_message` may have
+/// inserted, so that the stored history matches what the client actually sent.
+fn save_session(engine: &Arc<Engine>, session_id: &str, visible_req: &NormalRequest) {
+    let mut messages = get_messages(visible_req).clone();
+
+    // ensure_system_message inserts {role: "system", content: ""} at index 0
+    // when the client didn't send a system message. Strip it so the stored
+    // history matches what clients actually send on subsequent requests.
+    if let Some(first) = messages.first() {
+        let is_empty_system = first
+            .get("role")
+            .and_then(|r| match r {
+                Either::Left(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .is_some_and(|r| r == "system")
+            && first
+                .get("content")
+                .and_then(|c| match c {
+                    Either::Left(s) => Some(s.as_str()),
+                    _ => None,
+                })
+                .is_some_and(|s| s.is_empty());
+        if is_empty_system {
+            messages.remove(0);
+        }
+    }
+
+    let images = match &visible_req.messages {
+        RequestMessage::MultimodalChat { images, .. } => images.clone(),
+        _ => Vec::new(),
+    };
+    let entry = super::agentic_session::AgenticSessionEntry::new(messages, images);
+    engine
+        .session_store
+        .lock()
+        .unwrap()
+        .save(session_id.to_string(), entry);
 }
 
 // ── Tool executors ─────────────────────────────────────────────────────────
@@ -397,21 +449,29 @@ fn do_http_tool(
 /// 3. Repeat until no further tool call is made.
 /// 4. Forward every user-visible reply **except** the first, which is just the
 ///    probe that discovers whether a tool call is needed.
-pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
+pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) {
     let web_search_options = request.web_search_options.clone();
     let dispatch_url = request.tool_dispatch_url.clone();
 
-    // Only resolve a session ID when code execution is enabled for this request.
-    let code_exec_session_id: Option<String> = if request.enable_code_execution {
-        Some(
-            request
-                .code_execution_session_id
-                .clone()
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-        )
-    } else {
-        None
-    };
+    // Resolve session ID: use explicit, generate new, or match by content.
+    let session_id = request
+        .session_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    // Look up existing session and splice stored tool history into request.
+    {
+        let mut store = this.session_store.lock().unwrap();
+        let existing = if request.session_id.is_some() {
+            store.get(&session_id)
+        } else {
+            let msgs = get_messages(&request);
+            store.find_by_messages(msgs).map(|(_, e)| e)
+        };
+        if let Some(entry) = existing {
+            super::agentic_session::splice_session_into_request(&mut request, &entry);
+        }
+    }
 
     // Cache model modality support for multimodal tool results.
     let modalities = {
@@ -481,9 +541,9 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
     // We'll drive everything inside a single spawned task.
     let this_clone = this.clone();
     let handle = tokio::spawn(async move {
-        // Build tool call context with session ID for code execution callbacks.
+        // Build tool call context with session ID for tool callbacks.
         let tool_call_ctx = mistralrs_mcp::ToolCallContext {
-            session_id: code_exec_session_id.clone(),
+            session_id: Some(session_id.clone()),
         };
 
         // `current` is what we actually dispatch each loop.
@@ -543,8 +603,10 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
 
                 // No tool call, or max rounds reached? We are finished.
                 if tc_opt.is_none() || round >= max_rounds {
+                    // Save conversation state for future requests.
+                    save_session(&this_clone, &session_id, &visible_req);
                     let mut final_resp = done.clone();
-                    final_resp.code_execution_session_id = code_exec_session_id.clone();
+                    final_resp.session_id = Some(session_id.clone());
                     user_sender.send(Response::Done(final_resp)).await.unwrap();
                     return;
                 }
@@ -584,8 +646,9 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
                     do_http_tool(visible_req, tc, url)
                 } else {
                     // No way to execute — return to client.
+                    save_session(&this_clone, &session_id, &visible_req);
                     let mut final_resp = done.clone();
-                    final_resp.code_execution_session_id = code_exec_session_id.clone();
+                    final_resp.session_id = Some(session_id.clone());
                     user_sender.send(Response::Done(final_resp)).await.unwrap();
                     return;
                 };
@@ -667,10 +730,12 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
 
                 // No tool call or max rounds reached -> done.
                 if tc_opt.is_none() || round >= max_rounds {
+                    // Save conversation state for future requests.
+                    save_session(&this_clone, &session_id, &visible_req);
                     // Stamp the session ID on the held final chunk and send it.
                     if let Some(mut final_chunk) = held_final_chunk {
-                        final_chunk.code_execution_session_id =
-                            code_exec_session_id.clone();
+                        final_chunk.session_id =
+                            Some(session_id.clone());
                         let _ = user_sender.send(Response::Chunk(final_chunk)).await;
                     }
                     break;
@@ -707,6 +772,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, request: NormalRequest) {
                 } else if let Some(ref url) = dispatch_url {
                     do_http_tool(visible_req, tc, url)
                 } else {
+                    save_session(&this_clone, &session_id, &visible_req);
                     break; // No way to execute — client handles it.
                 };
 

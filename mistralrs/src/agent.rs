@@ -289,7 +289,7 @@ impl<'a> AgentStream<'a> {
                                                         total_completion_time_sec: 0.0,
                                                     },
                                                     agentic_tool_calls: None,
-                                                    code_execution_session_id: None,
+                                                    session_id: None,
                                                 };
 
                                                 self.state = AgentStreamState::ExecutingTools {

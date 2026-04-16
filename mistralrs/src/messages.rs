@@ -44,6 +44,10 @@ pub trait RequestLike {
     fn enable_code_execution(&self) -> bool {
         false
     }
+    /// Session ID for persistent agentic state across requests.
+    fn session_id(&self) -> Option<&str> {
+        None
+    }
     /// Whether to silently truncate prompts that exceed the model's context length.
     fn truncate_sequence(&self) -> bool {
         false
@@ -463,6 +467,7 @@ pub struct RequestBuilder {
     sampling_params: SamplingParams,
     web_search_options: Option<WebSearchOptions>,
     enable_code_execution: bool,
+    session_id: Option<String>,
     max_tool_rounds: Option<usize>,
     tool_dispatch_url: Option<String>,
     enable_thinking: Option<bool>,
@@ -492,6 +497,7 @@ impl From<TextMessages> for RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_code_execution: false,
+            session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             enable_thinking: None,
@@ -517,6 +523,7 @@ impl From<MultimodalMessages> for RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_code_execution: false,
+            session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             enable_thinking: None,
@@ -543,6 +550,7 @@ impl RequestBuilder {
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
             enable_code_execution: false,
+            session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
             enable_thinking: None,
@@ -560,6 +568,13 @@ impl RequestBuilder {
     /// Enable Python code execution tools for this request.
     pub fn with_code_execution(mut self) -> Self {
         self.enable_code_execution = true;
+        self
+    }
+
+    /// Set a session ID for persistent agentic state across requests.
+    /// Tool call history, code execution state, and images are preserved.
+    pub fn with_session_id(mut self, id: impl Into<String>) -> Self {
+        self.session_id = Some(id.into());
         self
     }
 
@@ -1009,6 +1024,10 @@ impl RequestLike for RequestBuilder {
 
     fn enable_code_execution(&self) -> bool {
         self.enable_code_execution
+    }
+
+    fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
     }
 
     fn truncate_sequence(&self) -> bool {

@@ -265,7 +265,7 @@ pub fn parse_request(
                 Some(oairequest.model.clone())
             },
             truncate_sequence: oairequest.truncate_sequence.unwrap_or(false),
-            code_execution_session_id: None,
+            session_id: None,
         })),
         is_streaming,
     ))

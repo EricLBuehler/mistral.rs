@@ -416,7 +416,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             object: "chat.completion".to_string(),
                             usage: group.get_usage(),
                             agentic_tool_calls: None,
-                            code_execution_session_id: None,
+                            session_id: None,
                         },
                         seq.responder(),
                     )
