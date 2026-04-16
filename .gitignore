@@ -10,3 +10,8 @@ mistralrs-cli/webui/node_modules/
 
 # mdbook output
 docs/book/
+
+# Starlight / Astro
+website/node_modules/
+website/dist/
+website/.astro/
