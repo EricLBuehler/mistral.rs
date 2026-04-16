@@ -13,7 +13,18 @@ interface StoredSettings {
   toolDispatchUrl: string;
 }
 
+// Stale keys from previous UI versions — clean them up on load
+const LEGACY_KEYS = ["mistralrs-settings", "theme"];
+
 function loadStored(): Partial<StoredSettings> {
+  // Clean up legacy keys from prior UI versions
+  for (const key of LEGACY_KEYS) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // ignore
+    }
+  }
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);

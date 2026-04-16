@@ -54,7 +54,7 @@ impl Default for GenerationParams {
             temperature: Some(0.7),
             top_p: Some(0.9),
             top_k: Some(40),
-            max_tokens: Some(2048),
+            max_tokens: Some(8192),
             repetition_penalty: Some(1.1),
             system_prompt: None,
         }
