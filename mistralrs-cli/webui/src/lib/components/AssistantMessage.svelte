@@ -52,14 +52,15 @@
       </div>
     {/if}
 
-    <!-- Streaming cursor when nothing has appeared yet -->
-    {#if streaming && !message.content && !message.blocks?.length}
-      <div class="rounded-2xl rounded-bl-md bg-gray-100 px-4 py-3 dark:bg-gray-800">
-        <div class="flex items-center gap-1.5">
-          <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.3s]"></span>
-          <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.15s]"></span>
-          <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400"></span>
-        </div>
+    <!-- "Working..." spinner shown only when there's no visible final content yet.
+         Once content streams in, the appearing text is its own activity signal. -->
+    {#if streaming && !message.content}
+      <div class="flex items-center gap-2 px-1 text-xs text-gray-500 dark:text-gray-400">
+        <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z"></path>
+        </svg>
+        <span>Working...</span>
       </div>
     {/if}
 
