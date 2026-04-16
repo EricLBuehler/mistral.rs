@@ -817,6 +817,7 @@ fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCa
                     stderr,
                     exception,
                     images,
+                    video_frame_count,
                     execution_time_ms,
                     ..
                 } => {
@@ -860,6 +861,9 @@ fn print_agentic_progress(tool_name: &str, phase: &mistralrs_core::AgenticToolCa
                     }
                     if !images.is_empty() {
                         println!("│ {} image(s) captured", images.len());
+                    }
+                    if let Some(n) = video_frame_count {
+                        println!("│ {} video frame(s) captured", n);
                     }
                 }
                 AgenticToolCallData::WebSearch { results_count, .. } => {

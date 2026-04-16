@@ -5,7 +5,7 @@ use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
 
-use crate::{MessageContent, NormalRequest, RequestMessage};
+use crate::{MessageContent, NormalRequest, RequestMessage, VideoInput};
 
 const MAX_SESSIONS: usize = 128;
 const SESSION_TTL: Duration = Duration::from_secs(30 * 60); // 30 minutes
@@ -17,6 +17,8 @@ pub struct AgenticSessionEntry {
     pub messages: Vec<IndexMap<String, MessageContent>>,
     /// Images from multimodal tool responses (positional with the messages).
     pub images: Vec<DynamicImage>,
+    /// Videos from multimodal tool responses.
+    pub videos: Vec<VideoInput>,
     /// Last access time for eviction.
     last_accessed: Instant,
 }
@@ -115,10 +117,12 @@ impl AgenticSessionEntry {
     pub fn new(
         messages: Vec<IndexMap<String, MessageContent>>,
         images: Vec<DynamicImage>,
+        videos: Vec<VideoInput>,
     ) -> Self {
         Self {
             messages,
             images,
+            videos,
             last_accessed: Instant::now(),
         }
     }
@@ -228,10 +232,16 @@ pub fn splice_session_into_request(request: &mut NormalRequest, entry: &AgenticS
 
     *incoming = result;
 
-    // Restore images for multimodal tool responses.
-    if !entry.images.is_empty() {
+    // Restore images and videos for multimodal tool responses.
+    if !entry.images.is_empty() || !entry.videos.is_empty() {
         super::agentic_loop::upgrade_to_multimodal(request);
-        let req_images = super::agentic_loop::get_images_mut(request);
-        *req_images = entry.images.clone();
+        if !entry.images.is_empty() {
+            let req_images = super::agentic_loop::get_images_mut(request);
+            *req_images = entry.images.clone();
+        }
+        if !entry.videos.is_empty() {
+            let req_videos = super::agentic_loop::get_videos_mut(request);
+            *req_videos = entry.videos.clone();
+        }
     }
 }

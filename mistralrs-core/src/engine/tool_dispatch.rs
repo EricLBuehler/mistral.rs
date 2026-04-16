@@ -26,6 +26,7 @@ use super::Engine;
 pub(super) struct ToolResult {
     pub content: String,
     pub images: Vec<DynamicImage>,
+    pub video_frames: Vec<DynamicImage>,
 }
 
 /// Resolve the token budget from [`SearchContextSize`].
@@ -52,6 +53,7 @@ pub(super) async fn execute_search(
                 content: serde_json::json!({"error": format!("Invalid search arguments: {e}")})
                     .to_string(),
                 images: vec![],
+                video_frames: vec![],
             };
         }
     };
@@ -202,6 +204,7 @@ pub(super) async fn execute_search(
     ToolResult {
         content,
         images: vec![],
+        video_frames: vec![],
     }
 }
 
@@ -220,6 +223,7 @@ pub(super) async fn execute_extraction(
                 content: serde_json::json!({"error": format!("Invalid extraction arguments: {e}")})
                     .to_string(),
                 images: vec![],
+                video_frames: vec![],
             };
         }
     };
@@ -243,6 +247,7 @@ pub(super) async fn execute_extraction(
             return ToolResult {
                 content: serde_json::json!({"error": "Content extraction failed"}).to_string(),
                 images: vec![],
+                video_frames: vec![],
             };
         };
         match raw.cap_content_len(&tokenizer, max_toks) {
@@ -254,6 +259,7 @@ pub(super) async fn execute_extraction(
                         serde_json::json!({"error": format!("Extraction processing failed: {e}")})
                             .to_string(),
                     images: vec![],
+                    video_frames: vec![],
                 };
             }
         }
@@ -279,6 +285,7 @@ pub(super) async fn execute_extraction(
     ToolResult {
         content: format!("{{\"output\": \"{content}\"}}"),
         images: vec![],
+        video_frames: vec![],
     }
 }
 
@@ -301,6 +308,7 @@ pub(super) fn execute_custom_tool(
             })
             .to_string(),
             images: vec![],
+            video_frames: vec![],
         };
     };
 
@@ -314,6 +322,7 @@ pub(super) fn execute_custom_tool(
             })
             .to_string(),
             images: vec![],
+            video_frames: vec![],
         }
     };
 
@@ -322,6 +331,7 @@ pub(super) fn execute_custom_tool(
             Ok(content) => ToolResult {
                 content,
                 images: vec![],
+                video_frames: vec![],
             },
             Err(e) => error_result(e),
         },
@@ -329,6 +339,7 @@ pub(super) fn execute_custom_tool(
             Ok(output) => ToolResult {
                 content: output.text().to_string(),
                 images: output.images().to_vec(),
+                video_frames: output.video_frames().to_vec(),
             },
             Err(e) => error_result(e),
         },
@@ -375,6 +386,7 @@ pub(super) fn execute_http_tool(tc: &ToolCallResponse, url: &str) -> ToolResult 
     ToolResult {
         content,
         images: vec![],
+        video_frames: vec![],
     }
 }
 

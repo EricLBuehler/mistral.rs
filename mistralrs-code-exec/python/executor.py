@@ -59,6 +59,8 @@ os.chdir(work_dir)
 
 namespace = {"__builtins__": __builtins__, "__name__": "__main__"}
 
+# _render_frame is injected into the namespace after matplotlib setup (see below).
+
 # Force matplotlib to non-interactive backend before any user code.
 # Also install a savefig/show hook so that figures are captured even if the
 # user calls plt.savefig() then plt.close().
@@ -86,7 +88,22 @@ try:
     matplotlib.figure.Figure.savefig = _hooked_savefig
     _plt.show = _hooked_show
 except ImportError:
-    pass
+    _orig_savefig = None
+
+_HAS_MATPLOTLIB = _orig_savefig is not None
+
+
+def _render_frame(fig):
+    """Render a matplotlib figure to PNG bytes without triggering the capture hook.
+
+    Used by model code to build video frames via `_video_frames.append(_render_frame(fig))`.
+    """
+    if not _HAS_MATPLOTLIB:
+        raise RuntimeError("matplotlib is not available")
+    buf = io.BytesIO()
+    _orig_savefig(fig, buf, format="png", bbox_inches="tight", dpi=150)
+    buf.seek(0)
+    return buf.read()
 
 
 def _capture_single_figure(fig):
@@ -226,6 +243,18 @@ def execute_code(code):
     # Capture matplotlib figures (runs after user code, even if it raised).
     images.extend(capture_matplotlib_figures())
 
+    # Capture video frames from the magic `_video_frames` variable.
+    video_frames = []
+    raw_frames = namespace.get("_video_frames")
+    if isinstance(raw_frames, list) and raw_frames:
+        for frame in raw_frames:
+            if isinstance(frame, bytes):
+                video_frames.append(
+                    {"format": "png", "data_base64": base64.b64encode(frame).decode()}
+                )
+        # Clear so next execution starts fresh.
+        namespace["_video_frames"] = []
+
     return {
         "stdout": stdout_capture.getvalue(),
         "stderr": stderr_capture.getvalue(),
@@ -233,6 +262,7 @@ def execute_code(code):
         "last_expr_repr": last_expr_repr,
         "last_expr_type": last_expr_type,
         "images": images,
+        "video_frames": video_frames,
     }
 
 
@@ -260,6 +290,10 @@ def send_error(msg):
 # Ensure KeyboardInterrupt propagates cleanly inside execute_code,
 # but does not kill the main loop.
 signal.signal(signal.SIGINT, signal.default_int_handler)
+
+# Inject helpers into the namespace so model code can use them.
+if _HAS_MATPLOTLIB:
+    namespace["_render_frame"] = _render_frame
 
 # Use iter(readline, "") so that output is not buffered on the read side.
 # The script must be launched with python3 -u for fully unbuffered I/O.
@@ -305,6 +339,8 @@ for line in iter(sys.stdin.readline, ""):
         namespace.clear()
         namespace["__builtins__"] = __builtins__
         namespace["__name__"] = "__main__"
+        if _HAS_MATPLOTLIB:
+            namespace["_render_frame"] = _render_frame
         _captured_figures.clear()
         send({"success": True})
 

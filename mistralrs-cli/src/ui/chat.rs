@@ -11,6 +11,7 @@ pub async fn append_chat_message(
     role: &str,
     content: &str,
     images: Option<Vec<String>>,
+    blocks: Option<serde_json::Value>,
 ) -> Result<()> {
     if content.trim_start().starts_with("{\"restore\":") {
         return Ok(());
@@ -25,6 +26,7 @@ pub async fn append_chat_message(
         role: role.into(),
         content: content.into(),
         images,
+        blocks,
     });
     fs::write(&path, serde_json::to_vec_pretty(&chat)?).await?;
     Ok(())

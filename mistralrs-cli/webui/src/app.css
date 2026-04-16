@@ -159,3 +159,17 @@
   color: #e2e8f0;
   background: #334155;
 }
+
+/* KaTeX dark mode: override white backgrounds and ensure text inherits color */
+.dark .katex {
+  color: inherit;
+}
+.dark .katex .katex-html {
+  color: inherit;
+}
+.dark .katex .base {
+  color: inherit;
+}
+.dark .katex-display {
+  color: inherit;
+}

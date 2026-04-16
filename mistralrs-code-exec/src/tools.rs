@@ -17,6 +17,7 @@ pub fn build_execute_python_tool(
     input_modalities: &[InputModality],
 ) -> Tool {
     let supports_vision = input_modalities.contains(&InputModality::Vision);
+    let supports_video = input_modalities.contains(&InputModality::Video);
 
     let matplotlib_desc = if supports_vision {
         "- **Matplotlib**: Figures are automatically captured as PNG images and sent to you as visible images that you can see and describe. You do NOT need to do anything special — figures are captured when you call `plt.savefig()`, `plt.show()`, or simply leave them open. Even `plt.savefig()` followed by `plt.close()` will capture the image. After execution, you will be able to SEE the generated plot and describe its visual contents."
@@ -28,6 +29,14 @@ pub fn build_execute_python_tool(
         "- **PIL Images**: If the last expression is a PIL Image, it is captured as a PNG image and sent to you as a visible image."
     } else {
         "- **PIL Images**: If the last expression is a PIL Image, it is captured as a PNG and saved to the working directory."
+    };
+
+    let video_desc = if supports_video {
+        "- **Video/Animation**: To output a video, build frames and append to `_video_frames`:\n  ```python\n  _video_frames = []\n  for i in range(N):\n      fig, ax = plt.subplots()\n      # ... draw frame ...\n      _video_frames.append(_render_frame(fig))\n      plt.close(fig)\n  ```\n  `_render_frame(fig)` renders the figure to PNG bytes. One video per execution. The video frames are sent back to you and you can see and describe them."
+    } else if supports_vision {
+        "- **Video/Animation**: To output a video, build frames and append to `_video_frames`:\n  ```python\n  _video_frames = []\n  for i in range(N):\n      fig, ax = plt.subplots()\n      # ... draw frame ...\n      _video_frames.append(_render_frame(fig))\n      plt.close(fig)\n  ```\n  `_render_frame(fig)` renders the figure to PNG bytes. One video per execution. Frames are sent back as individual images."
+    } else {
+        "- **Video/Animation**: To output a video, build frames and append to `_video_frames`:\n  ```python\n  _video_frames = []\n  for i in range(N):\n      fig, ax = plt.subplots()\n      # ... draw frame ...\n      _video_frames.append(_render_frame(fig))\n      plt.close(fig)\n  ```\n  `_render_frame(fig)` renders the figure to PNG bytes. One video per execution. Frames are saved to the working directory."
     };
 
     let images_output_desc = if supports_vision {
@@ -49,6 +58,7 @@ pub fn build_execute_python_tool(
 - **Last-expression capture**: If the final statement is an expression (not an assignment), its repr is returned as the result (like Jupyter/IPython). The last result is also stored in the `_` variable.
 {matplotlib}
 {pil}
+{video}
 - **Pandas DataFrames**: If the last expression is a DataFrame or Series, its formatted repr is returned.
 - **File I/O**: You can read and write files in the working directory.
 
@@ -87,6 +97,7 @@ The result is a JSON object with these fields:
         packages = installed_packages.trim(),
         matplotlib = matplotlib_desc,
         pil = pil_desc,
+        video = video_desc,
         images_output = images_output_desc,
     );
 

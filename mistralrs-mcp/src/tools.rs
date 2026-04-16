@@ -25,10 +25,13 @@ pub type MultimodalToolCallback =
 pub enum ToolOutput {
     /// Plain text result.
     Text(String),
-    /// Text plus images.
+    /// Text plus images and/or video frames.
     Multimodal {
         text: String,
         images: Vec<DynamicImage>,
+        /// Video frames (ordered). The caller assembles these into the
+        /// appropriate video representation (e.g. `VideoInput`).
+        video_frames: Vec<DynamicImage>,
     },
 }
 
@@ -53,10 +56,21 @@ impl ToolOutput {
         }
     }
 
-    pub fn has_images(&self) -> bool {
+    pub fn video_frames(&self) -> &[DynamicImage] {
+        match self {
+            ToolOutput::Text(_) => &[],
+            ToolOutput::Multimodal { video_frames, .. } => video_frames,
+        }
+    }
+
+    pub fn has_multimodal(&self) -> bool {
         match self {
             ToolOutput::Text(_) => false,
-            ToolOutput::Multimodal { images, .. } => !images.is_empty(),
+            ToolOutput::Multimodal {
+                images,
+                video_frames,
+                ..
+            } => !images.is_empty() || !video_frames.is_empty(),
         }
     }
 }

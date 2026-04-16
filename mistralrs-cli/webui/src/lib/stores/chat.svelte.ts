@@ -190,13 +190,15 @@ class ChatStore {
       };
       this.messages.push(assistantMsg);
 
-      // Persist
+      // Persist (including blocks for UI display on reload)
       if (this.currentChatId) {
         api
           .appendMessage(
             this.currentChatId,
             "assistant",
             this.streamingContent,
+            undefined,
+            assistantMsg.blocks,
           )
           .catch((e) =>
             console.error("Failed to persist assistant message:", e),
@@ -221,6 +223,7 @@ class ChatStore {
       role: m.role as "user" | "assistant",
       content: m.content,
       images: m.images,
+      blocks: m.blocks,
     }));
   }
 

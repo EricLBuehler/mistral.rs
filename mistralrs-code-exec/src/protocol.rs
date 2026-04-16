@@ -19,6 +19,8 @@ pub struct ExecuteResponse {
     #[serde(default)]
     pub images: Vec<ImageOutput>,
     #[serde(default)]
+    pub video_frames: Vec<ImageOutput>,
+    #[serde(default)]
     pub execution_time_ms: u64,
 }
 

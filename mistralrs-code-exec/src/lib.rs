@@ -247,6 +247,7 @@ impl CodeExecutionManager {
                         Ok(ToolOutput::Multimodal {
                             text: result.text,
                             images: result.images,
+                            video_frames: result.video_frames,
                         })
                     })
                 })

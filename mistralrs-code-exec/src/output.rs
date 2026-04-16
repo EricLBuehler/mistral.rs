@@ -7,6 +7,7 @@ use crate::protocol::ExecuteResponse;
 pub struct CodeExecResult {
     pub text: String,
     pub images: Vec<DynamicImage>,
+    pub video_frames: Vec<DynamicImage>,
 }
 
 impl CodeExecResult {
@@ -24,6 +25,7 @@ impl CodeExecResult {
         Self {
             text,
             images: vec![],
+            video_frames: vec![],
         }
     }
 
@@ -37,12 +39,14 @@ impl CodeExecResult {
         Self {
             text,
             images: vec![],
+            video_frames: vec![],
         }
     }
 
     /// Build from a successful Python execution response.
     pub fn from_response(response: ExecuteResponse, work_dir: &str) -> Self {
         let images = decode_images(&response.images);
+        let video_frames = decode_images(&response.video_frames);
 
         let status = if response.exception.is_some() {
             "error"
@@ -74,10 +78,14 @@ impl CodeExecResult {
         if !images.is_empty() {
             result["images_generated"] = serde_json::Value::Number(images.len().into());
         }
+        if !video_frames.is_empty() {
+            result["video_frames_generated"] = serde_json::Value::Number(video_frames.len().into());
+        }
 
         Self {
             text: result.to_string(),
             images,
+            video_frames,
         }
     }
 }

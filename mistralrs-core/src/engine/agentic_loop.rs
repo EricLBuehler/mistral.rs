@@ -112,29 +112,44 @@ pub(super) fn get_images_mut(request: &mut NormalRequest) -> &mut Vec<DynamicIma
     }
 }
 
-/// Append a tool response that may include images.
+pub(super) fn get_videos_mut(request: &mut NormalRequest) -> &mut Vec<crate::VideoInput> {
+    match &mut request.messages {
+        RequestMessage::MultimodalChat { videos, .. } => videos,
+        _ => unreachable!("must call upgrade_to_multimodal first"),
+    }
+}
+
+/// Append a tool response that may include images and/or video frames.
 ///
-/// When images are present and the model supports vision, the content is
-/// built as an array of typed parts (image/text) and images are added to
-/// the request-level vec. If the model lacks vision, a textual note is
-/// appended instead.
+/// When images/videos are present and the model supports the modality,
+/// the content is built as an array of typed parts and media is added to
+/// the request-level vecs. Otherwise a textual note is appended.
 fn append_multimodal_tool_response(
     request: &mut NormalRequest,
     tool_name: &str,
     mut content: String,
     images: Vec<DynamicImage>,
+    video_frames: Vec<DynamicImage>,
     supports_vision: bool,
+    supports_video: bool,
 ) {
     let inject_images = !images.is_empty() && supports_vision;
+    let inject_video = !video_frames.is_empty() && supports_video;
 
     if !images.is_empty() && !supports_vision {
         content.push_str(&format!(
-            "\n[{} image(s) were generated but this model cannot process images.]",
+            "\n[ERROR: {} image(s) were generated but this model does not support vision input. Do not attempt to generate images.]",
             images.len()
         ));
     }
+    if !video_frames.is_empty() && !supports_video {
+        content.push_str(&format!(
+            "\n[ERROR: {} video frame(s) were generated but this model does not support video input. Do not attempt to generate video.]",
+            video_frames.len()
+        ));
+    }
 
-    if !inject_images {
+    if !inject_images && !inject_video {
         let messages = get_messages_mut(request);
         append_tool_response(messages, tool_name, content);
         return;
@@ -144,11 +159,23 @@ fn append_multimodal_tool_response(
 
     let mut parts: Vec<IndexMap<String, Value>> = Vec::new();
 
-    let req_images = get_images_mut(request);
-    for img in &images {
-        req_images.push(img.clone());
+    // Images.
+    if inject_images {
+        let req_images = get_images_mut(request);
+        for img in &images {
+            req_images.push(img.clone());
+            let mut part = IndexMap::new();
+            part.insert("type".to_string(), Value::String("image".to_string()));
+            parts.push(part);
+        }
+    }
+
+    // Video frames → VideoInput.
+    if inject_video {
+        let video = crate::VideoInput::from_frames(video_frames, 1.0, None);
+        get_videos_mut(request).push(video);
         let mut part = IndexMap::new();
-        part.insert("type".to_string(), Value::String("image".to_string()));
+        part.insert("type".to_string(), Value::String("video".to_string()));
         parts.push(part);
     }
 
@@ -188,11 +215,13 @@ async fn forward_passthrough(
 /// Save the current conversation state to the session store.
 fn save_session(engine: &Arc<Engine>, session_id: &str, visible_req: &NormalRequest) {
     let messages = get_messages(visible_req).clone();
-    let images = match &visible_req.messages {
-        RequestMessage::MultimodalChat { images, .. } => images.clone(),
-        _ => Vec::new(),
+    let (images, videos) = match &visible_req.messages {
+        RequestMessage::MultimodalChat {
+            images, videos, ..
+        } => (images.clone(), videos.clone()),
+        _ => (Vec::new(), Vec::new()),
     };
-    let entry = super::agentic_session::AgenticSessionEntry::new(messages, images);
+    let entry = super::agentic_session::AgenticSessionEntry::new(messages, images, videos);
     engine
         .session_store
         .lock()
@@ -246,6 +275,7 @@ fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
             stderr: None,
             exception: None,
             images: vec![],
+            video_frame_count: None,
             working_directory: None,
             execution_time_ms: None,
         }
@@ -308,6 +338,7 @@ async fn do_custom_tool(
     mut request: NormalRequest,
     tc: &ToolCallResponse,
     supports_vision: bool,
+    supports_video: bool,
     ctx: &mistralrs_mcp::ToolCallContext,
 ) -> (NormalRequest, AgenticToolCallData) {
     let messages = get_messages_mut(&mut request);
@@ -340,6 +371,11 @@ async fn do_custom_tool(
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
             images: result.images.clone(),
+            video_frame_count: if result.video_frames.is_empty() {
+                None
+            } else {
+                Some(result.video_frames.len())
+            },
             working_directory: val
                 .as_ref()
                 .and_then(|v| v.get("working_directory"))
@@ -357,7 +393,9 @@ async fn do_custom_tool(
         }
     };
 
-    if result.images.is_empty() {
+    let has_multimodal =
+        !result.images.is_empty() || !result.video_frames.is_empty();
+    if !has_multimodal {
         let messages = get_messages_mut(&mut request);
         append_tool_response(messages, &tc.function.name, result.content);
     } else {
@@ -366,7 +404,9 @@ async fn do_custom_tool(
             &tc.function.name,
             result.content,
             result.images,
+            result.video_frames,
             supports_vision,
+            supports_video,
         );
     }
 
@@ -433,6 +473,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
         pipeline.get_metadata().modalities.clone()
     };
     let supports_vision = modalities.input.contains(&SupportedModality::Vision);
+    let supports_video = modalities.input.contains(&SupportedModality::Video);
 
     // The sender that ultimately delivers data back to the caller.
     let user_sender = request.response.clone();
@@ -480,7 +521,6 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
             }
         }
     }
-
 
     probe.tool_choice = Some(ToolChoice::Auto);
     // Prevent accidental infinite recursion on the probe itself.
@@ -591,6 +631,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                         visible_req,
                         tc,
                         supports_vision,
+                        supports_video,
                         &tool_call_ctx,
                     )
                     .await
@@ -647,8 +688,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                                     // Hold back — we may need to stamp the session ID.
                                     held_final_chunk = Some(chunk.clone());
                                 } else {
-                                    let _ =
-                                        user_sender.send(Response::Chunk(chunk.clone())).await;
+                                    let _ = user_sender.send(Response::Chunk(chunk.clone())).await;
                                 }
                             }
                             last_choice = Some(first_choice.clone());
@@ -686,8 +726,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     save_session(&this_clone, &session_id, &visible_req);
                     // Stamp the session ID on the held final chunk and send it.
                     if let Some(mut final_chunk) = held_final_chunk {
-                        final_chunk.session_id =
-                            Some(session_id.clone());
+                        final_chunk.session_id = Some(session_id.clone());
                         let _ = user_sender.send(Response::Chunk(final_chunk)).await;
                     }
                     break;
@@ -718,6 +757,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                         visible_req,
                         tc,
                         supports_vision,
+                        supports_video,
                         &tool_call_ctx,
                     )
                     .await

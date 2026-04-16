@@ -432,13 +432,17 @@ pub struct AppendMessageRequest {
     pub content: String,
     #[serde(default)]
     pub images: Option<Vec<String>>,
+    #[serde(default)]
+    pub blocks: Option<serde_json::Value>,
 }
 
 pub async fn append_message(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<AppendMessageRequest>,
 ) -> impl IntoResponse {
-    if let Err(e) = append_chat_message(&app, &req.id, &req.role, &req.content, req.images).await {
+    if let Err(e) =
+        append_chat_message(&app, &req.id, &req.role, &req.content, req.images, req.blocks).await
+    {
         error!("append message error: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "append failed").into_response();
     }

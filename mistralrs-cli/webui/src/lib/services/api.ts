@@ -80,8 +80,9 @@ export async function appendMessage(
   role: string,
   content: string,
   images?: string[],
+  blocks?: unknown[],
 ): Promise<void> {
-  await postVoid("append_message", { id, role, content, images });
+  await postVoid("append_message", { id, role, content, images, blocks });
 }
 
 // === Settings & Capabilities ===

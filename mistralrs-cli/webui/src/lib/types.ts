@@ -113,6 +113,7 @@ export interface ChatMessageRecord {
   role: string;
   content: string;
   images?: string[];
+  blocks?: StreamBlock[];
 }
 
 export interface Capabilities {
