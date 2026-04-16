@@ -181,10 +181,7 @@ impl CodeExecutionManager {
     /// `input_modalities` controls which capabilities are advertised in the
     /// tool description (e.g. image/video feedback is only mentioned when the
     /// model supports the corresponding input modality).
-    pub fn get_tool_callbacks(
-        &self,
-        input_modalities: &[InputModality],
-    ) -> ToolCallbacksWithTools {
+    pub fn get_tool_callbacks(&self, input_modalities: &[InputModality]) -> ToolCallbacksWithTools {
         let mut callbacks = ToolCallbacksWithTools::new();
 
         let execute_tool = tools::build_execute_python_tool(

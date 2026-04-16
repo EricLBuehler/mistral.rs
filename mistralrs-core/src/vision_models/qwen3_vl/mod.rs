@@ -18,7 +18,8 @@ use crate::{
     layers::CausalMasker,
     layers_masker::{masked_fill, PastKvLenCache},
     paged_attention::{
-        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        encoder_cache::{CacheModality, EncoderCacheManager},
+        AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -469,7 +470,7 @@ impl Qwen3VLModel {
                         .lock()
                         .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
+                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
                             per_image[i] = Some(cached);
                         } else {
                             miss_indices.push(i);
@@ -534,7 +535,11 @@ impl Qwen3VLModel {
                                 cache_entry.push(single_ds.clone());
                             }
                             enc_offset += n_out;
-                            guard.insert(image_hashes[orig_idx], cache_entry.clone());
+                            guard.insert(
+                                CacheModality::Image,
+                                image_hashes[orig_idx],
+                                cache_entry.clone(),
+                            );
                             per_image[orig_idx] = Some(cache_entry);
                         }
                     }

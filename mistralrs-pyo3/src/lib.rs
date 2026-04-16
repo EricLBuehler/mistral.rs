@@ -136,17 +136,19 @@ fn wrap_search_callback(cb: PyObject) -> Arc<SearchCallback> {
 }
 
 fn wrap_tool_callback(cb: PyObject) -> Arc<ToolCallback> {
-    Arc::new(move |func: &CalledFunction, _ctx: &mistralrs_core::ToolCallContext| {
-        Python::with_gil(|py| {
-            let json = py.import("json")?;
-            let args: Py<PyAny> = json
-                .call_method1("loads", (func.arguments.clone(),))?
-                .into();
-            let obj = cb.call1(py, (func.name.clone(), args))?;
-            obj.extract::<String>(py)
-        })
-        .map_err(|e: PyErr| anyhow::anyhow!(e.to_string()))
-    })
+    Arc::new(
+        move |func: &CalledFunction, _ctx: &mistralrs_core::ToolCallContext| {
+            Python::with_gil(|py| {
+                let json = py.import("json")?;
+                let args: Py<PyAny> = json
+                    .call_method1("loads", (func.arguments.clone(),))?
+                    .into();
+                let obj = cb.call1(py, (func.name.clone(), args))?;
+                obj.extract::<String>(py)
+            })
+            .map_err(|e: PyErr| anyhow::anyhow!(e.to_string()))
+        },
+    )
 }
 
 fn wrap_tool_callbacks(obj: PyObject) -> anyhow::Result<ToolCallbacks> {

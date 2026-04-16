@@ -21,7 +21,8 @@ use crate::{
     device_map::DeviceMapper,
     models::llama::Llama,
     paged_attention::{
-        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        encoder_cache::{CacheModality, EncoderCacheManager},
+        AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -204,7 +205,7 @@ impl Idefics3Model {
                         .lock()
                         .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
+                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
                             per_image[i] = Some(cached[0].clone());
                         } else {
                             miss_indices.push(i);
@@ -225,7 +226,11 @@ impl Idefics3Model {
                                 .encoder_cache
                                 .lock()
                                 .expect("encoder cache lock poisoned");
-                            guard.insert(image_hashes[i], vec![result.clone()]);
+                            guard.insert(
+                                CacheModality::Image,
+                                image_hashes[i],
+                                vec![result.clone()],
+                            );
                         }
                         per_image[i] = Some(result);
                     }

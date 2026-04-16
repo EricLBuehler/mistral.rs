@@ -141,8 +141,6 @@ impl SequenceImages {
     fn new(input_images: Vec<image::DynamicImage>) -> Self {
         let hashes = input_images.iter().map(|x| {
             let mut hasher = DefaultHasher::new();
-            // Domain tag so identical pixels encoded as image vs video don't collide.
-            b"image".hash(&mut hasher);
             x.as_bytes().hash(&mut hasher);
             hasher.finish()
         });

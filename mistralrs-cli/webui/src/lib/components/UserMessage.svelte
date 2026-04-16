@@ -3,6 +3,17 @@
   import { renderMarkdown } from "../utils/markdown";
 
   let { message }: { message: DisplayMessage } = $props();
+
+  function downloadFile(url: string, fallbackName: string) {
+    const a = document.createElement("a");
+    a.href = url;
+    // Try to extract filename from URL
+    const fromUrl = url.split("/").pop()?.split("?")[0];
+    a.download = fromUrl || fallbackName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
 </script>
 
 <div class="flex justify-end">
@@ -10,12 +21,24 @@
     <!-- Images -->
     {#if message.images?.length}
       <div class="mb-2 flex flex-wrap gap-2">
-        {#each message.images as img}
-          <img
-            src={img}
-            alt="Attached"
-            class="max-h-40 rounded-lg object-contain"
-          />
+        {#each message.images as img, i}
+          <div class="group relative">
+            <img
+              src={img}
+              alt="Attached"
+              class="max-h-40 rounded-lg object-contain"
+            />
+            <button
+              class="absolute right-1 top-1 rounded-md bg-black/60 p-1 text-white opacity-0 transition-opacity hover:bg-black/80 group-hover:opacity-100"
+              onclick={() => downloadFile(img, `image-${i + 1}.png`)}
+              title="Download image"
+              aria-label="Download image"
+            >
+              <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+            </button>
+          </div>
         {/each}
       </div>
     {/if}
@@ -23,15 +46,27 @@
     <!-- Videos (rendered as looping GIF-like clips) -->
     {#if message.videos?.length}
       <div class="mb-2 flex flex-wrap gap-2">
-        {#each message.videos as vid}
-          <video
-            src={vid}
-            autoplay
-            loop
-            muted
-            playsinline
-            class="max-h-48 rounded-lg"
-          ></video>
+        {#each message.videos as vid, i}
+          <div class="group relative">
+            <video
+              src={vid}
+              autoplay
+              loop
+              muted
+              playsinline
+              class="max-h-48 rounded-lg"
+            ></video>
+            <button
+              class="absolute right-1 top-1 rounded-md bg-black/60 p-1 text-white opacity-0 transition-opacity hover:bg-black/80 group-hover:opacity-100"
+              onclick={() => downloadFile(vid, `video-${i + 1}.mp4`)}
+              title="Download video"
+              aria-label="Download video"
+            >
+              <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+            </button>
+          </div>
         {/each}
       </div>
     {/if}

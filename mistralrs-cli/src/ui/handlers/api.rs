@@ -518,7 +518,13 @@ pub async fn append_message(
     Json(req): Json<AppendMessageRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = append_chat_message(
-        &app, &req.id, &req.role, &req.content, req.images, req.videos, req.blocks,
+        &app,
+        &req.id,
+        &req.role,
+        &req.content,
+        req.images,
+        req.videos,
+        req.blocks,
     )
     .await
     {

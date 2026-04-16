@@ -216,9 +216,7 @@ async fn forward_passthrough(
 fn save_session(engine: &Arc<Engine>, session_id: &str, visible_req: &NormalRequest) {
     let messages = get_messages(visible_req).clone();
     let (images, videos) = match &visible_req.messages {
-        RequestMessage::MultimodalChat {
-            images, videos, ..
-        } => (images.clone(), videos.clone()),
+        RequestMessage::MultimodalChat { images, videos, .. } => (images.clone(), videos.clone()),
         _ => (Vec::new(), Vec::new()),
     };
     let entry = super::agentic_session::AgenticSessionEntry::new(messages, images, videos);
@@ -393,8 +391,7 @@ async fn do_custom_tool(
         }
     };
 
-    let has_multimodal =
-        !result.images.is_empty() || !result.video_frames.is_empty();
+    let has_multimodal = !result.images.is_empty() || !result.video_frames.is_empty();
     if !has_multimodal {
         let messages = get_messages_mut(&mut request);
         append_tool_response(messages, &tc.function.name, result.content);

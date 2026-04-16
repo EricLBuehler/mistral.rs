@@ -29,7 +29,8 @@ use crate::{
     layers_masker::masked_fill,
     ops::RepeatInterleaveOp,
     paged_attention::{
-        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        encoder_cache::{CacheModality, EncoderCacheManager},
+        AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -151,7 +152,7 @@ impl MLlamaModel {
                         .lock()
                         .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
+                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
                             per_image.push(cached[0].clone());
                         } else {
                             per_image.push(Tensor::zeros(
@@ -183,7 +184,11 @@ impl MLlamaModel {
                                 .encoder_cache
                                 .lock()
                                 .expect("encoder cache lock poisoned");
-                            guard.insert(image_hashes[idx], vec![feats.clone()]);
+                            guard.insert(
+                                CacheModality::Image,
+                                image_hashes[idx],
+                                vec![feats.clone()],
+                            );
                         }
                         per_image[idx] = feats;
                     }

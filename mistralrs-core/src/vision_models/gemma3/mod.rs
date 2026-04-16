@@ -13,7 +13,7 @@ use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
     paged_attention::{
-        encoder_cache::{cached_encode_images, EncoderCacheManager},
+        encoder_cache::{cached_encode_images, CacheModality, EncoderCacheManager},
         AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
@@ -135,6 +135,7 @@ impl Gemma3Model {
             let dtype = vision_tower.dtype();
 
             let image_features = cached_encode_images(
+                CacheModality::Image,
                 image_hashes,
                 &pixel_values.to_dtype(dtype)?,
                 &self.encoder_cache,
