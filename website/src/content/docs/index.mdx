@@ -1,0 +1,101 @@
+---
+title: mistral.rs
+description: Fast, flexible LLM inference engine written in Rust. Run 40+ model families including text, vision, video, audio, speech, image generation, and embeddings, with OpenAI-compatible APIs and built-in agentic features.
+template: splash
+hero:
+  title: Fast, flexible LLM inference.
+  tagline: A single binary for running modern language, vision, and speech models on whatever hardware you have.
+  image:
+    file: ../../assets/banner.png
+  actions:
+    - text: Get started
+      link: /mistral.rs/tutorials/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/EricLBuehler/mistral.rs
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## Install and run
+
+```bash frame="none"
+# Linux or macOS. Auto-detects CUDA, Metal, or MKL.
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+
+# Windows, from PowerShell.
+irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
+```
+
+```bash frame="none"
+# Chat with a model in your terminal.
+mistralrs run --isq 4 -m Qwen/Qwen3-4B
+
+# Or serve the same model behind an OpenAI-compatible HTTP API with a built-in web UI.
+mistralrs serve --ui --isq 4 -m Qwen/Qwen3-4B
+```
+
+## Where to start
+
+<CardGrid>
+  <LinkCard
+    title="Tutorials"
+    href="/mistral.rs/tutorials/"
+    description="Hand-held lessons that take you from nothing installed to something working."
+  />
+  <LinkCard
+    title="Guides"
+    href="/mistral.rs/guides/"
+    description="Task-oriented recipes for the things people actually want to do."
+  />
+  <LinkCard
+    title="Reference"
+    href="/mistral.rs/reference/"
+    description="Dry, complete lookup pages for CLI flags, HTTP endpoints, and SDK methods."
+  />
+  <LinkCard
+    title="Explanation"
+    href="/mistral.rs/explanation/"
+    description="Concepts and design decisions behind how mistral.rs works under the hood."
+  />
+</CardGrid>
+
+## What you get
+
+<CardGrid>
+  <Card title="Zero configuration" icon="rocket">
+    `mistralrs run -m <model>` works out of the box. The binary figures out the
+    architecture, the chat template, and which accelerator to use, all from the
+    Hugging Face repository. When it guesses wrong, every choice can be
+    overridden by a flag.
+  </Card>
+  <Card title="Quantization without friction" icon="puzzle">
+    If you do not want to think about quantization, just pass `--isq 4` and
+    mistral.rs picks a sensible format for your hardware. If you do want to think
+    about it, you have ISQ, GGUF, GPTQ, AWQ, HQQ, AFQ, FP8, and MXFP4 available.
+  </Card>
+  <Card title="Auto-tuning" icon="seti:config">
+    Run `mistralrs tune -m <model>` to benchmark your hardware and see
+    recommended settings for context length, batch size, and quantization level.
+  </Card>
+  <Card title="Built for agents" icon="open-book">
+    Server-side tool calling loop, web search, code execution, and an MCP
+    client, all wired up and ready to use behind CLI flags.
+  </Card>
+  <Card title="Multi-GPU ready" icon="seti:hex">
+    Tensor parallelism across local GPUs using NCCL, or across machines using
+    the built-in ring backend.
+  </Card>
+  <Card title="A real web UI" icon="laptop">
+    Pass `--ui` and get a browser chat interface that renders reasoning blocks,
+    visualizes tool and code-execution calls, and shows search results inline.
+  </Card>
+</CardGrid>
+
+## Community
+
+- [Discord](https://discord.gg/SZrecqK8qw)
+- [Issues on GitHub](https://github.com/EricLBuehler/mistral.rs/issues)
+- [Contributing guide](https://github.com/EricLBuehler/mistral.rs/blob/master/README.md#contributing)

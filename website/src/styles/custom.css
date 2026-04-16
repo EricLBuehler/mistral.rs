@@ -1,0 +1,16 @@
+/* Project accent — tuned to the mistral.rs banner. */
+:root {
+  --sl-hue-accent: 25;
+}
+
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #3a1800;
+  --sl-color-accent: #e8772e;
+  --sl-color-accent-high: #ffd6b8;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #ffdcc2;
+  --sl-color-accent: #c55a14;
+  --sl-color-accent-high: #4a1c00;
+}
