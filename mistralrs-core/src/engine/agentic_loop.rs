@@ -167,25 +167,6 @@ fn append_multimodal_tool_response(
 }
 
 /// Ensure a system message exists at the start of the conversation.
-/// Models need a system message alongside tool declarations to reliably
-/// trigger tool calls.
-fn ensure_system_message(messages: &mut Vec<IndexMap<String, MessageContent>>) {
-    let has_system = messages
-        .first()
-        .and_then(|m| m.get("role"))
-        .and_then(|r| match r {
-            Either::Left(s) => Some(s.as_str()),
-            _ => None,
-        })
-        .is_some_and(|r| r == "system" || r == "developer");
-    if !has_system {
-        let mut sys_msg: IndexMap<String, MessageContent> = IndexMap::new();
-        sys_msg.insert("role".to_string(), Either::Left("system".to_string()));
-        sys_msg.insert("content".to_string(), Either::Left(String::new()));
-        messages.insert(0, sys_msg);
-    }
-}
-
 /// Forward a non-chat-completion response to the user sender.
 /// Returns `true` if the response was forwarded (caller should return),
 /// `false` if it's a `Done` or `Chunk` that the caller should handle.
@@ -205,35 +186,8 @@ async fn forward_passthrough(
 }
 
 /// Save the current conversation state to the session store.
-///
-/// Strips a leading empty system message that `ensure_system_message` may have
-/// inserted, so that the stored history matches what the client actually sent.
 fn save_session(engine: &Arc<Engine>, session_id: &str, visible_req: &NormalRequest) {
-    let mut messages = get_messages(visible_req).clone();
-
-    // ensure_system_message inserts {role: "system", content: ""} at index 0
-    // when the client didn't send a system message. Strip it so the stored
-    // history matches what clients actually send on subsequent requests.
-    if let Some(first) = messages.first() {
-        let is_empty_system = first
-            .get("role")
-            .and_then(|r| match r {
-                Either::Left(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .is_some_and(|r| r == "system")
-            && first
-                .get("content")
-                .and_then(|c| match c {
-                    Either::Left(s) => Some(s.as_str()),
-                    _ => None,
-                })
-                .is_some_and(|s| s.is_empty());
-        if is_empty_system {
-            messages.remove(0);
-        }
-    }
-
+    let messages = get_messages(visible_req).clone();
     let images = match &visible_req.messages {
         RequestMessage::MultimodalChat { images, .. } => images.clone(),
         _ => Vec::new(),
@@ -527,8 +481,6 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
         }
     }
 
-    // Models need a system message alongside tool declarations to reliably
-    ensure_system_message(get_messages_mut(&mut probe));
 
     probe.tool_choice = Some(ToolChoice::Auto);
     // Prevent accidental infinite recursion on the probe itself.
