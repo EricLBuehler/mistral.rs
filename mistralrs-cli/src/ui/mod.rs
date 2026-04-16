@@ -159,6 +159,7 @@ pub async fn build_ui_router(
         .route("/api/restore_chat_session", post(restore_chat_session))
         .route("/api/settings", get(get_settings))
         .route("/api/capabilities", get(get_capabilities))
+        .route("/api/mcp_tools", get(list_mcp_tools))
         .route("/api/generate_speech", post(generate_speech))
         .nest_service("/speech", get_service(ServeDir::new(speech_dir.clone())))
         .nest_service("/uploads", get_service(ServeDir::new(uploads_dir.clone())))

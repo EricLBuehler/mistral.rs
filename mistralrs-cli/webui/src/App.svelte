@@ -4,6 +4,7 @@
   import MessageList from "./lib/components/MessageList.svelte";
   import ChatInput from "./lib/components/ChatInput.svelte";
   import SettingsPanel from "./lib/components/SettingsPanel.svelte";
+  import ToolsPanel from "./lib/components/ToolsPanel.svelte";
   import { chatStore } from "./lib/stores/chat.svelte";
   import { modelStore } from "./lib/stores/models.svelte";
   import { settingsStore } from "./lib/stores/settings.svelte";
@@ -95,6 +96,18 @@
       ></button>
       <div class="fixed right-0 top-12 bottom-0 z-40 w-80 overflow-y-auto border-l border-gray-200 bg-white shadow-lg dark:border-gray-800 dark:bg-gray-950">
         <SettingsPanel />
+      </div>
+    {/if}
+
+    <!-- Tools panel overlay -->
+    {#if settingsStore.toolsOpen}
+      <button
+        class="fixed inset-0 z-30 bg-black/30"
+        onclick={() => (settingsStore.toolsOpen = false)}
+        aria-label="Close tools"
+      ></button>
+      <div class="fixed right-0 top-12 bottom-0 z-40 w-96 overflow-hidden border-l border-gray-200 bg-white shadow-lg dark:border-gray-800 dark:bg-gray-950">
+        <ToolsPanel />
       </div>
     {/if}
   </div>

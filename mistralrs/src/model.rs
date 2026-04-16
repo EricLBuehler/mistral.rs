@@ -882,4 +882,15 @@ impl Model {
     pub fn list_session_ids(&self, model_id: Option<&str>) -> crate::error::Result<Vec<String>> {
         Ok(self.runner.list_session_ids(model_id)?)
     }
+
+    /// List tools registered from MCP servers. Returns `(name, description)`
+    /// per tool; built-in tools (search, code execution) are excluded.
+    pub fn list_mcp_tools(
+        &self,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<Vec<(String, Option<String>)>> {
+        self.runner
+            .list_mcp_tools(model_id)
+            .map_err(|e| crate::error::Error::from(mistralrs_core::MistralRsError::Other(e)))
+    }
 }

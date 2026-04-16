@@ -736,3 +736,22 @@ pub async fn restore_chat_session(
 
     Json(json!({ "session_id": session_id })).into_response()
 }
+
+// ── MCP tools ───────────────────────────────────────────────────────────────
+
+/// Return the list of MCP-provided tools registered on the default model.
+pub async fn list_mcp_tools(Extension(app): Extension<Arc<AppState>>) -> impl IntoResponse {
+    match app.model.list_mcp_tools(None) {
+        Ok(tools) => {
+            let payload: Vec<_> = tools
+                .into_iter()
+                .map(|(name, description)| json!({ "name": name, "description": description }))
+                .collect();
+            Json(json!({ "tools": payload })).into_response()
+        }
+        Err(e) => {
+            error!("list_mcp_tools error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response()
+        }
+    }
+}

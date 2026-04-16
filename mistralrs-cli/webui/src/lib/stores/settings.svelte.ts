@@ -56,6 +56,7 @@ class SettingsStore {
   enableThinking = $state(stored.enableThinking ?? true);
   sidebarOpen = $state(window.innerWidth >= 768);
   settingsOpen = $state(false);
+  toolsOpen = $state(false);
 
   persist() {
     save({

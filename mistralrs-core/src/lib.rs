@@ -1620,6 +1620,50 @@ impl MistralRs {
         }
     }
 
+    /// List the registered tools for a model that came from MCP servers.
+    ///
+    /// Built-in tools (web search, code execution) are excluded. Returns a
+    /// `(name, description)` pair per tool.
+    pub fn list_mcp_tools(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<Vec<(String, Option<String>)>, String> {
+        let resolved_model_id = self
+            .resolve_alias_or_default(model_id)
+            .map_err(|e| e.to_string())?;
+
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| "Failed to acquire read lock on engines")?;
+        let engine_instance = engines
+            .get(&resolved_model_id)
+            .ok_or_else(|| format!("Model {resolved_model_id} not found"))?;
+
+        let mut tools: Vec<(String, Option<String>)> = engine_instance
+            .reboot_state
+            .tool_callbacks
+            .values()
+            .filter(|cb| {
+                let name = &cb.tool.function.name;
+                // Exclude built-in tools; everything else came from MCP.
+                !search::search_tool_called(name) && {
+                    #[cfg(feature = "code-execution")]
+                    {
+                        !mistralrs_code_exec::code_exec_tool_called(name)
+                    }
+                    #[cfg(not(feature = "code-execution"))]
+                    {
+                        true
+                    }
+                }
+            })
+            .map(|cb| (cb.tool.function.name.clone(), cb.tool.function.description.clone()))
+            .collect();
+        tools.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(tools)
+    }
+
     /// Check if MCP client is configured for a specific model
     pub fn has_mcp_client(&self, model_id: Option<&str>) -> Result<bool, String> {
         let resolved_model_id = self

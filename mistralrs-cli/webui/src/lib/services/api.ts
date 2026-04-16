@@ -105,6 +105,15 @@ export async function getCapabilities(): Promise<Capabilities> {
   return get("capabilities");
 }
 
+export interface McpToolInfo {
+  name: string;
+  description: string | null;
+}
+
+export async function listMcpTools(): Promise<{ tools: McpToolInfo[] }> {
+  return get("mcp_tools");
+}
+
 // === File uploads ===
 
 async function uploadFile(
