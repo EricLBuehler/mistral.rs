@@ -270,6 +270,7 @@ pub enum AgenticToolCallData {
         stderr: Option<String>,
         exception: Option<String>,
         images: Vec<image::DynamicImage>,
+        video_frames: Vec<image::DynamicImage>,
         video_frame_count: Option<usize>,
         working_directory: Option<String>,
         execution_time_ms: Option<u64>,

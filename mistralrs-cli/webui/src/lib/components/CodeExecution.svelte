@@ -1,8 +1,13 @@
 <script lang="ts">
   import type { CodeExecutionData } from "../types";
   import hljs from "highlight.js";
+  import VideoFrames from "./VideoFrames.svelte";
 
   let { data, phase }: { data: CodeExecutionData; phase: "calling" | "complete" } = $props();
+
+  let videoFrameCount = $derived(
+    data.video_frames_base64?.length ?? data.video_frame_count ?? 0
+  );
 
   const PREVIEW_LINES = 10;
 
@@ -52,12 +57,12 @@
             {data.images_base64.length}
           </span>
         {/if}
-        {#if data.video_frame_count}
+        {#if videoFrameCount}
           <span class="flex items-center gap-1">
             <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
-            {data.video_frame_count}
+            {videoFrameCount}
           </span>
         {/if}
         {#if executionTimeFormatted()}
@@ -144,7 +149,7 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
         <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
-          Images ({data.images_base64.length}){#if data.video_frame_count}, including {data.video_frame_count} video frame{data.video_frame_count !== 1 ? "s" : ""}{/if}
+          Images ({data.images_base64.length})
         </span>
       </div>
       <div class="bg-gray-50 p-3 dark:bg-gray-900/50">
@@ -191,6 +196,11 @@
         </div>
       </div>
     </div>
+  {/if}
+
+  <!-- Video frames (animated playback) -->
+  {#if data.video_frames_base64?.length}
+    <VideoFrames frames={data.video_frames_base64} />
   {/if}
 </div>
 

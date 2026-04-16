@@ -130,6 +130,7 @@ fn serialize_agentic_data(data: &AgenticToolCallData) -> Value {
             stderr,
             exception,
             images,
+            video_frames,
             video_frame_count,
             working_directory,
             execution_time_ms,
@@ -149,6 +150,9 @@ fn serialize_agentic_data(data: &AgenticToolCallData) -> Value {
             }
             if !images.is_empty() {
                 v["images_base64"] = json!(encode_agentic_tool_images(images));
+            }
+            if !video_frames.is_empty() {
+                v["video_frames_base64"] = json!(encode_agentic_tool_images(video_frames));
             }
             if let Some(n) = video_frame_count {
                 v["video_frame_count"] = json!(n);

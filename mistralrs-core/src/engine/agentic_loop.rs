@@ -274,6 +274,7 @@ fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
             exception: None,
             images: vec![],
             video_frame_count: None,
+            video_frames: vec![],
             working_directory: None,
             execution_time_ms: None,
         }
@@ -374,6 +375,7 @@ async fn do_custom_tool(
             } else {
                 Some(result.video_frames.len())
             },
+            video_frames: result.video_frames.clone(),
             working_directory: val
                 .as_ref()
                 .and_then(|v| v.get("working_directory"))

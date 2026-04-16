@@ -68,6 +68,7 @@ export interface CodeExecutionData {
   stderr?: string;
   exception?: string;
   images_base64?: string[];
+  video_frames_base64?: string[];
   video_frame_count?: number;
   working_directory?: string;
   execution_time_ms?: number;
