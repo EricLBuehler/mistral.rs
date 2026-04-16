@@ -40,6 +40,7 @@ export async function streamChatCompletion(
   if (options.web_search_options)
     body.web_search_options = options.web_search_options;
   if (options.enable_code_execution) body.enable_code_execution = true;
+  if (options.session_id) body.session_id = options.session_id;
 
   let response: Response;
   try {
@@ -131,6 +132,9 @@ export async function streamChatCompletion(
               }
               if (choice?.finish_reason) {
                 callbacks.onFinishReason(choice.finish_reason);
+              }
+              if (chunk.session_id) {
+                callbacks.onSessionId(chunk.session_id);
               }
             }
           } catch {

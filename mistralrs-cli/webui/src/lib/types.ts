@@ -18,6 +18,8 @@ export interface ChatCompletionChunk {
   choices: ChunkChoice[];
   model: string;
   usage?: Usage;
+  /** Returned in the final SSE chunk; the agentic session ID for follow-up turns. */
+  session_id?: string;
 }
 
 export interface ChunkChoice {
@@ -110,6 +112,8 @@ export interface ChatFile {
   kind: string;
   created_at: string;
   messages: ChatMessageRecord[];
+  /** Server-side agentic session ID. The serialized state lives in a sidecar file. */
+  session_id?: string | null;
 }
 
 export interface ChatMessageRecord {
@@ -162,6 +166,8 @@ export interface StreamOptions {
   enable_thinking?: boolean;
   web_search_options?: WebSearchOptions;
   enable_code_execution?: boolean;
+  /** If set, server reuses the agentic session (tool history, code execution state). */
+  session_id?: string;
   abortSignal?: AbortSignal;
 }
 
@@ -174,6 +180,7 @@ export interface StreamCallbacks {
   onReasoning: (text: string) => void;
   onToolCallProgress: (event: AgenticToolCallProgress) => void;
   onFinishReason: (reason: string) => void;
+  onSessionId: (id: string) => void;
   onDone: () => void;
   onError: (error: string) => void;
 }

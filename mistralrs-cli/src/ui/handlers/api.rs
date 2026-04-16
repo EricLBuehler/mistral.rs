@@ -442,6 +442,7 @@ pub async fn new_chat(
         kind,
         created_at: now,
         messages: Vec::new(),
+        session_id: None,
     };
 
     let path = format!("{}/{}.json", app.chats_dir, chat_id);
@@ -460,6 +461,9 @@ pub async fn delete_chat(
     Json(req): Json<DeleteChatRequest>,
 ) -> impl IntoResponse {
     let path = format!("{}/{}.json", app.chats_dir, req.id);
+    let session_path = format!("{}/{}.session.json", app.chats_dir, req.id);
+    // Best-effort delete the session sidecar; ignore errors (it may not exist)
+    let _ = fs::remove_file(&session_path).await;
     match fs::remove_file(&path).await {
         Ok(_) => (StatusCode::OK, "Deleted").into_response(),
         Err(_) => (StatusCode::NOT_FOUND, "Chat not found").into_response(),
@@ -630,4 +634,105 @@ pub async fn get_capabilities(Extension(app): Extension<Arc<AppState>>) -> impl 
         "code_execution_enabled": app.code_execution_enabled,
         "tool_dispatch_url": app.tool_dispatch_url,
     }))
+}
+
+// ── Agentic session persistence ─────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct SaveChatSessionRequest {
+    pub chat_id: String,
+    pub session_id: String,
+}
+
+/// Export the in-memory agentic session and write it to a sidecar file
+/// alongside the chat. Also stamps the session_id into the chat JSON.
+pub async fn save_chat_session(
+    Extension(app): Extension<Arc<AppState>>,
+    Json(req): Json<SaveChatSessionRequest>,
+) -> impl IntoResponse {
+    // Export the session from the in-memory store
+    let session = match app.model.export_session(None, &req.session_id) {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, "Session not found in store").into_response();
+        }
+        Err(e) => {
+            error!("export_session error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "export failed").into_response();
+        }
+    };
+
+    // Write session blob to sidecar file
+    let session_path = format!("{}/{}.session.json", app.chats_dir, req.chat_id);
+    let session_bytes = match serde_json::to_vec(&session) {
+        Ok(b) => b,
+        Err(e) => {
+            error!("serialize session error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "serialize failed").into_response();
+        }
+    };
+    if let Err(e) = fs::write(&session_path, &session_bytes).await {
+        error!("write session sidecar error: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write sidecar failed").into_response();
+    }
+
+    // Stamp session_id into the chat JSON for fast lookup
+    let chat_path = format!("{}/{}.json", app.chats_dir, req.chat_id);
+    if let Ok(bytes) = fs::read(&chat_path).await {
+        if let Ok(mut chat) = serde_json::from_slice::<ChatFile>(&bytes) {
+            chat.session_id = Some(req.session_id);
+            let _ = fs::write(&chat_path, serde_json::to_vec_pretty(&chat).unwrap()).await;
+        }
+    }
+
+    (StatusCode::OK, "Saved").into_response()
+}
+
+#[derive(Deserialize)]
+pub struct RestoreChatSessionRequest {
+    pub chat_id: String,
+}
+
+/// Read the session sidecar file and import it into the in-memory store under
+/// the chat's saved session_id. Returns the session_id (or null if no session).
+pub async fn restore_chat_session(
+    Extension(app): Extension<Arc<AppState>>,
+    Json(req): Json<RestoreChatSessionRequest>,
+) -> impl IntoResponse {
+    let chat_path = format!("{}/{}.json", app.chats_dir, req.chat_id);
+    let session_id = match fs::read(&chat_path).await {
+        Ok(bytes) => match serde_json::from_slice::<ChatFile>(&bytes) {
+            Ok(chat) => chat.session_id,
+            Err(_) => None,
+        },
+        Err(_) => return (StatusCode::NOT_FOUND, "Chat not found").into_response(),
+    };
+
+    let Some(session_id) = session_id else {
+        return Json(json!({ "session_id": serde_json::Value::Null })).into_response();
+    };
+
+    let session_path = format!("{}/{}.session.json", app.chats_dir, req.chat_id);
+    let bytes = match fs::read(&session_path).await {
+        Ok(b) => b,
+        Err(_) => {
+            // Sidecar missing — treat as no persisted session
+            return Json(json!({ "session_id": serde_json::Value::Null })).into_response();
+        }
+    };
+
+    let serialized: mistralrs::SerializedSession = match serde_json::from_slice(&bytes) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("parse session sidecar error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "parse sidecar failed").into_response();
+        }
+    };
+
+    if let Err(e) = app.model.import_session(None, session_id.clone(), serialized) {
+        error!("import_session error: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "import failed").into_response();
+    }
+
+    Json(json!({ "session_id": session_id })).into_response()
 }

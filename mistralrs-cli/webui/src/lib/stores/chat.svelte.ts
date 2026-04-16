@@ -14,6 +14,10 @@ import { modelStore } from "./models.svelte";
 class ChatStore {
   messages = $state<DisplayMessage[]>([]);
   currentChatId = $state<string | null>(null);
+  // Agentic session ID — preserves tool history, code execution variables,
+  // and accumulated images across turns. Persisted in a sidecar file so it
+  // survives server restarts.
+  currentSessionId = $state<string | null>(null);
   isStreaming = $state(false);
 
   // Accumulated streaming state. All output (content, reasoning, tool calls)
@@ -110,6 +114,7 @@ class ChatStore {
       max_tokens: settingsStore.maxTokens,
       repetition_penalty: settingsStore.repetitionPenalty,
       enable_thinking: settingsStore.enableThinking || undefined,
+      session_id: this.currentSessionId ?? undefined,
       abortSignal: this.abortController.signal,
     };
 
@@ -192,6 +197,16 @@ class ChatStore {
       onFinishReason: (reason) => {
         this.streamingFinishReason = reason;
       },
+      onSessionId: (id) => {
+        this.currentSessionId = id;
+        // Server-side: export session from in-memory store and write a sidecar
+        // file so the agentic state survives a server restart.
+        if (this.currentChatId) {
+          api
+            .saveChatSession(this.currentChatId, id)
+            .catch((e) => console.error("Failed to save chat session:", e));
+        }
+      },
       onDone: () => {
         this.finalizeStreaming();
       },
@@ -269,10 +284,21 @@ class ChatStore {
       blocks: m.blocks,
       finishReason: m.finish_reason,
     }));
+
+    // Restore the agentic session into the engine's in-memory store so the
+    // next turn can reuse tool history, code execution variables, etc.
+    try {
+      const result = await api.restoreChatSession(id);
+      this.currentSessionId = result.session_id;
+    } catch (e) {
+      console.error("Failed to restore chat session:", e);
+      this.currentSessionId = null;
+    }
   }
 
   async newChat() {
     this.currentChatId = null;
+    this.currentSessionId = null;
     this.messages = [];
     this.streamingBlocks = [];
     this.isStreaming = false;

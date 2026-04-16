@@ -155,6 +155,8 @@ pub async fn build_ui_router(
         .route("/api/load_chat", post(load_chat))
         .route("/api/rename_chat", post(rename_chat))
         .route("/api/append_message", post(append_message))
+        .route("/api/save_chat_session", post(save_chat_session))
+        .route("/api/restore_chat_session", post(restore_chat_session))
         .route("/api/settings", get(get_settings))
         .route("/api/capabilities", get(get_capabilities))
         .route("/api/generate_speech", post(generate_speech))

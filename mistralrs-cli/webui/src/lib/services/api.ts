@@ -144,3 +144,18 @@ export async function generateSpeech(
 ): Promise<{ url: string }> {
   return post("generate_speech", { text });
 }
+
+// === Agentic session persistence ===
+
+export async function saveChatSession(
+  chat_id: string,
+  session_id: string,
+): Promise<void> {
+  await postVoid("save_chat_session", { chat_id, session_id });
+}
+
+export async function restoreChatSession(
+  chat_id: string,
+): Promise<{ session_id: string | null }> {
+  return post("restore_chat_session", { chat_id });
+}

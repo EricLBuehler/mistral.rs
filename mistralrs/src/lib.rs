@@ -244,6 +244,7 @@ pub use messages::{
     RequestBuilder, RequestLike, TextMessageRole, TextMessages,
 };
 pub use mistralrs_core::CodeExecutionConfig;
+pub use mistralrs_core::{SerializedSession, SerializedVideo};
 pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
