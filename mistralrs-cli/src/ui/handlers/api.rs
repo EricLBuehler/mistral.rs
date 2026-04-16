@@ -46,6 +46,29 @@ fn validate_image_upload(
     }
 }
 
+fn validate_video_upload(
+    filename: Option<&str>,
+    content_type: Option<&str>,
+) -> Result<String, &'static str> {
+    if let Some(mime) = content_type {
+        if !mime.starts_with("video/") && mime != "image/gif" {
+            return Err("File must be a video");
+        }
+    }
+
+    let ext = if let Some(name) = filename {
+        name.rsplit('.').next().unwrap_or("").to_lowercase()
+    } else {
+        return Err("No filename provided");
+    };
+
+    match ext.as_str() {
+        "mp4" | "avi" | "mov" | "mkv" | "webm" | "m4v" | "gif" => Ok(ext),
+        "" => Err("No file extension"),
+        _ => Err("Unsupported video format"),
+    }
+}
+
 fn validate_audio_upload(
     filename: Option<&str>,
     content_type: Option<&str>,
@@ -183,6 +206,58 @@ pub async fn upload_audio(
         (StatusCode::OK, Json(json!({ "path": path, "url": url }))).into_response()
     } else {
         (StatusCode::BAD_REQUEST, "missing audio part").into_response()
+    }
+}
+
+pub async fn upload_video(
+    Extension(_app): Extension<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    if let Ok(Some(field)) = multipart.next_field().await {
+        let orig_filename = field.file_name().map(|s| s.to_string());
+        let content_type_opt = field.content_type().map(|s| s.to_string());
+
+        let ext = match validate_video_upload(orig_filename.as_deref(), content_type_opt.as_deref())
+        {
+            Ok(ext) => ext,
+            Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+        };
+
+        let data = match field.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                error!("multipart bytes error: {}", e);
+                let msg = if e.to_string().contains("exceeded") {
+                    "video too large (limit 50 MB)"
+                } else {
+                    "failed to read upload"
+                };
+                return (StatusCode::BAD_REQUEST, msg).into_response();
+            }
+        };
+
+        let uploads_dir = get_cache_dir().join("uploads");
+        if let Err(e) = tokio::fs::create_dir_all(&uploads_dir).await {
+            error!("create uploads dir error: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to create uploads directory",
+            )
+                .into_response();
+        }
+
+        let filename = format!("{}.{}", Uuid::new_v4(), ext);
+        let filepath = uploads_dir.join(&filename);
+        if let Err(e) = tokio::fs::write(&filepath, &data).await {
+            error!("write upload error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to save video").into_response();
+        }
+
+        let path = filepath.to_string_lossy().to_string();
+        let url = format!("uploads/{filename}");
+        (StatusCode::OK, Json(json!({ "path": path, "url": url }))).into_response()
+    } else {
+        (StatusCode::BAD_REQUEST, "missing video part").into_response()
     }
 }
 
@@ -433,6 +508,8 @@ pub struct AppendMessageRequest {
     #[serde(default)]
     pub images: Option<Vec<String>>,
     #[serde(default)]
+    pub videos: Option<Vec<String>>,
+    #[serde(default)]
     pub blocks: Option<serde_json::Value>,
 }
 
@@ -440,8 +517,10 @@ pub async fn append_message(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<AppendMessageRequest>,
 ) -> impl IntoResponse {
-    if let Err(e) =
-        append_chat_message(&app, &req.id, &req.role, &req.content, req.images, req.blocks).await
+    if let Err(e) = append_chat_message(
+        &app, &req.id, &req.role, &req.content, req.images, req.videos, req.blocks,
+    )
+    .await
     {
         error!("append message error: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "append failed").into_response();

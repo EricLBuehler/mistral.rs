@@ -80,9 +80,10 @@ export async function appendMessage(
   role: string,
   content: string,
   images?: string[],
+  videos?: string[],
   blocks?: unknown[],
 ): Promise<void> {
-  await postVoid("append_message", { id, role, content, images, blocks });
+  await postVoid("append_message", { id, role, content, images, videos, blocks });
 }
 
 // === Settings & Capabilities ===
@@ -121,6 +122,10 @@ export function uploadText(file: File) {
 
 export function uploadAudio(file: File) {
   return uploadFile("upload_audio", file);
+}
+
+export function uploadVideo(file: File) {
+  return uploadFile("upload_video", file);
 }
 
 // === Speech ===

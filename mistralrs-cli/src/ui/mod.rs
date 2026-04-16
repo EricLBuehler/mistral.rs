@@ -144,6 +144,7 @@ pub async fn build_ui_router(
 
     let router = Router::new()
         .route("/api/upload_image", post(upload_image))
+        .route("/api/upload_video", post(upload_video))
         .route("/api/upload_text", post(upload_text))
         .route("/api/upload_audio", post(upload_audio))
         .route("/api/list_models", get(list_models))

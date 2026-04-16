@@ -66,17 +66,27 @@ namespace = {"__builtins__": __builtins__, "__name__": "__main__"}
 # user calls plt.savefig() then plt.close().
 _captured_figures = []
 
+# When True, savefig captures go to _animation_frames (video) instead of
+# _captured_figures (images). Set by the Animation.save hook.
+_in_animation_save = False
+_animation_frames = []
+
 try:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as _plt
+    import matplotlib.animation as _animation
 
     _orig_savefig = matplotlib.figure.Figure.savefig
     _orig_show = _plt.show
+    _orig_animation_save = _animation.Animation.save
 
     def _hooked_savefig(self, *args, **kwargs):
         """Intercept savefig to also capture the figure for the model."""
-        _capture_single_figure(self)
+        if _in_animation_save:
+            _capture_animation_frame(self)
+        else:
+            _capture_single_figure(self)
         return _orig_savefig(self, *args, **kwargs)
 
     def _hooked_show(*args, **kwargs):
@@ -85,8 +95,28 @@ try:
             _capture_single_figure(_plt.figure(fig_num))
         return _orig_show(*args, **kwargs)
 
+    def _hooked_animation_save(self, *args, **kwargs):
+        """Intercept Animation.save to capture frames as video."""
+        global _in_animation_save
+        _in_animation_save = True
+        _animation_frames.clear()
+        try:
+            result = _orig_animation_save(self, *args, **kwargs)
+        finally:
+            _in_animation_save = False
+        # Move captured frames into the namespace _video_frames list.
+        if _animation_frames:
+            vf = namespace.get("_video_frames")
+            if not isinstance(vf, list):
+                namespace["_video_frames"] = list(_animation_frames)
+            else:
+                vf.extend(_animation_frames)
+            _animation_frames.clear()
+        return result
+
     matplotlib.figure.Figure.savefig = _hooked_savefig
     _plt.show = _hooked_show
+    _animation.Animation.save = _hooked_animation_save
 except ImportError:
     _orig_savefig = None
 
@@ -115,6 +145,17 @@ def _capture_single_figure(fig):
         _captured_figures.append(
             {"format": "png", "data_base64": base64.b64encode(buf.read()).decode()}
         )
+    except Exception:
+        pass
+
+
+def _capture_animation_frame(fig):
+    """Render a figure to PNG bytes and append to the animation frames list."""
+    try:
+        buf = io.BytesIO()
+        _orig_savefig(fig, buf, format="png", bbox_inches="tight", dpi=150)
+        buf.seek(0)
+        _animation_frames.append(buf.read())
     except Exception:
         pass
 

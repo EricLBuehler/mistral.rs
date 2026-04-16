@@ -6,6 +6,7 @@
   let textareaEl: HTMLTextAreaElement;
   let inputValue = $state("");
   let pendingImages = $state<{ file: File; url: string; uploadedUrl?: string }[]>([]);
+  let pendingVideos = $state<{ file: File; url: string; uploadedUrl?: string }[]>([]);
   let isDragging = $state(false);
 
   function autoResize() {
@@ -17,7 +18,7 @@
   async function handleSend() {
     if (chatStore.isStreaming) return;
     const content = inputValue.trim();
-    if (!content && !pendingImages.length) return;
+    if (!content && !pendingImages.length && !pendingVideos.length) return;
 
     // Upload pending images
     const imageUrls: string[] = [];
@@ -36,13 +37,35 @@
       }
     }
 
+    // Upload pending videos
+    const videoUrls: string[] = [];
+    for (const vid of pendingVideos) {
+      if (!vid.uploadedUrl) {
+        try {
+          const result = await api.uploadVideo(vid.file);
+          vid.uploadedUrl = result.url;
+        } catch (e) {
+          console.error("Video upload failed:", e);
+          continue;
+        }
+      }
+      if (vid.uploadedUrl) {
+        videoUrls.push(vid.uploadedUrl);
+      }
+    }
+
     inputValue = "";
     pendingImages = [];
+    pendingVideos = [];
     if (textareaEl) {
       textareaEl.style.height = "auto";
     }
 
-    await chatStore.sendMessage(content, imageUrls.length ? imageUrls : undefined);
+    await chatStore.sendMessage(
+      content,
+      imageUrls.length ? imageUrls : undefined,
+      videoUrls.length ? videoUrls : undefined,
+    );
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -66,7 +89,10 @@
   }
 
   async function addFile(file: File) {
-    if (file.type.startsWith("image/")) {
+    if (file.type.startsWith("video/") || file.name.endsWith(".gif")) {
+      const url = URL.createObjectURL(file);
+      pendingVideos = [...pendingVideos, { file, url }];
+    } else if (file.type.startsWith("image/")) {
       const url = URL.createObjectURL(file);
       pendingImages = [...pendingImages, { file, url }];
     } else if (file.type.startsWith("audio/")) {
@@ -87,6 +113,11 @@
   function removeImage(index: number) {
     URL.revokeObjectURL(pendingImages[index].url);
     pendingImages = pendingImages.filter((_, i) => i !== index);
+  }
+
+  function removeVideo(index: number) {
+    URL.revokeObjectURL(pendingVideos[index].url);
+    pendingVideos = pendingVideos.filter((_, i) => i !== index);
   }
 
   function handleDragOver(e: DragEvent) {
@@ -117,8 +148,8 @@
   ondrop={handleDrop}
 >
   <div class="mx-auto max-w-3xl">
-    <!-- Image previews -->
-    {#if pendingImages.length > 0}
+    <!-- Media previews -->
+    {#if pendingImages.length > 0 || pendingVideos.length > 0}
       <div class="mb-2 flex flex-wrap gap-2">
         {#each pendingImages as img, i}
           <div class="relative h-16 w-16 overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
@@ -127,6 +158,21 @@
               class="absolute right-0 top-0 rounded-bl bg-black/60 p-0.5 text-white hover:bg-black/80"
               onclick={() => removeImage(i)}
               aria-label="Remove image"
+            >
+              <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        {/each}
+        {#each pendingVideos as vid, i}
+          <div class="relative h-16 w-24 overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
+            <video src={vid.url} class="h-full w-full object-cover" muted></video>
+            <div class="absolute bottom-0.5 left-0.5 rounded bg-black/60 px-1 py-0.5 text-[9px] text-white">Video</div>
+            <button
+              class="absolute right-0 top-0 rounded-bl bg-black/60 p-0.5 text-white hover:bg-black/80"
+              onclick={() => removeVideo(i)}
+              aria-label="Remove video"
             >
               <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -155,7 +201,7 @@
           <input
             type="file"
             class="hidden"
-            accept="image/*,audio/*,.txt,.md,.py,.js,.ts,.json,.csv,.xml,.yaml,.yml,.toml,.html,.css"
+            accept="image/*,video/*,audio/*,.gif,.mp4,.avi,.mov,.mkv,.webm,.m4v,.txt,.md,.py,.js,.ts,.json,.csv,.xml,.yaml,.yml,.toml,.html,.css"
             multiple
             onchange={handleFileSelect}
           />

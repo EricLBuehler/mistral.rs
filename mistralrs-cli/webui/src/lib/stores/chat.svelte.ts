@@ -22,8 +22,8 @@ class ChatStore {
 
   private abortController: AbortController | null = null;
 
-  async sendMessage(content: string, imageUrls?: string[]) {
-    if (!content.trim() && !imageUrls?.length) return;
+  async sendMessage(content: string, imageUrls?: string[], videoUrls?: string[]) {
+    if (!content.trim() && !imageUrls?.length && !videoUrls?.length) return;
     if (this.isStreaming) return;
 
     const model = modelStore.selectedModel;
@@ -45,12 +45,13 @@ class ChatStore {
       role: "user",
       content,
       images: imageUrls,
+      videos: videoUrls,
     };
     this.messages.push(userMsg);
 
     // Persist user message (fire-and-forget)
     api
-      .appendMessage(this.currentChatId, "user", content, imageUrls)
+      .appendMessage(this.currentChatId, "user", content, imageUrls, videoUrls)
       .catch((e) => console.error("Failed to persist user message:", e));
 
     // Build the messages array for the API
@@ -67,17 +68,28 @@ class ChatStore {
     // History
     for (const msg of this.messages) {
       if (msg.role === "system") continue;
-      if (msg.images?.length) {
-        apiMessages.push({
-          role: msg.role,
-          content: [
-            { type: "text", text: msg.content },
-            ...msg.images.map((url) => ({
-              type: "image_url" as const,
+      const hasMedia = msg.images?.length || msg.videos?.length;
+      if (hasMedia) {
+        const contentParts: ChatCompletionMessage["content"] = [
+          { type: "text", text: msg.content },
+        ];
+        if (msg.images?.length) {
+          for (const url of msg.images) {
+            (contentParts as Array<{type: string; image_url?: {url: string}}>).push({
+              type: "image_url",
               image_url: { url },
-            })),
-          ],
-        });
+            });
+          }
+        }
+        if (msg.videos?.length) {
+          for (const url of msg.videos) {
+            (contentParts as Array<{type: string; video_url?: {url: string}}>).push({
+              type: "video_url",
+              video_url: { url },
+            });
+          }
+        }
+        apiMessages.push({ role: msg.role, content: contentParts });
       } else {
         apiMessages.push({ role: msg.role, content: msg.content });
       }
@@ -223,6 +235,7 @@ class ChatStore {
       role: m.role as "user" | "assistant",
       content: m.content,
       images: m.images,
+      videos: m.videos,
       blocks: m.blocks,
     }));
   }

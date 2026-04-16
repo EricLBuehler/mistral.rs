@@ -7,9 +7,10 @@ export interface ChatCompletionMessage {
 }
 
 export interface MessageContent {
-  type: "text" | "image_url";
+  type: "text" | "image_url" | "video_url";
   text?: string;
   image_url?: { url: string };
+  video_url?: { url: string };
 }
 
 export interface ChatCompletionChunk {
@@ -113,6 +114,7 @@ export interface ChatMessageRecord {
   role: string;
   content: string;
   images?: string[];
+  videos?: string[];
   blocks?: StreamBlock[];
 }
 
@@ -140,6 +142,7 @@ export interface DisplayMessage {
   content: string;
   blocks?: StreamBlock[];
   images?: string[];
+  videos?: string[];
 }
 
 // === Streaming options ===

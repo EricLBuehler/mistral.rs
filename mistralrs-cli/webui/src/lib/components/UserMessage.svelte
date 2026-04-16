@@ -20,6 +20,22 @@
       </div>
     {/if}
 
+    <!-- Videos (rendered as looping GIF-like clips) -->
+    {#if message.videos?.length}
+      <div class="mb-2 flex flex-wrap gap-2">
+        {#each message.videos as vid}
+          <video
+            src={vid}
+            autoplay
+            loop
+            muted
+            playsinline
+            class="max-h-48 rounded-lg"
+          ></video>
+        {/each}
+      </div>
+    {/if}
+
     <!-- Text content -->
     <div class="text-sm leading-relaxed [&_a]:underline [&_code]:rounded [&_code]:bg-blue-500/30 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs [&_pre]:my-1 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-blue-500/20 [&_pre]:p-2">
       {@html renderMarkdown(message.content)}

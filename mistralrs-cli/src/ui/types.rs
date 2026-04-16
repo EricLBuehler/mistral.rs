@@ -17,6 +17,8 @@ pub struct ChatMessage {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub videos: Option<Vec<String>>,
     /// Rich display blocks (reasoning, tool calls with results/images) for UI rendering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocks: Option<serde_json::Value>,
