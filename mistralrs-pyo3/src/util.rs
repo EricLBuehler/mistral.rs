@@ -379,11 +379,7 @@ fn decode_gif_frames(bytes: &[u8]) -> anyhow::Result<VideoInput> {
         .iter()
         .map(|f| {
             let (num, den) = f.delay().numer_denom_ms();
-            if den == 0 {
-                100
-            } else {
-                num * 1000 / den
-            }
+            (num * 1000).checked_div(den).unwrap_or(100)
         })
         .sum();
     let fps = if total_delay_ms > 0 {
