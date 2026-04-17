@@ -117,7 +117,7 @@ impl AudioProcessor {
         let mut mel_data = Vec::<f32>::with_capacity(batch_size * max_frames * self.feature_size);
         let mut mask_data = Vec::<f32>::with_capacity(batch_size * max_frames);
 
-        for (mel, valid_mask) in mel_batches.into_iter().zip(valid_masks.into_iter()) {
+        for (mel, valid_mask) in mel_batches.into_iter().zip(valid_masks) {
             for (frame, &is_valid) in mel.iter().zip(valid_mask.iter()) {
                 if is_valid {
                     mel_data.extend_from_slice(frame);
