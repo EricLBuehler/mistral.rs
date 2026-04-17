@@ -1431,9 +1431,7 @@ impl PackedExperts {
             let mut gs = Vec::new();
             let mut us = Vec::new();
             let mut ds = Vec::new();
-            for ((mut gate_proj, mut up_proj), mut down_proj) in
-                gc.into_iter().zip(uc.into_iter()).zip(dc.into_iter())
-            {
+            for ((mut gate_proj, mut up_proj), mut down_proj) in gc.into_iter().zip(uc).zip(dc) {
                 gate_proj = gate_proj.squeeze(0)?;
                 up_proj = up_proj.squeeze(0)?;
                 down_proj = down_proj.squeeze(0)?;
@@ -2036,9 +2034,7 @@ pub fn compute_n_kv_groups(
     } else {
         1
     };
-    if kv_replicate != 0 {
-        (num_attention_heads / total_num_kv_heads) / kv_replicate
-    } else {
-        num_attention_heads / total_num_kv_heads
-    }
+    (num_attention_heads / total_num_kv_heads)
+        .checked_div(kv_replicate)
+        .unwrap_or(num_attention_heads / total_num_kv_heads)
 }
